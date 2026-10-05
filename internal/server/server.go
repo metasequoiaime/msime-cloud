@@ -131,6 +131,7 @@ func New(c Config) (*Server, error) {
 	mux.HandleFunc("POST "+wordSubmissionsPath, s.submitWords)
 	mux.HandleFunc("POST /v1/skins/generate", s.generateSkinArtwork)
 	mux.HandleFunc("POST /v1/skins/jobs", s.createSkinArtworkJob)
+	mux.HandleFunc("POST "+voiceContributionsPath, s.voiceContribution)
 	mux.HandleFunc("GET /v1/skins/jobs/{job}", s.getSkinArtworkJob)
 	mux.HandleFunc("DELETE /v1/skins/jobs/{job}", s.deleteSkinArtworkJob)
 	mux.HandleFunc("GET /v1/skins", s.skinCatalog)
@@ -215,7 +216,9 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		if origin := r.Header.Get("Origin"); origin != "" {
+		// Apple 网页登录的回调是 appleid.apple.com 发起的 form_post，带它的 Origin。只有这一条路由不做 Origin 检查，也不回 CORS 头：它不读 Bearer，只认挑战 state 和 Apple 签名的 ID Token。
+		appleCallback := r.Method == "POST" && r.URL.Path == account.AppleCallbackPath
+		if origin := r.Header.Get("Origin"); origin != "" && !appleCallback {
 			w.Header().Add("Vary", "Origin")
 			allowed := origin == "https://"+r.Host || (r.TLS == nil && origin == "http://"+r.Host)
 			for _, o := range s.config.AllowedOrigins {

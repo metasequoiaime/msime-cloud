@@ -1268,6 +1268,10 @@
                         },
                         "email": {
                           "type": "boolean"
+                        },
+                        "apple_web": {
+                          "type": "boolean",
+                          "description": "Apple 网页登录（安卓）：只有 Services ID 已加进 auth.apple.client_ids 时为 true。"
                         }
                       }
                     }
@@ -1453,7 +1457,7 @@
             }
           }
         },
-        "description": "JSON 请求最多 16 KiB。绑定身份需要在挑战创建和验证时携带同一用户的会话令牌；绑定和注销要求最近 10 分钟内登录。设备令牌不能用于用户管理。",
+        "description": "JSON 请求最多 16 KiB。绑定身份需要在挑战创建和验证时携带同一用户的会话令牌；绑定和注销要求最近 10 分钟内登录。设备令牌不能用于用户管理。 provider=apple_web 返回 400 invalid_provider：Apple 网页登录只能走 /v1/auth/apple/web。",
         "requestBody": {
           "required": true,
           "content": {
@@ -1630,7 +1634,7 @@
             }
           }
         },
-        "description": "JSON 请求最多 16 KiB。绑定身份需要在挑战创建和验证时携带同一用户的会话令牌；绑定和注销要求最近 10 分钟内登录。设备令牌不能用于用户管理。",
+        "description": "JSON 请求最多 16 KiB。绑定身份需要在挑战创建和验证时携带同一用户的会话令牌；绑定和注销要求最近 10 分钟内登录。设备令牌不能用于用户管理。 apple_web 挑战返回 400 unsupported_challenge，只能用 /v1/auth/apple/web/login 兑换。",
         "requestBody": {
           "required": true,
           "content": {
@@ -4684,7 +4688,7 @@
         "tags": [
           "用户同步数据"
         ],
-        "description": "按最近添加顺序返回最多 50 条。q 为大小写不敏感的原文子串，最多 1024 UTF-8 字节。 设备令牌不能访问用户同步数据；注销账号会级联删除这些数据。",
+        "description": "置顶的在前，其余按最近添加顺序返回最多 50 条。q 为大小写不敏感的原文子串，最多 1024 UTF-8 字节。 设备令牌不能访问用户同步数据；注销账号会级联删除这些数据。",
         "security": [
           {
             "userSession": []
@@ -4717,9 +4721,27 @@
                           "updated_at": {
                             "type": "string",
                             "format": "date-time"
+                          },
+                          "pinned": {
+                            "type": "boolean",
+                            "description": "置顶的条目排在最前，不受保留期清理。"
+                          },
+                          "device": {
+                            "type": "string",
+                            "description": "写入时所用会话的设备名（登录时的 User-Agent 解析），认不出时为空字符串。"
                           }
                         }
                       }
+                    },
+                    "retention_days": {
+                      "type": "integer",
+                      "enum": [
+                        0,
+                        1,
+                        7,
+                        30
+                      ],
+                      "description": "保留天数，0 表示一直保留。"
                     }
                   }
                 }
@@ -4836,6 +4858,14 @@
                     "updated_at": {
                       "type": "string",
                       "format": "date-time"
+                    },
+                    "pinned": {
+                      "type": "boolean",
+                      "description": "置顶的条目排在最前，不受保留期清理。"
+                    },
+                    "device": {
+                      "type": "string",
+                      "description": "写入时所用会话的设备名（登录时的 User-Agent 解析），认不出时为空字符串。"
                     }
                   }
                 }
@@ -17499,7 +17529,7 @@
         "tags": [
           "皮肤"
         ],
-        "description": "立即返回任务 ID，不等待生图。任务仅当前认证主体可访问；每主体最多 3 个任务，全局最多 min(8,max_concurrent) 个。草稿保留 10 分钟，不是持久化皮肤。启用数据库时任务存于共享表，任何副本都能查询和删除，上限按整个部署计算；未启用数据库时任务只在接受它的进程内，服务重启会失效。领取结果后应 DELETE 释放。不要自动重试提交，避免重复生图。",
+        "description": "立即返回任务 ID，不等待生图。任务仅当前认证主体可访问；每主体最多 3 个任务，全局最多 min(8,max_concurrent) 个。草稿保留 10 分钟，不是持久化皮肤。启用数据库时任务存于共享表，任何副本都能查询和删除，上限按整个部署计算；未启用数据库时任务只在接受它的进程内，服务重启会失效。领取结果后应 DELETE 释放。不要自动重试提交，避免重复生图。 启用数据库时另有每个主体每天 10 个任务的配额（匿名账号同样适用，删除的任务也计数），超出返回 429 rate_limit_exceeded 并带 Retry-After（窗口剩余秒数）。",
         "requestBody": {
           "required": true,
           "content": {
@@ -17561,6 +17591,24 @@
           },
           "503": {
             "description": "未配置、容量已满或正在关闭（skin_jobs_busy），或任务存储暂不可用（job_unavailable）；均带 Retry-After"
+          },
+          "429": {
+            "description": "超过每日插画配额",
+            "headers": {
+              "Retry-After": {
+                "description": "配额窗口剩余秒数",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -18467,6 +18515,1174 @@
           },
           "503": {
             "description": "用户体系不可用或服务繁忙",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/apple/web": {
+      "post": {
+        "summary": "发起 Apple 网页登录（PKCE）",
+        "tags": [
+          "用户体系"
+        ],
+        "security": [],
+        "description": "安卓客户端生成 32 字节随机 code_verifier（base64url 无填充），提交 code_challenge=base64url(SHA-256(verifier))。服务端生成 nonce，返回用 Services ID 作 client_id、response_mode=form_post 的 Apple 授权地址，state 是挑战 ID，5 分钟有效。purpose=link 需要最近 10 分钟内登录的会话。未配置 Services ID 时返回 503 provider_disabled。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "code_challenge": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{43}$"
+                  },
+                  "code_challenge_method": {
+                    "type": "string",
+                    "enum": [
+                      "S256"
+                    ]
+                  },
+                  "app": {
+                    "type": "string",
+                    "enum": [
+                      "app.msime.android",
+                      "app.msime.android.pinyin",
+                      "app.msime.android.wubi",
+                      "app.msime.android.japanese",
+                      "app.msime.android.vietnamese",
+                      "app.msime.android.tibetan"
+                    ],
+                    "description": "发起登录的安卓 applicationId，也是回调跳回 App 的 URL scheme。"
+                  },
+                  "purpose": {
+                    "type": "string",
+                    "enum": [
+                      "login",
+                      "link"
+                    ]
+                  }
+                },
+                "required": [
+                  "code_challenge",
+                  "code_challenge_method",
+                  "app",
+                  "purpose"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "已创建",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "authorization_url": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "expires_in": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "authorization_url",
+                    "expires_in"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_code_challenge、invalid_app、invalid_purpose 或 JSON 无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "绑定时需要用户会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "绑定需要最近登录",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "需要 application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求过多",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "未启用 Apple 网页登录",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/apple/callback": {
+      "post": {
+        "summary": "Apple 网页登录回调（form_post）",
+        "tags": [
+          "用户体系"
+        ],
+        "security": [],
+        "description": "由 Apple 以 application/x-www-form-urlencoded 提交 state、id_token、code 和首次授权时的 user。全站只有这一条路由不检查 Origin（Apple 的表单带 Origin: https://appleid.apple.com），也不返回 CORS 头。校验 state 对应的未过期挑战和 ID Token（受众在 auth.apple.client_ids 中、nonce 等于挑战 nonce）后签发一次性授权码，响应总是 200 的自包含 HTML 落地页（Content-Security-Policy 以 default-src 'none'; style-src 'unsafe-inline' 开头，另用哈希放行一行跳转脚本），按钮链接 <app>://auth/apple?grant=<grant>，失败时 <app>://auth/apple?error=<code>（cancelled、apple_error、invalid_token、unavailable）。地址里不出现挑战 ID 和 ID Token，页面不回显任何请求内容；state 无效时只显示文字。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string"
+                  },
+                  "id_token": {
+                    "type": "string"
+                  },
+                  "code": {
+                    "type": "string"
+                  },
+                  "user": {
+                    "type": "string"
+                  },
+                  "error": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "落地页",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/apple/web/login": {
+      "post": {
+        "summary": "用授权码和 code_verifier 兑换会话",
+        "tags": [
+          "用户体系"
+        ],
+        "security": [],
+        "description": "授权码只能用一次（校验失败也会作废），签发后 120 秒内有效；base64url(SHA-256(code_verifier)) 必须与发起时的 code_challenge 相等。绑定流程要求带最近登录、且与发起时同一用户的会话。响应与 /v1/auth/login 相同，会话记录登录请求的 User-Agent。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "grant": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{43}$"
+                  },
+                  "code_verifier": {
+                    "type": "string",
+                    "minLength": 43,
+                    "maxLength": 128
+                  }
+                },
+                "required": [
+                  "grant",
+                  "code_verifier"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "access_token": {
+                      "type": "string"
+                    },
+                    "refresh_token": {
+                      "type": "string"
+                    },
+                    "token_type": {
+                      "type": "string",
+                      "enum": [
+                        "Bearer"
+                      ]
+                    },
+                    "expires_in": {
+                      "type": "integer"
+                    },
+                    "user": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "display_name": {
+                          "type": "string"
+                        },
+                        "created_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "email": {
+                          "type": "string",
+                          "format": "email",
+                          "description": "已绑定 Google 身份的已验证邮箱，仅返回给用户本人；没有时省略。"
+                        },
+                        "avatar_url": {
+                          "type": "string",
+                          "format": "uri",
+                          "description": "头像地址：上传的自定义头像优先，其次是 Google 头像；都没有时省略，客户端显示昵称首字。"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "display_name",
+                        "created_at"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_grant：授权码不存在、已用、过期、verifier 不符或绑定会话不一致",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "绑定时需要用户会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "账号已封禁或绑定需要最近登录",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "身份已绑定其他账号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "需要 application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求过多",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "用户体系不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/users/me/data": {
+      "get": {
+        "summary": "查看云端数据大小",
+        "tags": [
+          "用户同步数据"
+        ],
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "description": "一条 SQL 汇总本人各分区的行数和 PostgreSQL 行大小，是统计信息而不是精确的磁盘占用。分区顺序固定；头像存在对象存储里，只报告有没有。",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "bytes": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "sections": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "enum": [
+                              "preferences",
+                              "dictionary",
+                              "phrases",
+                              "clipboard",
+                              "community",
+                              "voice",
+                              "avatar"
+                            ]
+                          },
+                          "bytes": {
+                            "type": "integer",
+                            "format": "int64"
+                          },
+                          "items": {
+                            "type": "integer",
+                            "format": "int64"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "bytes",
+                          "items"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "bytes",
+                    "sections"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "需要有效用户会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "账号已封禁",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求过多",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "用户数据服务不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "删除云端数据（保留账号）",
+        "tags": [
+          "用户同步数据"
+        ],
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "description": "要求最近 10 分钟内登录。在一个事务里删除所选分区：偏好和常用语清空并推进 revision；词库删除条目、覆盖层、位置和选择次数，写一条 reset 变更并推进 revision，开着同步的其他设备会整份重载；剪贴板和语音贡献直接删除。账号、会话和社区作品不在可删范围内。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sections": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "preferences",
+                        "dictionary",
+                        "phrases",
+                        "clipboard",
+                        "voice"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "sections"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "已删除"
+          },
+          "400": {
+            "description": "invalid_sections 或 JSON 无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "需要有效用户会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "需要最近登录或账号已封禁",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "需要 application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求过多",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "用户数据服务不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/users/me/data/export": {
+      "get": {
+        "summary": "导出云端数据",
+        "tags": [
+          "用户同步数据"
+        ],
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "description": "流式返回 zip（Content-Disposition: attachment; filename=msime-data-<日期>.zip），内含 profile.json（ID、昵称、创建时间、只含 provider 名的身份列表）、preferences.json、dictionary.ndjson（与词库快照同一格式）、phrases.json、clipboard.json、community.json（作品元数据）、sessions.json。每个用户每天 3 次，路由时限 2 分钟；开始传输后出错会中断连接。导出内容不写日志。",
+        "responses": {
+          "200": {
+            "description": "zip 文件",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "需要有效用户会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "账号已封禁",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "超过每日导出次数（带 Retry-After）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "用户数据服务不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/users/me/download-link": {
+      "post": {
+        "summary": "把下载链接发到我的邮箱",
+        "tags": [
+          "用户体系"
+        ],
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "description": "只发到账号已验证的邮箱（邮箱登录身份，或 email_verified 的 Google 邮箱），不接受收件地址。正文是固定模板，链接只有 https://msime.app/download/?release=<platform>。每个用户每小时 3 次、每天 10 次，并计入全站每天 500 封的发信额度。没有已验证邮箱返回 409 no_verified_email，客户端改用复制链接。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "platform": {
+                    "type": "string",
+                    "enum": [
+                      "windows",
+                      "macos",
+                      "linux",
+                      "harmony-pc",
+                      "ios",
+                      "android",
+                      "harmony"
+                    ]
+                  }
+                },
+                "required": [
+                  "platform"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "已发送",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sent_to": {
+                      "type": "string",
+                      "description": "打码后的收件地址，例如 u***@example.com。"
+                    }
+                  },
+                  "required": [
+                    "sent_to"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_platform 或 JSON 无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "需要有效用户会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "账号已封禁",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "no_verified_email",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "需要 application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "发送过于频繁",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "未配置邮件或发送失败（delivery_failed）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/users/me/clipboard/retention": {
+      "put": {
+        "summary": "设置云端剪贴板保留时长",
+        "tags": [
+          "用户同步数据"
+        ],
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "description": "0 表示一直保留，否则 1、7、30 天；超过保留期的未置顶条目由每小时的清理任务删除。不改变同步开关，PUT /clipboard/settings 的请求体保持不变。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "days": {
+                    "type": "integer",
+                    "enum": [
+                      0,
+                      1,
+                      7,
+                      30
+                    ]
+                  }
+                },
+                "required": [
+                  "days"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "已保存"
+          },
+          "400": {
+            "description": "invalid_retention 或 JSON 无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "需要有效用户会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "账号已封禁",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "需要 application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求过多",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "用户数据服务不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/users/me/clipboard/{id}/pin": {
+      "put": {
+        "summary": "置顶或取消置顶剪贴板条目",
+        "tags": [
+          "用户同步数据"
+        ],
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "description": "条目不存在或属于其他用户均返回 404。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "pinned": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "pinned"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "已保存"
+          },
+          "400": {
+            "description": "pinned_required 或 JSON 无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "需要有效用户会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "账号已封禁",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "条目不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "需要 application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求过多",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "用户数据服务不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/voice/contributions": {
+      "post": {
+        "summary": "贡献一段语音样本",
+        "tags": [
+          "语音"
+        ],
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "description": "只在用户打开「贡献语音」后由客户端上传；需要用户会话（匿名账号也可以），设备令牌返回 401。multipart/form-data：payload 为 JSON（最多 16 KiB，未知字段返回 400），audio 为 WAV（RIFF 结构校验）或 Ogg，最多 2 MiB、60 秒。每个用户每小时 30 次（auth_rates，所有副本共享）。样本只用于改进语音识别，保留 180 天，注销账号或删除云端数据时一并删除；音频和文本不写日志。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "payload": {
+                    "type": "object",
+                    "properties": {
+                      "language": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$",
+                        "example": "zh-CN"
+                      },
+                      "provider": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$",
+                        "example": "doubao"
+                      },
+                      "duration_ms": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 60000
+                      },
+                      "transcript": {
+                        "type": "string",
+                        "maxLength": 2000,
+                        "description": "识别结果，去掉首尾空白后最多 2000 个字符。"
+                      },
+                      "app_version": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$"
+                      }
+                    },
+                    "required": [
+                      "language",
+                      "provider",
+                      "duration_ms",
+                      "transcript",
+                      "app_version"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "audio": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                },
+                "required": [
+                  "payload",
+                  "audio"
+                ]
+              },
+              "encoding": {
+                "payload": {
+                  "contentType": "application/json"
+                },
+                "audio": {
+                  "contentType": "audio/wav, audio/ogg"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "已保存",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_payload、invalid_audio、unexpected_part 或 multipart 无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "需要用户会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "账号已封禁",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "音频超过 2 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "需要 multipart/form-data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "上传过于频繁",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "用户体系不可用",
             "content": {
               "application/json": {
                 "schema": {

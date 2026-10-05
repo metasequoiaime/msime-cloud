@@ -6,18 +6,24 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
 
 // Jobs are short-lived drafts, not saved skins: at most eight bounded image responses are retained, for ten minutes. With a database the jobs live in the shared skin_jobs table (skin_jobs_shared.go) and the caps apply to the whole deployment; without one they live in this process, which is only correct for a single replica.
 const skinJobTTL = 10 * time.Minute
 const maxSkinJobs = 8
 const skinJobsPerOwner = 3
+
+// skinJobsPerDay 是每个 owner（每个用户会话账号，匿名账号也算，或每个配置的客户端令牌）每天能创建的插画任务数。计数在 auth_rates 的 skin-art-day:<owner> 上，所有副本共享；没有数据库时只有并发上限。
+const skinJobsPerDay = 10
 
 // skinJobTimeout bounds one job's upstream call, the same budget the synchronous endpoint gets.
 const skinJobTimeout = 180 * time.Second
@@ -73,6 +79,16 @@ func (s *Server) createSkinArtworkJob(w http.ResponseWriter, r *http.Request) {
 	id := hex.EncodeToString(nonce[:])
 	body, _ := json.Marshal(input)
 	if s.accounts != nil {
+		wait, err := s.accounts.RateLimitUntil(r.Context(), "skin-art-day", owner, skinJobsPerDay, 24*time.Hour)
+		if errors.Is(err, account.ErrLimited) {
+			w.Header().Set("Retry-After", strconv.Itoa(int((wait+time.Second-1)/time.Second)))
+			fail(w, 429, "rate_limit_exceeded")
+			return
+		}
+		if err != nil {
+			skinJobUnavailable(w, err)
+			return
+		}
 		s.createSharedSkinJob(w, r, id, owner, body)
 		return
 	}

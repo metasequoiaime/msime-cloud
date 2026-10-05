@@ -72,7 +72,27 @@ func (d delivery) sms(ctx context.Context, target, code string) error {
 	}
 	return nil
 }
+
+// Mailer 发送一封纯文本邮件。主题和正文都由服务端的固定模板生成，调用方不能把用户输入拼进去。
+type Mailer interface {
+	Mail(ctx context.Context, target, subject, body string) error
+}
+
+// Mail 发送一封通知邮件；和 Send 一样不透传 SMTP 错误，因为其中可能含收件地址或凭据。
+func (d delivery) Mail(ctx context.Context, target, subject, body string) error {
+	if d.config.Email.From == "" || d.mail(ctx, target, subject, body) != nil {
+		return errors.New("邮件发送失败")
+	}
+	return nil
+}
+
+// email 发送登录验证码，复用 mail 的连接、认证和发送。
 func (d delivery) email(ctx context.Context, target, code string) error {
+	return d.mail(ctx, target, "水杉输入法登录验证码", "你的验证码是 "+code+"，5 分钟内有效。请勿向他人透露。")
+}
+
+// smtpConnect 按配置建立到 SMTP 服务器的连接：465 端口直接 TLS，587 端口先明文再 STARTTLS。连接的期限取 10 秒和 ctx 期限中较早的一个，ctx 取消时连接随之关闭；返回的 release 负责收尾。
+func (d delivery) smtpConnect(ctx context.Context) (*smtp.Client, func(), error) {
 	c := d.config.Email
 	address := net.JoinHostPort(c.Host, strconv.Itoa(c.Port))
 	if d.smtpAddress != "" {
@@ -91,11 +111,9 @@ func (d delivery) email(ctx context.Context, target, code string) error {
 		conn, e = dialer.DialContext(ctx, "tcp", address)
 	}
 	if e != nil {
-		return e
+		return nil, nil, e
 	}
-	defer conn.Close()
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
-	defer stop()
 	deadline := time.Now().Add(10 * time.Second)
 	if v, ok := ctx.Deadline(); ok && v.Before(deadline) {
 		deadline = v
@@ -103,25 +121,40 @@ func (d delivery) email(ctx context.Context, target, code string) error {
 	conn.SetDeadline(deadline)
 	client, e := smtp.NewClient(conn, c.Host)
 	if e != nil {
-		return e
+		stop()
+		conn.Close()
+		return nil, nil, e
 	}
-	defer client.Close()
+	release := func() {
+		client.Close()
+		stop()
+		conn.Close()
+	}
 	if c.Port == 587 {
 		if e = client.StartTLS(tlsConfig); e != nil {
-			return e
+			release()
+			return nil, nil, e
 		}
 	}
-	if e = client.Auth(smtp.PlainAuth("", c.Username, os.Getenv(c.PasswordEnv), c.Host)); e != nil {
+	return client, release, nil
+}
+
+// smtpAuthenticate 用配置的账号和环境变量里的密码做 PLAIN 认证。
+func (d delivery) smtpAuthenticate(client *smtp.Client) error {
+	c := d.config.Email
+	return client.Auth(smtp.PlainAuth("", c.Username, os.Getenv(c.PasswordEnv), c.Host))
+}
+
+// smtpSend 投递一封 UTF-8 纯文本邮件，主题用 Q 编码，正文 base64。
+func (d delivery) smtpSend(client *smtp.Client, target, subject, body string) error {
+	from := d.config.Email.From
+	if e := client.Mail(from); e != nil {
 		return e
 	}
-	if e = client.Mail(c.From); e != nil {
+	if e := client.Rcpt(target); e != nil {
 		return e
 	}
-	if e = client.Rcpt(target); e != nil {
-		return e
-	}
-	body := "你的验证码是 " + code + "，5 分钟内有效。请勿向他人透露。"
-	message := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n%s\r\n", c.From, target, mime.QEncoding.Encode("UTF-8", "水杉输入法登录验证码"), base64.StdEncoding.EncodeToString([]byte(body)))
+	message := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n%s\r\n", from, target, mime.QEncoding.Encode("UTF-8", subject), base64.StdEncoding.EncodeToString([]byte(body)))
 	writer, e := client.Data()
 	if e != nil {
 		return e
@@ -136,4 +169,17 @@ func (d delivery) email(ctx context.Context, target, code string) error {
 	// DATA 已确认即视为成功；QUIT 失败不能触发重复投递。
 	_ = client.Quit()
 	return nil
+}
+
+// mail 依次连接、认证、发送。
+func (d delivery) mail(ctx context.Context, target, subject, body string) error {
+	client, release, e := d.smtpConnect(ctx)
+	if e != nil {
+		return e
+	}
+	defer release()
+	if e = d.smtpAuthenticate(client); e != nil {
+		return e
+	}
+	return d.smtpSend(client, target, subject, body)
 }

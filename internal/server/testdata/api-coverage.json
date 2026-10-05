@@ -32,7 +32,8 @@
       "internal/server/stream_test.go::TestStreamAuthenticationAndExpiry"
     ],
     "GET /v1/auth/providers": [
-      "internal/account/http_contract_test.go::TestProviderDiscoveryAndMalformedAuthenticationBodies"
+      "internal/account/http_contract_test.go::TestProviderDiscoveryAndMalformedAuthenticationBodies",
+      "internal/account/apple_web_test.go::TestAppleWebSignIn"
     ],
     "POST /v1/auth/challenges": [
       "internal/account/account_test.go::TestEmailHTTPFlowAndFailure",
@@ -81,11 +82,13 @@
     ],
     "GET /v1/users/me/clipboard": [
       "internal/account/clipboard_test.go::TestClipboardConsentIsolationLimitAndDeletion",
-      "internal/account/http_contract_test.go::TestClipboardClearAndCommunityResourceDeleteHTTP"
+      "internal/account/http_contract_test.go::TestClipboardClearAndCommunityResourceDeleteHTTP",
+      "internal/account/clipboard_retention_test.go::TestClipboardRetentionPinAndDevice"
     ],
     "POST /v1/users/me/clipboard": [
       "internal/account/clipboard_test.go::TestClipboardConsentIsolationLimitAndDeletion",
-      "internal/account/http_contract_test.go::TestClipboardClearAndCommunityResourceDeleteHTTP"
+      "internal/account/http_contract_test.go::TestClipboardClearAndCommunityResourceDeleteHTTP",
+      "internal/account/clipboard_retention_test.go::TestClipboardRetentionPinAndDevice"
     ],
     "DELETE /v1/users/me/clipboard": [
       "internal/account/clipboard_test.go::TestClipboardConsentIsolationLimitAndDeletion",
@@ -398,7 +401,8 @@
     "POST /v1/skins/jobs": [
       "internal/server/skin_jobs_test.go::TestSkinJobReturnsBeforeUpstreamAndBindsOwner",
       "internal/server/skin_jobs_test.go::TestSkinJobCapacityCancelExpiryAndShutdown",
-      "internal/server/skin_jobs_test.go::TestSharedSkinJobCapsSpanReplicas"
+      "internal/server/skin_jobs_test.go::TestSharedSkinJobCapsSpanReplicas",
+      "internal/server/skin_jobs_quota_test.go::TestSharedSkinJobDailyQuota"
     ],
     "GET /v1/skins/jobs/{job}": [
       "internal/server/skin_jobs_test.go::TestSkinJobReturnsBeforeUpstreamAndBindsOwner",
@@ -457,6 +461,41 @@
       "internal/account/feedback_test.go::TestFeedbackSubmitAndValidationHTTP",
       "internal/account/feedback_test.go::TestFeedbackLimitsRetentionAndDeletion",
       "internal/account/feedback_test.go::TestFeedbackUnavailable"
+    ],
+    "POST /v1/auth/apple/web": [
+      "internal/account/apple_web_test.go::TestAppleWebSignIn",
+      "internal/account/apple_web_test.go::TestAppleWebAppsMatchAndroidEditions"
+    ],
+    "POST /v1/auth/apple/callback": [
+      "internal/account/apple_web_test.go::TestAppleWebSignIn",
+      "internal/server/routes_contract_test.go::TestAppleOriginAcceptedOnlyOnCallback"
+    ],
+    "POST /v1/auth/apple/web/login": [
+      "internal/account/apple_web_test.go::TestAppleWebSignIn",
+      "internal/account/apple_web_test.go::TestPKCEHelpers"
+    ],
+    "GET /v1/users/me/data": [
+      "internal/account/user_data_test.go::TestUserDataSummaryExportAndDelete"
+    ],
+    "DELETE /v1/users/me/data": [
+      "internal/account/user_data_test.go::TestUserDataSummaryExportAndDelete"
+    ],
+    "GET /v1/users/me/data/export": [
+      "internal/account/user_data_test.go::TestUserDataSummaryExportAndDelete"
+    ],
+    "POST /v1/users/me/download-link": [
+      "internal/account/download_link_test.go::TestDownloadLink",
+      "internal/account/download_link_test.go::TestMaskEmailAndTemplate"
+    ],
+    "PUT /v1/users/me/clipboard/retention": [
+      "internal/account/clipboard_retention_test.go::TestClipboardRetentionPinAndDevice"
+    ],
+    "PUT /v1/users/me/clipboard/{id}/pin": [
+      "internal/account/clipboard_retention_test.go::TestClipboardRetentionPinAndDevice"
+    ],
+    "POST /v1/voice/contributions": [
+      "internal/server/voice_contributions_test.go::TestVoiceContributions",
+      "internal/server/voice_contributions_test.go::TestVoiceAudioMime"
     ]
   },
   "admin_and_docs": {

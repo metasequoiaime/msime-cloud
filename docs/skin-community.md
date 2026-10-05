@@ -59,7 +59,7 @@ SQL 在单个事务中切换到既有 DML 运行角色 `msime_backend`，使用�
 
 客户端使用 `POST /v1/skins/jobs` 提交内部生成的原创场景描述，收到 202 后每 5 秒调用 `GET /v1/skins/jobs/{job}`。`running` 表示仍在绘制，`succeeded` 的 `artwork` 包含与同步接口相同的有界 PNG/JPEG 数据，`failed` 表示此次生成失败。无需让一个公开 HTTP 请求等待完整生图时间。
 
-每个认证主体最多保留 3 个任务，全局最多 `min(8, max_concurrent)` 个；领取、取消或失败后调用 `DELETE /v1/skins/jobs/{job}` 释放任务。超出上限或服务正在关闭时返回 503 `skin_jobs_busy`；任务存储（数据库）暂不可用时提交、查询和删除返回 503 `job_unavailable`。两者都带 `Retry-After: 5`，客户端稍后再试即可。任务绑定认证主体，令牌刷新不改变归属，其他主体查询和删除都返回 404。上游请求最多运行 180 秒，服务关闭会取消并等待任务，被取消的任务以 `failed`、`reason` 为 `cancelled` 结束。提交请求不应自动重试，以免重复生成。
+每个认证主体最多保留 3 个任务，全局最多 `min(8, max_concurrent)` 个；领取、取消或失败后调用 `DELETE /v1/skins/jobs/{job}` 释放任务。超出上限或服务正在关闭时返回 503 `skin_jobs_busy`；任务存储（数据库）暂不可用时提交、查询和删除返回 503 `job_unavailable`。两者都带 `Retry-After: 5`，客户端稍后再试即可。任务绑定认证主体，令牌刷新不改变归属，其他主体查询和删除都返回 404。上游请求最多运行 180 秒，服务关闭会取消并等待任务，被取消的任务以 `failed`、`reason` 为 `cancelled` 结束。提交请求不应自动重试，以免重复生成。启用数据库时每个认证主体每天最多提交 10 个任务（匿名账号同样适用，删除的任务也计数；`auth_rates` 键 `skin-art-day:<owner 摘要>`，所有副本共享），超出返回 429 `rate_limit_exceeded`，`Retry-After` 是配额窗口的剩余秒数。
 
 这些是临时草稿，10 分钟后失效；不写入社区或用户皮肤库。客户端应提示重新抽取，只有用户保存后才成为持久化皮肤。
 

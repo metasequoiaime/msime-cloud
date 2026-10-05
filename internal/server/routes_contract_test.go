@@ -61,7 +61,12 @@ func TestEveryPublishedRouteSecurityContract(t *testing.T) {
 				r.Header.Set("Authorization", "Bearer "+testToken)
 				w := httptest.NewRecorder()
 				s.ServeHTTP(w, r)
-				if w.Code != 403 || !strings.Contains(w.Body.String(), "origin_denied") {
+				if method == "post" && path == account.AppleCallbackPath {
+					// Apple 的 form_post 带它自己的 Origin：只有这条路由豁免 Origin 检查，而且不回 CORS 头。
+					if w.Code == 403 || w.Header().Get("Access-Control-Allow-Origin") != "" {
+						t.Fatal("apple callback must skip the origin gate without CORS", w.Code, w.Header())
+					}
+				} else if w.Code != 403 || !strings.Contains(w.Body.String(), "origin_denied") {
 					t.Fatal("cross-origin request accepted", w.Code)
 				}
 				r = httptest.NewRequest("TRACE", path, nil)
@@ -85,6 +90,28 @@ func TestEveryPublishedRouteSecurityContract(t *testing.T) {
 		t.Fatal("empty API inventory")
 	}
 	t.Logf("verified security and method contracts for %d published operations", count)
+}
+
+// 豁免只针对 POST /v1/auth/apple/callback：Apple 的 Origin 在其他路由上照样被拒，回调的其他方法也不豁免。
+func TestAppleOriginAcceptedOnlyOnCallback(t *testing.T) {
+	s := fixture(t, nil)
+	for _, tc := range []struct{ method, path string }{{"POST", "/v1/auth/apple/web"}, {"POST", "/v1/auth/apple/web/login"}, {"POST", "/v1/auth/login"}, {"GET", "/v1/users/me"}, {"GET", account.AppleCallbackPath}} {
+		r := httptest.NewRequest(tc.method, tc.path, strings.NewReader(`{}`))
+		r.Header.Set("Origin", "https://appleid.apple.com")
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		if w.Code != 403 || !strings.Contains(w.Body.String(), "origin_denied") {
+			t.Fatal(tc, w.Code, w.Body.String())
+		}
+	}
+	r := httptest.NewRequest("POST", account.AppleCallbackPath, strings.NewReader("state=x"))
+	r.Header.Set("Origin", "https://appleid.apple.com")
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	if w.Code == 403 || w.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Fatal("callback", w.Code, w.Header())
+	}
 }
 
 func TestEveryAdminRouteAuthenticationAndOrigin(t *testing.T) {

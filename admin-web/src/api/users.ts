@@ -37,7 +37,7 @@ const userSessionSchema = z.object({
 });
 export type UserSession = z.infer<typeof userSessionSchema>;
 
-export const workSections = ["skins", "candidate-skins", "plugins", "dictionaries", "replies"] as const;
+export const workSections = ["skins", "candidate-skins", "plugins", "dictionaries", "replies", "phrases"] as const;
 const userWorkSchema = z.object({
   section: z.enum(workSections),
   id: z.string(),

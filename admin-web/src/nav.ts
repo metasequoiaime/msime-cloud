@@ -1,6 +1,6 @@
 import type { Permission, Shell } from "./api/shell";
 
-export type PageKey = "overview" | "dictpr" | "community" | "issues" | "words" | "users" | "downloads" | "notice" | "release" | "cloud" | "crash" | "status" | "logs" | "perm" | "me";
+export type PageKey = "overview" | "dictpr" | "community" | "issues" | "feedback" | "words" | "users" | "downloads" | "notice" | "release" | "cloud" | "crash" | "status" | "logs" | "perm" | "me";
 
 export type NavItem = {
   key: PageKey;
@@ -22,8 +22,9 @@ export const navGroups: readonly { title: string; items: readonly NavItem[] }[] 
   ] },
   { title: "审核", items: [
     { key: "dictpr", label: "词库审核", path: "/dictpr", description: "审核官网词库投稿生成的 GitHub PR。", icon: "M5 19.5V4.5A1.5 1.5 0 0 1 6.5 3H19v15H6.5A1.5 1.5 0 0 0 5 19.5A1.5 1.5 0 0 0 6.5 21H19v-3M9 10l2 2 4-4", badge: "dict_prs" },
-    { key: "community", label: "社区审核", path: "/community", description: "复核社区皮肤、候选皮肤、插件、词库和回复模板。", icon: "M8 3 4 6l2 4 2-1v12h8V9l2 1 2-4-4-3c-.5 1.5-2 2.5-4 2.5S8.5 4.5 8 3z", badge: "community" },
+    { key: "community", label: "社区审核", path: "/community", description: "复核社区皮肤、候选皮肤、插件、词库、回复模板和短语包。", icon: "M8 3 4 6l2 4 2-1v12h8V9l2 1 2-4-4-3c-.5 1.5-2 2.5-4 2.5S8.5 4.5 8 3z", badge: "community" },
     { key: "issues", label: "问题分诊", path: "/issues", description: "分类、指派和回复 GitHub Issue。", icon: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 8v5M12 16.5v.01", badge: "issues" },
+    { key: "feedback", label: "用户反馈", path: "/feedback", description: "用户在 App 里提交的问题、建议和词库反馈，以及附带的截图。", icon: "M4 5h16v11H8l-4 4zM8 9h8M8 12.5h5" },
     { key: "words", label: "敏感词库", path: "/words", description: "词库投稿和社区内容的敏感词名单。", icon: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM5.6 5.6l12.8 12.8" },
   ] },
   { title: "运营", items: [

@@ -48,6 +48,48 @@ ALTER DEFAULT PRIVILEGES FOR ROLE msime_migrator IN SCHEMA public GRANT USAGE, S
 6. `PATCH /v1/users/me`：`{"display_name":"昵称"}`，最长 64 字符。
 7. 绑定其他身份：创建挑战时使用 `purpose: link`，创建和验证均携带同一用户的访问令牌。绑定与 `DELETE /v1/users/me` 注销操作均要求最近 10 分钟内重新登录。注销删除用户、身份、会话及关联挑战。
 
+## 我的设备
+
+- `GET /v1/users/me/sessions` 返回本账号未撤销、未过期的会话，最多 50 条，按最近活跃倒序：`{"sessions":[{"id","platform","name","app_version","created_at","last_active","current"}]}`。`platform`、`name`（设备型号）、`app_version` 从登录时记录的 User-Agent 解析：认 `msime-<平台>/<版本> (<型号>; <系统>; edition=<版本 id>)`（例如 Android 真实账号登录时发送的 `msime-android/2.1.0 (Pixel 8; Android 15; edition=pinyin)`）、旧客户端的 `MSIME/Android` 这类写法和常见浏览器；解析不出的字段为空字符串。User-Agent 只在登录时记录，刷新令牌不更新。`last_active` 取 `greatest(created_at, 访问令牌到期时间 - 15 分钟)`，即最近一次签发访问令牌的时间。`current` 标出发起请求的会话。
+- `DELETE /v1/users/me/sessions/{id}` 撤销自己的一个会话，204；会话不存在或属于其他用户时一律 404 `session_not_found`，不区分两种情况。撤销当前会话等同于退出登录。
+
+## 常用语同步
+
+`GET /v1/users/me/phrases` 返回 `{"revision","phrases":[{"id","text","group","position"}]}`，从未上传过时 revision 为 0、列表为空。`PUT` 整份替换，请求体 `{"revision","phrases":[…]}`，revision 必须等于当前值，否则 409 `revision_conflict`（客户端先重新读取再合并）。限制：最多 500 条，`text` 1–2000 个 UTF-16 码元、不能含 NUL，`group` 最多 32 个字符，`id` 1–64 字节且不重复，整个请求体最多 256 KiB。存在 `user_phrases` 表（每用户一行，与 `user_preferences` 同形），注销账号时删除。
+
+## App 内反馈
+
+`POST /v1/feedback` 需要用户会话，设备的匿名账号也可以提交。请求是 multipart：`payload` 部分是 JSON `{"type":"bug|suggestion|dictionary","text","platform","app_version","edition","diagnostics"?}`，`text` 1–500 个字符；`diagnostics` 可选，只允许 `device`、`os`、`app_version`、`edition`、`scheme`、`keyboard_layout`、`skin`、`ime_enabled`、`ime_default` 这些键，值是不超过 256 字节的字符串，出现其他键或值类型不对时整份 400。可附最多 3 个 `screenshots` 部分（PNG 或 JPEG，单张不超过 1 MiB），服务端解码后重新编码，丢掉 EXIF 等元数据，再存进 `feedback_screenshots` 表，不进头像存储、不提供公开地址。成功返回 201 `{"id","status":"received"}`。限流：每个用户每小时 5 次、每天 20 次，每个客户端地址每天 50 次，计数在 `auth_rates`，所有副本共享，超出返回 429 和 `Retry-After`。反馈保存 180 天，由 `Store.Prune` 清理，注销账号时级联删除；管理后台的「用户反馈」页查看和标记处理（见 [管理后台](admin.md)）。
+
+## Apple 网页登录（安卓）
+
+安卓没有 Apple 官方 SDK，走网页授权加 PKCE 式的一次性授权码，回调地址里既没有挑战 ID 也没有 ID Token。
+
+1. 客户端生成 32 字节随机 `code_verifier`（base64url 无填充，43 字符），`POST /v1/auth/apple/web` 提交 `{"code_challenge":"<base64url(SHA-256(verifier))>","code_challenge_method":"S256","app":"<applicationId>","purpose":"login"|"link"}`。`app` 只认六个安卓版本的 applicationId（`app.msime.android` 与 `.pinyin`、`.wubi`、`.japanese`、`.vietnamese`、`.tibetan`，与 msime 仓库 `shared/contracts/editions.json` 一致），它也是回调跳回 App 的 URL scheme。`purpose=link` 需要最近 10 分钟内登录的会话。返回 201 `{"authorization_url","expires_in":300}`：`client_id` 是 Services ID `app.msime.signin`，`redirect_uri` 是 `https://api.msime.app/v1/auth/apple/callback`，`response_mode=form_post`，`scope=name email`，`state` 是挑战 ID，`nonce` 由服务端生成。
+2. Apple 以表单 POST 回调 `/v1/auth/apple/callback`。这是全站唯一不检查 Origin 的路由，也不返回 CORS 头。服务端校验 state 对应的未过期挑战、ID Token（受众在 `auth.apple.client_ids` 里、nonce 等于挑战 nonce），把校验后的身份（subject、邮箱、是否验证、首次授权时的名字）写到挑战行上，签发 32 字节随机授权码，库里只存它的 SHA-256。响应是 200 的自包含落地页：CSP 为 `default-src 'none'; style-src 'unsafe-inline'`，另用哈希只放行一行跳转脚本；按钮链接 `<app>://auth/apple?grant=<grant>`，脚本尝试 `location.replace` 到同一地址（Custom Tab 可能拦截没有用户手势的外部 scheme，按钮是后备）。失败时链接 `<app>://auth/apple?error=<code>`，`code` 为 `cancelled`、`apple_error`、`invalid_token` 或 `unavailable`；state 无效时不知道该回哪个 App，只显示文字。页面不回显任何请求内容。
+3. 客户端用授权码和 verifier 调 `POST /v1/auth/apple/web/login {"grant","code_verifier"}`，响应与 `/v1/auth/login` 相同，会话记录这次请求的 User-Agent。授权码只能兑换一次（校验失败也作废），签发后 120 秒内有效，verifier 的 S256 必须与发起时的 challenge 相等（常量时间比较）；绑定流程要求请求带最近登录、且与发起时同一用户的会话，否则 400 `invalid_grant`。
+4. `POST /v1/auth/challenges` 拒绝 `provider=apple_web`，`POST /v1/auth/login` 拒绝 apple_web 的挑战（400 `unsupported_challenge`），截获的 ID Token 不能走老路。`GET /v1/auth/providers` 的 `apple_web` 只有 Services ID 已加进 `auth.apple.client_ids` 时为 true。上线顺序见 README「多副本部署」。
+
+伪造回调（login CSRF）拿不到对应的 verifier，兑换会失败；截获授权码的一方同样缺 verifier。
+
+## 云端数据
+
+- `GET /v1/users/me/data` 返回 `{"bytes","sections":[{"id","bytes","items"}]}`，分区依次为 `preferences`、`dictionary`、`phrases`、`clipboard`、`community`、`voice`、`avatar`。大小由一条 SQL 用 `pg_column_size` / `octet_length` 汇总，是统计信息而不是磁盘占用；头像在对象存储里，只报告有没有。
+- `GET /v1/users/me/data/export` 流式返回 `msime-data-<日期>.zip`：`profile.json`（ID、昵称、创建时间、只含 provider 名的身份列表）、`preferences.json`、`dictionary.ndjson`（与词库快照同一格式）、`phrases.json`、`clipboard.json`、`community.json`（作品元数据）、`sessions.json`（设备信息与时间，不含令牌摘要）。每个用户每天 3 次（`auth_rates` 键 `export:<uid 摘要>`），超出 429 带 `Retry-After`；路由时限 2 分钟。开始传输后出错只能中断连接，客户端拿到的是不完整的 zip。导出内容不写日志。
+- `DELETE /v1/users/me/data {"sections":[…]}` 要求最近登录，分区取 `preferences`、`dictionary`、`phrases`、`clipboard`、`voice`，至少一个、不能重复，返回 204。一个事务内完成：偏好和常用语清空并推进 revision，其他设备拿旧 revision 写入会 409 并拉到空文档；词库删除条目、覆盖层、位置和选择次数，写一条 `reset` 变更并推进 revision，开着同步的设备会整份重载，而不是把旧数据推回来。账号、会话和社区作品不在其中，分别走注销账号、我的设备和作品管理。
+
+## 发送下载链接
+
+`POST /v1/users/me/download-link {"platform":"windows|macos|linux|harmony-pc|ios|android|harmony"}` 把固定模板的邮件发到账号已验证的邮箱：邮箱登录身份优先，其次是 `email_verified` 的 Google 邮箱。不接受收件地址，正文里只有 `https://msime.app/download/?release=<platform>`，不放任何用户输入。返回 202 `{"sent_to":"u***@example.com"}`；没有已验证邮箱返回 409 `no_verified_email`（客户端改用复制链接），邮件未配置返回 503 `provider_disabled`，发送失败返回 503 `delivery_failed`（不透传 SMTP 错误）。每个用户每小时 3 次、每天 10 次，同时计入验证码共用的全站每天 500 封。邮件与验证码共用同一套 SMTP 连接、认证和发送代码。收件人是 Apple 隐藏邮箱时，需要先在 Apple 后台登记发件域名的 Private Email Relay。
+
+## 云剪贴板保留与置顶
+
+`GET /v1/users/me/clipboard` 的响应带 `retention_days`（0 表示一直保留），条目带 `pinned` 和 `device`（写入时所用会话的设备名，从登录时的 User-Agent 解析，认不出为空字符串）。置顶的条目排在最前，不受保留期清理，也不会被 50 条上限挤掉。`PUT /v1/users/me/clipboard/retention {"days":0|1|7|30}` 设置保留天数，每小时的清理任务删除超期的未置顶条目；它不改同步开关，`PUT /clipboard/settings` 的请求体保持不变。`PUT /v1/users/me/clipboard/{id}/pin {"pinned":bool}` 置顶或取消，条目不存在或属于别人时 404。
+
+## 语音贡献
+
+`POST /v1/voice/contributions` 只在用户打开「贡献语音」后由客户端调用，需要用户会话（匿名账号也可以），设备令牌返回 401。multipart：`payload` 为 JSON `{"language","provider","duration_ms","transcript","app_version"}`（未知字段 400，`duration_ms` 1–60000，`transcript` 最多 2000 字符），`audio` 为 WAV（RIFF 结构校验）或 Ogg，最多 2 MiB。返回 201 `{"id"}`。每个用户每小时 30 次（`auth_rates`，所有副本共享）。样本存在 `voice_contributions` 表，只用于改进语音识别，保留 180 天由清理任务删除，注销账号或删除云端数据的 `voice` 分区时一并删除；音频和文本不写日志。
+
 验证码最多尝试五次，每个目标每分钟一次、每小时五次、每天十次，全服务每天最多发送 500 次。邮箱地址统一转为小写。用户接口按客户端地址每分钟最多 120 次。客户端地址默认是 TCP 对端，不信任转发头；部署在反向代理后，把顶层 `client_ip_header` 设为代理覆盖写入的头（Cloudflare 为 `CF-Connecting-IP`；`X-Forwarded-For` 取最后一段），否则同一代理后的所有请求共享此额度。IPv6 按 /64 归为一个地址。官网的 BFF（Cloudflare Pages Functions）代访客调用接口，所有官网访客都从同一组 Cloudflare 出口过来；配置顶层 `site_proxy_secret_env`（指向保存共享密钥的环境变量，值为 32–256 个可见 ASCII 字符，必须与官网 Pages 的 Secret `SITE_PROXY_SECRET` 相同）后，请求头 `X-MSIME-Site-Proxy` 与该密钥相等（常量时间比较）的请求按 `X-MSIME-Client-IP` 中的访客地址计额度（须是合法 IP，IPv6 同样按 /64 归组），优先于 `client_ip_header`；密钥不符、未配置或地址不合法时这两个头被完全忽略。所有按地址的限额都经过同一个计算，所以账号接口、社区接口、匿名开户、遥测、后台登录和词条投稿都随之生效。匿名开户的每日限额（`auth.anonymous.daily_per_address`，默认 5）也按同一个地址计。公开的 `GET /v1/notices` 和 `GET /v1/site/download-mirrors` 另用一份每分钟 1200 次的额度，匿名的 `POST /v1/telemetry/events` 再用一份每分钟 60 次的额度，它们都不占用这 120 次。
 
 本地设置 `docs_enabled: true` 后，Swagger `/swagger/` 包含所有用户接口。生产环境默认关闭文档。未完成生产提供方配置时，不应宣称相应登录已经可用。测试使用本地签名 JWT、模拟短信和 SMTP 服务以及真实 PostgreSQL，不替代生产供应商联调。

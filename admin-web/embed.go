@@ -15,7 +15,7 @@ var assets embed.FS
 
 // pagePaths are the SPA routes served with index.html; keep in sync with src/routes/router.tsx.
 var pagePaths = map[string]bool{
-	"/": true, "/dictpr": true, "/community": true, "/issues": true, "/words": true,
+	"/": true, "/dictpr": true, "/community": true, "/issues": true, "/feedback": true, "/words": true,
 	"/users": true, "/downloads": true, "/notice": true, "/release": true, "/cloud": true,
 	"/crash": true, "/status": true, "/logs": true, "/perm": true, "/me": true,
 	// Pre-console paths that the client router redirects to their replacements.

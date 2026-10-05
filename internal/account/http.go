@@ -35,9 +35,11 @@ type Service struct {
 	client    *http.Client
 	verifiers map[string]Verifier
 	sender    Sender
-	cancel    context.CancelFunc
-	done      chan struct{}
-	once      sync.Once
+	// mailer 发送固定模板的通知邮件（目前只有下载链接），与验证码共用同一套 SMTP 连接与认证。
+	mailer Mailer
+	cancel context.CancelFunc
+	done   chan struct{}
+	once   sync.Once
 
 	// tokenKey is the AES-256 key sealing provider refresh tokens; set only when the Google desktop client is configured.
 	tokenKey []byte
@@ -97,6 +99,7 @@ func New(ctx context.Context, c Config) (*Service, error) {
 		a.tokenKey, _ = c.providerTokenKey()
 	}
 	a.sender = delivery{config: c}
+	a.mailer = delivery{config: c}
 	a.avatars = avatarStorageFor(c.Avatars)
 	go func() {
 		defer close(a.done)
@@ -165,6 +168,11 @@ func (a *Service) RateLimit(ctx context.Context, scope, subject string, limit in
 	return a.store.Rate(ctx, scope+":"+hash(subject), limit, window)
 }
 
+// RateLimitUntil 与 RateLimit 相同，超限时另外返回窗口剩余时长，调用方用它写 Retry-After。
+func (a *Service) RateLimitUntil(ctx context.Context, scope, subject string, limit int, window time.Duration) (time.Duration, error) {
+	return a.store.RateUntil(ctx, scope+":"+hash(subject), limit, window)
+}
+
 // 官网 BFF（Cloudflare Pages Functions）代访客调用接口时带的两个头：SiteProxyHeader 是共享密钥，SiteProxyClientIPHeader 是它看到的访客地址。所有官网访客从同一组 Cloudflare 出口过来，不信任后者就会共用一份按地址的额度。
 const (
 	SiteProxyHeader         = "X-MSIME-Site-Proxy"
@@ -213,10 +221,10 @@ func (a *Service) clientAddress(r *http.Request) string {
 }
 
 func IsPath(path string) bool {
-	return strings.HasPrefix(path, "/v1/community/") || path == siteDownloadMirrorsPath || path == TelemetryPath || strings.HasPrefix(path, "/v1/auth/") || path == "/v1/users/me" || strings.HasPrefix(path, "/v1/users/me/")
+	return strings.HasPrefix(path, "/v1/community/") || path == siteDownloadMirrorsPath || path == TelemetryPath || path == FeedbackPath || strings.HasPrefix(path, "/v1/auth/") || path == "/v1/users/me" || strings.HasPrefix(path, "/v1/users/me/") || strings.HasPrefix(path, DiagnosticsMCPPrefix)
 }
 
-// accountRouteTimeout is the context each mounted route runs under: 15 s, except the transfers whose body alone can take longer: the dictionary snapshot restore, a candidate-skin publish or replacement, and a plugin pack publish or download.
+// accountRouteTimeout 是每条挂载路由的上下文时限：默认 15 秒；请求体本身就可能传得更久的几条例外：词库快照恢复、候选窗皮肤发布或替换、插件包发布或下载，以及带截图的反馈。
 func accountRouteTimeout(pattern string) time.Duration {
 	switch pattern {
 	case "PUT /v1/users/me/dictionary/snapshot":
@@ -225,6 +233,10 @@ func accountRouteTimeout(pattern string) time.Duration {
 		return candidatePublishTimeout
 	case "POST /v1/community/plugins", "POST /v1/community/plugins/{id}/download":
 		return pluginTransferTimeout
+	case "POST " + FeedbackPath:
+		return feedbackTimeout
+	case "GET /v1/users/me/data/export":
+		return userDataExportTimeout
 	default:
 		return 15 * time.Second
 	}
@@ -305,6 +317,24 @@ func Mount(mux *http.ServeMux, a *Service) {
 		"GET /v1/users/me/preferences":                      (*Service).preferences,
 		"PUT /v1/users/me/preferences":                      (*Service).preferences,
 		"GET /v1/users/me/preferences/schema":               (*Service).preferencesSchema,
+		"GET /v1/users/me/phrases":                          (*Service).phrases,
+		"PUT /v1/users/me/phrases":                          (*Service).phrases,
+		"GET /v1/users/me/sessions":                         (*Service).sessions,
+		"DELETE /v1/users/me/sessions/{id}":                 (*Service).revokeSession,
+		"POST " + FeedbackPath:                              (*Service).feedback,
+		"GET /v1/users/me/data":                             (*Service).userDataSummary,
+		"GET /v1/users/me/data/export":                      (*Service).userDataExport,
+		"DELETE /v1/users/me/data":                          (*Service).userDataDelete,
+		"POST /v1/users/me/download-link":                   (*Service).downloadLink,
+		"PUT /v1/users/me/clipboard/retention":              (*Service).clipboardRetention,
+		"PUT /v1/users/me/clipboard/{id}/pin":               (*Service).clipboardPin,
+		"POST /v1/users/me/diagnostics":                     (*Service).diagnosticsUpload,
+		"GET /v1/users/me/diagnostics":                      (*Service).diagnosticsGet,
+		"DELETE /v1/users/me/diagnostics":                   (*Service).diagnosticsDelete,
+		"POST /v1/users/me/diagnostics/token":               (*Service).diagnosticsToken,
+		"POST /v1/auth/apple/web":                           (*Service).appleWebBegin,
+		"POST " + AppleCallbackPath:                         (*Service).appleWebCallback,
+		"POST /v1/auth/apple/web/login":                     (*Service).appleWebLogin,
 		"GET /v1/auth/providers":                            (*Service).providers,
 		"POST /v1/auth/challenges":                          (*Service).begin,
 		"POST /v1/auth/login":                               (*Service).login,
@@ -415,13 +445,15 @@ func (a *Service) enabled(provider string) bool {
 		return a.config.SMS.TemplateCode != ""
 	case "anonymous":
 		return a.config.Anonymous.Enabled
+	case "apple_web":
+		return a.appleWebEnabled()
 	default:
 		return false
 	}
 }
 func (a *Service) providers(w http.ResponseWriter, r *http.Request) {
 	m := map[string]bool{}
-	for _, p := range []string{"apple", "google", "wechat", "phone", "email", "anonymous"} {
+	for _, p := range []string{"apple", "apple_web", "google", "wechat", "phone", "email", "anonymous"} {
 		m[p] = a.enabled(p)
 	}
 	write(w, 200, map[string]any{"providers": m})
@@ -452,6 +484,11 @@ func (a *Service) begin(w http.ResponseWriter, r *http.Request) {
 		Purpose  string `json:"purpose"`
 	}
 	if !read(w, r, &v) {
+		return
+	}
+	// apple_web 只是 providers 里给客户端看的开关，它的挑战只能由 POST /v1/auth/apple/web 创建。
+	if v.Provider == "apple_web" {
+		writeError(w, 400, "invalid_provider")
 		return
 	}
 	if !a.enabled(v.Provider) {
@@ -579,6 +616,11 @@ func (a *Service) login(w http.ResponseWriter, r *http.Request) {
 	c, e := a.store.Attempt(r.Context(), v.ChallengeID)
 	if e != nil {
 		a.error(w, e)
+		return
+	}
+	// Apple 网页登录只能用一次性授权码加 PKCE verifier 兑换（/v1/auth/apple/web/login），截获的 id_token 不能从这里走老路。
+	if c.Provider == "apple_web" {
+		writeError(w, 400, "unsupported_challenge")
 		return
 	}
 	if c.LinkUser != "" {

@@ -79,3 +79,15 @@ CREATE TABLE IF NOT EXISTS user_candidate_selections (
  count integer NOT NULL CHECK(count BETWEEN 0 AND 10),
  PRIMARY KEY(user_id,context,code,word)
 );
+
+-- 无编码常用语与偏好同一形状：整份列表一个 revision，PUT 时 CAS。
+CREATE TABLE IF NOT EXISTS user_phrases (
+ user_id text PRIMARY KEY REFERENCES auth_users(id) ON DELETE CASCADE,
+ revision bigint NOT NULL DEFAULT 0,
+ phrases jsonb NOT NULL DEFAULT '[]'
+);
+
+-- 云剪贴板的保留天数（0 表示一直保留，否则 1、7、30）、置顶和写入设备名。纯增量、带默认值：旧版本副本插入时不写这些列。
+ALTER TABLE user_clipboard_settings ADD COLUMN IF NOT EXISTS retention_days integer NOT NULL DEFAULT 0;
+ALTER TABLE user_clipboard ADD COLUMN IF NOT EXISTS pinned boolean NOT NULL DEFAULT false;
+ALTER TABLE user_clipboard ADD COLUMN IF NOT EXISTS device text NOT NULL DEFAULT '';

@@ -21,7 +21,7 @@ const count = (value: number) => value.toLocaleString("zh-CN");
 // itemMeta is the card's stats line after the author, built only from real counters.
 export function itemMeta(section: Section, item: Item): string {
   const parts: string[] = [];
-  if (section === "dictionaries" && item.entries != null) parts.push(`${count(item.entries)} 条`);
+  if ((section === "dictionaries" || section === "phrases") && item.entries != null) parts.push(`${count(item.entries)} 条`);
   if (item.downloads !== undefined) parts.push(`下载 ${count(item.downloads)}`);
   if (item.saves !== undefined) parts.push(`收藏 ${count(item.saves)}`);
   if ((section === "skins" || section === "candidate-skins") && item.category) parts.push(candidateCategoryLabel(item.category));
@@ -37,6 +37,9 @@ export function previewLines(section: Section, item: Item): string[] {
       return (item.preview ?? []).map(entry => `${entry.word}  ${entry.code}`);
     case "replies":
       return (item.prompt ?? "").split("\n").map(line => line.trim()).filter(Boolean).slice(0, 3);
+    case "phrases":
+      // 每条短语只取第一行，多行模板在抽屉里看全文。
+      return (item.phrases ?? []).map(text => text.split("\n")[0].trim()).filter(Boolean);
     case "candidate-skins":
       return [item.package_id ?? "", `v${item.version ?? "?"} · ${item.file_count ?? 0} 个文件 · ${formatBytes(item.size ?? 0)}`, item.description ?? ""].filter(Boolean);
     case "plugins":

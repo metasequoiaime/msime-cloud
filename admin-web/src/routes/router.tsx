@@ -25,6 +25,7 @@ const overviewRoute = page("/", () => import("../pages/overview"));
 const dictprRoute = page("/dictpr", () => import("../pages/dictpr"));
 const communityRoute = page("/community", () => import("../pages/community"));
 const issuesRoute = page("/issues", () => import("../pages/issues"));
+const feedbackRoute = page("/feedback", () => import("../pages/feedback"));
 const wordsRoute = page("/words", () => import("../pages/words"));
 const usersRoute = page("/users", () => import("../pages/users"));
 const downloadsRoute = page("/downloads", () => import("../pages/downloads"));
@@ -44,7 +45,7 @@ const moved = <P extends string>(path: P, to: "/perm" | "/status" | "/crash" | "
   } });
 
 const routeTree = rootRoute.addChildren([
-  overviewRoute, dictprRoute, communityRoute, issuesRoute, wordsRoute, usersRoute, downloadsRoute, noticeRoute, releaseRoute, cloudRoute, crashRoute, statusRoute, logsRoute, permRoute, meRoute,
+  overviewRoute, dictprRoute, communityRoute, issuesRoute, feedbackRoute, wordsRoute, usersRoute, downloadsRoute, noticeRoute, releaseRoute, cloudRoute, crashRoute, statusRoute, logsRoute, permRoute, meRoute,
   moved("/admins", "/perm"), moved("/audit", "/perm"), moved("/system", "/status"), moved("/crashes", "/crash"), moved("/skins", "/community", "skins"), moved("/dictionaries", "/community", "dictionaries"), moved("/replies", "/community", "replies"), moved("/site-settings", "/downloads"),
 ]);
 

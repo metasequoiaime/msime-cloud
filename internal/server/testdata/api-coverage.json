@@ -32,7 +32,8 @@
       "internal/server/stream_test.go::TestStreamAuthenticationAndExpiry"
     ],
     "GET /v1/auth/providers": [
-      "internal/account/http_contract_test.go::TestProviderDiscoveryAndMalformedAuthenticationBodies"
+      "internal/account/http_contract_test.go::TestProviderDiscoveryAndMalformedAuthenticationBodies",
+      "internal/account/apple_web_test.go::TestAppleWebSignIn"
     ],
     "POST /v1/auth/challenges": [
       "internal/account/account_test.go::TestEmailHTTPFlowAndFailure",
@@ -72,18 +73,22 @@
       "internal/account/preferences_test.go::TestPreferencesRevisionIsolationAndDeletion"
     ],
     "PUT /v1/users/me/preferences": [
-      "internal/account/preferences_test.go::TestPreferencesRevisionIsolationAndDeletion"
+      "internal/account/preferences_test.go::TestPreferencesRevisionIsolationAndDeletion",
+      "internal/account/preferences_test.go::TestAndroidPreferenceFields"
     ],
     "GET /v1/users/me/preferences/schema": [
-      "internal/account/preferences_test.go::TestPreferencesRevisionIsolationAndDeletion"
+      "internal/account/preferences_test.go::TestPreferencesRevisionIsolationAndDeletion",
+      "internal/account/preferences_test.go::TestAndroidPreferenceFields"
     ],
     "GET /v1/users/me/clipboard": [
       "internal/account/clipboard_test.go::TestClipboardConsentIsolationLimitAndDeletion",
-      "internal/account/http_contract_test.go::TestClipboardClearAndCommunityResourceDeleteHTTP"
+      "internal/account/http_contract_test.go::TestClipboardClearAndCommunityResourceDeleteHTTP",
+      "internal/account/clipboard_retention_test.go::TestClipboardRetentionPinAndDevice"
     ],
     "POST /v1/users/me/clipboard": [
       "internal/account/clipboard_test.go::TestClipboardConsentIsolationLimitAndDeletion",
-      "internal/account/http_contract_test.go::TestClipboardClearAndCommunityResourceDeleteHTTP"
+      "internal/account/http_contract_test.go::TestClipboardClearAndCommunityResourceDeleteHTTP",
+      "internal/account/clipboard_retention_test.go::TestClipboardRetentionPinAndDevice"
     ],
     "DELETE /v1/users/me/clipboard": [
       "internal/account/clipboard_test.go::TestClipboardConsentIsolationLimitAndDeletion",
@@ -245,7 +250,8 @@
       "internal/account/community_stats_test.go::TestCommunityStatsCountsPublicContentAnonymously"
     ],
     "POST /v1/community/reports": [
-      "internal/account/admin_moderation_test.go::TestCommunityReport"
+      "internal/account/admin_moderation_test.go::TestCommunityReport",
+      "internal/account/community_resources_test.go::TestResourcePhrasePackHTTP"
     ],
     "GET /v1/site/download-mirrors": [
       "internal/account/site_settings_test.go::TestSiteDownloadMirrorAdminEditAndPublicRead"
@@ -352,27 +358,33 @@
     ],
     "GET /v1/community/resources": [
       "internal/account/community_resources_test.go::TestResourcePublishVersionSaveRatingIsolation",
-      "internal/account/admin_moderation_test.go::TestAuthorSeesModerationStateOnlyWhenAsked"
+      "internal/account/admin_moderation_test.go::TestAuthorSeesModerationStateOnlyWhenAsked",
+      "internal/account/community_resources_test.go::TestResourcePhrasePackHTTP"
     ],
     "POST /v1/community/resources": [
-      "internal/account/community_resources_test.go::TestResourcePublishVersionSaveRatingIsolation"
+      "internal/account/community_resources_test.go::TestResourcePublishVersionSaveRatingIsolation",
+      "internal/account/community_resources_test.go::TestResourcePhrasePackHTTP"
     ],
     "GET /v1/community/resources/{id}": [
       "internal/account/community_resources_test.go::TestResourcePublishVersionSaveRatingIsolation",
-      "internal/account/admin_moderation_test.go::TestAuthorSeesModerationStateOnlyWhenAsked"
+      "internal/account/admin_moderation_test.go::TestAuthorSeesModerationStateOnlyWhenAsked",
+      "internal/account/community_resources_test.go::TestResourcePhrasePackHTTP"
     ],
     "DELETE /v1/community/resources/{id}": [
       "internal/account/http_contract_test.go::TestClipboardClearAndCommunityResourceDeleteHTTP"
     ],
     "POST /v1/community/resources/{id}/apply": [
-      "internal/account/community_resource_apply_test.go::TestResourceApplyAtomicVersionedMerge"
+      "internal/account/community_resource_apply_test.go::TestResourceApplyAtomicVersionedMerge",
+      "internal/account/community_resources_test.go::TestResourcePhrasePackHTTP"
     ],
     "PUT /v1/community/resources/{id}/save": [
-      "internal/account/community_resources_test.go::TestResourcePublishVersionSaveRatingIsolation"
+      "internal/account/community_resources_test.go::TestResourcePublishVersionSaveRatingIsolation",
+      "internal/account/community_resources_test.go::TestResourcePhrasePackHTTP"
     ],
     "PUT /v1/community/resources/{id}/rating": [
       "internal/account/community_resources_test.go::TestResourcePublishVersionSaveRatingIsolation",
-      "internal/account/community_saves_test.go::TestResourceRatingWithoutSave"
+      "internal/account/community_saves_test.go::TestResourceRatingWithoutSave",
+      "internal/account/community_resources_test.go::TestResourcePhrasePackHTTP"
     ],
     "POST /v1/telemetry/events": [
       "internal/account/admin_test.go::TestAdminDataAndActions",
@@ -389,7 +401,8 @@
     "POST /v1/skins/jobs": [
       "internal/server/skin_jobs_test.go::TestSkinJobReturnsBeforeUpstreamAndBindsOwner",
       "internal/server/skin_jobs_test.go::TestSkinJobCapacityCancelExpiryAndShutdown",
-      "internal/server/skin_jobs_test.go::TestSharedSkinJobCapsSpanReplicas"
+      "internal/server/skin_jobs_test.go::TestSharedSkinJobCapsSpanReplicas",
+      "internal/server/skin_jobs_quota_test.go::TestSharedSkinJobDailyQuota"
     ],
     "GET /v1/skins/jobs/{job}": [
       "internal/server/skin_jobs_test.go::TestSkinJobReturnsBeforeUpstreamAndBindsOwner",
@@ -427,6 +440,75 @@
       "internal/server/telegram_test.go::TestPublicNoticesFeedAndTelegramPublish",
       "internal/account/admin_notices_test.go::TestNoticeDraftPublishArchiveLifecycle",
       "internal/account/admin_notices_test.go::TestNoticeValidationAndPermissions"
+    ],
+    "GET /v1/users/me/sessions": [
+      "internal/account/sessions_test.go::TestUserSessionsListAndRevokeIsolation",
+      "internal/account/sessions_test.go::TestUserSessionsStorageFailure"
+    ],
+    "DELETE /v1/users/me/sessions/{id}": [
+      "internal/account/sessions_test.go::TestUserSessionsListAndRevokeIsolation",
+      "internal/account/sessions_test.go::TestUserSessionsStorageFailure"
+    ],
+    "GET /v1/users/me/phrases": [
+      "internal/account/phrases_test.go::TestPhrasesRevisionIsolationAndDeletion",
+      "internal/account/phrases_test.go::TestPhrasesStorageFailure"
+    ],
+    "PUT /v1/users/me/phrases": [
+      "internal/account/phrases_test.go::TestPhrasesRevisionIsolationAndDeletion",
+      "internal/account/phrases_test.go::TestPhrasesStorageFailure"
+    ],
+    "POST /v1/feedback": [
+      "internal/account/feedback_test.go::TestFeedbackSubmitAndValidationHTTP",
+      "internal/account/feedback_test.go::TestFeedbackLimitsRetentionAndDeletion",
+      "internal/account/feedback_test.go::TestFeedbackUnavailable"
+    ],
+    "POST /v1/auth/apple/web": [
+      "internal/account/apple_web_test.go::TestAppleWebSignIn",
+      "internal/account/apple_web_test.go::TestAppleWebAppsMatchAndroidEditions"
+    ],
+    "POST /v1/auth/apple/callback": [
+      "internal/account/apple_web_test.go::TestAppleWebSignIn",
+      "internal/server/routes_contract_test.go::TestAppleOriginAcceptedOnlyOnCallback"
+    ],
+    "POST /v1/auth/apple/web/login": [
+      "internal/account/apple_web_test.go::TestAppleWebSignIn",
+      "internal/account/apple_web_test.go::TestPKCEHelpers"
+    ],
+    "GET /v1/users/me/data": [
+      "internal/account/user_data_test.go::TestUserDataSummaryExportAndDelete"
+    ],
+    "DELETE /v1/users/me/data": [
+      "internal/account/user_data_test.go::TestUserDataSummaryExportAndDelete"
+    ],
+    "GET /v1/users/me/data/export": [
+      "internal/account/user_data_test.go::TestUserDataSummaryExportAndDelete"
+    ],
+    "POST /v1/users/me/download-link": [
+      "internal/account/download_link_test.go::TestDownloadLink",
+      "internal/account/download_link_test.go::TestMaskEmailAndTemplate"
+    ],
+    "PUT /v1/users/me/clipboard/retention": [
+      "internal/account/clipboard_retention_test.go::TestClipboardRetentionPinAndDevice"
+    ],
+    "PUT /v1/users/me/clipboard/{id}/pin": [
+      "internal/account/clipboard_retention_test.go::TestClipboardRetentionPinAndDevice"
+    ],
+    "POST /v1/voice/contributions": [
+      "internal/server/voice_contributions_test.go::TestVoiceContributions",
+      "internal/server/voice_contributions_test.go::TestVoiceAudioMime"
+    ],
+    "POST /v1/users/me/diagnostics": [
+      "internal/account/diagnostics_test.go::TestDiagnosticsUploadReadRotateAndDelete",
+      "internal/account/diagnostics_test.go::TestValidateDiagnosticUpload"
+    ],
+    "GET /v1/users/me/diagnostics": [
+      "internal/account/diagnostics_test.go::TestDiagnosticsUploadReadRotateAndDelete"
+    ],
+    "DELETE /v1/users/me/diagnostics": [
+      "internal/account/diagnostics_test.go::TestDiagnosticsUploadReadRotateAndDelete"
+    ],
+    "POST /v1/users/me/diagnostics/token": [
+      "internal/account/diagnostics_test.go::TestDiagnosticsUploadReadRotateAndDelete"
     ]
   },
   "admin_and_docs": {
@@ -465,9 +547,15 @@
       "internal/account/admin_test.go::TestAdminDataAndActions",
       "internal/account/admin_test.go::TestAdminListFilters"
     ],
+    "GET /api/phrases": [
+      "internal/account/community_resources_test.go::TestResourcePhrasePackHTTP"
+    ],
     "GET /api/audit": [
       "internal/account/admin_test.go::TestAdminDataAndActions",
       "internal/account/admin_test.go::TestAdminListFilters"
+    ],
+    "GET /api/feedback": [
+      "internal/account/admin_feedback_test.go::TestAdminFeedbackListScreenshotsAndStatus"
     ],
     "GET /api/users/{id}": [
       "internal/account/admin_user_test.go::TestAdminUserDetailsAndSessionRevocation"
@@ -487,12 +575,17 @@
     "GET /api/replies/{id}": [
       "internal/account/admin_content_test.go::TestAdminContentDetails"
     ],
+    "GET /api/phrases/{id}": [
+      "internal/account/community_resources_test.go::TestResourcePhrasePackHTTP"
+    ],
     "POST /api/actions": [
       "internal/account/admin_test.go::TestAdminDataAndActions",
       "internal/account/admin_contract_test.go::TestAdminHTTPValidationAndAuditAtomicity",
       "internal/account/admin_user_test.go::TestAdminUserDetailsAndSessionRevocation",
       "internal/account/community_plugins_test.go::TestCommunityPluginModeration",
-      "internal/account/admin_notices_test.go::TestNoticeBodyUsesTheFullColumn"
+      "internal/account/admin_notices_test.go::TestNoticeBodyUsesTheFullColumn",
+      "internal/account/admin_feedback_test.go::TestAdminFeedbackListScreenshotsAndStatus",
+      "internal/account/community_resources_test.go::TestResourcePhrasePackHTTP"
     ],
     "GET /api/site-settings": [
       "internal/account/site_settings_test.go::TestSiteDownloadMirrorAdminEditAndPublicRead"
@@ -535,6 +628,9 @@
     "GET /openapi.json": [
       "internal/server/docs_test.go::TestDocumentationAndBrowserAuthentication",
       "internal/server/docs_test.go::TestDocumentationDisabledByDefault"
+    ],
+    "GET /api/feedback/{id}": [
+      "internal/account/admin_feedback_test.go::TestAdminFeedbackListScreenshotsAndStatus"
     ]
   },
   "shared": [

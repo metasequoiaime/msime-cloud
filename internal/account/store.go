@@ -48,6 +48,15 @@ var adminOpsSchema string
 
 //go:embed skin_job_schema.sql
 var skinJobSchema string
+
+//go:embed feedback_schema.sql
+var feedbackSchema string
+
+//go:embed voice_contributions_schema.sql
+var voiceContributionsSchema string
+
+//go:embed diagnostics_schema.sql
+var diagnosticsSchema string
 var ErrInvalid = errors.New("invalid_credentials")
 var ErrLimited = errors.New("rate_limit_exceeded")
 var ErrConflict = errors.New("identity_already_linked")
@@ -175,7 +184,7 @@ func (s *Store) MigrateAs(ctx context.Context, role string) error {
 			return e
 		}
 	}
-	if _, e = tx.Exec(ctx, schema+"\n"+userDataSchema+"\n"+communitySchema+"\n"+adminSchema+"\n"+translationSchema+"\n"+candidateSkinSchema+"\n"+communityCandidateSkinSchema+"\n"+communityPluginSchema+"\n"+adminOpsSchema+"\n"+skinJobSchema); e != nil {
+	if _, e = tx.Exec(ctx, schema+"\n"+userDataSchema+"\n"+communitySchema+"\n"+adminSchema+"\n"+translationSchema+"\n"+candidateSkinSchema+"\n"+communityCandidateSkinSchema+"\n"+communityPluginSchema+"\n"+adminOpsSchema+"\n"+skinJobSchema+"\n"+feedbackSchema+"\n"+voiceContributionsSchema+"\n"+diagnosticsSchema); e != nil {
 		return e
 	}
 	return tx.Commit(ctx)
@@ -184,6 +193,7 @@ func (s *Store) Ready(ctx context.Context) error {
 	var n int
 	if e := s.pool.QueryRow(ctx, `SELECT count(*) FROM auth_users u
  LEFT JOIN user_preferences p ON p.user_id=u.id
+ LEFT JOIN user_phrases up ON up.user_id=u.id
  LEFT JOIN user_clipboard_settings cs ON cs.user_id=u.id
  LEFT JOIN user_clipboard c ON c.user_id=u.id
  LEFT JOIN user_dictionary_state ds ON ds.user_id=u.id
@@ -218,6 +228,23 @@ func (s *Store) Ready(ctx context.Context) error {
  LEFT JOIN auth_provider_tokens pt ON false WHERE false`).Scan(&n); e != nil {
 		return e
 	}
+	// App 内反馈与它的截图；缺表时启动走迁移。
+	if _, e := s.pool.Exec(ctx, `SELECT id,user_id,type,text,platform,app_version,edition,diagnostics,status,created_at FROM feedback WHERE false;
+SELECT feedback_id,position,mime,bytes FROM feedback_screenshots WHERE false`); e != nil {
+		return e
+	}
+	// Apple 网页登录的挑战列、云剪贴板的保留天数 / 置顶 / 设备列和语音贡献表；缺任何一个时启动走迁移。
+	if _, e := s.pool.Exec(ctx, `SELECT code_challenge,verified_subject,verified_email,verified_email_verified,verified_name,grant_hash,granted_at FROM auth_challenges WHERE false;
+SELECT retention_days FROM user_clipboard_settings WHERE false;
+SELECT pinned,device FROM user_clipboard WHERE false;
+SELECT id,user_id,language,provider,duration_ms,transcript,app_version,audio_mime,audio,created_at FROM voice_contributions WHERE false`); e != nil {
+		return e
+	}
+	// 诊断快照与它的访问记录；缺表时启动走迁移。
+	if _, e := s.pool.Exec(ctx, `SELECT id,user_id,token_hash,token_hint,platform,app_version,sections,content,bytes,created_at,expires_at FROM diagnostic_snapshots WHERE false;
+SELECT id,snapshot_id,tool,arguments,result_count,bytes,at FROM diagnostic_accesses WHERE false`); e != nil {
+		return e
+	}
 	// AI skin artwork jobs are shared between replicas through this table; without it a poll on another replica could not find the job.
 	if _, e := s.pool.Exec(ctx, `SELECT id,owner,state,reason,artwork,cancelled,created_at,heartbeat_at,expires_at FROM skin_jobs WHERE false`); e != nil {
 		return e
@@ -237,6 +264,14 @@ func (s *Store) Ready(ctx context.Context) error {
 	}
 	if !reservedIDs {
 		return errors.New("candidate skin id constraints predate the msime-windows looks")
+	}
+	// 社区资源和举报的 kind 也在 CHECK 约束里：约束还不含短语包（phrase、phrases）时启动走迁移，否则发布短语包和举报它会在插入时失败。
+	var phraseKinds bool
+	if e := s.pool.QueryRow(ctx, `SELECT count(*)=2 FROM pg_constraint WHERE (conrelid='community_resources'::regclass AND conname='community_resources_kind_known' AND pg_get_constraintdef(oid) LIKE '%phrase%') OR (conrelid='community_reports'::regclass AND conname='community_reports_kind_known' AND pg_get_constraintdef(oid) LIKE '%phrases%')`).Scan(&phraseKinds); e != nil {
+		return e
+	}
+	if !phraseKinds {
+		return errors.New("community resource and report kind constraints predate phrase packs")
 	}
 	return s.consoleReady(ctx)
 }
@@ -294,6 +329,22 @@ func (s *Store) Rate(ctx context.Context, key string, limit int, window time.Dur
 		return ErrLimited
 	}
 	return nil
+}
+
+// RateUntil 与 Rate 计数方式相同，超限时额外返回当前窗口的剩余时长，供响应的 Retry-After 使用。
+func (s *Store) RateUntil(ctx context.Context, key string, limit int, window time.Duration) (time.Duration, error) {
+	var n int
+	var expires, now time.Time
+	e := s.pool.QueryRow(ctx, `INSERT INTO auth_rates(key,count,expires_at) VALUES($1,1,now()+$2::interval)
+ ON CONFLICT(key) DO UPDATE SET count=CASE WHEN auth_rates.expires_at<=now() THEN 1 ELSE least(auth_rates.count+1,$3+1) END,
+ expires_at=CASE WHEN auth_rates.expires_at<=now() THEN excluded.expires_at ELSE auth_rates.expires_at END RETURNING count,expires_at,now()`, key, window.String(), limit).Scan(&n, &expires, &now)
+	if e != nil {
+		return 0, e
+	}
+	if n > limit {
+		return max(expires.Sub(now), time.Second), ErrLimited
+	}
+	return 0, nil
 }
 func (s *Store) PutChallenge(ctx context.Context, c Challenge) error {
 	_, e := s.pool.Exec(ctx, `INSERT INTO auth_challenges(id_hash,provider,subject,nonce,code_hash,link_user,code_verifier,redirect_uri,expires_at) VALUES($1,$2,$3,$4,$5,NULLIF($6,''),$7,$8,now()+interval '5 minutes')`, c.IDHash, c.Provider, c.Subject, c.Nonce, c.CodeHash, c.LinkUser, c.CodeVerifier, c.RedirectURI)
@@ -560,8 +611,40 @@ func (s *Store) DeleteUser(ctx context.Context, uid string) error {
 }
 func (s *Store) Prune(ctx context.Context) {
 	for _, q := range []string{"DELETE FROM admin_login_flows WHERE expires_at<now()", "DELETE FROM admin_sessions WHERE expires_at<now()", "DELETE FROM admin_tokens WHERE expires_at<now()", "DELETE FROM auth_challenges WHERE expires_at<now()", "DELETE FROM auth_rates WHERE expires_at<now()", "DELETE FROM auth_sessions WHERE expires_at<now()", "DELETE FROM skin_jobs WHERE expires_at<now()",
+		// 诊断快照到期即删，访问记录随外键一起删除。
+		"DELETE FROM diagnostic_snapshots WHERE expires_at<now()",
 		// Activity heartbeats and session ends only feed the overview's last 60 days, so they are kept for telemetryActivityRetentionDays. Downloads and crashes stay: the cumulative counters and crash groups read them.
-		"DELETE FROM admin_events WHERE kind IN ('active','session','session_crash') AND created_at<now()-interval '" + strconv.Itoa(telemetryActivityRetentionDays) + " days'"} {
+		"DELETE FROM admin_events WHERE kind IN ('active','session','session_crash') AND created_at<now()-interval '" + strconv.Itoa(telemetryActivityRetentionDays) + " days'",
+		// 反馈只保留 feedbackRetentionDays 天，截图随外键一起删除。
+		"DELETE FROM feedback WHERE created_at<now()-interval '" + strconv.Itoa(feedbackRetentionDays) + " days'",
+		// 语音贡献只保留 voiceContributionRetentionDays 天。
+		"DELETE FROM voice_contributions WHERE created_at<now()-interval '" + strconv.Itoa(voiceContributionRetentionDays) + " days'",
+		// 云剪贴板按用户设置的保留天数清理，置顶的条目不受保留期影响；0 表示一直保留。
+		"DELETE FROM user_clipboard c USING user_clipboard_settings cs WHERE cs.user_id=c.user_id AND cs.retention_days>0 AND NOT c.pinned AND c.updated_at<now()-make_interval(days=>cs.retention_days)"} {
 		s.pool.Exec(ctx, q)
 	}
+}
+
+// voiceContributionRetentionDays 是语音贡献的保留期，到期由 Store.Prune 删除。
+const voiceContributionRetentionDays = 180
+
+// VoiceContribution 是用户自愿上传的一条语音样本：音频已由调用方校验为 WAV 或 Ogg、不超过 60 秒。
+type VoiceContribution struct {
+	Language, Provider, Transcript, AppVersion, AudioMime string
+	DurationMS                                            int
+	Audio                                                 []byte
+}
+
+// SaveVoiceContribution 写入一条语音贡献并返回它的 ID。被封禁的账号写不进来（与其他用户数据共用 userDataTransaction 的行锁）。
+func (a *Service) SaveVoiceContribution(ctx context.Context, user string, v VoiceContribution) (string, error) {
+	tx, err := a.store.userDataTransaction(ctx, user)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx)
+	id := randomToken()
+	if _, err = tx.Exec(ctx, `INSERT INTO voice_contributions(id,user_id,language,provider,duration_ms,transcript,app_version,audio_mime,audio) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, id, user, v.Language, v.Provider, v.DurationMS, v.Transcript, v.AppVersion, v.AudioMime, v.Audio); err != nil {
+		return "", err
+	}
+	return id, tx.Commit(ctx)
 }

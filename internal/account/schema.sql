@@ -47,3 +47,12 @@ CREATE TABLE IF NOT EXISTS auth_provider_tokens (
  updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(provider, subject),
  FOREIGN KEY(provider, subject) REFERENCES auth_identities(provider, subject) ON DELETE CASCADE
 );
+-- Apple 网页登录（provider='apple_web'）：挑战行存客户端 PKCE 的 code_challenge，回调校验 ID Token 后把身份写进 verified_* 列，并只存一次性授权码的 SHA-256 和签发时间。纯增量、带默认值：旧版本副本不读也不写这些列。
+ALTER TABLE auth_challenges ADD COLUMN IF NOT EXISTS code_challenge text NOT NULL DEFAULT '';
+ALTER TABLE auth_challenges ADD COLUMN IF NOT EXISTS verified_subject text NOT NULL DEFAULT '';
+ALTER TABLE auth_challenges ADD COLUMN IF NOT EXISTS verified_email text NOT NULL DEFAULT '';
+ALTER TABLE auth_challenges ADD COLUMN IF NOT EXISTS verified_email_verified boolean NOT NULL DEFAULT false;
+ALTER TABLE auth_challenges ADD COLUMN IF NOT EXISTS verified_name text NOT NULL DEFAULT '';
+ALTER TABLE auth_challenges ADD COLUMN IF NOT EXISTS grant_hash text NOT NULL DEFAULT '';
+ALTER TABLE auth_challenges ADD COLUMN IF NOT EXISTS granted_at timestamptz;
+CREATE INDEX IF NOT EXISTS auth_challenges_grant ON auth_challenges(grant_hash) WHERE grant_hash<>'';

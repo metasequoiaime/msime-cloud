@@ -34,6 +34,7 @@ func (a *Service) adminUser(w http.ResponseWriter, r *http.Request, id string) {
  'plugins',(SELECT count(*) FROM community_plugins WHERE owner_id=u.id),
  'dictionaries',(SELECT count(*) FROM community_resources WHERE owner_id=u.id AND kind='dictionary'),
  'replies',(SELECT count(*) FROM community_resources WHERE owner_id=u.id AND kind='reply'),
+ 'phrases',(SELECT count(*) FROM community_resources WHERE owner_id=u.id AND kind='phrase'),
  'sessions',COALESCE((SELECT json_agg(x ORDER BY created_at DESC,id DESC) FROM (
  SELECT id,created_at,expires_at,greatest(created_at,access_expires-interval '15 minutes') AS last_active,user_agent,CASE WHEN revoked THEN 'revoked' WHEN expires_at<=now() THEN 'expired' ELSE 'active' END AS status
  FROM auth_sessions WHERE user_id=u.id ORDER BY created_at DESC,id DESC LIMIT 50
@@ -43,7 +44,7 @@ func (a *Service) adminUser(w http.ResponseWriter, r *http.Request, id string) {
   SELECT 'skins' AS section,s.id,s.name,s.moderation,COALESCE(s.moderation_reason,'') AS moderation_reason,s.created_at,(SELECT count(*) FROM community_skin_downloads d WHERE d.skin_id=s.id) AS downloads,0::bigint AS saves FROM community_skins s WHERE s.owner_id=u.id
   UNION ALL SELECT 'candidate-skins',c.id,c.name,c.moderation,COALESCE(c.moderation_reason,''),c.created_at,(SELECT count(*) FROM community_candidate_skin_downloads d WHERE d.skin_id=c.id),0 FROM community_candidate_skins c WHERE c.owner_id=u.id
   UNION ALL SELECT 'plugins',p.id,p.name,p.moderation,COALESCE(p.moderation_reason,''),p.created_at,(SELECT count(*) FROM community_plugin_downloads d WHERE d.pack_id=p.id),0 FROM community_plugins p WHERE p.owner_id=u.id
-  UNION ALL SELECT CASE r.kind WHEN 'dictionary' THEN 'dictionaries' ELSE 'replies' END,r.id,r.name,r.moderation,COALESCE(r.moderation_reason,''),r.created_at,0,(SELECT count(*) FROM community_resource_saves v WHERE v.resource_id=r.id) FROM community_resources r WHERE r.owner_id=u.id
+  UNION ALL SELECT `+resourceSectionSQL("r.")+`,r.id,r.name,r.moderation,COALESCE(r.moderation_reason,''),r.created_at,0,(SELECT count(*) FROM community_resource_saves v WHERE v.resource_id=r.id) FROM community_resources r WHERE r.owner_id=u.id
  ) all_works ORDER BY created_at DESC,id DESC LIMIT 20
  ) w),'[]'::json),
  'history',COALESCE((SELECT json_agg(h ORDER BY created_at DESC,id DESC) FROM (

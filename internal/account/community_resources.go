@@ -18,10 +18,48 @@ type SharedWord struct {
 	Word   string `json:"word"`
 	Weight int64  `json:"weight"`
 }
-type ResourceContent struct {
-	Entries []SharedWord `json:"entries,omitempty"`
-	Prompt  string       `json:"prompt,omitempty"`
+
+// SharedPhrase 是短语包里的一条无编码常用语；group 为空表示未分组。
+type SharedPhrase struct {
+	Text  string `json:"text"`
+	Group string `json:"group"`
 }
+
+// ResourceContent 按 kind 只带一种内容：dictionary 带 entries，reply 带 prompt，phrase 带 phrases。
+type ResourceContent struct {
+	Entries []SharedWord   `json:"entries,omitempty"`
+	Prompt  string         `json:"prompt,omitempty"`
+	Phrases []SharedPhrase `json:"phrases,omitempty"`
+}
+
+// 短语包的上限：1–200 条，每条 1–2000 个 UTF-16 单元，分组名最多 32 个 UTF-16 单元。
+const (
+	maximumResourcePhrases     = 200
+	maximumResourcePhraseText  = 2000
+	maximumResourcePhraseGroup = 32
+)
+
+// resourceSectionSQL 把 community_resources 行的 kind 换成管理后台的分区名（也是举报的 kind）。alias 为空或是带点的固定表别名（如 `r.`），不来自请求。
+func resourceSectionSQL(alias string) string {
+	return `CASE ` + alias + `kind WHEN 'dictionary' THEN 'dictionaries' WHEN 'phrase' THEN 'phrases' ELSE 'replies' END`
+}
+
+// resourceKinds 是社区资源接受的 kind。旧版本副本只认前两种，但列表只按请求的 kind 返回，旧客户端看不到 phrase。
+var resourceKinds = map[string]bool{"dictionary": true, "reply": true, "phrase": true}
+
+// validResourcePhrase 校验短语包里的一条：正文去掉首尾空白后不能为空，可以换行，不能含其他控制字符；分组不能含控制字符。
+func validResourcePhrase(p SharedPhrase) bool {
+	if !utf8.ValidString(p.Text) || strings.TrimSpace(p.Text) == "" || utf16Length(p.Text) > maximumResourcePhraseText {
+		return false
+	}
+	for _, c := range p.Text {
+		if unicode.IsControl(c) && c != '\n' {
+			return false
+		}
+	}
+	return utf8.ValidString(p.Group) && !strings.ContainsFunc(p.Group, unicode.IsControl) && utf16Length(p.Group) <= maximumResourcePhraseGroup
+}
+
 type CommunityResource struct {
 	ID            string          `json:"id"`
 	Kind          string          `json:"kind"`
@@ -55,12 +93,25 @@ func resourceText(s string, min, max int, multiline bool) bool {
 func (a *Service) validateResource(ctx context.Context, kind string, content ResourceContent) (ResourceContent, error) {
 	switch kind {
 	case "reply":
-		if len(content.Entries) != 0 || !resourceText(content.Prompt, 1, 2000, true) {
+		if len(content.Entries) != 0 || len(content.Phrases) != 0 || !resourceText(content.Prompt, 1, 2000, true) {
 			return content, ErrInvalid
 		}
 		content.Prompt = strings.TrimSpace(content.Prompt)
+	case "phrase":
+		if content.Prompt != "" || len(content.Entries) != 0 || len(content.Phrases) < 1 || len(content.Phrases) > maximumResourcePhrases {
+			return content, ErrInvalid
+		}
+		seen := make(map[string]bool, len(content.Phrases))
+		for i, p := range content.Phrases {
+			p.Group = strings.TrimSpace(p.Group)
+			if !validResourcePhrase(p) || seen[p.Text] {
+				return content, ErrInvalid
+			}
+			seen[p.Text] = true
+			content.Phrases[i] = p
+		}
 	case "dictionary":
-		if content.Prompt != "" || len(content.Entries) < 1 || len(content.Entries) > 128 {
+		if content.Prompt != "" || len(content.Phrases) != 0 || len(content.Entries) < 1 || len(content.Entries) > 128 {
 			return content, ErrInvalid
 		}
 		groups := map[string][]DictionaryEntry{}
@@ -113,7 +164,7 @@ func scanResource(row interface{ Scan(...any) error }) (CommunityResource, error
 func (a *Service) resourceList(w http.ResponseWriter, r *http.Request) {
 	offset, _, ok := dictionaryPage(r)
 	kind, scope, q := r.URL.Query().Get("kind"), r.URL.Query().Get("scope"), r.URL.Query().Get("q")
-	if !ok || (kind != "dictionary" && kind != "reply") || (scope != "" && scope != "mine" && scope != "saved") || !resourceText(q, 0, 128, false) {
+	if !ok || !resourceKinds[kind] || (scope != "" && scope != "mine" && scope != "saved") || !resourceText(q, 0, 128, false) {
 		writeError(w, 400, "invalid_resource_query")
 		return
 	}

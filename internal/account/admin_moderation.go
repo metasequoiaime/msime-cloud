@@ -31,7 +31,7 @@ var statusFilter = listFilter{param: "status", field: "moderation", max: 8, valu
 
 const authorColumn = `COALESCE(NULLIF(btrim(u.display_name),''),'水杉小鹿·'||upper(left(u.id,6))) AS author`
 
-// The lists serve GET /api/{skins,candidate-skins,plugins,dictionaries,replies}.
+// The lists serve GET /api/{skins,candidate-skins,plugins,dictionaries,replies,phrases}.
 var (
 	// The skin design travels without its photo, so the console can draw the keyboard preview on each card. 也可以按图库分类筛选。
 	skinsList = adminList{
@@ -55,6 +55,11 @@ var (
 	}
 	repliesList = adminList{
 		query:   `SELECT r.id,r.name,r.description,r.owner_id,` + authorColumn + `,r.revision,r.created_at,r.updated_at,r.content->>'prompt' AS prompt,(SELECT count(*) FROM community_resource_saves WHERE resource_id=r.id) AS saves,` + moderationColumns("r", "replies") + ` FROM community_resources r JOIN auth_users u ON u.id=r.owner_id WHERE r.kind='reply'`,
+		filters: []listFilter{statusFilter},
+	}
+	// 短语包的卡片显示条数和前三条正文。
+	phrasesList = adminList{
+		query:   `SELECT r.id,r.name,r.description,r.owner_id,` + authorColumn + `,r.revision,r.created_at,r.updated_at,jsonb_array_length(r.content->'phrases') AS entries,(SELECT jsonb_agg(p->>'text') FROM (SELECT p FROM jsonb_array_elements(r.content->'phrases') p LIMIT 3) x) AS phrases,(SELECT count(*) FROM community_resource_saves WHERE resource_id=r.id) AS saves,` + moderationColumns("r", "phrases") + ` FROM community_resources r JOIN auth_users u ON u.id=r.owner_id WHERE r.kind='phrase'`,
 		filters: []listFilter{statusFilter},
 	}
 )
@@ -82,6 +87,7 @@ var (
 	actionDeletePlugin        = deleteContent(`DELETE FROM community_plugins WHERE id=$1`)
 	actionDeleteDictionary    = deleteContent(`DELETE FROM community_resources WHERE id=$1 AND kind='dictionary'`)
 	actionDeleteReply         = deleteContent(`DELETE FROM community_resources WHERE id=$1 AND kind='reply'`)
+	actionDeletePhrase        = deleteContent(`DELETE FROM community_resources WHERE id=$1 AND kind='phrase'`)
 )
 
 // candidateCategoryFilter 让键盘皮肤和候选皮肤列表按图库分类筛选，取值即 candidateSkinCategories。
@@ -163,6 +169,7 @@ var moderationSections = map[string]moderationTable{
 	"plugins":         {"community_plugins", "", "插件", false},
 	"dictionaries":    {"community_resources", "dictionary", "词库", true},
 	"replies":         {"community_resources", "reply", "回复模板", true},
+	"phrases":         {"community_resources", "phrase", "短语包", true},
 }
 
 // match is the WHERE clause selecting the ids in $1 of this section; every identifier is a fixed string from moderationSections.
@@ -410,7 +417,7 @@ func (a *Service) moderationCounts(ctx context.Context) (moderationCounts, error
 	rows, err := a.store.pool.Query(ctx, `SELECT 'skins',moderation,count(*) FROM community_skins GROUP BY moderation
 UNION ALL SELECT 'candidate-skins',moderation,count(*) FROM community_candidate_skins WHERE visibility='public' GROUP BY moderation
 UNION ALL SELECT 'plugins',moderation,count(*) FROM community_plugins GROUP BY moderation
-UNION ALL SELECT CASE kind WHEN 'dictionary' THEN 'dictionaries' ELSE 'replies' END,moderation,count(*) FROM community_resources GROUP BY kind,moderation`)
+UNION ALL SELECT `+resourceSectionSQL("")+`,moderation,count(*) FROM community_resources GROUP BY kind,moderation`)
 	if err != nil {
 		return nil, err
 	}
@@ -520,7 +527,7 @@ func contentScreenSQL(section string, table moderationTable) string {
 	switch section {
 	case "candidate-skins", "plugins":
 		content = "convert_from(manifest,'UTF8')"
-	case "dictionaries", "replies":
+	case "dictionaries", "replies", "phrases":
 		content = "content"
 	}
 	return `SELECT json_build_object('name',name,'description',description,'content',` + content + `) FROM ` + table.table + table.where(`id=$1`)
@@ -595,6 +602,9 @@ func resourceScreenText(content ResourceContent) string {
 	}
 	if content.Prompt != "" {
 		parts = append(parts, content.Prompt)
+	}
+	for _, phrase := range content.Phrases {
+		parts = append(parts, phrase.Group, phrase.Text)
 	}
 	return strings.Join(parts, "\n")
 }

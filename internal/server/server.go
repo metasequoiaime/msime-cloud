@@ -131,6 +131,7 @@ func New(c Config) (*Server, error) {
 	mux.HandleFunc("POST "+wordSubmissionsPath, s.submitWords)
 	mux.HandleFunc("POST /v1/skins/generate", s.generateSkinArtwork)
 	mux.HandleFunc("POST /v1/skins/jobs", s.createSkinArtworkJob)
+	mux.HandleFunc("POST "+voiceContributionsPath, s.voiceContribution)
 	mux.HandleFunc("GET /v1/skins/jobs/{job}", s.getSkinArtworkJob)
 	mux.HandleFunc("DELETE /v1/skins/jobs/{job}", s.deleteSkinArtworkJob)
 	mux.HandleFunc("GET /v1/skins", s.skinCatalog)
@@ -147,6 +148,9 @@ func New(c Config) (*Server, error) {
 	// Console-managed public data: the live notices feed needs no credentials, a content report needs a signed-in user (the /v1/community/ prefix skips Bearer authentication in the middleware and the handler checks the session itself).
 	mux.HandleFunc("GET "+noticesPath, account.Route(s.accounts, "GET "+noticesPath, (*account.Service).PublicNotices))
 	mux.HandleFunc("POST /v1/community/reports", account.Route(s.accounts, "POST /v1/community/reports", (*account.Service).CommunityReport))
+	// 诊断快照的远程 MCP 端点：account.IsPath 让它绕过 Bearer 中间件，处理器自己校验快照令牌并按快照限流。
+	mux.Handle("POST "+account.DiagnosticsMCPPrefix+"{id}", s.diagnosticsMCP())
+	mux.Handle("GET "+account.DiagnosticsMCPPrefix+"{id}", s.diagnosticsMCP())
 	mux.HandleFunc("POST /v1/input/{operation}", s.inputQuery)
 	mux.HandleFunc("GET /v1/input/capabilities", s.inputCapabilities)
 	mux.HandleFunc("GET /v1/catalog/{kind}", s.inputCatalog)
@@ -215,7 +219,9 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		if origin := r.Header.Get("Origin"); origin != "" {
+		// Apple 网页登录的回调是 appleid.apple.com 发起的 form_post，带它的 Origin。只有这一条路由不做 Origin 检查，也不回 CORS 头：它不读 Bearer，只认挑战 state 和 Apple 签名的 ID Token。
+		appleCallback := r.Method == "POST" && r.URL.Path == account.AppleCallbackPath
+		if origin := r.Header.Get("Origin"); origin != "" && !appleCallback {
 			w.Header().Add("Vary", "Origin")
 			allowed := origin == "https://"+r.Host || (r.TLS == nil && origin == "http://"+r.Host)
 			for _, o := range s.config.AllowedOrigins {

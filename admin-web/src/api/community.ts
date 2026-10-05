@@ -1,10 +1,10 @@
 import { z } from "zod";
 
-// Community moderation (unit U2): the five content sections, their moderation lists, counts and drawer details.
+// 社区审核（U2）：六类内容分区、各自的审核列表、计数和抽屉详情。
 
-export const sections = ["skins", "candidate-skins", "plugins", "dictionaries", "replies"] as const;
+export const sections = ["skins", "candidate-skins", "plugins", "dictionaries", "replies", "phrases"] as const;
 export type Section = (typeof sections)[number];
-export const sectionLabels: Record<Section, string> = { skins: "皮肤", "candidate-skins": "候选皮肤", plugins: "插件", dictionaries: "词库", replies: "回复模板" };
+export const sectionLabels: Record<Section, string> = { skins: "皮肤", "candidate-skins": "候选皮肤", plugins: "插件", dictionaries: "词库", replies: "回复模板", phrases: "短语包" };
 
 export function isSection(value: string | undefined): value is Section {
   return (sections as readonly string[]).includes(value ?? "");
@@ -18,7 +18,7 @@ export const moderationTones = { pending: "warn", approved: "ok", removed: "bad"
 
 const stateCountsSchema = z.object({ pending: z.number().int().nonnegative(), approved: z.number().int().nonnegative(), removed: z.number().int().nonnegative() });
 export const countsSchema = z.object({
-  skins: stateCountsSchema, "candidate-skins": stateCountsSchema, plugins: stateCountsSchema, dictionaries: stateCountsSchema, replies: stateCountsSchema,
+  skins: stateCountsSchema, "candidate-skins": stateCountsSchema, plugins: stateCountsSchema, dictionaries: stateCountsSchema, replies: stateCountsSchema, phrases: stateCountsSchema,
 });
 export type Counts = z.infer<typeof countsSchema>;
 
@@ -68,6 +68,8 @@ export const itemSchema = z.object({
   entries: z.number().nullish(),
   preview: z.array(entrySchema).nullish(),
   prompt: z.string().nullish(),
+  // 短语包卡片的前三条正文。
+  phrases: z.array(z.string()).nullish(),
 });
 export type Item = z.infer<typeof itemSchema>;
 
@@ -115,7 +117,8 @@ export const detailSchema = z.object({
 });
 export type Detail = z.infer<typeof detailSchema>;
 
-export const resourceContentSchema = z.object({ entries: z.array(entrySchema).optional(), prompt: z.string().optional() });
+const phraseSchema = z.object({ text: z.string(), group: z.string() });
+export const resourceContentSchema = z.object({ entries: z.array(entrySchema).optional(), prompt: z.string().optional(), phrases: z.array(phraseSchema).optional() });
 
 export const sensitiveLevelLabels: Record<string, string> = { block: "拦截", review: "需复核" };
 export const sensitiveCategoryLabels: Record<string, string> = { ad: "广告导流", vulgar: "低俗", abuse: "辱骂", illegal: "违法", custom: "自定义" };

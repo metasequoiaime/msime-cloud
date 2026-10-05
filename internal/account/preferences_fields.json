@@ -444,5 +444,173 @@
   "platform.macos.candidate_skin": {
     "type": "string",
     "maxLength": 64
+  },
+  "general.app_theme": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "input.learning": {
+    "type": "boolean"
+  },
+  "input.chinese_punctuation": {
+    "type": "boolean"
+  },
+  "input.wubi_code_hint": {
+    "type": "boolean"
+  },
+  "input.frequency_mode": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "input.frequency_trigger_count": {
+    "type": "integer"
+  },
+  "input.frequency_linear_step": {
+    "type": "integer"
+  },
+  "helpcode.quanpin_helpcode_mode": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "helpcode.shuangpin_helpcode_mode": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.android.theme": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.android.global_theme": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.android.custom_theme_base": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.android.custom_keyboard_skin": {
+    "type": "string",
+    "maxLength": 786432
+  },
+  "platform.android.custom_keyboard_skins": {
+    "type": "string",
+    "maxLength": 786432
+  },
+  "platform.android.custom_candidate_skin": {
+    "type": "string",
+    "maxLength": 64
+  },
+  "platform.android.keyboard_layout": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.android.keyboard_height_adjustment": {
+    "type": "integer",
+    "minimum": -46,
+    "maximum": 55
+  },
+  "platform.android.touch_key_spacing_tenths": {
+    "type": "integer"
+  },
+  "platform.android.touch_row_spacing_tenths": {
+    "type": "integer"
+  },
+  "platform.android.voice_shortcut": {
+    "type": "boolean"
+  },
+  "platform.android.sound_enabled": {
+    "type": "boolean"
+  },
+  "platform.android.haptics_enabled": {
+    "type": "boolean"
+  },
+  "platform.android.haptic_strength": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.android.one_handed": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.android.key_popup": {
+    "type": "boolean"
+  },
+  "platform.android.swipe_down_symbols": {
+    "type": "boolean"
+  },
+  "platform.android.space_cursor": {
+    "type": "boolean"
+  },
+  "platform.android.space_voice": {
+    "type": "boolean"
+  },
+  "platform.android.key_animation": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.android.key_sound_pack": {
+    "type": "string",
+    "maxLength": 64
+  },
+  "platform.android.toolbar_layout": {
+    "type": "boolean"
+  },
+  "platform.android.toolbar_emoji": {
+    "type": "boolean"
+  },
+  "platform.android.toolbar_phrase": {
+    "type": "boolean"
+  },
+  "platform.android.toolbar_clipboard": {
+    "type": "boolean"
+  },
+  "platform.android.toolbar_skin": {
+    "type": "boolean"
+  },
+  "platform.android.toolbar_ai": {
+    "type": "boolean"
+  },
+  "platform.android.toolbar_character_set": {
+    "type": "boolean"
+  },
+  "platform.android.toolbar_fullwidth": {
+    "type": "boolean"
+  },
+  "platform.android.toolbar_punctuation": {
+    "type": "boolean"
+  },
+  "platform.android.toolbar_scheme": {
+    "type": "boolean"
+  },
+  "platform.android.toolbar_hidden": {
+    "type": "boolean"
+  },
+  "platform.android.handwriting_mode": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.android.handwriting_delay_ms": {
+    "type": "integer",
+    "minimum": 200,
+    "maximum": 1500
+  },
+  "platform.android.handwriting_show_pinyin": {
+    "type": "boolean"
+  },
+  "platform.android.handwriting_stroke_color": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.android.handwriting_stroke_width": {
+    "type": "integer",
+    "minimum": 1,
+    "maximum": 8
+  },
+  "platform.android.voice_language": {
+    "type": "string",
+    "maxLength": 16
+  },
+  "platform.android.voice_offline_fallback": {
+    "type": "boolean"
   }
 }

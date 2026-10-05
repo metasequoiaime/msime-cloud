@@ -176,3 +176,118 @@ func TestPrivatePhotoPreferenceBounds(t *testing.T) {
 		t.Fatal("photo did not round-trip")
 	}
 }
+
+// Android 的同步字段：Tauri 已经产出的键和重做新增的键都在字段表里，整数按各自的范围校验（键盘高度允许负数），其余整数仍是 0–1000000。
+func TestAndroidPreferenceFields(t *testing.T) {
+	for _, tc := range []struct {
+		key, value string
+		valid      bool
+	}{
+		{"platform.android.theme", `"dark"`, true},
+		{"platform.android.keyboard_layout", `"nine_key"`, true},
+		{"platform.android.keyboard_height_adjustment", "-46", true},
+		{"platform.android.keyboard_height_adjustment", "55", true},
+		{"platform.android.keyboard_height_adjustment", "-47", false},
+		{"platform.android.keyboard_height_adjustment", "56", false},
+		{"platform.android.touch_key_spacing_tenths", "50", true},
+		{"platform.android.touch_row_spacing_tenths", "-1", false},
+		{"platform.android.voice_shortcut", "true", true},
+		{"platform.android.sound_enabled", "false", true},
+		{"platform.android.haptics_enabled", "true", true},
+		{"platform.android.haptic_strength", `"medium"`, true},
+		{"platform.android.global_theme", `"siji"`, true},
+		{"platform.android.custom_theme_base", `"light"`, true},
+		{"platform.android.custom_candidate_skin", `"` + strings.Repeat("a", 64) + `"`, true},
+		{"platform.android.custom_candidate_skin", `"` + strings.Repeat("a", 65) + `"`, false},
+		{"input.chinese_punctuation", "true", true},
+		{"input.learning", "false", true},
+		{"input.wubi_code_hint", "true", true},
+		{"input.frequency_mode", `"linear"`, true},
+		{"input.frequency_trigger_count", "3", true},
+		{"input.frequency_linear_step", "2", true},
+		{"general.app_theme", `"chunya"`, true},
+		{"general.app_theme", `"` + strings.Repeat("a", 33) + `"`, false},
+		{"platform.android.one_handed", `"left"`, true},
+		{"platform.android.key_popup", "true", true},
+		{"platform.android.swipe_down_symbols", "true", true},
+		{"platform.android.space_cursor", "false", true},
+		{"platform.android.space_voice", "true", true},
+		{"platform.android.key_animation", `"ripple"`, true},
+		{"platform.android.key_sound_pack", `"msime-woodblock"`, true},
+		{"platform.android.key_sound_pack", `"` + strings.Repeat("a", 65) + `"`, false},
+		{"platform.android.toolbar_layout", "true", true},
+		{"platform.android.toolbar_emoji", "true", true},
+		{"platform.android.toolbar_phrase", "true", true},
+		{"platform.android.toolbar_clipboard", "true", true},
+		{"platform.android.toolbar_skin", "true", true},
+		{"platform.android.toolbar_ai", "true", true},
+		{"platform.android.toolbar_character_set", "true", true},
+		{"platform.android.toolbar_fullwidth", "true", true},
+		{"platform.android.toolbar_punctuation", "true", true},
+		{"platform.android.toolbar_scheme", "true", true},
+		{"platform.android.toolbar_hidden", "false", true},
+		{"platform.android.toolbar_hidden", `"false"`, false},
+		{"platform.android.handwriting_mode", `"overlap"`, true},
+		{"platform.android.handwriting_delay_ms", "200", true},
+		{"platform.android.handwriting_delay_ms", "1500", true},
+		{"platform.android.handwriting_delay_ms", "199", false},
+		{"platform.android.handwriting_delay_ms", "1501", false},
+		{"platform.android.handwriting_show_pinyin", "true", true},
+		{"platform.android.handwriting_stroke_color", `"follow_skin"`, true},
+		{"platform.android.handwriting_stroke_width", "1", true},
+		{"platform.android.handwriting_stroke_width", "8", true},
+		{"platform.android.handwriting_stroke_width", "0", false},
+		{"platform.android.handwriting_stroke_width", "9", false},
+		{"platform.android.voice_language", `"zh-CN"`, true},
+		{"platform.android.voice_language", `"` + strings.Repeat("a", 17) + `"`, false},
+		{"platform.android.voice_offline_fallback", "true", true},
+		{"helpcode.quanpin_helpcode_mode", `"radical"`, true},
+		{"helpcode.shuangpin_helpcode_mode", `"stroke"`, true},
+		// 设备本地且涉及隐私的偏好不进同步。
+		{"platform.android.touch_incognito", "true", false},
+		{"platform.android.developer_options", "true", false},
+		{"platform.android.contribute_audio", "true", false},
+	} {
+		if got := validPreference(tc.key, json.RawMessage(tc.value)); got != tc.valid {
+			t.Errorf("%s %s: got %v", tc.key, tc.value, got)
+		}
+	}
+	design, _ := json.Marshal(strings.Repeat("x", 786432))
+	if !validPreference("platform.android.custom_keyboard_skins", design) || !validPreference("platform.android.custom_keyboard_skin", design) {
+		t.Fatal("keyboard skin library rejected at its limit")
+	}
+	oversized, _ := json.Marshal(strings.Repeat("x", 786433))
+	if validPreference("platform.android.custom_keyboard_skins", oversized) {
+		t.Fatal("oversized keyboard skin library accepted")
+	}
+	// schema 接口带出范围，旧客户端只读 type。
+	var schema struct {
+		Fields map[string]map[string]any `json:"fields"`
+	}
+	raw, _ := json.Marshal(map[string]any{"fields": preferenceFields})
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	if f := schema.Fields["platform.android.keyboard_height_adjustment"]; f["type"] != "integer" || f["minimum"] != float64(-46) || f["maximum"] != float64(55) {
+		t.Fatal("height bounds missing from schema", f)
+	}
+	if _, ok := schema.Fields["appearance.page_size"]["minimum"]; ok {
+		t.Fatal("default bounds leaked into schema")
+	}
+	// 通过接口：schema 带出 Android 字段与范围，负数高度能写入和读回，越界值让整份 PUT 失败。
+	s := testStore(t)
+	user := complete(t, s, Identity{"email", "android-prefs@example.test"})
+	mux := http.NewServeMux()
+	Mount(mux, &Service{store: s})
+	served := apiRequest(t, mux, "GET", "/v1/users/me/preferences/schema", "", user.AccessToken, 200)
+	if !strings.Contains(served.Body.String(), `"platform.android.keyboard_height_adjustment":{"minimum":-46,"maximum":55,"type":"integer"}`) {
+		t.Fatal("schema response", served.Body.String())
+	}
+	body := `{"revision":0,"settings":{"platform.android.keyboard_height_adjustment":-20,"general.app_theme":"siji","platform.android.toolbar_hidden":true,"platform.android.handwriting_delay_ms":600}}`
+	apiRequest(t, mux, "PUT", "/v1/users/me/preferences", strings.Replace(body, "-20", "-47", 1), user.AccessToken, 400)
+	apiRequest(t, mux, "PUT", "/v1/users/me/preferences", body, user.AccessToken, 200)
+	stored, err := s.Preferences(context.Background(), user.User.ID)
+	if err != nil || string(stored.Settings["platform.android.keyboard_height_adjustment"]) != "-20" || string(stored.Settings["general.app_theme"]) != `"siji"` {
+		t.Fatal("android preferences roundtrip", stored, err)
+	}
+}

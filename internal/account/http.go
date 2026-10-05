@@ -221,7 +221,7 @@ func (a *Service) clientAddress(r *http.Request) string {
 }
 
 func IsPath(path string) bool {
-	return strings.HasPrefix(path, "/v1/community/") || path == siteDownloadMirrorsPath || path == TelemetryPath || path == FeedbackPath || strings.HasPrefix(path, "/v1/auth/") || path == "/v1/users/me" || strings.HasPrefix(path, "/v1/users/me/")
+	return strings.HasPrefix(path, "/v1/community/") || path == siteDownloadMirrorsPath || path == TelemetryPath || path == FeedbackPath || strings.HasPrefix(path, "/v1/auth/") || path == "/v1/users/me" || strings.HasPrefix(path, "/v1/users/me/") || strings.HasPrefix(path, DiagnosticsMCPPrefix)
 }
 
 // accountRouteTimeout 是每条挂载路由的上下文时限：默认 15 秒；请求体本身就可能传得更久的几条例外：词库快照恢复、候选窗皮肤发布或替换、插件包发布或下载，以及带截图的反馈。
@@ -328,6 +328,10 @@ func Mount(mux *http.ServeMux, a *Service) {
 		"POST /v1/users/me/download-link":                   (*Service).downloadLink,
 		"PUT /v1/users/me/clipboard/retention":              (*Service).clipboardRetention,
 		"PUT /v1/users/me/clipboard/{id}/pin":               (*Service).clipboardPin,
+		"POST /v1/users/me/diagnostics":                     (*Service).diagnosticsUpload,
+		"GET /v1/users/me/diagnostics":                      (*Service).diagnosticsGet,
+		"DELETE /v1/users/me/diagnostics":                   (*Service).diagnosticsDelete,
+		"POST /v1/users/me/diagnostics/token":               (*Service).diagnosticsToken,
 		"POST /v1/auth/apple/web":                           (*Service).appleWebBegin,
 		"POST " + AppleCallbackPath:                         (*Service).appleWebCallback,
 		"POST /v1/auth/apple/web/login":                     (*Service).appleWebLogin,

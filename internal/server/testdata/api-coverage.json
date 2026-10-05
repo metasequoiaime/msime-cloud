@@ -496,6 +496,19 @@
     "POST /v1/voice/contributions": [
       "internal/server/voice_contributions_test.go::TestVoiceContributions",
       "internal/server/voice_contributions_test.go::TestVoiceAudioMime"
+    ],
+    "POST /v1/users/me/diagnostics": [
+      "internal/account/diagnostics_test.go::TestDiagnosticsUploadReadRotateAndDelete",
+      "internal/account/diagnostics_test.go::TestValidateDiagnosticUpload"
+    ],
+    "GET /v1/users/me/diagnostics": [
+      "internal/account/diagnostics_test.go::TestDiagnosticsUploadReadRotateAndDelete"
+    ],
+    "DELETE /v1/users/me/diagnostics": [
+      "internal/account/diagnostics_test.go::TestDiagnosticsUploadReadRotateAndDelete"
+    ],
+    "POST /v1/users/me/diagnostics/token": [
+      "internal/account/diagnostics_test.go::TestDiagnosticsUploadReadRotateAndDelete"
     ]
   },
   "admin_and_docs": {

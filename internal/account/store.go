@@ -54,6 +54,9 @@ var feedbackSchema string
 
 //go:embed voice_contributions_schema.sql
 var voiceContributionsSchema string
+
+//go:embed diagnostics_schema.sql
+var diagnosticsSchema string
 var ErrInvalid = errors.New("invalid_credentials")
 var ErrLimited = errors.New("rate_limit_exceeded")
 var ErrConflict = errors.New("identity_already_linked")
@@ -181,7 +184,7 @@ func (s *Store) MigrateAs(ctx context.Context, role string) error {
 			return e
 		}
 	}
-	if _, e = tx.Exec(ctx, schema+"\n"+userDataSchema+"\n"+communitySchema+"\n"+adminSchema+"\n"+translationSchema+"\n"+candidateSkinSchema+"\n"+communityCandidateSkinSchema+"\n"+communityPluginSchema+"\n"+adminOpsSchema+"\n"+skinJobSchema+"\n"+feedbackSchema+"\n"+voiceContributionsSchema); e != nil {
+	if _, e = tx.Exec(ctx, schema+"\n"+userDataSchema+"\n"+communitySchema+"\n"+adminSchema+"\n"+translationSchema+"\n"+candidateSkinSchema+"\n"+communityCandidateSkinSchema+"\n"+communityPluginSchema+"\n"+adminOpsSchema+"\n"+skinJobSchema+"\n"+feedbackSchema+"\n"+voiceContributionsSchema+"\n"+diagnosticsSchema); e != nil {
 		return e
 	}
 	return tx.Commit(ctx)
@@ -235,6 +238,11 @@ SELECT feedback_id,position,mime,bytes FROM feedback_screenshots WHERE false`); 
 SELECT retention_days FROM user_clipboard_settings WHERE false;
 SELECT pinned,device FROM user_clipboard WHERE false;
 SELECT id,user_id,language,provider,duration_ms,transcript,app_version,audio_mime,audio,created_at FROM voice_contributions WHERE false`); e != nil {
+		return e
+	}
+	// 诊断快照与它的访问记录；缺表时启动走迁移。
+	if _, e := s.pool.Exec(ctx, `SELECT id,user_id,token_hash,token_hint,platform,app_version,sections,content,bytes,created_at,expires_at FROM diagnostic_snapshots WHERE false;
+SELECT id,snapshot_id,tool,arguments,result_count,bytes,at FROM diagnostic_accesses WHERE false`); e != nil {
 		return e
 	}
 	// AI skin artwork jobs are shared between replicas through this table; without it a poll on another replica could not find the job.
@@ -603,6 +611,8 @@ func (s *Store) DeleteUser(ctx context.Context, uid string) error {
 }
 func (s *Store) Prune(ctx context.Context) {
 	for _, q := range []string{"DELETE FROM admin_login_flows WHERE expires_at<now()", "DELETE FROM admin_sessions WHERE expires_at<now()", "DELETE FROM admin_tokens WHERE expires_at<now()", "DELETE FROM auth_challenges WHERE expires_at<now()", "DELETE FROM auth_rates WHERE expires_at<now()", "DELETE FROM auth_sessions WHERE expires_at<now()", "DELETE FROM skin_jobs WHERE expires_at<now()",
+		// 诊断快照到期即删，访问记录随外键一起删除。
+		"DELETE FROM diagnostic_snapshots WHERE expires_at<now()",
 		// Activity heartbeats and session ends only feed the overview's last 60 days, so they are kept for telemetryActivityRetentionDays. Downloads and crashes stay: the cumulative counters and crash groups read them.
 		"DELETE FROM admin_events WHERE kind IN ('active','session','session_crash') AND created_at<now()-interval '" + strconv.Itoa(telemetryActivityRetentionDays) + " days'",
 		// 反馈只保留 feedbackRetentionDays 天，截图随外键一起删除。

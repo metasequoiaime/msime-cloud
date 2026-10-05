@@ -148,6 +148,9 @@ func New(c Config) (*Server, error) {
 	// Console-managed public data: the live notices feed needs no credentials, a content report needs a signed-in user (the /v1/community/ prefix skips Bearer authentication in the middleware and the handler checks the session itself).
 	mux.HandleFunc("GET "+noticesPath, account.Route(s.accounts, "GET "+noticesPath, (*account.Service).PublicNotices))
 	mux.HandleFunc("POST /v1/community/reports", account.Route(s.accounts, "POST /v1/community/reports", (*account.Service).CommunityReport))
+	// 诊断快照的远程 MCP 端点：account.IsPath 让它绕过 Bearer 中间件，处理器自己校验快照令牌并按快照限流。
+	mux.Handle("POST "+account.DiagnosticsMCPPrefix+"{id}", s.diagnosticsMCP())
+	mux.Handle("GET "+account.DiagnosticsMCPPrefix+"{id}", s.diagnosticsMCP())
 	mux.HandleFunc("POST /v1/input/{operation}", s.inputQuery)
 	mux.HandleFunc("GET /v1/input/capabilities", s.inputCapabilities)
 	mux.HandleFunc("GET /v1/catalog/{kind}", s.inputCatalog)

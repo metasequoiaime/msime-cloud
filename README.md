@@ -87,7 +87,7 @@ go build ./cmd/msime-server
 
 测试使用本地 TLS 模拟服务，不需要真实服务商密钥、不消耗线上配额。测试覆盖认证、额度隔离与补充、并发上限、超时、凭据替换、模型限制、候选编码与过滤、翻译、语音 multipart、重定向与超大上游响应。
 
-共享接口权威在 Engine `contracts/backend/protocol.json`，本仓 `contracts/protocol.json` 为精确副本。`python3 scripts/sync_contract.py --check` 检查生成常量；跨仓核对传入 `--source ../MSIME-Engine/contracts/backend/protocol.json`。契约测试通过 HTTP 和 TLS 上游执行清单中每个操作的请求/响应示例。
+共享接口权威在本仓 `contracts/protocol.json`。它原是 MSIME-Engine `contracts/backend/protocol.json` 的副本，Engine 归档后由本仓维护。`python3 scripts/sync_contract.py --check` 检查生成常量。契约测试通过 HTTP 和 TLS 上游执行清单中每个操作的请求/响应示例。
 
 WAV 上传现在校验 RIFF 文件长度、分块边界、fmt/data 必需块和采样帧一致性，允许 PCM 8/16/24/32 位与 IEEE 浮点 32/64 位（1–8 声道、8–192 kHz）。分块规则参考 [Microsoft RIFF 文档](https://learn.microsoft.com/en-us/windows/win32/xaudio2/resource-interchange-file-format--riff-)。缺失或空白转写文本返回 502，不再伪装成功。
 
@@ -199,7 +199,7 @@ echo '{"display_name":"昵称"}' | ./msime-cloud call PATCH /v1/users/me -
 
 文档默认关闭，生产环境保持 `docs_enabled: false`（省略时同样关闭）。只有本地开发需要调试时，在配置顶层设置 `"docs_enabled": true`，重启后访问 `/swagger/`（`/swagger` 自动跳转），规范文件为 `/openapi.json`。显式启用后的文档无需登录；关闭时页面、JS/CSS 和 OpenAPI 入口统一返回 404，即使携带有效令牌也不开放。在线 API 的鉴权不受文档开关影响。点击 **Authorize**，只填写令牌本身，再使用 **Try it out → Execute**。令牌不持久化到浏览器存储。WAV 接口提供文件上传；实时语音仅展示 WebSocket 协议，不提供 HTTP 调试按钮。页面与 Swagger UI 5.32.15 的 JS/CSS 均内嵌到二进制，无需外部 CDN，禁用外部 validator。
 
-规范由 `scripts/generate_openapi.py` 从 Engine 契约副本和接口 schema 生成；接口更新后运行该脚本，CI 使用 `--check` 检查是否同步。Swagger UI 配置参考 https://swagger.io/docs/open-source-tools/swagger-ui/usage/configuration/ 。第三方资源版本及完整性值在 `internal/server/swagger/version.json`，许可和 NOTICE 随资源嵌入。
+规范由 `scripts/generate_openapi.py` 从 `contracts/protocol.json` 和接口 schema 生成；接口更新后运行该脚本，CI 使用 `--check` 检查是否同步。Swagger UI 配置参考 https://swagger.io/docs/open-source-tools/swagger-ui/usage/configuration/ 。第三方资源版本及完整性值在 `internal/server/swagger/version.json`，许可和 NOTICE 随资源嵌入。
 
 云候选的 `text` 是待转换的拼写。`scheme=pinyin` 时传拼音（如 `haohaoxuexi`），包含汉字返回 400 `pinyin_spelling_required`。当上游提供匹配长度时，拼音候选只保留覆盖整个输入的结果；`limit` 为最大数量，不保证凑满。启用原生引擎时，云端过滤后没有完整候选会补查 Engine 的完整词典词条（例如 `zhonguo` → `中国`）；若 Engine 确认输入需要拼写纠错且找到完整词条，也优先返回这些词条，避免上游逐字拼凑（如 `zhon'guo` → `中哦你过`）。纠错和全输入匹配由 Engine 处理，候选仍可能为空。生产验收见 [公共 API 清单](docs/windows-api-extraction.md)，早期本机测试见 [API 验证记录](docs/api-verification.md)。
 
@@ -255,7 +255,7 @@ EveryAPI 合作服务实时语音配置：
 
 ### 原生资源容器验证
 
-镜像构建时按 `native/resources.lock.json` 下载并校验发布资源，资源只读放在 `/usr/share/msime`，原生桥接程序为 `/usr/local/bin/msime-engine`。部署配置的 `engine.binary` 和 `engine.resources` 分别指向这两个路径；生产文档继续关闭。用户词库查询和恢复需要可写 `/tmp`，部署时应提供独立临时卷。
+镜像构建时按 `third_party/msime` 子模块里客户端的词库锁文件下载并校验发布资源，资源只读放在 `/usr/share/msime`，引擎进程（`msime-backend-engine`）为 `/usr/local/bin/msime-engine`。部署配置的 `engine.binary` 和 `engine.resources` 分别指向这两个路径；生产文档继续关闭。用户词库查询和恢复需要可写 `/tmp`，部署时应提供独立临时卷。
 
 构建后可运行 `python3 scripts/smoke_container.py --image msime-backend-shared-test --native`，在只读根文件系统、2 CPU / 2 GiB 限制下验证内置资源、转换、注音及四路并发日语查询。该检查不替代生产数据库和代理链路验收。
 

@@ -1,4 +1,4 @@
-// Code generated from Engine contracts/backend/protocol.json. DO NOT EDIT.
+// Code generated from contracts/protocol.json. DO NOT EDIT.
 package contract
 
 const (

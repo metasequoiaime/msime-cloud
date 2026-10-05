@@ -26,6 +26,15 @@ class VersionTests(unittest.TestCase):
 
 class RepositoryTests(unittest.TestCase):
     def setUp(self):
+        # git commit and a receiving push start `git maintenance --auto` / `gc --auto` in the background, detached from the command that started them. One still packing objects when the test ends makes the temporary directory's removal fail with "Directory not empty: 'objects'" (seen in CI). Every git process here, the release script's included, inherits this environment.
+        environment = patch.dict(os.environ, {
+            'GIT_CONFIG_COUNT': '3',
+            'GIT_CONFIG_KEY_0': 'gc.auto', 'GIT_CONFIG_VALUE_0': '0',
+            'GIT_CONFIG_KEY_1': 'maintenance.auto', 'GIT_CONFIG_VALUE_1': 'false',
+            'GIT_CONFIG_KEY_2': 'receive.autogc', 'GIT_CONFIG_VALUE_2': 'false',
+        })
+        environment.start()
+        self.addCleanup(environment.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)

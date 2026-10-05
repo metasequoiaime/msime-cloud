@@ -5,7 +5,8 @@ config.json
 bin
 **/build
 **/__pycache__
-third_party/MSIME-Engine/voice/third_party
+third_party/msime/target
+third_party/msime/apps/desktop/dist
 
 **/node_modules
 .playwright-cli

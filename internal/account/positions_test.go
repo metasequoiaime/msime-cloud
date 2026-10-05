@@ -59,7 +59,17 @@ func TestFixedPositionsHTTPAndNativeReplay(t *testing.T) {
 	if first.Context != "ni'hao" || len(first.Candidates) < 2 {
 		t.Fatal(first)
 	}
-	selected := first.Candidates[1]
+	// A candidate stored under the context itself, not in first place: the shuangpin list for the same syllables holds it too, which a completion such as 你好吗 (ni'hao'ma) is not.
+	selected := first.Candidates[0]
+	for _, candidate := range first.Candidates[1:] {
+		if candidate.Canonical == first.Context {
+			selected = candidate
+			break
+		}
+	}
+	if selected == first.Candidates[0] {
+		t.Fatal("no second candidate under the context", first)
+	}
 	p := map[string]any{"revision": first.Revision, "context": first.Context, "code": selected.Canonical, "word": selected.Word, "position": 1}
 	path := "/v1/users/me/dictionary/positions"
 	call("PUT", path, "device-token", p, 401)

@@ -832,7 +832,7 @@ func translationLines(entries []translationSubmissionEntry) []submissionLine {
 	return lines
 }
 
-// weightMedians returns the base dictionary's median weight per syllable count (8 standing for 8 or more syllables), computed by the Engine once per process. A failed computation is not cached, so the next submission tries again; meanwhile words get wordSubmissionFallbackWeight, which is logged only the first time.
+// weightMedians returns the base dictionary's median weight per syllable count (8 standing for 8 or more syllables), computed by the engine once per process. A failed computation is not cached, so the next submission tries again; meanwhile words get wordSubmissionFallbackWeight, which is logged only the first time.
 func (ws *wordSubmitter) weightMedians(ctx context.Context, e engine.Config) map[int]int {
 	ws.mediansMu.Lock()
 	defer ws.mediansMu.Unlock()
@@ -870,7 +870,7 @@ type alreadyListedError []int
 
 func (alreadyListedError) Error() string { return "entries already listed" }
 
-// shippedWords rejects entries the base dictionary in the Engine resources already holds, before GitHub is touched. The msime-dictionary check-words gate repeats this against the current release, so an unavailable Engine only logs and lets the submission through.
+// shippedWords rejects entries the base dictionary already holds, before GitHub is touched. The engine resources are the dictionary release the clients pin (third_party/msime), the same one the msime-dictionary check-words gate reads, so the two agree; an unavailable engine only logs and lets the submission through.
 func (s *Server) shippedWords(ctx context.Context, entries []wordSubmissionEntry) error {
 	batch := make([]map[string]string, len(entries))
 	for i, e := range entries {

@@ -15,10 +15,10 @@
 必须使用独立的 PostgreSQL 数据库，名称包含 `msime_auth_test`；账号测试会清空测试表。不要复用本地开发或生产数据库，也不要并行运行多个使用同一测试数据库的 `go test` 进程。
 
 ```sh
-git submodule update --init --recursive
-cmake -S native -B bin/native -DCMAKE_BUILD_TYPE=Release
-cmake --build bin/native --parallel 4
-python3 scripts/fetch_engine_resources.py bin/resources --native-build bin/native
+git submodule update --init
+(cd third_party/msime && cargo build -p msime-backend-engine --release --locked)
+install -D third_party/msime/target/release/msime-backend-engine bin/native/msime-engine
+python3 scripts/fetch_engine_resources.py bin/resources
 
 export MSIME_TEST_DATABASE_URL='postgres://postgres:local-test@127.0.0.1:5432/msime_auth_test?sslmode=disable'
 export MSIME_ENGINE_TEST_BINARY="$PWD/bin/native/msime-engine"

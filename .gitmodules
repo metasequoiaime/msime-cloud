@@ -1,9 +1,4 @@
-[submodule "vendor/MSIME-Engine"]
-	path = third_party/MSIME-Engine
-	url = https://github.com/metasequoiaime/MSIME-Engine.git
-[submodule "third_party/opencc"]
-	path = third_party/opencc
-	url = https://github.com/byvoid/opencc.git
-[submodule "third_party/cpp-pinyin"]
-	path = third_party/cpp-pinyin
-	url = https://github.com/wolfgitpr/cpp-pinyin.git
+[submodule "third_party/msime"]
+	path = third_party/msime
+	url = https://github.com/metasequoiaime/msime.git
+	shallow = true

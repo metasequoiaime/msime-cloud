@@ -73,10 +73,15 @@ func TestManagedBaseDictionaryEdits(t *testing.T) {
 			t.Fatal("edit leaked", tc)
 		}
 		call("POST", path, one.AccessToken, body, 409)
-		if len(before) > 1 {
+		// Replacing the entry with a different one the dictionary already has is a conflict. The next distinct entry, not simply the second row: dict-v2.0.7 lists some single characters twice (是/shi among them), fixed in the dictionary builder but still in that release.
+		for _, other := range before[1:] {
+			if other.Code == original.Code && other.Word == original.Word {
+				continue
+			}
 			body["revision"] = changed.Revision
-			body["replacement"] = map[string]any{"code": before[1].Code, "word": before[1].Word, "weight": 10}
+			body["replacement"] = map[string]any{"code": other.Code, "word": other.Word, "weight": 10}
 			call("POST", path, one.AccessToken, body, 409)
+			break
 		}
 		// Management deletion includes single-character rows; candidate UI deletion
 		// retains its separate single-character protection rule.

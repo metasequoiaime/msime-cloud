@@ -128,6 +128,15 @@ func TestEveryAccountRouteAuthenticationAndDisabledService(t *testing.T) {
 			if path == TelemetryPath {
 				expected = 400
 			}
+			// Apple 网页登录的三条路由在登录之前调用，本来就不要凭据。测试里没有配置 Apple，所以各自给出固定的回应：发起登录报服务未开启，回调返回说明登录请求无效的页面，用一次性授权码换令牌时授权码不存在。
+			switch path {
+			case "/v1/auth/apple/web":
+				expected = 503
+			case "/v1/auth/apple/callback":
+				expected = 200
+			case "/v1/auth/apple/web/login":
+				expected = 400
+			}
 			t.Run(method+" "+path, func(t *testing.T) {
 				verb := strings.ToUpper(method)
 				apiRequest(t, disabled, verb, concrete, `{}`, "", 503)
@@ -166,7 +175,7 @@ func TestProviderDiscoveryAndMalformedAuthenticationBodies(t *testing.T) {
 	var response struct {
 		Providers map[string]bool `json:"providers"`
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil || len(response.Providers) != 6 || !response.Providers["google"] || !response.Providers["email"] || response.Providers["phone"] || response.Providers["anonymous"] {
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil || len(response.Providers) != 7 || !response.Providers["google"] || !response.Providers["email"] || response.Providers["phone"] || response.Providers["anonymous"] || response.Providers["apple_web"] {
 		t.Fatal(w.Body.String(), err)
 	}
 	user := complete(t, db, Identity{"email", "malformed@example.test"})

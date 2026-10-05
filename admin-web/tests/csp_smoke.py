@@ -25,7 +25,7 @@ DIST = ROOT / "admin-web" / "dist"
 ADMIN_GO = ROOT / "internal" / "server" / "admin.go"
 
 PAGES = {
-    "/": "数据概览", "/dictpr": "词库审核", "/community": "社区审核", "/issues": "问题分诊", "/words": "敏感词库",
+    "/": "数据概览", "/dictpr": "词库审核", "/community": "社区审核", "/issues": "问题分诊", "/feedback": "用户反馈", "/words": "敏感词库",
     "/users": "用户账号", "/downloads": "下载记录", "/notice": "公告推送", "/release": "发布管理", "/cloud": "云端监控",
     "/crash": "崩溃上报", "/status": "系统状态", "/logs": "服务日志", "/perm": "权限日志", "/me": "个人中心",
 }
@@ -147,7 +147,7 @@ FIXTURES.update({
 SMOKE_DESIGN = {"background": 15266027, "keyBackground": 16777215, "keyForeground": 1516829, "accent": 1596487, "actionBackground": 1596487, "cornerRadius": 8, "borderWidth": 0, "shadow": 0, "pattern": 0, "monospaced": False, "gradientEnd": 16304344}
 SMOKE_STATES = {"pending": 1, "approved": 0, "removed": 0}
 FIXTURES.update({
-    "/api/community/counts": {"skins": SMOKE_STATES, "candidate-skins": SMOKE_STATES, "plugins": {**SMOKE_STATES, "pending": 0}, "dictionaries": SMOKE_STATES, "replies": SMOKE_STATES},
+    "/api/community/counts": {"skins": SMOKE_STATES, "candidate-skins": SMOKE_STATES, "plugins": {**SMOKE_STATES, "pending": 0}, "dictionaries": SMOKE_STATES, "replies": SMOKE_STATES, "phrases": SMOKE_STATES},
     "/api/skins": {"items": [{"id": "smoke-skin", "name": "春日樱", "description": "粉色", "owner_id": "u1", "author": "smoke-author", "created_at": "2026-10-01T00:00:00Z", "design": SMOKE_DESIGN, "downloads": 12, "moderation": "pending", "moderation_reason": "命中敏感词：「加V」", "moderated_by": None, "moderated_at": None, "flag": "命中敏感词：「加V」", "reports": 1}], "page": 1, "total": 1, "has_more": False},
     "/api/skins/smoke-skin": {"id": "smoke-skin", "name": "春日樱", "description": "粉色", "owner_id": "u1", "author": "smoke-author", "created_at": "2026-10-01T00:00:00Z", "content": SMOKE_DESIGN, "moderation": "pending", "previous_moderation": None, "moderation_reason": None, "moderated_by": None, "moderated_at": None, "owner_banned": False, "downloads": 12, "rating_count": 0, "rating_average": 0, "reports": [{"id": 1, "reason": "商标侵权", "detail": "附截图", "reporter": "smoke-reader", "created_at": "2026-10-01T00:00:00Z"}], "report_count": 1, "flags": [], "owner_items": [{"section": "replies", "id": "r1", "name": "委婉拒绝", "moderation": "approved", "created_at": "2026-09-01T00:00:00Z"}]},
 })
@@ -167,6 +167,7 @@ FIXTURES.update({
 # Crash page (U9): one open group without install ids and one known group with a GitHub issue and a stack sample.
 CRASH_GROUP = {"signature": "0123456789abcdef", "platform": "ios", "version": "1.0.0", "title": "EXC_BAD_ACCESS", "status": "known", "issue_url": "https://github.com/metasequoiaime/msime-ios/issues/7", "first_seen": "2026-09-20T00:00:00Z", "last_seen": "2026-10-01T00:00:00Z", "count_7d": 12, "count_prev_7d": 9, "devices_7d": 8, "new": False}
 FIXTURES.update({
+    "/api/feedback": {"items": [{"id": "0b6f2c1e-5d3a-4c8e-9f10-2a7b8c9d0e1f", "type": "bug", "text": "候选栏偶尔不显示\n重启后恢复", "platform": "android", "app_version": "2.1.0", "edition": "pinyin", "diagnostics": {"device": "Pixel 8"}, "status": "new", "created_at": "2026-10-01T00:00:00Z", "user_id": "u1", "author": "smoke-user", "anonymous": False, "screenshots": 0}], "page": 1, "total": 1, "has_more": False},
     "/api/crash-groups": {"items": [CRASH_GROUP, {**CRASH_GROUP, "signature": "fedcba9876543210", "platform": "windows", "title": "Server exited", "status": "open", "issue_url": None, "count_7d": 3, "count_prev_7d": 0, "devices_7d": None, "new": True}], "has_more": False, "platforms": [{"platform": "ios", "count": 1}, {"platform": "windows", "count": 1}], "summary": {"groups": 2, "crashes_7d": 15, "devices_7d": 8, "installs_today": None, "crash_free_rate": 0.9962}},
     "/api/crash-groups/0123456789abcdef": {"group": CRASH_GROUP, "samples": [{"id": "crash-1", "platform": "ios", "version": "1.0.0", "message": "EXC_BAD_ACCESS", "stack": "2 MSIME 0x1 KeyboardViewController.layoutCandidates() + 120", "resolved": False, "created_at": "2026-10-01T00:00:00Z"}]},
     "/api/crash-groups/0123456789abcdef/issue": {"target": {"platform": "ios", "name": "iOS", "repo": "metasequoiaime/msime-ios"}, "issue_url": CRASH_GROUP["issue_url"]},

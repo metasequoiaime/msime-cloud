@@ -48,6 +48,19 @@ ALTER DEFAULT PRIVILEGES FOR ROLE msime_migrator IN SCHEMA public GRANT USAGE, S
 6. `PATCH /v1/users/me`：`{"display_name":"昵称"}`，最长 64 字符。
 7. 绑定其他身份：创建挑战时使用 `purpose: link`，创建和验证均携带同一用户的访问令牌。绑定与 `DELETE /v1/users/me` 注销操作均要求最近 10 分钟内重新登录。注销删除用户、身份、会话及关联挑战。
 
+## 我的设备
+
+- `GET /v1/users/me/sessions` 返回本账号未撤销、未过期的会话，最多 50 条，按最近活跃倒序：`{"sessions":[{"id","platform","name","app_version","created_at","last_active","current"}]}`。`platform`、`name`（设备型号）、`app_version` 从登录时记录的 User-Agent 解析：认 `msime-<平台>/<版本> (<型号>; <系统>; edition=<版本 id>)`（例如 Android 真实账号登录时发送的 `msime-android/2.1.0 (Pixel 8; Android 15; edition=pinyin)`）、旧客户端的 `MSIME/Android` 这类写法和常见浏览器；解析不出的字段为空字符串。User-Agent 只在登录时记录，刷新令牌不更新。`last_active` 取 `greatest(created_at, 访问令牌到期时间 - 15 分钟)`，即最近一次签发访问令牌的时间。`current` 标出发起请求的会话。
+- `DELETE /v1/users/me/sessions/{id}` 撤销自己的一个会话，204；会话不存在或属于其他用户时一律 404 `session_not_found`，不区分两种情况。撤销当前会话等同于退出登录。
+
+## 常用语同步
+
+`GET /v1/users/me/phrases` 返回 `{"revision","phrases":[{"id","text","group","position"}]}`，从未上传过时 revision 为 0、列表为空。`PUT` 整份替换，请求体 `{"revision","phrases":[…]}`，revision 必须等于当前值，否则 409 `revision_conflict`（客户端先重新读取再合并）。限制：最多 500 条，`text` 1–2000 个 UTF-16 码元、不能含 NUL，`group` 最多 32 个字符，`id` 1–64 字节且不重复，整个请求体最多 256 KiB。存在 `user_phrases` 表（每用户一行，与 `user_preferences` 同形），注销账号时删除。
+
+## App 内反馈
+
+`POST /v1/feedback` 需要用户会话，设备的匿名账号也可以提交。请求是 multipart：`payload` 部分是 JSON `{"type":"bug|suggestion|dictionary","text","platform","app_version","edition","diagnostics"?}`，`text` 1–500 个字符；`diagnostics` 可选，只允许 `device`、`os`、`app_version`、`edition`、`scheme`、`keyboard_layout`、`skin`、`ime_enabled`、`ime_default` 这些键，值是不超过 256 字节的字符串，出现其他键或值类型不对时整份 400。可附最多 3 个 `screenshots` 部分（PNG 或 JPEG，单张不超过 1 MiB），服务端解码后重新编码，丢掉 EXIF 等元数据，再存进 `feedback_screenshots` 表，不进头像存储、不提供公开地址。成功返回 201 `{"id","status":"received"}`。限流：每个用户每小时 5 次、每天 20 次，每个客户端地址每天 50 次，计数在 `auth_rates`，所有副本共享，超出返回 429 和 `Retry-After`。反馈保存 180 天，由 `Store.Prune` 清理，注销账号时级联删除；管理后台的「用户反馈」页查看和标记处理（见 [管理后台](admin.md)）。
+
 验证码最多尝试五次，每个目标每分钟一次、每小时五次、每天十次，全服务每天最多发送 500 次。邮箱地址统一转为小写。用户接口按客户端地址每分钟最多 120 次。客户端地址默认是 TCP 对端，不信任转发头；部署在反向代理后，把顶层 `client_ip_header` 设为代理覆盖写入的头（Cloudflare 为 `CF-Connecting-IP`；`X-Forwarded-For` 取最后一段），否则同一代理后的所有请求共享此额度。IPv6 按 /64 归为一个地址。官网的 BFF（Cloudflare Pages Functions）代访客调用接口，所有官网访客都从同一组 Cloudflare 出口过来；配置顶层 `site_proxy_secret_env`（指向保存共享密钥的环境变量，值为 32–256 个可见 ASCII 字符，必须与官网 Pages 的 Secret `SITE_PROXY_SECRET` 相同）后，请求头 `X-MSIME-Site-Proxy` 与该密钥相等（常量时间比较）的请求按 `X-MSIME-Client-IP` 中的访客地址计额度（须是合法 IP，IPv6 同样按 /64 归组），优先于 `client_ip_header`；密钥不符、未配置或地址不合法时这两个头被完全忽略。所有按地址的限额都经过同一个计算，所以账号接口、社区接口、匿名开户、遥测、后台登录和词条投稿都随之生效。匿名开户的每日限额（`auth.anonymous.daily_per_address`，默认 5）也按同一个地址计。公开的 `GET /v1/notices` 和 `GET /v1/site/download-mirrors` 另用一份每分钟 1200 次的额度，匿名的 `POST /v1/telemetry/events` 再用一份每分钟 60 次的额度，它们都不占用这 120 次。
 
 本地设置 `docs_enabled: true` 后，Swagger `/swagger/` 包含所有用户接口。生产环境默认关闭文档。未完成生产提供方配置时，不应宣称相应登录已经可用。测试使用本地签名 JWT、模拟短信和 SMTP 服务以及真实 PostgreSQL，不替代生产供应商联调。

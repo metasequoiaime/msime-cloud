@@ -83,16 +83,29 @@ function sectionFields(section: Section, detail: Detail): DrawerField[] {
     }
     case "replies":
       return [{ label: "敏感词命中", value: hits }];
+    case "phrases": {
+      const content = resourceContentSchema.safeParse(detail.content);
+      return [{ label: "短语数", value: String(content.success ? content.data.phrases?.length ?? 0 : 0) }, { label: "敏感词命中", value: hits }];
+    }
     default:
       return [];
   }
 }
 
 function contentSection(section: Section, detail: Detail): DrawerSection | null {
-  if (section === "dictionaries" || section === "replies") {
+  if (section === "dictionaries" || section === "replies" || section === "phrases") {
     const content = resourceContentSchema.safeParse(detail.content);
     if (!content.success) return { title: "内容预览", items: [], empty: "内容格式无法解析" };
     if (section === "replies") return { title: "内容预览", items: content.data.prompt ? [{ text: content.data.prompt }] : [], empty: "没有内容" };
+    if (section === "phrases") {
+      const phrases = content.data.phrases ?? [];
+      return { title: `内容预览（${phrases.length} 条）`, empty: "没有短语", content: phrases.length > 0 && <div className="max-h-[320px] space-y-2 overflow-y-auto rounded-[10px] bg-panel-2 px-3 py-2.5 text-[13.5px] leading-relaxed">
+        {phrases.map(phrase => <div key={`${phrase.group}\u0000${phrase.text}`} className="flex gap-3">
+          <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-ink">{phrase.text}</span>
+          {phrase.group && <span className="shrink-0 text-[12.5px] text-muted">{phrase.group}</span>}
+        </div>)}
+      </div>, items: phrases.length ? undefined : [] };
+    }
     const entries = content.data.entries ?? [];
     return { title: `内容预览（${entries.length} 条）`, empty: "没有词条", content: entries.length > 0 && <div className="max-h-[280px] overflow-y-auto rounded-[10px] bg-panel-2 px-3 py-2 text-[13.5px] leading-[1.9]">
       {entries.map(entry => <div key={`${entry.kind}\u0000${entry.code}\u0000${entry.word}`} className="flex gap-3"><span className="min-w-0 flex-1 truncate text-ink">{entry.word}</span><span className="font-mono text-[12.5px] text-muted">{entry.code}</span></div>)}

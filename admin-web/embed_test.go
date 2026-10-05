@@ -10,7 +10,7 @@ import (
 func TestEmbeddedBuildAndDeepLinks(t *testing.T) {
 	handler := Handler()
 	for _, path := range []string{
-		"/", "/dictpr", "/community", "/issues", "/words", "/users", "/downloads", "/notice", "/release", "/cloud", "/crash", "/status", "/perm", "/me",
+		"/", "/dictpr", "/community", "/issues", "/feedback", "/words", "/users", "/downloads", "/notice", "/release", "/cloud", "/crash", "/status", "/perm", "/me",
 		"/admins", "/audit", "/system", "/crashes", "/skins", "/dictionaries", "/replies", "/site-settings",
 	} {
 		w := httptest.NewRecorder()

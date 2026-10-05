@@ -54,7 +54,7 @@ export function devicePlatform(userAgent: string): string {
   return "其他设备";
 }
 
-const sectionLabels: Record<UserWork["section"], string> = { skins: "皮肤", "candidate-skins": "候选栏皮肤", plugins: "插件", dictionaries: "词库", replies: "回复模板" };
+const sectionLabels: Record<UserWork["section"], string> = { skins: "皮肤", "candidate-skins": "候选栏皮肤", plugins: "插件", dictionaries: "词库", replies: "回复模板", phrases: "短语包" };
 const moderationLabels: Record<UserWork["moderation"], string> = { pending: "待审核", approved: "已通过", removed: "已下架" };
 
 export function workText(work: UserWork): string {
@@ -62,7 +62,7 @@ export function workText(work: UserWork): string {
 }
 
 export function workMeta(work: UserWork): string {
-  const usage = work.section === "dictionaries" || work.section === "replies" ? `收藏 ${work.saves.toLocaleString("zh-CN")}` : `下载 ${work.downloads.toLocaleString("zh-CN")}`;
+  const usage = work.section === "dictionaries" || work.section === "replies" || work.section === "phrases" ? `收藏 ${work.saves.toLocaleString("zh-CN")}` : `下载 ${work.downloads.toLocaleString("zh-CN")}`;
   let state: string = moderationLabels[work.moderation];
   if (work.moderation === "removed" && work.moderation_reason === "owner_banned") state = "已下架（账号封禁）";
   else if (work.moderation === "removed" && work.moderation_reason) state = `已下架（${work.moderation_reason}）`;

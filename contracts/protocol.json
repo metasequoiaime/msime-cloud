@@ -78,7 +78,8 @@
             }
           }
         ]
-      }
+      },
+      "description": "stream 为 true 时返回 200 和 text/event-stream; charset=utf-8（Cache-Control: no-cache）：每个事件是一行 data: 加 chat.completion.chunk JSON（只含 choices[0].delta 的 role、content 和 finish_reason）和一个空行，最后一个事件是 data: [DONE]。请求体、鉴权、校验和限额与非流式相同；开始输出之前的失败仍返回 JSON 错误和对应状态码。开始输出之后上游失败时，最后一个事件是 data: {\"error\":{\"code\":\"upstream_error\"}}，随后关闭连接，不发送 [DONE]。不支持流式的旧后端对 stream=true 返回 400 invalid_chat_request，客户端应改用非流式请求。"
     },
     "translation": {
       "method": "POST",
@@ -165,7 +166,7 @@
     "云候选响应只包含候选字符串；客户端结合 Engine 在线查询身份与代次检查进行合并。",
     "焦点、组合输入或服务地址变化时取消待处理任务；另一轮组合输入中的相同拼写不属于同一请求。",
     "后端失败时不自动切换到第三方服务，本地输入始终可用。",
-    "聊天仅支持非流式纯文本；兼容接收旧字段 thinking.type=disabled 和 enable_thinking=false，但不向上游转发。",
+    "聊天只返回纯文本，支持非流式和流式（stream=true，OpenAI 兼容 SSE）；兼容接收旧字段 thinking.type=disabled 和 enable_thinking=false，但不向上游转发。旧后端对 stream=true 返回 400，客户端此时改用非流式请求。",
     "批量转写要求有效的 PCM 或 IEEE 浮点 RIFF/WAVE，且包含 fmt 和 data 块；该 multipart 协议不承载豆包 WebSocket 帧。",
     "拒绝未知的请求 JSON 字段；客户端新增字段前需要进行兼容性评审。",
     "响应不缓存；后端不持久化用户输入、音频或凭据。",

@@ -11,7 +11,7 @@ func TestEnabledAPIInvalidRequests(t *testing.T) {
 	s := fixture(t, func(w http.ResponseWriter, r *http.Request) { t.Error("invalid request reached upstream") })
 	for _, tc := range []struct{ name, method, path, body, code string }{
 		{"chat empty messages", "POST", "/v1/chat/completions", `{"messages":[]}`, "invalid_chat_request"},
-		{"chat stream unsupported", "POST", "/v1/chat/completions", `{"messages":[{"role":"user","content":"test"}],"stream":true}`, "invalid_chat_request"},
+		{"chat stream empty messages", "POST", "/v1/chat/completions", `{"messages":[],"stream":true}`, "invalid_chat_request"},
 		{"chat invalid role", "POST", "/v1/chat/completions", `{"messages":[{"role":"tool","content":"test"}]}`, "invalid_message"},
 		{"chat unknown field", "POST", "/v1/chat/completions", `{"messages":[],"unexpected":true}`, "invalid_json"},
 		{"translation blank text", "POST", "/v1/translate", `{"text":" ","source_lang":"AUTO","target_lang":"EN"}`, "invalid_translation_request"},

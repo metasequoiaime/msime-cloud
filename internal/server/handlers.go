@@ -41,7 +41,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &v) {
 		return
 	}
-	if v.Stream || len(v.Messages) == 0 || len(v.Messages) > contract.ChatMessages || v.MaxTokens < 0 || v.MaxTokens > contract.ChatMaxTokens {
+	if len(v.Messages) == 0 || len(v.Messages) > contract.ChatMessages || v.MaxTokens < 0 || v.MaxTokens > contract.ChatMaxTokens {
 		fail(w, 400, "invalid_chat_request")
 		return
 	}
@@ -98,6 +98,10 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 	}
 	if v.MaxTokens == 0 {
 		v.MaxTokens = contract.ChatDefaultTokens
+	}
+	if v.Stream {
+		s.chatStream(w, r, v)
+		return
 	}
 	mr, call := metered(r, "chat", 0)
 	accepted := false

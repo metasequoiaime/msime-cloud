@@ -452,6 +452,71 @@
                     }
                   ]
                 }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "description": "stream 为 true 时的事件流。每个事件是 data: 加一个 chat.completion.chunk JSON（结构见 x-chunk-schema）和一个空行，以 data: [DONE] 结束；上游中途失败时以 data: {\"error\":{\"code\":\"upstream_error\"}} 结束且没有 [DONE]。"
+                },
+                "x-chunk-schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "object": {
+                      "type": "string",
+                      "enum": [
+                        "chat.completion.chunk"
+                      ]
+                    },
+                    "created": {
+                      "type": "integer"
+                    },
+                    "model": {
+                      "type": "string"
+                    },
+                    "choices": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "index": {
+                            "type": "integer",
+                            "enum": [
+                              0
+                            ]
+                          },
+                          "delta": {
+                            "type": "object",
+                            "properties": {
+                              "role": {
+                                "type": "string"
+                              },
+                              "content": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "finish_reason": {
+                            "type": "string",
+                            "nullable": true
+                          }
+                        },
+                        "required": [
+                          "index",
+                          "delta",
+                          "finish_reason"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "object",
+                    "choices"
+                  ]
+                },
+                "example": "data: {\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"你好\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n"
               }
             }
           },
@@ -603,10 +668,8 @@
                   },
                   "stream": {
                     "type": "boolean",
-                    "enum": [
-                      false
-                    ],
-                    "default": false
+                    "default": false,
+                    "description": "true 时以 OpenAI 兼容的 Server-Sent Events 流式返回，见接口说明。"
                   },
                   "max_tokens": {
                     "type": "integer",
@@ -684,7 +747,8 @@
               }
             }
           }
-        }
+        },
+        "description": "stream 为 true 时返回 200 和 text/event-stream; charset=utf-8（Cache-Control: no-cache）：每个事件是一行 data: 加 chat.completion.chunk JSON（只含 choices[0].delta 的 role、content 和 finish_reason）和一个空行，最后一个事件是 data: [DONE]。请求体、鉴权、校验和限额与非流式相同；开始输出之前的失败仍返回 JSON 错误和对应状态码。开始输出之后上游失败时，最后一个事件是 data: {\"error\":{\"code\":\"upstream_error\"}}，随后关闭连接，不发送 [DONE]。不支持流式的旧后端对 stream=true 返回 400 invalid_chat_request，客户端应改用非流式请求。"
       }
     },
     "/v1/translate": {

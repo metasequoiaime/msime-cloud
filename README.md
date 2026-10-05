@@ -37,7 +37,7 @@ curl -G -H "Authorization: Bearer $MSIME_CLIENT_TOKEN" \
 | GET `/v1/capabilities` | 无 | API 版本、已配置功能开关 |
 | GET `/v1/cloud/candidates` | `text`，`scheme=pinyin\|japanese`，`limit=1..10` | `{"candidates":["你好"]}` |
 | GET `/v1/models` | 无 | 可选模型列表与 `default_model`，需登录或设备令牌 |
-| POST `/v1/chat/completions` | `messages`、可选 `model`、`max_tokens`、`temperature` | Chat Completions JSON；支持联想和语音润色 |
+| POST `/v1/chat/completions` | `messages`、可选 `model`、`max_tokens`、`temperature`、`stream` | Chat Completions JSON；`stream: true` 时为 OpenAI 兼容 SSE；支持联想和语音润色 |
 | POST `/v1/translate` | `text`、`source_lang`、`target_lang` | DeepLX 兼容 `{"code":200,"data":"..."}` |
 | POST `/v1/audio/transcriptions` | multipart `file`（WAV）、可选 `model`、`language`、`response_format=json` | `{"text":"..."}` |
 | POST `/v1/niutrans/documents` | multipart `file`、`from`、`to`，可选领域/术语/记忆参数 | 小牛文档翻译任务 |
@@ -53,7 +53,11 @@ curl -G -H "Authorization: Bearer $MSIME_CLIENT_TOKEN" \
 | GET `/v1/niutrans/voice/{file_no}/download` | `type=0..5` | 下载语音结果 |
 | GET `/v1/niutrans/resources` | `action` | 调用已配置的小牛资源管理动作 |
 
-语音模型由服务端固定。聊天默认保持固定模型；管理员可在 `chat.models` 配置最多 32 个可选模型 ID，`GET /v1/models` 返回默认模型和允许列表，聊天请求只能选择其中的模型。EveryAPI 凭据仅保存在服务端；聊天未指定输出长度时最多生成 2048 token，避免长语音润色被候选场景的小预算截断；现有 AI 候选客户端明确请求 512 token，请求上限为 2048。聊天仅接受非流式文本消息（system/user/assistant），不支持工具调用。支持现有 Linux/Windows 请求中的 `response_format.type=json_object` 或 `text`；客户端的 `thinking.type=disabled` 和 `enable_thinking=false` 只作兼容接收，不透传服务商专有字段。JSON 请求上限 64 KiB；语音文件上限 15 MiB，multipart 总体上限 16 MiB；上游响应上限 1 MiB。客户端必须保留取消和输入代次校验，失败时继续本地输入。
+语音模型由服务端固定。聊天默认保持固定模型；管理员可在 `chat.models` 配置最多 32 个可选模型 ID，`GET /v1/models` 返回默认模型和允许列表，聊天请求只能选择其中的模型。EveryAPI 凭据仅保存在服务端；聊天未指定输出长度时最多生成 2048 token，避免长语音润色被候选场景的小预算截断；现有 AI 候选客户端明确请求 512 token，请求上限为 2048。聊天只接受文本消息（system/user/assistant），不支持工具调用。支持现有 Linux/Windows 请求中的 `response_format.type=json_object` 或 `text`；客户端的 `thinking.type=disabled` 和 `enable_thinking=false` 只作兼容接收，不透传服务商专有字段。JSON 请求上限 64 KiB；语音文件上限 15 MiB，multipart 总体上限 16 MiB；上游响应上限 1 MiB。客户端必须保留取消和输入代次校验，失败时继续本地输入。
+
+聊天请求带 `"stream": true` 时，请求体、鉴权、校验、模型允许列表和限流与非流式完全相同，响应改为 `200`、`Content-Type: text/event-stream; charset=utf-8`、`Cache-Control: no-cache` 的 OpenAI 兼容 SSE：每个事件是 `data: <chat.completion.chunk JSON>` 加一个空行，最后是 `data: [DONE]`。服务端向上游发同样带 `stream: true` 的请求，逐个事件读取、重新编码后立即 flush；转发的 chunk 只含 `id`、`object`、`created`、`model` 和 `choices[0]` 的 `delta.role`、`delta.content`、`finish_reason`，上游的其他字段和 `choices` 为空的 usage 事件不转发。累计正文出现非空白字符之前不输出任何字节，这之前的失败（上游连不上、非 2xx、出错事件、没有正文就结束）与非流式一样返回 JSON 错误和 502/504。开始输出后上游失败（出错事件、无效事件、连接中断、超过上限）时发 `data: {"error":{"code":"upstream_error"}}` 后关闭连接，不发 `[DONE]`，日志只记原因，不记上游正文。整条流受 `timeout_seconds`、上游响应 1 MiB 和输出正文 64 KiB 的上限约束；客户端断开时上游请求随之取消。计量与非流式相同：每条流计一次 `chat` 调用，耗时取整条流的时长，客户端放弃的流不计；服务端没有按 token 计费，因此不向上游请求 `stream_options.include_usage`。客户端发 `stream_options` 等未知字段仍返回 400 `invalid_json`。
+
+不支持流式的旧版本对 `stream: true` 返回 400 `invalid_chat_request`，客户端收到后改用非流式请求。这个功能不新增配置字段；滚动升级期间请求会轮询到新旧副本，旧副本返回的 400 由客户端的回退处理，所以无需等全部副本升级。
 
 翻译上游支持 OpenAI 兼容聊天模型、DeepLX、DeepL、腾讯 TMT `TextTranslateBatch` 与小牛翻译 NiuTrans v2；客户端统一使用 DeepLX 格式，不持有供应商密钥。语音上游使用 multipart 转写协议，可解析 `text`、`transcription` 和 `result.text`。云候选上游使用 Google Input Tools 的响应格式，输出过滤控制字符、超长候选和重复项。
 

@@ -18,8 +18,11 @@ var preferenceFieldsJSON []byte
 
 const maximumPreferencesBytes = 1024 * 1024
 
+// preferenceField 是一个可同步字段的类型与范围。Minimum、Maximum 只用于 integer，省略时取 0 与 1000000；字段表随 schema 接口原样返回，客户端只读 type，多出的键不影响旧客户端。
 type preferenceField struct {
 	MaxLength int    `json:"maxLength,omitempty"`
+	Minimum   *int64 `json:"minimum,omitempty"`
+	Maximum   *int64 `json:"maximum,omitempty"`
 	Type      string `json:"type"`
 }
 
@@ -49,7 +52,14 @@ func validPreference(key string, raw json.RawMessage) bool {
 		return json.Unmarshal(raw, &v) == nil
 	case "integer":
 		var v int64
-		return json.Unmarshal(raw, &v) == nil && v >= 0 && v <= 1000000
+		low, high := int64(0), int64(1000000)
+		if field.Minimum != nil {
+			low = *field.Minimum
+		}
+		if field.Maximum != nil {
+			high = *field.Maximum
+		}
+		return json.Unmarshal(raw, &v) == nil && v >= low && v <= high
 	case "number":
 		var v float64
 		return json.Unmarshal(raw, &v) == nil && v >= 0 && v <= 1000000

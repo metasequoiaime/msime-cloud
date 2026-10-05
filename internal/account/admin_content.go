@@ -46,11 +46,7 @@ func (a *Service) adminContent(w http.ResponseWriter, r *http.Request, section, 
  'rating_average',(SELECT COALESCE(avg(stars),0) FROM community_plugin_ratings WHERE pack_id=p.id))
  FROM community_plugins p JOIN auth_users u ON u.id=p.owner_id WHERE p.id=$1`
 	} else {
-		kind := "dictionary"
-		if section == "replies" {
-			kind = "reply"
-		}
-		args = append(args, kind)
+		args = append(args, moderationSections[section].kind)
 		query = `SELECT json_build_object('id',s.id,'name',s.name,'description',s.description,'owner_id',s.owner_id,'author',u.display_name,'created_at',s.created_at,'updated_at',s.updated_at,'revision',s.revision,'content',s.content,
  'moderation',s.moderation,'previous_moderation',s.previous_moderation,'moderation_reason',s.moderation_reason,'moderated_by',s.moderated_by,'moderated_at',s.moderated_at,'owner_banned',u.banned_at IS NOT NULL,
  'saves',(SELECT count(*) FROM community_resource_saves WHERE resource_id=s.id),
@@ -134,7 +130,7 @@ func (a *Service) contentModeration(ctx context.Context, section, id string, raw
  SELECT 'skins' AS section,id,name,moderation,created_at FROM community_skins WHERE owner_id=$1
  UNION ALL SELECT 'candidate-skins',id,name,moderation,created_at FROM community_candidate_skins WHERE owner_id=$1
  UNION ALL SELECT 'plugins',id,name,moderation,created_at FROM community_plugins WHERE owner_id=$1
- UNION ALL SELECT CASE kind WHEN 'dictionary' THEN 'dictionaries' ELSE 'replies' END,id,name,moderation,created_at FROM community_resources WHERE owner_id=$1
+ UNION ALL SELECT `+resourceSectionSQL("")+`,id,name,moderation,created_at FROM community_resources WHERE owner_id=$1
 ) x WHERE NOT (section=$2 AND id=$3) ORDER BY created_at DESC,id DESC LIMIT 20`, owner, section, id)
 	if err != nil {
 		return nil, err
@@ -170,7 +166,7 @@ func contentScreenText(section string, base map[string]json.RawMessage) string {
 	_ = json.Unmarshal(base["description"], &description)
 	parts := []string{name, description}
 	switch section {
-	case "dictionaries", "replies":
+	case "dictionaries", "replies", "phrases":
 		var content ResourceContent
 		if json.Unmarshal(base["content"], &content) == nil {
 			parts = append(parts, resourceScreenText(content))

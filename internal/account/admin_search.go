@@ -39,8 +39,8 @@ SELECT kind,id,title,where_,target FROM (
   CASE WHEN p.id IN ($1,q.q) OR lower(p.name)=q.q THEN 0 WHEN starts_with(lower(p.name),q.q) THEN 1 ELSE 2 END AS rank,p.created_at
   FROM community_plugins p,q WHERE p.id IN ($1,q.q) OR strpos(lower(p.name),q.q)>0 ORDER BY rank,p.created_at DESC LIMIT $2)
  UNION ALL
- (SELECT CASE r.kind WHEN 'dictionary' THEN 'dictionary' ELSE 'reply' END,CASE r.kind WHEN 'dictionary' THEN 'dictionaries/' ELSE 'replies/' END||r.id,
-  r.name||CASE r.kind WHEN 'dictionary' THEN ' · 词库' ELSE ' · 回复模板' END,'社区审核','community',
+ (SELECT CASE r.kind WHEN 'dictionary' THEN 'dictionary' WHEN 'phrase' THEN 'phrase' ELSE 'reply' END,CASE r.kind WHEN 'dictionary' THEN 'dictionaries/' WHEN 'phrase' THEN 'phrases/' ELSE 'replies/' END||r.id,
+  r.name||CASE r.kind WHEN 'dictionary' THEN ' · 词库' WHEN 'phrase' THEN ' · 短语包' ELSE ' · 回复模板' END,'社区审核','community',
   CASE WHEN r.id IN ($1,q.q) OR lower(r.name)=q.q THEN 0 WHEN starts_with(lower(r.name),q.q) THEN 1 ELSE 2 END AS rank,r.created_at
   FROM community_resources r,q WHERE r.id IN ($1,q.q) OR strpos(lower(r.name),q.q)>0 ORDER BY rank,r.created_at DESC LIMIT $2)
  UNION ALL

@@ -30,11 +30,12 @@ func adminJSONRequest(method, path, body string) *http.Request {
 func TestAdminRegistryCompleteness(t *testing.T) {
 	actions := []string{
 		"revoke_session", "revoke_sessions", "ban_user", "unban_user",
-		"delete_skin", "delete_candidate_skin", "delete_plugin", "delete_dictionary", "delete_reply", "approve_content", "remove_content", "restore_content", "set_skin_category", "set_candidate_skin_category",
+		"delete_skin", "delete_candidate_skin", "delete_plugin", "delete_dictionary", "delete_reply", "delete_phrase", "approve_content", "remove_content", "restore_content", "set_skin_category", "set_candidate_skin_category",
 		"add_sensitive_word", "set_sensitive_word_level", "delete_sensitive_word",
 		"save_notice_draft", "publish_notice", "archive_notice",
 		"resolve_crash", "reopen_crash", "crash_group_status",
 		"open_incident", "resolve_incident", "update_incident",
+		"resolve_feedback", "reopen_feedback",
 	}
 	var registered []string
 	for name, spec := range adminActions {
@@ -55,7 +56,7 @@ func TestAdminRegistryCompleteness(t *testing.T) {
 		}
 		routes[route.method+" "+route.pattern] = true
 	}
-	for _, want := range []string{"GET overview", "GET notifications", "POST notifications/read", "GET me", "POST me", "GET permissions", "POST permissions", "GET users/stats", "GET users/{}", "GET community/counts", "GET candidate-skins/{}/preview", "GET skins/{}", "GET candidate-skins/{}", "GET plugins/{}", "GET dictionaries/{}", "GET replies/{}", "GET sensitive-words", "GET downloads/summary", "GET notices", "GET crash-groups", "GET crash-groups/{}"} {
+	for _, want := range []string{"GET overview", "GET notifications", "POST notifications/read", "GET me", "POST me", "GET permissions", "POST permissions", "GET users/stats", "GET users/{}", "GET community/counts", "GET candidate-skins/{}/preview", "GET skins/{}", "GET candidate-skins/{}", "GET plugins/{}", "GET dictionaries/{}", "GET replies/{}", "GET phrases/{}", "GET sensitive-words", "GET downloads/summary", "GET notices", "GET crash-groups", "GET crash-groups/{}", "GET feedback/{}"} {
 		if !routes[want] {
 			t.Errorf("route %s not registered", want)
 		}
@@ -69,7 +70,7 @@ func TestAdminRegistryCompleteness(t *testing.T) {
 		}
 	}
 	field := regexp.MustCompile(`^[a-z_]+$`)
-	for _, name := range []string{"users", "skins", "candidate-skins", "plugins", "dictionaries", "replies", "downloads", "crashes", "audit"} {
+	for _, name := range []string{"users", "skins", "candidate-skins", "plugins", "dictionaries", "replies", "phrases", "downloads", "crashes", "audit", "feedback"} {
 		list, ok := adminLists[name]
 		if !ok || list.query == "" {
 			t.Errorf("list %s not registered", name)

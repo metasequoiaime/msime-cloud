@@ -14,7 +14,7 @@ const communityReportsPerHour = 30
 
 // CommunityReport serves POST /v1/community/reports (unit U2): a signed-in user reports a community item. The route is registered in the server package with the same per-address limit and timeout as the other account routes.
 //
-// The body is {kind, item_id, reason, detail?}: kind is one of skins, candidate-skins, plugins, dictionaries or replies; the item must be one the reporter can see (not removed, and a candidate skin must be public). Reporting the same item again is accepted without a second record. A new report notifies the console in the same transaction.
+// The body is {kind, item_id, reason, detail?}: kind is one of skins, candidate-skins, plugins, dictionaries, replies or phrases; the item must be one the reporter can see (not removed, and a candidate skin must be public). Reporting the same item again is accepted without a second record. A new report notifies the console in the same transaction.
 func (a *Service) CommunityReport(w http.ResponseWriter, r *http.Request) {
 	if a == nil {
 		writeError(w, 503, "user_auth_disabled")

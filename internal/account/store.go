@@ -48,6 +48,9 @@ var adminOpsSchema string
 
 //go:embed skin_job_schema.sql
 var skinJobSchema string
+
+//go:embed feedback_schema.sql
+var feedbackSchema string
 var ErrInvalid = errors.New("invalid_credentials")
 var ErrLimited = errors.New("rate_limit_exceeded")
 var ErrConflict = errors.New("identity_already_linked")
@@ -175,7 +178,7 @@ func (s *Store) MigrateAs(ctx context.Context, role string) error {
 			return e
 		}
 	}
-	if _, e = tx.Exec(ctx, schema+"\n"+userDataSchema+"\n"+communitySchema+"\n"+adminSchema+"\n"+translationSchema+"\n"+candidateSkinSchema+"\n"+communityCandidateSkinSchema+"\n"+communityPluginSchema+"\n"+adminOpsSchema+"\n"+skinJobSchema); e != nil {
+	if _, e = tx.Exec(ctx, schema+"\n"+userDataSchema+"\n"+communitySchema+"\n"+adminSchema+"\n"+translationSchema+"\n"+candidateSkinSchema+"\n"+communityCandidateSkinSchema+"\n"+communityPluginSchema+"\n"+adminOpsSchema+"\n"+skinJobSchema+"\n"+feedbackSchema); e != nil {
 		return e
 	}
 	return tx.Commit(ctx)
@@ -184,6 +187,7 @@ func (s *Store) Ready(ctx context.Context) error {
 	var n int
 	if e := s.pool.QueryRow(ctx, `SELECT count(*) FROM auth_users u
  LEFT JOIN user_preferences p ON p.user_id=u.id
+ LEFT JOIN user_phrases up ON up.user_id=u.id
  LEFT JOIN user_clipboard_settings cs ON cs.user_id=u.id
  LEFT JOIN user_clipboard c ON c.user_id=u.id
  LEFT JOIN user_dictionary_state ds ON ds.user_id=u.id
@@ -218,6 +222,11 @@ func (s *Store) Ready(ctx context.Context) error {
  LEFT JOIN auth_provider_tokens pt ON false WHERE false`).Scan(&n); e != nil {
 		return e
 	}
+	// App 内反馈与它的截图；缺表时启动走迁移。
+	if _, e := s.pool.Exec(ctx, `SELECT id,user_id,type,text,platform,app_version,edition,diagnostics,status,created_at FROM feedback WHERE false;
+SELECT feedback_id,position,mime,bytes FROM feedback_screenshots WHERE false`); e != nil {
+		return e
+	}
 	// AI skin artwork jobs are shared between replicas through this table; without it a poll on another replica could not find the job.
 	if _, e := s.pool.Exec(ctx, `SELECT id,owner,state,reason,artwork,cancelled,created_at,heartbeat_at,expires_at FROM skin_jobs WHERE false`); e != nil {
 		return e
@@ -237,6 +246,14 @@ func (s *Store) Ready(ctx context.Context) error {
 	}
 	if !reservedIDs {
 		return errors.New("candidate skin id constraints predate the msime-windows looks")
+	}
+	// 社区资源和举报的 kind 也在 CHECK 约束里：约束还不含短语包（phrase、phrases）时启动走迁移，否则发布短语包和举报它会在插入时失败。
+	var phraseKinds bool
+	if e := s.pool.QueryRow(ctx, `SELECT count(*)=2 FROM pg_constraint WHERE (conrelid='community_resources'::regclass AND conname='community_resources_kind_known' AND pg_get_constraintdef(oid) LIKE '%phrase%') OR (conrelid='community_reports'::regclass AND conname='community_reports_kind_known' AND pg_get_constraintdef(oid) LIKE '%phrases%')`).Scan(&phraseKinds); e != nil {
+		return e
+	}
+	if !phraseKinds {
+		return errors.New("community resource and report kind constraints predate phrase packs")
 	}
 	return s.consoleReady(ctx)
 }
@@ -561,7 +578,9 @@ func (s *Store) DeleteUser(ctx context.Context, uid string) error {
 func (s *Store) Prune(ctx context.Context) {
 	for _, q := range []string{"DELETE FROM admin_login_flows WHERE expires_at<now()", "DELETE FROM admin_sessions WHERE expires_at<now()", "DELETE FROM admin_tokens WHERE expires_at<now()", "DELETE FROM auth_challenges WHERE expires_at<now()", "DELETE FROM auth_rates WHERE expires_at<now()", "DELETE FROM auth_sessions WHERE expires_at<now()", "DELETE FROM skin_jobs WHERE expires_at<now()",
 		// Activity heartbeats and session ends only feed the overview's last 60 days, so they are kept for telemetryActivityRetentionDays. Downloads and crashes stay: the cumulative counters and crash groups read them.
-		"DELETE FROM admin_events WHERE kind IN ('active','session','session_crash') AND created_at<now()-interval '" + strconv.Itoa(telemetryActivityRetentionDays) + " days'"} {
+		"DELETE FROM admin_events WHERE kind IN ('active','session','session_crash') AND created_at<now()-interval '" + strconv.Itoa(telemetryActivityRetentionDays) + " days'",
+		// 反馈只保留 feedbackRetentionDays 天，截图随外键一起删除。
+		"DELETE FROM feedback WHERE created_at<now()-interval '" + strconv.Itoa(feedbackRetentionDays) + " days'"} {
 		s.pool.Exec(ctx, q)
 	}
 }

@@ -19,7 +19,7 @@ type actionRequest struct {
 	IDs []string `json:"ids"`
 	// Reason is shown to the affected user or recorded in the audit log; at most 500 characters.
 	Reason string `json:"reason"`
-	// Section names the content kind for community actions: skins, candidate-skins, plugins, dictionaries or replies.
+	// Section 是社区操作针对的内容分区：skins、candidate-skins、plugins、dictionaries、replies 或 phrases。
 	Section string `json:"section"`
 	// Value is an action-specific JSON payload, at most 8 KiB except for the actions listed in actionValueLimits.
 	Value json.RawMessage `json:"value"`
@@ -58,6 +58,7 @@ var adminActions = map[string]adminActionSpec{
 	"delete_plugin":               {PermReviewCommunity, actionDeletePlugin},
 	"delete_dictionary":           {PermReviewCommunity, actionDeleteDictionary},
 	"delete_reply":                {PermReviewCommunity, actionDeleteReply},
+	"delete_phrase":               {PermReviewCommunity, actionDeletePhrase},
 	"approve_content":             {PermReviewCommunity, actionApproveContent},
 	"remove_content":              {PermReviewCommunity, actionRemoveContent},
 	"restore_content":             {PermReviewCommunity, actionRestoreContent},
@@ -79,6 +80,9 @@ var adminActions = map[string]adminActionSpec{
 	"open_incident":    {PermTriageIssues, actionOpenIncident},
 	"resolve_incident": {PermTriageIssues, actionResolveIncident},
 	"update_incident":  {PermTriageIssues, actionUpdateIncident},
+	// App 内反馈：admin_feedback.go。标记处理与问题分诊同一权限。
+	"resolve_feedback": {PermTriageIssues, actionResolveFeedback},
+	"reopen_feedback":  {PermTriageIssues, actionReopenFeedback},
 }
 
 // adminRouteHandler serves one admin route; match is the part of the path the route pattern's "{}" matched, or "" for an exact pattern.
@@ -113,6 +117,7 @@ var adminRoutes = []adminRoute{
 	{"GET", "plugins/{}", contentRoute("plugins")},
 	{"GET", "dictionaries/{}", contentRoute("dictionaries")},
 	{"GET", "replies/{}", contentRoute("replies")},
+	{"GET", "phrases/{}", contentRoute("phrases")},
 	// U4 sensitive words: sensitive_words.go
 	{"GET", "sensitive-words", (*Service).adminSensitiveWords},
 	// U6 downloads: admin_downloads.go
@@ -122,6 +127,8 @@ var adminRoutes = []adminRoute{
 	// U9 crashes: admin_crash_groups.go. POST crash-groups/{sig}/issue is served by the server package before this handler runs.
 	{"GET", "crash-groups", (*Service).adminCrashGroups},
 	{"GET", "crash-groups/{}", (*Service).adminCrashGroup},
+	// App 内反馈的截图：admin_feedback.go
+	{"GET", "feedback/{}", (*Service).adminFeedbackScreenshot},
 }
 
 func contentRoute(section string) adminRouteHandler {
@@ -159,6 +166,8 @@ var adminLists = map[string]adminList{
 	"plugins":         pluginsList,        // U2 admin_moderation.go
 	"dictionaries":    dictionariesList,   // U2 admin_moderation.go
 	"replies":         repliesList,        // U2 admin_moderation.go
+	"phrases":         phrasesList,        // U2 admin_moderation.go
+	"feedback":        feedbackList,       // admin_feedback.go
 	"downloads":       downloadsList,      // U6 admin_downloads.go
 	"crashes":         crashesList,        // U9 admin_crash_groups.go
 	"audit":           auditList,          // U12 admin_permissions.go

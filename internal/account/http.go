@@ -213,10 +213,10 @@ func (a *Service) clientAddress(r *http.Request) string {
 }
 
 func IsPath(path string) bool {
-	return strings.HasPrefix(path, "/v1/community/") || path == siteDownloadMirrorsPath || path == TelemetryPath || strings.HasPrefix(path, "/v1/auth/") || path == "/v1/users/me" || strings.HasPrefix(path, "/v1/users/me/")
+	return strings.HasPrefix(path, "/v1/community/") || path == siteDownloadMirrorsPath || path == TelemetryPath || path == FeedbackPath || strings.HasPrefix(path, "/v1/auth/") || path == "/v1/users/me" || strings.HasPrefix(path, "/v1/users/me/")
 }
 
-// accountRouteTimeout is the context each mounted route runs under: 15 s, except the transfers whose body alone can take longer: the dictionary snapshot restore, a candidate-skin publish or replacement, and a plugin pack publish or download.
+// accountRouteTimeout 是每条挂载路由的上下文时限：默认 15 秒；请求体本身就可能传得更久的几条例外：词库快照恢复、候选窗皮肤发布或替换、插件包发布或下载，以及带截图的反馈。
 func accountRouteTimeout(pattern string) time.Duration {
 	switch pattern {
 	case "PUT /v1/users/me/dictionary/snapshot":
@@ -225,6 +225,8 @@ func accountRouteTimeout(pattern string) time.Duration {
 		return candidatePublishTimeout
 	case "POST /v1/community/plugins", "POST /v1/community/plugins/{id}/download":
 		return pluginTransferTimeout
+	case "POST " + FeedbackPath:
+		return feedbackTimeout
 	default:
 		return 15 * time.Second
 	}
@@ -305,6 +307,11 @@ func Mount(mux *http.ServeMux, a *Service) {
 		"GET /v1/users/me/preferences":                      (*Service).preferences,
 		"PUT /v1/users/me/preferences":                      (*Service).preferences,
 		"GET /v1/users/me/preferences/schema":               (*Service).preferencesSchema,
+		"GET /v1/users/me/phrases":                          (*Service).phrases,
+		"PUT /v1/users/me/phrases":                          (*Service).phrases,
+		"GET /v1/users/me/sessions":                         (*Service).sessions,
+		"DELETE /v1/users/me/sessions/{id}":                 (*Service).revokeSession,
+		"POST " + FeedbackPath:                              (*Service).feedback,
 		"GET /v1/auth/providers":                            (*Service).providers,
 		"POST /v1/auth/challenges":                          (*Service).begin,
 		"POST /v1/auth/login":                               (*Service).login,

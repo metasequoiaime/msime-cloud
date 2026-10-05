@@ -47,11 +47,11 @@ CREATE TABLE IF NOT EXISTS community_skin_saves (
 );
 CREATE INDEX IF NOT EXISTS community_skin_saves_user ON community_skin_saves(user_id,created_at DESC);
 
--- Versioned, data-only word packs and reply prompts. No personal dictionary is exposed.
+-- 带版本的纯数据社区资源：词包、回复提示词和短语包。不暴露任何个人词库。
 CREATE TABLE IF NOT EXISTS community_resources (
  id text PRIMARY KEY,
  owner_id text NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
- kind text NOT NULL CHECK(kind IN ('dictionary','reply')),
+ kind text NOT NULL CONSTRAINT community_resources_kind_known CHECK(kind IN ('dictionary','reply','phrase')),
  name text NOT NULL,
  description text NOT NULL DEFAULT '',
  content jsonb NOT NULL,
@@ -60,6 +60,17 @@ CREATE TABLE IF NOT EXISTS community_resources (
  updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS community_resources_catalog ON community_resources(kind,created_at DESC,id);
+-- 早期建的表用的是自动命名的 kind 约束（不含 phrase）。命名约束还不含 phrase 时，按 pg_constraint 查出列着 kind 取值的旧约束逐个删掉，再加上命名约束；整段在迁移的 advisory lock 下执行，可以重复执行。以后再加类型时把这里探测的类型名换成新加的那个，并同步 store.go 的 Ready。
+DO $$
+DECLARE c record;
+BEGIN
+ IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='community_resources'::regclass AND conname='community_resources_kind_known' AND pg_get_constraintdef(oid) LIKE '%phrase%') THEN
+  FOR c IN SELECT conname FROM pg_constraint WHERE conrelid='community_resources'::regclass AND contype='c' AND pg_get_constraintdef(oid) LIKE '%kind%' AND pg_get_constraintdef(oid) LIKE '%reply%' LOOP
+   EXECUTE format('ALTER TABLE community_resources DROP CONSTRAINT %I',c.conname);
+  END LOOP;
+  ALTER TABLE community_resources ADD CONSTRAINT community_resources_kind_known CHECK(kind IN ('dictionary','reply','phrase'));
+ END IF;
+END $$;
 CREATE TABLE IF NOT EXISTS community_resource_saves (
  resource_id text NOT NULL REFERENCES community_resources(id) ON DELETE CASCADE,
  user_id text NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,

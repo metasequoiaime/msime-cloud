@@ -39,6 +39,11 @@ func (a *Service) resourceApply(w http.ResponseWriter, r *http.Request) {
 		a.error(w, err)
 		return
 	}
+	// 短语包由客户端在本地合并进常用语，服务端不导入。
+	if kind == "phrase" {
+		writeError(w, 400, "unsupported_kind")
+		return
+	}
 	if kind != "dictionary" {
 		writeError(w, 400, "dictionary_resource_required")
 		return

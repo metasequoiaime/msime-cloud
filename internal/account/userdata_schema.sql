@@ -79,3 +79,10 @@ CREATE TABLE IF NOT EXISTS user_candidate_selections (
  count integer NOT NULL CHECK(count BETWEEN 0 AND 10),
  PRIMARY KEY(user_id,context,code,word)
 );
+
+-- 无编码常用语与偏好同一形状：整份列表一个 revision，PUT 时 CAS。
+CREATE TABLE IF NOT EXISTS user_phrases (
+ user_id text PRIMARY KEY REFERENCES auth_users(id) ON DELETE CASCADE,
+ revision bigint NOT NULL DEFAULT 0,
+ phrases jsonb NOT NULL DEFAULT '[]'
+);

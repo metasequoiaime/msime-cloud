@@ -72,10 +72,12 @@
       "internal/account/preferences_test.go::TestPreferencesRevisionIsolationAndDeletion"
     ],
     "PUT /v1/users/me/preferences": [
-      "internal/account/preferences_test.go::TestPreferencesRevisionIsolationAndDeletion"
+      "internal/account/preferences_test.go::TestPreferencesRevisionIsolationAndDeletion",
+      "internal/account/preferences_test.go::TestAndroidPreferenceFields"
     ],
     "GET /v1/users/me/preferences/schema": [
-      "internal/account/preferences_test.go::TestPreferencesRevisionIsolationAndDeletion"
+      "internal/account/preferences_test.go::TestPreferencesRevisionIsolationAndDeletion",
+      "internal/account/preferences_test.go::TestAndroidPreferenceFields"
     ],
     "GET /v1/users/me/clipboard": [
       "internal/account/clipboard_test.go::TestClipboardConsentIsolationLimitAndDeletion",
@@ -245,7 +247,8 @@
       "internal/account/community_stats_test.go::TestCommunityStatsCountsPublicContentAnonymously"
     ],
     "POST /v1/community/reports": [
-      "internal/account/admin_moderation_test.go::TestCommunityReport"
+      "internal/account/admin_moderation_test.go::TestCommunityReport",
+      "internal/account/community_resources_test.go::TestResourcePhrasePackHTTP"
     ],
     "GET /v1/site/download-mirrors": [
       "internal/account/site_settings_test.go::TestSiteDownloadMirrorAdminEditAndPublicRead"
@@ -352,27 +355,33 @@
     ],
     "GET /v1/community/resources": [
       "internal/account/community_resources_test.go::TestResourcePublishVersionSaveRatingIsolation",
-      "internal/account/admin_moderation_test.go::TestAuthorSeesModerationStateOnlyWhenAsked"
+      "internal/account/admin_moderation_test.go::TestAuthorSeesModerationStateOnlyWhenAsked",
+      "internal/account/community_resources_test.go::TestResourcePhrasePackHTTP"
     ],
     "POST /v1/community/resources": [
-      "internal/account/community_resources_test.go::TestResourcePublishVersionSaveRatingIsolation"
+      "internal/account/community_resources_test.go::TestResourcePublishVersionSaveRatingIsolation",
+      "internal/account/community_resources_test.go::TestResourcePhrasePackHTTP"
     ],
     "GET /v1/community/resources/{id}": [
       "internal/account/community_resources_test.go::TestResourcePublishVersionSaveRatingIsolation",
-      "internal/account/admin_moderation_test.go::TestAuthorSeesModerationStateOnlyWhenAsked"
+      "internal/account/admin_moderation_test.go::TestAuthorSeesModerationStateOnlyWhenAsked",
+      "internal/account/community_resources_test.go::TestResourcePhrasePackHTTP"
     ],
     "DELETE /v1/community/resources/{id}": [
       "internal/account/http_contract_test.go::TestClipboardClearAndCommunityResourceDeleteHTTP"
     ],
     "POST /v1/community/resources/{id}/apply": [
-      "internal/account/community_resource_apply_test.go::TestResourceApplyAtomicVersionedMerge"
+      "internal/account/community_resource_apply_test.go::TestResourceApplyAtomicVersionedMerge",
+      "internal/account/community_resources_test.go::TestResourcePhrasePackHTTP"
     ],
     "PUT /v1/community/resources/{id}/save": [
-      "internal/account/community_resources_test.go::TestResourcePublishVersionSaveRatingIsolation"
+      "internal/account/community_resources_test.go::TestResourcePublishVersionSaveRatingIsolation",
+      "internal/account/community_resources_test.go::TestResourcePhrasePackHTTP"
     ],
     "PUT /v1/community/resources/{id}/rating": [
       "internal/account/community_resources_test.go::TestResourcePublishVersionSaveRatingIsolation",
-      "internal/account/community_saves_test.go::TestResourceRatingWithoutSave"
+      "internal/account/community_saves_test.go::TestResourceRatingWithoutSave",
+      "internal/account/community_resources_test.go::TestResourcePhrasePackHTTP"
     ],
     "POST /v1/telemetry/events": [
       "internal/account/admin_test.go::TestAdminDataAndActions",
@@ -427,6 +436,27 @@
       "internal/server/telegram_test.go::TestPublicNoticesFeedAndTelegramPublish",
       "internal/account/admin_notices_test.go::TestNoticeDraftPublishArchiveLifecycle",
       "internal/account/admin_notices_test.go::TestNoticeValidationAndPermissions"
+    ],
+    "GET /v1/users/me/sessions": [
+      "internal/account/sessions_test.go::TestUserSessionsListAndRevokeIsolation",
+      "internal/account/sessions_test.go::TestUserSessionsStorageFailure"
+    ],
+    "DELETE /v1/users/me/sessions/{id}": [
+      "internal/account/sessions_test.go::TestUserSessionsListAndRevokeIsolation",
+      "internal/account/sessions_test.go::TestUserSessionsStorageFailure"
+    ],
+    "GET /v1/users/me/phrases": [
+      "internal/account/phrases_test.go::TestPhrasesRevisionIsolationAndDeletion",
+      "internal/account/phrases_test.go::TestPhrasesStorageFailure"
+    ],
+    "PUT /v1/users/me/phrases": [
+      "internal/account/phrases_test.go::TestPhrasesRevisionIsolationAndDeletion",
+      "internal/account/phrases_test.go::TestPhrasesStorageFailure"
+    ],
+    "POST /v1/feedback": [
+      "internal/account/feedback_test.go::TestFeedbackSubmitAndValidationHTTP",
+      "internal/account/feedback_test.go::TestFeedbackLimitsRetentionAndDeletion",
+      "internal/account/feedback_test.go::TestFeedbackUnavailable"
     ]
   },
   "admin_and_docs": {
@@ -465,9 +495,15 @@
       "internal/account/admin_test.go::TestAdminDataAndActions",
       "internal/account/admin_test.go::TestAdminListFilters"
     ],
+    "GET /api/phrases": [
+      "internal/account/community_resources_test.go::TestResourcePhrasePackHTTP"
+    ],
     "GET /api/audit": [
       "internal/account/admin_test.go::TestAdminDataAndActions",
       "internal/account/admin_test.go::TestAdminListFilters"
+    ],
+    "GET /api/feedback": [
+      "internal/account/admin_feedback_test.go::TestAdminFeedbackListScreenshotsAndStatus"
     ],
     "GET /api/users/{id}": [
       "internal/account/admin_user_test.go::TestAdminUserDetailsAndSessionRevocation"
@@ -487,12 +523,17 @@
     "GET /api/replies/{id}": [
       "internal/account/admin_content_test.go::TestAdminContentDetails"
     ],
+    "GET /api/phrases/{id}": [
+      "internal/account/community_resources_test.go::TestResourcePhrasePackHTTP"
+    ],
     "POST /api/actions": [
       "internal/account/admin_test.go::TestAdminDataAndActions",
       "internal/account/admin_contract_test.go::TestAdminHTTPValidationAndAuditAtomicity",
       "internal/account/admin_user_test.go::TestAdminUserDetailsAndSessionRevocation",
       "internal/account/community_plugins_test.go::TestCommunityPluginModeration",
-      "internal/account/admin_notices_test.go::TestNoticeBodyUsesTheFullColumn"
+      "internal/account/admin_notices_test.go::TestNoticeBodyUsesTheFullColumn",
+      "internal/account/admin_feedback_test.go::TestAdminFeedbackListScreenshotsAndStatus",
+      "internal/account/community_resources_test.go::TestResourcePhrasePackHTTP"
     ],
     "GET /api/site-settings": [
       "internal/account/site_settings_test.go::TestSiteDownloadMirrorAdminEditAndPublicRead"
@@ -535,6 +576,9 @@
     "GET /openapi.json": [
       "internal/server/docs_test.go::TestDocumentationAndBrowserAuthentication",
       "internal/server/docs_test.go::TestDocumentationDisabledByDefault"
+    ],
+    "GET /api/feedback/{id}": [
+      "internal/account/admin_feedback_test.go::TestAdminFeedbackListScreenshotsAndStatus"
     ]
   },
   "shared": [

@@ -12,7 +12,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-// This file validates packages stored in the database. They use the manifest dialect of the cross-platform client (msime-skins, base = a global theme id), not the Windows dialect Parse accepts for builtins and skins_root. The rules port crates/client-core/src/skin/catalog.rs load() one for one, including its reason strings, so a package this accepts is one every client lists; testdata/client_dialect.json pins both this and scripts/candidate_skins_seed.py to the same cases.
+// 本文件校验数据库里的皮肤包。它们用跨平台客户端与 msime-windows 统一后的清单规则（base 是全局主题或 msime-windows 内置外观），不是 Parse 给内置皮肤和 skins_root 用的旧 Windows 方言。规则逐条移植 msime 的 crates/client-core/src/skin/catalog.rs load()，连拒绝原因也相同，所以这里接受的包每个客户端都能列出；testdata/client_dialect.json 是 msime 那份共享用例表的副本（scripts/sync_client_dialect.py 同步），同时约束本文件和 scripts/candidate_skins_seed.py。
 
 // Background is the image drawn over the candidate card, with the client's defaults (cover, opacity 1) filled in.
 type Background struct {
@@ -61,8 +61,27 @@ var reservedThemeIDs = []string{"system", "shuishan", "light", "paper", "night",
 // baseThemeIDs are the global themes a package may be drawn over: every reserved id except custom.
 var baseThemeIDs = []string{"system", "shuishan", "light", "paper", "night", "ink"}
 
-// windowsBaseAlias is the one Windows base the client accepts in a manifest, as another name for system, so msime-skins packages can keep the base msime-windows requires. The package is served with base system; the other Windows bases (wechat, graphite, willow_green) stay refused.
-const windowsBaseAlias = "fluent"
+// windowsLookIDs 是 msime-windows 的六个内置外观，与客户端 catalog/windows_looks.rs 的 WINDOWS_LOOK_IDS 一致。清单的 base 可以写它们，服务端一律按 system 返回；外观的配色由客户端读清单时补齐，接口按清单原样返回颜色。外部皮肤也不能用这些 ID。
+var windowsLookIDs = []string{"fluent", "wechat", "graphite", "willow_green", "autumn_osmanthus", "microsoft"}
+
+// windowsDefaultsFolder 是 msime-windows 放内置外观设置清单的子目录名，外部皮肤同样不能占用。
+const windowsDefaultsFolder = "default"
+
+// clientReservedID 是客户端的 is_reserved：全局主题、msime-windows 内置外观和 default 目录。
+func clientReservedID(id string) bool {
+	return slices.Contains(reservedThemeIDs, id) || slices.Contains(windowsLookIDs, id) || id == windowsDefaultsFolder
+}
+
+// cssColorText 是客户端的 css_color_text：颜色值会被 msime-windows 拼进 CSS 声明，只放行颜色写法用得到的字符。
+func cssColorText(value string) bool {
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte("#(),.% -/", c) >= 0) {
+			return false
+		}
+	}
+	return true
+}
 
 func invalid(reason string) error { return fmt.Errorf("%w: %s", ErrInvalid, reason) }
 
@@ -199,7 +218,7 @@ func enumArray(table map[string]any, key string, allowed []string) ([]string, bo
 // ParseStored validates a database package with the client's rules and returns it in the catalog shape, with skin.toml and every stored file as resources.
 func ParseStored(s Stored) (Package, error) {
 	var p Package
-	if !SafeID(s.ID) || slices.Contains(reservedThemeIDs, s.ID) || Builtin(s.ID) {
+	if !SafeID(s.ID) || clientReservedID(s.ID) {
 		return p, invalid("invalid skin id")
 	}
 	if len(s.Manifest) > 65536 {
@@ -237,7 +256,7 @@ func ParseStored(s Stored) (Package, error) {
 	if p.Description, _, err = optionalString(table, "description", 500); err != nil {
 		return p, err
 	}
-	if p.Base == windowsBaseAlias {
+	if slices.Contains(windowsLookIDs, p.Base) {
 		p.Base = "system"
 	}
 	if !slices.Contains(baseThemeIDs, p.Base) {
@@ -303,6 +322,9 @@ func readWindow(p *Package, window map[string]any, files packageFiles) error {
 		}
 		w.CornerRadius = &radius
 	}
+	if err := checkWindowsWindowKeys(window); err != nil {
+		return err
+	}
 	decoration := map[string]any{}
 	if value, present := window["decoration"]; present {
 		table, ok := value.(map[string]any)
@@ -366,6 +388,42 @@ func readWindow(p *Package, window map[string]any, files packageFiles) error {
 	return nil
 }
 
+// checkWindowsWindowKeys 是客户端的 check_windows_window_keys：[candidate_window] 里只有 msime-windows 会画的键，别的平台按同样的规则校验，同一个包在每处的加载结果一致。
+func checkWindowsWindowKeys(window map[string]any) error {
+	for _, field := range []struct {
+		key string
+		max float64
+	}{{"border_width_dip", 4}, {"item_corner_radius_dip", 16}} {
+		if value, present := window[field.key]; present {
+			if _, ok := numberIn(value, field.max); !ok {
+				return invalid("invalid " + field.key)
+			}
+		}
+	}
+	if value, present := window["shadow"]; present {
+		if shadow, _ := value.(string); shadow != "none" && shadow != "soft" && shadow != "strong" {
+			return invalid("invalid shadow")
+		}
+	}
+	if value, present := window["font_family"]; present {
+		family, ok := value.(string)
+		valid := ok && family != "" && len(family) <= 64
+		for i := 0; valid && i < len(family); i++ {
+			c := family[i]
+			valid = c >= 0x80 || (c >= 0x20 && c != 0x7f && strings.IndexByte("\"'\\,;{}<>`", c) < 0)
+		}
+		if !valid {
+			return invalid("invalid font_family")
+		}
+	}
+	if value, present := window["page_arrows"]; present {
+		if _, ok := value.(bool); !ok {
+			return invalid("invalid page_arrows")
+		}
+	}
+	return nil
+}
+
 func readToolbar(table map[string]any) (*Toolbar, error) {
 	value, present := table["toolbar"]
 	if !present {
@@ -412,6 +470,9 @@ func readToolbar(table map[string]any) (*Toolbar, error) {
 			if len(color) > 80 {
 				return nil, invalid("toolbar color exceeds 80 bytes")
 			}
+			if !cssColorText(color) {
+				return nil, invalid("invalid toolbar")
+			}
 			*field.target = color
 		}
 	}
@@ -441,7 +502,7 @@ func readLicense(table map[string]any) (*SkinLicense, error) {
 	return l, nil
 }
 
-// readColors mirrors the client's serde read of [candidate]: known keys must have their type, unknown keys are ignored, and a colour is at most 80 bytes.
+// readColors mirrors the client's serde read of [candidate]: known keys must have their type, unknown keys are ignored. 类型都对之后，再按客户端 check_colors 的顺序逐个明暗检查颜色键与右键菜单：长度不超过 80 字节，只含 CSS 颜色字符。
 func readColors(p *Package, table map[string]any) error {
 	value, present := table["candidate"]
 	if !present {
@@ -451,7 +512,6 @@ func readColors(p *Package, table map[string]any) error {
 	if !ok {
 		return invalid("invalid candidate colors")
 	}
-	var tooLong bool
 	for mode, colors := range map[string]*Colors{"dark": &p.Candidate.Dark, "light": &p.Candidate.Light} {
 		value, present := candidate[mode]
 		if !present {
@@ -470,7 +530,6 @@ func readColors(p *Package, table map[string]any) error {
 			if !ok {
 				return invalid("invalid candidate colors")
 			}
-			tooLong = tooLong || len(color) > 80
 			*field = color
 		}
 		if value, present := palette["show_selected_bar"]; present {
@@ -481,9 +540,50 @@ func readColors(p *Package, table map[string]any) error {
 			colors.ShowSelectedBar = &bar
 		}
 	}
-	// The client deserializes both palettes before it measures any colour, so a type error anywhere wins over a length error.
-	if tooLong {
-		return invalid("candidate color exceeds 80 bytes")
+	// 客户端先反序列化两个明暗，再逐个检查颜色，所以任何一处类型错误都先于长度和字符错误。
+	for _, mode := range []string{"dark", "light"} {
+		palette, ok := candidate[mode].(map[string]any)
+		if !ok {
+			continue
+		}
+		if err := checkColors(palette, candidateColorKeys); err != nil {
+			return err
+		}
+		if value, present := palette["menu"]; present {
+			menu, ok := value.(map[string]any)
+			if !ok {
+				return invalid("invalid candidate colors")
+			}
+			if err := checkColors(menu, menuColorKeys); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// candidateColorKeys 是客户端的 CANDIDATE_COLOR_KEYS：前八个各平台都画，其余是 msime-windows 的细分配色，别处只校验。
+var candidateColorKeys = []string{"accent", "selected", "hover", "surface", "border", "text", "number", "translation", "candidate_text", "preedit_text", "preedit_caret", "selected_text", "selected_number", "selected_translation", "selected_bar", "preedit_background", "preedit_divider"}
+
+// menuColorKeys 是 msime-windows 候选框右键菜单的配色键。
+var menuColorKeys = []string{"background", "border", "text", "hover"}
+
+func checkColors(table map[string]any, keys []string) error {
+	for _, key := range keys {
+		value, present := table[key]
+		if !present {
+			continue
+		}
+		color, ok := value.(string)
+		if !ok {
+			return invalid("invalid candidate colors")
+		}
+		if len(color) > 80 {
+			return invalid("candidate color exceeds 80 bytes")
+		}
+		if !cssColorText(color) {
+			return invalid("invalid candidate colors")
+		}
 	}
 	return nil
 }

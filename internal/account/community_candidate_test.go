@@ -1092,6 +1092,66 @@ func TestCommunityCandidateSkinSchemaUpgrade(t *testing.T) {
 	}
 }
 
+// 保留 ID 的列约束在旧库里不含 autumn_osmanthus、microsoft 与 default：Ready 因此失败，迁移把两张表的约束换成新列表，旧行保留，新写入的行受约束。
+func TestCandidateSkinReservedIDConstraintUpgrade(t *testing.T) {
+	db := testStore(t)
+	owner := complete(t, db, Identity{"email", "candidate-reserved@example.test"})
+	tx, err := db.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.Background())
+	for _, statement := range []string{
+		`SELECT pg_advisory_xact_lock(8372419)`,
+		`ALTER TABLE candidate_skins DROP CONSTRAINT candidate_skins_id_check, ADD CONSTRAINT candidate_skins_id_check CHECK(id ~ '^[a-z0-9][a-z0-9._-]{0,63}$' AND id NOT IN ('fluent','wechat','graphite','willow_green','system','shuishan','light','paper','night','ink','custom'))`,
+		`ALTER TABLE community_candidate_skins DROP CONSTRAINT community_candidate_skins_package_id_check, ADD CONSTRAINT community_candidate_skins_package_id_check CHECK(package_id ~ '^[a-z0-9][a-z0-9._-]{0,63}$' AND package_id NOT IN ('system','shuishan','light','paper','night','ink','custom','fluent','wechat','graphite','willow_green'))`,
+	} {
+		if _, err = tx.Exec(t.Context(), statement); err != nil {
+			t.Fatal(statement, err)
+		}
+	}
+	if err = tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.pool.Exec(context.Background(), `DELETE FROM candidate_skins WHERE id='default'`) })
+	// 旧约束允许的行：迁移不能因为它们失败。
+	if _, err = db.pool.Exec(t.Context(), `INSERT INTO candidate_skins(id,manifest) VALUES('default','schema_version = 1')`); err != nil {
+		t.Fatal(err)
+	}
+	id := "ee334455-1234-4234-8234-123456789abc"
+	insertCandidateSkin(t, db, id, owner.User.ID, "released")
+	if _, err = db.pool.Exec(t.Context(), `UPDATE community_candidate_skins SET package_id='microsoft' WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Ready(t.Context()); err == nil {
+		t.Fatal("Ready accepted the old reserved id constraints")
+	}
+	for range 2 {
+		if err = db.Migrate(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = db.Ready(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var constraints int
+	if err = db.pool.QueryRow(t.Context(), `SELECT count(*) FROM pg_constraint WHERE conrelid IN ('candidate_skins'::regclass,'community_candidate_skins'::regclass) AND contype='c' AND conname IN ('candidate_skins_id_check','community_candidate_skins_package_id_check')`).Scan(&constraints); err != nil || constraints != 2 {
+		t.Fatal("constraints", constraints, err)
+	}
+	var kept int
+	if err = db.pool.QueryRow(t.Context(), `SELECT (SELECT count(*) FROM candidate_skins WHERE id='default')+(SELECT count(*) FROM community_candidate_skins WHERE package_id='microsoft')`).Scan(&kept); err != nil || kept != 2 {
+		t.Fatal("old rows", kept, err)
+	}
+	for _, statement := range []string{
+		`INSERT INTO candidate_skins(id,manifest) VALUES('autumn_osmanthus','schema_version = 1')`,
+		`UPDATE community_candidate_skins SET package_id='default' WHERE package_id='microsoft'`,
+	} {
+		if _, err = db.pool.Exec(t.Context(), statement); err == nil {
+			t.Fatal("constraint accepted", statement)
+		}
+	}
+}
+
 // 分类只在 include=category 时出现：没有声明的列表、详情、发布、替换和 PATCH 响应都不带 category 键，已发布客户端按拒绝未知字段解析条目。
 func TestCommunityCandidateSkinCategory(t *testing.T) {
 	db := testStore(t)

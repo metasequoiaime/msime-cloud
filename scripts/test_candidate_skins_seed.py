@@ -104,17 +104,19 @@ class SeedTests(unittest.TestCase):
         with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
             seed.main([str(self.root), "--role", "x; DROP TABLE y"])
 
-    def test_windows_bases_other_than_the_fluent_alias_are_refused(self):
+    def test_windows_looks_are_bases_and_other_names_are_refused(self):
         self.package("harbor", base="fluent")
-        code, sql, err = self.run_main()
-        self.assertEqual(code, 0, err)
-        # The manifest bytes are stored as written; only the service resolves fluent to system.
-        self.assertIn("base = 'fluent'".encode().hex(), sql)
         self.package("quay", base="wechat")
         code, sql, err = self.run_main()
+        self.assertEqual(code, 0, err)
+        # 清单按原样存储，只有服务端把 msime-windows 内置外观解析成 system。
+        self.assertIn("base = 'fluent'".encode().hex(), sql)
+        self.assertIn("base = 'wechat'".encode().hex(), sql)
+        self.package("pier", base="sepia")
+        code, sql, err = self.run_main()
         self.assertEqual((code, sql), (1, ""))
-        self.assertIn("refused quay: base must be system or a built-in theme", err)
-        self.assertIn("wechat", (self.root / "quay/skin.toml").read_text())
+        self.assertIn("refused pier: base must be system or a built-in theme", err)
+        self.assertIn("sepia", (self.root / "pier/skin.toml").read_text())
 
     def test_unverified_assets_are_skipped_or_refused(self):
         self.package("niya-demo", extra="[license]\nassets = 'UNVERIFIED-DEMO-ONLY'\n")

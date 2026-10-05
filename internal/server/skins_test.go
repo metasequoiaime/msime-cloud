@@ -78,7 +78,7 @@ func TestDatabaseSkinsHTTP(t *testing.T) {
 		return "schema_version = 1\nid = '" + id + "'\nname = 'Demo'\nversion = '1.0.0'\nbase = '" + base + "'\n[supports]\nlayouts = ['horizontal', 'vertical']\nthemes = ['dark']\n[candidate_window]\nmin_width_dip = 176\n[candidate_window.background]\nimage = 'assets/bg.png'\nopacity = 0.3\n[candidate.dark]\ntranslation = '#9FB4E0'\n"
 	}
 	tables := pgx.Identifier{schema}.Sanitize()
-	for _, row := range [][3]any{{"demo", manifest("demo", "paper"), true}, {"legacy", manifest("legacy", "wechat"), true}, {"windows", manifest("windows", "fluent"), true}, {"clash", manifest("clash", "system"), true}, {"secret", manifest("secret", "ink"), false}} {
+	for _, row := range [][3]any{{"demo", manifest("demo", "paper"), true}, {"legacy", manifest("legacy", "wechat"), true}, {"broken", manifest("broken", "sepia"), true}, {"windows", manifest("windows", "fluent"), true}, {"clash", manifest("clash", "system"), true}, {"secret", manifest("secret", "ink"), false}} {
 		if _, err = admin.Exec(ctx, "INSERT INTO "+tables+".candidate_skins(id,manifest,published) VALUES($1,$2,$3)", row[0], []byte(row[1].(string)), row[2]); err != nil {
 			t.Fatal(err)
 		}
@@ -102,8 +102,8 @@ func TestDatabaseSkinsHTTP(t *testing.T) {
 	for _, p := range catalog.Skins {
 		ids = append(ids, p.ID+":"+p.Base)
 	}
-	// legacy names a Windows base the client refuses and clash exists in skins_root too: neither is listed. windows uses fluent, the manifest alias of system.
-	if strings.Join(ids, ",") != "demo:paper,fluent:fluent,graphite:graphite,wechat:wechat,willow_green:willow_green,windows:system" || catalog.Invalid != 2 {
+	// legacy 与 windows 的 base 是 msime-windows 内置外观（wechat、fluent），都按 system 返回；broken 的 base 两边都不认，clash 同时出现在 skins_root，这两个都不列出。
+	if strings.Join(ids, ",") != "demo:paper,fluent:fluent,graphite:graphite,legacy:system,wechat:wechat,willow_green:willow_green,windows:system" || catalog.Invalid != 2 {
 		t.Fatal(ids, catalog.Invalid)
 	}
 	detail := call(s, "GET", "/v1/skins/demo", "")
@@ -119,7 +119,10 @@ func TestDatabaseSkinsHTTP(t *testing.T) {
 	if toml := call(s, "GET", "/v1/skins/demo/resources/skin.toml", ""); toml.Code != 200 || toml.Body.String() != manifest("demo", "paper") {
 		t.Fatal(toml.Code, toml.Body.String())
 	}
-	for _, path := range []string{"/v1/skins/legacy", "/v1/skins/clash", "/v1/skins/secret", "/v1/skins/secret/resources/assets/bg.png", "/v1/skins/demo/resources/missing.png", "/v1/skins/demo/resources/..%2fskin.toml"} {
+	if legacy := call(s, "GET", "/v1/skins/legacy", ""); legacy.Code != 200 || !strings.Contains(legacy.Body.String(), `"base":"system"`) {
+		t.Fatal(legacy.Code, legacy.Body.String())
+	}
+	for _, path := range []string{"/v1/skins/broken", "/v1/skins/clash", "/v1/skins/secret", "/v1/skins/secret/resources/assets/bg.png", "/v1/skins/demo/resources/missing.png", "/v1/skins/demo/resources/..%2fskin.toml"} {
 		if w := call(s, "GET", path, ""); w.Code != 404 {
 			t.Fatal(path, w.Code)
 		}

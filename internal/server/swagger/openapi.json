@@ -9816,7 +9816,7 @@
                               "night",
                               "ink"
                             ],
-                            "description": "内置与 skins_root 皮肤包沿用 Windows 方言，base 为四个内置 ID 之一；数据库皮肤包沿用客户端方言，base 为 system 或内置全局主题；清单中的 fluent 是 system 的别名，返回 system。"
+                            "description": "内置与 skins_root 皮肤包沿用 Windows 方言，base 为四个内置 ID 之一；数据库皮肤包沿用客户端与 msime-windows 统一后的规则，base 为 system 或内置全局主题；清单中的 msime-windows 内置外观（fluent、wechat、graphite、willow_green、autumn_osmanthus、microsoft）返回 system，外观配色由客户端读清单时补齐，接口按清单原样返回颜色。"
                           },
                           "builtin": {
                             "type": "boolean"
@@ -10171,7 +10171,7 @@
                         "night",
                         "ink"
                       ],
-                      "description": "内置与 skins_root 皮肤包沿用 Windows 方言，base 为四个内置 ID 之一；数据库皮肤包沿用客户端方言，base 为 system 或内置全局主题；清单中的 fluent 是 system 的别名，返回 system。"
+                      "description": "内置与 skins_root 皮肤包沿用 Windows 方言，base 为四个内置 ID 之一；数据库皮肤包沿用客户端与 msime-windows 统一后的规则，base 为 system 或内置全局主题；清单中的 msime-windows 内置外观（fluent、wechat、graphite、willow_green、autumn_osmanthus、microsoft）返回 system，外观配色由客户端读清单时补齐，接口按清单原样返回颜色。"
                     },
                     "builtin": {
                       "type": "boolean"

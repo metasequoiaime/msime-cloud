@@ -3,7 +3,7 @@
 
 Usage: candidate_skins_seed.py CHECKOUT [--only id,...] [--role ROLE] > candidate-skins.sql
 
-Every package is validated with the rules the client loader applies (crates/client-core/src/skin/catalog.rs), the same port internal/skins/client.go serves them with; testdata/client_dialect.json pins both. A package the client would reject is refused, never rewritten. Packages whose license.assets says UNVERIFIED are skipped unless named with --only, and then refused. The SQL runs in one transaction as the DML runtime role, inserts only what is missing and fails the whole transaction if an existing package differs from the reviewed files.
+Every package is validated with the rules the client loader applies (crates/client-core/src/skin/catalog.rs), the same port internal/skins/client.go serves them with; testdata/client_dialect.json, a copy of the client's shared case table, pins both. A package the client would reject is refused, never rewritten. Packages whose license.assets says UNVERIFIED are skipped unless named with --only, and then refused. The SQL runs in one transaction as the DML runtime role, inserts only what is missing and fails the whole transaction if an existing package differs from the reviewed files.
 """
 import argparse
 import hashlib
@@ -21,10 +21,16 @@ MAX_RESOURCE = 4 << 20
 MAX_PACKAGE = 16 << 20
 MAX_ENTRIES = 512
 RESERVED = {"system", "shuishan", "light", "paper", "night", "ink", "custom"}
-BUILTIN = {"fluent", "wechat", "graphite", "willow_green"}
+# msime-windows 的六个内置外观与它放内置外观设置的 default 目录：外部皮肤不能占用这些 ID。
+WINDOWS_LOOKS = {"fluent", "wechat", "graphite", "willow_green", "autumn_osmanthus", "microsoft"}
+WINDOWS_DEFAULTS_FOLDER = "default"
 BASES = {"system", "shuishan", "light", "paper", "night", "ink"}
-# The one Windows base the client accepts in a manifest, as another name for system; the service serves such a package with base system.
-BASE_ALIASES = {"fluent": "system"}
+# 清单的 base 可以写 msime-windows 内置外观，服务端一律按 system 返回；外观的配色由客户端读清单时补齐。
+BASE_ALIASES = {look: "system" for look in WINDOWS_LOOKS}
+# 颜色值只放行 CSS 颜色写法用得到的字符，与客户端的 css_color_text 相同。
+CSS_COLOR = re.compile(r"[A-Za-z0-9#(),.% /-]*")
+CANDIDATE_COLOR_KEYS = ("accent", "selected", "hover", "surface", "border", "text", "number", "translation", "candidate_text", "preedit_text", "preedit_caret", "selected_text", "selected_number", "selected_translation", "selected_bar", "preedit_background", "preedit_divider")
+MENU_COLOR_KEYS = ("background", "border", "text", "hover")
 MEDIA = {"css": "text/css; charset=utf-8", "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp", "svg": "image/svg+xml", "ico": "image/x-icon", "bmp": "image/bmp", "avif": "image/avif", "woff": "font/woff", "woff2": "font/woff2", "ttf": "font/ttf", "otf": "font/otf"}
 BASE_HINT = "base must be system or a built-in theme"
 
@@ -116,7 +122,7 @@ def package_files(files):
 
 def validate(folder, manifest, files):
     """Validate one package: folder is its id, manifest the skin.toml bytes, files maps every other stored path to its size. Returns the parsed manifest or raises Invalid with the client's reason."""
-    if not safe_id(folder) or folder in RESERVED or folder in BUILTIN:
+    if not safe_id(folder) or folder in RESERVED or folder in WINDOWS_LOOKS or folder == WINDOWS_DEFAULTS_FOLDER:
         raise Invalid("invalid skin id")
     if len(manifest) > MAX_MANIFEST:
         raise Invalid("skin.toml is too large")
@@ -161,6 +167,7 @@ def validate(folder, manifest, files):
         raise Invalid("invalid min_width_dip")
     if "corner_radius_dip" in window and not bounded(number(window, "corner_radius_dip"), 32):
         raise Invalid("invalid corner_radius_dip")
+    validate_windows_window_keys(window)
     decoration = window.get("decoration", {})
     if not isinstance(decoration, dict):
         raise Invalid("invalid decoration")
@@ -199,6 +206,8 @@ def validate(folder, manifest, files):
                     raise Invalid("invalid toolbar")
                 if len(colors[key].encode()) > 80:
                     raise Invalid("toolbar color exceeds 80 bytes")
+                if not CSS_COLOR.fullmatch(colors[key]):
+                    raise Invalid("invalid toolbar")
     if "license" in table:
         license_table = table["license"]
         if not isinstance(license_table, dict):
@@ -216,29 +225,61 @@ def validate(folder, manifest, files):
     return table
 
 
+def validate_windows_window_keys(window):
+    """客户端的 check_windows_window_keys：只有 msime-windows 会画的键也按它的规则校验。"""
+    for key, limit in (("border_width_dip", 4), ("item_corner_radius_dip", 16)):
+        if key in window and not bounded(number(window, key), limit):
+            raise Invalid(f"invalid {key}")
+    if "shadow" in window and window["shadow"] not in ("none", "soft", "strong"):
+        raise Invalid("invalid shadow")
+    if "font_family" in window:
+        family = window["font_family"]
+        raw = family.encode() if isinstance(family, str) else b""
+        if not raw or len(raw) > 64 or any(byte < 0x80 and (byte < 0x20 or byte == 0x7F or byte in b"\"'\\,;{}<>`") for byte in raw):
+            raise Invalid("invalid font_family")
+    if "page_arrows" in window and not isinstance(window["page_arrows"], bool):
+        raise Invalid("invalid page_arrows")
+
+
+def check_colors(table, keys):
+    for key in keys:
+        if key not in table:
+            continue
+        if not isinstance(table[key], str):
+            raise Invalid("invalid candidate colors")
+        if len(table[key].encode()) > 80:
+            raise Invalid("candidate color exceeds 80 bytes")
+        if not CSS_COLOR.fullmatch(table[key]):
+            raise Invalid("invalid candidate colors")
+
+
 def validate_colors(table):
-    """The client deserializes both palettes before it measures any colour, so a type error anywhere wins over a length error."""
+    """The client deserializes both palettes before it checks any colour, so a type error anywhere wins over a length or character error; then each mode's colours and menu are checked in the client's order."""
     if "candidate" not in table:
         return
     candidate = table["candidate"]
     if not isinstance(candidate, dict):
         raise Invalid("invalid candidate colors")
-    too_long = False
     for mode in ("dark", "light"):
         if mode not in candidate:
             continue
         palette = candidate[mode]
         if not isinstance(palette, dict):
             raise Invalid("invalid candidate colors")
-        for key in ("accent", "selected", "hover", "surface", "border", "text", "number", "translation"):
-            if key in palette:
-                if not isinstance(palette[key], str):
-                    raise Invalid("invalid candidate colors")
-                too_long = too_long or len(palette[key].encode()) > 80
+        for key in CANDIDATE_COLOR_KEYS[:8]:
+            if key in palette and not isinstance(palette[key], str):
+                raise Invalid("invalid candidate colors")
         if "show_selected_bar" in palette and not isinstance(palette["show_selected_bar"], bool):
             raise Invalid("invalid candidate colors")
-    if too_long:
-        raise Invalid("candidate color exceeds 80 bytes")
+    for mode in ("dark", "light"):
+        palette = candidate.get(mode)
+        if not isinstance(palette, dict):
+            continue
+        check_colors(palette, CANDIDATE_COLOR_KEYS)
+        if "menu" in palette:
+            if not isinstance(palette["menu"], dict):
+                raise Invalid("invalid candidate colors")
+            check_colors(palette["menu"], MENU_COLOR_KEYS)
 
 
 def validate_resources(manifest, files):
@@ -361,7 +402,7 @@ def build(checkout, only=None):
         except Invalid as error:
             reason = str(error)
             if reason == BASE_HINT:
-                reason += " (use system, shuishan, light, paper, night or ink, or fluent as an alias of system)"
+                reason += " (use system, shuishan, light, paper, night or ink, or an msime-windows look: fluent, wechat, graphite, willow_green, autumn_osmanthus or microsoft)"
             errors.append(f"{sid}: {reason}")
             continue
         if unverified(table):

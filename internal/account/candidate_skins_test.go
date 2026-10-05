@@ -149,7 +149,7 @@ func TestCandidateSkinSeedSQL(t *testing.T) {
 	if err = os.MkdirAll(filepath.Join(pkg, "assets"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	manifest := "schema_version = 1\nid = 'harbor'\nname = 'Harbor'\nversion = '1.0.0'\nbase = 'system'\n[supports]\nlayouts = ['horizontal']\nthemes = ['dark', 'light']\n[candidate_window]\nmin_width_dip = 176\n[candidate_window.decoration]\nimage = 'assets/deco.png'\ntop_inset_dip = 40\nwidth_dip = 60\n[candidate.dark]\naccent = \"it's fine\"\n[license]\ncode = 'MIT'\nassets = 'CC-BY-4.0'\n"
+	manifest := "schema_version = 1\nid = 'harbor'\nname = \"Harbor's\"\nversion = '1.0.0'\nbase = 'system'\n[supports]\nlayouts = ['horizontal']\nthemes = ['dark', 'light']\n[candidate_window]\nmin_width_dip = 176\n[candidate_window.decoration]\nimage = 'assets/deco.png'\ntop_inset_dip = 40\nwidth_dip = 60\n[candidate.dark]\naccent = '#123456'\n[license]\ncode = 'MIT'\nassets = 'CC-BY-4.0'\n"
 	for name, content := range map[string]string{"skin.toml": manifest, "assets/deco.png": "png'bytes", "README.md": "not an asset"} {
 		if err = os.WriteFile(filepath.Join(pkg, name), []byte(content), 0600); err != nil {
 			t.Fatal(err)
@@ -180,7 +180,7 @@ func TestCandidateSkinSeedSQL(t *testing.T) {
 		t.Fatal(stored, err)
 	}
 	p, err := skins.ParseStored(stored)
-	if err != nil || p.CandidateWindow.Decoration.Image != "assets/deco.png" || p.Candidate.Dark.Accent != "it's fine" {
+	if err != nil || p.CandidateWindow.Decoration.Image != "assets/deco.png" || p.Name != "Harbor's" || p.Candidate.Dark.Accent != "#123456" {
 		t.Fatal(p, err)
 	}
 	if raw, err := s.CandidateSkinResource(ctx, "harbor", "assets/deco.png"); err != nil || string(raw) != "png'bytes" {

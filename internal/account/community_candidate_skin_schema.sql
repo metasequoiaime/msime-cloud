@@ -2,7 +2,7 @@
 CREATE TABLE IF NOT EXISTS community_candidate_skins (
  id text PRIMARY KEY CHECK(id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'),
  owner_id text NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
- package_id text NOT NULL CHECK(package_id ~ '^[a-z0-9][a-z0-9._-]{0,63}$' AND package_id NOT IN ('system','shuishan','light','paper','night','ink','custom','fluent','wechat','graphite','willow_green')),
+ package_id text NOT NULL CHECK(package_id ~ '^[a-z0-9][a-z0-9._-]{0,63}$' AND package_id NOT IN ('system','shuishan','light','paper','night','ink','custom','fluent','wechat','graphite','willow_green','autumn_osmanthus','microsoft','default')),
  name text NOT NULL,
  description text NOT NULL DEFAULT '',
  version text NOT NULL,
@@ -51,6 +51,14 @@ DO $$
 BEGIN
  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='community_candidate_skins'::regclass AND conname='community_candidate_skins_license_check') THEN
   ALTER TABLE community_candidate_skins ADD CONSTRAINT community_candidate_skins_license_check CHECK(length(btrim(license_assets)) <= 120 AND (visibility='private' OR length(btrim(license_assets)) >= 1));
+ END IF;
+END $$;
+-- 保留 ID 与客户端的 is_reserved 一致，做法同 candidate_skin_schema.sql：旧库的列约束不含 autumn_osmanthus、microsoft 与 default 时整体替换，以 NOT VALID 添加，已有行不回头校验，新发布的行照常受约束。
+DO $$
+BEGIN
+ IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='community_candidate_skins'::regclass AND conname='community_candidate_skins_package_id_check' AND pg_get_constraintdef(oid) LIKE '%microsoft%') THEN
+  ALTER TABLE community_candidate_skins DROP CONSTRAINT IF EXISTS community_candidate_skins_package_id_check;
+  ALTER TABLE community_candidate_skins ADD CONSTRAINT community_candidate_skins_package_id_check CHECK(package_id ~ '^[a-z0-9][a-z0-9._-]{0,63}$' AND package_id NOT IN ('system','shuishan','light','paper','night','ink','custom','fluent','wechat','graphite','willow_green','autumn_osmanthus','microsoft','default')) NOT VALID;
  END IF;
 END $$;
 CREATE INDEX IF NOT EXISTS community_candidate_skins_newest ON community_candidate_skins(created_at DESC,id);

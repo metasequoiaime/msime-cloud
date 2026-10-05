@@ -230,6 +230,14 @@ func (s *Store) Ready(ctx context.Context) error {
 	if _, e := s.pool.Exec(ctx, `SELECT category FROM community_skins WHERE false`); e != nil {
 		return e
 	}
+	// 两张候选窗皮肤表的保留 ID 写在 CHECK 约束里，SELECT 探测不到；约束还不含 msime-windows 后加的内置外观时启动走迁移。
+	var reservedIDs bool
+	if e := s.pool.QueryRow(ctx, `SELECT count(*)=2 FROM pg_constraint WHERE conname IN ('candidate_skins_id_check','community_candidate_skins_package_id_check') AND conrelid IN ('candidate_skins'::regclass,'community_candidate_skins'::regclass) AND pg_get_constraintdef(oid) LIKE '%microsoft%'`).Scan(&reservedIDs); e != nil {
+		return e
+	}
+	if !reservedIDs {
+		return errors.New("candidate skin id constraints predate the msime-windows looks")
+	}
 	return s.consoleReady(ctx)
 }
 

@@ -67,7 +67,8 @@ jobs:
   native-engine:
     name: 公共引擎与发布词库集成测试
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The Rust engine is compiled twice from cold, on the runner for the tests and inside the image build.
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:17-alpine
@@ -81,13 +82,13 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          submodules: recursive
+          submodules: true
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version-file: go.mod
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential cmake libboost-dev libfmt-dev libspdlog-dev libsqlite3-dev nlohmann-json3-dev
-      - run: cmake -S native -B bin/native -DCMAKE_BUILD_TYPE=Release && cmake --build bin/native --parallel 4
-      - run: python3 scripts/fetch_engine_resources.py bin/resources --native-build bin/native
+      # msime-backend-engine from the msime submodule; rustup on the runner installs the toolchain its rust-toolchain.toml pins.
+      - run: cd third_party/msime && cargo build -p msime-backend-engine --release --locked && install -D target/release/msime-backend-engine ../../bin/native/msime-engine
+      - run: python3 scripts/fetch_engine_resources.py bin/resources
       - name: 验证真实原生查询和 HTTP 返回
         env:
           MSIME_ENGINE_TEST_BINARY: ${{ github.workspace }}/bin/native/msime-engine
@@ -101,7 +102,7 @@ jobs:
           python3 scripts/check_api_test_results.py bin/api-test-results.jsonl
           python3 scripts/check_go_coverage.py bin/api.cover
       - name: 确认查询未修改基础词库
-        run: python3 scripts/fetch_engine_resources.py bin/resources --native-build bin/native
+        run: python3 scripts/fetch_engine_resources.py bin/resources
 
       - name: 验证只读生产镜像与内置原生资源
         run: |

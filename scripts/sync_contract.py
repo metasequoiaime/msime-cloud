@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""导入 Engine 后端契约，或检查随仓清单及生成的 Go 绑定。"""
+"""从本仓 contracts/protocol.json 生成 Go 绑定，或检查生成结果。--source 可比较另一份契约。"""
 import argparse
 import json
 from pathlib import Path
@@ -8,7 +8,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
-parser.add_argument('--source', type=Path, help='要导入或比较的 Engine contracts/backend/protocol.json 路径')
+parser.add_argument('--source', type=Path, help='要导入或比较的另一份契约路径')
 parser.add_argument('--check', action='store_true')
 args = parser.parse_args()
 bundled = ROOT / 'contracts/protocol.json'
@@ -20,7 +20,7 @@ if spec['version'] != '1':
 def name(key):
     return ''.join(part.capitalize() for part in key.split('_'))
 
-lines = ['// Code generated from Engine contracts/backend/protocol.json. DO NOT EDIT.',
+lines = ['// Code generated from contracts/protocol.json. DO NOT EDIT.',
          'package contract', '', 'const (', 'APIVersion = "1"']
 for key, operation in (spec['operations'] | spec.get('websocket_operations', {})).items():
     lines += [f'{name(key)}Path = {json.dumps(operation["path"])}']

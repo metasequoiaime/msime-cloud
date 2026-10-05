@@ -53,7 +53,7 @@ func TestCloudNativeShippedWords(t *testing.T) {
 	s := fixture(t, nil)
 	s.config.Engine.Binary = binary
 	s.config.Engine.Resources = resources
-	// 未来可期 has shipped since dict-v2.0.1, which builds the Engine's custom/words.txt into the quanpin tables.
+	// 未来可期 is one of msime-dictionary's custom/words.txt entries, which every release builds into the quanpin tables.
 	entries := []wordSubmissionEntry{{"测试", "ce'shi"}, {"测试", "ce'si"}, {"未来可期", "wei'lai'ke'qi"}, {"中华人民共和国", "zhong'hua'ren'min'gong'he'guo"}, {"测测测测测测测测", "ce'ce'ce'ce'ce'ce'ce'ce"}}
 	err := s.shippedWords(context.Background(), entries)
 	var listed alreadyListedError

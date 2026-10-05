@@ -23,7 +23,7 @@
 | Windows 接入 | 新增云候选配置、设置页双宿主桥接、请求快照、可取消 curl 传输；2 项候选协议测试通过；TypeScript/Vite 构建与 11 项既有页面测试通过 | 已实现云候选适配；Windows 原生联合验证待做，AI/翻译/语音复用现有自定义端点 |
 | macOS / iOS 接入 | Foundation 共用云候选客户端、Keychain 配置、Engine 合并、iOS App 设置与完全访问门禁、macOS 菜单设置；iOS 模拟器 SDK 构建通过 | 源码接入已实现；匹配固定 Engine 的 macOS 通用构建与 41/41 测试通过；iOS 真机/真实服务联合验证待做 |
 | Linux 接入 | 新增 MSIME 云候选端点、密钥环与设置 UI；AI/翻译/语音已有自定义端点；完整 Linux 编译和 39/39 ctest 通过（含 IBus 冒烟和打包） | 云候选适配已完成；实际云候选适配器与 Go 服务 TLS 联合测试通过；AI/翻译/语音实际服务类 TLS 联合测试通过；完整宿主联网验收待做 |
-| 公共 HTTP 契约的权威归属 | Engine contracts/backend/protocol.json；服务端精确副本、生成常量、HTTP/TLS 契约测试 | 本地契约已实现并通过一致性测试；上游合并与消费者发布固定版本未执行 |
+| 公共 HTTP 契约的权威归属 | 本仓 contracts/protocol.json（原为 MSIME-Engine contracts/backend/protocol.json 的副本，Engine 已归档）；生成常量、HTTP/TLS 契约测试 | 契约已实现并通过一致性测试 |
 | 部署、CI、维护文档 | Docker 构建及只读容器 health/鉴权/capabilities/SIGTERM 验证通过；CI 检查契约生成 | 本地容器已验证；远程 CI 和生产部署未执行 |
 | 真正平台端到端验收 | Linux/Windows 云候选适配器经 TLS 访问真实 Go 服务通过；Go 自身所有契约操作经过 HTTP/TLS | 候选及 AI/翻译/批量语音服务类网络链路已验证；Windows TSF、Apple 宿主联网仍未完成 |
 

@@ -18,26 +18,24 @@ COPY internal ./internal
 COPY admin-web/embed.go ./admin-web/embed.go
 COPY --from=admin-build /src/dist ./admin-web/dist
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -trimpath -ldflags="-s -w" -o /msime-server ./cmd/msime-server
-FROM debian:bookworm-slim AS native-build
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential cmake python3 libboost-dev libfmt-dev libspdlog-dev libsqlite3-dev nlohmann-json3-dev && rm -rf /var/lib/apt/lists/*
+# The query process msime-cloud runs per request: msime-backend-engine from the msime submodule, the same Rust engine the clients ship. The toolchain is the submodule's rust-toolchain.toml; the image is the one msime's own Linux build gate uses.
+FROM rust:1.97.1-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97 AS native-build
+WORKDIR /src/third_party/msime
+COPY third_party/msime ./
+RUN cargo build -p msime-backend-engine --release --locked && install -D target/release/msime-backend-engine /build/msime-engine
+# The dictionary release the clients pin, verified against the submodule's lock file, and the submodule's helpcode tables.
+FROM debian:bookworm-slim AS resources
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates python3 && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-COPY native ./native
-COPY third_party/MSIME-Engine ./third_party/MSIME-Engine
-COPY third_party/opencc ./third_party/opencc
-COPY third_party/cpp-pinyin ./third_party/cpp-pinyin
-RUN cmake -S native -B /build -DCMAKE_BUILD_TYPE=Release && cmake --build /build --parallel 4
-FROM native-build AS resources
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
-COPY scripts/fetch_engine_resources.py /src/scripts/fetch_engine_resources.py
-RUN python3 scripts/fetch_engine_resources.py /resources --native-build /build
+COPY scripts/fetch_engine_resources.py ./scripts/fetch_engine_resources.py
+COPY third_party/msime/resources/desktop-dictionary.lock.json ./third_party/msime/resources/desktop-dictionary.lock.json
+COPY third_party/msime/resources/helpcodes ./third_party/msime/resources/helpcodes
+RUN python3 scripts/fetch_engine_resources.py /resources
 FROM gcr.io/distroless/cc-debian12:nonroot
 COPY --from=native-build /build/msime-engine /usr/local/bin/msime-engine
 COPY --from=resources --chown=65532:65532 /resources /usr/share/msime
-COPY --from=native-build /usr/lib/*-linux-gnu/libsqlite3.so.0* /usr/lib/
-COPY third_party/opencc/LICENSE /licenses/OpenCC-LICENSE
-COPY third_party/cpp-pinyin/LICENSE /licenses/cpp-pinyin-LICENSE
-COPY third_party/MSIME-Engine/LICENSE /licenses/MSIME-Engine-LICENSE
-COPY third_party/MSIME-Engine/NOTICE.md /licenses/MSIME-Engine-NOTICE.md
+COPY third_party/msime/LICENSE /licenses/msime-LICENSE
+COPY third_party/msime/resources/licenses/msime-engine-dictionary-NOTICE.md /licenses/msime-dictionary-NOTICE.md
 COPY --from=build /msime-server /msime-server
 COPY THIRD_PARTY_NOTICES.txt /licenses/MSIME-Server-THIRD-PARTY.txt
 EXPOSE 8080

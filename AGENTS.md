@@ -22,10 +22,10 @@
 ## 仓库结构
 
 - `cmd/msime-server`：服务端入口；`cmd/msime-cloud`：给人和 AI 助手用的命令行（见 README「命令行」）。
-- `internal/server`：HTTP 服务、在线输入接口、管理后台路由与鉴权；`internal/account`：用户体系、社区、管理后台数据，依赖 PostgreSQL；`internal/engine`：原生 Engine 查询；`internal/githubapp`：管理后台与官网词条投稿使用的 GitHub App 客户端；`internal/skins`：内置皮肤目录；`internal/contract`：由契约生成的常量。
+- `internal/server`：HTTP 服务、在线输入接口、管理后台路由与鉴权；`internal/account`：用户体系、社区、管理后台数据，依赖 PostgreSQL；`internal/engine`：引擎进程查询；`internal/githubapp`：管理后台与官网词条投稿使用的 GitHub App 客户端；`internal/skins`：内置皮肤目录；`internal/contract`：由契约生成的常量。
 - `admin-web/`：管理后台前端，`dist/` 是提交进版本库的构建产物，由 `admin-web/embed.go` 嵌入服务端。
-- `contracts/protocol.json`：Engine 仓 `contracts/backend/protocol.json` 的精确副本，是客户端接口的权威来源，不要在本仓直接改语义。
-- `native/`、`third_party/`：原生 Engine 及其子模块，只在 Docker 镜像和原生集成测试中构建。
+- `contracts/protocol.json`：客户端接口的权威来源。它原是 MSIME-Engine `contracts/backend/protocol.json` 的副本，Engine 归档后由本仓维护；改语义要同时顾及已发布的客户端。
+- `native/`、`third_party/`：引擎进程说明与 msime 主仓库子模块。引擎（`msime-backend-engine`）和词库锁文件都来自子模块，只在 Docker 镜像和原生集成测试中构建。
 
 ## 验证
 
@@ -49,7 +49,7 @@ gofmt -l ./cmd ./internal
 ## 接口与契约
 
 - 新增或修改 `/v1` 接口后运行 `python3 scripts/generate_openapi.py` 更新 `internal/server/swagger/openapi.json`。`routes_contract_test.go` 会对规范里的每个接口检查鉴权和来源限制，命令行的 `routes`、`describe` 也直接读这份规范。
-- 共享接口的变化先改 Engine 仓的契约，再用 `scripts/sync_contract.py` 同步到本仓，不要只改本仓副本。
+- 共享接口的变化改 `contracts/protocol.json`，再用 `scripts/sync_contract.py` 重新生成常量。
 - 管理后台 `/api/*` 的路由由表分发：`internal/account/admin_actions_registry.go` 的 `adminRoutes`、`adminLists`，以及 `internal/server/admin.go` 的 `adminServerRoutes`。新增路由在对应的表里登记，处理函数写在各功能自己的文件中。请求体、权限和返回格式写进 [docs/admin.md](docs/admin.md)，命令行的 `describe` 会引用其中提到该路由的段落。
 - 错误统一返回 `{"error":{"code":"...","message":"..."}}`，不要把上游服务商的响应正文、凭据或用户输入透传给客户端，也不要写进日志。
 

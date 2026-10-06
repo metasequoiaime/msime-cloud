@@ -61,7 +61,7 @@ curl -G -H "Authorization: Bearer $MSIME_CLIENT_TOKEN" \
 
 翻译上游支持 OpenAI 兼容聊天模型、DeepLX、DeepL、腾讯 TMT `TextTranslateBatch` 与小牛翻译 NiuTrans v2；客户端统一使用 DeepLX 格式，不持有供应商密钥。语音上游使用 multipart 转写协议，可解析 `text`、`transcription` 和 `result.text`。云候选上游使用 Google Input Tools 的响应格式，输出过滤控制字符、超长候选和重复项。
 
-客户端请求不需要传 `provider` 字段。翻译 provider 由服务端配置决定；可选的 `translation_fallbacks` 按配置顺序尝试。主 provider 返回上游错误、超时或无效响应时，服务端继续下一个 provider；请求参数错误和不支持的批量请求不会切换。只有腾讯 provider 支持当前 `texts` 批量格式。
+客户端请求不需要传 `provider` 字段。翻译 provider 由服务端配置决定；可选的 `translation_fallbacks` 按配置顺序尝试。主 provider 返回上游错误、超时或无效响应时，服务端继续下一个 provider；请求参数错误不会切换。所有 provider 都接受 `texts` 批量请求（最多 32 条），返回与 `texts` 等长、顺序相同的 `data` 数组：腾讯 TMT 和 DeepL 一次请求上游，其余一条一请求的 provider 由服务端拆成单条，最多 4 条同时请求上游，任何一条失败整次按失败返回（5xx 照常切换到下一个 provider），不会返回一半有译文的结果。
 
 错误采用 `{"error":{"code":"...","message":"..."}}`：400 参数不合法、401 未认证、403 来源不允许、413 上传过大、415 格式不支持、429 限流、502 上游失败、503 功能关闭或并发已满、504 超时。错误不透传服务商正文。429/并发已满提供 Retry-After。额度按认证主体的 token bucket 控制：设备令牌按 `clients[].requests_per_minute`，登录用户每分钟 120 次。桶保存在每个副本的进程内存里，候选这类几乎逐键请求的热路径不写数据库，重启会重置。顶层 `replicas`（默认 1，可设 1–64）填部署的副本数，每个副本对每个主体执行 ⌈额度 / `replicas`⌉ 次/分钟（至少 1 次），突发容量同样按这个份额计；在无粘性会话的轮询转发下，所有副本合计约等于配置的额度。向上取整会让合计略高（例如 5 次/分钟、2 个副本时合计最多 6 次），而单个客户端的请求没有被均匀分到各副本时，可能在合计用满前就收到 429。`replicas` 必须随扩缩容同步修改并滚动重启，否则合计会按比例偏离配置。详见下文「多副本部署」。
 
@@ -153,7 +153,7 @@ WAV 上传现在校验 RIFF 文件长度、分块边界、fmt/data 必需块和�
 ]
 ```
 
-服务默认调用 `https://api.niutrans.com/v2/text/translate`，也可在 `url` 中指定同样的 HTTPS 接口。App ID 和 API Key 只通过服务进程环境注入；服务端按 NiuTrans v2 协议生成 `authStr`，不会把供应商凭据转发给客户端。小牛翻译接口是单条请求，批量 `texts` 仍只支持腾讯 TMT。
+服务默认调用 `https://api.niutrans.com/v2/text/translate`，也可在 `url` 中指定同样的 HTTPS 接口。App ID 和 API Key 只通过服务进程环境注入；服务端按 NiuTrans v2 协议生成 `authStr`，不会把供应商凭据转发给客户端。小牛翻译接口是单条请求，批量 `texts` 由服务端拆成单条请求。
 
 文档、图片和语音接口使用同样的 NiuTrans v2 异步文件协议。服务端负责签名、上传和状态查询，客户端只看到 MSIME 设备令牌。对应 API 应用分别由 `MSIME_NIUTRANS_DOC_APP_ID`、`MSIME_NIUTRANS_IMAGE_APP_ID`、`MSIME_NIUTRANS_VOICE_APP_ID` 注入，并共用 `MSIME_NIUTRANS_APIKEY`。资源管理路由使用 `MSIME_NIUTRANS_RESOURCE_APP_ID`；`action` 只允许单段路径，服务端不会接受任意上游 URL。未配置某项 API 时，该项返回 503，不影响其他功能启动。
 

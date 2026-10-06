@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"unicode"
 	"unicode/utf16"
 	"unicode/utf8"
@@ -213,7 +214,7 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) translateEndpoint(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint) {
 	if len(v.Texts) > 0 && e.Provider != "tencent" && e.Provider != "deepl" {
-		fail(w, 400, "batch_not_supported")
+		s.translateEach(w, r, v, e)
 		return
 	}
 	switch e.Provider {
@@ -239,6 +240,48 @@ func (s *Server) translateEndpoint(w http.ResponseWriter, r *http.Request, v tra
 		}
 		respond(w, 200, map[string]any{"code": 200, "data": result.Data})
 	}
+}
+
+// 拆开批量时同时在途的上游请求数。一次批量只占一个 max_concurrent 名额,这里再限住它对上游的并发,
+// 一页九个词不至于同时打出九个请求。
+const translationSplitConcurrency = 4
+
+// 给一条一请求的翻译服务回答批量:把 texts 拆成单条,按 translationSplitConcurrency 并发走单条路径,
+// 再按原顺序拼回 {"code":200,"data":[…]}。客户端按页批量请求;拒绝批量会让它们退回逐词请求,一页十几个
+// 并发请求正是 max_concurrent 会挡掉的那种(#3864)。任何一条失败,整次调用就按那条的状态返回:5xx 让
+// 外层改试下一个翻译服务,4xx 原样交给客户端,不会出现一半有译文一半没有的结果。
+func (s *Server) translateEach(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint) {
+	results := make([]*httptest.ResponseRecorder, len(v.Texts))
+	slots := make(chan struct{}, translationSplitConcurrency)
+	var wg sync.WaitGroup
+	for i, text := range v.Texts {
+		wg.Add(1)
+		slots <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-slots }()
+			rr := httptest.NewRecorder()
+			// 每条单独计量:外层 translate 打在请求上的计量只能记一次上游调用,几条并发写它会互相覆盖。
+			// 这里的计量把外层的遮住,外层因此看不到上游调用、什么也不记,用量按条记下。
+			mr, call := metered(r, "translation", textChars([]string{text}))
+			s.translateEndpoint(rr, mr, translationRequest{Text: text, Source: v.Source, Target: v.Target}, e)
+			s.settleMeter(call, rr.Code < 500)
+			results[i] = rr
+		}()
+	}
+	wg.Wait()
+	texts := make([]string, len(results))
+	for i, rr := range results {
+		var result struct {
+			Data string `json:"data"`
+		}
+		if rr.Code != 200 || json.Unmarshal(rr.Body.Bytes(), &result) != nil {
+			copyResponse(w, rr)
+			return
+		}
+		texts[i] = result.Data
+	}
+	respondTranslations(w, v, texts)
 }
 
 func copyResponse(w http.ResponseWriter, r *httptest.ResponseRecorder) {

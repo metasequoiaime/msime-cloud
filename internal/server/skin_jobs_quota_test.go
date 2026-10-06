@@ -2,7 +2,6 @@ package server
 
 import (
 	"bytes"
-	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
@@ -21,10 +20,11 @@ func TestSharedSkinJobDailyQuota(t *testing.T) {
 		if i%2 == 1 {
 			s = b
 		}
-		path := createArtworkJobOnceFree(t, s)
+		path := createArtworkJob(t, s)
 		if w := call(s, "DELETE", path, ""); w.Code != 204 {
 			t.Fatal("delete", w.Code)
 		}
+		waitSkinWorkersIdle(t, s)
 	}
 	for _, s := range []*Server{a, b} {
 		w := call(s, "POST", "/v1/skins/jobs", `{"prompt":"one more"}`)
@@ -38,25 +38,20 @@ func TestSharedSkinJobDailyQuota(t *testing.T) {
 	}
 }
 
-// createArtworkJobOnceFree 等前面被 DELETE 的任务的 worker 真正停下再建：被取消的任务在 worker 删掉行之前仍占着 owner 的并发名额（skinJobsPerOwner），连续「建→删」时下一次可能先拿到 503 skin_jobs_busy。-race 下 worker 收尾更慢，CI 上因此偶发失败；这里只在 busy 时稍等重试，日配额的断言不变。
-func createArtworkJobOnceFree(t *testing.T, s *Server) string {
+// waitSkinWorkersIdle 等这个副本上被取消的任务的 worker 真正收尾：worker 删掉行之前，任务仍占着 owner 的并发名额（skinJobsPerOwner），紧接着再建可能先拿到 503 skin_jobs_busy，-race 下 worker 收尾更慢，CI 上因此偶发失败。worker 在删行之后才把任务从 skinRunning 里去掉，所以等它空了就够。只看副本内存里的状态、不发请求：之前用 POST 轮询重试，每次都消耗客户端每分钟的请求额度，worker 慢的时候会把额度耗尽，得到 429 rate_limit_exceeded。
+func waitSkinWorkersIdle(t *testing.T, s *Server) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for {
-		w := call(s, "POST", "/v1/skins/jobs", `{"prompt":"原创森林"}`)
-		if w.Code == 503 && bytes.Contains(w.Body.Bytes(), []byte(`"skin_jobs_busy"`)) && time.Now().Before(deadline) {
-			time.Sleep(20 * time.Millisecond)
-			continue
+		s.mu.Lock()
+		running := len(s.skinRunning)
+		s.mu.Unlock()
+		if running == 0 {
+			return
 		}
-		if w.Code != 202 {
-			t.Fatalf("create: %d %s", w.Code, w.Body.String())
+		if time.Now().After(deadline) {
+			t.Fatalf("%d skin artwork workers still running", running)
 		}
-		var out struct {
-			ID string `json:"id"`
-		}
-		if json.Unmarshal(w.Body.Bytes(), &out) != nil || len(out.ID) != 48 {
-			t.Fatal("missing job ID")
-		}
-		return "/v1/skins/jobs/" + out.ID
+		time.Sleep(10 * time.Millisecond)
 	}
 }

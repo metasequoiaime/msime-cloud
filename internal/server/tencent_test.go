@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -140,9 +141,66 @@ func TestTencentBatchRejectsOversizeAndOtherProviders(t *testing.T) {
 	if w := call(s, "POST", "/v1/translate", string(payload)); w.Code != 400 {
 		t.Fatalf("a batch past the limit was accepted: %d", w.Code)
 	}
-	// deeplx 一条一请求,openai 一条一次对话 —— 对它们「支持批量」只是把 N 次调用挪到服务端。
+}
+
+// 一条一请求的翻译服务(deeplx、openai、niutrans)也接受批量:服务端把 texts 拆成单条按顺序拼回数组。
+// 拒绝批量会让客户端退回逐词请求,一页候选十几个并发请求正是会被 max_concurrent 挡掉的那种(#3864)。
+func TestTranslationBatchSplitsForPerTextProviders(t *testing.T) {
+	var calls atomic.Int32
+	s := fixture(t, func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		var body struct {
+			Text  string   `json:"text"`
+			Texts []string `json:"texts"`
+		}
+		if json.NewDecoder(r.Body).Decode(&body) != nil || len(body.Texts) != 0 || body.Text == "" {
+			t.Error("a per-text provider was sent a batch")
+		}
+		_, _ = io.WriteString(w, `{"code":200,"data":"`+map[string]string{"你": "you", "爷": "grandpa", "爸": "dad"}[body.Text]+`"}`)
+	})
 	s.config.Translation.Provider = "deeplx"
-	if w := call(s, "POST", "/v1/translate", `{"texts":["你","爷"],"source_lang":"ZH","target_lang":"EN"}`); w.Code != 400 {
-		t.Fatalf("deeplx accepted a batch it cannot serve: %d", w.Code)
+	w := call(s, "POST", "/v1/translate", `{"texts":["你","爷","爸"],"source_lang":"ZH","target_lang":"EN"}`)
+	var result struct {
+		Code int      `json:"code"`
+		Data []string `json:"data"`
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Code != 200 ||
+		strings.Join(result.Data, ",") != "you,grandpa,dad" {
+		t.Fatalf("a per-text provider did not answer the batch in order: %d %s", w.Code, w.Body.String())
+	}
+	if calls.Load() != 3 {
+		t.Fatalf("the batch should cost one upstream call per text, got %d", calls.Load())
+	}
+}
+
+// 拆开的批量里只要有一条上游失败,整次调用按失败(5xx)返回,外层照常改试 translation_fallbacks 里的下一个服务。
+func TestTranslationBatchSplitFailureFallsBack(t *testing.T) {
+	var primary atomic.Int32
+	s := fixture(t, func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Text string `json:"text"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if r.URL.Path == "/fallback" {
+			_, _ = io.WriteString(w, `{"code":200,"data":"ok-`+body.Text+`"}`)
+			return
+		}
+		primary.Add(1)
+		if body.Text == "爸" {
+			w.WriteHeader(500)
+			return
+		}
+		_, _ = io.WriteString(w, `{"code":200,"data":"primary"}`)
+	})
+	s.config.Translation.Provider = "deeplx"
+	fallback := s.config.Translation
+	fallback.URL += "/fallback"
+	s.config.TranslationFallbacks = []TranslationEndpoint{fallback}
+	w := call(s, "POST", "/v1/translate", `{"texts":["你","爸"],"source_lang":"ZH","target_lang":"EN"}`)
+	var result struct {
+		Data []string `json:"data"`
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || strings.Join(result.Data, ",") != "ok-你,ok-爸" {
+		t.Fatalf("a failed item did not move the batch to the fallback: %d %s", w.Code, w.Body.String())
 	}
 }

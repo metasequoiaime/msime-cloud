@@ -542,6 +542,65 @@ func TestAdminReleaseWrites(t *testing.T) {
 	if got := notificationRows(t, admin, schema); !slices.Equal(got, []string{"release release windows", "release release windows", "release release windows", "release release windows"}) {
 		t.Fatal("release notifications", got)
 	}
+
+	// GitHub 的各种失败应答映射为后台的错误码；这些失败都不会改动发布、写审计或发通知。
+	f.mu.Lock()
+	f.releases["metasequoiaime/msime-windows"][2]["prerelease"] = false
+	f.releases["metasequoiaime/msime-windows"][2]["body"] = "### 修复\n- 新说明"
+	f.latest["metasequoiaime/msime-windows"] = 3
+	delete(f.status, dispatch)
+	f.mu.Unlock()
+	const (
+		repoRead  = "GET /repos/metasequoiaime/msime-windows"
+		listRead  = "GET /repos/metasequoiaime/msime-windows/releases"
+		latest    = "GET /repos/metasequoiaime/msime-windows/releases/latest"
+		patch     = "PATCH /repos/metasequoiaime/msime-windows/releases/3"
+		triggerTo = "/api/releases/windows/trigger"
+		notesTo   = "/api/releases/windows/windows-v0.5.4/notes"
+		withdraw  = "/api/releases/windows/windows-v0.5.4/withdraw"
+	)
+	for _, tc := range []struct {
+		key        string
+		forced     int
+		path, body string
+		status     int
+		code       string
+	}{
+		{repoRead, 404, triggerTo, `{"version":"v0.5.7"}`, 502, "github_repo_not_found"},
+		{repoRead, 401, triggerTo, `{"version":"v0.5.7"}`, 502, "github_rejected"},
+		{repoRead, 500, triggerTo, `{"version":"v0.5.7"}`, 502, "github_unavailable"},
+		{dispatch, 404, triggerTo, `{"version":"v0.5.7"}`, 409, "workflow_not_found"},
+		{listRead, 500, notesTo, `{"body":"x"}`, 502, "github_unavailable"},
+		{patch, 404, notesTo, `{"body":"x"}`, 404, "not_found"},
+		{patch, 422, notesTo, `{"body":"x"}`, 409, "release_rejected"},
+		{latest, 500, withdraw, ``, 502, "github_unavailable"},
+		{patch, 422, withdraw, ``, 409, "release_rejected"},
+	} {
+		f.mu.Lock()
+		f.status[tc.key] = tc.forced
+		f.mu.Unlock()
+		// 仓库信息的读取会缓存 ReadTTL，清掉缓存才能让每个用例都请求到假的 GitHub。
+		s.adminGitHub.Invalidate("")
+		code := errorCode(t, s, releaseWrite(tc.path, tc.body), tc.status)
+		f.mu.Lock()
+		delete(f.status, tc.key)
+		f.mu.Unlock()
+		if code != tc.code {
+			t.Fatal(tc.key, tc.forced, tc.path, code)
+		}
+	}
+	f.mu.Lock()
+	still := f.releases["metasequoiaime/msime-windows"][2]["prerelease"]
+	f.mu.Unlock()
+	if still != false {
+		t.Fatal("a failed withdrawal changed the release")
+	}
+	if n := len(releaseAudits(t, admin, schema)); n != len(audits) {
+		t.Fatal("failed writes were audited", n)
+	}
+	if got := notificationRows(t, admin, schema); len(got) != 4 {
+		t.Fatal("failed writes notified", got)
+	}
 }
 
 // The daily job records every published asset's cumulative download count once per day; a second run the same day updates the counts instead of adding rows.

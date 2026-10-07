@@ -260,6 +260,70 @@ func TestAppleWebSignIn(t *testing.T) {
 			t.Fatal(w.Body.String())
 		}
 	})
+	t.Run("unknown purpose", func(t *testing.T) {
+		w := f.json("/v1/auth/apple/web", "", map[string]string{"code_challenge": pkceChallenge(newVerifier()), "code_challenge_method": "S256", "app": "app.msime.android", "purpose": "export"})
+		if w.Code != 400 || !strings.Contains(w.Body.String(), "invalid_purpose") {
+			t.Fatal(w.Code, w.Body.String())
+		}
+	})
+	t.Run("callback requests that never reach a challenge", func(t *testing.T) {
+		state, _, _ := f.begin("app.msime.android", "login", "", newVerifier())
+		for _, tc := range []struct {
+			name, contentType, body, message string
+		}{
+			{"json instead of form_post", "application/json", `{"state":"` + state + `"}`, "登录请求无效"},
+			{"malformed form", "application/x-www-form-urlencoded", "state=%zz", "登录请求无效"},
+			{"short state", "application/x-www-form-urlencoded", "state=abc", "登录已过期"},
+		} {
+			r := httptest.NewRequest("POST", AppleCallbackPath, strings.NewReader(tc.body))
+			r.Header.Set("Content-Type", tc.contentType)
+			w := httptest.NewRecorder()
+			f.mux.ServeHTTP(w, r)
+			// 没有可信的 state 就不知道该跳回哪个 App，落地页只能显示文字，不能带链接。
+			if w.Code != 200 || !strings.Contains(w.Body.String(), tc.message) || strings.Contains(w.Body.String(), "href=") {
+				t.Fatal(tc.name, w.Code, w.Body.String())
+			}
+		}
+		// 上面的请求都没有消耗挑战，同一个 state 仍然可以完成登录；Apple 返回的其他错误码统一映射为 apple_error，并作废挑战。
+		w, _ := f.callback(url.Values{"state": {state}, "error": {"invalid_request"}})
+		if !strings.Contains(w.Body.String(), "app.msime.android://auth/apple?error=apple_error") {
+			t.Fatal(w.Body.String())
+		}
+		if w, _ = f.callback(url.Values{"state": {state}, "error": {"invalid_request"}}); strings.Contains(w.Body.String(), "href=") {
+			t.Fatal("challenge survived an Apple error", w.Body.String())
+		}
+	})
+	t.Run("first authorization carries the name", func(t *testing.T) {
+		verifier := newVerifier()
+		state, nonce, w := f.begin("app.msime.android", "login", "", verifier)
+		if state == "" {
+			t.Fatal(w.Code, w.Body.String())
+		}
+		f.token = &oidc.IDToken{Subject: "apple-subject-named", Nonce: nonce, IssuedAt: time.Now()}
+		_, grant := f.callback(url.Values{"state": {state}, "id_token": {"header.payload.signature"}, "user": {`{"name":{"firstName":"晓","lastName":"莫"},"email":"hidden@privaterelay.appleid.com"}`}})
+		if grant == "" {
+			t.Fatal("no grant")
+		}
+		w = f.json("/v1/auth/apple/web/login", "", map[string]string{"grant": grant, "code_verifier": verifier})
+		var v struct {
+			User User `json:"user"`
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &v) != nil || v.User.DisplayName != "晓 莫" {
+			t.Fatal(w.Code, w.Body.String())
+		}
+	})
+	t.Run("future issued_at and oversized token are refused", func(t *testing.T) {
+		state, nonce, _ := f.begin("app.msime.android", "login", "", newVerifier())
+		f.token = &oidc.IDToken{Subject: "s", Nonce: nonce, IssuedAt: time.Now().Add(time.Hour)}
+		if w, grant := f.callback(url.Values{"state": {state}, "id_token": {"x"}}); grant != "" || !strings.Contains(w.Body.String(), "error=invalid_token") {
+			t.Fatal(w.Body.String())
+		}
+		state, nonce, _ = f.begin("app.msime.android", "login", "", newVerifier())
+		f.token = &oidc.IDToken{Subject: "s", Nonce: nonce, IssuedAt: time.Now()}
+		if w, grant := f.callback(url.Values{"state": {state}, "id_token": {strings.Repeat("x", 12001)}}); grant != "" || !strings.Contains(w.Body.String(), "error=invalid_token") {
+			t.Fatal(w.Body.String())
+		}
+	})
 	t.Run("disabled without the services id", func(t *testing.T) {
 		f.a.config.Apple.ClientIDs = []string{"app.msime.ios"}
 		defer func() { f.a.config.Apple.ClientIDs = []string{"app.msime.ios", AppleServicesID} }()
@@ -267,4 +331,20 @@ func TestAppleWebSignIn(t *testing.T) {
 			t.Fatal(w.Code)
 		}
 	})
+}
+
+func TestAppleName(t *testing.T) {
+	for _, tc := range []struct{ raw, want string }{
+		{`{"name":{"firstName":"Ada","lastName":"Lovelace"}}`, "Ada Lovelace"},
+		{`{"name":{"firstName":"晓"}}`, "晓"},
+		{`{"email":"a@example.test"}`, ""},
+		{`{"name":`, ""},
+		{"", ""},
+		{`{"name":{"firstName":"` + strings.Repeat("a", 4096) + `"}}`, ""},
+		{`{"name":{"firstName":"a\u0007b"}}`, ""},
+	} {
+		if got := appleName(tc.raw); got != tc.want {
+			t.Errorf("appleName(%.40q) = %q, want %q", tc.raw, got, tc.want)
+		}
+	}
 }

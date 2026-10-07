@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/metasequoiaime/MSIME-Backend/internal/engine"
 	"net/http"
@@ -358,6 +359,103 @@ func testUserDataTransactions(t *testing.T, native bool) {
 						t.Fatalf("partial mutation persisted after cancellation of %s", sql)
 					}
 				})
+			}
+		})
+	}
+}
+
+// 登录是一个事务：消耗挑战、创建或绑定用户、写入服务商资料与刷新令牌、创建会话。任意一条语句失败都不能留下用户、身份、资料修改、服务商令牌或会话，挑战仍然有效，可以重试。
+func TestLoginRollsBackAtEveryDatabaseStatement(t *testing.T) {
+	db := testStore(t)
+	type fixture struct {
+		challenge Challenge
+		identity  Identity
+		grant     *providerGrant
+	}
+	seeds := map[string]func(t *testing.T) fixture{
+		"new account": func(t *testing.T) fixture {
+			identity := Identity{"email", randomToken() + "@example.test"}
+			c := Challenge{IDHash: hash(randomToken()), Provider: identity.Provider, Subject: identity.Subject}
+			if err := db.PutChallenge(t.Context(), c); err != nil {
+				t.Fatal(err)
+			}
+			return fixture{c, identity, nil}
+		},
+		"returning account with a provider grant": func(t *testing.T) fixture {
+			identity := Identity{"google", randomToken()}
+			complete(t, db, identity)
+			c := Challenge{IDHash: hash(randomToken()), Provider: identity.Provider, Subject: identity.Subject}
+			if err := db.PutChallenge(t.Context(), c); err != nil {
+				t.Fatal(err)
+			}
+			return fixture{c, identity, &providerGrant{Profile: &providerProfile{Email: "returning@example.test", EmailVerified: true, Name: "Returning User"}, SealedRefresh: []byte("sealed-refresh"), Scope: "openid"}}
+		},
+		"link to the signed-in account": func(t *testing.T) fixture {
+			owner := complete(t, db, Identity{"email", randomToken() + "@example.test"})
+			identity := Identity{"apple", randomToken()}
+			c := Challenge{IDHash: hash(randomToken()), Provider: identity.Provider, Subject: identity.Subject, LinkUser: owner.User.ID}
+			if err := db.PutChallenge(t.Context(), c); err != nil {
+				t.Fatal(err)
+			}
+			return fixture{c, identity, &providerGrant{Profile: &providerProfile{Name: "Linked"}}}
+		},
+	}
+	state := func(t *testing.T, f fixture) string {
+		t.Helper()
+		var raw string
+		if err := db.pool.QueryRow(t.Context(), `SELECT jsonb_build_object(
+ 'challenge',(SELECT count(*) FROM auth_challenges WHERE id_hash=$1),
+ 'identities',(SELECT COALESCE(jsonb_agg(to_jsonb(i) ORDER BY i.provider),'[]'::jsonb) FROM auth_identities i WHERE (provider=$2 AND subject=$3) OR user_id=$4),
+ 'users',(SELECT COALESCE(jsonb_agg(jsonb_build_object('id',u.id,'name',u.display_name) ORDER BY u.id),'[]'::jsonb) FROM auth_users u WHERE u.id IN (SELECT user_id FROM auth_identities WHERE provider=$2 AND subject=$3) OR u.id=$4),
+ 'tokens',(SELECT count(*) FROM auth_provider_tokens WHERE provider=$2 AND subject=$3),
+ 'sessions',(SELECT count(*) FROM auth_sessions WHERE user_id IN (SELECT user_id FROM auth_identities WHERE provider=$2 AND subject=$3) OR user_id=$4))::text`,
+			f.challenge.IDHash, f.identity.Provider, f.identity.Subject, f.challenge.LinkUser).Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	for name, seed := range seeds {
+		t.Run(name, func(t *testing.T) {
+			trace := &statementCancellation{}
+			cfg := db.pool.Config()
+			cfg.ConnConfig.Tracer = trace
+			pool, err := pgxpool.NewWithConfig(t.Context(), cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pool.Close()
+			store := &Store{pool: pool}
+			f := seed(t)
+			before := state(t, f)
+			if _, err := store.completeWith(t.Context(), f.challenge, f.identity, f.grant); err != nil {
+				t.Fatal("baseline", err)
+			}
+			if state(t, f) == before {
+				t.Fatal("baseline login changed nothing")
+			}
+			trace.mu.Lock()
+			statements := append([]string(nil), trace.statements...)
+			trace.mu.Unlock()
+			for i, sql := range statements {
+				f := seed(t)
+				before := state(t, f)
+				trace.mu.Lock()
+				trace.at, trace.seen, trace.statements = i+1, 0, nil
+				trace.mu.Unlock()
+				_, err := store.completeWith(t.Context(), f.challenge, f.identity, f.grant)
+				trace.mu.Lock()
+				trace.at = 0
+				trace.mu.Unlock()
+				if err == nil || errors.Is(err, ErrInvalid) {
+					t.Fatalf("statement %d (%s): %v", i+1, sql, err)
+				}
+				if after := state(t, f); after != before {
+					t.Fatalf("statement %d (%s): partial login persisted\nbefore %s\nafter  %s", i+1, sql, before, after)
+				}
+				// 失败的尝试没有消耗挑战，同一个已验证的凭据可以完成登录。
+				if _, err := db.completeWith(t.Context(), f.challenge, f.identity, f.grant); err != nil {
+					t.Fatalf("statement %d (%s): retry %v", i+1, sql, err)
+				}
 			}
 		})
 	}

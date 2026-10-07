@@ -94,11 +94,12 @@ jobs:
           MSIME_ENGINE_TEST_BINARY: ${{ github.workspace }}/bin/native/msime-engine
           MSIME_ENGINE_TEST_RESOURCES: ${{ github.workspace }}/bin/resources
           MSIME_TEST_DATABASE_URL: postgres://postgres:local-native-test@127.0.0.1:5432/msime_auth_test?sslmode=disable
+        # `-count=1` 关闭测试结果缓存。setup-go 按 go.sum 恢复的 GOCACHE 只在 go.sum 变化时更新，没有改动依赖的包（admin-web、internal/engine 等）会直接重放缓存里的覆盖率文件；`-coverpkg=./...` 时这些文件也列出它们没有导入的包，块位置却是缓存时的旧源码，合并后多出一批永远为 0 的旧块，把总覆盖率拉到门禁以下（2026-10 的 89.3% 就是旧版 `internal/server/handlers.go` 多出的 282 条语句）。
         run: |
           python3 scripts/test_native.py
           python3 -m unittest discover -s scripts -p 'test_api_test_results.py'
           python3 -m unittest discover -s scripts -p 'test_go_coverage.py'
-          go test -race -p 1 -json -coverpkg=./... -coverprofile=bin/api.cover ./... > bin/api-test-results.jsonl || { cat bin/api-test-results.jsonl; exit 1; }
+          go test -race -count=1 -p 1 -json -coverpkg=./... -coverprofile=bin/api.cover ./... > bin/api-test-results.jsonl || { cat bin/api-test-results.jsonl; exit 1; }
           python3 scripts/check_api_test_results.py bin/api-test-results.jsonl
           python3 scripts/check_go_coverage.py bin/api.cover
       - name: 确认查询未修改基础词库

@@ -99,6 +99,58 @@ func TestVoiceContributions(t *testing.T) {
 			t.Fatal(tc.payload, w.Code, w.Body.String())
 		}
 	}
+	// 手工拼的请求覆盖 multipart 层面的拒绝：非 multipart、缺 boundary、没有分隔行、截断的部分、重复的部分、超长 payload、payload 后面跟着第二个 JSON 值，以及 payload 字段的边界。
+	raw := func(contentType, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("POST", voiceContributionsPath, strings.NewReader(body))
+		r.Header.Set("Content-Type", contentType)
+		r.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		return w
+	}
+	parts := func(fields ...string) (string, string) {
+		var b bytes.Buffer
+		m := multipart.NewWriter(&b)
+		for i := 0; i+1 < len(fields); i += 2 {
+			f, _ := m.CreateFormFile(fields[i], fields[i])
+			_, _ = f.Write([]byte(fields[i+1]))
+		}
+		_ = m.Close()
+		return m.FormDataContentType(), b.String()
+	}
+	wav := string(testWAV())
+	for _, tc := range []struct {
+		name, contentType, body, code string
+		status                        int
+	}{
+		{"json body", "application/json", good, "multipart_required", 415},
+		{"no content type", "", "", "multipart_required", 415},
+		{"no boundary", "multipart/form-data", "x", "invalid_multipart", 400},
+		{"no boundary line", "multipart/form-data; boundary=b", "not a multipart body", "invalid_multipart", 400},
+		{"truncated payload part", "multipart/form-data; boundary=b", "--b\r\nContent-Disposition: form-data; name=\"payload\"\r\n\r\n{", "invalid_payload", 400},
+	} {
+		if w := raw(tc.contentType, tc.body); w.Code != tc.status || !strings.Contains(w.Body.String(), `"`+tc.code+`"`) {
+			t.Fatal(tc.name, w.Code, w.Body.String())
+		}
+	}
+	for _, tc := range []struct {
+		name   string
+		fields []string
+		code   string
+	}{
+		{"two payloads", []string{"payload", good, "payload", good, "audio", wav}, "invalid_payload"},
+		{"two audio parts", []string{"payload", good, "audio", wav, "audio", wav}, "invalid_audio"},
+		{"payload over 16 KiB", []string{"payload", `{"transcript":"` + strings.Repeat("x", voiceContributionPayloadBytes) + `"}`, "audio", wav}, "invalid_payload"},
+		{"trailing JSON value", []string{"payload", good + `{}`, "audio", wav}, "invalid_payload"},
+		{"NUL in transcript", []string{"payload", `{"language":"zh-CN","provider":"doubao","duration_ms":1000,"transcript":"a\u0000b","app_version":"1.4.0"}`, "audio", wav}, "invalid_payload"},
+		{"transcript over 2000 runes", []string{"payload", `{"language":"zh-CN","provider":"doubao","duration_ms":1000,"transcript":"` + strings.Repeat("字", voiceContributionTranscriptRunes+1) + `","app_version":"1.4.0"}`, "audio", wav}, "invalid_payload"},
+		{"zero duration", []string{"payload", `{"language":"zh-CN","provider":"doubao","duration_ms":0,"transcript":"x","app_version":"1.4.0"}`, "audio", wav}, "invalid_payload"},
+	} {
+		contentType, body := parts(tc.fields...)
+		if w := raw(contentType, body); w.Code != 400 || !strings.Contains(w.Body.String(), `"`+tc.code+`"`) {
+			t.Fatal(tc.name, w.Code, w.Body.String())
+		}
+	}
 	w := post(tokens.AccessToken, good, testWAV(), false)
 	if w.Code != 201 || !strings.Contains(w.Body.String(), `"id"`) {
 		t.Fatal(w.Code, w.Body.String())

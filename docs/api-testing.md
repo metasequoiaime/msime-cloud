@@ -23,11 +23,13 @@ python3 scripts/fetch_engine_resources.py bin/resources
 export MSIME_TEST_DATABASE_URL='postgres://postgres:local-test@127.0.0.1:5432/msime_auth_test?sslmode=disable'
 export MSIME_ENGINE_TEST_BINARY="$PWD/bin/native/msime-engine"
 export MSIME_ENGINE_TEST_RESOURCES="$PWD/bin/resources"
-go test -race -p 1 -json -coverpkg=./... -coverprofile=bin/api.cover ./... > bin/api-tests.jsonl
+go test -race -count=1 -p 1 -json -coverpkg=./... -coverprofile=bin/api.cover ./... > bin/api-tests.jsonl
 python3 scripts/check_api_test_results.py bin/api-tests.jsonl
 python3 scripts/check_go_coverage.py bin/api.cover
 go tool cover -func=bin/api.cover
 ```
+
+`-count=1` 不能省：`-coverpkg=./...` 下，命中测试缓存的包会重放旧的覆盖率文件，其中也列出它没有导入、之后改过的包，块位置还是旧源码，合并后多出一批为 0 的旧块，算出的覆盖率偏低。
 
 `TestAPICoverageInventory` 检查 OpenAPI 操作没有漏登记，且登记的业务测试函数真实存在。`check_api_test_results.py` 进一步读取 Go 测试事件，要求登记用例实际为 `pass`；缺失、跳过、失败均不通过。CI 的原生引擎任务执行这两层检查。单独执行不带数据库或引擎环境变量的 `go test ./...` 仍适合快速检查，但不代表完整 API 回归。
 

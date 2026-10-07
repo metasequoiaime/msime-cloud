@@ -91,6 +91,16 @@ func TestSnapshotDecoderRecordBoundaries(t *testing.T) {
 			}
 		})
 	}
+	// 安卓导出的 98 版五笔词条（kind 为 wubi98）是有效记录；未知种类仍然拒绝，见上面的 invalid entry kind。
+	wubi98 := strings.Replace(strings.Replace(entry, `"pinyin"`, `"wubi98"`, 1), `"code":"ni'hao","word":"你好"`, `"code":"wq","word":"你"`, 1)
+	overlay := strings.Replace(wubi98, `"type":"entry"`, `"type":"overlay","deleted":false`, 1)
+	staged := []string{}
+	if err := decodeDictionarySnapshot(bytes.NewReader(signedSnapshot(header, wubi98, overlay)), func(record snapshotRecord) error {
+		staged = append(staged, record.Type)
+		return nil
+	}); err != nil || len(staged) != 3 {
+		t.Fatal("wubi98 entry rejected", staged, err)
+	}
 	// An EOF immediately after the footer is valid; a final newline is optional.
 	raw := bytes.TrimSuffix(signedSnapshot(header), []byte{'\n'})
 	if err := decodeDictionarySnapshot(bytes.NewReader(raw), func(snapshotRecord) error { return nil }); err != nil {

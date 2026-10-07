@@ -114,7 +114,7 @@ func TestDictionaryHTTPWithNativeValidation(t *testing.T) {
 		return w
 	}
 	base := "/v1/users/me/dictionaries/"
-	for _, tc := range []struct{ kind, code, word string }{{"pinyin", "ni hao", "你好"}, {"wubi", "wq", "你"}, {"quick", "test", "测试短语"}, {"english", "hello", "Hello"}} {
+	for _, tc := range []struct{ kind, code, word string }{{"pinyin", "ni hao", "你好"}, {"wubi", "wq", "你"}, {"wubi98", "wq", "你"}, {"quick", "test", "测试短语"}, {"english", "hello", "Hello"}} {
 		body, _ := json.Marshal(map[string]any{"code": tc.code, "word": tc.word, "weight": 10})
 		response := call("POST", base+tc.kind, string(body), 201)
 		var change DictionaryChange
@@ -171,10 +171,10 @@ func TestDictionaryHTTPUpdateDeleteRevisionAndOwnership(t *testing.T) {
 	two := complete(t, db, Identity{"email", "crud-two@example.test"})
 	mux := http.NewServeMux()
 	Mount(mux, &Service{store: db, engine: engine.Config{Binary: binary, Resources: os.Getenv("MSIME_ENGINE_TEST_RESOURCES")}})
-	for _, kind := range []string{"pinyin", "wubi", "quick", "english"} {
+	for _, kind := range []string{"pinyin", "wubi", "wubi98", "quick", "english"} {
 		t.Run(kind, func(t *testing.T) {
 			code, word := "ni", "你"
-			if kind == "wubi" {
+			if kind == "wubi" || kind == "wubi98" {
 				code = "wq"
 			}
 			if kind == "quick" {

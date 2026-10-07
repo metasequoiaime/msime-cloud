@@ -59,7 +59,7 @@ func TestMergedDictionaryCatalogPages(t *testing.T) {
 		}
 	}
 	for _, tc := range []struct{ kind, code, word, prefix string }{
-		{"pinyin", "ni'hao", "拟蒿", "nihao"}, {"wubi", "abcd", "测试目录", "abc"}, {"english", "zzcatalog", "Zzcatalog", "zzcat"}, {"quick", "zzcat", "测试目录短语", ""},
+		{"pinyin", "ni'hao", "拟蒿", "nihao"}, {"wubi", "abcd", "测试目录", "abc"}, {"wubi98", "abcd", "九八测试目录", "abc"}, {"english", "zzcatalog", "Zzcatalog", "zzcat"}, {"quick", "zzcat", "测试目录短语", ""},
 	} {
 		change, err := s.EditDictionary(ctx, one.User.ID, tc.kind, "", 0, &DictionaryEntry{Code: tc.code, Word: tc.word, Weight: 100000000})
 		if err != nil {

@@ -123,7 +123,7 @@ func (a *Service) validateResource(ctx context.Context, kind string, content Res
 		}
 		content.Entries = nil
 		seen := map[string]bool{}
-		for _, k := range []string{"pinyin", "wubi", "english", "quick"} {
+		for _, k := range dictionaryKinds {
 			if len(groups[k]) == 0 {
 				continue
 			}

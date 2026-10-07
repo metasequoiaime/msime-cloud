@@ -78,12 +78,13 @@ func preparePersonalQuery(w http.ResponseWriter, v PersonalQuery) (map[string]an
 		if v.Kind == "jianpin" {
 			operation = "jianpin"
 		}
-	case "wubi":
+	case "wubi", "wubi98":
+		// 两版五笔的编码规则相同；引擎的方案名与种类同名，`wubi98` 读 98 版码表。
 		if len(v.Text) > 4 || !personalEnglishCode.MatchString(v.Text) {
 			writeError(w, 400, "invalid_wubi_code")
 			return nil, false
 		}
-		v.Scheme = "wubi"
+		v.Scheme = v.Kind
 	case "english":
 		if !personalEnglishPrefix.MatchString(v.Text) {
 			writeError(w, 400, "invalid_english_prefix")

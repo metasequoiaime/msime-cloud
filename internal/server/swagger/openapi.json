@@ -7597,6 +7597,7 @@
                     "enum": [
                       "pinyin",
                       "wubi",
+                      "wubi98",
                       "english",
                       "quick",
                       "jianpin"
@@ -7674,6 +7675,7 @@
                             "enum": [
                               "pinyin",
                               "wubi",
+                              "wubi98",
                               "english",
                               "quick"
                             ]
@@ -7765,6 +7767,7 @@
                           "enum": [
                             "pinyin",
                             "wubi",
+                            "wubi98",
                             "english",
                             "quick"
                           ]
@@ -7805,6 +7808,7 @@
                           "enum": [
                             "pinyin",
                             "wubi",
+                            "wubi98",
                             "english",
                             "quick"
                           ]
@@ -7891,6 +7895,7 @@
                         "enum": [
                           "pinyin",
                           "wubi",
+                          "wubi98",
                           "english",
                           "quick",
                           "jianpin"
@@ -8018,6 +8023,7 @@
               "enum": [
                 "pinyin",
                 "wubi",
+                "wubi98",
                 "english",
                 "quick"
               ]
@@ -8084,6 +8090,7 @@
                             "enum": [
                               "pinyin",
                               "wubi",
+                              "wubi98",
                               "english",
                               "quick"
                             ]
@@ -8162,6 +8169,7 @@
               "enum": [
                 "pinyin",
                 "wubi",
+                "wubi98",
                 "english",
                 "quick"
               ]
@@ -8232,6 +8240,7 @@
                             "enum": [
                               "pinyin",
                               "wubi",
+                              "wubi98",
                               "english",
                               "quick"
                             ]
@@ -8323,6 +8332,7 @@
                           "enum": [
                             "pinyin",
                             "wubi",
+                            "wubi98",
                             "english",
                             "quick"
                           ]
@@ -8363,6 +8373,7 @@
                           "enum": [
                             "pinyin",
                             "wubi",
+                            "wubi98",
                             "english",
                             "quick"
                           ]
@@ -8435,6 +8446,7 @@
               "enum": [
                 "pinyin",
                 "wubi",
+                "wubi98",
                 "english",
                 "quick"
               ]
@@ -8509,6 +8521,7 @@
                             "enum": [
                               "pinyin",
                               "wubi",
+                              "wubi98",
                               "english",
                               "quick"
                             ]
@@ -8600,6 +8613,7 @@
                           "enum": [
                             "pinyin",
                             "wubi",
+                            "wubi98",
                             "english",
                             "quick"
                           ]
@@ -8640,6 +8654,7 @@
                           "enum": [
                             "pinyin",
                             "wubi",
+                            "wubi98",
                             "english",
                             "quick"
                           ]
@@ -8712,6 +8727,7 @@
               "enum": [
                 "pinyin",
                 "wubi",
+                "wubi98",
                 "english",
                 "quick"
               ]
@@ -8798,6 +8814,7 @@
                             "enum": [
                               "pinyin",
                               "wubi",
+                              "wubi98",
                               "english",
                               "quick"
                             ]
@@ -8889,6 +8906,7 @@
                           "enum": [
                             "pinyin",
                             "wubi",
+                            "wubi98",
                             "english",
                             "quick"
                           ]
@@ -8929,6 +8947,7 @@
                           "enum": [
                             "pinyin",
                             "wubi",
+                            "wubi98",
                             "english",
                             "quick"
                           ]
@@ -9001,6 +9020,7 @@
               "enum": [
                 "pinyin",
                 "wubi",
+                "wubi98",
                 "english",
                 "quick"
               ]
@@ -9108,6 +9128,7 @@
               "enum": [
                 "pinyin",
                 "wubi",
+                "wubi98",
                 "english",
                 "quick"
               ]
@@ -9205,6 +9226,7 @@
               "enum": [
                 "pinyin",
                 "wubi",
+                "wubi98",
                 "english",
                 "quick"
               ]
@@ -9267,6 +9289,7 @@
                                   "enum": [
                                     "pinyin",
                                     "wubi",
+                                    "wubi98",
                                     "english",
                                     "quick"
                                   ]
@@ -9358,6 +9381,7 @@
                                 "enum": [
                                   "pinyin",
                                   "wubi",
+                                  "wubi98",
                                   "english",
                                   "quick"
                                 ]
@@ -9398,6 +9422,7 @@
                                 "enum": [
                                   "pinyin",
                                   "wubi",
+                                  "wubi98",
                                   "english",
                                   "quick"
                                 ]
@@ -9527,6 +9552,7 @@
                             "enum": [
                               "pinyin",
                               "wubi",
+                              "wubi98",
                               "english",
                               "quick"
                             ]
@@ -9639,6 +9665,7 @@
                         "enum": [
                           "pinyin",
                           "wubi",
+                          "wubi98",
                           "english",
                           "quick",
                           "jianpin"
@@ -9972,6 +9999,7 @@
               "enum": [
                 "pinyin",
                 "wubi",
+                "wubi98",
                 "english",
                 "quick"
               ]
@@ -10070,6 +10098,7 @@
                             "enum": [
                               "pinyin",
                               "wubi",
+                              "wubi98",
                               "english",
                               "quick"
                             ]
@@ -10161,6 +10190,7 @@
                           "enum": [
                             "pinyin",
                             "wubi",
+                            "wubi98",
                             "english",
                             "quick"
                           ]
@@ -10201,6 +10231,7 @@
                           "enum": [
                             "pinyin",
                             "wubi",
+                            "wubi98",
                             "english",
                             "quick"
                           ]
@@ -10273,6 +10304,7 @@
               "enum": [
                 "pinyin",
                 "wubi",
+                "wubi98",
                 "english",
                 "quick"
               ]
@@ -15689,6 +15721,7 @@
                                       "enum": [
                                         "pinyin",
                                         "wubi",
+                                        "wubi98",
                                         "english",
                                         "quick"
                                       ]
@@ -15946,6 +15979,7 @@
                               "enum": [
                                 "pinyin",
                                 "wubi",
+                                "wubi98",
                                 "english",
                                 "quick"
                               ]
@@ -16103,6 +16137,7 @@
                                 "enum": [
                                   "pinyin",
                                   "wubi",
+                                  "wubi98",
                                   "english",
                                   "quick"
                                 ]

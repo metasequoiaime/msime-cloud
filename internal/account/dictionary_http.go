@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf16"
@@ -14,8 +15,11 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/engine"
 )
 
+// dictionaryKinds 是个人词库词条的全部种类，顺序即社区词库分组校验的顺序：`wubi` 是 86 版五笔，`wubi98` 是 98 版。数据库里的同一份清单是 userdata_schema.sql 的 `user_dictionary_entries_kind_check`，两边要一起改。
+var dictionaryKinds = []string{"pinyin", "wubi", "wubi98", "english", "quick"}
+
 func dictionaryKind(kind string) bool {
-	return kind == "pinyin" || kind == "wubi" || kind == "english" || kind == "quick"
+	return slices.Contains(dictionaryKinds, kind)
 }
 func (a *Service) dictionaryError(w http.ResponseWriter, err error) {
 	switch {

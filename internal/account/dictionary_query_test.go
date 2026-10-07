@@ -59,6 +59,7 @@ func TestPersonalCandidateReplayAndIsolation(t *testing.T) {
 	cases := []struct{ kind, code, word, input, scheme string }{
 		{"pinyin", "ni'hao", "拟蒿", "nihao", "pinyin"},
 		{"wubi", "abcd", "测试专用词", "abcd", "wubi"},
+		{"wubi98", "abcd", "九八测试专用词", "abcd", "wubi98"},
 		{"english", "zzmsimeexample", "Zzmsimeexample", "zzmsime", ""},
 		{"quick", "apitest", "仅此用户合成短语", "apitest", ""},
 	}

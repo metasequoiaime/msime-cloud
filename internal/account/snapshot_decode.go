@@ -98,9 +98,7 @@ func decodeDictionarySnapshot(reader io.Reader, stage func(snapshotRecord) error
 			if err := strictSnapshotJSON(record.Data, &e); err != nil {
 				return errInvalidSnapshot
 			}
-			switch e.Kind {
-			case "pinyin", "wubi", "english", "quick":
-			default:
+			if !dictionaryKind(e.Kind) {
 				return errInvalidSnapshot
 			}
 			if !validPositionText(e.Code, 512) || !validPositionText(e.Word, 2048) || e.Revision < 1 || e.Revision > revision || e.UpdatedAt.IsZero() {

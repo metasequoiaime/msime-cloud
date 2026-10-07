@@ -273,6 +273,75 @@ func TestStartupMigratesAdminConsoleObjectsAddedLater(t *testing.T) {
 	}
 }
 
+// 旧库的 user_dictionary_entries.kind 约束只有四种取值。启动时 Ready 发现约束不含 wubi98 就走迁移：约束被原名替换为含 wubi98 的版本，已有词条一行不动，98 版五笔词条可以写入，未知种类照样被拒绝。
+func TestStartupRelaxesDictionaryKindConstraintForWubi98(t *testing.T) {
+	admin, schema := disposableSchema(t)
+	ctx := context.Background()
+	db, err := account.Open(ctx, os.Getenv("MSIME_TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	quoted := pgx.Identifier{schema}.Sanitize()
+	// 还原成加入 wubi98 之前的列约束（PostgreSQL 给列约束起的默认名就是这个），并放进一条已有词条。
+	if _, err = admin.Exec(ctx, `ALTER TABLE `+quoted+`.user_dictionary_entries DROP CONSTRAINT user_dictionary_entries_kind_check, ADD CONSTRAINT user_dictionary_entries_kind_check CHECK(kind IN ('pinyin','wubi','english','quick'));
+INSERT INTO `+quoted+`.auth_users(id,display_name) VALUES('wubi98-migration-user','');
+INSERT INTO `+quoted+`.user_dictionary_entries(id,user_id,kind,code,word,weight,revision) VALUES('existing-entry','wubi98-migration-user','wubi','wq','你',10,1)`); err != nil {
+		t.Fatal(err)
+	}
+	insert := func(id, kind string) error {
+		_, err := admin.Exec(ctx, `INSERT INTO `+quoted+`.user_dictionary_entries(id,user_id,kind,code,word,weight,revision) VALUES($1,'wubi98-migration-user',$2,'kg',$1,10,2)`, id, kind)
+		return err
+	}
+	if insert("before-migration", "wubi98") == nil {
+		t.Fatal("the old constraint accepted wubi98")
+	}
+	t.Setenv("TEST_AUTH_PEPPER", strings.Repeat("p", 64))
+	t.Setenv("TEST_CLIENT_TOKEN", testToken)
+	config := Config{
+		Auth:    account.Config{Enabled: true, DatabaseEnv: "MSIME_TEST_DATABASE_URL", PepperEnv: "TEST_AUTH_PEPPER"},
+		Clients: []Client{{ID: "device", TokenEnv: "TEST_CLIENT_TOKEN", RequestsPerMinute: 120}},
+	}
+	constraints := func() []string {
+		t.Helper()
+		rows, err := admin.Query(ctx, `SELECT c.conname||' '||pg_get_constraintdef(c.oid) FROM pg_constraint c JOIN pg_namespace n ON n.oid=c.connamespace WHERE n.nspname=$1 AND c.conrelid=($2||'.user_dictionary_entries')::regclass AND c.contype='c' AND pg_get_constraintdef(c.oid) LIKE '%kind%' ORDER BY 1`, schema, quoted)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defs, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return defs
+	}
+	// 迁移可以重复执行：第二次启动时约束已是新的，不再替换，也不会多出一条。
+	for range 2 {
+		s, err := New(config)
+		if err != nil {
+			t.Fatalf("the old dictionary kind constraint was not migrated at startup: %v", err)
+		}
+		s.CloseAccounts()
+		s.Close()
+		defs := constraints()
+		if len(defs) != 1 || !strings.HasPrefix(defs[0], "user_dictionary_entries_kind_check ") || !strings.Contains(defs[0], "'wubi98'") {
+			t.Fatal("kind constraint after migration:", defs)
+		}
+	}
+	var kind string
+	if err = admin.QueryRow(ctx, `SELECT kind FROM `+quoted+`.user_dictionary_entries WHERE id='existing-entry'`).Scan(&kind); err != nil || kind != "wubi" {
+		t.Fatal("existing entry changed", kind, err)
+	}
+	if err = insert("after-migration", "wubi98"); err != nil {
+		t.Fatal("wubi98 rejected after migration:", err)
+	}
+	if insert("unknown-kind", "wubi86") == nil {
+		t.Fatal("the new constraint accepted an unknown kind")
+	}
+}
+
 // notificationRows lists the console notifications recorded in schema as "kind page id", oldest first, so a test can check that a GitHub-driven write really reached the bell.
 func notificationRows(t *testing.T, conn *pgx.Conn, schema string) []string {
 	t.Helper()

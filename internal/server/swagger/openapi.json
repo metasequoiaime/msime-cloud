@@ -3097,6 +3097,9 @@
                           "type": "string",
                           "maxLength": 32
                         },
+                        "platform.android.split_keyboard": {
+                          "type": "boolean"
+                        },
                         "platform.android.key_popup": {
                           "type": "boolean"
                         },
@@ -3823,6 +3826,9 @@
                           "type": "string",
                           "maxLength": 32
                         },
+                        "platform.android.split_keyboard": {
+                          "type": "boolean"
+                        },
                         "platform.android.key_popup": {
                           "type": "boolean"
                         },
@@ -4535,6 +4541,9 @@
                       "platform.android.one_handed": {
                         "type": "string",
                         "maxLength": 32
+                      },
+                      "platform.android.split_keyboard": {
+                        "type": "boolean"
                       },
                       "platform.android.key_popup": {
                         "type": "boolean"

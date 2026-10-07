@@ -208,6 +208,8 @@ func TestAndroidPreferenceFields(t *testing.T) {
 		{"general.app_theme", `"chunya"`, true},
 		{"general.app_theme", `"` + strings.Repeat("a", 33) + `"`, false},
 		{"platform.android.one_handed", `"left"`, true},
+		{"platform.android.split_keyboard", "true", true},
+		{"platform.android.split_keyboard", `"on"`, false},
 		{"platform.android.key_popup", "true", true},
 		{"platform.android.swipe_down_symbols", "true", true},
 		{"platform.android.space_cursor", "false", true},

@@ -3065,6 +3065,10 @@
                           "type": "string",
                           "maxLength": 64
                         },
+                        "platform.android.custom_candidate_skin_dark": {
+                          "type": "string",
+                          "maxLength": 64
+                        },
                         "platform.android.keyboard_layout": {
                           "type": "string",
                           "maxLength": 32
@@ -3794,6 +3798,10 @@
                           "type": "string",
                           "maxLength": 64
                         },
+                        "platform.android.custom_candidate_skin_dark": {
+                          "type": "string",
+                          "maxLength": 64
+                        },
                         "platform.android.keyboard_layout": {
                           "type": "string",
                           "maxLength": 32
@@ -4507,6 +4515,10 @@
                         "maxLength": 786432
                       },
                       "platform.android.custom_candidate_skin": {
+                        "type": "string",
+                        "maxLength": 64
+                      },
+                      "platform.android.custom_candidate_skin_dark": {
                         "type": "string",
                         "maxLength": 64
                       },

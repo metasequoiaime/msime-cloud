@@ -199,6 +199,8 @@ func TestAndroidPreferenceFields(t *testing.T) {
 		{"platform.android.custom_theme_base", `"light"`, true},
 		{"platform.android.custom_candidate_skin", `"` + strings.Repeat("a", 64) + `"`, true},
 		{"platform.android.custom_candidate_skin", `"` + strings.Repeat("a", 65) + `"`, false},
+		{"platform.android.custom_candidate_skin_dark", `"night-sakura"`, true},
+		{"platform.android.custom_candidate_skin_dark", `"` + strings.Repeat("a", 65) + `"`, false},
 		{"input.chinese_punctuation", "true", true},
 		{"input.learning", "false", true},
 		{"input.wubi_code_hint", "true", true},

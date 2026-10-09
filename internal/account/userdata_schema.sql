@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS user_dictionary_state (
 CREATE TABLE IF NOT EXISTS user_dictionary_entries (
  id text PRIMARY KEY,
  user_id text NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
- kind text NOT NULL CHECK(kind IN ('pinyin','wubi','english','quick')),
+ kind text NOT NULL CONSTRAINT user_dictionary_entries_kind_check CHECK(kind IN ('pinyin','wubi','wubi98','english','quick')),
  code text NOT NULL,
  word text NOT NULL,
  weight bigint NOT NULL CHECK(weight>=0),
@@ -34,6 +34,14 @@ CREATE TABLE IF NOT EXISTS user_dictionary_entries (
  UNIQUE(user_id,kind,code,word)
 );
 CREATE INDEX IF NOT EXISTS user_dictionary_entries_order ON user_dictionary_entries(user_id,kind,code,word);
+-- 词条种类加入 98 版五笔 wubi98（安卓导出的快照里 98 版词条的 kind）。旧库的列约束（PostgreSQL 命名为 user_dictionary_entries_kind_check）不含它时整体替换，可以重复执行。新约束只放宽取值，已有行都满足旧约束也就满足新约束，所以以 NOT VALID 添加：不回头扫描整张表，迁移持有的排他锁只到替换完成为止，不改写任何数据。
+DO $$
+BEGIN
+ IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='user_dictionary_entries'::regclass AND conname='user_dictionary_entries_kind_check' AND pg_get_constraintdef(oid) LIKE '%wubi98%') THEN
+  ALTER TABLE user_dictionary_entries DROP CONSTRAINT IF EXISTS user_dictionary_entries_kind_check;
+  ALTER TABLE user_dictionary_entries ADD CONSTRAINT user_dictionary_entries_kind_check CHECK(kind IN ('pinyin','wubi','wubi98','english','quick')) NOT VALID;
+ END IF;
+END $$;
 CREATE TABLE IF NOT EXISTS user_dictionary_changes (
  user_id text NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
  revision bigint NOT NULL,

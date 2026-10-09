@@ -273,6 +273,14 @@ SELECT id,snapshot_id,tool,arguments,result_count,bytes,at FROM diagnostic_acces
 	if !phraseKinds {
 		return errors.New("community resource and report kind constraints predate phrase packs")
 	}
+	// 个人词库的词条种类同样在 CHECK 约束里：约束还不含 98 版五笔 wubi98 时启动走迁移，否则含 98 版词条的快照恢复和编辑会在插入时失败。
+	var wubi98Kind bool
+	if e := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='user_dictionary_entries'::regclass AND conname='user_dictionary_entries_kind_check' AND pg_get_constraintdef(oid) LIKE '%wubi98%')`).Scan(&wubi98Kind); e != nil {
+		return e
+	}
+	if !wubi98Kind {
+		return errors.New("user_dictionary_entries kind constraint predates wubi98")
+	}
 	return s.consoleReady(ctx)
 }
 

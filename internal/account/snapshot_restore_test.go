@@ -126,3 +126,75 @@ func TestRestoreFullDictionarySnapshotAtomically(t *testing.T) {
 		t.Fatal("source snapshot changed")
 	}
 }
+
+// 安卓客户端导出的快照里 98 版五笔词条的 kind 是 wubi98。只用数据库就能验证的部分：词条能写入、按种类列出，导出的快照能被服务端自己的解码器接受。
+func TestWubi98EntriesRoundTripThroughTheSnapshot(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	one := complete(t, s, Identity{"email", "wubi98-snapshot@example.test"})
+	if _, err := s.EditDictionary(ctx, one.User.ID, "wubi98", "", 0, &DictionaryEntry{Code: "wq", Word: "你", Weight: 10}); err != nil {
+		t.Fatal("wubi98 entry rejected by the database", err)
+	}
+	entries, _, err := s.DictionaryEntries(ctx, one.User.ID, "wubi98", "", 0, 200)
+	if err != nil || len(entries) != 1 || entries[0].Kind != "wubi98" || entries[0].Code != "wq" {
+		t.Fatal("wubi98 entries", entries, err)
+	}
+	if others, _, err := s.DictionaryEntries(ctx, one.User.ID, "wubi", "", 0, 200); err != nil || len(others) != 0 {
+		t.Fatal("wubi98 entry listed under wubi", others, err)
+	}
+	mux := http.NewServeMux()
+	Mount(mux, &Service{store: s})
+	exported := apiRequest(t, mux, "GET", "/v1/users/me/dictionary/snapshot", "", one.AccessToken, 200)
+	kinds := []string{}
+	if err = decodeDictionarySnapshot(bytes.NewReader(exported.Body.Bytes()), func(record snapshotRecord) error {
+		if record.Type == "entry" || record.Type == "overlay" {
+			var e DictionaryEntry
+			if err := json.Unmarshal(record.Data, &e); err != nil {
+				return err
+			}
+			kinds = append(kinds, record.Type+":"+e.Kind)
+		}
+		return nil
+	}); err != nil || len(kinds) != 2 || kinds[0] != "entry:wubi98" || kinds[1] != "overlay:wubi98" {
+		t.Fatal("exported wubi98 snapshot", kinds, err)
+	}
+}
+
+// 用户报告的故障本身：含 98 版五笔词条的快照经 PUT 恢复成功，恢复后的词条能被个人词库查询读到。需要能识别 wubi98 的 Engine。
+func TestRestoreSnapshotWithWubi98Entries(t *testing.T) {
+	cfg := engine.Config{Binary: os.Getenv("MSIME_ENGINE_TEST_BINARY"), Resources: os.Getenv("MSIME_ENGINE_TEST_RESOURCES")}
+	if cfg.Binary == "" || cfg.Resources == "" {
+		t.Skip("需要真实 Engine 与发布词库")
+	}
+	s := testStore(t)
+	ctx := context.Background()
+	one := complete(t, s, Identity{"email", "wubi98-restore-source@example.test"})
+	two := complete(t, s, Identity{"email", "wubi98-restore-target@example.test"})
+	if _, err := s.EditDictionary(ctx, one.User.ID, "wubi98", "", 0, &DictionaryEntry{Code: "abcd", Word: "九八恢复专用词", Weight: 100000000}); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	Mount(mux, &Service{store: s, engine: cfg})
+	snapshot := apiRequest(t, mux, "GET", "/v1/users/me/dictionary/snapshot", "", one.AccessToken, 200).Body.Bytes()
+	r := httptest.NewRequest("PUT", "/v1/users/me/dictionary/snapshot?revision=0", bytes.NewReader(snapshot))
+	r.Header.Set("Authorization", "Bearer "+two.AccessToken)
+	r.Header.Set("Content-Type", "application/x-ndjson")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatal("restore with a wubi98 entry", w.Code, w.Body.String())
+	}
+	entries, _, err := s.DictionaryEntries(ctx, two.User.ID, "wubi98", "", 0, 200)
+	if err != nil || len(entries) != 1 || entries[0].Word != "九八恢复专用词" {
+		t.Fatal("restored wubi98 entries", entries, err)
+	}
+	found := apiRequest(t, mux, "POST", "/v1/users/me/dictionary/candidates", `{"kind":"wubi98","text":"abcd","limit":5}`, two.AccessToken, 200)
+	var result struct {
+		Candidates []struct {
+			Word string `json:"word"`
+		} `json:"candidates"`
+	}
+	if err = json.Unmarshal(found.Body.Bytes(), &result); err != nil || len(result.Candidates) == 0 || result.Candidates[0].Word != "九八恢复专用词" {
+		t.Fatal("restored wubi98 query", found.Body.String(), err)
+	}
+}

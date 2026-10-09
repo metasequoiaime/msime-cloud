@@ -84,13 +84,13 @@ func TestDictionaryStreamConsumerFailureAndClosedDatabase(t *testing.T) {
 }
 
 func TestPersonalQueryValidationAndErrorMapping(t *testing.T) {
-	for _, q := range []PersonalQuery{{Text: "ni", Limit: -1}, {Text: "ni", Limit: 201}, {Text: "ni", Profile: "bad"}, {Text: "ni", Scheme: "bad"}, {Kind: "wubi", Text: "abcde"}, {Kind: "english", Text: "1"}, {Kind: "quick", Text: "!"}, {Kind: "unknown", Text: "a"}} {
+	for _, q := range []PersonalQuery{{Text: "ni", Limit: -1}, {Text: "ni", Limit: 201}, {Text: "ni", Profile: "bad"}, {Text: "ni", Scheme: "bad"}, {Kind: "wubi", Text: "abcde"}, {Kind: "wubi98", Text: "abcde"}, {Kind: "wubi98", Text: "w1"}, {Kind: "english", Text: "1"}, {Kind: "quick", Text: "!"}, {Kind: "unknown", Text: "a"}} {
 		w := httptest.NewRecorder()
 		if _, ok := preparePersonalQuery(w, q); ok || w.Code != 400 {
 			t.Fatal(q, w.Code)
 		}
 	}
-	for kind, code := range map[string]string{"pinyin": "ni", "jianpin": "nh", "wubi": "wq", "english": "HELLO", "quick": "a1"} {
+	for kind, code := range map[string]string{"pinyin": "ni", "jianpin": "nh", "wubi": "wq", "wubi98": "wq", "english": "HELLO", "quick": "a1"} {
 		w := httptest.NewRecorder()
 		q, ok := preparePersonalQuery(w, PersonalQuery{Kind: kind, Text: code})
 		if !ok || q["limit"] != 20 || q["profile"] != "xiaohe" {
@@ -98,6 +98,10 @@ func TestPersonalQueryValidationAndErrorMapping(t *testing.T) {
 		}
 		if kind == "english" && q["text"] != "hello" {
 			t.Fatal("English prefix not normalized")
+		}
+		// 两版五笔按种类选引擎方案，忽略请求里的 scheme：wubi98 读 98 版码表。
+		if (kind == "wubi" || kind == "wubi98") && (q["scheme"] != kind || q["operation"] != "candidates") {
+			t.Fatal(kind, q)
 		}
 	}
 	for _, tc := range []struct {

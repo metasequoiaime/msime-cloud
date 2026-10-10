@@ -1,0 +1,24 @@
+# The sample, a soft piano-like note on A4, is synthesized by scripts/generate_seed_packs.py; the tune is the opening of Ludwig van Beethoven's Für Elise (1810), which is in the public domain.
+schema_version = 1
+kind = "sound"
+id = "fur-elise"
+name = "致爱丽丝"
+version = "1.0.0"
+license = "CC0-1.0"
+author = "水杉输入法"
+description = "柔和的钢琴音色，每按一个键弹出贝多芬《致爱丽丝》开头的下一个音，停顿三秒后从头开始。"
+permissions = []
+mode = "sequence"
+
+[sequence]
+sample = "tone.wav"
+# 0 is A4: E5 D#5 E5 D#5 E5 B4 D5 C5 A4, C4 E4 A4 B4, E4 G#4 B4 C5, E4 E5 D#5 E5 D#5 E5 B4 D5 C5 A4, C4 E4 A4 B4, E4 C5 B4 A4
+semitones = [
+  7, 6, 7, 6, 7, 2, 5, 3, 0,
+  -9, -5, 0, 2,
+  -5, -1, 2, 3,
+  -5, 7, 6, 7, 6, 7, 2, 5, 3, 0,
+  -9, -5, 0, 2,
+  -5, 3, 2, 0,
+]
+advance = "key"

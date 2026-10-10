@@ -136,6 +136,28 @@ func TestPluginSeedFixturePacks(t *testing.T) {
 	}
 }
 
+// TestStarterPluginsPassThePublishRules 用发布接口的规则校验仓库里随附的精选包：这是它们唯一的来源，服务端规则收紧时要先在这里失败，而不是等运维生成种子时才发现。
+func TestStarterPluginsPassThePublishRules(t *testing.T) {
+	root := filepath.Join("..", "..", "assets", "community-starter-plugins")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directories := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			directories++
+		}
+	}
+	sql, err := RenderCommunityPluginSeed(root, "msime_backend")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows := len(pluginSeedRows(t, sql)); directories == 0 || rows != directories {
+		t.Fatalf("%d starter packs rendered from %d directories", rows, directories)
+	}
+}
+
 func TestPluginSeedRendersFixturesDeterministically(t *testing.T) {
 	root := pluginSeedFixtureRoot(t)
 	sql := renderPluginSeedOK(t, root, "msime_backend")

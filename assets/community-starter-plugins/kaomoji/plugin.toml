@@ -1,0 +1,100 @@
+# Type / and a trigger, e.g. /kx, to get the kaomoji as a candidate. Triggers are the pinyin initials of the mood.
+schema_version = 1
+kind = "command_table"
+id = "kaomoji"
+name = "颜文字"
+version = "1.0.0"
+license = "CC0-1.0"
+author = "水杉输入法"
+description = "常用颜文字：输入 / 加情绪的拼音首字母，如 /kx 开心、/ng 难过、/fp 掀桌。"
+permissions = []
+
+[[commands]]
+trigger = "kx"
+title = "开心"
+template = "(＾▽＾)"
+
+[[commands]]
+trigger = "hh"
+title = "哈哈"
+template = "(≧∇≦)ﾉ"
+
+[[commands]]
+trigger = "ng"
+title = "难过"
+template = "(╥﹏╥)"
+
+[[commands]]
+trigger = "sq"
+title = "生气"
+template = "(╬▔皿▔)╯"
+
+[[commands]]
+trigger = "fp"
+title = "掀桌"
+template = "(╯°□°)╯︵ ┻━┻"
+
+[[commands]]
+trigger = "fz"
+title = "扶桌"
+template = "┬─┬ノ( º _ ºノ)"
+
+[[commands]]
+trigger = "tt"
+title = "摊手"
+template = "¯\\_(ツ)_/¯"
+
+[[commands]]
+trigger = "jy"
+title = "惊讶"
+template = "(⊙ˍ⊙)"
+
+[[commands]]
+trigger = "hx"
+title = "害羞"
+template = "(/ω＼)"
+
+[[commands]]
+trigger = "bx"
+title = "比心"
+template = "(｡♥‿♥｡)"
+
+[[commands]]
+trigger = "bb"
+title = "抱抱"
+template = "(つ≧▽≦)つ"
+
+[[commands]]
+trigger = "wq"
+title = "委屈"
+template = "(｡•́︿•̀｡)"
+
+[[commands]]
+trigger = "dk"
+title = "疑惑"
+template = "(・_・?)"
+
+[[commands]]
+trigger = "jt"
+title = "加油"
+template = "ᕦ(ò_óˇ)ᕤ"
+
+[[commands]]
+trigger = "sj"
+title = "睡觉"
+template = "(－_－) zzZ"
+
+[[commands]]
+trigger = "hi"
+title = "打招呼"
+template = "(｡･∀･)ﾉﾞ"
+
+[[commands]]
+trigger = "xm"
+title = "猫"
+template = "(=^･ω･^=)"
+
+[[commands]]
+trigger = "wl"
+title = "无语"
+template = "(￣_￣|||)"

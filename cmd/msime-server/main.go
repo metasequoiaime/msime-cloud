@@ -19,7 +19,7 @@ import (
 func main() {
 	path := flag.String("config", "config.json", "path to configuration")
 	migrate := flag.Bool("migrate-users", false, "迁移用户数据库后退出")
-	pluginSeed := flag.String("render-plugin-seed", "", "把 msime-plugins 检出（或其 packs 目录）里的精选插件包渲染成种子 SQL 写到 stdout 后退出；不读配置、不连接数据库")
+	pluginSeed := flag.String("render-plugin-seed", "", "把目录（通常是 assets/community-starter-plugins）里的精选插件包渲染成种子 SQL 写到 stdout 后退出；不读配置、不连接数据库")
 	pluginSeedRole := flag.String("plugin-seed-role", "msime_backend", "种子 SQL 切换到的 DML 运行角色")
 	flag.Parse()
 	if *pluginSeed != "" {

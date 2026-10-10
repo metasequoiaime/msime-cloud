@@ -1,0 +1,18 @@
+# Samples synthesized by scripts/generate_seed_packs.py.
+schema_version = 1
+kind = "sound"
+id = "mech-blue-switch"
+name = "机械青轴"
+version = "1.0.0"
+license = "CC0-1.0"
+author = "水杉输入法"
+description = "清脆的段落轴：先是卡扣的一声脆响，再是触底；空格和回车带一点卫星轴的回响。"
+permissions = []
+mode = "keys"
+
+[sounds]
+default = "key.wav"
+space = "space.wav"
+enter = "enter.wav"
+backspace = "backspace.wav"
+commit = "commit.wav"

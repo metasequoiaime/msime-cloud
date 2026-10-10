@@ -1,0 +1,22 @@
+# The sample, a toy xylophone bar on C5, is synthesized by scripts/generate_seed_packs.py; the tune is the traditional round Frère Jacques, sung in Chinese as 两只老虎, which is in the public domain.
+schema_version = 1
+kind = "sound"
+id = "two-tigers"
+name = "两只老虎"
+version = "1.0.0"
+license = "CC0-1.0"
+author = "水杉输入法"
+description = "玩具木琴音色，每次上屏弹出《两只老虎》的下一个音，停顿三秒后从头开始。"
+permissions = []
+mode = "sequence"
+
+[sequence]
+sample = "tone.wav"
+# 0 is C5: 1 2 3 1 (twice), 3 4 5 (twice), 5 6 5 4 3 1 (twice), 1 5, 1 (twice) with the 5 an octave down
+semitones = [
+  0, 2, 4, 0, 0, 2, 4, 0,
+  4, 5, 7, 4, 5, 7,
+  7, 9, 7, 5, 4, 0, 7, 9, 7, 5, 4, 0,
+  0, -5, 0, 0, -5, 0,
+]
+advance = "commit"

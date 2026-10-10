@@ -1,0 +1,214 @@
+# Type a key in quick-phrase mode (Shift+K in Chinese mode), e.g. xx or zsh, to get the phrase as a candidate. Keys are pinyin initials.
+schema_version = 1
+kind = "phrase_table"
+id = "polite-phrases"
+name = "客套话"
+version = "1.0.0"
+license = "CC0-1.0"
+author = "水杉输入法"
+description = "常用的客套话与问候：xx 谢谢！、xk 辛苦了！、qsd 请稍等。、zsh 早上好！、xnkl 新年快乐！等 51 条。"
+permissions = []
+
+[[phrases]]
+key = "xx"
+text = "谢谢！"
+
+[[phrases]]
+key = "xx"
+text = "谢谢您！"
+
+[[phrases]]
+key = "fcgx"
+text = "非常感谢！"
+
+[[phrases]]
+key = "gxzc"
+text = "感谢您的支持！"
+
+[[phrases]]
+key = "bkq"
+text = "不客气。"
+
+[[phrases]]
+key = "dr"
+text = "打扰了。"
+
+[[phrases]]
+key = "xk"
+text = "辛苦了！"
+
+[[phrases]]
+key = "mfl"
+text = "麻烦您了。"
+
+[[phrases]]
+key = "yll"
+text = "有劳了。"
+
+[[phrases]]
+key = "qdzj"
+text = "请多指教。"
+
+[[phrases]]
+key = "qdgz"
+text = "请多关照。"
+
+[[phrases]]
+key = "cmgz"
+text = "承蒙关照，不胜感激。"
+
+[[phrases]]
+key = "qjl"
+text = "请见谅。"
+
+[[phrases]]
+key = "bhys"
+text = "不好意思。"
+
+[[phrases]]
+key = "bq"
+text = "抱歉，让您久等了。"
+
+[[phrases]]
+key = "fcbq"
+text = "非常抱歉给您带来不便。"
+
+[[phrases]]
+key = "bzzc"
+text = "不足之处，还请指正。"
+
+[[phrases]]
+key = "hd"
+text = "好的。"
+
+[[phrases]]
+key = "hdsd"
+text = "好的，收到。"
+
+[[phrases]]
+key = "sdxx"
+text = "收到，谢谢！"
+
+[[phrases]]
+key = "mwt"
+text = "没问题！"
+
+[[phrases]]
+key = "qsd"
+text = "请稍等。"
+
+[[phrases]]
+key = "msjl"
+text = "马上就来。"
+
+[[phrases]]
+key = "qcs"
+text = "请查收。"
+
+[[phrases]]
+key = "fjqcs"
+text = "附件请查收。"
+
+[[phrases]]
+key = "ryyw"
+text = "如有疑问，请随时联系我。"
+
+[[phrases]]
+key = "qdhf"
+text = "期待您的回复。"
+
+[[phrases]]
+key = "qdhz"
+text = "期待与您合作。"
+
+[[phrases]]
+key = "hygl"
+text = "欢迎光临！"
+
+[[phrases]]
+key = "hyhl"
+text = "欢迎回来！"
+
+[[phrases]]
+key = "zsh"
+text = "早上好！"
+
+[[phrases]]
+key = "zwh"
+text = "中午好！"
+
+[[phrases]]
+key = "xwh"
+text = "下午好！"
+
+[[phrases]]
+key = "wsh"
+text = "晚上好！"
+
+[[phrases]]
+key = "wa"
+text = "晚安。"
+
+[[phrases]]
+key = "zj"
+text = "再见！"
+
+[[phrases]]
+key = "xcj"
+text = "下次见！"
+
+[[phrases]]
+key = "zh"
+text = "祝好！"
+
+[[phrases]]
+key = "zh"
+text = "祝贺！"
+
+[[phrases]]
+key = "gxgx"
+text = "恭喜恭喜！"
+
+[[phrases]]
+key = "stjk"
+text = "祝您身体健康！"
+
+[[phrases]]
+key = "gzsl"
+text = "祝您工作顺利！"
+
+[[phrases]]
+key = "wsry"
+text = "万事如意！"
+
+[[phrases]]
+key = "ylsf"
+text = "一路顺风！"
+
+[[phrases]]
+key = "zmyk"
+text = "周末愉快！"
+
+[[phrases]]
+key = "srkl"
+text = "生日快乐！"
+
+[[phrases]]
+key = "xnkl"
+text = "新年快乐！"
+
+[[phrases]]
+key = "cjkl"
+text = "春节快乐！"
+
+[[phrases]]
+key = "zqkl"
+text = "中秋快乐！"
+
+[[phrases]]
+key = "gxfc"
+text = "恭喜发财！"
+
+[[phrases]]
+key = "jrkl"
+text = "节日快乐！"

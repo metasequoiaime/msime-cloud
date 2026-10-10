@@ -1,0 +1,16 @@
+schema_version = 1
+kind = "effect"
+id = "neon"
+name = "霓虹"
+version = "1.0.0"
+license = "CC0-1.0"
+author = "水杉输入法"
+description = "粉、青、紫三色霓虹火花，短促明亮。"
+permissions = []
+
+[effect]
+style = "sparks"
+intensity = 75
+colors = ["#FF2E88", "#22E4FF", "#A64BFF"]
+duration_ms = 320
+particles = 28

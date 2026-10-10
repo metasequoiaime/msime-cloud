@@ -1,0 +1,18 @@
+# Samples synthesized by scripts/generate_seed_packs.py.
+schema_version = 1
+kind = "sound"
+id = "kalimba"
+name = "拇指琴"
+version = "1.0.0"
+license = "CC0-1.0"
+author = "水杉输入法"
+description = "五声音阶的拇指琴：字母、空格、回车、退格各拨一根琴键，上屏时轻轻扫一个和弦。"
+permissions = []
+mode = "keys"
+
+[sounds]
+default = "key.wav"
+space = "space.wav"
+enter = "enter.wav"
+backspace = "backspace.wav"
+commit = "commit.wav"

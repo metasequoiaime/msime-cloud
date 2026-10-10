@@ -1,0 +1,17 @@
+# Samples synthesized by scripts/generate_seed_packs.py.
+schema_version = 1
+kind = "sound"
+id = "soft-thock"
+name = "静音线性轴"
+version = "1.0.0"
+license = "CC0-1.0"
+author = "水杉输入法"
+description = "润过的线性轴配消音棉：只有低沉的“咚”，没有清脆的咔嗒，适合安静场合。"
+permissions = []
+mode = "keys"
+
+[sounds]
+default = "key.wav"
+space = "space.wav"
+enter = "enter.wav"
+backspace = "backspace.wav"

@@ -1,0 +1,15 @@
+schema_version = 1
+kind = "effect"
+id = "soft-glow"
+name = "微光"
+version = "1.0.0"
+license = "CC0-1.0"
+author = "水杉输入法"
+description = "候选框淡淡亮一下，青绿色，安静不打扰。"
+permissions = []
+
+[effect]
+style = "flash"
+intensity = 30
+colors = ["#3DD6B5"]
+duration_ms = 260

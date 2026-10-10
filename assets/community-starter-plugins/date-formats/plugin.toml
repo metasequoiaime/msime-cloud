@@ -1,0 +1,75 @@
+# Type / and a trigger, e.g. /iso, to get the current date or time in that format as a candidate.
+schema_version = 1
+kind = "command_table"
+id = "date-formats"
+name = "日期时间格式"
+version = "1.0.0"
+license = "CC0-1.0"
+author = "水杉输入法"
+description = "常用的日期时间写法：/rq 中文日期、/iso ISO 8601、/sj 时间、/sjc 完整时间戳、/xq 星期等。"
+permissions = []
+
+[[commands]]
+trigger = "rq"
+title = "中文日期"
+template = "{date:%Y年%-m月%-d日}"
+
+[[commands]]
+trigger = "rqxq"
+title = "日期与星期"
+template = "{date:%Y年%-m月%-d日} {weekday}"
+
+[[commands]]
+trigger = "iso"
+title = "ISO 8601 日期"
+template = "{date:%Y-%m-%d}"
+
+[[commands]]
+trigger = "xg"
+title = "斜杠日期"
+template = "{date:%Y/%m/%d}"
+
+[[commands]]
+trigger = "dd"
+title = "点分日期"
+template = "{date:%Y.%m.%d}"
+
+[[commands]]
+trigger = "ny"
+title = "年月"
+template = "{date:%Y年%-m月}"
+
+[[commands]]
+trigger = "sj"
+title = "时间"
+template = "{time:%H:%M}"
+
+[[commands]]
+trigger = "sjm"
+title = "时间（秒）"
+template = "{time:%H:%M:%S}"
+
+[[commands]]
+trigger = "zwsj"
+title = "中文时间"
+template = "{time:%-H点%M分}"
+
+[[commands]]
+trigger = "sjc"
+title = "日期加时间"
+template = "{date:%Y-%m-%d} {time:%H:%M:%S}"
+
+[[commands]]
+trigger = "xq"
+title = "星期"
+template = "{weekday}"
+
+[[commands]]
+trigger = "zs"
+title = "第几周"
+template = "{date:%Y年第%V周}"
+
+[[commands]]
+trigger = "en"
+title = "英文日期"
+template = "{date:%B %-d, %Y}"

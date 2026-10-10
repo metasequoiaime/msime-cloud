@@ -1,0 +1,13 @@
+# The track is synthesized by scripts/generate_seed_packs.py: filtered noise for the rain and short gliding plinks for close drops, crossfaded so it loops without a seam.
+schema_version = 1
+kind = "music"
+id = "rain-ambience"
+name = "窗外小雨"
+version = "1.0.0"
+license = "CC0-1.0"
+author = "水杉输入法"
+description = "绵绵的雨声，偶尔有几滴落在近处，无缝循环，适合专注写作。"
+permissions = []
+
+[music]
+tracks = ["rain.wav"]

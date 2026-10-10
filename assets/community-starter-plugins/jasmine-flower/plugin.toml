@@ -1,0 +1,22 @@
+# The sample, a plucked string on C5, is synthesized by scripts/generate_seed_packs.py; the tune is the Jiangsu folk song 茉莉花, which is traditional and in the public domain.
+schema_version = 1
+kind = "sound"
+id = "jasmine-flower"
+name = "茉莉花"
+version = "1.0.0"
+license = "CC0-1.0"
+author = "水杉输入法"
+description = "古筝般的拨弦音色，每按一个键弹出江苏民歌《茉莉花》的下一个音，停顿三秒后从头开始。"
+permissions = []
+mode = "sequence"
+
+[sequence]
+sample = "tone.wav"
+# 0 is C5 (numbered notation 1 = C): 3 3 5 6 1' 1' 6 5 5 6 5 (twice), 5 5 5 3 5 6 6 5, 3 2 3 5 3 2 1 1 2 1
+semitones = [
+  4, 4, 7, 9, 12, 12, 9, 7, 7, 9, 7,
+  4, 4, 7, 9, 12, 12, 9, 7, 7, 9, 7,
+  7, 7, 7, 4, 7, 9, 9, 7,
+  4, 2, 4, 7, 4, 2, 0, 0, 2, 0,
+]
+advance = "key"

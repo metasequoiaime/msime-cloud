@@ -1,0 +1,16 @@
+schema_version = 1
+kind = "effect"
+id = "fireworks"
+name = "烟花"
+version = "1.0.0"
+license = "CC0-1.0"
+author = "水杉输入法"
+description = "满屏金红烟花，连击越高越猛烈，适合打字冲刺。"
+permissions = []
+
+[effect]
+style = "power_mode"
+intensity = 95
+colors = ["#FFD23F", "#FF5D3A", "#FF9F1C", "#FFFFFF"]
+duration_ms = 600
+particles = 48

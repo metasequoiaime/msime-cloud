@@ -23,7 +23,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-// 社区插件库只存在 PostgreSQL 里。msime-plugins 仓库里维护者制作的精选包经 RenderCommunityPluginSeed 生成的 SQL 一次性导入，由运维审核后自己执行；这里只生成文本，从不连接数据库。每个包走发布接口同一套校验（pluginPublishMetadataCode、validPluginPublishArchive 和每账号配额），所以种子里的包与经接口发布的包受同样的规则约束，规则只有服务端这一份。
+// 社区插件库只存在 PostgreSQL 里。`assets/community-starter-plugins/` 下维护者制作的精选包经 RenderCommunityPluginSeed 生成的 SQL 一次性导入，由运维审核后自己执行；这里只生成文本，从不连接数据库。每个包走发布接口同一套校验（pluginPublishMetadataCode、validPluginPublishArchive 和每账号配额），所以种子里的包与经接口发布的包受同样的规则约束，规则只有服务端这一份。
 
 // pluginSeedPublisherName 是精选内容的非交互发布主体，与 scripts/community_seed.py、scripts/community_resources_seed.py 使用同一个账号。
 const pluginSeedPublisherName = "水杉精选"
@@ -54,7 +54,7 @@ func uuid5URL(name string) string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", s[0:4], s[4:6], s[6:8], s[8:10], s[10:16])
 }
 
-// RenderCommunityPluginSeed 把 source（msime-plugins 检出，或直接是其中的 packs 目录）下的每个包目录渲染成写入 community_plugins 的幂等 SQL，事务切换到运行角色 role。任何一个包不能经发布接口发布时返回错误、不输出 SQL，错误逐行列出每个被拒绝的包。
+// RenderCommunityPluginSeed 把 source 下的每个包目录（默认是 `assets/community-starter-plugins`；source 下有 packs 子目录时读它）渲染成写入 community_plugins 的幂等 SQL，事务切换到运行角色 role。任何一个包不能经发布接口发布时返回错误、不输出 SQL，错误逐行列出每个被拒绝的包。
 func RenderCommunityPluginSeed(source, role string) (string, error) {
 	if !pluginSeedRole.MatchString(role) {
 		return "", errors.New("role must be a plain lowercase PostgreSQL role name")
@@ -75,7 +75,7 @@ func RenderCommunityPluginSeed(source, role string) (string, error) {
 			continue
 		}
 		pack, err := preparePluginSeedPack(filepath.Join(root, entry.Name()))
-		// msime-plugins 用目录名保证 id 唯一，目录名与清单 id 一致也就保证了种子里没有重复的 (kind, plugin_id)。
+		// 包目录名就是 id，同一目录下不会重名，目录名与清单 id 一致也就保证了种子里没有重复的 (kind, plugin_id)。
 		if err == nil && pack.pluginID != entry.Name() {
 			err = fmt.Errorf("invalid_plugin_manifest: manifest id %q does not match the directory name", pack.pluginID)
 		}
@@ -138,7 +138,7 @@ func preparePluginSeedPack(dir string) (pluginSeedPack, error) {
 	}
 	pack, code := validPluginPublishArchive(archive, request.Kind, request.ID, request.Version)
 	if code != "" {
-		return pluginSeedPack{}, fmt.Errorf("%s: the server's pack validator rejects it (msime-plugins' scripts/check-packs.sh reports the client's reason)", code)
+		return pluginSeedPack{}, fmt.Errorf("%s: the server's pack validator rejects it (`msime-pack validate <pack>`, built from the msime repo, reports the client's reason)", code)
 	}
 	p.kind, p.pluginID, p.version, p.license, p.manifest = pack.Kind, pack.ID, pack.Version, pack.License, pack.Manifest
 	p.digest = pluginRequestDigest(p.name, p.description, p.kind, p.pluginID, p.version, archive)

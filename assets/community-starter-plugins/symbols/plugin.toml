@@ -1,0 +1,165 @@
+# Type / and a trigger, e.g. /ssd, to get the symbol as a candidate. Triggers are pinyin initials or a short English name.
+schema_version = 1
+kind = "command_table"
+id = "symbols"
+name = "常用符号"
+version = "1.0.0"
+license = "CC0-1.0"
+author = "水杉输入法"
+description = "不好打的常用符号：/ssd ℃、/dg ✓、/jt →、/rmb ¥、/c ©、/zj ≈ 等。"
+permissions = []
+
+[[commands]]
+trigger = "ssd"
+title = "摄氏度"
+template = "℃"
+
+[[commands]]
+trigger = "hsd"
+title = "华氏度"
+template = "℉"
+
+[[commands]]
+trigger = "du"
+title = "度"
+template = "°"
+
+[[commands]]
+trigger = "dg"
+title = "对勾"
+template = "✓"
+
+[[commands]]
+trigger = "cha"
+title = "叉"
+template = "✗"
+
+[[commands]]
+trigger = "jt"
+title = "右箭头"
+template = "→"
+
+[[commands]]
+trigger = "zjt"
+title = "左箭头"
+template = "←"
+
+[[commands]]
+trigger = "sjt"
+title = "上箭头"
+template = "↑"
+
+[[commands]]
+trigger = "xjt"
+title = "下箭头"
+template = "↓"
+
+[[commands]]
+trigger = "sxjt"
+title = "双向箭头"
+template = "↔"
+
+[[commands]]
+trigger = "rmb"
+title = "人民币"
+template = "¥"
+
+[[commands]]
+trigger = "oy"
+title = "欧元"
+template = "€"
+
+[[commands]]
+trigger = "yb"
+title = "英镑"
+template = "£"
+
+[[commands]]
+trigger = "c"
+title = "版权"
+template = "©"
+
+[[commands]]
+trigger = "r"
+title = "注册商标"
+template = "®"
+
+[[commands]]
+trigger = "tm"
+title = "商标"
+template = "™"
+
+[[commands]]
+trigger = "zj"
+title = "约等于"
+template = "≈"
+
+[[commands]]
+trigger = "bdy"
+title = "不等于"
+template = "≠"
+
+[[commands]]
+trigger = "xydy"
+title = "小于等于"
+template = "≤"
+
+[[commands]]
+trigger = "dydy"
+title = "大于等于"
+template = "≥"
+
+[[commands]]
+trigger = "zf"
+title = "正负"
+template = "±"
+
+[[commands]]
+trigger = "cheng"
+title = "乘号"
+template = "×"
+
+[[commands]]
+trigger = "chu"
+title = "除号"
+template = "÷"
+
+[[commands]]
+trigger = "wq"
+title = "无穷"
+template = "∞"
+
+[[commands]]
+trigger = "qfh"
+title = "千分号"
+template = "‰"
+
+[[commands]]
+trigger = "xx"
+title = "实心星"
+template = "★"
+
+[[commands]]
+trigger = "kx"
+title = "空心星"
+template = "☆"
+
+[[commands]]
+trigger = "dian"
+title = "间隔号"
+template = "·"
+
+[[commands]]
+trigger = "slh"
+title = "省略号"
+template = "……"
+
+[[commands]]
+trigger = "pzh"
+title = "破折号"
+template = "——"
+
+[[commands]]
+trigger = "sm"
+title = "书名号"
+template = "《》"

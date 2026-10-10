@@ -1,0 +1,64 @@
+# The groups appear in the symbol pickers under 数学符号 once the pack is imported; search with the pinyin or English keywords.
+schema_version = 1
+kind = "symbol_set"
+id = "math-symbols"
+name = "数学符号"
+version = "1.0.0"
+license = "CC0-1.0"
+author = "水杉输入法"
+description = "运算、关系、集合、逻辑、希腊字母、上下标、几何与分数共八组数学符号，外加一组解题时用的颜文字。"
+permissions = []
+
+[[groups]]
+tab = "symbols"
+title = "运算"
+keywords = "yunsuan operator plus minus times divide root sum integral"
+items = ["±", "∓", "×", "÷", "·", "∘", "√", "∛", "∜", "∑", "∏", "∫", "∬", "∭", "∮", "∂", "∇", "∞", "′", "″", "%", "‰", "‱", "!"]
+
+[[groups]]
+tab = "symbols"
+title = "关系"
+keywords = "guanxi relation equal approx less greater proportional"
+items = ["=", "≠", "≈", "≡", "≢", "≅", "∼", "≃", "∝", "<", ">", "≤", "≥", "≪", "≫", "≦", "≧", "≺", "≻"]
+
+[[groups]]
+tab = "symbols"
+title = "集合"
+keywords = "jihe set element subset union intersection empty"
+items = ["∈", "∉", "∋", "⊂", "⊃", "⊆", "⊇", "⊊", "⊋", "∪", "∩", "∅", "∖", "∁", "ℕ", "ℤ", "ℚ", "ℝ", "ℂ", "ℙ"]
+
+[[groups]]
+tab = "symbols"
+title = "逻辑"
+keywords = "luoji logic and or not implies forall exists therefore because"
+items = ["¬", "∧", "∨", "⊕", "⇒", "⇔", "→", "↔", "∀", "∃", "∄", "∴", "∵", "⊢", "⊨", "⊤", "⊥", "□"]
+
+[[groups]]
+tab = "symbols"
+title = "希腊字母"
+keywords = "xila greek alpha beta gamma delta pi sigma omega"
+items = ["α", "β", "γ", "δ", "ε", "ζ", "η", "θ", "ι", "κ", "λ", "μ", "ν", "ξ", "ο", "π", "ρ", "σ", "τ", "υ", "φ", "χ", "ψ", "ω", "Γ", "Δ", "Θ", "Λ", "Ξ", "Π", "Σ", "Υ", "Φ", "Ψ", "Ω"]
+
+[[groups]]
+tab = "symbols"
+title = "上标与下标"
+keywords = "shangbiao xiabiao superscript subscript power index"
+items = ["⁰", "¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹", "⁺", "⁻", "⁼", "⁽", "⁾", "ⁿ", "ⁱ", "₀", "₁", "₂", "₃", "₄", "₅", "₆", "₇", "₈", "₉", "₊", "₋", "₌", "₍", "₎"]
+
+[[groups]]
+tab = "symbols"
+title = "几何"
+keywords = "jihe geometry angle perpendicular parallel triangle circle degree congruent similar"
+items = ["∠", "∟", "⊥", "∥", "∦", "△", "□", "○", "⊙", "°", "⌒", "≌", "∽", "π"]
+
+[[groups]]
+tab = "symbols"
+title = "分数"
+keywords = "fenshu fraction half third quarter"
+items = ["½", "⅓", "⅔", "¼", "¾", "⅕", "⅖", "⅗", "⅘", "⅙", "⅚", "⅐", "⅛", "⅜", "⅝", "⅞", "⅑", "⅒"]
+
+[[groups]]
+tab = "kaomoji"
+title = "解题中"
+keywords = "jieti math thinking confused"
+items = ["(・_・;)", "(・・?)", "(⊙_⊙)?", "(＠_＠;)", "(￣～￣;)", "(；一_一)", "( ˘•ω•˘ )", "ᕦ(ò_óˇ)ᕤ", "＼(＾o＾)／"]

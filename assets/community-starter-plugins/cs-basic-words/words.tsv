@@ -1,0 +1,282 @@
+# Basic computer science English words with short Chinese meanings written for this pack. Each line is word<TAB>meaning.
+algorithm	n. 算法
+data	n. 数据
+structure	n. 结构
+array	n. 数组
+list	n. 列表；v. 列出
+linked list	n. 链表
+stack	n. 栈
+queue	n. 队列
+heap	n. 堆
+tree	n. 树
+binary	adj. 二进制的；二元的
+graph	n. 图
+node	n. 节点
+edge	n. 边
+vertex	n. 顶点
+root	n. 根；根节点
+leaf	n. 叶子节点
+hash	n. 哈希；v. 计算哈希
+hash table	n. 哈希表
+key	n. 键
+value	n. 值
+pointer	n. 指针
+reference	n. 引用
+index	n. 索引；下标
+element	n. 元素
+string	n. 字符串
+character	n. 字符
+integer	n. 整数
+float	n. 浮点数
+boolean	n. 布尔值；adj. 布尔的
+byte	n. 字节
+bit	n. 位，比特
+variable	n. 变量
+constant	n. 常量
+function	n. 函数
+method	n. 方法
+parameter	n. 形式参数
+argument	n. 实际参数
+return	v. 返回；n. 返回值
+loop	n. 循环
+iteration	n. 迭代
+recursion	n. 递归
+condition	n. 条件
+branch	n. 分支；v. 分叉
+statement	n. 语句
+expression	n. 表达式
+operator	n. 运算符
+operand	n. 操作数
+syntax	n. 语法
+semantics	n. 语义
+type	n. 类型
+class	n. 类
+object	n. 对象
+instance	n. 实例
+inheritance	n. 继承
+interface	n. 接口
+abstraction	n. 抽象
+encapsulation	n. 封装
+polymorphism	n. 多态
+module	n. 模块
+package	n. 包
+library	n. 库
+framework	n. 框架
+dependency	n. 依赖
+import	v. 导入
+export	v. 导出
+compile	v. 编译
+compiler	n. 编译器
+interpreter	n. 解释器
+runtime	n. 运行时
+debug	v. 调试
+debugger	n. 调试器
+bug	n. 程序缺陷，漏洞
+exception	n. 异常
+error	n. 错误
+warning	n. 警告
+log	n. 日志；v. 记录
+test	n. 测试；v. 测试
+assertion	n. 断言
+source code	n. 源代码
+binary file	n. 二进制文件
+executable	n. 可执行文件；adj. 可执行的
+script	n. 脚本
+command	n. 命令
+terminal	n. 终端
+shell	n. 命令行外壳
+console	n. 控制台
+editor	n. 编辑器
+version	n. 版本
+repository	n. 仓库
+commit	v. 提交；n. 提交记录
+merge	v. 合并
+conflict	n. 冲突
+release	n. 发布版本；v. 发布
+deploy	v. 部署
+build	v. 构建；n. 构建产物
+configuration	n. 配置
+environment	n. 环境
+operating system	n. 操作系统
+kernel	n. 内核
+process	n. 进程
+thread	n. 线程
+concurrency	n. 并发
+parallelism	n. 并行
+synchronization	n. 同步
+asynchronous	adj. 异步的
+lock	n. 锁；v. 加锁
+deadlock	n. 死锁
+race condition	n. 竞态条件
+scheduler	n. 调度器
+interrupt	n. 中断
+memory	n. 内存
+register	n. 寄存器
+cache	n. 高速缓存
+buffer	n. 缓冲区
+address	n. 地址
+allocate	v. 分配
+garbage collection	n. 垃圾回收
+memory leak	n. 内存泄漏
+overflow	n. 溢出
+processor	n. 处理器
+core	n. 核心
+instruction	n. 指令
+clock	n. 时钟
+storage	n. 存储
+disk	n. 磁盘
+file	n. 文件
+directory	n. 目录
+path	n. 路径
+permission	n. 权限
+user	n. 用户
+input	n. 输入
+output	n. 输出
+device	n. 设备
+driver	n. 驱动程序
+network	n. 网络
+protocol	n. 协议
+packet	n. 数据包
+router	n. 路由器
+switch	n. 交换机；v. 切换
+bandwidth	n. 带宽
+latency	n. 延迟
+throughput	n. 吞吐量
+server	n. 服务器
+client	n. 客户端
+request	n. 请求
+response	n. 响应
+port	n. 端口
+socket	n. 套接字
+domain	n. 域名；领域
+proxy	n. 代理
+firewall	n. 防火墙
+browser	n. 浏览器
+website	n. 网站
+URL	n. 网址，统一资源定位符
+cookie	n. 网站存放在浏览器里的小段数据
+session	n. 会话
+API	n. 应用程序编程接口
+endpoint	n. 端点
+upload	v. 上传
+download	v. 下载
+database	n. 数据库
+table	n. 表
+row	n. 行
+column	n. 列
+query	n. 查询；v. 查询
+transaction	n. 事务
+schema	n. 模式，结构定义
+record	n. 记录
+field	n. 字段
+primary key	n. 主键
+backup	n. 备份；v. 备份
+security	n. 安全
+encryption	n. 加密
+decryption	n. 解密
+password	n. 密码
+authentication	n. 身份验证
+authorization	n. 授权
+certificate	n. 证书
+signature	n. 签名
+vulnerability	n. 漏洞
+attack	n. 攻击；v. 攻击
+virus	n. 病毒
+malware	n. 恶意软件
+token	n. 令牌；词法单元
+privacy	n. 隐私
+software	n. 软件
+hardware	n. 硬件
+application	n. 应用程序
+program	n. 程序；v. 编程
+programmer	n. 程序员
+developer	n. 开发者
+platform	n. 平台
+cloud	n. 云
+virtual machine	n. 虚拟机
+container	n. 容器
+cluster	n. 集群
+service	n. 服务
+microservice	n. 微服务
+load balancer	n. 负载均衡器
+scalability	n. 可扩展性
+availability	n. 可用性
+reliability	n. 可靠性
+performance	n. 性能
+optimization	n. 优化
+complexity	n. 复杂度
+sort	v. 排序
+search	v. 搜索；n. 搜索
+binary search	n. 二分查找
+traverse	v. 遍历
+insert	v. 插入
+delete	v. 删除
+update	v. 更新
+swap	v. 交换
+compare	v. 比较
+copy	v. 复制
+paste	v. 粘贴
+undo	v. 撤销
+redo	v. 重做
+cursor	n. 光标；游标
+keyboard	n. 键盘
+mouse	n. 鼠标
+screen	n. 屏幕
+window	n. 窗口
+menu	n. 菜单
+button	n. 按钮
+icon	n. 图标
+dialog	n. 对话框
+font	n. 字体
+pixel	n. 像素
+resolution	n. 分辨率
+image	n. 图像
+format	n. 格式；v. 格式化
+encoding	n. 编码
+Unicode	n. 统一码
+compression	n. 压缩
+parse	v. 解析
+parser	n. 解析器
+serialize	v. 序列化
+template	n. 模板
+callback	n. 回调
+event	n. 事件
+handler	n. 处理程序
+listener	n. 监听器
+plugin	n. 插件
+extension	n. 扩展
+default	n. 默认值；adj. 默认的
+option	n. 选项
+setting	n. 设置
+feature	n. 功能，特性
+requirement	n. 需求
+specification	n. 规格说明
+documentation	n. 文档
+comment	n. 注释；评论
+refactor	v. 重构
+maintenance	n. 维护
+compatibility	n. 兼容性
+migration	n. 迁移
+architecture	n. 架构
+design pattern	n. 设计模式
+prototype	n. 原型
+artificial intelligence	n. 人工智能
+machine learning	n. 机器学习
+neural network	n. 神经网络
+model	n. 模型
+training	n. 训练
+dataset	n. 数据集
+feature vector	n. 特征向量
+accuracy	n. 准确率
+probability	n. 概率
+statistics	n. 统计
+matrix	n. 矩阵
+vector	n. 向量
+logic	n. 逻辑
+Boolean algebra	n. 布尔代数
+automaton	n. 自动机
+regular expression	n. 正则表达式
+boundary	n. 边界
+null	n. 空值
+random	adj. 随机的
+timeout	n. 超时

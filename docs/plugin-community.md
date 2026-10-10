@@ -90,6 +90,26 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON community_plugins, community_plugin_down
 
 上线顺序：客户端先发出容忍未知类型的版本，再部署本服务端（类型声明、迁移和四种新类型的校验器），最后发布会发布这些类型、带 `kinds` 声明的客户端。服务端某个类型的校验器必须先于发布该类型的客户端上线。回退到旧版本时，旧版本不认识 `kinds` 参数，会把已发布的新类型返回给所有客户端，所以回退前要确认已发布的客户端都能容忍未知类型，或先下架新类型的作品。单个插件最多 8 MiB、每账号最多 32 MiB，数据库容量和备份需按预期发布量规划。
 
+## 初始精选插件
+
+社区插件库只存在 PostgreSQL 里，不与 GitHub 同步。[msime-plugins](https://github.com/metasequoiaime/msime-plugins) 仓库里维护者制作的 17 个包（音效、旋律、音乐、指令表、特效、符号集、短语表和单词本）通过一次性的种子 SQL 导入数据库，之后与用户作品一样只在库里管理。`msime-server -render-plugin-seed` 只生成 SQL 写到 stdout，不读配置、不连接数据库，参数是 msime-plugins 的检出或其中的 `packs/` 目录：
+
+```sh
+git -C ~/src/msime-plugins fetch origin
+git -C ~/src/msime-plugins worktree add --detach ~/worktrees/msime-plugins-main origin/main
+go run ./cmd/msime-server -render-plugin-seed ~/worktrees/msime-plugins-main > /tmp/community-plugins.sql
+psql -X -v ON_ERROR_STOP=1 "$MSIME_MIGRATION_DATABASE_URL" -f /tmp/community-plugins.sql
+git -C ~/src/msime-plugins worktree remove ~/worktrees/msime-plugins-main
+```
+
+生成器在 `internal/account/community_plugin_seed.go`，直接调用发布接口用的校验函数，规则只有服务端这一份：清单里的 `kind`、`id`、`name`、`version` 和 `description` 充当一次发布请求，先过请求元数据的检查（`pluginPublishMetadataCode`：社区列表标题取清单 `name`、说明取 `description`，去掉首尾空白后分别为 1 到 32 和至多 280 个字符；`plugin_id`、`version` 和包体大小），再过归档的检查（`validPluginPublishArchive`，即上面的「zip 校验」「plugin.toml 校验」加上 kind、id、version 与请求一致），另外要求清单 `id` 与目录名一致，以及每账号 20 个、合计 32 MiB 的配额。服务端会拒绝的包直接拒绝，不截断、不改写，每个被拒绝的包在 stderr 列出错误码，命令以非零状态退出且不输出 SQL；校验器只给出错误码，具体原因可以用 msime-plugins 的 `scripts/check-packs.sh` 查看客户端的说明。发布接口的敏感词筛查依赖数据库里的词库，生成器做不到，执行前由运维审核清单和说明文本。
+
+每个包打成一个 zip：文件放在根部、按文件名字节序排列、跳过以 `.` 开头的文件、固定时间戳（1980-01-01）和 0644 权限，布局与客户端 `pack()` 相同。不同的是成员用 Store 而不是 Deflate：压缩结果随实现和版本变化，换一个版本重新生成就可能得到不同的字节，而不一致检查依赖归档字节可复现；服务端和客户端都接受 Store。这批包以 WAV 为主，压缩省不了多少空间，17 个包合计约 2.5 MB，生成的 SQL 约 5 MB（bytea 以十六进制写出）。
+
+SQL 在单个事务中切换到运行角色 `msime_backend`（`-plugin-seed-role` 可改），设置锁和语句超时，用与 `scripts/community_resources_seed.py`、`scripts/community_seed.py` 相同的事务锁和作者「水杉精选」（固定 UUID，只建作者记录，不建登录身份或会话；该 ID 已绑定登录身份或会话时拒绝执行）。每个包一行 `community_plugins`：`id` 由类型、插件 id 和版本按 UUIDv5 固定生成，`manifest` 是原始 `plugin.toml` 字节，`archive` 是上面的 zip，`moderation` 直接为 `approved`，`request_sha256` 按发布接口的 `pluginRequestDigest` 计算（种子作者没有会话，不会有接口重试，这一列只是与经接口发布同样内容时的值保持一致）。插入用 `ON CONFLICT(id) DO NOTHING`，随后检查已有行的作者、类型、插件 id、标题、说明、版本、许可证、清单与归档的 SHA-256 和 `request_sha256`，任何一项不同时整个事务失败，不覆盖已入库的包；不比较审核状态，运维下架后重新执行不会失败，也不会把它恢复上架。执行前还会检查 `moderation` 列和 `community_plugins_kind_known` 约束：数据库尚未由新版本迁移（约束不含辅助码表、符号集、短语表或单词本）时直接报出原因，而不是在插入时撞上约束。事务最后列出与这些包同类型、同插件 id 的全部行，客户端按 (类型, 插件 id) 安装，用户发布的同名包会与精选包互相替换，由运维决定如何处理。种子不创建下载、评分或收藏。包改版时在 msime-plugins 里提高 `version` 再生成，新版本得到新的 UUID，不继承旧版评分。
+
+为什么不从 GitHub 同步：客户端无法直接访问 GitHub，插件只能经本服务下发；评分、下载、收藏和审核状态本来就在数据库里，同步会让同一个包出现两个权威来源；GitHub 仓库按目录名保证 id 唯一，而库里的 id 是发布 UUID、插件 id 允许不同作者重复，两套唯一性无法直接对应；仓库也没有面向社区投稿的维护者审核队列，用户作品走的是服务端的发布校验和事后审核。所以种子只做一次迁移，之后精选包和用户作品一样在库里维护。
+
 ## 管理后台
 
 `GET /api/plugins` 列出插件（id、kind、plugin_id、名称、版本、发布者、owner_id、大小、SHA-256、下载人数、发布时间），支持关键词搜索和分页。`GET /api/plugins/{id}` 返回元数据、清单文本、大小、SHA-256、下载与评分统计，不返回 zip 字节。`POST /api/actions` 的 `delete_plugin` 永久删除插件及其下载和评分并写入审计。总览新增 `plugins` 和 `plugin_downloads` 两项计数。管理后台网页暂未提供对应页面，需直接调用 API。

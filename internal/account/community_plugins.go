@@ -132,6 +132,42 @@ func pluginRequestDigest(name, description, kind, pluginID, version string, arch
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// pluginPublishMetadataCode 校验发布请求的元数据，返回 400 错误码，合规时返回空串。id 已转成小写，name 和 description 已去掉首尾空白。发布接口和 RenderCommunityPluginSeed 共用这一份规则。
+func pluginPublishMetadataCode(id, name, description, kind, pluginID, version string, archiveSize int) string {
+	if len(id) != 36 || !validCommunityID(id) {
+		return "invalid_community_id"
+	}
+	// 客户端拒绝含任何控制字符的列表标题，以及含换行、制表符以外控制字符的说明。
+	if !resourceText(name, 1, 32, false) || !resourceText(description, 0, 280, true) {
+		return "invalid_plugin_metadata"
+	}
+	if !slices.Contains(pluginKinds, kind) {
+		return "invalid_kind"
+	}
+	if !validPluginID(pluginID) || !pluginBoundedText(version, 32) {
+		return "invalid_plugin_metadata"
+	}
+	if archiveSize < 1 || archiveSize > maxPluginArchiveBytes {
+		return "plugin_too_large"
+	}
+	return ""
+}
+
+// validPluginPublishArchive 对归档执行服务端的全部包校验，并要求清单的 kind、id 和 version 与请求一致；返回要存储的内容或 400 错误码。发布接口和 RenderCommunityPluginSeed 共用。
+func validPluginPublishArchive(archive []byte, kind, pluginID, version string) (pluginPack, string) {
+	pack, code := validPluginArchive(archive)
+	if code != "" {
+		return pluginPack{}, code
+	}
+	if pack.Kind != kind {
+		return pluginPack{}, "plugin_kind_mismatch"
+	}
+	if pack.ID != pluginID || pack.Version != version {
+		return pluginPack{}, "plugin_manifest_mismatch"
+	}
+	return pack, ""
+}
+
 func extendPluginTransfer(w http.ResponseWriter) {
 	// Extend only this request's socket deadlines, as the candidate-skin publish does; Mount gives the route the matching context.
 	controller := http.NewResponseController(w)
@@ -272,27 +308,10 @@ func (a *Service) communityPluginPublish(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	input.ID = strings.ToLower(input.ID)
-	if len(input.ID) != 36 || !validCommunityID(input.ID) {
-		writeError(w, 400, "invalid_community_id")
-		return
-	}
 	input.Name = strings.TrimSpace(input.Name)
 	input.Description = strings.TrimSpace(input.Description)
-	// Clients reject a listed name with any control character and a description with one other than newline or tab.
-	if !resourceText(input.Name, 1, 32, false) || !resourceText(input.Description, 0, 280, true) {
-		writeError(w, 400, "invalid_plugin_metadata")
-		return
-	}
-	if !slices.Contains(pluginKinds, input.Kind) {
-		writeError(w, 400, "invalid_kind")
-		return
-	}
-	if !validPluginID(input.PluginID) || !pluginBoundedText(input.Version, 32) {
-		writeError(w, 400, "invalid_plugin_metadata")
-		return
-	}
-	if len(input.Archive) < 1 || len(input.Archive) > maxPluginArchiveBytes {
-		writeError(w, 400, "plugin_too_large")
+	if code := pluginPublishMetadataCode(input.ID, input.Name, input.Description, input.Kind, input.PluginID, input.Version, len(input.Archive)); code != "" {
+		writeError(w, 400, code)
 		return
 	}
 	digest := pluginRequestDigest(input.Name, input.Description, input.Kind, input.PluginID, input.Version, input.Archive)
@@ -321,17 +340,9 @@ func (a *Service) communityPluginPublish(w http.ResponseWriter, r *http.Request)
 		a.error(w, e)
 		return
 	}
-	pack, code := validPluginArchive(input.Archive)
+	pack, code := validPluginPublishArchive(input.Archive, input.Kind, input.PluginID, input.Version)
 	if code != "" {
 		writeError(w, 400, code)
-		return
-	}
-	if pack.Kind != input.Kind {
-		writeError(w, 400, "plugin_kind_mismatch")
-		return
-	}
-	if pack.ID != input.PluginID || pack.Version != input.Version {
-		writeError(w, 400, "plugin_manifest_mismatch")
 		return
 	}
 	// Screened after the hourly charge, so probing the word list costs publishes, and on the manifest too, whose command texts are user-visible.

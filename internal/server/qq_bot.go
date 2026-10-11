@@ -479,10 +479,16 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 			return
 		}
 	}
-	if !admin {
-		s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, text, reply)
+	if s.qqCommand(ctx, m, text, admin, reply) {
 		return
 	}
+	// 只有管理员用「提issue」时才提交；其他消息不论谁发的都按问题回答。曾经管理员的每条消息都先自动判断、像反馈就提交，群里讨论和吐槽也被提成了 issue。
+	s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, text, reply)
+}
+
+// fileAdminFeedback 处理管理员用「提issue」提交的一条反馈：整理成 bug 或需求后按平台选仓库、查重、带上附件和标签提交；看不出是 bug 还是需求时请管理员写具体些。
+func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text string, reply func(string)) {
+	text, notes := qqParseNotes(text)
 	report, err := s.qqSummarise(ctx, text)
 	if err != nil {
 		slog.Warn("qq bot: summarise failed", "reason", err.Error())
@@ -490,7 +496,7 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		return
 	}
 	if report.Kind == "other" {
-		s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, text, reply)
+		reply("没看出要提的是 bug 还是需求，请把问题或想要的功能描述具体一点。")
 		return
 	}
 	if report.Missing != "" {
@@ -504,17 +510,17 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 	}
 	reply(qqReplyWorking)
 	media, failed := s.publishQQMedia(ctx, m.Attachments)
-	number, duplicate, err := s.fileQQReport(ctx, repo, label, report, qqMediaSection(media, failed))
+	number, duplicate, err := s.fileQQReport(ctx, repo, label, report, qqMediaSection(media, failed), notes)
 	if err != nil {
 		slog.Warn("qq bot: file issue failed", "repo", repo, "reason", err.Error())
 		reply(qqReplyUnavailable)
 		return
 	}
 	if duplicate {
-		reply(fmt.Sprintf("这个问题已经有人反馈过，已补充到 GitHub %s 的 #%d。%s", repo, number, qqReplyPublic))
+		reply("这个问题已经有人反馈过，已补充到 " + qqIssueNumberText(repo, number) + "。" + qqReplyPublic)
 		return
 	}
-	reply(fmt.Sprintf("已记录为 GitHub %s 的 #%d，开发者会在那里跟进。%s", repo, number, qqReplyPublic))
+	reply("已记录为 " + qqIssueNumberText(repo, number) + "，开发者会在那里跟进。" + qqReplyPublic)
 }
 
 // answerQQQuestion 用知识库回答一条消息；答不上时 @ 本群的管理员（qqGroupAdmins）。
@@ -786,7 +792,7 @@ func (s *Server) qqTarget(report qqReport) (repo, label string, known bool) {
 }
 
 // fileQQReport 把一条反馈提交到 repo：模型判断与某个开启的 issue 是同一件事时在那里补充评论，否则新建 issue。返回 issue 编号以及是否是补充到已有 issue。
-func (s *Server) fileQQReport(ctx context.Context, repo, platformLabel string, report qqReport, mediaSection string) (int64, bool, error) {
+func (s *Server) fileQQReport(ctx context.Context, repo, platformLabel string, report qqReport, mediaSection string, notes qqNotes) (int64, bool, error) {
 	client := s.adminGitHub
 	token, err := client.Token(ctx, repo, issueTokenPerms)
 	if err != nil {
@@ -803,8 +809,13 @@ func (s *Server) fileQQReport(ctx context.Context, repo, platformLabel string, r
 		}
 		return duplicate, true, nil
 	}
-	request := map[string]any{"title": qqIssueTitle(report), "body": qqIssueBody(report, mediaSection)}
-	request["labels"] = s.qqLabels(report, platformLabel)
+	// 新 issue 的标签：类型、平台和配置的标签，加上模型从仓库分类标签里挑的，以及维护者标注对应的标签；仓库没有对应标签的标注写进正文。
+	labels := s.qqLabels(report, platformLabel)
+	repoLabels := s.qqRepoLabels(ctx, client, token, repo)
+	labels = append(labels, s.qqTopicLabels(ctx, repoLabels, labels, report)...)
+	noteLabels, noteSection := qqNoteLabels(repoLabels, notes)
+	labels = append(labels, noteLabels...)
+	request := map[string]any{"title": qqIssueTitle(report), "body": qqIssueBody(report, noteSection+mediaSection), "labels": labels}
 	r, err := client.Do(ctx, token, "POST", "/repos/"+repo+"/issues", request)
 	if err != nil || !r.OK() {
 		return 0, false, githubFailure("create", r, err)

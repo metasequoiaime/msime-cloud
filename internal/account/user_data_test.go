@@ -35,9 +35,10 @@ func TestUserDataSummaryExportAndDelete(t *testing.T) {
 	for _, q := range []string{
 		`INSERT INTO user_preferences(user_id,revision,settings) VALUES($1,4,'{"theme":"dark"}')`,
 		`INSERT INTO user_phrases(user_id,revision,phrases) VALUES($1,2,'[{"id":"a","text":"你好","group":"","position":1}]')`,
-		`INSERT INTO user_clipboard_settings(user_id,enabled) VALUES($1,true)`,
+		`INSERT INTO user_clipboard_settings(user_id,enabled,retention_days,key_id) VALUES($1,true,7,'k')`,
 		`INSERT INTO user_clipboard(id,user_id,text,text_hash,ciphertext,key_id,sequence) VALUES(md5(random()::text),$1,'','h','v1.owner-ciphertext','k',1)`,
 		`INSERT INTO user_clipboard_devices(user_id,device_id,public_key,name) VALUES($1,'d','p','剪贴设备')`,
+		`INSERT INTO user_clipboard_wraps(user_id,device_id,key_id,wrap) VALUES($1,'d','k','w')`,
 		`INSERT INTO user_dictionary_state(user_id,revision) VALUES($1,7)`,
 		`INSERT INTO user_dictionary_entries(id,user_id,kind,code,word,weight,revision) VALUES(md5(random()::text),$1,'pinyin','shuishan','水杉',10,7)`,
 	} {
@@ -45,8 +46,15 @@ func TestUserDataSummaryExportAndDelete(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.pool.Exec(ctx, `INSERT INTO user_clipboard(id,user_id,text,text_hash,ciphertext,key_id,sequence) VALUES(md5(random()::text),$1,'','h','v1.other-ciphertext','k',1)`, other.User.ID); err != nil {
-		t.Fatal(err)
+	for _, q := range []string{
+		`INSERT INTO user_clipboard_settings(user_id,enabled,key_id) VALUES($1,true,'k')`,
+		`INSERT INTO user_clipboard(id,user_id,text,text_hash,ciphertext,key_id,sequence) VALUES(md5(random()::text),$1,'','h','v1.other-ciphertext','k',1)`,
+		`INSERT INTO user_clipboard_devices(user_id,device_id,public_key,name) VALUES($1,'d','p','别人的设备')`,
+		`INSERT INTO user_clipboard_wraps(user_id,device_id,key_id,wrap) VALUES($1,'d','k','w')`,
+	} {
+		if _, err := s.pool.Exec(ctx, q, other.User.ID); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	w := userDataRequest(mux, "GET", "/v1/users/me/data", owner.AccessToken, "")
@@ -113,9 +121,16 @@ func TestUserDataSummaryExportAndDelete(t *testing.T) {
 	if prefRevision != 5 || phraseRevision != 3 || dictRevision != 8 || clips != 0 || entries != 0 || !reset {
 		t.Fatal(prefRevision, phraseRevision, dictRevision, clips, entries, reset)
 	}
-	var otherClips int
-	s.pool.QueryRow(ctx, `SELECT count(*) FROM user_clipboard WHERE user_id=$1`, other.User.ID).Scan(&otherClips)
-	if otherClips != 1 {
+	// 剪贴板分区同时删除密钥、封装和设备登记，同步开关和保留天数不变。
+	var devices, wraps, retention int
+	var enabled, keyless bool
+	if err := s.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM user_clipboard_devices WHERE user_id=$1),(SELECT count(*) FROM user_clipboard_wraps WHERE user_id=$1),enabled,retention_days,key_id IS NULL FROM user_clipboard_settings WHERE user_id=$1`, uid).Scan(&devices, &wraps, &enabled, &retention, &keyless); err != nil || devices != 0 || wraps != 0 || !enabled || retention != 7 || !keyless {
+		t.Fatal("clipboard key material", devices, wraps, enabled, retention, keyless, err)
+	}
+	var otherClips, otherDevices, otherWraps int
+	var otherKey string
+	s.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM user_clipboard WHERE user_id=$1),(SELECT count(*) FROM user_clipboard_devices WHERE user_id=$1),(SELECT count(*) FROM user_clipboard_wraps WHERE user_id=$1),(SELECT key_id FROM user_clipboard_settings WHERE user_id=$1)`, other.User.ID).Scan(&otherClips, &otherDevices, &otherWraps, &otherKey)
+	if otherClips != 1 || otherDevices != 1 || otherWraps != 1 || otherKey != "k" {
 		t.Fatal("deleted another user's data")
 	}
 	s.pool.Exec(ctx, "UPDATE auth_sessions SET created_at=now()-interval '11 minutes' WHERE user_id=$1", uid)

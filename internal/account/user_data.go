@@ -56,7 +56,7 @@ func (s *Store) UserDataSummary(ctx context.Context, user string) ([]UserDataSec
 	return sections, total, err
 }
 
-// DeleteUserData 在一个事务里删除所选分区。偏好和常用语清空内容并推进 revision，其他设备的旧 revision 写入会 409 并拉到空文档；词库删除条目、覆盖层、位置和选择次数后写一条 reset 变更并推进 revision，与快照恢复的重置方式相同，开着同步的设备拉取时会整份重载而不是把旧数据推回来。
+// DeleteUserData 在一个事务里删除所选分区。偏好和常用语清空内容并推进 revision，其他设备的旧 revision 写入会 409 并拉到空文档；词库删除条目、覆盖层、位置和选择次数后写一条 reset 变更并推进 revision，与快照恢复的重置方式相同，开着同步的设备拉取时会整份重载而不是把旧数据推回来；剪贴板删除条目、密钥、封装和设备登记，保留同步开关和保留天数。
 func (s *Store) DeleteUserData(ctx context.Context, user string, sections map[string]bool) error {
 	tx, err := s.userDataTransaction(ctx, user)
 	if err != nil {
@@ -71,7 +71,11 @@ func (s *Store) DeleteUserData(ctx context.Context, user string, sections map[st
 		statements = append(statements, `UPDATE user_phrases SET phrases='[]'::jsonb,revision=revision+1 WHERE user_id=$1`)
 	}
 	if sections["clipboard"] {
-		statements = append(statements, `DELETE FROM user_clipboard WHERE user_id=$1`)
+		// 除了条目，还删除当前密钥编号、封装和全部设备登记（设备名、公钥、登记时间是服务端看得到的元数据）；封装随设备的外键一起删除。同步开关和保留天数不变，开着同步的设备会重新登记，由第一台设备重新生成密钥。
+		statements = append(statements,
+			`DELETE FROM user_clipboard WHERE user_id=$1`,
+			`DELETE FROM user_clipboard_devices WHERE user_id=$1`,
+			`UPDATE user_clipboard_settings SET key_id=NULL WHERE user_id=$1`)
 	}
 	if sections["voice"] {
 		statements = append(statements, `DELETE FROM voice_contributions WHERE user_id=$1`)

@@ -44,6 +44,8 @@ type Server struct {
 	// qq 是 QQ 群反馈机器人，未配置或没有数据库时为 nil；qqWorkers 跟踪它在后台处理的消息，Close 等它们结束。
 	qq        *qqBot
 	qqWorkers sync.WaitGroup
+	// media 把 QQ 管理员附带的图片和视频写进公开 bucket（account.Service.PublishMedia）；没有数据库时为 nil。
+	media mediaPublisher
 
 	adminStore  adminAuthStore
 	adminGoogle *adminGoogleAuth
@@ -133,6 +135,9 @@ func New(c Config) (*Server, error) {
 	}
 	if c.QQBot.enabled() && s.limits != nil {
 		s.qq = newQQBot(c.QQBot)
+		if s.accounts != nil {
+			s.media = s.accounts
+		}
 	}
 	mux := http.NewServeMux()
 	// Anonymous website endpoints: the /v1/community/ prefix skips Bearer authentication in the middleware, and the handlers apply their own origin, Turnstile and rate checks.

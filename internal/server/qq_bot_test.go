@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -165,6 +166,9 @@ type qqFake struct {
 	replies     []map[string]any
 	replyAuth   []string
 	replyStatus int
+	// 群成员身份：roles 为 nil 时照生产现状返回 11253（接口未开通）。
+	roles     map[string]string
+	roleCalls int
 	// GitHub
 	searchQuery  string
 	searchItems  []map[string]any
@@ -224,6 +228,19 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_, _ = w.Write([]byte(`{"access_token":"qq-access-token","expires_in":"7200"}`))
+	case strings.HasPrefix(r.URL.Path, "/v2/groups/GROUP1/members/"):
+		f.roleCalls++
+		role, ok := f.roles[strings.TrimPrefix(r.URL.Path, "/v2/groups/GROUP1/members/")]
+		switch {
+		case f.roles == nil:
+			w.WriteHeader(400)
+			_, _ = io.WriteString(w, `{"message":"应用无接口访问权限","code":11253}`)
+		case !ok:
+			w.WriteHeader(500)
+			_, _ = io.WriteString(w, `{"code":500}`)
+		default:
+			_, _ = io.WriteString(w, `{"member_openid":"x","member_role":"`+role+`"}`)
+		}
 	case strings.HasPrefix(r.URL.Path, "/v2/groups/"):
 		if r.URL.Path != "/v2/groups/GROUP1/messages" {
 			f.t.Error("reply path", r.URL.Path)
@@ -236,6 +253,22 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.replies = append(f.replies, body)
 		f.replyAuth = append(f.replyAuth, r.Header.Get("Authorization"))
 		_, _ = w.Write([]byte(`{"id":"reply"}`))
+	case strings.HasPrefix(r.URL.Path, "/media/"):
+		if r.URL.Path == "/media/huge.png" {
+			w.Header().Set("Content-Length", strconv.Itoa(qqImageBytes+1))
+			w.WriteHeader(200)
+			return
+		}
+		if r.URL.Path == "/media/redirect.png" {
+			http.Redirect(w, r, "https://evil.example/x.png", http.StatusFound)
+			return
+		}
+		body, ok := qqTestMedia[strings.TrimPrefix(r.URL.Path, "/media/")]
+		if !ok {
+			w.WriteHeader(404)
+			return
+		}
+		_, _ = w.Write(body)
 	case r.URL.Path == "/app/installations/77/access_tokens":
 		_ = json.NewEncoder(w).Encode(map[string]any{"token": "ghs_test", "expires_at": time.Now().Add(time.Hour)})
 	case strings.HasPrefix(r.URL.Path, "/repos/o/docs/contents/"):
@@ -514,10 +547,10 @@ func TestQQBotFeatureRequest(t *testing.T) {
 	if last := fake.created[len(fake.created)-1]; last["_repo"] != "o/r" || fmt.Sprint(last["labels"]) != "[bug source/qq]" {
 		t.Fatal(last["_repo"], last["labels"])
 	}
-	if comment := qqCommentBody(qqReport{Kind: "feature", Problem: "p", Proposal: "建议"}); !strings.Contains(comment, "建议") || strings.Contains(comment, "环境") {
+	if comment := qqCommentBody(qqReport{Kind: "feature", Problem: "p", Proposal: "建议"}, ""); !strings.Contains(comment, "建议") || strings.Contains(comment, "环境") {
 		t.Fatal(comment)
 	}
-	if body := qqIssueBody(qqReport{Kind: "bug", Problem: "p"}); !strings.Contains(body, "### 系统与输入法版本\n\n反馈中没有说明。") {
+	if body := qqIssueBody(qqReport{Kind: "bug", Problem: "p"}, ""); !strings.Contains(body, "### 系统与输入法版本\n\n反馈中没有说明。") {
 		t.Fatal(body)
 	}
 }
@@ -891,5 +924,237 @@ func TestQQKnowledgeLoadFailures(t *testing.T) {
 				t.Fatal("accepted")
 			}
 		})
+	}
+}
+
+// qqTestMedia 是测试用的附件内容，只有文件头是真的。
+var qqTestMedia = map[string][]byte{
+	"shot.png":  append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 32)...),
+	"clip.mp4":  append([]byte("\x00\x00\x00\x18ftypisom"), make([]byte, 32)...),
+	"evil.png":  []byte("<html><script>alert(1)</script></html>"),
+	"photo.jpg": append([]byte("\xff\xd8\xff\xe0"), make([]byte, 32)...),
+}
+
+// fakeMedia 记下写进公开 bucket 的对象。
+type fakeMedia struct {
+	mu      sync.Mutex
+	objects map[string]string
+	err     error
+}
+
+func (f *fakeMedia) PublishMedia(_ context.Context, key string, _ []byte, contentType string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return "", f.err
+	}
+	if f.objects == nil {
+		f.objects = map[string]string{}
+	}
+	f.objects[key] = contentType
+	return "https://media.example.test/" + key, nil
+}
+
+func qqMessageWithAttachments(id, content string, attachments []map[string]string) string {
+	event, _ := json.Marshal(map[string]any{"op": 0, "t": "GROUP_AT_MESSAGE_CREATE", "d": map[string]any{"id": id, "content": content, "group_openid": "GROUP1", "author": map[string]string{"member_openid": "MEMBER1"}, "attachments": attachments}})
+	return string(event)
+}
+
+// 管理员提 issue 时，图片和视频按文件头核实后存进公开 bucket，链接写进正文；伪装成图片的网页、超大文件、不在白名单的主机和重定向都算没能保存，语音不收。
+func TestQQBotStoresAdminMediaInIssue(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	media := &fakeMedia{}
+	s.media = media
+	base := s.config.Chat.URL
+	host := strings.TrimPrefix(base, "https://")
+	s.qq.mediaHosts = append(append([]string(nil), qqMediaHosts...), strings.Split(host, ":")[0])
+	s.qq.mediaClient = newQQMediaClient(&s.qq.mediaHosts)
+	s.qq.mediaClient.Transport = s.client.Transport
+	attachments := []map[string]string{
+		{"content_type": "image/png", "url": base + "/media/shot.png"},
+		{"content_type": "video/mp4", "url": base + "/media/clip.mp4"},
+		{"content_type": "image/jpeg", "url": host + "/media/photo.jpg"},
+		{"content_type": "image/png", "url": base + "/media/evil.png"},
+		{"content_type": "image/png", "url": base + "/media/huge.png"},
+		{"content_type": "image/png", "url": base + "/media/redirect.png"},
+		{"content_type": "image/png", "url": "https://evil.example/x.png"},
+		{"content_type": "image/png", "url": base + "/media/missing.png"},
+		{"content_type": "voice", "url": base + "/media/voice.silk"},
+	}
+	w := qqPost(t, s, qqMessageWithAttachments("m-media", "Windows 11 上水杉 1.2.0 候选框停在左上角", attachments))
+	s.qqWorkers.Wait()
+	if w.Code != 200 || len(fake.created) != 1 {
+		t.Fatal(w.Code, fake.created)
+	}
+	body := fake.created[0]["body"].(string)
+	types := []string{}
+	for key, contentType := range media.objects {
+		if !strings.HasPrefix(key, "qq-feedback/") {
+			t.Fatal(key)
+		}
+		types = append(types, contentType)
+	}
+	slices.Sort(types)
+	if strings.Join(types, ",") != "image/jpeg,image/png,video/mp4" {
+		t.Fatal(types)
+	}
+	for _, want := range []string{"### 截图与视频", "![截图 1](https://media.example.test/qq-feedback/", "![截图 2](https://media.example.test/qq-feedback/", "[视频 1](https://media.example.test/qq-feedback/", "另有 5 个附件没能保存。"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("body missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Index(body, "### 截图与视频") > strings.Index(body, qqIssueFooter) {
+		t.Fatal("media must come before the footer")
+	}
+	// 去重时附件写进补充评论。
+	fake.searchItems = []map[string]any{{"number": 7, "title": "候选框位置不对", "body": "b"}}
+	fake.duplicate = `{"duplicate":7}`
+	qqPost(t, s, qqMessageWithAttachments("m-media-dup", "Windows 11 上水杉 1.2.0 候选框停在左上角", attachments[:1]))
+	s.qqWorkers.Wait()
+	if comment := fake.comments["/repos/o/win/issues/7/comments"]; comment == nil || !strings.Contains(comment["body"].(string), "![截图 1](https://media.example.test/") {
+		t.Fatal(fake.comments)
+	}
+	// 普通群友的附件不处理。
+	before := len(media.objects)
+	s.qq.config.Admins = nil
+	qqPost(t, s, qqMessageWithAttachments("m-media-member", "五笔怎么切换", attachments[:1]))
+	s.qqWorkers.Wait()
+	if len(media.objects) != before {
+		t.Fatal("member attachments stored")
+	}
+}
+
+func TestQQBotMediaWithoutBucket(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.media = nil
+	qqPost(t, s, qqMessageWithAttachments("m-nobucket", "Windows 11 上水杉 1.2.0 候选框停在左上角", []map[string]string{{"content_type": "image/png", "url": "https://multimedia.nt.qq.com.cn/download?x=1"}, {"content_type": "voice", "url": "x"}}))
+	s.qqWorkers.Wait()
+	if len(fake.created) != 1 || !strings.Contains(fake.created[0]["body"].(string), "另有 1 个附件没能保存。") {
+		t.Fatal(fake.created)
+	}
+	// 存储失败也只算没能保存，issue 照提。
+	s.media = &fakeMedia{err: errors.New("bucket down")}
+	s.qq.mediaHosts = append(append([]string(nil), qqMediaHosts...), strings.Split(strings.TrimPrefix(s.config.Chat.URL, "https://"), ":")[0])
+	s.qq.mediaClient = newQQMediaClient(&s.qq.mediaHosts)
+	s.qq.mediaClient.Transport = s.client.Transport
+	qqPost(t, s, qqMessageWithAttachments("m-bucket-down", "Windows 11 上水杉 1.2.0 候选框停在左上角", []map[string]string{{"content_type": "image/png", "url": s.config.Chat.URL + "/media/shot.png"}}))
+	s.qqWorkers.Wait()
+	if len(fake.created) != 2 || !strings.Contains(fake.created[1]["body"].(string), "另有 1 个附件没能保存。") {
+		t.Fatal(fake.created)
+	}
+	// 超过一条消息的附件上限的算作没能保存。
+	many := make([]qqAttachment, qqMediaMaxFiles+2)
+	for i := range many {
+		many[i] = qqAttachment{ContentType: "image/png", URL: s.config.Chat.URL + "/media/shot.png"}
+	}
+	s.media = &fakeMedia{}
+	stored, failed := s.publishQQMedia(context.Background(), many)
+	if len(stored) != qqMediaMaxFiles || failed != 2 {
+		t.Fatal(len(stored), failed)
+	}
+}
+
+func TestQQMediaKindAndURL(t *testing.T) {
+	for name, tc := range map[string]struct {
+		body        string
+		contentType string
+		ok          bool
+	}{
+		"png":  {"\x89PNG\r\n\x1a\n0000", "image/png", true},
+		"jpeg": {"\xff\xd8\xff\xe00000", "image/jpeg", true},
+		"gif":  {"GIF89a000000", "image/gif", true},
+		"webp": {"RIFF0000WEBPVP8 ", "image/webp", true},
+		"mp4":  {"\x00\x00\x00\x18ftypisom0000", "video/mp4", true},
+		"mov":  {"\x00\x00\x00\x14ftypqt  0000", "video/quicktime", true},
+		"webm": {"\x1a\x45\xdf\xa30000", "video/webm", true},
+		"html": {"<!DOCTYPE html><script>", "", false},
+		"svg":  {`<svg xmlns="http://www.w3.org/2000/svg"><script/></svg>`, "", false},
+		"text": {"just text", "", false},
+	} {
+		contentType, _, _, ok := qqMediaKind([]byte(tc.body))
+		if ok != tc.ok || contentType != tc.contentType {
+			t.Errorf("%s: %q %v", name, contentType, ok)
+		}
+	}
+	for raw, want := range map[string]string{
+		"multimedia.nt.qq.com.cn/download?x=1": "https://multimedia.nt.qq.com.cn/download?x=1",
+		"https://gchat.qpic.cn/a.jpg":          "https://gchat.qpic.cn/a.jpg",
+		"http://qq.com/a.png":                  "http://qq.com/a.png",
+	} {
+		if got, err := qqMediaURL(raw, qqMediaHosts); err != nil || got != want {
+			t.Errorf("%s: %q %v", raw, got, err)
+		}
+	}
+	for _, raw := range []string{"https://evil.example/a.png", "https://qq.com.evil.example/a.png", "https://user:pass@gchat.qpic.cn/a.jpg", "ftp://gchat.qpic.cn/a.jpg", "https://%zz"} {
+		if _, err := qqMediaURL(raw, qqMediaHosts); err == nil {
+			t.Errorf("%s accepted", raw)
+		}
+	}
+	if qqMediaSection(nil, 0) != "" {
+		t.Fatal("no media, no section")
+	}
+}
+
+// 群身份接口开通后，群主和群管理员自动当作管理员；没开通（11253）时只认名单，并在一小时内不再调用。
+func TestQQBotRecognisesGroupAdmins(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.qq.config.Admins = []string{"LISTED"}
+	// 未开通：普通成员，「我的ID」如实报出；一小时内不再调用接口。
+	qqDeliver(t, s, "m-role-1", "我的ID")
+	qqDeliver(t, s, "m-role-2", "我的ID")
+	if replies := fake.replyTexts(); len(replies) != 2 || replies[0] != "你的 ID 是 MEMBER1，机器人把你当作普通成员。" || fake.roleCalls != 1 {
+		t.Fatal(replies, fake.roleCalls)
+	}
+	// 开通后：群管理员能提 issue，答不上时也会被 @。
+	s.qq.roles = qqRoles{}
+	fake.roles = map[string]string{"MEMBER1": "admin"}
+	qqDeliver(t, s, "m-role-admin", "Windows 11 上水杉 1.2.0 候选框停在左上角")
+	if len(fake.created) != 1 {
+		t.Fatal("group admin could not file an issue")
+	}
+	if got := s.qqGroupAdmins("GROUP1"); strings.Join(got, ",") != "LISTED,MEMBER1" {
+		t.Fatal(got)
+	}
+	// 缓存期内不重复查询。
+	calls := fake.roleCalls
+	qqDeliver(t, s, "m-role-cached", "我的ID")
+	if fake.roleCalls != calls || !strings.HasSuffix(fake.replyTexts()[len(fake.replyTexts())-1], "机器人把你当作管理员。") {
+		t.Fatal(fake.roleCalls, fake.replyTexts())
+	}
+	// 普通成员和查询失败都按普通成员处理。
+	for role, want := range map[string]bool{"owner": true, "admin": true, "member": false} {
+		s.qq.roles = qqRoles{}
+		fake.roles = map[string]string{"MEMBER1": role}
+		if got := s.qqIsAdmin(context.Background(), "GROUP1", "MEMBER1"); got != want {
+			t.Fatal(role, got)
+		}
+	}
+	s.qq.roles = qqRoles{}
+	fake.roles = map[string]string{}
+	if s.qqIsAdmin(context.Background(), "GROUP1", "MEMBER1") {
+		t.Fatal("a failed lookup must not grant admin")
+	}
+	// 名单里的人不用查。
+	calls = fake.roleCalls
+	if !s.qqIsAdmin(context.Background(), "GROUP1", "LISTED") || fake.roleCalls != calls {
+		t.Fatal("listed admins skip the lookup")
+	}
+	// 响应缺字段、凭证失败、地址无效。
+	if _, err := (&qqBot{config: QQBotConfig{APIURL: "https://bad host"}, token: "t", expires: time.Now().Add(time.Hour), now: time.Now, client: s.client}).memberRole(context.Background(), "G", "M"); err == nil {
+		t.Fatal("invalid endpoint accepted")
+	}
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, `{}`) }))
+	defer upstream.Close()
+	b := &qqBot{config: QQBotConfig{APIURL: upstream.URL}, token: "t", expires: time.Now().Add(time.Hour), now: time.Now, client: upstream.Client()}
+	if _, err := b.memberRole(context.Background(), "G", "M"); err == nil {
+		t.Fatal("empty role accepted")
+	}
+	upstream.Close()
+	if _, err := b.memberRole(context.Background(), "G", "M"); err == nil {
+		t.Fatal("closed upstream accepted")
+	}
+	b.token = ""
+	if _, err := b.memberRole(context.Background(), "G", "M"); err == nil {
+		t.Fatal("token failure accepted")
 	}
 }

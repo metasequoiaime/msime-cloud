@@ -26,8 +26,8 @@ import (
 
 const (
 	defaultQQEmbeddingModel = "doubao-embedding-vision"
-	// qqEmbedBatch 是一次请求算的文本数：2048 维的向量写成 JSON 每条约 25KB，16 条在上游响应 1MB 的上限内。
-	qqEmbedBatch = 16
+	// qqEmbedBatch 是一次请求算的文本数：doubao-embedding-vision 一次最多 10 条（多了上游返回 400 「input limit exceeded: max 10」），10 条 1500 字的文本响应约 340KB，在上游响应 1MB 的上限内。
+	qqEmbedBatch = 10
 	// qqEmbedRunes 是算向量时每段文本的长度上限。
 	qqEmbedRunes = 1500
 	// qqVectorSyncInterval 是同步的间隔，qqVectorSyncPages 是每次每个仓库最多拉的页数（每页 100 条）。

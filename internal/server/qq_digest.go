@@ -84,13 +84,13 @@ func (s *Server) qqWeeklyDigest(ctx context.Context, reply func(string)) {
 		}
 	}
 	if s.qqDrafts != nil {
-		if drafts, err := s.qqDrafts.OpenQQDrafts(ctx, 1000); err == nil {
-			fmt.Fprintf(&b, "\n- 待提交的草稿 %d 份（发「草稿」看）", len(drafts))
+		if _, total, err := s.qqDrafts.OpenQQDrafts(ctx, 1); err == nil {
+			fmt.Fprintf(&b, "\n- 待提交的草稿 %d 份（发「草稿」看）", total)
 		}
 	}
 	if s.qqFAQCandidates != nil {
-		if list, err := s.qqFAQCandidates.OpenQQFAQCandidates(ctx, 1000); err == nil {
-			fmt.Fprintf(&b, "\n- 文档缺口 %d 条（发「文档缺口」看）", len(list))
+		if _, total, err := s.qqFAQCandidates.OpenQQFAQCandidates(ctx, 1); err == nil {
+			fmt.Fprintf(&b, "\n- 文档缺口 %d 条（发「文档缺口」看）", total)
 		}
 	}
 	if filed, ok := s.qqIssuesFiledSince(ctx, since); ok {

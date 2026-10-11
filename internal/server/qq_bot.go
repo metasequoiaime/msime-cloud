@@ -756,13 +756,27 @@ func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text s
 			return "existing"
 		}
 	}
+	// 缺信息时先存成草稿，管理员补一句「提交 D编号 …」就行（qqAdminDraft）；没有草稿存储或存不进去时照旧请他补充后重发。
 	if report.Missing != "" {
-		reply("还差一点信息：" + report.Missing + qqReplyResend)
+		if note, ok := s.qqAdminDraft(ctx, m, text, report, notes, report.Missing); ok {
+			reply(note)
+		} else {
+			reply("还差一点信息：" + report.Missing + qqReplyResend)
+		}
 		return "needs_info"
 	}
-	repo, label, question := s.qqTarget(ctx, report, text)
+	// 管理员写了「版本 未知」时不再追问版本，Windows 按平台配置提交，正文写明版本未知。
+	unknown := qqVersionUnknown.MatchString(text)
+	if unknown {
+		report = qqMarkVersionUnknown(report)
+	}
+	repo, label, question := s.qqTarget(ctx, report, text, unknown)
 	if question != "" {
-		reply("还差一点信息：" + question + qqReplyResend)
+		if note, ok := s.qqAdminDraft(ctx, m, text, report, notes, question); ok {
+			reply(note)
+		} else {
+			reply("还差一点信息：" + question + qqReplyResend)
+		}
 		return "needs_version"
 	}
 	// 已经回过「收到」或其他过渡语时不再多说一句。
@@ -1240,6 +1254,21 @@ const qqWindowsLabel = "platform/windows"
 // qqWindowsVersionQuestion 是 Windows 反馈没有说输入法版本时的追问。
 const qqWindowsVersionQuestion = "你用的水杉输入法是哪个版本？在设置的「关于」页能看到。"
 
+// qqVersionUnknown 匹配管理员写的「版本 未知」「版本：不知道」：群友没说版本、管理员也不知道时，Windows 的反馈原来根本提不上去。只在管理员提 issue、提交草稿时看（fileAdminFeedback、qqFileDraft），群友这样写照旧追问。
+var qqVersionUnknown = regexp.MustCompile(`版本\s*[:：]?\s*(?:未知|不详|不知道|不清楚)`)
+
+// qqMarkVersionUnknown 把整理结果标成输入法版本未知：IMEVersion 里没有版本号时写成「未知」，并在 Version（正文的「系统与输入法版本」）后面写明，issue 里看得出是确实不知道，不是漏问了。IMEVersion 里有版本号时原样返回。
+func qqMarkVersionUnknown(report qqReport) qqReport {
+	if _, ok := qqParseVersion(report.IMEVersion); ok {
+		return report
+	}
+	report.IMEVersion = "未知"
+	if !strings.Contains(report.Version, "未知") {
+		report.Version = strings.TrimLeft(report.Version+"，输入法版本未知", "，")
+	}
+	return report
+}
+
 var qqVersionPattern = regexp.MustCompile(`([0-9]+)\.([0-9]+)(?:\.([0-9]+))?`)
 
 // qqParseVersion 取 text 里第一个形如 0.9 或 0.9.5 的版本号。
@@ -1271,19 +1300,21 @@ func qqVersionAtLeast(v, floor [3]int) bool {
 	return true
 }
 
-// qqTarget 是反馈要提交到的仓库和平台标签：与崩溃 issue 一样按 admin.github.platforms 分发，看不出平台或平台没有配置时提交到 qq_bot.repo，不加平台标签。Windows 例外：qqWindowsProduct 判断是 msime 的新实现时提交到 qq_bot.repo 并加 qqWindowsLabel，否则按平台配置提交（msime-windows）。text 是管理员的原话，用来找安装包名这类说明。question 不为空时（没有版本号，或者版本号两个产品都有）不提交，调用方先追问。
-func (s *Server) qqTarget(ctx context.Context, report qqReport, text string) (repo, label, question string) {
+// qqTarget 是反馈要提交到的仓库和平台标签：与崩溃 issue 一样按 admin.github.platforms 分发，看不出平台或平台没有配置时提交到 qq_bot.repo，不加平台标签。Windows 例外：qqWindowsProduct 判断是 msime 的新实现时提交到 qq_bot.repo 并加 qqWindowsLabel，否则按平台配置提交（msime-windows）。text 是管理员的原话，用来找安装包名这类说明。question 不为空时（没有版本号，或者版本号两个产品都有）不提交，调用方先追问。versionUnknown 表示管理员确认版本未知（qqVersionUnknown）：没有版本号时不追问，按平台配置提交。
+func (s *Server) qqTarget(ctx context.Context, report qqReport, text string, versionUnknown bool) (repo, label, question string) {
 	if report.Platform == "windows" {
 		version, ok := qqParseVersion(report.IMEVersion)
-		if !ok {
+		switch {
+		case !ok && !versionUnknown:
 			return "", "", qqWindowsVersionQuestion
-		}
-		isNew, question := s.qqWindowsProduct(ctx, version, text)
-		if question != "" {
-			return "", "", question
-		}
-		if isNew {
-			return s.qq.config.Repo, qqWindowsLabel, ""
+		case ok:
+			isNew, question := s.qqWindowsProduct(ctx, version, text)
+			if question != "" {
+				return "", "", question
+			}
+			if isNew {
+				return s.qq.config.Repo, qqWindowsLabel, ""
+			}
 		}
 	}
 	for _, p := range s.config.Admin.GitHub.Platforms {

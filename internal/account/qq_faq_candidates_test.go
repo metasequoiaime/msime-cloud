@@ -18,8 +18,8 @@ func TestQQFAQCandidates(t *testing.T) {
 		t.Fatal(err)
 	}
 	second, _ := a.AddQQFAQCandidate(ctx, "有几个开发者", "主仓库 12 位贡献者")
-	if list, err := a.OpenQQFAQCandidates(ctx, 10); err != nil || len(list) != 2 || list[0].ID != second {
-		t.Fatal(list, err)
+	if list, total, err := a.OpenQQFAQCandidates(ctx, 10); err != nil || len(list) != 2 || list[0].ID != first || total != 2 {
+		t.Fatal(list, total, err)
 	}
 	if c, err := a.QQFAQCandidate(ctx, second); err != nil || c.Answer != "主仓库 12 位贡献者" {
 		t.Fatal(c, err)
@@ -36,7 +36,7 @@ func TestQQFAQCandidates(t *testing.T) {
 	if _, err := a.CloseQQFAQCandidate(ctx, first, "bogus", ""); err == nil {
 		t.Fatal("invalid state accepted")
 	}
-	if list, _ := a.OpenQQFAQCandidates(ctx, 10); len(list) != 1 || list[0].ID != first {
+	if list, total, _ := a.OpenQQFAQCandidates(ctx, 10); len(list) != 1 || list[0].ID != first || total != 1 {
 		t.Fatal(list)
 	}
 }

@@ -288,7 +288,7 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		user := messages[1].(map[string]any)["content"].(string)
 		// 经 EveryAPI 转发的 OpenAI 模型只在用户消息里找 json，最后一条必须是格式指令。
 		last := messages[len(messages)-1].(map[string]any)
-		if (body["model"] != "claude-haiku-5-5" && body["model"] != "fallback-model") || len(messages) != 3 || last["role"] != "user" || last["content"] != jsonObjectInstruction {
+		if (body["model"] != "claude-haiku-5-5" && body["model"] != "fallback-model" && body["model"] != "strong-model") || len(messages) != 3 || last["role"] != "user" || last["content"] != jsonObjectInstruction {
 			f.t.Error("chat request", body["model"], messages)
 		}
 		content := f.summary
@@ -2711,5 +2711,49 @@ func TestQQResearchTarget(t *testing.T) {
 	trimmed, _ := json.Marshal(qqResearchTrim(map[string]any{"title": "t", "html_url": "x", "node_id": "n", "body": strings.Repeat("长", qqResearchBodyRunes+10), "user": map[string]any{"login": "a", "avatar_url": "b"}, "assets": []any{map[string]any{"name": "setup.exe", "size": 1, "uploader": map[string]any{"login": "bot"}}}}))
 	if want := `{"assets":["setup.exe"],"body":"` + strings.Repeat("长", qqResearchBodyRunes) + `…","title":"t","user":"a"}`; string(trimmed) != want {
 		t.Fatal(string(trimmed))
+	}
+}
+
+// 难题换更强的模型：挑段落的模型标了 strong（或 lookup）时回答用 strong_model，常规问题用 model；没有配置 strong_model 时一律用 model。
+func TestQQBotStrongModelRouting(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.qq.config.Admins = nil
+	s.qq.config.StrongModel = "strong-model"
+	answerModel := func() string {
+		// 最后一次请求就是回答的那次。
+		return fake.models[len(fake.models)-1]
+	}
+	fake.selected = `{"sections":[1],"strong":true}`
+	fake.answer = `{"type":"answered","answer":"全拼按完整拼音输入，双拼每个字固定两键。"}`
+	qqDeliver(t, s, "m-strong", "全拼和双拼哪个效率高，为什么")
+	if answerModel() != "strong-model" || fake.models[len(fake.models)-2] != "claude-haiku-5-5" {
+		t.Fatal(fake.models)
+	}
+	fake.selected = `{"sections":[1]}`
+	qqDeliver(t, s, "m-fast", "五笔怎么切换")
+	if answerModel() != "claude-haiku-5-5" {
+		t.Fatal(fake.models)
+	}
+	s.qq.config.StrongModel = ""
+	fake.selected = `{"sections":[1],"strong":true}`
+	qqDeliver(t, s, "m-no-strong", "全拼和双拼哪个效率高")
+	if answerModel() != "claude-haiku-5-5" {
+		t.Fatal(fake.models)
+	}
+	// 配置校验：默认 claude-sonnet-5-5，none 时用 model，不能有空白。
+	t.Setenv("TEST_QQ_SECRET", qqTestSecret)
+	c := qqValidConfig()
+	if err := c.QQBot.validate(&c); err != nil || c.QQBot.StrongModel != defaultQQStrongModel {
+		t.Fatal(err, c.QQBot.StrongModel)
+	}
+	c = qqValidConfig()
+	c.QQBot.StrongModel = "none"
+	if err := c.QQBot.validate(&c); err != nil || c.QQBot.StrongModel != c.QQBot.Model {
+		t.Fatal(err, c.QQBot.StrongModel)
+	}
+	c = qqValidConfig()
+	c.QQBot.StrongModel = "bad model"
+	if c.QQBot.validate(&c) == nil {
+		t.Fatal("strong model with whitespace accepted")
 	}
 }

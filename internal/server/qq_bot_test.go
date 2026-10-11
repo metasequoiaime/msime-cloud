@@ -2848,3 +2848,136 @@ func TestQQBotScreenshots(t *testing.T) {
 		t.Fatal(last())
 	}
 }
+
+// memoryDrafts 是测试用的草稿存储。
+type memoryDrafts struct {
+	mu     sync.Mutex
+	drafts []account.QQDraft
+}
+
+func (m *memoryDrafts) CreateQQDraft(_ context.Context, subject, original, report string) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.drafts = append(m.drafts, account.QQDraft{ID: int64(len(m.drafts) + 1), Subject: account.QQDraftSubject(subject), Original: original, Report: report, CreatedAt: time.Date(2026, 10, 12, 1, 0, 0, 0, time.UTC)})
+	return int64(len(m.drafts)), nil
+}
+func (m *memoryDrafts) QQDraft(_ context.Context, id int64) (account.QQDraft, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if id < 1 || int(id) > len(m.drafts) {
+		return account.QQDraft{}, account.ErrQQDraftNotFound
+	}
+	return m.drafts[id-1], nil
+}
+func (m *memoryDrafts) UpdateQQDraft(_ context.Context, id int64, original, report string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.drafts[id-1].Filed {
+		return false, nil
+	}
+	m.drafts[id-1].Original, m.drafts[id-1].Report = original, report
+	return true, nil
+}
+func (m *memoryDrafts) ClaimQQDraft(_ context.Context, id int64) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.drafts[id-1].Filed {
+		return false, nil
+	}
+	m.drafts[id-1].Filed = true
+	return true, nil
+}
+func (m *memoryDrafts) ReleaseQQDraft(_ context.Context, id int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.drafts[id-1].IssueRef == "" {
+		m.drafts[id-1].Filed = false
+	}
+	return nil
+}
+func (m *memoryDrafts) SetQQDraftIssue(_ context.Context, id int64, ref string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.drafts[id-1].IssueRef = ref
+	return nil
+}
+func (m *memoryDrafts) OpenQQDrafts(_ context.Context, limit int) ([]account.QQDraft, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []account.QQDraft
+	for i := len(m.drafts) - 1; i >= 0 && len(out) < limit; i-- {
+		if !m.drafts[i].Filed {
+			out = append(out, m.drafts[i])
+		}
+	}
+	return out, nil
+}
+
+// qqMessageFrom 是 member 发的一条 @ 消息。
+func qqMessageFrom(id, member, content string) string {
+	event, _ := json.Marshal(map[string]any{"op": 0, "t": "GROUP_AT_MESSAGE_CREATE", "id": "event-" + id, "d": map[string]any{"id": id, "content": content, "group_openid": "GROUP1", "author": map[string]string{"member_openid": member}}})
+	return string(event)
+}
+
+// 群友报 bug：机器人先给排查办法，同时整理成草稿并追问缺的信息；群友「补充 D编号」补上；只有管理员能「提交 D编号」，提交前认领，不会提两遍。
+func TestQQBotDrafts(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	drafts := &memoryDrafts{}
+	s.qqDrafts = drafts
+	s.qq.config.Admins = []string{"ADMIN1"}
+	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
+	deliver := func(id, member, content string) {
+		t.Helper()
+		qqPost(t, s, qqMessageFrom(id, member, content))
+		s.qqWorkers.Wait()
+	}
+	fake.answer = `{"type":"answered","answer":"先在「外观」里打开「候选窗口跟随光标」试试。","escalate":true,"topic":"候选框停在左上角"}`
+	fake.summary = `{"kind":"bug","title":"候选框停在屏幕左上角","platform":"","problem":"打字时候选框一直在左上角","steps":"","keywords":"候选框 左上角"}`
+	deliver("m-d1", "MEMBER1", "候选框一直跑到左上角")
+	if want := "先在「外观」里打开「候选窗口跟随光标」试试。\n\n我把这个问题整理成了草稿 D1，管理员确认后会提交到 GitHub。还差一点信息：" + qqDefaultQuestion + " 补充时发「补充 D1 内容」。"; last() != want {
+		t.Fatalf("%q", last())
+	}
+	// 别人不能补充，本人可以。
+	deliver("m-d1-other", "MEMBER2", "补充 D1 我也是")
+	if last() != "只有发起这份草稿的人和管理员能补充。" {
+		t.Fatal(last())
+	}
+	fake.summary = `{"kind":"bug","title":"候选框停在屏幕左上角","platform":"windows","ime_version":"0.9.5","problem":"打字时候选框一直在左上角","steps":"在记事本里打字","keywords":"候选框 左上角"}`
+	deliver("m-d1-more", "MEMBER1", "补充 D1 Windows 11，版本 0.9.5，在记事本里打字")
+	if last() != "已补充到草稿 D1，信息齐了，等管理员确认提交。" || !strings.Contains(drafts.drafts[0].Original, "\n补充：Windows 11，版本 0.9.5") {
+		t.Fatal(last(), drafts.drafts[0].Original)
+	}
+	// 普通群友不能提交、不能看列表；管理员能。
+	deliver("m-d1-file-member", "MEMBER1", "提交 D1")
+	if !strings.HasPrefix(last(), "只有管理员能提交草稿。") || len(fake.created) != 0 {
+		t.Fatal(last())
+	}
+	deliver("m-list", "ADMIN1", "草稿")
+	if !strings.Contains(last(), "- D1（bug，10-12 09:00）候选框停在屏幕左上角") {
+		t.Fatal(last())
+	}
+	deliver("m-d1-file", "ADMIN1", "提交D1")
+	if len(fake.created) != 1 || fake.created[0]["_repo"] != "o/win" || !strings.HasPrefix(last(), "草稿 D1 已提交为 GitHub o/win 的 #123。") || drafts.drafts[0].IssueRef != "win #123" {
+		t.Fatal(fake.created, last(), drafts.drafts[0])
+	}
+	deliver("m-d1-again", "ADMIN1", "提交 D1")
+	if last() != "草稿 D1 已经提交过了：win #123。" || len(fake.created) != 1 {
+		t.Fatal(last())
+	}
+	deliver("m-d9", "ADMIN1", "提交 D9")
+	if last() != "没有找到草稿 D9，可能已经过期了。" {
+		t.Fatal(last())
+	}
+	// 只问用法时不起草稿；不是具体的 bug 时照旧记进汇总。
+	fake.answer = `{"type":"answered","answer":"在设置里选五笔。"}`
+	deliver("m-howto", "MEMBER1", "五笔怎么切换")
+	if last() != "在设置里选五笔。" || len(drafts.drafts) != 1 {
+		t.Fatal(last(), len(drafts.drafts))
+	}
+	fake.answer = `{"type":"answered","answer":"先重启一下试试。","escalate":true,"topic":"输入法不好用"}`
+	fake.summary = `{"kind":"other"}`
+	deliver("m-vague", "MEMBER1", "这输入法不好用")
+	if last() != "先重启一下试试。"+qqEscalationUnrecorded || len(drafts.drafts) != 1 {
+		t.Fatal(last(), len(drafts.drafts))
+	}
+}

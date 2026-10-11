@@ -61,6 +61,9 @@ var diagnosticsSchema string
 //go:embed qq_conversations_schema.sql
 var qqConversationsSchema string
 
+//go:embed qq_drafts_schema.sql
+var qqDraftsSchema string
+
 //go:embed qq_knowledge_schema.sql
 var qqKnowledgeSchema string
 var ErrInvalid = errors.New("invalid_credentials")
@@ -190,7 +193,7 @@ func (s *Store) MigrateAs(ctx context.Context, role string) error {
 			return e
 		}
 	}
-	if _, e = tx.Exec(ctx, schema+"\n"+userDataSchema+"\n"+communitySchema+"\n"+adminSchema+"\n"+translationSchema+"\n"+candidateSkinSchema+"\n"+communityCandidateSkinSchema+"\n"+communityPluginSchema+"\n"+adminOpsSchema+"\n"+skinJobSchema+"\n"+feedbackSchema+"\n"+voiceContributionsSchema+"\n"+diagnosticsSchema+"\n"+qqConversationsSchema); e != nil {
+	if _, e = tx.Exec(ctx, schema+"\n"+userDataSchema+"\n"+communitySchema+"\n"+adminSchema+"\n"+translationSchema+"\n"+candidateSkinSchema+"\n"+communityCandidateSkinSchema+"\n"+communityPluginSchema+"\n"+adminOpsSchema+"\n"+skinJobSchema+"\n"+feedbackSchema+"\n"+voiceContributionsSchema+"\n"+diagnosticsSchema+"\n"+qqConversationsSchema+"\n"+qqDraftsSchema); e != nil {
 		return e
 	}
 	// QQ 答疑的向量索引要用 pgvector：它的 halfvec 类型在当前 search_path 里解析得到才建表（扩展要超级用户安装，迁移角色装不了），否则答疑退回只用目录挑段落，服务照常启动。判断类型而不是判断扩展装没装：扩展装在 public，而 search_path 不含 public 的连接（例如测试用的独立 schema）解析不到它的类型，建表会让整个迁移失败。
@@ -270,6 +273,10 @@ SELECT id,snapshot_id,tool,arguments,result_count,bytes,at FROM diagnostic_acces
 	}
 	// QQ 群答疑接上追问用的最近问答；缺表时启动走迁移。
 	if _, e := s.pool.Exec(ctx, `SELECT id,subject,question,answer,created_at FROM qq_conversations WHERE false`); e != nil {
+		return e
+	}
+	// QQ 群友反馈的 issue 草稿；缺表时启动走迁移。
+	if _, e := s.pool.Exec(ctx, `SELECT id,subject,original,report,created_at,updated_at,filed_at,issue_ref FROM qq_drafts WHERE false`); e != nil {
 		return e
 	}
 	// QQ 答疑的向量索引：pgvector 的 halfvec 解析得到、表却还没建时（扩展是在库已经迁移过之后才装的）启动走迁移；解析不到时这个功能本来就关闭，不算缺表。
@@ -662,6 +669,7 @@ func (s *Store) Prune(ctx context.Context) {
 		"DELETE FROM feedback WHERE created_at<now()-interval '" + strconv.Itoa(feedbackRetentionDays) + " days'",
 		// QQ 群答疑的问答只用来接上 30 分钟内的追问，过期即删。
 		"DELETE FROM qq_conversations WHERE created_at<now()-interval '30 minutes'",
+		"DELETE FROM qq_drafts WHERE created_at<now()-interval '30 days'",
 		// 语音贡献只保留 voiceContributionRetentionDays 天。
 		"DELETE FROM voice_contributions WHERE created_at<now()-interval '" + strconv.Itoa(voiceContributionRetentionDays) + " days'",
 		// 云剪贴板按用户设置的保留天数清理，置顶的条目不受保留期影响；0 表示一直保留。

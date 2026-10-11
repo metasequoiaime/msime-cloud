@@ -24,7 +24,8 @@ const (
 	qqAdminHelpText = `
 管理员：
 - 提issue 内容：提 bug 或需求，可以加「优先级 高」
-- 记录答案 问：… 答：…：写进 FAQ`
+- 记录答案 问：… 答：…：写进 FAQ
+- 草稿：看群友反馈整理好的 issue 草稿，「提交 D编号」就提上去`
 )
 
 var (
@@ -66,6 +67,9 @@ func qqCommandArg(text string, words ...string) (string, bool) {
 
 // qqCommand 处理群里的命令，返回处理结果的名字（写进每条消息的处理日志，见 handleQQFeedback），不是命令时返回空字符串。
 func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, admin bool, reply func(string)) string {
+	if command := s.qqDraftCommands(ctx, m, text, admin, reply); command != "" {
+		return command
+	}
 	compact := strings.ToLower(strings.Join(strings.Fields(text), ""))
 	switch compact {
 	case "帮助", "help", "菜单", "命令":

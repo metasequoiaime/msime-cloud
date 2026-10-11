@@ -176,6 +176,8 @@ func (s *Server) qqRepoFile(ctx context.Context, token, repo, path, ref string) 
 
 // recordQQAnswer 处理「记录答案」：整理成 FAQ 条目，在知识库仓库新分支上一次提交简体、繁体和核对哈希，开 PR。
 func (s *Server) recordQQAnswer(ctx context.Context, text string, reply func(string)) int64 {
+	// 读文件、整理、翻译再开 PR 要半分钟左右，先回一句，管理员不会以为没收到又发一遍（重发就是重复的 PR）。
+	reply("收到，正在整理成 FAQ 并开 PR，大约半分钟～")
 	client, repo, dir := s.adminGitHub, s.qq.config.KnowledgeRepo, s.qq.config.KnowledgeDir
 	fail := func(phase string, err error) {
 		slog.Warn("qq bot: record answer failed", "phase", phase, "reason", err.Error())

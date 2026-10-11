@@ -70,7 +70,7 @@ func (s *Server) qqVoteFeature(ctx context.Context, subject string, report qqRep
 	return fmt.Sprintf("这个需求已经有人提过：%s，我帮你在那里记了一票，现在 QQ 群里一共 %d 人需要。%s", ref, count, s.qqProgressHint(repo, number))
 }
 
-// qqAddVote 把 issue 下的计数评论加一（没有就新建），返回新的人数。
+// qqAddVote 把 issue 下机器人自己发的计数评论加一（没有就新建），返回新的人数。外人留的带计数标记的评论直接跳过（见 qqWrittenByApp）；分不清带标记的评论是谁发的（bot 账号没取到）时返回错误，不新建，免得同一个 issue 下出现两条计数。
 func (s *Server) qqAddVote(ctx context.Context, token, repo string, number int64) (int, error) {
 	if s.qqLocks != nil {
 		release, err := s.qqLocks.WaitLock(ctx, "qq-vote:"+repo+"#"+strconv.FormatInt(number, 10), 15*time.Second)
@@ -85,13 +85,20 @@ func (s *Server) qqAddVote(ctx context.Context, token, repo string, number int64
 	var comments []struct {
 		ID   int64  `json:"id"`
 		Body string `json:"body"`
+		qqGitHubAuthor
 	}
 	if err != nil || !r.OK() || r.Decode(&comments) != nil {
 		return 0, githubFailure("vote comments", r, err)
 	}
+	unknown := false
 	for _, c := range comments {
 		m := qqVotePattern.FindStringSubmatch(c.Body)
 		if m == nil {
+			continue
+		}
+		owned, known := s.qqWrittenByApp(ctx, c.qqGitHubAuthor)
+		if !owned {
+			unknown = unknown || !known
 			continue
 		}
 		n, _ := strconv.Atoi(m[1])
@@ -100,6 +107,9 @@ func (s *Server) qqAddVote(ctx context.Context, token, repo string, number int64
 			return 0, githubFailure("vote update", r, err)
 		}
 		return n + 1, nil
+	}
+	if unknown {
+		return 0, errors.New("vote comments: app login unavailable")
 	}
 	r, err = client.Do(ctx, token, "POST", issuePath+"/comments", map[string]string{"body": qqVoteBody(1)})
 	if err != nil || !r.OK() {

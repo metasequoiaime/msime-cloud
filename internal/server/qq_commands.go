@@ -242,15 +242,15 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 			reply("请在「查」后面写要搜的关键词，例如 @我 发「查 候选框 左上角」。")
 			return "cmd_search"
 		}
-		found, failed := s.qqSearchIssues(ctx, terms)
-		found = strings.TrimSpace(found)
+		// 群友只看短列表，不用给 issue 补上下文。
+		hits, failed := s.qqSearchIssueHits(ctx, terms, false)
 		switch {
-		case found == "" && failed:
+		case len(hits) == 0 && failed:
 			reply("GitHub 这会儿查不了，过一分钟再试试。")
-		case found == "":
+		case len(hits) == 0:
 			reply("GitHub 上没人报过这个。想问怎么用的话直接 @我 问就行，不用加「查」。")
 		default:
-			reply("GitHub 上搜到的相关 issue：\n" + found)
+			reply(qqIssueListForMembers(hits))
 		}
 		return "cmd_search"
 	}
@@ -267,7 +267,7 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 			reply("请在「提文档」后面写文档缺了什么或哪里不对，例如「提文档 FAQ 没写鸿蒙版的发布状态」。")
 			return "cmd_docs"
 		}
-		s.fileQQDocs(ctx, content, admin, reply)
+		s.fileQQDocs(ctx, m.GroupOpenID+"/"+m.Author.MemberOpenID, content, admin, reply)
 		return "cmd_docs"
 	}
 	if content, ok := qqCommandArg(text, "提issue", "提 issue", "提交issue"); ok {
@@ -395,7 +395,7 @@ func (s *Server) qqMentionedIssues(ctx context.Context, question string) string 
 // qqIssueBodyRunes 是交给模型的 issue 正文长度上限。
 const qqIssueBodyRunes = 3000
 
-// qqIssueBodyText 读一个 issue 或 PR 的正文（去掉图片和链接，截到 qqIssueBodyRunes 字）；name 为空时在每个答疑仓库里找这个编号，用第一个找到的。
+// qqIssueBodyText 读一个 issue 或 PR 的正文（去掉图片后转成纯文本，见 qqPlainText，按句子截到 qqIssueBodyRunes 字以内）；name 为空时在每个答疑仓库里找这个编号，用第一个找到的。只交 OWNER、MEMBER、COLLABORATOR 写的正文，其他人写的返回空字符串，模型只看到 qqIssueStatus 里的标题，和 qqMaintainerComment 对评论的过滤一致：任何 GitHub 用户都能开 issue，曾经外人写在正文里的「新版请加群下载」会原样交给回答的模型。
 func (s *Server) qqIssueBodyText(ctx context.Context, name, number string) string {
 	client := s.adminGitHub
 	for _, repo := range s.qqGitHubRepos() {
@@ -409,12 +409,18 @@ func (s *Server) qqIssueBodyText(ctx context.Context, name, number string) strin
 		}
 		r, err := client.Get(ctx, token, "/repos/"+repo+"/issues/"+number)
 		var issue struct {
-			Body string `json:"body"`
+			Body              string `json:"body"`
+			AuthorAssociation string `json:"author_association"`
 		}
 		if err != nil || !r.OK() || r.Decode(&issue) != nil {
 			continue
 		}
-		return qqTruncate(strings.TrimSpace(qqStripLinks(qqImagePattern.ReplaceAllString(issue.Body, " "))), qqIssueBodyRunes)
+		switch issue.AuthorAssociation {
+		case "OWNER", "MEMBER", "COLLABORATOR":
+		default:
+			return ""
+		}
+		return qqTruncateSentence(qqPlainText(qqImagePattern.ReplaceAllString(issue.Body, " ")), qqIssueBodyRunes)
 	}
 	return ""
 }

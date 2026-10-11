@@ -7,7 +7,10 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
+
+	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
 
 // 「提文档」：在群里反馈文档缺了什么、哪里写错了。管理员的反馈由模型整理成标准格式，查重后在知识库仓库（qq_bot.knowledge_repo，即 msime-docs）新开 issue，只打仓库已有的标签；普通群友的反馈不单独开 issue，转述后追加到答不上问题的汇总 issue（qq_gaps.go），免得刷出一堆 issue。
@@ -70,8 +73,11 @@ func qqDocsIssueBody(request qqDocsRequest) string {
 		"\n\n### 涉及的文档\n\n" + qqPublic(page) + qqIssueFooter
 }
 
-// fileQQDocs 处理「提文档」。管理员的反馈在知识库仓库开 issue（重复时在原 issue 下补充）；普通群友的反馈追加到答不上问题的汇总 issue。
-func (s *Server) fileQQDocs(ctx context.Context, text string, admin bool, reply func(string)) {
+// qqDocsMemberDaily 是一位群友每天能用「提文档」记进汇总 issue 的条数：群友的反馈不经管理员就公开，汇总 issue 每天只有 qqGapsDaily 条额度，没有按人的上限时一个人就能占满，之后真正答不上的问题都记不下。
+const qqDocsMemberDaily = 3
+
+// fileQQDocs 处理「提文档」，subject 是「群/成员」。管理员的反馈在知识库仓库开 issue（重复时在原 issue 下补充）；普通群友的反馈追加到答不上问题的汇总 issue，每人每天 qqDocsMemberDaily 条，没记下时退回名额。
+func (s *Server) fileQQDocs(ctx context.Context, subject, text string, admin bool, reply func(string)) {
 	// 整理、查重、建 issue 要十几秒，先回一句。
 	reply("收到，正在整理文档反馈～")
 	request, err := s.qqSummariseDocs(ctx, text)
@@ -85,11 +91,26 @@ func (s *Server) fileQQDocs(ctx context.Context, text string, admin bool, reply 
 		return
 	}
 	if !admin {
+		// 名额在整理之后才扣：没看出是文档反馈的消息不占名额。
+		switch err := s.limits.RateLimit(ctx, "qq-bot-docs-member", subject, qqDocsMemberDaily, 24*time.Hour); {
+		case errors.Is(err, account.ErrLimited):
+			reply("今天已经记了几条了，明天再提，或者请管理员用「提文档」提交。")
+			return
+		case err != nil:
+			slog.Error("qq bot: docs member limit unavailable", "reason", err.Error())
+			reply(qqReplyUnavailable)
+			return
+		}
 		if s.recordQQGap(ctx, "群友反馈文档：", request.Title+"（"+request.Problem+"）") {
 			reply("已经记下，管理员会据此更新文档。")
-		} else {
-			reply("暂时记不下来，请稍后再试，或者请管理员用「提文档」提交。")
+			return
 		}
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		if err := s.limits.ReleaseRateLimit(rctx, "qq-bot-docs-member", subject); err != nil {
+			slog.Warn("qq bot: docs member slot not released", "reason", err.Error())
+		}
+		cancel()
+		reply("暂时记不下来，请稍后再试，或者请管理员用「提文档」提交。")
 		return
 	}
 	client, repo := s.adminGitHub, s.qq.config.KnowledgeRepo

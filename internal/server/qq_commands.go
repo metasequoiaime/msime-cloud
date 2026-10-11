@@ -358,7 +358,12 @@ func (s *Server) qqTopicLabels(ctx context.Context, repoLabels []string, exclude
 
 // qqIssueNumberText 是回复里提到的 issue，例如「GitHub metasequoiaime/msime 的 #12」。
 func qqIssueNumberText(repo string, number int64) string {
-	return "GitHub " + repo + " 的 #" + strconv.FormatInt(number, 10)
+	return "GitHub " + repo + " 的 #" + strconv.FormatInt(number, 10) + "（" + qqGitHubLink(repo, number) + "）"
+}
+
+// qqGitHubLink 是 issue 或 PR 的网页地址（issues 地址对 PR 也会跳转过去）。QQ 拒收带这个链接的消息时，回复会去掉链接重发，见 handleQQFeedback。
+func qqGitHubLink(repo string, number int64) string {
+	return "https://github.com/" + repo + "/issues/" + strconv.FormatInt(number, 10)
 }
 
 // qqProgressHint 接在提交 issue 的回复后面，告诉群友怎么查进度；只有答疑仓库里的 issue 能用「#编号」查。

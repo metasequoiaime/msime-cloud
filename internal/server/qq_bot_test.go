@@ -178,6 +178,8 @@ type qqFake struct {
 	replies     []map[string]any
 	replyAuth   []string
 	replyStatus int
+	// rejectLinks 为 true 时像开放平台拒收未报备的域名那样，拒收带链接的回复。
+	rejectLinks bool
 	// 群成员身份：roles 为 nil 时照生产现状返回 11253（接口未开通）。
 	roles     map[string]string
 	roleCalls int
@@ -217,7 +219,11 @@ type qqFake struct {
 	vision      string
 	visionCalls []string
 	// 现查 GitHub：researchPath 是模型第一轮要调用的路径（为空时直接回复「不需要查」），researchTools 记下每轮是否给了工具；answerAfterResearch 是资料里有现查结果时回答模型的输出；extraGitHub 是按路径（含查询参数）给的额外 GitHub 响应。
-	researchPath        string
+	researchPath string
+	// researchQuery 不为空时模型第一轮改为调用 web_search；webResults 是网关搜索接口返回的文字，webQueries 记下收到的搜索。
+	researchQuery       string
+	webResults          string
+	webQueries          []string
 	researchTools       []bool
 	answerAfterResearch string
 	extraGitHub         map[string]string
@@ -237,6 +243,12 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var body map[string]any
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	switch {
+	case r.URL.Path == "/messages":
+		if r.Header.Get("anthropic-version") == "" {
+			f.t.Error("web search without anthropic-version")
+		}
+		f.webQueries = append(f.webQueries, fmt.Sprint(body["messages"].([]any)[0].(map[string]any)["content"]))
+		_ = json.NewEncoder(w).Encode(map[string]any{"content": []any{map[string]any{"type": "server_tool_use"}, map[string]any{"type": "web_search_tool_result"}, map[string]any{"type": "text", "text": f.webResults}}})
 	case r.URL.Path == "/embeddings":
 		var inputs []string
 		for _, v := range body["input"].([]any) {
@@ -282,6 +294,9 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case f.researchPath == "":
 				reply["content"] = "不需要查"
+			case tool == "" && f.researchQuery != "":
+				reply = map[string]any{"role": "assistant", "content": "", "tool_calls": []any{map[string]any{"id": "call-1", "type": "function", "function": map[string]any{"name": "web_search", "arguments": `{"query":"` + f.researchQuery + `"}`}}}}
+				finish = "tool_calls"
 			case tool == "":
 				reply = map[string]any{"role": "assistant", "content": "", "tool_calls": []any{map[string]any{"id": "call-1", "type": "function", "function": map[string]any{"name": "github_get", "arguments": `{"path":"` + f.researchPath + `"}`}}}}
 				finish = "tool_calls"
@@ -335,7 +350,7 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case strings.HasPrefix(system, qqFAQPrompt):
 			content = f.faq
 			f.chatCalls = append(f.chatCalls, "faq")
-		case strings.HasPrefix(system, qqAnswerPrompt) && f.answerAfterResearch != "" && strings.Contains(system, "### 现查的 GitHub 结果"):
+		case strings.HasPrefix(system, qqAnswerPrompt) && f.answerAfterResearch != "" && strings.Contains(system, "### 现查的结果"):
 			content, f.answerSystem = f.answerAfterResearch, system
 			f.chatCalls = append(f.chatCalls, "answer")
 		case strings.HasPrefix(system, qqAnswerPrompt):
@@ -377,6 +392,11 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(r.URL.Path, "/v2/groups/"):
 		if r.URL.Path != "/v2/groups/GROUP1/messages" {
 			f.t.Error("reply path", r.URL.Path)
+		}
+		if f.rejectLinks && strings.Contains(fmt.Sprint(body["content"]), "://") {
+			w.WriteHeader(400)
+			_, _ = w.Write([]byte(`{"code":304003,"message":"url not allowed"}`))
+			return
 		}
 		if f.replyStatus != 0 {
 			w.WriteHeader(f.replyStatus)
@@ -655,7 +675,7 @@ func TestQQBotOpensIssue(t *testing.T) {
 		t.Fatal("ack", d)
 	}
 	replies := fake.replyTexts()
-	if len(replies) != 2 || replies[0] != qqReplyWorking || !strings.Contains(replies[1], "o/win 的 #123") || !strings.Contains(replies[1], qqReplyPublic) || strings.Contains(replies[1], "://") {
+	if len(replies) != 2 || replies[0] != qqReplyWorking || !strings.Contains(replies[1], "o/win 的 #123") || !strings.Contains(replies[1], qqReplyPublic) || strings.Contains(replies[1], "evil.example") || !strings.Contains(replies[1], "（https://github.com/o/win/issues/123）") {
 		t.Fatal(replies)
 	}
 	for i, r := range fake.replies {
@@ -2685,7 +2705,7 @@ func TestQQBotResearchesGitHub(t *testing.T) {
 		t.Fatal(last, fake.chatCalls)
 	}
 	// 工具结果去掉了链接和头像字段；第一轮给工具，第二轮作答。
-	if !strings.Contains(fake.answerSystem, "### 现查的 GitHub 结果\n"+`查到：[{"contributions":5000,"login":"houko","type":"User"}`) || strings.Contains(fake.answerSystem, "avatar_url") || fmt.Sprint(fake.researchTools) != "[true true]" {
+	if !strings.Contains(fake.answerSystem, qqResearchHeading+`查到：[{"contributions":5000,"login":"houko","type":"User"}`) || strings.Contains(fake.answerSystem, "avatar_url") || fmt.Sprint(fake.researchTools) != "[true true]" {
 		t.Fatal(fake.answerSystem, fake.researchTools)
 	}
 	// 挑段落时标了 lookup 的问题回答前先查，只查一次；这类问题（「我是不是开发者」）常被当成闲聊，走不到答不上那一步。
@@ -2964,7 +2984,7 @@ func TestQQBotDrafts(t *testing.T) {
 		t.Fatal(last())
 	}
 	deliver("m-d1-file", "ADMIN1", "提交D1")
-	if len(fake.created) != 1 || fake.created[0]["_repo"] != "o/win" || !strings.HasPrefix(last(), "草稿 D1 已提交为 GitHub o/win 的 #123。") || drafts.drafts[0].IssueRef != "win #123" {
+	if len(fake.created) != 1 || fake.created[0]["_repo"] != "o/win" || !strings.HasPrefix(last(), "草稿 D1 已提交为 GitHub o/win 的 #123（https://github.com/o/win/issues/123）。") || drafts.drafts[0].IssueRef != "win #123" {
 		t.Fatal(fake.created, last(), drafts.drafts[0])
 	}
 	deliver("m-d1-again", "ADMIN1", "提交 D1")
@@ -3075,7 +3095,7 @@ func TestQQBotFeatureVotes(t *testing.T) {
 	if c := fake.comments["/repos/o/r/issues/7/comments"]; c == nil || c["body"] != qqVoteBody(1) {
 		t.Fatal(fake.comments)
 	}
-	if want := "现在还不支持。\n\n这个需求已经有人提过：GitHub o/r 的 #7，我帮你在那里记了一票，现在 QQ 群里一共 1 人需要。之后 @我 发「#7」可以查进度。"; last() != want || len(drafts.drafts) != 0 {
+	if want := "现在还不支持。\n\n这个需求已经有人提过：GitHub o/r 的 #7（https://github.com/o/r/issues/7），我帮你在那里记了一票，现在 QQ 群里一共 1 人需要。之后 @我 发「#7」可以查进度。"; last() != want || len(drafts.drafts) != 0 {
 		t.Fatalf("%q %d", last(), len(drafts.drafts))
 	}
 	// 第二个人：改同一条计数评论。
@@ -3201,5 +3221,38 @@ func TestQQBotFAQCandidates(t *testing.T) {
 	deliver("m-c-again", "ADMIN1", "写进FAQ F1")
 	if last() != "没有找到 F1，可能已经处理过或过期了。" {
 		t.Fatal(last())
+	}
+}
+
+// 开放平台拒收带链接的回复时，去掉链接（连同括号）重发一次，msg_seq 往后排。
+func TestQQBotResendsWithoutLinks(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	fake.rejectLinks = true
+	qqDeliver(t, s, "m-link", "提issue Windows 11 上水杉 1.2.0 在记事本里打字，候选框一直停在左上角")
+	replies := fake.replyTexts()
+	if len(replies) != 2 || replies[1] != "已记录为 GitHub o/win 的 #123，开发者会在那里跟进。之后 @我 发「win #123」可以查进度。"+qqReplyPublic || fake.replies[1]["msg_seq"] != float64(3) {
+		t.Fatal(replies, fake.replies)
+	}
+}
+
+// 问水杉以外的软件时，模型用 web_search 联网搜索，搜到的内容作为现查结果交给回答的模型。
+func TestQQBotWebSearch(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.qq.config.Admins = nil
+	fake.selected = `{"sections":[],"lookup":true}`
+	fake.answer = `{"type":"answered","answer":"不太清楚。"}`
+	fake.researchPath, fake.researchQuery = "x", "Photon Studio"
+	fake.webResults = "Photon Studio 是免费的跨平台图像编辑器，被称作轻量化 Photoshop 平替。"
+	fake.answerAfterResearch = `{"type":"answered","answer":"据网上资料，Photon Studio 是免费的跨平台图像编辑器。"}`
+	qqDeliver(t, s, "m-web", "评价一下 Photon Studio 和 Photoshop")
+	if strings.Join(fake.webQueries, ",") != "Photon Studio" || !strings.Contains(fake.answerSystem, qqResearchHeading+"查到：Photon Studio 是免费的跨平台图像编辑器") {
+		t.Fatal(fake.webQueries, fake.answerSystem)
+	}
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "据网上资料，Photon Studio 是免费的跨平台图像编辑器。" {
+		t.Fatal(last)
+	}
+	// 空的搜索词不发请求。
+	if got := s.qqWebSearch(context.Background(), " "); got != "搜索关键词为空或太长。" || len(fake.webQueries) != 1 {
+		t.Fatal(got)
 	}
 }

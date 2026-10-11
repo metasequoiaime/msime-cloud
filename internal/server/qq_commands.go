@@ -12,7 +12,7 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
 )
 
-// QQ 群里的命令和管理员提 issue 时的标签。命令不经过模型，直接查 GitHub 或给固定文字，回复快、结果稳定：帮助、版本、查 关键词、#编号、提文档（见 qq_docs.go）、我的ID（在 handleQQFeedback 里），以及只有管理员能用的「提issue」。管理员不用命令、但在消息里明确要求记录（「记一下」「反馈给开发」等）的具体反馈也会提交，见 fileAdminFeedback。管理员提 issue 时，模型从目标仓库已有的分类标签里挑 0 到 2 个；消息里写的「优先级 高」「effort S」在仓库有对应标签时打上标签，否则写进正文的「维护者标注」，不新建标签。
+// QQ 群里的命令和管理员提 issue 时的标签。命令不经过模型，直接查 GitHub 或给固定文字，回复快、结果稳定：帮助、版本、查 关键词、#编号、提文档（见 qq_docs.go）、我的ID（在 handleQQFeedback 里），以及只有管理员能用的「提issue」和「记录答案」（见 qq_faq.go）。管理员不用命令、但在消息里明确要求记录（「记一下」「反馈给开发」等）的具体反馈也会提交，见 fileAdminFeedback。管理员提 issue 时，模型从目标仓库已有的分类标签里挑 0 到 2 个；消息里写的「优先级 高」「effort S」在仓库有对应标签时打上标签，否则写进正文的「维护者标注」，不新建标签。
 
 // qqHelpText 是「帮助」的回复；管理员另外看到 qqAdminHelpText。
 const (
@@ -27,7 +27,8 @@ const (
 管理员还可以：
 - 提issue 内容：把 bug 或需求整理成 GitHub issue（会先查重，图片和视频一并带上），没有要求记录的反馈只回复我的理解，不会提交；文档里已经有的功能也不会提交
 - 在「提issue」里写「优先级 高」「effort S」：仓库有对应标签就打上，否则写进 issue 正文
-- 提文档 内容：直接在 msime-docs 开文档 issue（会先查重）`
+- 提文档 内容：直接在 msime-docs 开文档 issue（会先查重）
+- 记录答案 问：… 答：…：把你在群里回答的问题整理成 FAQ 的一条，给 msime-docs 开 PR，合并后我就能自己回答`
 )
 
 var (
@@ -112,6 +113,18 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 			return true
 		}
 		s.fileAdminFeedback(ctx, m, content, true, reply)
+		return true
+	}
+	if content, ok := qqCommandArg(text, "记录答案", "记答案"); ok {
+		if !admin {
+			reply("只有管理员能用「记录答案」。")
+			return true
+		}
+		if content == "" {
+			reply("请在「记录答案」后面写问题和答案，例如「记录答案 问：鸿蒙版在哪下载？ 答：在华为应用市场搜索水杉输入法」。")
+			return true
+		}
+		s.recordQQAnswer(ctx, content, reply)
 		return true
 	}
 	return false

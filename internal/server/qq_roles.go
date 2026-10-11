@@ -79,7 +79,7 @@ func (b *qqBot) memberRole(ctx context.Context, group, member string) (string, e
 	return result.MemberRole, nil
 }
 
-// qqIsAdmin 判断发消息的人是不是管理员：在 qq_bot.admins 里，或者在 qq_bot.groups 列出的群里，事件带的 eventRole（为空时查群身份接口）说他是群主或管理员。接口不可用或出错时按普通成员处理。
+// qqIsAdmin 判断发消息的人是不是管理员：在 qq_bot.admins 里，或者在 qq_bot.groups 列出的群里，事件带的 eventRole（为空时查群身份接口）说他是群主或管理员。接口不可用时按普通成员处理；临时出错时沿用过期的缓存，没有缓存才按普通成员处理。
 func (s *Server) qqIsAdmin(ctx context.Context, group, member, eventRole string) bool {
 	r := &s.qq.roles
 	now := s.qq.now()
@@ -132,7 +132,11 @@ func (s *Server) qqIsAdmin(ctx context.Context, group, member, eventRole string)
 		r.unavailableUntil = now.Add(qqRoleUnavailableTTL)
 		return false
 	case err != nil:
+		// 接口临时出错时沿用过期的缓存：管理员刚被认出来，十分钟后接口抖一下就被当成普通成员，「提issue」突然不能用了。从没查到过时才按普通成员处理。
 		slog.Warn("qq bot: member role lookup failed", "reason", err.Error())
+		if entry, ok := r.entries[key]; ok {
+			return entry.admin
+		}
 		return false
 	}
 	admin := role == "owner" || role == "admin"

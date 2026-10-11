@@ -149,6 +149,11 @@ func New(c Config) (*Server, error) {
 	}
 	if c.QQBot.enabled() && s.limits != nil {
 		s.qq = newQQBot(c.QQBot)
+		s.adminJobs.Add(1)
+		go func() {
+			defer s.adminJobs.Done()
+			s.warmQQKnowledge(s.lifetime)
+		}()
 		if s.accounts != nil {
 			s.media = s.accounts
 			s.qqHistory = s.accounts

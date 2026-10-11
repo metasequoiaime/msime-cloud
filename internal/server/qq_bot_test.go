@@ -210,6 +210,8 @@ type qqFake struct {
 	history      map[string][]string
 	historySince []string
 	embedCalls   int
+	// tokenPerms 记下每次申请 GitHub App 令牌时要的权限。
+	tokenPerms []string
 	// 「记录答案」：faq 是整理 FAQ 的模型输出；faqFiles 不为 nil 时知识库仓库按它返回文件（要求按 qqFAQHead 读），faqWrites 按顺序记下建树、建提交、建分支、开 PR 的请求，faqFailPath 是会返回 422 的写接口路径。
 	faq         string
 	faqFiles    map[string]string
@@ -354,6 +356,7 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		_, _ = w.Write(body)
 	case r.URL.Path == "/app/installations/77/access_tokens":
+		f.tokenPerms = append(f.tokenPerms, fmt.Sprint(body["permissions"]))
 		_ = json.NewEncoder(w).Encode(map[string]any{"token": "ghs_test", "expires_at": time.Now().Add(time.Hour)})
 	case r.URL.Path == "/repos/o/docs" && r.Method == "GET":
 		_, _ = io.WriteString(w, `{"default_branch":"main"}`)
@@ -2551,6 +2554,10 @@ func TestQQVectorSync(t *testing.T) {
 	}
 	if !store.cursors["o/r"].Equal(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)) || fake.historySince[0] != "" {
 		t.Fatal(store.cursors, fake.historySince)
+	}
+	// 只有 issues 读权限的令牌调 issues 接口时 GitHub 会滤掉 PR，同步要带上 pull_requests 读权限。
+	if !slices.ContainsFunc(fake.tokenPerms, func(p string) bool { return strings.Contains(p, "pull_requests:read") }) {
+		t.Fatal(fake.tokenPerms)
 	}
 	// 同一个间隔里不再同步；下一个间隔从记下的时间往后拉，内容没变的不重算向量。
 	calls := fake.embedCalls

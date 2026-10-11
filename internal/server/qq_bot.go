@@ -251,9 +251,18 @@ type qqBot struct {
 	// gapsIssue 是答不上的问题汇总 issue 的编号和查到它的时间，见 qq_gaps.go；由 mu 保护。
 	gapsIssue   int64
 	gapsIssueAt time.Time
+	// probeOnce 让 probeMemberRole 只记一次。
+	probeOnce sync.Once
 	// stats 是缓存的仓库统计和统计的时间，见 qqRepoStats；由 mu 保护。
 	stats   string
 	statsAt time.Time
+}
+
+// probeMemberRole 在每个副本第一次收到 @ 消息时记一行日志，说明事件里有没有带群身份（author.member_role）：开放平台的文档写了这个字段，但没确认生产的事件里真的有。有的话群主和群管理员不用加进名单就能识别（见 qq_roles.go）。
+func (b *qqBot) probeMemberRole(role string) {
+	b.probeOnce.Do(func() {
+		slog.Info("qq bot: event member_role probe", "present", role != "", "role", role)
+	})
 }
 
 func newQQBot(c QQBotConfig) *qqBot {
@@ -424,6 +433,7 @@ func (s *Server) acceptQQMessage(ctx context.Context, raw json.RawMessage) bool 
 	if json.Unmarshal(raw, &m) != nil || !qqMessageIDPattern.MatchString(m.ID) || !qqOpenIDPattern.MatchString(m.GroupOpenID) || !qqOpenIDPattern.MatchString(m.Author.MemberOpenID) {
 		return true
 	}
+	s.qq.probeMemberRole(m.Author.MemberRole)
 	if groups := s.qq.config.Groups; len(groups) > 0 && !slices.Contains(groups, m.GroupOpenID) {
 		// 开放平台只给 group_openid，不给群号；记下被拦下的群标识，方便把要接受的群填进 qq_bot.groups。
 		slog.Info("qq bot: message from unlisted group", "group_openid", m.GroupOpenID)
@@ -553,6 +563,7 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		}
 	}
 	if imageOnly {
+		reply("我看一下截图～")
 		shot := s.qqDescribeImages(ctx, m.Attachments)
 		if shot == "" {
 			reply(qqReplyScreenshot)
@@ -567,6 +578,7 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 	}
 	// 文字带截图时把截图描述接在问题后面再答。命令不带截图描述：「查」「#编号」用不上，「提issue」在 fileAdminFeedback 里自己看图。
 	if !imageOnly && qqHasImages(m.Attachments) {
+		reply("我看一下截图～")
 		text = qqWithShot(text, s.qqDescribeImages(ctx, m.Attachments))
 	}
 	// 普通群友的消息都按问题回答。管理员的消息先整理一遍：只有明确要求记录（qqIssueIntent 或模型给出的 intent）的具体反馈才提交，其余的回复机器人的理解并提示用「提issue」。曾经管理员的每条消息都先自动判断、像反馈就提交，群里讨论和吐槽也被提成了 issue。
@@ -655,13 +667,38 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 		}
 		history = turns
 	}
-	answer, err := s.qqAnswerQuestion(ctx, history, question)
+	// 要现查或者重答时先回一句，查一次要几十秒，免得群友以为机器人没反应。只回一次。
+	progressed := false
+	ask := qqAsk{progress: func() {
+		if !progressed {
+			progressed = true
+			reply("我查一下，稍等～")
+		}
+	}}
+	// 群友说上一个回答不对：记下来，强制现查、换思路把上一个问题重答一次（见 qq_bad_answers.go）。
+	retrying, feedback := qqIsBadAnswerFeedback(history, question), question
+	var last account.QQTurn
+	if retrying {
+		last = history[len(history)-1]
+		question, history, ask.force = qqRetryQuestion(last, feedback), history[:len(history)-1], true
+	}
+	answer, err := s.qqAnswerQuestion(ctx, history, question, ask)
 	if err != nil {
 		slog.Warn("qq bot: answer failed", "reason", err.Error())
 		reply(qqReplyUnavailable)
 		return "failed"
 	}
+	if retrying {
+		s.recordQQBadAnswer(ctx, last, feedback, answer.Answer)
+		if answer.Type != "unknown" {
+			answer.Answer, answer.Escalate = qqRetryPrefix+answer.Answer, false
+		}
+		question = last.Question
+	}
 	recorded, outcome := answer.Answer, answer.Type
+	if retrying {
+		outcome = "retry_" + outcome
+	}
 	// 先记进汇总 issue 再回复，按有没有记下选说法，不承诺没做到的事。
 	switch {
 	case answer.Type == "unknown":
@@ -705,7 +742,7 @@ var qqPrimaryModelTimeout = 50 * time.Second
 
 // qqHistoryTurns 是答疑时带上的最近问答轮数；qqUnansweredTurn 是答不上时记下的答案，让下一轮追问知道上一轮没有解决。
 const (
-	qqHistoryTurns   = 2
+	qqHistoryTurns   = 4
 	qqUnansweredTurn = "（没能回答，已请管理员来看）"
 )
 

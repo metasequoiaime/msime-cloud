@@ -27,7 +27,8 @@ const (
 - 查 候选框 左上角 —— 在 GitHub 上搜相关 issue
 - 加词 扛把子 kang ba zi —— 某个词打不出来时投稿到词库，拼音可以不写
 - 补充 D12 Windows 11，版本 0.9.5 —— 给你报的问题草稿补信息
-- 提文档 FAQ 没写鸿蒙版怎么下载 —— 反馈文档缺了什么或写错了`
+- 提文档 FAQ 没写鸿蒙版怎么下载 —— 反馈文档缺了什么或写错了
+- 觉得我答错了，直接回一句「不对」，我会重新查`
 	qqAdminHelpText = `
 
 管理员还可以：
@@ -36,7 +37,8 @@ const (
 - 提交 D12 —— 把草稿提成 issue，可以顺带补一句：提交 D12 版本 0.9.5
 - 文档缺口 —— 列出文档没写到的问题
 - 写进FAQ F3 —— 把机器人当时的回答写进 FAQ；没答案的写：写进FAQ F3 答：……
-- 记录答案 问：鸿蒙版在哪下载？ 答：华为应用市场搜水杉输入法 —— 把你的回答写进 FAQ`
+- 记录答案 问：鸿蒙版在哪下载？ 答：华为应用市场搜水杉输入法 —— 把你的回答写进 FAQ
+- 差评 —— 看最近群友说我答错的问题`
 )
 
 var (
@@ -85,6 +87,14 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 	}
 	if command := s.qqFAQCandidateCommands(ctx, text, admin, reply); command != "" {
 		return command
+	}
+	if compact := strings.Join(strings.Fields(text), ""); compact == "差评" || compact == "答错的" {
+		if !admin {
+			reply("只有管理员能看差评。觉得我答错了，直接回一句「不对」，我会重新查。")
+		} else {
+			s.qqListBadAnswers(ctx, reply)
+		}
+		return "cmd_bad_answers"
 	}
 	compact := strings.ToLower(strings.Join(strings.Fields(text), ""))
 	switch compact {

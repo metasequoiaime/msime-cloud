@@ -1769,10 +1769,11 @@ func TestQQBotFollowUpsUseRecentTurns(t *testing.T) {
 	if len(turns) != 2 || turns[1].Answer != qqUnansweredTurn {
 		t.Fatal(turns)
 	}
-	// 只带最近两轮。
-	qqDeliver(t, s, "m-turn-3", "第三问")
-	qqDeliver(t, s, "m-turn-3b", "第四问")
-	if got := fake.chatBodies[len(fake.chatBodies)-1]; strings.Count(got, "问：") != 2 || strings.Contains(got, "问：五笔怎么切换") || !strings.Contains(got, "问：第三问") {
+	// 只带最近四轮。
+	for i, q := range []string{"第三问", "第四问", "第五问", "第六问"} {
+		qqDeliver(t, s, "m-turn-more-"+strconv.Itoa(i), q)
+	}
+	if got := fake.chatBodies[len(fake.chatBodies)-1]; strings.Count(got, "问：") != 4 || strings.Contains(got, "问：五笔怎么切换") || !strings.Contains(got, "问：还是不行") || !strings.Contains(got, "问：第五问") {
 		t.Fatalf("%q", got)
 	}
 	// 存储出错时照常回答。
@@ -3267,5 +3268,73 @@ func TestQQBotReadsLinkedIssue(t *testing.T) {
 	qqDeliver(t, s, "m-link-issue", "提出改进意见 https://github.com/metasequoiaime/r/issues/785")
 	if !strings.Contains(fake.answerSystem, "### 用户提到的 issue\nr #785 临时输入、混输、方案切换一致体验：开着") || !strings.Contains(fake.answerSystem, "正文：目标：统一临时英文、混输和方案切换。建议：Shift+方案键临时切换。") || strings.Contains(fake.answerSystem, "x.y/a.png") {
 		t.Fatal(fake.answerSystem)
+	}
+}
+
+// memoryBadAnswers 是测试用的差评存储。
+type memoryBadAnswers struct {
+	mu    sync.Mutex
+	items []account.QQBadAnswer
+}
+
+func (m *memoryBadAnswers) AddQQBadAnswer(_ context.Context, question, answer, feedback, retry string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.items = append([]account.QQBadAnswer{{ID: int64(len(m.items) + 1), Question: question, Answer: answer, Feedback: feedback, Retry: retry, CreatedAt: time.Date(2026, 10, 12, 1, 0, 0, 0, time.UTC)}}, m.items...)
+	return nil
+}
+func (m *memoryBadAnswers) RecentQQBadAnswers(_ context.Context, _ time.Duration, limit int) ([]account.QQBadAnswer, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.items[:min(limit, len(m.items))], nil
+}
+
+// 群友回「不对」时：记下上一轮，强制现查（先回「我查一下」），换思路重答上一个问题；管理员「差评」能看到；长消息和答不上之后的话不算。
+func TestQQBotBadAnswerRetry(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.qq.config.Admins = []string{"ADMIN1"}
+	history := &memoryConversations{}
+	s.qqHistory = history
+	bad := &memoryBadAnswers{}
+	s.qqBadAnswers = bad
+	deliver := func(id, member, content string) {
+		t.Helper()
+		qqPost(t, s, qqMessageFrom(id, member, content))
+		s.qqWorkers.Wait()
+	}
+	fake.answer = `{"type":"answered","answer":"在设置里选五笔。"}`
+	deliver("m-b1", "MEMBER1", "五笔怎么切换")
+	fake.researchPath = "/repos/metasequoiaime/msime/contributors?per_page=100"
+	fake.extraGitHub = map[string]string{"/repos/metasequoiaime/msime/contributors?per_page=100": `[]`}
+	fake.answerAfterResearch = `{"type":"answered","answer":"按 Ctrl+` + "`" + ` 打开方案菜单选五笔。"}`
+	before := len(fake.replyTexts())
+	deliver("m-b2", "MEMBER1", "不对啊")
+	replies := fake.replyTexts()[before:]
+	if len(replies) != 2 || replies[0] != "我查一下，稍等～" || replies[1] != qqRetryPrefix+"按 Ctrl+` 打开方案菜单选五笔。" {
+		t.Fatal(replies)
+	}
+	if !strings.Contains(fake.chatBodies[len(fake.chatBodies)-1], "五笔怎么切换\n\n（群友说上一个回答不对：「不对啊」。上一个回答是：在设置里选五笔。") {
+		t.Fatal(fake.chatBodies[len(fake.chatBodies)-1])
+	}
+	if len(bad.items) != 1 || bad.items[0].Question != "五笔怎么切换" || bad.items[0].Feedback != "不对啊" || bad.items[0].Retry != "按 Ctrl+` 打开方案菜单选五笔。" {
+		t.Fatal(bad.items)
+	}
+	// 记进对话的是原问题和重答。
+	if turns := history.turns["GROUP1/MEMBER1"]; turns[len(turns)-1].Question != "五笔怎么切换" || !strings.HasPrefix(turns[len(turns)-1].Answer, qqRetryPrefix) {
+		t.Fatal(turns)
+	}
+	// 长消息不算差评。
+	fake.answer = `{"type":"answered","answer":"可以。"}`
+	deliver("m-b3", "MEMBER1", "不对，我想问的是另外一件事：能不能在 Linux 上用五笔打繁体字并且同步词库到手机")
+	if len(bad.items) != 1 {
+		t.Fatal("long message counted as feedback")
+	}
+	deliver("m-b-list-member", "MEMBER1", "差评")
+	if !strings.HasPrefix(fake.replyTexts()[len(fake.replyTexts())-1], "只有管理员能看差评。") {
+		t.Fatal(fake.replyTexts())
+	}
+	deliver("m-b-list", "ADMIN1", "差评")
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; !strings.Contains(last, "问：五笔怎么切换\n答：在设置里选五笔。\n群友：不对啊\n重答：按 Ctrl+` 打开方案菜单选五笔。") {
+		t.Fatal(last)
 	}
 }

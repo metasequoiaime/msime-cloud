@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"regexp"
 	"slices"
 	"strconv"
@@ -245,7 +246,7 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 	return ""
 }
 
-// qqIssueStatus 查一个 issue 的标题和状态，以及修复有没有发版和维护者最近的评论（截到 commentRunes 字，见 qq_issue_context.go）。仓库名为空时在每个答疑仓库里查同一个编号；仓库名只能是答疑仓库之一（按名字或 owner/name 匹配）。
+// qqIssueStatus 查一个 issue 的标题和状态，以及修复有没有发版和开发者最近的评论（截到 commentRunes 字，见 qq_issue_context.go）。仓库名为空时在每个答疑仓库里查同一个编号；仓库名只能是答疑仓库之一（按名字或 owner/name 匹配）。只有 GitHub 回 404 或 410 才算这个仓库没有这个编号；拿不到令牌、网络出错、限流和其他错误状态、解码失败都记为查询失败，一个都没查到又有失败时说暂时查不了，不说「没有查到」：这句话同时是命令回复和交给答疑模型的资料，说成没有查到，模型就会告诉群友没有这个 issue。
 func (s *Server) qqIssueStatus(ctx context.Context, name, number string, commentRunes int) string {
 	repos := s.qqGitHubRepos()
 	if name != "" {
@@ -259,14 +260,21 @@ func (s *Server) qqIssueStatus(ctx context.Context, name, number string, comment
 	}
 	client := s.adminGitHub
 	var lines []string
+	failed := 0
 	for _, repo := range repos {
 		token, err := client.Token(ctx, repo, qqGitHubReadPerms)
 		if err != nil {
+			failed++
 			slog.Warn("qq bot: issue lookup skipped", "repo", repo, "reason", err.Error())
 			continue
 		}
 		r, err := client.Get(ctx, token, "/repos/"+repo+"/issues/"+number)
+		if err == nil && (r.Status == http.StatusNotFound || r.Status == http.StatusGone) {
+			continue
+		}
 		if err != nil || !r.OK() {
+			failed++
+			slog.Warn("qq bot: issue lookup failed", "repo", repo, "status", r.Status, "reason", githubFailure("issue", r, err).Error())
 			continue
 		}
 		var issue struct {
@@ -274,14 +282,16 @@ func (s *Server) qqIssueStatus(ctx context.Context, name, number string, comment
 			qqIssueDetail
 			UpdatedAt string `json:"updated_at"`
 		}
-		if r.Decode(&issue) != nil {
+		if err := r.Decode(&issue); err != nil {
+			failed++
+			slog.Warn("qq bot: issue lookup failed", "repo", repo, "status", r.Status, "reason", "decode: "+err.Error())
 			continue
 		}
 		labels := issue.labelNames()
 		_, short, _ := strings.Cut(repo, "/")
 		kind := ""
 		if len(issue.PullRequest) > 0 && string(issue.PullRequest) != "null" {
-			kind = "（拉取请求）"
+			kind = "（代码改动）"
 		}
 		updated, _, _ := strings.Cut(issue.UpdatedAt, "T")
 		line := fmt.Sprintf("%s #%s%s %s：%s，更新于 %s", short, number, kind, issue.Title, qqIssueState(issue.State, issue.StateReason, labels), updated)
@@ -289,6 +299,9 @@ func (s *Server) qqIssueStatus(ctx context.Context, name, number string, comment
 			line += "\n" + strings.TrimSuffix(s.qqIssueExtras(ctx, repo, issue.Number, issue.qqIssueDetail, commentRunes, ""), "\n")
 		}
 		lines = append(lines, strings.TrimSuffix(line, "\n"))
+	}
+	if len(lines) == 0 && failed > 0 {
+		return "暂时查不了 #" + number + "（GitHub 出错或限流），不能据此说没有这个 issue，请过一会儿再问。"
 	}
 	if len(lines) == 0 {
 		return "没有查到 #" + number + "。"
@@ -484,9 +497,10 @@ func (s *Server) qqTopicLabels(ctx context.Context, repoLabels []string, exclude
 	return labels
 }
 
-// qqIssueNumberText 是回复里提到的 issue，例如「GitHub metasequoiaime/msime 的 #12」。
+// qqIssueNumberText 是回复里提到的 issue，例如「msime #12（https://github.com/metasequoiaime/msime/issues/12）」：和「#编号」查进度、答疑里引用 issue 用同一种「仓库短名 #编号」写法，群友看到的同一个 issue 只有一种叫法。链接要放在全角括号里，QQ 拒收带链接的消息时 qqWithoutLinks 靠这个格式连括号一起去掉，剩下「msime #12」。
 func qqIssueNumberText(repo string, number int64) string {
-	return "GitHub " + repo + " 的 #" + strconv.FormatInt(number, 10) + "（" + qqGitHubLink(repo, number) + "）"
+	_, short, _ := strings.Cut(repo, "/")
+	return short + " #" + strconv.FormatInt(number, 10) + "（" + qqGitHubLink(repo, number) + "）"
 }
 
 // qqGitHubLink 是 issue 或 PR 的网页地址（issues 地址对 PR 也会跳转过去）。QQ 拒收带这个链接的消息时，回复会去掉链接重发，见 handleQQFeedback。

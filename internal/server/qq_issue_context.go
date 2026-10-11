@@ -93,16 +93,16 @@ func (s *Server) qqFixRelease(ctx context.Context, repo string, issue qqIssueDet
 	case matched == 0:
 		return ""
 	case first == nil:
-		return "修复已合入（" + closed + " 关闭），之后还没有发布新版本"
+		return "已经修好（" + closed + "），还没发新版，等下个版本就有了"
 	case len(releases) >= qqReleasePage && first == &releases[len(releases)-1]:
 		// 只读了最近一页 Release，关闭时间比这一页都早时说不准是哪个版本。
-		return "修复在 " + closed + " 合入，已经包含在较早发布的版本里"
+		return "已经修好（" + closed + "），更新到最新版就有"
 	default:
 		suffix := ""
 		if first.Prerelease {
 			suffix = "（预发布）"
 		}
-		return "修复已包含在 " + first.TagName + suffix + " 及之后的版本"
+		return "已修好，" + first.TagName + suffix + " 及之后的版本都有"
 	}
 }
 
@@ -169,7 +169,7 @@ func (s *Server) qqIssueExtras(ctx context.Context, repo string, number int64, i
 		b.WriteString(prefix + release + "\n")
 	}
 	if comment := s.qqMaintainerComment(ctx, repo, number, issue, limit); comment != "" {
-		b.WriteString(prefix + "维护者最近说：" + comment + "\n")
+		b.WriteString(prefix + "开发者最近说：" + comment + "\n")
 	}
 	return b.String()
 }

@@ -84,7 +84,7 @@ func (s *Server) fileQQDocs(ctx context.Context, text string, admin bool, reply 
 	}
 	if !admin {
 		if s.recordQQGap(ctx, "群友反馈文档：", request.Title+"（"+request.Problem+"）") {
-			reply("已经记下，维护者会据此更新文档。")
+			reply("已经记下，管理员会据此更新文档。")
 		} else {
 			reply("暂时记不下来，请稍后再试，或者请管理员用「提文档」提交。")
 		}
@@ -136,5 +136,5 @@ func (s *Server) fileQQDocs(ctx context.Context, text string, admin bool, reply 
 		return
 	}
 	client.Invalidate("/repos/" + repo + "/issues")
-	reply("已记录为 " + qqIssueNumberText(repo, created.Number) + "，维护者会据此更新文档。" + qqReplyPublic)
+	reply("已记录为 " + qqIssueNumberText(repo, created.Number) + "，管理员会据此更新文档。" + qqReplyPublic)
 }

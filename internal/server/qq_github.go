@@ -34,7 +34,7 @@ func (s *Server) qqGitHubRepos() []string {
 	return repos
 }
 
-// qqIssueState 是 issue 状态的中文写法：已关闭的按 state_reason 区分已完成和不计划处理，因为关闭不一定代表修好了；打了 invalid、duplicate、wontfix 标签的按标签说（这类 issue 也常以 completed 关闭）。msime 合进开发分支就关 issue，修复要等下一个版本才发布，所以 completed 写「已完成」，不写「已解决」。
+// qqIssueState 是 issue 状态的中文写法：已关闭的按 state_reason 区分已完成和不计划处理，因为关闭不一定代表修好了；打了 invalid、duplicate、wontfix 标签的按标签说（这类 issue 也常以 completed 关闭）。msime 合进开发分支就关 issue，修复要等下一个版本才发布，所以 completed 写「已完成」，不写「已解决」。开着的写「还没解决」：群友关心的是修没修，「开着」是 GitHub 的说法，他们看不懂；也不写「还在处理」，开着不等于有人在处理。
 func qqIssueState(state, reason string, labels []string) string {
 	if state != "open" {
 		for _, label := range labels {
@@ -50,7 +50,7 @@ func qqIssueState(state, reason string, labels []string) string {
 	}
 	switch {
 	case state == "open":
-		return "开着"
+		return "还没解决"
 	case reason == "completed":
 		return "已完成"
 	case reason == "not_planned":

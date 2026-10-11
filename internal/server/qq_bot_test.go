@@ -288,7 +288,7 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		user := messages[1].(map[string]any)["content"].(string)
 		// 经 EveryAPI 转发的 OpenAI 模型只在用户消息里找 json，最后一条必须是格式指令。
 		last := messages[len(messages)-1].(map[string]any)
-		if (body["model"] != "claude-haiku-5-5" && body["model"] != "fallback-model" && body["model"] != "strong-model") || len(messages) != 3 || last["role"] != "user" || last["content"] != jsonObjectInstruction {
+		if (body["model"] != "claude-haiku-5-5" && body["model"] != "fallback-model" && body["model"] != "strong-model" && body["model"] != "chat-model") || len(messages) != 3 || last["role"] != "user" || last["content"] != jsonObjectInstruction {
 			f.t.Error("chat request", body["model"], messages)
 		}
 		content := f.summary
@@ -2734,7 +2734,21 @@ func TestQQBotStrongModelRouting(t *testing.T) {
 	if answerModel() != "claude-haiku-5-5" {
 		t.Fatal(fake.models)
 	}
-	s.qq.config.StrongModel = ""
+	// 闲聊用 chat_model；同时标了难题时按难题处理。
+	s.qq.config.ChatModel = "chat-model"
+	fake.selected = `{"sections":[],"chat":true}`
+	fake.answer = `{"type":"chat","answer":"在的，想聊点啥？"}`
+	qqDeliver(t, s, "m-chat-model", "在吗")
+	if answerModel() != "chat-model" || fake.replyTexts()[len(fake.replyTexts())-1] != "在的，想聊点啥？" {
+		t.Fatal(fake.models)
+	}
+	fake.selected = `{"sections":[],"chat":true,"strong":true}`
+	qqDeliver(t, s, "m-chat-strong", "聊聊双拼的历史")
+	if answerModel() != "strong-model" {
+		t.Fatal(fake.models)
+	}
+	s.qq.config.StrongModel, s.qq.config.ChatModel = "", ""
+	fake.answer = `{"type":"answered","answer":"全拼按完整拼音输入，双拼每个字固定两键。"}`
 	fake.selected = `{"sections":[1],"strong":true}`
 	qqDeliver(t, s, "m-no-strong", "全拼和双拼哪个效率高")
 	if answerModel() != "claude-haiku-5-5" {
@@ -2743,13 +2757,13 @@ func TestQQBotStrongModelRouting(t *testing.T) {
 	// 配置校验：默认 claude-sonnet-5-5，none 时用 model，不能有空白。
 	t.Setenv("TEST_QQ_SECRET", qqTestSecret)
 	c := qqValidConfig()
-	if err := c.QQBot.validate(&c); err != nil || c.QQBot.StrongModel != defaultQQStrongModel {
-		t.Fatal(err, c.QQBot.StrongModel)
+	if err := c.QQBot.validate(&c); err != nil || c.QQBot.StrongModel != defaultQQStrongModel || c.QQBot.ChatModel != defaultQQChatModel {
+		t.Fatal(err, c.QQBot.StrongModel, c.QQBot.ChatModel)
 	}
 	c = qqValidConfig()
-	c.QQBot.StrongModel = "none"
-	if err := c.QQBot.validate(&c); err != nil || c.QQBot.StrongModel != c.QQBot.Model {
-		t.Fatal(err, c.QQBot.StrongModel)
+	c.QQBot.StrongModel, c.QQBot.ChatModel = "none", "none"
+	if err := c.QQBot.validate(&c); err != nil || c.QQBot.StrongModel != c.QQBot.Model || c.QQBot.ChatModel != c.QQBot.Model {
+		t.Fatal(err, c.QQBot.StrongModel, c.QQBot.ChatModel)
 	}
 	c = qqValidConfig()
 	c.QQBot.StrongModel = "bad model"

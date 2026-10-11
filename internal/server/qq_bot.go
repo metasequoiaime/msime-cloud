@@ -89,6 +89,8 @@ type QQBotConfig struct {
 	GapsRepo string `json:"gaps_repo"`
 	// StrongModel 是难题用的更强的模型，经 chat 端点调用：挑段落的模型判断问题需要推理、文档以外的知识或现查 GitHub 时用它回答，常规模型答不上时也换它带着 GitHub 工具重答，现查 GitHub 的工具调用也用它。为空时用 defaultQQStrongModel，写 none 时一律用 model。
 	StrongModel string `json:"strong_model"`
+	// ChatModel 是问候和闲聊用的模型，经 chat 端点调用：挑段落的模型判断是闲聊时用它回答，闲聊用不上强模型，选便宜、语气自然的国产模型。为空时用 defaultQQChatModel，写 none 时用 model。
+	ChatModel string `json:"chat_model"`
 	// EmbeddingModel 是答疑向量检索用的 embedding 模型，经 chat 端点所在服务的 /embeddings 接口调用（密钥沿用 chat）；为空时用 defaultQQEmbeddingModel，写 none 关闭向量检索。见 qq_vectors.go。
 	EmbeddingModel string `json:"embedding_model"`
 	// APIURL 覆盖 https://api.bot.qq.com，供测试使用。
@@ -111,7 +113,7 @@ var (
 
 func (c *QQBotConfig) validate(cfg *Config) error {
 	if !c.enabled() {
-		if c.APIURL != "" || c.Repo != "" || c.Model != "" || c.FallbackModel != "" || c.KnowledgeRepo != "" || c.KnowledgeDir != "" || c.GapsRepo != "" || c.EmbeddingModel != "" || c.StrongModel != "" || len(c.Labels) > 0 || len(c.Groups) > 0 || len(c.Admins) > 0 {
+		if c.APIURL != "" || c.Repo != "" || c.Model != "" || c.FallbackModel != "" || c.KnowledgeRepo != "" || c.KnowledgeDir != "" || c.GapsRepo != "" || c.EmbeddingModel != "" || c.StrongModel != "" || c.ChatModel != "" || len(c.Labels) > 0 || len(c.Groups) > 0 || len(c.Admins) > 0 {
 			return errors.New("qq_bot settings require app_id")
 		}
 		return nil
@@ -148,6 +150,15 @@ func (c *QQBotConfig) validate(cfg *Config) error {
 	}
 	if len(c.StrongModel) > 200 || strings.ContainsAny(c.StrongModel, " \r\n\t") {
 		return errors.New("qq_bot strong_model must be a model name without whitespace")
+	}
+	switch c.ChatModel {
+	case "":
+		c.ChatModel = defaultQQChatModel
+	case "none":
+		c.ChatModel = c.Model
+	}
+	if len(c.ChatModel) > 200 || strings.ContainsAny(c.ChatModel, " \r\n\t") {
+		return errors.New("qq_bot chat_model must be a model name without whitespace")
 	}
 	if len(c.EmbeddingModel) > 200 || strings.ContainsAny(c.EmbeddingModel, " \r\n\t") {
 		return errors.New("qq_bot embedding_model must be a model name without whitespace")
@@ -788,8 +799,11 @@ func (s *Server) qqChat(ctx context.Context, system, user string, out any) error
 	return s.qqChatModel(ctx, s.qq.config.Model, system, user, out)
 }
 
-// defaultQQStrongModel 是 qq_bot.strong_model 的默认值。
-const defaultQQStrongModel = "claude-sonnet-5-5"
+// defaultQQStrongModel、defaultQQChatModel 是 qq_bot.strong_model、qq_bot.chat_model 的默认值。闲聊的模型按 2026-10 在 EveryAPI 上的实测选：glm-5.3-flash 语气自然、回复里不推销，输入单价和 deepseek-v4-flash 一样、输出更便宜；doubao-seed-2.0-mini 更便宜，但有时不按要求输出类型。
+const (
+	defaultQQStrongModel = "claude-sonnet-5-5"
+	defaultQQChatModel   = "glm-5.3-flash"
+)
 
 // qqStrongModel 是难题用的模型；没有配置（测试里直接构造配置时）就用常规模型。
 func (s *Server) qqStrongModel() string {

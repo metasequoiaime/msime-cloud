@@ -38,12 +38,10 @@ const (
 	qqBotProcessTimeout = 4 * time.Minute
 	// qqBotMessageWindow 是消息 id 的去重期。QQ 在没有收到成功应答时会重推同一个事件，重推间隔远小于这个时长。
 	qqBotMessageWindow = 7 * 24 * time.Hour
-	// 每个群友每天、每个群每天最多处理的消息数（auth_rates，所有副本共享）。它们限制的是交给模型整理的次数，所以闲聊和追问也计数。
-	qqBotMemberDaily = 5
-	qqBotGroupDaily  = 50
-	// 去掉 @ 标记后少于 qqBotMinRunes 个字符的消息不交给模型，直接回复用法。
-	qqBotMinRunes = 6
-	qqBotMaxRunes = 2000
+	// 每个群友每天、每个群每天最多处理的消息数（auth_rates，所有副本共享）。它们限制的是交给模型的次数，所以问答、闲聊和追问都计数；qq_bot.admins 里的管理员不受个人限额限制。
+	qqBotMemberDaily = 20
+	qqBotGroupDaily  = 300
+	qqBotMaxRunes    = 2000
 	// qqBotSearchResults 是去重时交给模型比对的已有 issue 数。
 	qqBotSearchResults = 5
 	// qqBotFieldRunes 是模型返回的每个文本字段的上限，标题另有 qqBotTitleRunes 的上限。
@@ -75,6 +73,11 @@ type QQBotConfig struct {
 	Groups []string `json:"groups"`
 	// Model 是整理反馈和判断重复用的模型，通过 chat 端点调用（接入地址和密钥都沿用 chat）；为空时用 chat.model。AI 联想用的模型追求快和便宜，整理 issue 需要更可靠地理解长段描述，所以可以单独指定，例如 EveryAPI 上的 claude-haiku-5-5。
 	Model string `json:"model"`
+	// Admins 是管理员的 member_openid。只有管理员 @ 机器人描述 bug 或需求时才会提 issue；普通群友 @ 机器人只做答疑，知识库答不上时 @ 这些管理员。开放平台不提供群管理员身份，所以名单由这里维护：任何人 @ 机器人发「我的ID」会收到自己的 member_openid。
+	Admins []string `json:"admins"`
+	// KnowledgeRepo 和 KnowledgeDir 是答疑知识库所在的仓库和目录，默认 metasequoiaime/msime-docs 的 guides；只收这个目录下的 Markdown 文件，不含子目录。管理后台的 GitHub App 要能读这个仓库。
+	KnowledgeRepo string `json:"knowledge_repo"`
+	KnowledgeDir  string `json:"knowledge_dir"`
 	// APIURL 覆盖 https://api.bot.qq.com，供测试使用。
 	APIURL string `json:"api_url,omitempty"`
 	secret string
@@ -89,11 +92,13 @@ var (
 	qqMessageIDPattern = regexp.MustCompile(`^[!-~]{1,256}$`)
 	// qqMarkupPattern 匹配消息内容里的 @ 标记和表情等尖括号标签。
 	qqMarkupPattern = regexp.MustCompile(`<[^<>\n]{1,200}>`)
+	// qqKnowledgeDirPattern 是知识库目录允许的形状：以 / 分隔的几段字母、数字、点、下划线和连字符。
+	qqKnowledgeDirPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$`)
 )
 
 func (c *QQBotConfig) validate(cfg *Config) error {
 	if !c.enabled() {
-		if c.APIURL != "" || c.Repo != "" || c.Model != "" || len(c.Labels) > 0 || len(c.Groups) > 0 {
+		if c.APIURL != "" || c.Repo != "" || c.Model != "" || c.KnowledgeRepo != "" || c.KnowledgeDir != "" || len(c.Labels) > 0 || len(c.Groups) > 0 || len(c.Admins) > 0 {
 			return errors.New("qq_bot settings require app_id")
 		}
 		return nil
@@ -149,6 +154,28 @@ func (c *QQBotConfig) validate(cfg *Config) error {
 		}
 		seen[group] = true
 	}
+	if len(c.Admins) > 50 {
+		return errors.New("qq_bot admins exceeds 50 entries")
+	}
+	seen = map[string]bool{}
+	for _, admin := range c.Admins {
+		if !qqOpenIDPattern.MatchString(admin) || seen[admin] {
+			return errors.New("qq_bot admins must be unique member_openid values")
+		}
+		seen[admin] = true
+	}
+	if c.KnowledgeRepo == "" {
+		c.KnowledgeRepo = defaultQQKnowledgeRepo
+	}
+	if c.KnowledgeDir == "" {
+		c.KnowledgeDir = defaultQQKnowledgeDir
+	}
+	if !githubRepositoryPattern.MatchString(c.KnowledgeRepo) {
+		return errors.New("qq_bot knowledge_repo must be owner/name")
+	}
+	if !qqKnowledgeDirPattern.MatchString(c.KnowledgeDir) || strings.Contains(c.KnowledgeDir, "..") {
+		return errors.New("qq_bot knowledge_dir must be a relative directory path")
+	}
 	if c.APIURL == "" {
 		c.APIURL = defaultQQBotAPIURL
 	}
@@ -169,6 +196,8 @@ type qqBot struct {
 	mu      sync.Mutex
 	token   string
 	expires time.Time
+	// knowledge 是本副本缓存的答疑知识库，见 qq_knowledge.go。
+	knowledge qqKnowledge
 }
 
 func newQQBot(c QQBotConfig) *qqBot {
@@ -366,18 +395,20 @@ func (s *Server) acceptQQMessage(ctx context.Context, raw json.RawMessage) bool 
 
 // 回复给群友的固定文字。开放平台只允许消息里出现报备过的域名，所以回复只给 issue 编号，不带链接。
 const (
-	qqReplyUsage       = "请 @我 并用一段话描述遇到的问题或想要的功能，例如：Windows 11 上用水杉 1.2.0 打字时候选框不跟随光标。"
+	qqReplyUsage       = "有水杉输入法的使用问题可以直接 @我 问，例如：五笔怎么切换？"
 	qqReplyTooLong     = "内容太长了，请精简到 2000 字以内再 @我。"
-	qqReplyLimited     = "今天提交的反馈已经够多了，明天再来吧。"
-	qqReplyUnavailable = "反馈暂时提交不了，请稍后再 @我 发一次。"
+	qqReplyLimited     = "今天问得已经够多了，明天再来吧。"
+	qqReplyUnavailable = "我暂时处理不了，请稍后再 @我 发一次。"
 	qqReplyWorking     = "收到，正在整理成 issue。"
-	qqReplyNotFeedback = "这条看起来不是 bug 或功能建议，没有提交。如果是，请 @我 再具体描述一下。"
 	qqReplyPublic      = "内容由机器人转述后公开在 GitHub 上，不包含你的昵称和原话。"
 	// qqDefaultQuestion 是 bug 既看不出平台、也没有操作步骤，而模型没有给出追问时用的问题。
 	qqDefaultQuestion = "你用的是哪个系统（Windows、macOS、安卓等）和输入法版本？是在什么操作下出现的？"
 )
 
-// handleQQFeedback 在后台处理一条已认领的 @ 消息，所有结果都以被动回复告诉群友。不记录消息内容，日志里只有失败原因。
+// qqWhoAmI 是查询自己 member_openid 的命令，比较时忽略空白和大小写。
+var qqWhoAmI = []string{"我的id", "myid"}
+
+// handleQQFeedback 在后台处理一条已认领的 @ 消息，所有结果都以被动回复告诉群友：管理员描述的 bug 或需求提 issue，其他消息（包括普通群友的所有消息）按知识库答疑。不记录消息内容，日志里只有失败原因。
 func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 	seq := 0
 	reply := func(text string) {
@@ -387,18 +418,30 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		}
 	}
 	text := qqFeedbackText(m.Content)
+	if slices.Contains(qqWhoAmI, strings.ToLower(strings.Join(strings.Fields(text), ""))) {
+		reply("你的 ID 是 " + m.Author.MemberOpenID + "（只在这个机器人里有效，管理员把它发给维护者加进名单）")
+		return
+	}
 	switch n := utf8.RuneCountInString(text); {
-	case n < qqBotMinRunes:
+	case n == 0:
 		reply(qqReplyUsage)
 		return
 	case n > qqBotMaxRunes:
 		reply(qqReplyTooLong)
 		return
 	}
-	for _, limit := range []struct {
+	admin := slices.Contains(s.qq.config.Admins, m.Author.MemberOpenID)
+	limits := []struct {
 		scope, subject string
 		daily          int
-	}{{"qq-bot-member", m.GroupOpenID + "/" + m.Author.MemberOpenID, qqBotMemberDaily}, {"qq-bot-group", m.GroupOpenID, qqBotGroupDaily}} {
+	}{{"qq-bot-group", m.GroupOpenID, qqBotGroupDaily}}
+	if !admin {
+		limits = append(limits, struct {
+			scope, subject string
+			daily          int
+		}{"qq-bot-member", m.GroupOpenID + "/" + m.Author.MemberOpenID, qqBotMemberDaily})
+	}
+	for _, limit := range limits {
 		switch err := s.limits.RateLimit(ctx, limit.scope, limit.subject, limit.daily, 24*time.Hour); {
 		case errors.Is(err, account.ErrLimited):
 			reply(qqReplyLimited)
@@ -409,7 +452,10 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 			return
 		}
 	}
-	reply(qqReplyWorking)
+	if !admin {
+		s.answerQQQuestion(ctx, text, reply)
+		return
+	}
 	report, err := s.qqSummarise(ctx, text)
 	if err != nil {
 		slog.Warn("qq bot: summarise failed", "reason", err.Error())
@@ -417,7 +463,7 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		return
 	}
 	if report.Kind == "other" {
-		reply(qqReplyNotFeedback)
+		s.answerQQQuestion(ctx, text, reply)
 		return
 	}
 	if report.Missing != "" {
@@ -429,6 +475,7 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		reply("还差一点信息：" + qqWindowsVersionQuestion + " 补充后请 @我 把问题完整描述一次。")
 		return
 	}
+	reply(qqReplyWorking)
 	number, duplicate, err := s.fileQQReport(ctx, repo, label, report)
 	if err != nil {
 		slog.Warn("qq bot: file issue failed", "repo", repo, "reason", err.Error())
@@ -440,6 +487,21 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		return
 	}
 	reply(fmt.Sprintf("已记录为 GitHub %s 的 #%d，开发者会在那里跟进。%s", repo, number, qqReplyPublic))
+}
+
+// answerQQQuestion 用知识库回答一条消息；答不上时 @ 管理员。
+func (s *Server) answerQQQuestion(ctx context.Context, question string, reply func(string)) {
+	answer, err := s.qqAnswerQuestion(ctx, question)
+	if err != nil {
+		slog.Warn("qq bot: answer failed", "reason", err.Error())
+		reply(qqReplyUnavailable)
+		return
+	}
+	if answer.Type == "unknown" {
+		reply(qqUnknownReply(s.qq.config.Admins))
+		return
+	}
+	reply(answer.Answer)
 }
 
 // qqFeedbackText 去掉消息里的 @ 标记、表情等尖括号标签和首尾空白。

@@ -668,7 +668,11 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 		}
 	case answer.Type == "answered" && answer.Escalate:
 		outcome = "answered_escalate"
-		if s.recordQQReport(ctx, answer.Topic) {
+		// 群友在报 bug 或提需求：整理成草稿等管理员一句话提交（见 qq_drafts.go）；整理不成时照旧记进汇总 issue。
+		if note := s.qqDraftReport(ctx, subject, question); note != "" {
+			outcome = "answered_draft"
+			reply(answer.Answer + note)
+		} else if s.recordQQReport(ctx, answer.Topic) {
 			reply(answer.Answer + qqEscalation)
 		} else {
 			reply(answer.Answer + qqEscalationUnrecorded)

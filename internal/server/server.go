@@ -52,6 +52,8 @@ type Server struct {
 	qqLocks sharedLocker
 	// qqVectors 是答疑的向量索引（account.Service，见 qq_vectors.go）；没有数据库时为 nil。
 	qqVectors qqVectorStore
+	// qqDrafts 是群友反馈整理成的 issue 草稿（account.Service，见 qq_drafts.go）；没有数据库时为 nil。
+	qqDrafts qqDraftStore
 
 	adminStore  adminAuthStore
 	adminGoogle *adminGoogleAuth
@@ -146,6 +148,7 @@ func New(c Config) (*Server, error) {
 			s.qqHistory = s.accounts
 			s.qqLocks = s.accounts
 			s.qqVectors = s.accounts
+			s.qqDrafts = s.accounts
 			s.adminJobs.Add(1)
 			go func() {
 				defer s.adminJobs.Done()

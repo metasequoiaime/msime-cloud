@@ -46,6 +46,10 @@ type Server struct {
 	qqWorkers sync.WaitGroup
 	// media 把 QQ 管理员附带的图片和视频写进公开 bucket（account.Service.PublishMedia）；没有数据库时为 nil。
 	media mediaPublisher
+	// qqHistory 是 QQ 群答疑接上追问用的最近问答（account.Service）；没有数据库时为 nil。
+	qqHistory qqConversationStore
+	// qqLocks 是新建汇总 issue 时用的跨副本锁（account.Service.WaitLock）；没有数据库时为 nil。
+	qqLocks sharedLocker
 
 	adminStore  adminAuthStore
 	adminGoogle *adminGoogleAuth
@@ -137,6 +141,8 @@ func New(c Config) (*Server, error) {
 		s.qq = newQQBot(c.QQBot)
 		if s.accounts != nil {
 			s.media = s.accounts
+			s.qqHistory = s.accounts
+			s.qqLocks = s.accounts
 		}
 	}
 	mux := http.NewServeMux()

@@ -57,6 +57,9 @@ var voiceContributionsSchema string
 
 //go:embed diagnostics_schema.sql
 var diagnosticsSchema string
+
+//go:embed qq_conversations_schema.sql
+var qqConversationsSchema string
 var ErrInvalid = errors.New("invalid_credentials")
 var ErrLimited = errors.New("rate_limit_exceeded")
 var ErrConflict = errors.New("identity_already_linked")
@@ -184,7 +187,7 @@ func (s *Store) MigrateAs(ctx context.Context, role string) error {
 			return e
 		}
 	}
-	if _, e = tx.Exec(ctx, schema+"\n"+userDataSchema+"\n"+communitySchema+"\n"+adminSchema+"\n"+translationSchema+"\n"+candidateSkinSchema+"\n"+communityCandidateSkinSchema+"\n"+communityPluginSchema+"\n"+adminOpsSchema+"\n"+skinJobSchema+"\n"+feedbackSchema+"\n"+voiceContributionsSchema+"\n"+diagnosticsSchema); e != nil {
+	if _, e = tx.Exec(ctx, schema+"\n"+userDataSchema+"\n"+communitySchema+"\n"+adminSchema+"\n"+translationSchema+"\n"+candidateSkinSchema+"\n"+communityCandidateSkinSchema+"\n"+communityPluginSchema+"\n"+adminOpsSchema+"\n"+skinJobSchema+"\n"+feedbackSchema+"\n"+voiceContributionsSchema+"\n"+diagnosticsSchema+"\n"+qqConversationsSchema); e != nil {
 		return e
 	}
 	return tx.Commit(ctx)
@@ -243,6 +246,10 @@ SELECT id,user_id,language,provider,duration_ms,transcript,app_version,audio_mim
 	// 诊断快照与它的访问记录；缺表时启动走迁移。
 	if _, e := s.pool.Exec(ctx, `SELECT id,user_id,token_hash,token_hint,platform,app_version,sections,content,bytes,created_at,expires_at FROM diagnostic_snapshots WHERE false;
 SELECT id,snapshot_id,tool,arguments,result_count,bytes,at FROM diagnostic_accesses WHERE false`); e != nil {
+		return e
+	}
+	// QQ 群答疑接上追问用的最近问答；缺表时启动走迁移。
+	if _, e := s.pool.Exec(ctx, `SELECT id,subject,question,answer,created_at FROM qq_conversations WHERE false`); e != nil {
 		return e
 	}
 	// AI skin artwork jobs are shared between replicas through this table; without it a poll on another replica could not find the job.
@@ -625,6 +632,8 @@ func (s *Store) Prune(ctx context.Context) {
 		"DELETE FROM admin_events WHERE kind IN ('active','session','session_crash') AND created_at<now()-interval '" + strconv.Itoa(telemetryActivityRetentionDays) + " days'",
 		// 反馈只保留 feedbackRetentionDays 天，截图随外键一起删除。
 		"DELETE FROM feedback WHERE created_at<now()-interval '" + strconv.Itoa(feedbackRetentionDays) + " days'",
+		// QQ 群答疑的问答只用来接上 30 分钟内的追问，过期即删。
+		"DELETE FROM qq_conversations WHERE created_at<now()-interval '30 minutes'",
 		// 语音贡献只保留 voiceContributionRetentionDays 天。
 		"DELETE FROM voice_contributions WHERE created_at<now()-interval '" + strconv.Itoa(voiceContributionRetentionDays) + " days'",
 		// 云剪贴板按用户设置的保留天数清理，置顶的条目不受保留期影响；0 表示一直保留。

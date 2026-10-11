@@ -81,6 +81,8 @@ type QQBotConfig struct {
 	// KnowledgeRepo 和 KnowledgeDir 是答疑知识库所在的仓库和目录，默认 metasequoiaime/msime-docs 的 guides；只收这个目录下的 Markdown 文件，不含子目录。管理后台的 GitHub App 要能读这个仓库。
 	KnowledgeRepo string `json:"knowledge_repo"`
 	KnowledgeDir  string `json:"knowledge_dir"`
+	// GapsRepo 是汇总「机器人答不上的问题」的仓库，例如 metasequoiaime/msime-docs：答不上时把模型对问题的一句话概括作为评论追加到其中名为「QQ 机器人答不上的问题」的开放 issue，没有时新建。为空时不记录。GitHub App 要有这个仓库的 Issues 写权限。
+	GapsRepo string `json:"gaps_repo"`
 	// APIURL 覆盖 https://api.bot.qq.com，供测试使用。
 	APIURL string `json:"api_url,omitempty"`
 	secret string
@@ -101,7 +103,7 @@ var (
 
 func (c *QQBotConfig) validate(cfg *Config) error {
 	if !c.enabled() {
-		if c.APIURL != "" || c.Repo != "" || c.Model != "" || c.FallbackModel != "" || c.KnowledgeRepo != "" || c.KnowledgeDir != "" || len(c.Labels) > 0 || len(c.Groups) > 0 || len(c.Admins) > 0 {
+		if c.APIURL != "" || c.Repo != "" || c.Model != "" || c.FallbackModel != "" || c.KnowledgeRepo != "" || c.KnowledgeDir != "" || c.GapsRepo != "" || len(c.Labels) > 0 || len(c.Groups) > 0 || len(c.Admins) > 0 {
 			return errors.New("qq_bot settings require app_id")
 		}
 		return nil
@@ -182,6 +184,9 @@ func (c *QQBotConfig) validate(cfg *Config) error {
 	if !qqKnowledgeDirPattern.MatchString(c.KnowledgeDir) || strings.Contains(c.KnowledgeDir, "..") {
 		return errors.New("qq_bot knowledge_dir must be a relative directory path")
 	}
+	if c.GapsRepo != "" && !githubRepositoryPattern.MatchString(c.GapsRepo) {
+		return errors.New("qq_bot gaps_repo must be owner/name")
+	}
 	if c.APIURL == "" {
 		c.APIURL = defaultQQBotAPIURL
 	}
@@ -209,6 +214,9 @@ type qqBot struct {
 	mediaHosts  []string
 	// roles 缓存群成员身份，见 qq_roles.go。
 	roles qqRoles
+	// gapsIssue 是答不上的问题汇总 issue 的编号和查到它的时间，见 qq_gaps.go；由 mu 保护。
+	gapsIssue   int64
+	gapsIssueAt time.Time
 }
 
 func newQQBot(c QQBotConfig) *qqBot {
@@ -472,7 +480,7 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		}
 	}
 	if !admin {
-		s.answerQQQuestion(ctx, m.GroupOpenID, text, reply)
+		s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, text, reply)
 		return
 	}
 	report, err := s.qqSummarise(ctx, text)
@@ -482,7 +490,7 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		return
 	}
 	if report.Kind == "other" {
-		s.answerQQQuestion(ctx, m.GroupOpenID, text, reply)
+		s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, text, reply)
 		return
 	}
 	if report.Missing != "" {
@@ -510,22 +518,64 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 }
 
 // answerQQQuestion 用知识库回答一条消息；答不上时 @ 本群的管理员（qqGroupAdmins）。
-func (s *Server) answerQQQuestion(ctx context.Context, group, question string, reply func(string)) {
-	answer, err := s.qqAnswerQuestion(ctx, question)
+func (s *Server) answerQQQuestion(ctx context.Context, group, member, question string, reply func(string)) {
+	subject := group + "/" + member
+	var history []account.QQTurn
+	if s.qqHistory != nil {
+		turns, err := s.qqHistory.QQConversation(ctx, subject, qqHistoryTurns)
+		if err != nil {
+			slog.Warn("qq bot: conversation unavailable", "reason", err.Error())
+		}
+		history = turns
+	}
+	answer, err := s.qqAnswerQuestion(ctx, history, question)
 	if err != nil {
 		slog.Warn("qq bot: answer failed", "reason", err.Error())
 		reply(qqReplyUnavailable)
 		return
 	}
-	if answer.Type == "unknown" {
+	recorded := answer.Answer
+	switch {
+	case answer.Type == "unknown":
+		recorded = qqUnansweredTurn
 		reply(qqUnknownReply(s.qqGroupAdmins(group)))
-		return
-	}
-	if answer.Type == "answered" && answer.Escalate {
+		s.recordQQGap(ctx, answer.Topic)
+	case answer.Type == "answered" && answer.Escalate:
 		reply(answer.Answer + qqEscalation(s.qqGroupAdmins(group)))
-		return
+	default:
+		reply(answer.Answer)
 	}
-	reply(answer.Answer)
+	if s.qqHistory != nil {
+		if err := s.qqHistory.RecordQQTurn(ctx, subject, question, recorded); err != nil {
+			slog.Warn("qq bot: conversation not recorded", "reason", err.Error())
+		}
+	}
+}
+
+// qqHistoryTurns 是答疑时带上的最近问答轮数；qqUnansweredTurn 是答不上时记下的答案，让下一轮追问知道上一轮没有解决。
+const (
+	qqHistoryTurns   = 2
+	qqUnansweredTurn = "（没能回答，已请管理员来看）"
+)
+
+// qqConversationStore 是 account.Service 里接上追问用的最近问答，所有副本共享；没有数据库时为 nil。
+type qqConversationStore interface {
+	QQConversation(ctx context.Context, subject string, limit int) ([]account.QQTurn, error)
+	RecordQQTurn(ctx context.Context, subject, question, answer string) error
+}
+
+// qqQuestionWithHistory 是交给模型的用户消息：有最近的问答时先列出来，再给出这次的问题，追问才能接上前文。
+func qqQuestionWithHistory(history []account.QQTurn, question string) string {
+	if len(history) == 0 {
+		return question
+	}
+	var b strings.Builder
+	b.WriteString("之前的对话（较早的在前）：\n")
+	for _, turn := range history {
+		b.WriteString("问：" + turn.Question + "\n答：" + turn.Answer + "\n")
+	}
+	b.WriteString("\n现在的问题：" + question)
+	return b.String()
 }
 
 // qqEscalation 接在群友报问题时的答案后面：先给文档里的排查办法，再请管理员跟进。没有管理员可 @ 时只说管理员会来看。

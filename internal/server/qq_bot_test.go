@@ -175,6 +175,10 @@ type qqFake struct {
 	// GitHub
 	searchQuery string
 	// searchQueries 记下每次搜索；releases 是各仓库 Release 列表的响应（缺省的仓库返回 500）。
+	// openIssues 是列出开放 issue 的响应（为空时返回 500），openIssueCalls 记下调用次数；commentStatus 非 0 时评论失败。
+	openIssues     string
+	openIssueCalls int
+	commentStatus  int
 	searchQueries  []string
 	searchMaxTerms int
 	releases       map[string]string
@@ -312,6 +316,13 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"items": f.searchItems})
+	case qqIssuesPath.MatchString(r.URL.Path) && r.Method == "GET":
+		f.openIssueCalls++
+		if f.openIssues == "" {
+			w.WriteHeader(500)
+			return
+		}
+		_, _ = io.WriteString(w, f.openIssues)
 	case qqIssuesPath.MatchString(r.URL.Path) && r.Method == "POST":
 		if f.createStatus != 0 {
 			w.WriteHeader(f.createStatus)
@@ -321,6 +332,8 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.created = append(f.created, body)
 		w.WriteHeader(201)
 		_, _ = w.Write([]byte(`{"number":123,"html_url":"https://github.com/o/r/issues/123"}`))
+	case strings.HasPrefix(r.URL.Path, "/repos/") && strings.HasSuffix(r.URL.Path, "/comments") && f.commentStatus != 0:
+		w.WriteHeader(f.commentStatus)
 	case strings.HasPrefix(r.URL.Path, "/repos/") && strings.HasSuffix(r.URL.Path, "/comments"):
 		if f.comments == nil {
 			f.comments = map[string]map[string]any{}
@@ -1319,5 +1332,173 @@ func TestQQIssueSearchNarrows(t *testing.T) {
 	}
 	if s.qqSearchIssues(context.Background(), "  ") != "" {
 		t.Fatal("blank keywords must not search")
+	}
+}
+
+// memoryConversations 是测试用的对话存储。
+type memoryConversations struct {
+	turns map[string][]account.QQTurn
+	err   error
+}
+
+func (m *memoryConversations) QQConversation(_ context.Context, subject string, limit int) ([]account.QQTurn, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	turns := m.turns[subject]
+	if len(turns) > limit {
+		turns = turns[len(turns)-limit:]
+	}
+	return turns, nil
+}
+
+func (m *memoryConversations) RecordQQTurn(_ context.Context, subject, question, answer string) error {
+	if m.err != nil {
+		return m.err
+	}
+	if m.turns == nil {
+		m.turns = map[string][]account.QQTurn{}
+	}
+	m.turns[subject] = append(m.turns[subject], account.QQTurn{Question: question, Answer: answer})
+	return nil
+}
+
+// 追问接上前文：挑段落和回答都看到最近两轮问答；每轮都记下，答不上时记下占位答案；存储出错不影响答疑。
+func TestQQBotFollowUpsUseRecentTurns(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.qq.config.Admins = nil
+	history := &memoryConversations{}
+	s.qqHistory = history
+	qqDeliver(t, s, "m-turn-1", "五笔怎么切换")
+	if fake.chatBodies[0] != "五笔怎么切换" {
+		t.Fatalf("first question carries no history: %q", fake.chatBodies[0])
+	}
+	fake.answer = `{"type":"unknown"}`
+	qqDeliver(t, s, "m-turn-2", "还是不行")
+	want := "之前的对话（较早的在前）：\n问：五笔怎么切换\n答：在设置的「输入方案」里选五笔。\n\n现在的问题：还是不行"
+	if got := fake.chatBodies[len(fake.chatBodies)-1]; got != want || fake.chatBodies[len(fake.chatBodies)-2] != want {
+		t.Fatalf("%q", got)
+	}
+	turns := history.turns["GROUP1/MEMBER1"]
+	if len(turns) != 2 || turns[1].Answer != qqUnansweredTurn {
+		t.Fatal(turns)
+	}
+	// 只带最近两轮。
+	qqDeliver(t, s, "m-turn-3", "第三问")
+	qqDeliver(t, s, "m-turn-3b", "第四问")
+	if got := fake.chatBodies[len(fake.chatBodies)-1]; strings.Count(got, "问：") != 2 || strings.Contains(got, "问：五笔怎么切换") || !strings.Contains(got, "问：第三问") {
+		t.Fatalf("%q", got)
+	}
+	// 存储出错时照常回答。
+	history.err = errors.New("database down")
+	fake.answer = `{"type":"answered","answer":"在设置里选五笔。"}`
+	qqDeliver(t, s, "m-turn-4", "五笔怎么切换")
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "在设置里选五笔。" {
+		t.Fatal(last)
+	}
+}
+
+// countingLocker 记下取锁次数。
+type countingLocker struct {
+	locks int
+	err   error
+}
+
+func (l *countingLocker) WaitLock(context.Context, string, time.Duration) (func(), error) {
+	if l.err != nil {
+		return nil, l.err
+	}
+	l.locks++
+	return func() {}, nil
+}
+
+// 答不上的问题汇总到 gaps_repo 的固定 issue：第一次新建，之后复用；同一个问题 7 天内只记一次；没有配置 gaps_repo 时不记。
+func TestQQBotRecordsUnansweredTopics(t *testing.T) {
+	s, fake, limiter := qqServer(t)
+	s.qq.config.Admins = nil
+	s.qq.config.GapsRepo = "o/docs"
+	locks := &countingLocker{}
+	s.qqLocks = locks
+	fake.openIssues = `[{"number":5,"title":"别的 issue"},{"number":6,"title":"QQ 机器人答不上的问题","pull_request":{"url":"x"}}]`
+	fake.answer = `{"type":"unknown","topic":"  有没有 @octocat 鸿蒙版\n见 #12 "}`
+	qqDeliver(t, s, "m-gap-1", "有鸿蒙版吗")
+	var created map[string]any
+	for _, c := range fake.created {
+		if c["_repo"] == "o/docs" {
+			created = c
+		}
+	}
+	if created == nil || created["title"] != qqGapsTitle || locks.locks != 1 {
+		t.Fatal(fake.created, locks.locks)
+	}
+	comment := fake.comments["/repos/o/docs/issues/123/comments"]
+	if comment == nil || comment["body"] != "群友问：有没有 @\u200boctocat 鸿蒙版 见 #\u200b12" {
+		t.Fatal(fake.comments)
+	}
+	// 同一个概括不再记录；编号已缓存，不再列 issue。
+	delete(fake.comments, "/repos/o/docs/issues/123/comments")
+	calls := fake.openIssueCalls
+	qqDeliver(t, s, "m-gap-2", "有鸿蒙版吗")
+	if fake.comments["/repos/o/docs/issues/123/comments"] != nil || fake.openIssueCalls != calls {
+		t.Fatal("the same topic must be recorded once", fake.comments)
+	}
+	// 换一个问题：复用缓存的编号。
+	fake.answer = `{"type":"unknown","topic":"能否设置候选窗透明度"}`
+	qqDeliver(t, s, "m-gap-3", "候选窗能透明吗")
+	if c := fake.comments["/repos/o/docs/issues/123/comments"]; c == nil || c["body"] != "群友问：能否设置候选窗透明度" || fake.openIssueCalls != calls {
+		t.Fatal(fake.comments, fake.openIssueCalls)
+	}
+	// 缓存过期后重新查找，找到已有的同名 issue 就不新建。
+	s.qq.gapsIssueAt = time.Now().Add(-2 * qqGapsIssueTTL)
+	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题"}]`
+	createdBefore := len(fake.created)
+	fake.answer = `{"type":"unknown","topic":"第三个问题"}`
+	qqDeliver(t, s, "m-gap-4", "第三个")
+	if fake.comments["/repos/o/docs/issues/77/comments"] == nil || len(fake.created) != createdBefore {
+		t.Fatal(fake.comments, len(fake.created))
+	}
+	// 评论失败时清掉缓存，下一次重新查找。
+	fake.commentStatus = 410
+	fake.answer = `{"type":"unknown","topic":"第四个问题"}`
+	qqDeliver(t, s, "m-gap-5", "第四个")
+	if s.qq.gapsIssue != 0 {
+		t.Fatal("a failed comment must drop the cached issue")
+	}
+	fake.commentStatus = 0
+	// 每天的上限。
+	limiter.counts["qq-bot-gaps-day|o/docs"] = qqGapsDaily
+	delete(fake.comments, "/repos/o/docs/issues/77/comments")
+	fake.answer = `{"type":"unknown","topic":"第五个问题"}`
+	qqDeliver(t, s, "m-gap-6", "第五个")
+	if fake.comments["/repos/o/docs/issues/77/comments"] != nil {
+		t.Fatal("daily cap ignored")
+	}
+	// 没有配置 gaps_repo、概括为空或限流出错时都不记。
+	s.qq.config.GapsRepo = ""
+	s.recordQQGap(context.Background(), "x")
+	s.qq.config.GapsRepo = "o/docs"
+	s.recordQQGap(context.Background(), "   ")
+	limiter.err = map[string]error{"qq-bot-gap": errors.New("down")}
+	s.recordQQGap(context.Background(), "限流出错")
+	limiter.err = nil
+	// 列 issue 失败、取锁失败、概括过长。
+	s.qq.gapsIssue = 0
+	fake.openIssues = ""
+	s.recordQQGap(context.Background(), "列表失败")
+	locks.err = errors.New("busy")
+	s.recordQQGap(context.Background(), "取锁失败")
+	locks.err = nil
+	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题"}]`
+	delete(limiter.counts, "qq-bot-gaps-day|o/docs")
+	s.recordQQGap(context.Background(), strings.Repeat("长", qqGapRunes+20))
+	if c := fake.comments["/repos/o/docs/issues/77/comments"]; c == nil || len([]rune(c["body"].(string))) != len([]rune("群友问："))+qqGapRunes {
+		t.Fatal(fake.comments)
+	}
+	// 配置校验。
+	t.Setenv("TEST_QQ_SECRET", qqTestSecret)
+	c := qqValidConfig()
+	c.QQBot.GapsRepo = "msime-docs"
+	if c.QQBot.validate(&c) == nil {
+		t.Fatal("bad gaps_repo accepted")
 	}
 }

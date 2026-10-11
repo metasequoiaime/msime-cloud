@@ -212,6 +212,11 @@ type qqFake struct {
 	embedCalls   int
 	// tokenPerms 记下每次申请 GitHub App 令牌时要的权限。
 	tokenPerms []string
+	// 现查 GitHub：researchPath 是模型第一轮要调用的路径（为空时直接回复「不需要查」），researchTools 记下每轮是否给了工具；answerAfterResearch 是资料里有现查结果时回答模型的输出；extraGitHub 是按路径（含查询参数）给的额外 GitHub 响应。
+	researchPath        string
+	researchTools       []bool
+	answerAfterResearch string
+	extraGitHub         map[string]string
 	// 「记录答案」：faq 是整理 FAQ 的模型输出；faqFiles 不为 nil 时知识库仓库按它返回文件（要求按 qqFAQHead 读），faqWrites 按顺序记下建树、建提交、建分支、开 PR 的请求，faqFailPath 是会返回 422 的写接口路径。
 	faq         string
 	faqFiles    map[string]string
@@ -259,6 +264,27 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		messages := body["messages"].([]any)
 		system := messages[0].(map[string]any)["content"].(string)
+		if strings.HasPrefix(system, qqResearchPrompt) {
+			f.researchTools = append(f.researchTools, body["tools"] != nil)
+			f.chatCalls = append(f.chatCalls, "research")
+			var tool string
+			for _, m := range messages {
+				if m.(map[string]any)["role"] == "tool" {
+					tool = m.(map[string]any)["content"].(string)
+				}
+			}
+			reply := map[string]any{"role": "assistant", "content": "查到：" + tool}
+			finish := "stop"
+			switch {
+			case f.researchPath == "":
+				reply["content"] = "不需要查"
+			case tool == "":
+				reply = map[string]any{"role": "assistant", "content": "", "tool_calls": []any{map[string]any{"id": "call-1", "type": "function", "function": map[string]any{"name": "github_get", "arguments": `{"path":"` + f.researchPath + `"}`}}}}
+				finish = "tool_calls"
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": reply, "finish_reason": finish}}})
+			return
+		}
 		user := messages[1].(map[string]any)["content"].(string)
 		// 经 EveryAPI 转发的 OpenAI 模型只在用户消息里找 json，最后一条必须是格式指令。
 		last := messages[len(messages)-1].(map[string]any)
@@ -291,6 +317,9 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case strings.HasPrefix(system, qqFAQPrompt):
 			content = f.faq
 			f.chatCalls = append(f.chatCalls, "faq")
+		case strings.HasPrefix(system, qqAnswerPrompt) && f.answerAfterResearch != "" && strings.Contains(system, "### 现查的 GitHub 结果"):
+			content, f.answerSystem = f.answerAfterResearch, system
+			f.chatCalls = append(f.chatCalls, "answer")
 		case strings.HasPrefix(system, qqAnswerPrompt):
 			content, f.answerSystem = f.answer, system
 			f.chatCalls = append(f.chatCalls, "answer")
@@ -355,6 +384,8 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_, _ = w.Write(body)
+	case f.extraGitHub[r.URL.RequestURI()] != "":
+		_, _ = io.WriteString(w, f.extraGitHub[r.URL.RequestURI()])
 	case r.URL.Path == "/app/installations/77/access_tokens":
 		f.tokenPerms = append(f.tokenPerms, fmt.Sprint(body["permissions"]))
 		_ = json.NewEncoder(w).Encode(map[string]any{"token": "ghs_test", "expires_at": time.Now().Add(time.Hour)})
@@ -2612,5 +2643,60 @@ func TestQQVectorRecall(t *testing.T) {
 	}
 	if got := (&Server{qq: &qqBot{config: QQBotConfig{EmbeddingModel: "m"}}, config: Config{Chat: ChatEndpoint{Endpoint: Endpoint{URL: "https://api.everyapi.ai/v1/chat/completions"}}}}).qqEmbeddingURL(); got != "https://api.everyapi.ai/v1/embeddings" {
 		t.Fatal(got)
+	}
+}
+
+// 文档答不上时现查 GitHub：模型用 github_get 查到事实后重答；查完或者不需要查时不影响原来的答不上流程。
+func TestQQBotResearchesGitHub(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.qq.config.Admins = nil
+	fake.answer = `{"type":"unknown","topic":"水杉输入法有几个开发者"}`
+	fake.researchPath = "/repos/metasequoiaime/msime/contributors?per_page=100"
+	fake.extraGitHub = map[string]string{"/repos/metasequoiaime/msime/contributors?per_page=100": `[{"login":"houko","type":"User","contributions":5000,"avatar_url":"https://x","url":"https://y"},{"login":"dependabot[bot]","type":"Bot","contributions":20}]`}
+	fake.answerAfterResearch = `{"type":"answered","answer":"msime 仓库有 1 位人类贡献者和 1 个机器人账号。"}`
+	qqDeliver(t, s, "m-research", "水杉输入法现在有几个开发？")
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "msime 仓库有 1 位人类贡献者和 1 个机器人账号。" {
+		t.Fatal(last, fake.chatCalls)
+	}
+	// 工具结果去掉了链接和头像字段；第一轮给工具，第二轮作答。
+	if !strings.Contains(fake.answerSystem, "### 现查的 GitHub 结果\n"+`查到：[{"contributions":5000,"login":"houko","type":"User"}`) || strings.Contains(fake.answerSystem, "avatar_url") || fmt.Sprint(fake.researchTools) != "[true true]" {
+		t.Fatal(fake.answerSystem, fake.researchTools)
+	}
+	// 不需要查的问题照常按答不上处理。
+	fake.researchPath, fake.chatCalls = "", nil
+	qqDeliver(t, s, "m-research-none", "今天天气怎么样")
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != qqUnknownUnrecordedReply || strings.Join(fake.chatCalls, ",") != "select,answer,research" {
+		t.Fatal(last, fake.chatCalls)
+	}
+	// 不允许的路径不发请求，告诉模型原因。
+	if got := s.qqResearchCall(context.Background(), qqResearchToolCall{Function: struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	}{Name: "github_get", Arguments: `{"path":"/repos/other/x/issues"}`}}); !strings.HasPrefix(got, "这个路径不允许") {
+		t.Fatal(got)
+	}
+}
+
+func TestQQResearchTarget(t *testing.T) {
+	for raw, want := range map[string]string{
+		"/repos/metasequoiaime/msime/contributors?per_page=100":                "metasequoiaime/msime /repos/metasequoiaime/msime/contributors?per_page=100",
+		"/repos/metasequoiaime/msime-windows":                                  "metasequoiaime/msime-windows /repos/metasequoiaime/msime-windows",
+		"/orgs/metasequoiaime/repos?per_page=100":                              "o/r /orgs/metasequoiaime/repos?per_page=100",
+		"/search/issues?q=repo:metasequoiaime/msime+is:pr+merged:>=2026-10-11": "o/r /search/issues?q=repo%3Ametasequoiaime%2Fmsime+is%3Apr+merged%3A%3E%3D2026-10-11",
+		"/search/commits?q=org:metasequoiaime author:houko":                    "o/r /search/commits?q=org%3Ametasequoiaime+author%3Ahouko",
+	} {
+		repo, path, ok := qqResearchTarget(raw, "o/r")
+		if !ok || repo+" "+path != want {
+			t.Errorf("%q: %q %q %v", raw, repo, path, ok)
+		}
+	}
+	for _, raw := range []string{"/repos/other/x", "/repos/metasequoiaime/../other/x", "https://api.github.com/repos/metasequoiaime/msime", "/user", "/search/issues?q=is:pr", "/search/issues?q=repo:metasequoiaimex/y", "/orgs/other", "/search/code?q=org:metasequoiaime"} {
+		if _, _, ok := qqResearchTarget(raw, "o/r"); ok {
+			t.Errorf("%q allowed", raw)
+		}
+	}
+	trimmed, _ := json.Marshal(qqResearchTrim(map[string]any{"title": "t", "html_url": "x", "node_id": "n", "body": strings.Repeat("长", qqResearchBodyRunes+10), "user": map[string]any{"login": "a", "avatar_url": "b"}, "assets": []any{map[string]any{"name": "setup.exe", "size": 1, "uploader": map[string]any{"login": "bot"}}}}))
+	if want := `{"assets":["setup.exe"],"body":"` + strings.Repeat("长", qqResearchBodyRunes) + `…","title":"t","user":"a"}`; string(trimmed) != want {
+		t.Fatal(string(trimmed))
 	}
 }

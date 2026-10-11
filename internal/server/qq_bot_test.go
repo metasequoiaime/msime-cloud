@@ -195,9 +195,11 @@ type qqFake struct {
 	releaseCalls   int
 	searchItems    []map[string]any
 	searchStatus   int
-	created        []map[string]any
-	createStatus   int
-	comments       map[string]map[string]any
+	// searchTotals 是按搜索语句给出的 total_count（仓库统计用），没有列出的搜索不带这个字段。
+	searchTotals map[string]int
+	created      []map[string]any
+	createStatus int
+	comments     map[string]map[string]any
 	// issueComments 是按路径列出 issue 评论的响应（GET），缺省为空列表。
 	issueComments map[string]string
 	// 「记录答案」：faq 是整理 FAQ 的模型输出；faqFiles 不为 nil 时知识库仓库按它返回文件（要求按 qqFAQHead 读），faqWrites 按顺序记下建树、建提交、建分支、开 PR 的请求，faqFailPath 是会返回 422 的写接口路径。
@@ -394,7 +396,11 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(f.searchStatus)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"items": f.searchItems})
+		result := map[string]any{"items": f.searchItems}
+		if total, ok := f.searchTotals[r.URL.Query().Get("q")]; ok {
+			result["total_count"] = total
+		}
+		_ = json.NewEncoder(w).Encode(result)
 	case qqIssuesPath.MatchString(r.URL.Path) && r.Method == "GET":
 		f.openIssueCalls++
 		if f.openIssues == "" {
@@ -2350,5 +2356,21 @@ func TestQQIssueContext(t *testing.T) {
 	found, _ := s.qqSearchIssues(context.Background(), "候选框")
 	if !strings.Contains(found, "- win #818（已完成，更新于 2026-10-06，标签：）候选框错位\n  修复已包含在 v0.9.5 及之后的版本\n  维护者最近说：在设置里关掉") {
 		t.Fatal(found)
+	}
+}
+
+// 问「msime 有多少 issue」这类数量时，挑段落的模型给出 stats，资料里列出每个答疑仓库的 issue 和 PR 数；某个数查不到时那个仓库不写，不写成 0。
+func TestQQBotRepoStats(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.qq.config.Admins = nil
+	fake.searchTotals = map[string]int{"repo:o/r is:issue is:open": 120, "repo:o/r is:issue is:closed": 3400, "repo:o/r is:pr is:open": 7, "repo:o/win is:issue is:open": 50}
+	fake.selected = `{"sections":[],"stats":true}`
+	fake.answer = `{"type":"answered","answer":"msime 现在开着 120 个 issue。"}`
+	qqDeliver(t, s, "m-stats", "msime有多少issue")
+	if !strings.Contains(fake.answerSystem, "### GitHub 仓库统计（现在的数量）\n- r：开着的 issue 120 个，已关闭的 issue 3400 个，开着的 PR 7 个\n") || strings.Contains(fake.answerSystem, "- win：") {
+		t.Fatal(fake.answerSystem)
+	}
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "msime 现在开着 120 个 issue。" {
+		t.Fatal(last)
 	}
 }

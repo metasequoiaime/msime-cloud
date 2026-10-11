@@ -4,10 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
-	"unicode/utf16"
-	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -15,14 +12,30 @@ import (
 var errClipboardDisabled = errors.New("clipboard_sync_disabled")
 var errDataNotFound = errors.New("user_data_not_found")
 
+// ClipboardItem 是云剪贴板里的一条密文条目。服务端看不到明文，`Ciphertext` 由客户端用 `KeyID` 对应的剪贴板密钥加密。
 type ClipboardItem struct {
-	ID        string    `json:"id"`
-	Text      string    `json:"text"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID         string    `json:"id"`
+	Ciphertext string    `json:"ciphertext"`
+	KeyID      string    `json:"key_id"`
+	UpdatedAt  time.Time `json:"updated_at"`
 	// Pinned 的条目排在最前，不受保留期清理，也不会被五十条上限挤掉。
 	Pinned bool `json:"pinned"`
 	// Device 是写入时所用会话的设备名（由登录时记录的 User-Agent 解析），认不出时为空字符串。
 	Device string `json:"device"`
+}
+
+// ClipboardUpload 是客户端上传的一条密文条目：`Dedup` 是明文的 HMAC 标签，相同内容只保留一条。
+type ClipboardUpload struct {
+	Ciphertext string `json:"ciphertext"`
+	KeyID      string `json:"key_id"`
+	Dedup      string `json:"dedup"`
+}
+
+// ClipboardSettings 是一个账号的云剪贴板设置：同步开关、保留天数和当前密钥编号（还没有密钥时为 nil）。
+type ClipboardSettings struct {
+	Enabled       bool
+	RetentionDays int
+	KeyID         *string
 }
 
 // clipboardRetentionDays 是保留时长允许的取值；0 表示一直保留。
@@ -46,37 +59,41 @@ func (s *Store) userDataTransaction(ctx context.Context, user string) (pgx.Tx, e
 	}
 	return tx, nil
 }
-func (s *Store) ClipboardEnabled(ctx context.Context, user string) (bool, error) {
-	var enabled bool
-	e := s.pool.QueryRow(ctx, "SELECT COALESCE((SELECT enabled FROM user_clipboard_settings WHERE user_id=$1),false)", user).Scan(&enabled)
-	return enabled, e
+
+// ClipboardSettings 用一条语句读出同步开关、保留天数和当前密钥编号；没有设置行时是关闭、一直保留、没有密钥。
+func (s *Store) ClipboardSettings(ctx context.Context, user string) (ClipboardSettings, error) {
+	var v ClipboardSettings
+	e := s.pool.QueryRow(ctx, "SELECT COALESCE(bool_or(enabled),false),COALESCE(max(retention_days),0),max(key_id) FROM user_clipboard_settings WHERE user_id=$1", user).Scan(&v.Enabled, &v.RetentionDays, &v.KeyID)
+	return v, e
 }
+
+// clipboardState 在用户行锁内读出同步开关和当前密钥编号，供写入路径判断 403 和 409。
+func clipboardState(ctx context.Context, tx pgx.Tx, user string) (bool, *string, error) {
+	var enabled bool
+	var key *string
+	e := tx.QueryRow(ctx, "SELECT COALESCE(bool_or(enabled),false),max(key_id) FROM user_clipboard_settings WHERE user_id=$1", user).Scan(&enabled, &key)
+	return enabled, key, e
+}
+
+// SetClipboardEnabled 打开或关闭云剪贴板。关闭时在同一个事务里删除全部条目、当前密钥、封装和设备登记，再次打开时由第一台设备重新生成密钥。
 func (s *Store) SetClipboardEnabled(ctx context.Context, user string, enabled bool) error {
 	tx, e := s.userDataTransaction(ctx, user)
 	if e != nil {
 		return e
 	}
 	defer tx.Rollback(ctx)
-	if _, e = tx.Exec(ctx, "INSERT INTO user_clipboard_settings(user_id,enabled) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET enabled=excluded.enabled", user, enabled); e != nil {
+	if _, e = tx.Exec(ctx, "INSERT INTO user_clipboard_settings(user_id,enabled) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET enabled=excluded.enabled,key_id=CASE WHEN excluded.enabled THEN user_clipboard_settings.key_id END", user, enabled); e != nil {
 		return e
 	}
-	// 撤销同步时清空云端历史；不会操作用户设备的系统剪贴板。
+	// 撤销同步时清空云端历史和密钥材料；不会操作用户设备的系统剪贴板。封装随设备的外键一起删除。
 	if !enabled {
-		if _, e = tx.Exec(ctx, "DELETE FROM user_clipboard WHERE user_id=$1", user); e != nil {
-			return e
+		for _, q := range []string{"DELETE FROM user_clipboard WHERE user_id=$1", "DELETE FROM user_clipboard_devices WHERE user_id=$1"} {
+			if _, e = tx.Exec(ctx, q, user); e != nil {
+				return e
+			}
 		}
 	}
 	return tx.Commit(ctx)
-}
-func (s *Store) AddClipboard(ctx context.Context, user, text string) (ClipboardItem, error) {
-	return s.AddClipboardFrom(ctx, user, "", text)
-}
-
-// ClipboardRetention 返回用户设置的保留天数，没有设置时为 0。
-func (s *Store) ClipboardRetention(ctx context.Context, user string) (int, error) {
-	var days int
-	e := s.pool.QueryRow(ctx, "SELECT COALESCE((SELECT retention_days FROM user_clipboard_settings WHERE user_id=$1),0)", user).Scan(&days)
-	return days, e
 }
 
 // SetClipboardRetention 写入保留天数，不改变同步开关；超过保留期的条目由 Store.Prune 删除。
@@ -117,24 +134,31 @@ func (s *Store) sessionDevice(ctx context.Context, session string) (string, erro
 	return name, e
 }
 
-// AddClipboardFrom 写入一条剪贴板文本并记下写入设备；相同文本只保留一条，移到最前并更新设备名。
-func (s *Store) AddClipboardFrom(ctx context.Context, user, device, text string) (ClipboardItem, error) {
+// AddClipboard 写入一条密文条目并记下写入设备（会话的设备名）。云剪贴板关闭时返回 errClipboardDisabled，`KeyID` 不是当前密钥（包括还没有密钥）时返回 errClipboardKeyConflict。`Dedup` 相同的条目只保留一条，移到最前并换成新的密文和设备名。
+func (s *Store) AddClipboard(ctx context.Context, user, device string, v ClipboardUpload) (ClipboardItem, error) {
 	tx, e := s.userDataTransaction(ctx, user)
 	if e != nil {
 		return ClipboardItem{}, e
 	}
 	defer tx.Rollback(ctx)
-	var enabled bool
-	if e = tx.QueryRow(ctx, "SELECT COALESCE((SELECT enabled FROM user_clipboard_settings WHERE user_id=$1),false)", user).Scan(&enabled); e != nil {
+	enabled, key, e := clipboardState(ctx, tx, user)
+	if e != nil {
 		return ClipboardItem{}, e
 	}
 	if !enabled {
 		return ClipboardItem{}, errClipboardDisabled
 	}
+	if key == nil || *key != v.KeyID {
+		return ClipboardItem{}, errClipboardKeyConflict
+	}
+	// 滚动升级期间旧版本副本写入的明文条目，以及不属于当前密钥的条目，都不会再出现在列表里；趁持有用户行锁时删掉，免得它们占用五十条的名额。
+	if _, e = tx.Exec(ctx, "DELETE FROM user_clipboard WHERE user_id=$1 AND (ciphertext='' OR key_id<>$2)", user, v.KeyID); e != nil {
+		return ClipboardItem{}, e
+	}
 	var item ClipboardItem
-	e = tx.QueryRow(ctx, `INSERT INTO user_clipboard(id,user_id,text,text_hash,sequence,device) VALUES($1,$2,$3,$4,(SELECT COALESCE(max(sequence),0)+1 FROM user_clipboard WHERE user_id=$2),$5)
- ON CONFLICT(user_id,text_hash) DO UPDATE SET sequence=excluded.sequence,updated_at=now(),device=excluded.device
- RETURNING id,text,updated_at,pinned,device`, randomToken(), user, text, hash(text), device).Scan(&item.ID, &item.Text, &item.UpdatedAt, &item.Pinned, &item.Device)
+	e = tx.QueryRow(ctx, `INSERT INTO user_clipboard(id,user_id,text,text_hash,ciphertext,key_id,sequence,device) VALUES($1,$2,'',$3,$4,$5,(SELECT COALESCE(max(sequence),0)+1 FROM user_clipboard WHERE user_id=$2),$6)
+ ON CONFLICT(user_id,text_hash) DO UPDATE SET sequence=excluded.sequence,updated_at=now(),device=excluded.device,ciphertext=excluded.ciphertext,key_id=excluded.key_id
+ RETURNING id,ciphertext,key_id,updated_at,pinned,device`, randomToken(), user, v.Dedup, v.Ciphertext, v.KeyID, device).Scan(&item.ID, &item.Ciphertext, &item.KeyID, &item.UpdatedAt, &item.Pinned, &item.Device)
 	if e != nil {
 		return item, e
 	}
@@ -145,9 +169,11 @@ func (s *Store) AddClipboardFrom(ctx context.Context, user, device, text string)
 	}
 	return item, tx.Commit(ctx)
 }
-func (s *Store) ListClipboard(ctx context.Context, user, search string) ([]ClipboardItem, error) {
-	rows, e := s.pool.Query(ctx, `SELECT id,text,updated_at,pinned,device FROM user_clipboard WHERE user_id=$1
- AND strpos(lower(text),lower($2))>0 ORDER BY pinned DESC,sequence DESC LIMIT 50`, user, search)
+
+// ListClipboard 返回用密钥 key 加密的条目，置顶的在前，最多 50 条。明文条目和其他密钥的条目不返回。
+func (s *Store) ListClipboard(ctx context.Context, user, key string) ([]ClipboardItem, error) {
+	rows, e := s.pool.Query(ctx, `SELECT id,ciphertext,key_id,updated_at,pinned,device FROM user_clipboard WHERE user_id=$1
+ AND ciphertext<>'' AND key_id=$2 ORDER BY pinned DESC,sequence DESC LIMIT 50`, user, key)
 	if e != nil {
 		return nil, e
 	}
@@ -155,7 +181,7 @@ func (s *Store) ListClipboard(ctx context.Context, user, search string) ([]Clipb
 	items := []ClipboardItem{}
 	for rows.Next() {
 		var x ClipboardItem
-		if e = rows.Scan(&x.ID, &x.Text, &x.UpdatedAt, &x.Pinned, &x.Device); e != nil {
+		if e = rows.Scan(&x.ID, &x.Ciphertext, &x.KeyID, &x.UpdatedAt, &x.Pinned, &x.Device); e != nil {
 			return nil, e
 		}
 		items = append(items, x)
@@ -205,36 +231,35 @@ func (a *Service) clipboard(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case "GET":
-		search := r.URL.Query().Get("q")
-		if !utf8.ValidString(search) || len(search) > 1024 || strings.ContainsRune(search, 0) {
-			writeError(w, 400, "invalid_search")
-			return
-		}
-		enabled, e := a.store.ClipboardEnabled(r.Context(), p.UserID)
+		// 服务端看不到明文，不再支持搜索：查询参数 q 被忽略，由客户端解密后自己搜索。
+		settings, e := a.store.ClipboardSettings(r.Context(), p.UserID)
 		if e != nil {
 			a.error(w, e)
 			return
 		}
-		days, e := a.store.ClipboardRetention(r.Context(), p.UserID)
-		if e != nil {
-			a.error(w, e)
-			return
+		items := []ClipboardItem{}
+		if settings.KeyID != nil {
+			if items, e = a.store.ListClipboard(r.Context(), p.UserID, *settings.KeyID); e != nil {
+				a.error(w, e)
+				return
+			}
 		}
-		items, e := a.store.ListClipboard(r.Context(), p.UserID, search)
-		if e != nil {
-			a.error(w, e)
-			return
-		}
-		write(w, 200, map[string]any{"enabled": enabled, "retention_days": days, "items": items})
+		write(w, 200, map[string]any{"enabled": settings.Enabled, "retention_days": settings.RetentionDays, "key_id": settings.KeyID, "items": items})
 	case "POST":
 		var v struct {
+			// Text 只用来识别旧版本客户端：带非空明文时返回 400 clipboard_e2e_required。
 			Text string `json:"text"`
+			ClipboardUpload
 		}
 		if !readSized(w, r, &v, 32768) {
 			return
 		}
-		if !utf8.ValidString(v.Text) || strings.TrimSpace(v.Text) == "" || strings.ContainsRune(v.Text, 0) || len(utf16.Encode([]rune(v.Text))) > 4000 {
-			writeError(w, 400, "invalid_clipboard_text")
+		if v.Text != "" {
+			writeError(w, 400, "clipboard_e2e_required")
+			return
+		}
+		if !validClipboardCiphertext(v.Ciphertext) || !isLowerHex(v.Dedup, 64) {
+			writeError(w, 400, "invalid_clipboard_ciphertext")
 			return
 		}
 		device, e := a.store.sessionDevice(r.Context(), p.SessionID)
@@ -242,13 +267,8 @@ func (a *Service) clipboard(w http.ResponseWriter, r *http.Request) {
 			a.error(w, e)
 			return
 		}
-		item, e := a.store.AddClipboardFrom(r.Context(), p.UserID, device, v.Text)
-		if errors.Is(e, errClipboardDisabled) {
-			writeError(w, 403, "clipboard_sync_disabled")
-			return
-		}
-		if e != nil {
-			a.error(w, e)
+		item, e := a.store.AddClipboard(r.Context(), p.UserID, device, v.ClipboardUpload)
+		if a.clipboardError(w, e) {
 			return
 		}
 		write(w, 200, item)

@@ -74,10 +74,8 @@ func testUserDataTransactions(t *testing.T, native bool) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := db.SetClipboardEnabled(t.Context(), uid, true); err != nil {
-			t.Fatal(err)
-		}
-		item, err := db.AddClipboard(t.Context(), uid, "original")
+		key, _ := clipboardTestReady(t, db, uid, "transaction")
+		item, err := db.AddClipboard(t.Context(), uid, "", clipboardTestUpload(key, "original"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -124,7 +122,7 @@ func testUserDataTransactions(t *testing.T, native bool) {
 	snapshot := func(t *testing.T, uid string) string {
 		t.Helper()
 		var all strings.Builder
-		for _, table := range []string{"auth_users", "user_dictionary_state", "user_dictionary_entries", "user_dictionary_changes", "user_dictionary_overlay", "user_candidate_positions", "user_candidate_selections", "user_clipboard_settings", "user_clipboard", "user_preferences", "auth_sessions", "community_skins", "community_resources", "community_skin_downloads", "community_resource_saves", "community_candidate_skins", "community_candidate_skin_files", "community_candidate_skin_downloads", "community_candidate_skin_ratings", "community_skin_saves", "community_candidate_skin_saves", "community_plugin_saves", "admin_members", "admin_sessions", "admin_audit", "site_settings"} {
+		for _, table := range []string{"auth_users", "user_dictionary_state", "user_dictionary_entries", "user_dictionary_changes", "user_dictionary_overlay", "user_candidate_positions", "user_candidate_selections", "user_clipboard_settings", "user_clipboard", "user_clipboard_devices", "user_clipboard_wraps", "user_preferences", "auth_sessions", "community_skins", "community_resources", "community_skin_downloads", "community_resource_saves", "community_candidate_skins", "community_candidate_skin_files", "community_candidate_skin_downloads", "community_candidate_skin_ratings", "community_skin_saves", "community_candidate_skin_saves", "community_plugin_saves", "admin_members", "admin_sessions", "admin_audit", "site_settings"} {
 			var raw string
 			column := "user_id"
 			if table == "auth_users" {
@@ -176,7 +174,10 @@ func testUserDataTransactions(t *testing.T, native bool) {
 			_, e := s.SetCandidatePosition(t.Context(), f.user.User.ID, 1, CandidatePosition{Context: "hi", Code: "hi", Word: "hello"})
 			return e
 		},
-		"clipboard add":     func(s *Store, f fixture) error { _, e := s.AddClipboard(t.Context(), f.user.User.ID, "new"); return e },
+		"clipboard add": func(s *Store, f fixture) error {
+			_, e := s.AddClipboard(t.Context(), f.user.User.ID, "", clipboardTestUpload(clipboardTestKeyID("transaction"), "new"))
+			return e
+		},
 		"clipboard delete":  func(s *Store, f fixture) error { return s.DeleteClipboard(t.Context(), f.user.User.ID, f.clipboard) },
 		"clipboard disable": func(s *Store, f fixture) error { return s.SetClipboardEnabled(t.Context(), f.user.User.ID, false) },
 		"preferences": func(s *Store, f fixture) error {
@@ -231,8 +232,10 @@ func testUserDataTransactions(t *testing.T, native bool) {
 		"profile update":          {"PATCH", (*Service).update, func(f fixture) string { return `{"display_name":"changed"}` }, 204},
 		"logout":                  {"POST", (*Service).logout, func(f fixture) string { return `{}` }, 204},
 		"positions update":        {"PUT", (*Service).candidatePositions, func(f fixture) string { return `{"revision":1,"context":"hi","code":"hi","word":"hello","position":1}` }, 200},
-		"clipboard append":        {"POST", (*Service).clipboard, func(f fixture) string { return `{"text":"new text"}` }, 200},
-		"clipboard clear":         {"DELETE", (*Service).clipboard, func(f fixture) string { return `` }, 204},
+		"clipboard append": {"POST", (*Service).clipboard, func(f fixture) string {
+			return clipboardTestBody(clipboardTestUpload(clipboardTestKeyID("transaction"), "new text"))
+		}, 200},
+		"clipboard clear": {"DELETE", (*Service).clipboard, func(f fixture) string { return `` }, 204},
 	} {
 		operations[name] = func(s *Store, f fixture) error {
 			r := jsonRequest(spec.method, "/test", spec.body(f), f.user.AccessToken)

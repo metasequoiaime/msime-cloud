@@ -156,12 +156,17 @@ func TestReadOnlyDatabaseRejectsMutationsWithoutSuccess(t *testing.T) {
 	}
 }
 
-// Android 改版新增的账号接口（会话、短语同步、反馈、云端数据、剪贴板保留与置顶、诊断快照、候选窗皮肤同步与替换）在任意一条数据库语句失败时返回 503，只是可选语句失败时照常应答；写操作失败后调用者的数据与请求前完全一致。每个请求的每条语句依次在驱动层取消，每次都重新准备数据。
+// Android 改版新增的账号接口（会话、短语同步、反馈、云端数据、剪贴板保留与置顶、云剪贴板端到端加密、诊断快照、候选窗皮肤同步与替换）在任意一条数据库语句失败时返回 503，只是可选语句失败时照常应答；写操作失败后调用者的数据与请求前完全一致。每个请求的每条语句依次在驱动层取消，每次都重新准备数据。
 func TestAndroidAccountEndpointsAnswerEveryDatabaseFailure(t *testing.T) {
 	db := testStore(t)
 	type fixture struct {
 		user, token, otherSession, clipboard, candidate string
 	}
+	// 云剪贴板：seed 用设备 failure 生成密钥，另有一台待批准的设备；每个 seed 是新用户，所以编号可以固定。
+	clipboardKey := clipboardTestKeyID("failure")
+	clipboardDevice, _ := clipboardTestDevice("failure")
+	pending, pendingPublic := clipboardTestDevice("failure-pending")
+	newcomer, newcomerPublic := clipboardTestDevice("failure-new")
 	seed := func(t *testing.T) fixture {
 		t.Helper()
 		identity := Identity{"email", randomToken() + "@example.test"}
@@ -175,11 +180,12 @@ func TestAndroidAccountEndpointsAnswerEveryDatabaseFailure(t *testing.T) {
 		if _, err := db.PutPhrases(t.Context(), uid, 0, []Phrase{{ID: "p1", Text: "我在开会，稍后回复", Group: "工作", Position: 0}}); err != nil {
 			t.Fatal(err)
 		}
-		if err := db.SetClipboardEnabled(t.Context(), uid, true); err != nil {
+		key, _ := clipboardTestReady(t, db, uid, "failure")
+		item, err := db.AddClipboard(t.Context(), uid, "", clipboardTestUpload(key, "剪贴板条目"))
+		if err != nil {
 			t.Fatal(err)
 		}
-		item, err := db.AddClipboard(t.Context(), uid, "剪贴板条目")
-		if err != nil {
+		if err := db.PutClipboardDevice(t.Context(), uid, pending, pendingPublic, "待批准"); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := db.pool.Exec(t.Context(), `INSERT INTO diagnostic_snapshots(id,user_id,token_hash,token_hint,platform,app_version,sections,content,bytes,expires_at) VALUES($1,$2,$3,'abcd','android','1.0.0','{perf_trace}','{"perf_trace":[]}',17,now()+interval '1 hour')`, randomToken()[:24], uid, hash(randomToken())); err != nil {
@@ -198,6 +204,8 @@ func TestAndroidAccountEndpointsAnswerEveryDatabaseFailure(t *testing.T) {
 			`SELECT to_jsonb(x) FROM user_preferences x WHERE user_id=$1`,
 			`SELECT to_jsonb(x) FROM user_clipboard x WHERE user_id=$1`,
 			`SELECT to_jsonb(x) FROM user_clipboard_settings x WHERE user_id=$1`,
+			`SELECT to_jsonb(x) FROM user_clipboard_devices x WHERE user_id=$1`,
+			`SELECT to_jsonb(x) FROM user_clipboard_wraps x WHERE user_id=$1`,
 			`SELECT to_jsonb(x) FROM feedback x WHERE user_id=$1`,
 			`SELECT jsonb_build_object('feedback_id',feedback_id,'position',position) FROM feedback_screenshots WHERE feedback_id IN (SELECT id FROM feedback WHERE user_id=$1)`,
 			`SELECT jsonb_build_object('id',id,'token_hash',token_hash,'expires_at',expires_at) FROM diagnostic_snapshots WHERE user_id=$1`,
@@ -243,6 +251,25 @@ func TestAndroidAccountEndpointsAnswerEveryDatabaseFailure(t *testing.T) {
 		}, true},
 		{"clipboard retention", "PUT", "/v1/users/me/clipboard/retention", func(fixture) (string, string) { return `{"days":7}`, "application/json" }, true},
 		{"clipboard pin", "PUT", "/v1/users/me/clipboard/{clipboard}/pin", func(fixture) (string, string) { return `{"pinned":true}`, "application/json" }, true},
+		{"clipboard list", "GET", "/v1/users/me/clipboard", nil, false},
+		{"clipboard add", "POST", "/v1/users/me/clipboard", func(fixture) (string, string) {
+			return clipboardTestBody(clipboardTestUpload(clipboardKey, "新条目")), "application/json"
+		}, true},
+		{"clipboard disable", "PUT", "/v1/users/me/clipboard/settings", func(fixture) (string, string) { return `{"enabled":false}`, "application/json" }, true},
+		{"clipboard keys", "GET", "/v1/users/me/clipboard/keys?device_id=" + clipboardDevice, nil, false},
+		{"clipboard register", "PUT", "/v1/users/me/clipboard/devices/" + newcomer, func(fixture) (string, string) {
+			return clipboardTestBody(map[string]string{"public_key": newcomerPublic, "name": "新设备"}), "application/json"
+		}, true},
+		{"clipboard rename", "PUT", "/v1/users/me/clipboard/devices/" + pending, func(fixture) (string, string) {
+			return clipboardTestBody(map[string]string{"public_key": pendingPublic, "name": "改名"}), "application/json"
+		}, true},
+		{"clipboard reject", "DELETE", "/v1/users/me/clipboard/devices/" + pending, nil, true},
+		{"clipboard approve", "PUT", "/v1/users/me/clipboard/keys/" + clipboardKey + "/wraps/" + pending, func(fixture) (string, string) {
+			return `{"wrap":"` + clipboardTestWrap("pending") + `"}`, "application/json"
+		}, true},
+		{"clipboard rotate", "POST", "/v1/users/me/clipboard/keys", func(fixture) (string, string) {
+			return clipboardTestBody(ClipboardKeyChange{Previous: &clipboardKey, KeyID: clipboardTestKeyID("rotated"), Wraps: []ClipboardWrap{{clipboardDevice, clipboardTestWrap("rotated")}}, Revoke: []string{pending}}), "application/json"
+		}, true},
 		{"diagnostics upload", "POST", "/v1/users/me/diagnostics", func(fixture) (string, string) {
 			return diagnosticBody(`{"perf_trace":[{"t_ms":1,"kind":"key_down","duration_ms":3}]}`), "application/json"
 		}, true},
@@ -275,8 +302,8 @@ func TestAndroidAccountEndpointsAnswerEveryDatabaseFailure(t *testing.T) {
 					r.Header.Set("Content-Type", contentType)
 				}
 				r.Header.Set("Authorization", "Bearer "+f.token)
-				// 每次请求用一个不同的文档保留地址，避免按地址的共享限流代替接口本身作答。
-				r.RemoteAddr = "[2001:db8::" + randomToken()[:4] + "]:443"
+				// 每次请求用一个不同的文档保留地址，避免按地址的共享限流代替接口本身作答。IPv6 按 /64 计额度，所以变化的是前 64 位里的一组。
+				r.RemoteAddr = "[2001:db8:" + randomToken()[:4] + "::1]:443"
 				w = httptest.NewRecorder()
 				// 导出在写出响应头后才流式写 zip，此后出错只能中断连接，这正是约定的行为。
 				defer func() {

@@ -36,7 +36,8 @@ func TestUserDataSummaryExportAndDelete(t *testing.T) {
 		`INSERT INTO user_preferences(user_id,revision,settings) VALUES($1,4,'{"theme":"dark"}')`,
 		`INSERT INTO user_phrases(user_id,revision,phrases) VALUES($1,2,'[{"id":"a","text":"你好","group":"","position":1}]')`,
 		`INSERT INTO user_clipboard_settings(user_id,enabled) VALUES($1,true)`,
-		`INSERT INTO user_clipboard(id,user_id,text,text_hash,sequence) VALUES(md5(random()::text),$1,'剪贴内容','h',1)`,
+		`INSERT INTO user_clipboard(id,user_id,text,text_hash,ciphertext,key_id,sequence) VALUES(md5(random()::text),$1,'','h','v1.owner-ciphertext','k',1)`,
+		`INSERT INTO user_clipboard_devices(user_id,device_id,public_key,name) VALUES($1,'d','p','剪贴设备')`,
 		`INSERT INTO user_dictionary_state(user_id,revision) VALUES($1,7)`,
 		`INSERT INTO user_dictionary_entries(id,user_id,kind,code,word,weight,revision) VALUES(md5(random()::text),$1,'pinyin','shuishan','水杉',10,7)`,
 	} {
@@ -44,7 +45,7 @@ func TestUserDataSummaryExportAndDelete(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.pool.Exec(ctx, `INSERT INTO user_clipboard(id,user_id,text,text_hash,sequence) VALUES(md5(random()::text),$1,'别人的','h',1)`, other.User.ID); err != nil {
+	if _, err := s.pool.Exec(ctx, `INSERT INTO user_clipboard(id,user_id,text,text_hash,ciphertext,key_id,sequence) VALUES(md5(random()::text),$1,'','h','v1.other-ciphertext','k',1)`, other.User.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -85,7 +86,7 @@ func TestUserDataSummaryExportAndDelete(t *testing.T) {
 			t.Fatal("missing", name)
 		}
 	}
-	if !strings.Contains(files["preferences.json"], "dark") || !strings.Contains(files["dictionary.ndjson"], "水杉") || !strings.Contains(files["clipboard.json"], "剪贴内容") || strings.Contains(files["clipboard.json"], "别人的") || !strings.Contains(files["profile.json"], `"email"`) || strings.Contains(files["profile.json"], "data@example.test") {
+	if !strings.Contains(files["preferences.json"], "dark") || !strings.Contains(files["dictionary.ndjson"], "水杉") || !strings.Contains(files["clipboard.json"], "v1.owner-ciphertext") || !strings.Contains(files["clipboard.json"], "剪贴设备") || strings.Contains(files["clipboard.json"], "other-ciphertext") || !strings.Contains(files["profile.json"], `"email"`) || strings.Contains(files["profile.json"], "data@example.test") {
 		t.Fatal(files)
 	}
 	for i := 0; i < 2; i++ {

@@ -144,12 +144,12 @@ type userDataExportFile struct {
 	name, query string
 }
 
-// userDataExportFiles 是导出包里除词库外的文件。身份只列 provider 名，不含 subject、邮箱和令牌；会话只含设备信息与时间，不含令牌哈希。
+// userDataExportFiles 是导出包里除词库外的文件。身份只列 provider 名，不含 subject、邮箱和令牌；会话只含设备信息与时间，不含令牌哈希；云剪贴板只有密文（服务端没有明文）和登记设备的名称与时间。
 var userDataExportFiles = []userDataExportFile{
 	{"profile.json", `SELECT jsonb_build_object('id',u.id,'display_name',u.display_name,'created_at',u.created_at,'identities',COALESCE((SELECT jsonb_agg(DISTINCT i.provider) FROM auth_identities i WHERE i.user_id=u.id),'[]'::jsonb)) FROM auth_users u WHERE u.id=$1`},
 	{"preferences.json", `SELECT COALESCE((SELECT jsonb_build_object('revision',revision,'settings',settings) FROM user_preferences WHERE user_id=$1),jsonb_build_object('revision',0,'settings','{}'::jsonb))`},
 	{"phrases.json", `SELECT COALESCE((SELECT jsonb_build_object('revision',revision,'phrases',phrases) FROM user_phrases WHERE user_id=$1),jsonb_build_object('revision',0,'phrases','[]'::jsonb))`},
-	{"clipboard.json", `SELECT jsonb_build_object('retention_days',COALESCE((SELECT retention_days FROM user_clipboard_settings WHERE user_id=$1),0),'items',COALESCE((SELECT jsonb_agg(jsonb_build_object('text',text,'pinned',pinned,'device',device,'updated_at',updated_at) ORDER BY pinned DESC,sequence DESC) FROM user_clipboard WHERE user_id=$1),'[]'::jsonb))`},
+	{"clipboard.json", `SELECT jsonb_build_object('retention_days',COALESCE((SELECT retention_days FROM user_clipboard_settings WHERE user_id=$1),0),'key_id',(SELECT key_id FROM user_clipboard_settings WHERE user_id=$1),'items',COALESCE((SELECT jsonb_agg(jsonb_build_object('ciphertext',ciphertext,'key_id',key_id,'pinned',pinned,'device',device,'updated_at',updated_at) ORDER BY pinned DESC,sequence DESC) FROM user_clipboard WHERE user_id=$1 AND ciphertext<>''),'[]'::jsonb),'devices',COALESCE((SELECT jsonb_agg(jsonb_build_object('device_id',device_id,'name',name,'created_at',created_at) ORDER BY created_at,device_id) FROM user_clipboard_devices WHERE user_id=$1),'[]'::jsonb))`},
 	{"community.json", `SELECT jsonb_build_object(
  'skins',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id,'name',name,'created_at',created_at) ORDER BY created_at) FROM community_skins WHERE owner_id=$1),'[]'::jsonb),
  'candidate_skins',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id,'name',name,'created_at',created_at) ORDER BY created_at) FROM community_candidate_skins WHERE owner_id=$1),'[]'::jsonb),

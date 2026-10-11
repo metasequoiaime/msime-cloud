@@ -327,7 +327,6 @@ func Mount(mux *http.ServeMux, a *Service) {
 		"DELETE /v1/users/me/data":                          (*Service).userDataDelete,
 		"POST /v1/users/me/download-link":                   (*Service).downloadLink,
 		"PUT /v1/users/me/clipboard/retention":              (*Service).clipboardRetention,
-		"PUT /v1/users/me/clipboard/{id}/pin":               (*Service).clipboardPin,
 		"POST /v1/users/me/diagnostics":                     (*Service).diagnosticsUpload,
 		"GET /v1/users/me/diagnostics":                      (*Service).diagnosticsGet,
 		"DELETE /v1/users/me/diagnostics":                   (*Service).diagnosticsDelete,
@@ -345,6 +344,13 @@ func Mount(mux *http.ServeMux, a *Service) {
 		"DELETE /v1/users/me/avatar":                        (*Service).deleteAvatar,
 		"PATCH /v1/users/me":                                (*Service).update,
 		"DELETE /v1/users/me":                               (*Service).delete,
+
+		// 云剪贴板端到端加密的密钥与设备。PUT /v1/users/me/clipboard/{id}/pin 和 PUT /v1/users/me/clipboard/devices/{device_id} 共用一个模式，原因见 clipboardItemPut。
+		"GET /v1/users/me/clipboard/keys":                            (*Service).clipboardKeys,
+		"POST /v1/users/me/clipboard/keys":                           (*Service).clipboardKeys,
+		"PUT /v1/users/me/clipboard/keys/{key_id}/wraps/{device_id}": (*Service).clipboardWrap,
+		"DELETE /v1/users/me/clipboard/devices/{device_id}":          (*Service).clipboardDevice,
+		"PUT /v1/users/me/clipboard/{id}/{action}":                   (*Service).clipboardItemPut,
 	} {
 		mux.HandleFunc(pattern, Route(a, pattern, method))
 	}

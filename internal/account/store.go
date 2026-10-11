@@ -60,6 +60,9 @@ var diagnosticsSchema string
 
 //go:embed qq_conversations_schema.sql
 var qqConversationsSchema string
+
+//go:embed qq_knowledge_schema.sql
+var qqKnowledgeSchema string
 var ErrInvalid = errors.New("invalid_credentials")
 var ErrLimited = errors.New("rate_limit_exceeded")
 var ErrConflict = errors.New("identity_already_linked")
@@ -189,6 +192,16 @@ func (s *Store) MigrateAs(ctx context.Context, role string) error {
 	}
 	if _, e = tx.Exec(ctx, schema+"\n"+userDataSchema+"\n"+communitySchema+"\n"+adminSchema+"\n"+translationSchema+"\n"+candidateSkinSchema+"\n"+communityCandidateSkinSchema+"\n"+communityPluginSchema+"\n"+adminOpsSchema+"\n"+skinJobSchema+"\n"+feedbackSchema+"\n"+voiceContributionsSchema+"\n"+diagnosticsSchema+"\n"+qqConversationsSchema); e != nil {
 		return e
+	}
+	// QQ 答疑的向量索引要用 pgvector：装了才建表（扩展要超级用户安装，迁移角色装不了），没装时答疑退回只用目录挑段落，服务照常启动。
+	var vectors bool
+	if e = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname='vector')`).Scan(&vectors); e != nil {
+		return e
+	}
+	if vectors {
+		if _, e = tx.Exec(ctx, qqKnowledgeSchema); e != nil {
+			return e
+		}
 	}
 	return tx.Commit(ctx)
 }

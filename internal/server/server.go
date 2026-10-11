@@ -50,6 +50,8 @@ type Server struct {
 	qqHistory qqConversationStore
 	// qqLocks 是新建汇总 issue 时用的跨副本锁（account.Service.WaitLock）；没有数据库时为 nil。
 	qqLocks sharedLocker
+	// qqVectors 是答疑的向量索引（account.Service，见 qq_vectors.go）；没有数据库时为 nil。
+	qqVectors qqVectorStore
 
 	adminStore  adminAuthStore
 	adminGoogle *adminGoogleAuth
@@ -143,6 +145,12 @@ func New(c Config) (*Server, error) {
 			s.media = s.accounts
 			s.qqHistory = s.accounts
 			s.qqLocks = s.accounts
+			s.qqVectors = s.accounts
+			s.adminJobs.Add(1)
+			go func() {
+				defer s.adminJobs.Done()
+				s.qqVectorJob(s.lifetime)
+			}()
 		}
 	}
 	mux := http.NewServeMux()

@@ -49,7 +49,8 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17-alpine
+        # 带 pgvector 的官方镜像：QQ 答疑的向量索引（account/qq_knowledge.go）要用它，生产的 CloudNativePG 镜像也带这个扩展。
+        image: pgvector/pgvector:pg17
         env:
           POSTGRES_PASSWORD: local-auth-test
           POSTGRES_DB: msime_auth_test

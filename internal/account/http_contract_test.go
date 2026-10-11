@@ -201,9 +201,12 @@ func TestClipboardClearAndCommunityResourceDeleteHTTP(t *testing.T) {
 	two := complete(t, db, Identity{"email", "clear-two@example.test"})
 	mux := http.NewServeMux()
 	Mount(mux, &Service{store: db})
-	for _, token := range []string{one.AccessToken, two.AccessToken} {
-		apiRequest(t, mux, "PUT", "/v1/users/me/clipboard/settings", `{"enabled":true}`, token, 200)
-		apiRequest(t, mux, "POST", "/v1/users/me/clipboard", `{"text":"retained by its owner"}`, token, 200)
+	retained := map[string]ClipboardUpload{}
+	for _, owner := range []Tokens{one, two} {
+		apiRequest(t, mux, "PUT", "/v1/users/me/clipboard/settings", `{"enabled":true}`, owner.AccessToken, 200)
+		key, _ := clipboardTestReady(t, db, owner.User.ID, owner.User.ID)
+		retained[owner.User.ID] = clipboardTestUpload(key, "retained by its owner")
+		apiRequest(t, mux, "POST", "/v1/users/me/clipboard", clipboardTestBody(retained[owner.User.ID]), owner.AccessToken, 200)
 	}
 	apiRequest(t, mux, "DELETE", "/v1/users/me/clipboard", "", one.AccessToken, 204)
 	var response struct {
@@ -214,7 +217,7 @@ func TestClipboardClearAndCommunityResourceDeleteHTTP(t *testing.T) {
 		t.Fatal(w.Body.String(), err)
 	}
 	w = apiRequest(t, mux, "GET", "/v1/users/me/clipboard", "", two.AccessToken, 200)
-	if !strings.Contains(w.Body.String(), "retained by its owner") {
+	if !strings.Contains(w.Body.String(), retained[two.User.ID].Ciphertext) {
 		t.Fatal("clear crossed owner boundary")
 	}
 	apiRequest(t, mux, "DELETE", "/v1/users/me/clipboard", "", one.AccessToken, 204)
@@ -256,7 +259,7 @@ func TestEveryAccountJSONBodyRejectsMalformedInput(t *testing.T) {
 		if !IsPath(path) || path == "/v1/community/word-submissions" || path == "/v1/community/qq-bot/events" {
 			continue
 		}
-		path = strings.NewReplacer("{id}", "missing", "{kind}", "pinyin").Replace(path)
+		path = strings.NewReplacer("{id}", "missing", "{kind}", "pinyin", "{key_id}", "missing", "{device_id}", "missing").Replace(path)
 		for method, rawOperation := range methods {
 			if method != "post" && method != "put" && method != "patch" && method != "delete" {
 				continue

@@ -35,9 +35,10 @@ func TestClipboardRetentionPinAndDevice(t *testing.T) {
 	s.pool.Exec(ctx, "UPDATE auth_sessions SET user_agent='msime-android/1.0.0 (Pixel 8; Android 15; edition=full)' WHERE user_id=$1", one.User.ID)
 	path := "/v1/users/me/clipboard"
 	call("PUT", path+"/settings", one.AccessToken, `{"enabled":true}`, "", 200)
+	key, _ := clipboardTestReady(t, s, one.User.ID, "retention")
 	var first, second ClipboardItem
-	json.Unmarshal(call("POST", path, one.AccessToken, `{"text":"first"}`, "", 200).Body.Bytes(), &first)
-	json.Unmarshal(call("POST", path, one.AccessToken, `{"text":"second"}`, "", 200).Body.Bytes(), &second)
+	json.Unmarshal(call("POST", path, one.AccessToken, clipboardTestBody(clipboardTestUpload(key, "first")), "", 200).Body.Bytes(), &first)
+	json.Unmarshal(call("POST", path, one.AccessToken, clipboardTestBody(clipboardTestUpload(key, "second")), "", 200).Body.Bytes(), &second)
 	if !strings.Contains(first.Device, "Pixel 8") || first.Pinned {
 		t.Fatal(first)
 	}

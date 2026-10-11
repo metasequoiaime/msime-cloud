@@ -249,6 +249,13 @@ func (s *Store) Ready(ctx context.Context) error {
 SELECT feedback_id,position,mime,bytes FROM feedback_screenshots WHERE false`); e != nil {
 		return e
 	}
+	// 云剪贴板端到端加密的密文列、当前密钥编号、设备与封装表；缺任何一个时启动走迁移，迁移同时删除旧的明文条目。
+	if _, e := s.pool.Exec(ctx, `SELECT ciphertext,key_id FROM user_clipboard WHERE false;
+SELECT key_id FROM user_clipboard_settings WHERE false;
+SELECT user_id,device_id,public_key,name,created_at,last_seen FROM user_clipboard_devices WHERE false;
+SELECT user_id,device_id,key_id,wrap FROM user_clipboard_wraps WHERE false`); e != nil {
+		return e
+	}
 	// Apple 网页登录的挑战列、云剪贴板的保留天数 / 置顶 / 设备列和语音贡献表；缺任何一个时启动走迁移。
 	if _, e := s.pool.Exec(ctx, `SELECT code_challenge,verified_subject,verified_email,verified_email_verified,verified_name,grant_hash,granted_at FROM auth_challenges WHERE false;
 SELECT retention_days FROM user_clipboard_settings WHERE false;
@@ -658,7 +665,9 @@ func (s *Store) Prune(ctx context.Context) {
 		// 语音贡献只保留 voiceContributionRetentionDays 天。
 		"DELETE FROM voice_contributions WHERE created_at<now()-interval '" + strconv.Itoa(voiceContributionRetentionDays) + " days'",
 		// 云剪贴板按用户设置的保留天数清理，置顶的条目不受保留期影响；0 表示一直保留。
-		"DELETE FROM user_clipboard c USING user_clipboard_settings cs WHERE cs.user_id=c.user_id AND cs.retention_days>0 AND NOT c.pinned AND c.updated_at<now()-make_interval(days=>cs.retention_days)"} {
+		"DELETE FROM user_clipboard c USING user_clipboard_settings cs WHERE cs.user_id=c.user_id AND cs.retention_days>0 AND NOT c.pinned AND c.updated_at<now()-make_interval(days=>cs.retention_days)",
+		// 云剪贴板只保存密文；滚动升级期间旧版本副本可能还会写入明文条目，这里把它们删掉。
+		"DELETE FROM user_clipboard WHERE ciphertext=''"} {
 		s.pool.Exec(ctx, q)
 	}
 }

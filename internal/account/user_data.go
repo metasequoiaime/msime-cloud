@@ -56,7 +56,7 @@ func (s *Store) UserDataSummary(ctx context.Context, user string) ([]UserDataSec
 	return sections, total, err
 }
 
-// DeleteUserData 在一个事务里删除所选分区。偏好和常用语清空内容并推进 revision，其他设备的旧 revision 写入会 409 并拉到空文档；词库删除条目、覆盖层、位置和选择次数后写一条 reset 变更并推进 revision，与快照恢复的重置方式相同，开着同步的设备拉取时会整份重载而不是把旧数据推回来。
+// DeleteUserData 在一个事务里删除所选分区。偏好和常用语清空内容并推进 revision，其他设备的旧 revision 写入会 409 并拉到空文档；词库删除条目、覆盖层、位置和选择次数后写一条 reset 变更并推进 revision，与快照恢复的重置方式相同，开着同步的设备拉取时会整份重载而不是把旧数据推回来；剪贴板删除条目、密钥、封装和设备登记，保留同步开关和保留天数。
 func (s *Store) DeleteUserData(ctx context.Context, user string, sections map[string]bool) error {
 	tx, err := s.userDataTransaction(ctx, user)
 	if err != nil {
@@ -71,7 +71,11 @@ func (s *Store) DeleteUserData(ctx context.Context, user string, sections map[st
 		statements = append(statements, `UPDATE user_phrases SET phrases='[]'::jsonb,revision=revision+1 WHERE user_id=$1`)
 	}
 	if sections["clipboard"] {
-		statements = append(statements, `DELETE FROM user_clipboard WHERE user_id=$1`)
+		// 除了条目，还删除当前密钥编号、封装和全部设备登记（设备名、公钥、登记时间是服务端看得到的元数据）；封装随设备的外键一起删除。同步开关和保留天数不变，开着同步的设备会重新登记，由第一台设备重新生成密钥。
+		statements = append(statements,
+			`DELETE FROM user_clipboard WHERE user_id=$1`,
+			`DELETE FROM user_clipboard_devices WHERE user_id=$1`,
+			`UPDATE user_clipboard_settings SET key_id=NULL WHERE user_id=$1`)
 	}
 	if sections["voice"] {
 		statements = append(statements, `DELETE FROM voice_contributions WHERE user_id=$1`)
@@ -144,12 +148,12 @@ type userDataExportFile struct {
 	name, query string
 }
 
-// userDataExportFiles 是导出包里除词库外的文件。身份只列 provider 名，不含 subject、邮箱和令牌；会话只含设备信息与时间，不含令牌哈希。
+// userDataExportFiles 是导出包里除词库外的文件。身份只列 provider 名，不含 subject、邮箱和令牌；会话只含设备信息与时间，不含令牌哈希；云剪贴板只有密文（服务端没有明文）和登记设备的名称与时间。
 var userDataExportFiles = []userDataExportFile{
 	{"profile.json", `SELECT jsonb_build_object('id',u.id,'display_name',u.display_name,'created_at',u.created_at,'identities',COALESCE((SELECT jsonb_agg(DISTINCT i.provider) FROM auth_identities i WHERE i.user_id=u.id),'[]'::jsonb)) FROM auth_users u WHERE u.id=$1`},
 	{"preferences.json", `SELECT COALESCE((SELECT jsonb_build_object('revision',revision,'settings',settings) FROM user_preferences WHERE user_id=$1),jsonb_build_object('revision',0,'settings','{}'::jsonb))`},
 	{"phrases.json", `SELECT COALESCE((SELECT jsonb_build_object('revision',revision,'phrases',phrases) FROM user_phrases WHERE user_id=$1),jsonb_build_object('revision',0,'phrases','[]'::jsonb))`},
-	{"clipboard.json", `SELECT jsonb_build_object('retention_days',COALESCE((SELECT retention_days FROM user_clipboard_settings WHERE user_id=$1),0),'items',COALESCE((SELECT jsonb_agg(jsonb_build_object('text',text,'pinned',pinned,'device',device,'updated_at',updated_at) ORDER BY pinned DESC,sequence DESC) FROM user_clipboard WHERE user_id=$1),'[]'::jsonb))`},
+	{"clipboard.json", `SELECT jsonb_build_object('retention_days',COALESCE((SELECT retention_days FROM user_clipboard_settings WHERE user_id=$1),0),'key_id',(SELECT key_id FROM user_clipboard_settings WHERE user_id=$1),'items',COALESCE((SELECT jsonb_agg(jsonb_build_object('ciphertext',ciphertext,'key_id',key_id,'pinned',pinned,'device',device,'updated_at',updated_at) ORDER BY pinned DESC,sequence DESC) FROM user_clipboard WHERE user_id=$1 AND ciphertext<>''),'[]'::jsonb),'devices',COALESCE((SELECT jsonb_agg(jsonb_build_object('device_id',device_id,'name',name,'created_at',created_at) ORDER BY created_at,device_id) FROM user_clipboard_devices WHERE user_id=$1),'[]'::jsonb))`},
 	{"community.json", `SELECT jsonb_build_object(
  'skins',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id,'name',name,'created_at',created_at) ORDER BY created_at) FROM community_skins WHERE owner_id=$1),'[]'::jsonb),
  'candidate_skins',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id,'name',name,'created_at',created_at) ORDER BY created_at) FROM community_candidate_skins WHERE owner_id=$1),'[]'::jsonb),

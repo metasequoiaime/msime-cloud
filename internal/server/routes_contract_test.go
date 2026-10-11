@@ -27,7 +27,7 @@ func TestEveryPublishedRouteSecurityContract(t *testing.T) {
 	}
 	count := 0
 	for path, operations := range spec.Paths {
-		path = strings.NewReplacer("{id}", "missing", "{kind}", "pinyin", "{resource}", "missing.css", "{job}", "missing").Replace(path)
+		path = strings.NewReplacer("{id}", "missing", "{kind}", "pinyin", "{resource}", "missing.css", "{job}", "missing", "{key_id}", "missing", "{device_id}", "missing").Replace(path)
 		for method := range operations {
 			if method != "get" && method != "post" && method != "put" && method != "patch" && method != "delete" {
 				continue

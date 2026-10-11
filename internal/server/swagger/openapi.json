@@ -4781,11 +4781,11 @@
     },
     "/v1/users/me/clipboard": {
       "get": {
-        "summary": "查询和搜索云端剪贴板",
+        "summary": "查询云端剪贴板",
         "tags": [
           "用户同步数据"
         ],
-        "description": "置顶的在前，其余按最近添加顺序返回最多 50 条。q 为大小写不敏感的原文子串，最多 1024 UTF-8 字节。 设备令牌不能访问用户同步数据；注销账号会级联删除这些数据。",
+        "description": "置顶的在前，其余按最近添加顺序返回当前密钥加密的最多 50 条。服务端看不到明文，不支持搜索：查询参数 q 被忽略，由客户端解密后搜索。 设备令牌不能访问用户同步数据；注销账号会级联删除这些数据。",
         "security": [
           {
             "userSession": []
@@ -4802,6 +4802,12 @@
                     "enabled": {
                       "type": "boolean"
                     },
+                    "key_id": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{32}$",
+                      "description": "当前密钥编号，还没有密钥时为 null。",
+                      "nullable": true
+                    },
                     "items": {
                       "type": "array",
                       "maxItems": 50,
@@ -4811,9 +4817,16 @@
                           "id": {
                             "type": "string"
                           },
-                          "text": {
+                          "ciphertext": {
                             "type": "string",
-                            "description": "最多 4000 个 UTF-16 单元，不允许空白或 NUL。"
+                            "pattern": "^v1\\.[A-Za-z0-9_-]+$",
+                            "maxLength": 16384,
+                            "description": "\"v1.\" + base64url(nonce 24 字节 ‖ XChaCha20-Poly1305 密文和 tag)，解码后至少 41 字节，总长最多 16384 个字符。"
+                          },
+                          "key_id": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{32}$",
+                            "description": "剪贴板密钥编号：hex(HKDF(K, info=\"msime-clipboard-v1-key-id\", 16))。"
                           },
                           "updated_at": {
                             "type": "string",
@@ -4922,7 +4935,8 @@
             "in": "query",
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "已忽略，保留只为兼容旧客户端。"
           }
         ]
       },
@@ -4931,7 +4945,7 @@
         "tags": [
           "用户同步数据"
         ],
-        "description": "必须显式开启同步，否则返回 403。请求最多 32 KiB，文本最多 4000 个 UTF-16 单元。重复文本保留 ID 并移动到最前；超过 50 条移除最旧条目。 设备令牌不能访问用户同步数据；注销账号会级联删除这些数据。",
+        "description": "必须显式开启同步，否则返回 403 clipboard_sync_disabled。请求最多 32 KiB。带非空 text 返回 400 clipboard_e2e_required；密文或去重标签格式不对返回 400 invalid_clipboard_ciphertext；key_id 不是当前密钥（包括还没有密钥）返回 409 clipboard_key_conflict。dedup 相同的条目保留 ID、换成新密文并移动到最前；超过 50 条移除最旧条目。 设备令牌不能访问用户同步数据；注销账号会级联删除这些数据。",
         "security": [
           {
             "userSession": []
@@ -4948,9 +4962,16 @@
                     "id": {
                       "type": "string"
                     },
-                    "text": {
+                    "ciphertext": {
                       "type": "string",
-                      "description": "最多 4000 个 UTF-16 单元，不允许空白或 NUL。"
+                      "pattern": "^v1\\.[A-Za-z0-9_-]+$",
+                      "maxLength": 16384,
+                      "description": "\"v1.\" + base64url(nonce 24 字节 ‖ XChaCha20-Poly1305 密文和 tag)，解码后至少 41 字节，总长最多 16384 个字符。"
+                    },
+                    "key_id": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{32}$",
+                      "description": "剪贴板密钥编号：hex(HKDF(K, info=\"msime-clipboard-v1-key-id\", 16))。"
                     },
                     "updated_at": {
                       "type": "string",
@@ -5010,7 +5031,7 @@
             }
           },
           "409": {
-            "description": "偏好版本冲突",
+            "description": "clipboard_key_conflict：key_id 不是当前密钥",
             "content": {
               "application/json": {
                 "schema": {
@@ -5047,13 +5068,31 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "ciphertext": {
+                    "type": "string",
+                    "pattern": "^v1\\.[A-Za-z0-9_-]+$",
+                    "maxLength": 16384,
+                    "description": "\"v1.\" + base64url(nonce 24 字节 ‖ XChaCha20-Poly1305 密文和 tag)，解码后至少 41 字节，总长最多 16384 个字符。"
+                  },
+                  "key_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{32}$",
+                    "description": "剪贴板密钥编号：hex(HKDF(K, info=\"msime-clipboard-v1-key-id\", 16))。"
+                  },
+                  "dedup": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": "hex(HMAC-SHA256(dedup_key, 明文))，用于去重。"
+                  },
                   "text": {
                     "type": "string",
-                    "description": "最多 4000 个 UTF-16 单元，不允许空白或 NUL。"
+                    "description": "只为识别旧版本客户端保留：非空时返回 400 clipboard_e2e_required。"
                   }
                 },
                 "required": [
-                  "text"
+                  "ciphertext",
+                  "key_id",
+                  "dedup"
                 ],
                 "additionalProperties": false
               }
@@ -5254,7 +5293,7 @@
         "tags": [
           "用户同步数据"
         ],
-        "description": "默认关闭，必须由用户显式开启；关闭会删除该用户全部云端剪贴板记录。请求最多 16 KiB。 设备令牌不能访问用户同步数据；注销账号会级联删除这些数据。",
+        "description": "默认关闭，必须由用户显式开启；关闭会删除该用户全部云端剪贴板记录，以及剪贴板密钥、封装和全部设备登记。请求最多 16 KiB。 设备令牌不能访问用户同步数据；注销账号会级联删除这些数据。",
         "security": [
           {
             "userSession": []
@@ -19238,7 +19277,7 @@
             "userSession": []
           }
         ],
-        "description": "要求最近 10 分钟内登录。在一个事务里删除所选分区：偏好和常用语清空并推进 revision；词库删除条目、覆盖层、位置和选择次数，写一条 reset 变更并推进 revision，开着同步的其他设备会整份重载；剪贴板和语音贡献直接删除。账号、会话和社区作品不在可删范围内。",
+        "description": "要求最近 10 分钟内登录。在一个事务里删除所选分区：偏好和常用语清空并推进 revision；词库删除条目、覆盖层、位置和选择次数，写一条 reset 变更并推进 revision，开着同步的其他设备会整份重载；剪贴板删除条目、当前密钥、封装和全部设备登记，保留同步开关和保留天数；语音贡献直接删除。账号、会话和社区作品不在可删范围内。",
         "requestBody": {
           "required": true,
           "content": {
@@ -19728,6 +19767,656 @@
           },
           "415": {
             "description": "需要 application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求过多",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "用户数据服务不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/users/me/clipboard/keys": {
+      "get": {
+        "summary": "查询剪贴板密钥与设备",
+        "tags": [
+          "用户同步数据"
+        ],
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$",
+              "description": "设备编号：hex(SHA-256(公钥)[0..16])。"
+            }
+          }
+        ],
+        "description": "返回当前密钥编号、当前密钥给 device_id 这台设备的封装（没有密钥或没有封装时为 null）和全部登记设备（按登记时间排序），并记下该设备最近一次来取的时间。服务端只检查格式，不验证密码学内容。协议见 msime 主仓库 docs/cloud-clipboard-e2e.md。",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "key_id": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{32}$",
+                      "description": "剪贴板密钥编号：hex(HKDF(K, info=\"msime-clipboard-v1-key-id\", 16))。",
+                      "nullable": true
+                    },
+                    "wrap": {
+                      "type": "string",
+                      "pattern": "^v1\\.[A-Za-z0-9_-]{139}$",
+                      "minLength": 142,
+                      "maxLength": 142,
+                      "description": "当前密钥给该设备的封装：\"v1.\" + base64url(临时公钥 32 字节 ‖ nonce 24 字节 ‖ 密文 32 字节 ‖ tag 16 字节)。",
+                      "nullable": true
+                    },
+                    "devices": {
+                      "type": "array",
+                      "maxItems": 20,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "device_id": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{32}$",
+                            "description": "设备编号：hex(SHA-256(公钥)[0..16])。"
+                          },
+                          "public_key": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9_-]{43}$"
+                          },
+                          "name": {
+                            "type": "string",
+                            "maxLength": 64
+                          },
+                          "created_at": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "approved": {
+                            "type": "boolean",
+                            "description": "该设备持有当前密钥的封装。"
+                          }
+                        },
+                        "required": [
+                          "device_id",
+                          "public_key",
+                          "name",
+                          "created_at",
+                          "approved"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "enabled",
+                    "key_id",
+                    "wrap",
+                    "devices"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_device_id：device_id 缺失或格式不对",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "需要有效用户会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "账号已封禁",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求过多",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "用户数据服务不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "生成或更换剪贴板密钥",
+        "tags": [
+          "用户同步数据"
+        ],
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "description": "在一个事务里确认当前密钥编号等于 previous_key_id（没有密钥时为 null），删除 revoke 里的设备，删除全部条目和全部旧封装，写入新的 key_id 和 wraps。wraps 有 1 到 20 项，每个设备都必须已登记、不重复且不在 revoke 里；revoke 最多 20 项。服务端只检查格式，不验证密码学内容。协议见 msime 主仓库 docs/cloud-clipboard-e2e.md。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "previous_key_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{32}$",
+                    "description": "剪贴板密钥编号：hex(HKDF(K, info=\"msime-clipboard-v1-key-id\", 16))。",
+                    "nullable": true
+                  },
+                  "key_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{32}$",
+                    "description": "剪贴板密钥编号：hex(HKDF(K, info=\"msime-clipboard-v1-key-id\", 16))。"
+                  },
+                  "wraps": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 20,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "device_id": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{32}$",
+                          "description": "设备编号：hex(SHA-256(公钥)[0..16])。"
+                        },
+                        "wrap": {
+                          "type": "string",
+                          "pattern": "^v1\\.[A-Za-z0-9_-]{139}$",
+                          "minLength": 142,
+                          "maxLength": 142,
+                          "description": "当前密钥给该设备的封装：\"v1.\" + base64url(临时公钥 32 字节 ‖ nonce 24 字节 ‖ 密文 32 字节 ‖ tag 16 字节)。"
+                        }
+                      },
+                      "required": [
+                        "device_id",
+                        "wrap"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "revoke": {
+                    "type": "array",
+                    "maxItems": 20,
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{32}$",
+                      "description": "设备编号：hex(SHA-256(公钥)[0..16])。"
+                    }
+                  }
+                },
+                "required": [
+                  "key_id",
+                  "wraps"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "已更换"
+          },
+          "400": {
+            "description": "invalid_clipboard_key 或 JSON 无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "需要有效用户会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "clipboard_sync_disabled 或账号已封禁",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "clipboard_key_conflict：当前密钥编号不等于 previous_key_id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "需要 application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求过多",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "用户数据服务不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/users/me/clipboard/keys/{key_id}/wraps/{device_id}": {
+      "put": {
+        "summary": "批准设备（写入密钥封装）",
+        "tags": [
+          "用户同步数据"
+        ],
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "key_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$",
+              "description": "剪贴板密钥编号：hex(HKDF(K, info=\"msime-clipboard-v1-key-id\", 16))。"
+            }
+          },
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$",
+              "description": "设备编号：hex(SHA-256(公钥)[0..16])。"
+            }
+          }
+        ],
+        "description": "写入当前密钥给一台已登记设备的封装，已有时替换。服务端只检查格式，不验证密码学内容。协议见 msime 主仓库 docs/cloud-clipboard-e2e.md。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "wrap": {
+                    "type": "string",
+                    "pattern": "^v1\\.[A-Za-z0-9_-]{139}$",
+                    "minLength": 142,
+                    "maxLength": 142,
+                    "description": "当前密钥给该设备的封装：\"v1.\" + base64url(临时公钥 32 字节 ‖ nonce 24 字节 ‖ 密文 32 字节 ‖ tag 16 字节)。"
+                  }
+                },
+                "required": [
+                  "wrap"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "已批准"
+          },
+          "400": {
+            "description": "invalid_clipboard_key 或 JSON 无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "需要有效用户会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "账号已封禁",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found：设备没有登记",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "clipboard_key_conflict：key_id 不是当前密钥",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "需要 application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求过多",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "用户数据服务不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/users/me/clipboard/devices/{device_id}": {
+      "put": {
+        "summary": "登记云剪贴板设备",
+        "tags": [
+          "用户同步数据"
+        ],
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$",
+              "description": "设备编号：hex(SHA-256(公钥)[0..16])。"
+            }
+          }
+        ],
+        "description": "登记一台设备，已登记时只更新名称。device_id 必须等于 hex(SHA-256(公钥)[0..16])；name 不超过 64 个字符、不含控制字符。每个账号最多 20 台设备，满了时先淘汰最早登记、尚未批准的设备。服务端只检查格式，不验证密码学内容。协议见 msime 主仓库 docs/cloud-clipboard-e2e.md。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "public_key": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{43}$",
+                    "description": "base64url(X25519 公钥 32 字节)。"
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "public_key"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "已登记"
+          },
+          "400": {
+            "description": "invalid_clipboard_device 或 JSON 无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "需要有效用户会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "账号已封禁",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "clipboard_device_limit：20 台设备都已批准",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "需要 application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求过多",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "用户数据服务不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "删除（拒绝）云剪贴板设备",
+        "tags": [
+          "用户同步数据"
+        ],
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$",
+              "description": "设备编号：hex(SHA-256(公钥)[0..16])。"
+            }
+          }
+        ],
+        "description": "删除设备和它的封装，用于拒绝一台待批准的设备。移除已批准的设备要换钥，见 POST /v1/users/me/clipboard/keys 的 revoke。",
+        "responses": {
+          "204": {
+            "description": "已删除"
+          },
+          "401": {
+            "description": "需要有效用户会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "账号已封禁",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found：设备没有登记",
             "content": {
               "application/json": {
                 "schema": {

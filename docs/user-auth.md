@@ -75,8 +75,8 @@ ALTER DEFAULT PRIVILEGES FOR ROLE msime_migrator IN SCHEMA public GRANT USAGE, S
 ## 云端数据
 
 - `GET /v1/users/me/data` 返回 `{"bytes","sections":[{"id","bytes","items"}]}`，分区依次为 `preferences`、`dictionary`、`phrases`、`clipboard`、`community`、`voice`、`avatar`。大小由一条 SQL 用 `pg_column_size` / `octet_length` 汇总，是统计信息而不是磁盘占用；头像在对象存储里，只报告有没有。
-- `GET /v1/users/me/data/export` 流式返回 `msime-data-<日期>.zip`：`profile.json`（ID、昵称、创建时间、只含 provider 名的身份列表）、`preferences.json`、`dictionary.ndjson`（与词库快照同一格式）、`phrases.json`、`clipboard.json`、`community.json`（作品元数据）、`sessions.json`（设备信息与时间，不含令牌摘要）。每个用户每天 3 次（`auth_rates` 键 `export:<uid 摘要>`），超出 429 带 `Retry-After`；路由时限 2 分钟。开始传输后出错只能中断连接，客户端拿到的是不完整的 zip。导出内容不写日志。
-- `DELETE /v1/users/me/data {"sections":[…]}` 要求最近登录，分区取 `preferences`、`dictionary`、`phrases`、`clipboard`、`voice`，至少一个、不能重复，返回 204。一个事务内完成：偏好和常用语清空并推进 revision，其他设备拿旧 revision 写入会 409 并拉到空文档；词库删除条目、覆盖层、位置和选择次数，写一条 `reset` 变更并推进 revision，开着同步的设备会整份重载，而不是把旧数据推回来。账号、会话和社区作品不在其中，分别走注销账号、我的设备和作品管理。
+- `GET /v1/users/me/data/export` 流式返回 `msime-data-<日期>.zip`：`profile.json`（ID、昵称、创建时间、只含 provider 名的身份列表）、`preferences.json`、`dictionary.ndjson`（与词库快照同一格式）、`phrases.json`、`clipboard.json`（云剪贴板的密文和登记设备）、`community.json`（作品元数据）、`sessions.json`（设备信息与时间，不含令牌摘要）。每个用户每天 3 次（`auth_rates` 键 `export:<uid 摘要>`），超出 429 带 `Retry-After`；路由时限 2 分钟。开始传输后出错只能中断连接，客户端拿到的是不完整的 zip。导出内容不写日志。
+- `DELETE /v1/users/me/data {"sections":[…]}` 要求最近登录，分区取 `preferences`、`dictionary`、`phrases`、`clipboard`、`voice`，至少一个、不能重复，返回 204。一个事务内完成：偏好和常用语清空并推进 revision，其他设备拿旧 revision 写入会 409 并拉到空文档；词库删除条目、覆盖层、位置和选择次数，写一条 `reset` 变更并推进 revision，开着同步的设备会整份重载，而不是把旧数据推回来；剪贴板删除条目、当前密钥、封装和全部设备登记（设备名、公钥、登记时间），保留同步开关和保留天数，开着同步的设备之后重新登记，由第一台设备重新生成密钥。账号、会话和社区作品不在其中，分别走注销账号、我的设备和作品管理。
 
 ## 发送下载链接
 
@@ -85,6 +85,21 @@ ALTER DEFAULT PRIVILEGES FOR ROLE msime_migrator IN SCHEMA public GRANT USAGE, S
 ## 云剪贴板保留与置顶
 
 `GET /v1/users/me/clipboard` 的响应带 `retention_days`（0 表示一直保留），条目带 `pinned` 和 `device`（写入时所用会话的设备名，从登录时的 User-Agent 解析，认不出为空字符串）。置顶的条目排在最前，不受保留期清理，也不会被 50 条上限挤掉。`PUT /v1/users/me/clipboard/retention {"days":0|1|7|30}` 设置保留天数，每小时的清理任务删除超期的未置顶条目；它不改同步开关，`PUT /clipboard/settings` 的请求体保持不变。`PUT /v1/users/me/clipboard/{id}/pin {"pinned":bool}` 置顶或取消，条目不存在或属于别人时 404。
+
+## 云剪贴板端到端加密
+
+云剪贴板的文字只在设备上加密和解密，服务端只保存密文。协议（编码、密钥派生、封装格式、客户端驱动）是 msime 仓库的 `docs/cloud-clipboard-e2e.md`，服务端、Rust 驱动和各平台客户端共同遵守，这里只写服务端的行为。服务端验证不了密码学内容，只检查格式：`device_id` 必须等于 `hex(SHA-256(公钥)[0..16])`，公钥是 43 个字符的 base64url（32 字节），封装是 `"v1."` 加 139 个 base64url 字符（104 字节），条目密文是 `"v1."` 加 base64url、总长不超过 16384 个字符、解码后至少 41 字节，`key_id` 是 32 个、`dedup` 是 64 个小写十六进制字符。base64url 一律不带填充，按规范编码严格解码（换行、填充和末尾多余的位都拒绝）。
+
+- `GET /v1/users/me/clipboard/keys?device_id=<id>` 返回 `{"enabled","key_id","wrap","devices":[{"device_id","public_key","name","created_at","approved"}]}`。没有密钥时 `key_id` 为 null，`wrap` 是当前密钥给这台设备的封装、没有时为 null，`approved` 表示设备持有当前密钥的封装，设备按登记时间排序。`device_id` 缺失或格式不对返回 400 `invalid_device_id`。顺带记下该设备最近一次来取的时间（`last_seen`，不对外返回）。
+- `PUT /v1/users/me/clipboard/devices/{device_id} {"public_key","name"}` 登记设备，已登记时只改名；`name` 不超过 64 个字符、不含控制字符，可以为空。格式不对返回 400 `invalid_clipboard_device`。每个账号最多 20 台，满了先淘汰最早登记、尚未批准的一台，都已批准时返回 409 `clipboard_device_limit`。云剪贴板关闭时也能登记。
+- `DELETE /v1/users/me/clipboard/devices/{device_id}` 删除设备和它的封装（拒绝待批准的设备），不存在返回 404 `not_found`。
+- `POST /v1/users/me/clipboard/keys {"previous_key_id","key_id","wraps":[{"device_id","wrap"}],"revoke":[]}` 换钥。在持有用户行锁的事务里比较 `previous_key_id` 与当前密钥编号（没有密钥时为 null），不等返回 409 `clipboard_key_conflict`，所以并发换钥只有一个成功；然后删除 `revoke` 里的设备、全部条目和全部旧封装，写入新密钥编号和封装。`wraps` 1 到 20 项、设备不重复、都已登记且不在 `revoke` 里，`revoke` 最多 20 项，否则 400 `invalid_clipboard_key`。云剪贴板关闭时返回 403 `clipboard_sync_disabled`。
+- `PUT /v1/users/me/clipboard/keys/{key_id}/wraps/{device_id} {"wrap"}` 批准一台设备，已有封装时替换。封装格式不对 400 `invalid_clipboard_key`，`key_id` 不是当前密钥 409 `clipboard_key_conflict`，设备没登记 404 `not_found`。
+- `GET /v1/users/me/clipboard` 返回 `{"enabled","retention_days","key_id","items":[{"id","ciphertext","key_id","updated_at","pinned","device"}]}`，只含当前密钥加密的条目。查询参数 `q` 被忽略，搜索由客户端解密后进行。
+- `POST /v1/users/me/clipboard {"ciphertext","key_id","dedup"}` 返回一条条目。带非空 `text` 返回 400 `clipboard_e2e_required`（旧版本客户端），密文或 `dedup` 格式不对 400 `invalid_clipboard_ciphertext`，云剪贴板关闭 403 `clipboard_sync_disabled`，`key_id` 不是当前密钥（包括还没有密钥）409 `clipboard_key_conflict`。`dedup` 相同的条目只保留一条：保留 ID，换成新密文并移到最前。
+- `PUT /v1/users/me/clipboard/settings {"enabled":false}` 除了条目，还删除当前密钥、封装和全部设备登记；再次打开后由第一台设备重新生成密钥。`DELETE /v1/users/me/data` 选了 `clipboard` 分区时同样删除这些，但保留同步开关和保留天数。清空、删除单条、置顶和保留天数的接口不变。
+
+数据放在 `user_clipboard`（`ciphertext`、`key_id` 两列；去重标签写进原来的 `text_hash`，`text` 写空字符串）、`user_clipboard_settings.key_id`（当前密钥编号）、`user_clipboard_devices` 和 `user_clipboard_wraps`。这一版的迁移删除全部明文条目，旧版本客户端的云剪贴板会显示加载失败或上传失败，直到升级。导出的 `clipboard.json` 只有密文、密钥编号和登记设备的名称与时间，服务端没有明文。`PUT /clipboard/{id}/pin` 和 `PUT /clipboard/devices/{device_id}` 都能匹配 `/clipboard/devices/pin`，`net/http` 的 ServeMux 会把这两个模式判为冲突，所以服务端注册成一个 `PUT /v1/users/me/clipboard/{id}/{action}` 再按路径分开，对外的路径不变。滚动升级的注意事项见 README「多副本部署」。
 
 ## 语音贡献
 

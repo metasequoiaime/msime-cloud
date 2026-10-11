@@ -99,3 +99,30 @@ CREATE TABLE IF NOT EXISTS user_phrases (
 ALTER TABLE user_clipboard_settings ADD COLUMN IF NOT EXISTS retention_days integer NOT NULL DEFAULT 0;
 ALTER TABLE user_clipboard ADD COLUMN IF NOT EXISTS pinned boolean NOT NULL DEFAULT false;
 ALTER TABLE user_clipboard ADD COLUMN IF NOT EXISTS device text NOT NULL DEFAULT '';
+
+-- 云剪贴板端到端加密，协议见 msime 主仓库的 docs/cloud-clipboard-e2e.md。服务端只保存密文：条目的 `ciphertext` 和写入时的密钥编号 `key_id`，去重标签 `dedup` 写进原来的 `text_hash`，`text` 写空字符串。`text` / `text_hash` 两列保留，滚动升级期间旧版本副本照常插入明文行；这些行不会出现在新版本的列表里，由写入路径和 `Store.Prune` 删除。
+ALTER TABLE user_clipboard ADD COLUMN IF NOT EXISTS ciphertext text NOT NULL DEFAULT '';
+ALTER TABLE user_clipboard ADD COLUMN IF NOT EXISTS key_id text NOT NULL DEFAULT '';
+-- 账号当前的剪贴板密钥编号，还没有密钥时为 NULL。关闭云剪贴板时清空。
+ALTER TABLE user_clipboard_settings ADD COLUMN IF NOT EXISTS key_id text;
+-- 登记过云剪贴板的设备：`device_id` 是公钥 SHA-256 的前 16 字节（小写十六进制），`public_key` 是 X25519 公钥的 base64url。
+CREATE TABLE IF NOT EXISTS user_clipboard_devices (
+ user_id text NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
+ device_id text NOT NULL,
+ public_key text NOT NULL,
+ name text NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT now(),
+ last_seen timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(user_id,device_id)
+);
+-- 当前密钥给每台已批准设备的封装。换钥时全部删除后重写，所以每台设备最多一行；设备删除时随外键一起删除。
+CREATE TABLE IF NOT EXISTS user_clipboard_wraps (
+ user_id text NOT NULL,
+ device_id text NOT NULL,
+ key_id text NOT NULL,
+ wrap text NOT NULL,
+ PRIMARY KEY(user_id,device_id),
+ FOREIGN KEY(user_id,device_id) REFERENCES user_clipboard_devices(user_id,device_id) ON DELETE CASCADE
+);
+-- 这一版起只接受密文：删除此前的全部明文条目。可以重复执行，迁移完成后没有符合条件的行。
+DELETE FROM user_clipboard WHERE ciphertext='';

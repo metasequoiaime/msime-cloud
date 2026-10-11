@@ -63,16 +63,22 @@ func TestDictionaryStreamConsumerFailureAndClosedDatabase(t *testing.T) {
 			_, e := db.RestoreDictionarySnapshot(ctx, uid, 1, strings.NewReader(""), engine.Config{})
 			return e
 		},
-		"clipboard list":    func() error { _, e := db.ListClipboard(ctx, uid, ""); return e },
-		"clipboard add":     func() error { _, e := db.AddClipboard(ctx, uid, "text"); return e },
-		"clipboard setting": func() error { return db.SetClipboardEnabled(ctx, uid, true) },
-		"preferences":       func() error { _, e := db.Preferences(ctx, uid); return e },
-		"write preferences": func() error { _, e := db.PutPreferences(ctx, uid, 0, map[string]json.RawMessage{}); return e },
-		"refresh":           func() error { _, e := db.Refresh(ctx, user.RefreshToken); return e },
-		"complete":          func() error { _, e := db.Complete(ctx, Challenge{}, Identity{}); return e },
-		"profile":           func() error { _, _, e := db.Me(ctx, uid); return e },
-		"admin session":     func() error { _, e := (&Service{store: db}).CreateAdminSession(ctx, AdminIdentity{}); return e },
-		"migration":         func() error { return db.Migrate(ctx) },
+		"clipboard list":     func() error { _, e := db.ListClipboard(ctx, uid, ""); return e },
+		"clipboard add":      func() error { _, e := db.AddClipboard(ctx, uid, "", ClipboardUpload{}); return e },
+		"clipboard setting":  func() error { return db.SetClipboardEnabled(ctx, uid, true) },
+		"clipboard settings": func() error { _, e := db.ClipboardSettings(ctx, uid); return e },
+		"clipboard keys":     func() error { _, e := db.ClipboardKeys(ctx, uid, ""); return e },
+		"clipboard device":   func() error { return db.PutClipboardDevice(ctx, uid, "", "", "") },
+		"clipboard reject":   func() error { return db.DeleteClipboardDevice(ctx, uid, "") },
+		"clipboard rotate":   func() error { return db.RotateClipboardKey(ctx, uid, ClipboardKeyChange{}) },
+		"clipboard wrap":     func() error { return db.PutClipboardWrap(ctx, uid, "", "", "") },
+		"preferences":        func() error { _, e := db.Preferences(ctx, uid); return e },
+		"write preferences":  func() error { _, e := db.PutPreferences(ctx, uid, 0, map[string]json.RawMessage{}); return e },
+		"refresh":            func() error { _, e := db.Refresh(ctx, user.RefreshToken); return e },
+		"complete":           func() error { _, e := db.Complete(ctx, Challenge{}, Identity{}); return e },
+		"profile":            func() error { _, _, e := db.Me(ctx, uid); return e },
+		"admin session":      func() error { _, e := (&Service{store: db}).CreateAdminSession(ctx, AdminIdentity{}); return e },
+		"migration":          func() error { return db.Migrate(ctx) },
 	}
 	for name, check := range checks {
 		t.Run(name, func(t *testing.T) {

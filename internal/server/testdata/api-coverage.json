@@ -83,12 +83,14 @@
     "GET /v1/users/me/clipboard": [
       "internal/account/clipboard_test.go::TestClipboardConsentIsolationLimitAndDeletion",
       "internal/account/http_contract_test.go::TestClipboardClearAndCommunityResourceDeleteHTTP",
-      "internal/account/clipboard_retention_test.go::TestClipboardRetentionPinAndDevice"
+      "internal/account/clipboard_retention_test.go::TestClipboardRetentionPinAndDevice",
+      "internal/account/clipboard_test.go::TestClipboardPlaintextRowsAreDeleted"
     ],
     "POST /v1/users/me/clipboard": [
       "internal/account/clipboard_test.go::TestClipboardConsentIsolationLimitAndDeletion",
       "internal/account/http_contract_test.go::TestClipboardClearAndCommunityResourceDeleteHTTP",
-      "internal/account/clipboard_retention_test.go::TestClipboardRetentionPinAndDevice"
+      "internal/account/clipboard_retention_test.go::TestClipboardRetentionPinAndDevice",
+      "internal/account/clipboard_test.go::TestClipboardE2EKeysDevicesAndWraps"
     ],
     "DELETE /v1/users/me/clipboard": [
       "internal/account/clipboard_test.go::TestClipboardConsentIsolationLimitAndDeletion",
@@ -100,7 +102,31 @@
     ],
     "PUT /v1/users/me/clipboard/settings": [
       "internal/account/clipboard_test.go::TestClipboardConsentIsolationLimitAndDeletion",
-      "internal/account/http_contract_test.go::TestClipboardClearAndCommunityResourceDeleteHTTP"
+      "internal/account/http_contract_test.go::TestClipboardClearAndCommunityResourceDeleteHTTP",
+      "internal/account/clipboard_test.go::TestClipboardE2EKeysDevicesAndWraps"
+    ],
+    "GET /v1/users/me/clipboard/keys": [
+      "internal/account/clipboard_test.go::TestClipboardE2EKeysDevicesAndWraps",
+      "internal/account/service_failure_test.go::TestAndroidAccountEndpointsAnswerEveryDatabaseFailure"
+    ],
+    "POST /v1/users/me/clipboard/keys": [
+      "internal/account/clipboard_test.go::TestClipboardE2EKeysDevicesAndWraps",
+      "internal/account/clipboard_test.go::TestClipboardDeviceLimitEvictsOldestPending",
+      "internal/account/clipboard_test.go::TestClipboardKeyRotationIsCompareAndSet",
+      "internal/account/service_failure_test.go::TestAndroidAccountEndpointsAnswerEveryDatabaseFailure"
+    ],
+    "PUT /v1/users/me/clipboard/keys/{key_id}/wraps/{device_id}": [
+      "internal/account/clipboard_test.go::TestClipboardE2EKeysDevicesAndWraps",
+      "internal/account/service_failure_test.go::TestAndroidAccountEndpointsAnswerEveryDatabaseFailure"
+    ],
+    "PUT /v1/users/me/clipboard/devices/{device_id}": [
+      "internal/account/clipboard_test.go::TestClipboardE2EKeysDevicesAndWraps",
+      "internal/account/clipboard_test.go::TestClipboardDeviceLimitEvictsOldestPending",
+      "internal/account/service_failure_test.go::TestAndroidAccountEndpointsAnswerEveryDatabaseFailure"
+    ],
+    "DELETE /v1/users/me/clipboard/devices/{device_id}": [
+      "internal/account/clipboard_test.go::TestClipboardE2EKeysDevicesAndWraps",
+      "internal/account/service_failure_test.go::TestAndroidAccountEndpointsAnswerEveryDatabaseFailure"
     ],
     "GET /v1/input/capabilities": [
       "internal/server/input_test.go::TestInputCapabilitiesAndQuickPhraseHTTP"

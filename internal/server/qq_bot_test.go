@@ -1102,6 +1102,10 @@ func TestQQBotAnswersMembersFromKnowledge(t *testing.T) {
 	if !strings.Contains(fake.answerSystem, "### [FAQ · 常见问题] 输入 > 五笔怎么切换\n在设置的「输入方案」里选五笔。") || !strings.Contains(fake.answerSystem, "### [Windows 正式版 · windows] 安装\n双击安装包。") || strings.Contains(fake.answerSystem, "同步需要登录") || strings.Count(fake.answerSystem, "五笔怎么切换") != 1 {
 		t.Fatal(fake.answerSystem)
 	}
+	// 回答的系统说明列出 qqDocPlatforms 里的平台（不含 FAQ、通用、各平台这类标签），资料只有部分平台时不会说成其他平台没有。
+	if qqPlatformList != "Android、Linux、macOS、Windows 正式版" || !strings.Contains(fake.answerSystem, "水杉有 Android、Linux、macOS、Windows 正式版 等版本；资料里只有部分平台的说明时，不要说其他平台没有这个功能或没有这个版本。") {
+		t.Fatal(qqPlatformList, fake.answerSystem)
+	}
 	if limiter.counts["qq-bot-member|GROUP1/MEMBER1"] != 1 {
 		t.Fatal("members are counted", limiter.counts)
 	}

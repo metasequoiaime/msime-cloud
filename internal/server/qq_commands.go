@@ -25,7 +25,7 @@ const (
 下面这些照着发就行：
 【看各平台最新版本】
 @水杉助手 版本
-【在 GitHub 上搜有没有人报过】
+【看有没有人报过同样的问题】
 @水杉助手 查 候选框 左上角
 【某个词打不出来，投稿到词库】
 @水杉助手 加词 扛把子 kang ba zi
@@ -161,7 +161,7 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 	}
 	if compact := strings.Join(strings.Fields(text), ""); compact == "差评" || compact == "答错的" {
 		if !admin {
-			reply("只有管理员能看差评。觉得我答错了，直接回一句「不对」，我会重新查。")
+			reply("只有管理员能看差评。觉得我答错了，@我 说一句「不对」，我会重新查。")
 		} else {
 			s.qqListBadAnswers(ctx, reply)
 		}
@@ -188,16 +188,16 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 	// 「查 为什么打不了字」是在提问，交给答疑。
 	if terms, ok := qqCommandArg(text, "查", "搜索", "搜"); ok && !qqCommandQuestion.MatchString(terms) {
 		if terms == "" {
-			reply("请在「查」后面写要搜的关键词，例如「查 候选框 左上角」。")
+			reply("请在「查」后面写要搜的关键词，例如 @我 发「查 候选框 左上角」。")
 			return "cmd_search"
 		}
 		found, failed := s.qqSearchIssues(ctx, terms)
 		found = strings.TrimSpace(found)
 		switch {
 		case found == "" && failed:
-			reply("GitHub 暂时查不了，可能是被限流了，请一分钟后再试。")
+			reply("GitHub 这会儿查不了，过一分钟再试试。")
 		case found == "":
-			reply("GitHub 上没有找到相关的 issue。")
+			reply("GitHub 上没人报过这个。想问怎么用的话直接 @我 问就行，不用加「查」。")
 		default:
 			reply("GitHub 上搜到的相关 issue：\n" + found)
 		}

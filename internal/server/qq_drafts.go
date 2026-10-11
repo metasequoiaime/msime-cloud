@@ -82,9 +82,10 @@ func (s *Server) qqDraftReport(ctx context.Context, subject, text string) string
 		return ""
 	}
 	code := qqDraftCode(id)
-	note := "\n\n我把这个问题整理成了草稿 " + code + "，管理员确认后会提交到 GitHub。"
+	// 群友看到的说法不用「草稿」「GitHub」这类内部叫法；编号要留着，补充时用得到。
+	note := "\n\n我已经把这个问题记下来了，编号 " + code + "，管理员确认后会转给开发者。"
 	if missing := s.qqDraftMissing(ctx, report, text); missing != "" {
-		note += "还差一点信息：" + missing + " 补充时发「补充 " + code + " 内容」。"
+		note += "还想知道：" + qqQuestionEnd(missing) + "补上后 @我 发「补充 " + code + " Windows 11，版本 0.9.5」这样就行。"
 	}
 	return note
 }
@@ -133,17 +134,18 @@ func (s *Server) qqDraftCommands(ctx context.Context, m qqGroupMessage, text str
 			return "cmd_draft_supplement"
 		}
 		if extra == "" {
-			reply("请在编号后面写要补充的内容，例如「补充 " + qqDraftCode(id) + " Windows 11，版本 0.9.5」。")
+			reply("请在编号后面写要补充的内容，例如 @我 发「补充 " + qqDraftCode(id) + " Windows 11，版本 0.9.5」。")
 			return "cmd_draft_supplement"
 		}
-		report, ok := s.qqSupplementDraft(ctx, draft, extra, reply)
+		report, ok := s.qqSupplementDraft(ctx, draft, extra, false, reply)
 		if !ok {
 			return "cmd_draft_supplement"
 		}
+		code := qqDraftCode(id)
 		if missing := s.qqDraftMissing(ctx, report, draft.Original+"\n补充："+extra); missing != "" {
-			reply("已补充到草稿 " + qqDraftCode(id) + "。还差：" + missing)
+			reply("已补充到 " + code + "。还想知道：" + qqQuestionEnd(missing) + "再 @我 发「补充 " + code + " …」补上就行。")
 		} else {
-			reply("已补充到草稿 " + qqDraftCode(id) + "，信息齐了，等管理员确认提交。")
+			reply("已补充到 " + code + "，信息齐了，等管理员确认提交。")
 		}
 		return "cmd_draft_supplement"
 	}
@@ -154,24 +156,44 @@ func (s *Server) qqDraftCommands(ctx context.Context, m qqGroupMessage, text str
 	return "cmd_draft_file_" + s.qqFileDraft(ctx, draft, extra, reply)
 }
 
-// qqSupplementDraft 把补充内容并进草稿原话，重新整理并保存。
-func (s *Server) qqSupplementDraft(ctx context.Context, draft account.QQDraft, extra string, reply func(string)) (qqReport, bool) {
+// qqSupplementDraft 把补充内容并进草稿原话，重新整理并保存。filing 表示管理员在「提交 D编号 …」时顺带补充。几种失败分开回复：补充后整理成 other 不是临时故障，重发同一句结果不变，所以请群友写具体些、草稿不改；整理或数据库出错才是「稍后再试」；草稿已经提交或过期才说改不了。
+func (s *Server) qqSupplementDraft(ctx context.Context, draft account.QQDraft, extra string, filing bool, reply func(string)) (qqReport, bool) {
+	code := qqDraftCode(draft.ID)
 	original := qqTruncate(draft.Original+"\n补充："+extra, qqDraftOriginalRunes)
 	report, err := s.qqSummarise(ctx, original)
-	if err != nil || report.Kind == "other" {
-		if err != nil {
-			slog.Warn("qq bot: draft not summarised", "reason", err.Error())
-		}
+	switch {
+	case err != nil:
+		slog.Warn("qq bot: draft not summarised", "reason", err.Error())
 		reply(qqReplyUnavailable)
+		return report, false
+	case report.Kind == "other":
+		message := "这条补充我没看懂，能说具体点吗？比如 @我 发「补充 " + code + " Windows 11，版本 0.9.5，在微信里打字时候选框不见了」。"
+		if filing {
+			message += "也可以直接 @我 发「提交 " + code + "」。"
+		}
+		reply(message)
 		return report, false
 	}
 	raw, _ := json.Marshal(report)
 	ok, err := s.qqDrafts.UpdateQQDraft(ctx, draft.ID, original, string(raw))
-	if err != nil || !ok {
-		reply("草稿 " + qqDraftCode(draft.ID) + " 已经提交或过期了，改不了。")
+	switch {
+	case err != nil:
+		slog.Warn("qq bot: draft not updated", "reason", err.Error())
+		reply(qqReplyUnavailable)
+		return report, false
+	case !ok:
+		reply("草稿 " + code + " 已经提交或过期了，改不了。")
 		return report, false
 	}
 	return report, true
+}
+
+// qqQuestionEnd 给模型写的追问补上句末的问号，后面好直接接下一句；已经以标点结尾时原样返回。
+func qqQuestionEnd(question string) string {
+	if strings.HasSuffix(question, "？") || strings.HasSuffix(question, "?") || strings.HasSuffix(question, "。") || strings.HasSuffix(question, "！") || strings.HasSuffix(question, "!") {
+		return question
+	}
+	return question + "？"
 }
 
 // qqFileDraft 提交一份草稿，返回结果的名字。extra 是管理员顺带补的内容。
@@ -186,7 +208,7 @@ func (s *Server) qqFileDraft(ctx context.Context, draft account.QQDraft, extra s
 	text, notes := qqParseNotes(extra)
 	if text != "" {
 		// 管理员顺带补了内容（例如版本号）时先并进草稿再提交。
-		updated, ok := s.qqSupplementDraft(ctx, draft, text, reply)
+		updated, ok := s.qqSupplementDraft(ctx, draft, text, true, reply)
 		if !ok {
 			return "failed"
 		}
@@ -194,11 +216,16 @@ func (s *Server) qqFileDraft(ctx context.Context, draft account.QQDraft, extra s
 	}
 	repo, label, question := s.qqTarget(ctx, report, original)
 	if question != "" {
-		reply("草稿 " + code + " 还差：" + question + " 可以发「提交 " + code + " 补充的内容」一起提交。")
+		reply("草稿 " + code + " 还差：" + qqQuestionEnd(question) + "可以 @我 发「提交 " + code + " 版本 0.9.5」把缺的信息带上一起提交。")
 		return "needs_info"
 	}
 	claimed, err := s.qqDrafts.ClaimQQDraft(ctx, draft.ID)
-	if err != nil || !claimed {
+	switch {
+	case err != nil:
+		slog.Warn("qq bot: draft not claimed", "reason", err.Error())
+		reply(qqReplyUnavailable)
+		return "failed"
+	case !claimed:
 		reply("草稿 " + code + " 已经在提交或提交过了。")
 		return "duplicate"
 	}

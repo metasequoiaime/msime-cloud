@@ -93,7 +93,7 @@ func (s *Server) qqAddWords(ctx context.Context, subject, content string, reply 
 	entries := qqParseWords(content)
 	switch {
 	case len(entries) == 0:
-		reply("请在「加词」后面写词语和拼音，例如「加词 水杉输入法 shui shan shu ru fa」，多个词用逗号隔开。")
+		reply("请在「加词」后面写词语和拼音，例如 @我 发「加词 水杉输入法 shui shan shu ru fa」，多个词用逗号隔开。")
 		return
 	case len(entries) > qqWordsPerMessage:
 		reply("一次最多加 " + strconv.Itoa(qqWordsPerMessage) + " 个词，请分几次发。")
@@ -125,7 +125,7 @@ func (s *Server) qqAddWords(ctx context.Context, subject, content string, reply 
 			Pinyin []string `json:"pinyin"`
 		}
 		if err := s.qqChat(ctx, qqPinyinPrompt, strings.Join(words, "\n"), &out); err != nil || len(out.Pinyin) != len(missing) {
-			reply("没能给这些词标上拼音，请自己写上拼音再发，例如「加词 水杉输入法 shui shan shu ru fa」。")
+			reply("没能给这些词标上拼音，请自己写上拼音再发，例如 @我 发「加词 水杉输入法 shui shan shu ru fa」。")
 			return
 		}
 		for i, index := range missing {

@@ -470,9 +470,10 @@ const (
 	qqReplyUsage   = "有水杉输入法的使用问题可以直接 @我 问，例如：五笔怎么切换？"
 	qqReplyTooLong = "内容太长了，请精简到 2000 字以内再 @我。"
 	// qqReplyScreenshot 是只发了截图、截图又没能看成（下载失败、格式不支持、模型出错）时的回复。
-	qqReplyScreenshot   = "这张截图我没看清，可以把报错文字、系统和输入法版本打出来再 @我。"
-	qqReplyLimited      = "你 24 小时内问得已经够多了，请过一阵再来。"
-	qqReplyGroupLimited = "这个群 24 小时内问得太多了，请过一阵再来。"
+	qqReplyScreenshot = "这张截图我没看清，可以把报错文字、系统和输入法版本打出来再 @我。"
+	// qqReplyLimited 和 qqReplyGroupLimited 是额度用完时的回复。额度是从第一条消息算起的 24 小时滚动窗口，所以不说「今天」；不提「限流」这类说法，并给一个马上能走的路。
+	qqReplyLimited      = "你最近问得有点多，到我的上限了，过几个小时再来吧～急的话可以直接在群里问问大家。"
+	qqReplyGroupLimited = "这会儿大家问得太多，我的额度用完了，晚点再来吧～急的话可以先在群里问问管理员。"
 	qqReplyUnavailable  = "我暂时处理不了，请稍后再 @我 发一次。"
 	// qqReplyRestarting 在副本关停取消了处理时代替 qqReplyUnavailable：机器人正在滚动更新，过一会儿重发就能由新副本处理。
 	qqReplyRestarting = "机器人正在更新，请一分钟后再 @我 发一次。"
@@ -786,10 +787,10 @@ func qqQuestionWithHistory(history []account.QQTurn, question string) string {
 	return b.String()
 }
 
-// qqEscalation 接在群友报问题时的答案后面：先给文档里的排查办法，再说明问题已经记进汇总 issue（recordQQReport）；没记下时用 qqEscalationUnrecorded，不说会跟进。不插 <qqbot-at-user> 标签，原因见 qqUnknownReply。
+// qqEscalation 接在群友报问题时的答案后面：先给文档里的排查办法，再说明问题已经记进汇总 issue（recordQQReport），转给了管理员；没记下时用 qqEscalationUnrecorded，请群友在群里找管理员转给开发者，不说会跟进。提需求时也接这两句，所以不写「如果还不行」（接在需求后面读不通），也不写「提 issue」这类行话。不插 <qqbot-at-user> 标签，原因见 qqUnknownReply。
 const (
-	qqEscalation           = "\n\n如果还不行，这个问题已经记下来了，管理员看到后会跟进。"
-	qqEscalationUnrecorded = "\n\n如果还不行，可以等管理员看到，或者请管理员帮忙提 issue。"
+	qqEscalation           = "\n\n这个情况我已经记下来转给管理员了。"
+	qqEscalationUnrecorded = "\n\n要是还没解决，可以在群里找管理员，请他转给开发者。"
 )
 
 // qqLinkNote 匹配回复里括在全角括号里的链接，例如 qqIssueNumberText 附上的「（https://github.com/…）」。

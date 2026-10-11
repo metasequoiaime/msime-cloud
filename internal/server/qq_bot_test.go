@@ -1565,7 +1565,7 @@ func TestQQBotEscalatesProblemReports(t *testing.T) {
 	s.qq.config.GapsRepo = "o/docs"
 	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题"}]`
 	qqDeliver(t, s, "m-escalate", "候选框老是跑到屏幕左上角")
-	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "在「外观」里打开「候选窗口跟随光标」。\n\n如果还不行，这个问题已经记下来了，管理员看到后会跟进。" {
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "在「外观」里打开「候选窗口跟随光标」。\n\n这个情况我已经记下来转给管理员了。" {
 		t.Fatalf("%q", last)
 	}
 	if c := fake.comments["/repos/o/docs/issues/77/comments"]; c == nil || c["body"] != "群友报告问题：Windows 候选框跑到屏幕左上角" {
@@ -1760,7 +1760,7 @@ func TestQQIssueSearchNarrows(t *testing.T) {
 		t.Fatal(found, failed, fake.searchQueries)
 	}
 	qqDeliver(t, s, "m-search-fail", "查 a b")
-	if texts := fake.replyTexts(); texts[len(texts)-1] != "GitHub 暂时查不了，可能是被限流了，请一分钟后再试。" {
+	if texts := fake.replyTexts(); texts[len(texts)-1] != "GitHub 这会儿查不了，过一分钟再试试。" {
 		t.Fatal(texts)
 	}
 	s.qq.config.Admins = nil
@@ -1977,7 +1977,7 @@ func TestQQBotCommands(t *testing.T) {
 	}
 	fake.searchItems = nil
 	qqDeliver(t, s, "m-search-none", "搜 不存在的东西")
-	if last() != "GitHub 上没有找到相关的 issue。" {
+	if last() != "GitHub 上没人报过这个。想问怎么用的话直接 @我 问就行，不用加「查」。" {
 		t.Fatal(last())
 	}
 	qqDeliver(t, s, "m-search-empty", "查")
@@ -2966,10 +2966,12 @@ func TestQQBotScreenshots(t *testing.T) {
 	}
 }
 
-// memoryDrafts 是测试用的草稿存储。
+// memoryDrafts 是测试用的草稿存储；updateErr、claimErr 不为空时对应的操作像数据库出错那样失败。
 type memoryDrafts struct {
-	mu     sync.Mutex
-	drafts []account.QQDraft
+	mu        sync.Mutex
+	drafts    []account.QQDraft
+	updateErr error
+	claimErr  error
 }
 
 func (m *memoryDrafts) CreateQQDraft(_ context.Context, subject, original, report string) (int64, error) {
@@ -2989,6 +2991,9 @@ func (m *memoryDrafts) QQDraft(_ context.Context, id int64) (account.QQDraft, er
 func (m *memoryDrafts) UpdateQQDraft(_ context.Context, id int64, original, report string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.updateErr != nil {
+		return false, m.updateErr
+	}
 	if m.drafts[id-1].Filed {
 		return false, nil
 	}
@@ -2998,6 +3003,9 @@ func (m *memoryDrafts) UpdateQQDraft(_ context.Context, id int64, original, repo
 func (m *memoryDrafts) ClaimQQDraft(_ context.Context, id int64) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.claimErr != nil {
+		return false, m.claimErr
+	}
 	if m.drafts[id-1].Filed {
 		return false, nil
 	}
@@ -3051,7 +3059,7 @@ func TestQQBotDrafts(t *testing.T) {
 	fake.answer = `{"type":"answered","answer":"先在「外观」里打开「候选窗口跟随光标」试试。","escalate":true,"topic":"候选框停在左上角"}`
 	fake.summary = `{"kind":"bug","title":"候选框停在屏幕左上角","platform":"","problem":"打字时候选框一直在左上角","steps":"","keywords":"候选框 左上角"}`
 	deliver("m-d1", "MEMBER1", "候选框一直跑到左上角")
-	if want := "先在「外观」里打开「候选窗口跟随光标」试试。\n\n我把这个问题整理成了草稿 D1，管理员确认后会提交到 GitHub。还差一点信息：" + qqDefaultQuestion + " 补充时发「补充 D1 内容」。"; last() != want {
+	if want := "先在「外观」里打开「候选窗口跟随光标」试试。\n\n我已经把这个问题记下来了，编号 D1，管理员确认后会转给开发者。还想知道：" + qqDefaultQuestion + "补上后 @我 发「补充 D1 Windows 11，版本 0.9.5」这样就行。"; last() != want {
 		t.Fatalf("%q", last())
 	}
 	// 别人不能补充，本人可以。
@@ -3061,7 +3069,7 @@ func TestQQBotDrafts(t *testing.T) {
 	}
 	fake.summary = `{"kind":"bug","title":"候选框停在屏幕左上角","platform":"windows","ime_version":"0.9.5","problem":"打字时候选框一直在左上角","steps":"在记事本里打字","keywords":"候选框 左上角"}`
 	deliver("m-d1-more", "MEMBER1", "补充 D1 Windows 11，版本 0.9.5，在记事本里打字")
-	if last() != "已补充到草稿 D1，信息齐了，等管理员确认提交。" || !strings.Contains(drafts.drafts[0].Original, "\n补充：Windows 11，版本 0.9.5") {
+	if last() != "已补充到 D1，信息齐了，等管理员确认提交。" || !strings.Contains(drafts.drafts[0].Original, "\n补充：Windows 11，版本 0.9.5") {
 		t.Fatal(last(), drafts.drafts[0].Original)
 	}
 	// 普通群友不能提交、不能看列表；管理员能。
@@ -3096,6 +3104,85 @@ func TestQQBotDrafts(t *testing.T) {
 	deliver("m-vague", "MEMBER1", "这输入法不好用")
 	if last() != "先重启一下试试。"+qqEscalationUnrecorded || len(drafts.drafts) != 1 {
 		t.Fatal(last(), len(drafts.drafts))
+	}
+}
+
+// 补充和提交草稿时几种失败分开回复：补充被整理成 other 时请群友写具体些、草稿不改（管理员提交时再提示可以直接提交）；整理或数据库出错回「稍后再试」；还缺信息时告诉群友带 @ 怎么补。
+func TestQQBotDraftSupplementFailures(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	drafts := &memoryDrafts{}
+	s.qqDrafts = drafts
+	s.qq.config.Admins = []string{"ADMIN1"}
+	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
+	deliver := func(id, member, content string) {
+		t.Helper()
+		qqPost(t, s, qqMessageFrom(id, member, content))
+		s.qqWorkers.Wait()
+	}
+	fake.answer = `{"type":"answered","answer":"先重启一下试试。","escalate":true,"topic":"候选框不见了"}`
+	fake.summary = `{"kind":"bug","title":"候选框不见了","platform":"","problem":"打字时看不到候选框","steps":"","keywords":"候选框"}`
+	deliver("m-s1", "MEMBER1", "候选框不见了")
+	original := drafts.drafts[0].Original
+	// 补充后被整理成 other：不是临时故障，不回「稍后再试」，草稿不改。
+	fake.summary = `{"kind":"other"}`
+	deliver("m-s1-other", "MEMBER1", "补充 D1 哈哈")
+	if want := "这条补充我没看懂，能说具体点吗？比如 @我 发「补充 D1 Windows 11，版本 0.9.5，在微信里打字时候选框不见了」。"; last() != want || drafts.drafts[0].Original != original {
+		t.Fatalf("%q %q", last(), drafts.drafts[0].Original)
+	}
+	deliver("m-s1-file-other", "ADMIN1", "提交 D1 哈哈")
+	if want := "这条补充我没看懂，能说具体点吗？比如 @我 发「补充 D1 Windows 11，版本 0.9.5，在微信里打字时候选框不见了」。也可以直接 @我 发「提交 D1」。"; last() != want || drafts.drafts[0].Filed || len(fake.created) != 0 {
+		t.Fatalf("%q", last())
+	}
+	// 整理出错、保存出错：回「稍后再试」，不说草稿已经提交或过期。
+	fake.summary = "好的，这是一个 bug"
+	deliver("m-s1-broken", "MEMBER1", "补充 D1 在微信里")
+	if last() != qqReplyUnavailable || drafts.drafts[0].Original != original {
+		t.Fatalf("%q", last())
+	}
+	fake.summary = `{"kind":"bug","title":"候选框不见了","platform":"","problem":"打字时看不到候选框","steps":"","missing":"你用的是哪个系统","keywords":"候选框"}`
+	drafts.updateErr = errors.New("connection reset")
+	deliver("m-s1-db", "MEMBER1", "补充 D1 在微信里")
+	if last() != qqReplyUnavailable || drafts.drafts[0].Original != original {
+		t.Fatalf("%q", last())
+	}
+	// 补上了一部分，还缺：告诉群友带 @ 怎么补；模型的追问没写问号时补上。
+	drafts.updateErr = nil
+	deliver("m-s1-more", "MEMBER1", "补充 D1 在微信里")
+	if want := "已补充到 D1。还想知道：你用的是哪个系统？再 @我 发「补充 D1 …」补上就行。"; last() != want {
+		t.Fatalf("%q", last())
+	}
+	// 管理员提交时 Windows 还缺版本号：告诉他怎么带上缺的信息一起提交。
+	fake.summary = `{"kind":"bug","title":"候选框不见了","platform":"windows","problem":"打字时看不到候选框","steps":"在微信里打字","keywords":"候选框"}`
+	deliver("m-s1-more2", "MEMBER1", "补充 D1 Windows 11，在微信里打字")
+	deliver("m-s1-file-missing", "ADMIN1", "提交 D1")
+	if want := "草稿 D1 还差：" + qqWindowsVersionQuestion + "可以 @我 发「提交 D1 版本 0.9.5」把缺的信息带上一起提交。"; last() != want || len(fake.created) != 0 {
+		t.Fatalf("%q", last())
+	}
+	// 认领时数据库出错：回「稍后再试」，不说已经在提交。
+	fake.summary = `{"kind":"bug","title":"候选框不见了","platform":"windows","ime_version":"0.9.5","problem":"打字时看不到候选框","steps":"在微信里打字","keywords":"候选框"}`
+	deliver("m-s1-more3", "MEMBER1", "补充 D1 Windows 11，版本 0.9.5")
+	drafts.claimErr = errors.New("connection reset")
+	deliver("m-s1-claim", "ADMIN1", "提交 D1")
+	if last() != qqReplyUnavailable || len(fake.created) != 0 || drafts.drafts[0].Filed {
+		t.Fatalf("%q", last())
+	}
+	drafts.claimErr = nil
+	deliver("m-s1-claim-again", "ADMIN1", "提交 D1")
+	if len(fake.created) != 1 || !strings.HasPrefix(last(), "草稿 D1 已提交为") {
+		t.Fatalf("%q", last())
+	}
+}
+
+func TestQQQuestionEnd(t *testing.T) {
+	for in, want := range map[string]string{
+		"你用的是哪个系统":      "你用的是哪个系统？",
+		"你用的是哪个系统？":     "你用的是哪个系统？",
+		"请说一下版本号。":      "请说一下版本号。",
+		"which system?": "which system?",
+	} {
+		if got := qqQuestionEnd(in); got != want {
+			t.Errorf("%q: %q want %q", in, got, want)
+		}
 	}
 }
 
@@ -3246,7 +3333,7 @@ func TestQQBotFeatureVotes(t *testing.T) {
 	// 没有同一个需求时照旧起草稿。
 	fake.duplicate = `{"duplicate":0}`
 	deliver("m-vote-new", "MEMBER2", "希望支持自定义候选框圆角")
-	if len(drafts.drafts) != 1 || !strings.Contains(last(), "整理成了草稿 D1") {
+	if len(drafts.drafts) != 1 || !strings.Contains(last(), "记下来了，编号 D1") {
 		t.Fatal(len(drafts.drafts), last())
 	}
 }

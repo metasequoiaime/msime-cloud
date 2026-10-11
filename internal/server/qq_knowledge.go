@@ -272,10 +272,18 @@ func qqStripLinks(text string) string {
 }
 
 // qqAnswerQuestion 用知识库回答一个问题：先按目录挑段落，再只用挑出的段落回答。
-func (s *Server) qqAnswerQuestion(ctx context.Context, history []account.QQTurn, question string) (qqAnswer, error) {
+// qqAsk 是一次查资料的选项：github 为 true 时还查 GitHub 上的 issue、版本和统计；force 为 true 时不管挑段落的判断都现查（群友说上一个回答不对时）；progress 在开始现查前调用一次（回复「我查一下」），可以为空。
+type qqAsk struct {
+	github   bool
+	force    bool
+	progress func()
+}
+
+func (s *Server) qqAnswerQuestion(ctx context.Context, history []account.QQTurn, question string, ask qqAsk) (qqAnswer, error) {
 	question = qqQuestionWithHistory(history, question)
+	ask.github = true
 	// 按挑段落时的判断选回答的模型（见 qqAnswerModel）。
-	material, model, err := s.qqKnowledgeMaterial(ctx, question, true)
+	material, model, err := s.qqKnowledgeMaterial(ctx, question, ask)
 	if err != nil {
 		return qqAnswer{}, err
 	}
@@ -288,6 +296,9 @@ func (s *Server) qqAnswerQuestion(ctx context.Context, history []account.QQTurn,
 	}
 	// 文档和预先查好的资料答不上时，让模型带着只读的 GitHub 工具现查一次，查到了再重答（见 qq_research.go）。
 	if answer.Type == "unknown" && !strings.Contains(material, qqResearchHeading) {
+		if ask.progress != nil {
+			ask.progress()
+		}
 		if findings := s.qqResearch(ctx, question); findings != "" {
 			var retry qqAnswer
 			if err := s.qqChatModel(ctx, s.qqStrongModel(), qqAnswerPrompt+"\n\n资料：\n"+material+qqResearchHeading+findings+"\n", question, &retry); err == nil && retry.Type != "" {
@@ -331,7 +342,7 @@ const qqTriagePrompt = `你是水杉输入法的维护助手。管理员想把�
 
 // qqTriage 在提交 issue 前对照知识库：文档说明反馈想要的功能已经有了、现象是正常行为或已经回答了问题时，返回给群友的答案；需要提交时返回空字符串。只用文档段落，不查 GitHub：已有的同类 issue 由提交时的查重处理。
 func (s *Server) qqTriage(ctx context.Context, feedback string) (string, error) {
-	material, _, err := s.qqKnowledgeMaterial(ctx, feedback, false)
+	material, _, err := s.qqKnowledgeMaterial(ctx, feedback, qqAsk{})
 	if err != nil || material == "" {
 		return "", err
 	}
@@ -364,7 +375,8 @@ func (s *Server) qqAnswerModel(chat, strong bool) string {
 }
 
 // qqKnowledgeMaterial 按目录让模型挑出与问题相关的段落，返回交给模型的资料；github 为 true 时还按模型的要求附上 GitHub 上的相关 issue 和各平台最新版本。没有挑出任何内容时返回空字符串。
-func (s *Server) qqKnowledgeMaterial(ctx context.Context, question string, github bool) (string, string, error) {
+func (s *Server) qqKnowledgeMaterial(ctx context.Context, question string, ask qqAsk) (string, string, error) {
+	github := ask.github
 	sections, err := s.qqKnowledgeSections(ctx)
 	if err != nil {
 		return "", "", err
@@ -422,7 +434,11 @@ func (s *Server) qqKnowledgeMaterial(ctx context.Context, question string, githu
 		material.WriteString("### 语义相近的历史 issue 和 PR\n" + qqHistoryMaterial(recall.history) + "\n")
 	}
 	// 要现查 GitHub 的问题回答前先查（见 qq_research.go），不等到答不上：这类问题（「我是不是开发者」）常被回答的模型当成闲聊，走不到答不上那一步。
-	if picked.Lookup {
+	if picked.Lookup || ask.force {
+		picked.Lookup = true
+		if ask.progress != nil {
+			ask.progress()
+		}
 		if findings := s.qqResearch(ctx, question); findings != "" {
 			material.WriteString(qqResearchHeading + findings + "\n\n")
 		}

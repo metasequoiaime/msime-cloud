@@ -56,6 +56,8 @@ type Server struct {
 	qqDrafts qqDraftStore
 	// qqFAQCandidates 是答疑沉淀进文档的候选（account.Service，见 qq_faq_candidates.go）；没有数据库时为 nil。
 	qqFAQCandidates qqFAQCandidateStore
+	// qqBadAnswers 是被群友说答错的回答（account.Service，见 qq_bad_answers.go）；没有数据库时为 nil。
+	qqBadAnswers qqBadAnswerStore
 
 	adminStore  adminAuthStore
 	adminGoogle *adminGoogleAuth
@@ -152,6 +154,7 @@ func New(c Config) (*Server, error) {
 			s.qqVectors = s.accounts
 			s.qqDrafts = s.accounts
 			s.qqFAQCandidates = s.accounts
+			s.qqBadAnswers = s.accounts
 			s.adminJobs.Add(1)
 			go func() {
 				defer s.adminJobs.Done()

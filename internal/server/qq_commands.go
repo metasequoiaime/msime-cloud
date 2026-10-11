@@ -162,7 +162,8 @@ func qqCommandAsks(content string, glued bool) bool {
 
 // qqWordsQuestion 判断「加词」后面的内容是不是提问。有一条写了拼音就是在加词；都没写拼音时，除了 qqCommandAsks，任何位置出现问句的说法也算提问（「加词扛把子怎么不生效」），因为误提交会进公开的词库 PR，而含「吧」「吗」的词（酒吧、吗啡）写上拼音照样能加。
 func qqWordsQuestion(content string, glued bool) bool {
-	for _, e := range qqParseWords(content) {
+	entries, _ := qqParseWords(content)
+	for _, e := range entries {
 		if qqExplicitPinyin.MatchString(e.Pinyin) {
 			return false
 		}

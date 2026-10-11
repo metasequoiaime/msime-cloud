@@ -90,9 +90,11 @@ func qqSplitPinyin(pinyin string, n int) string {
 // qqWordQuotes 是群友常给词语加的引号和书名号：「加词「扛把子」」。
 const qqWordQuotes = "「」“”《》\"'"
 
-// qqParseWords 把「加词」后面的内容拆成词条：每条是词语，后面可以跟拼音。词语两边的引号、书名号先去掉；拼音那边的括号和引号由 qqNormalizePinyin 去掉。
-func qqParseWords(content string) []wordSubmissionEntry {
-	var entries []wordSubmissionEntry
+// qqReplyWordLetters 是词语里夹着字母时的回复。词库只收纯汉字（wordCharacter），「加词 栓Q shuan q」原来被拆成词语「栓」、拼音「q'shuan'q」，回的是看不懂的拼音错误，词语还被截成一个字。
+const qqReplyWordLetters = "加词只收纯汉字的词；带字母的词（比如栓Q）可以在输入法设置里加成快捷短语。"
+
+// qqParseWords 把「加词」后面的内容拆成词条：每条是词语，后面可以跟拼音。词语两边的引号、书名号先去掉；拼音那边的括号和引号由 qqNormalizePinyin 去掉。lettered 表示有一条的字母是词语的一部分（「栓Q shuan q」「打call」）：开头的汉字后面不隔空格紧跟着 ASCII 字母，并且这样拆出来的拼音校验不过；校验得过的是拼音连着词语写（「水杉shuishan」），照常当拼音。
+func qqParseWords(content string) (entries []wordSubmissionEntry, lettered bool) {
 	for _, part := range qqWordSeparators.Split(content, -1) {
 		part = strings.TrimSpace(strings.Trim(strings.TrimSpace(part), qqWordQuotes))
 		if part == "" {
@@ -103,10 +105,13 @@ func qqParseWords(content string) []wordSubmissionEntry {
 		if i := strings.IndexFunc(part, func(r rune) bool { return !wordCharacter(r) }); i > 0 {
 			word, pinyin = part[:i], qqNormalizePinyin(part[i:])
 			pinyin = qqSplitPinyin(pinyin, utf8.RuneCountInString(word))
+			if c := part[i]; ('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z') && len(validateWordEntries([]wordSubmissionEntry{{Word: word, Pinyin: pinyin}})) > 0 {
+				lettered = true
+			}
 		}
 		entries = append(entries, wordSubmissionEntry{Word: word, Pinyin: pinyin})
 	}
-	return entries
+	return entries, lettered
 }
 
 // qqAddWords 处理「加词 …」。
@@ -115,10 +120,13 @@ func (s *Server) qqAddWords(ctx context.Context, subject, content string, reply 
 		reply("加词暂时用不了，可以在官网的「提交词条」页面投稿。")
 		return
 	}
-	entries := qqParseWords(content)
+	entries, lettered := qqParseWords(content)
 	switch {
 	case len(entries) == 0:
 		reply("请在「加词」后面写词语和拼音，例如 @我 发「加词 水杉输入法 shui shan shu ru fa」，多个词用逗号隔开。")
+		return
+	case lettered:
+		reply(qqReplyWordLetters)
 		return
 	case len(entries) > qqWordsPerMessage:
 		reply("一次最多加 " + strconv.Itoa(qqWordsPerMessage) + " 个词，请分几次发。")

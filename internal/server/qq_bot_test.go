@@ -4753,7 +4753,10 @@ func TestQQBotAddWords(t *testing.T) {
 	// 校验不过时用 QQ 的写法报错，词语只出现一次，也不扣当天提交的额度。
 	used := limiter.counts["qq-bot-words|GROUP1/MEMBER1"]
 	for _, tc := range []struct{ id, text, want string }{
-		{"m-words-bad", "加词 打call da call", "「打」的拼音里「call」不是有效的拼音（ü 写作 v，如 lv）。"},
+		{"m-words-bad", "加词 扛把子 kang ba zii", "「扛把子」的拼音里「zii」不是有效的拼音（ü 写作 v，如 lv）。"},
+		// 词语里夹着字母（网络梗）时直接说词库只收纯汉字、可以加成快捷短语，不再把词语截成一个字、报看不懂的拼音错误。
+		{"m-words-letters", "加词 栓Q shuan q", qqReplyWordLetters},
+		{"m-words-letters-2", "加词 打call da call", qqReplyWordLetters},
 		{"m-words-count", "加词 扛把子 kang ba", "「扛把子」是 3 个字，拼音却是 2 个音节，对一下再发。"},
 		{"m-words-digits", "加词 扛把子 kang4 ba3 zi3", "「扛把子」的拼音只能写字母，音节之间空一格，比如 @我 发「加词 扛把子 kang ba zi」。"},
 		{"m-words-twice", "加词 扛把子 kang ba zi，扛把子 kang ba zi", "「扛把子」重复填写了。"},
@@ -4773,6 +4776,11 @@ func TestQQBotAddWords(t *testing.T) {
 	}
 	qqDeliver(t, s, "m-words-empty", "加词")
 	if !strings.HasPrefix(last(), "请在「加词」后面写词语和拼音") {
+		t.Fatal(last())
+	}
+	// 纯汉字的词照常加，拼音连着词语写也认得。
+	qqDeliver(t, s, "m-words-plain", "加词 你好 ni hao，秋天qiutian")
+	if !strings.HasPrefix(last(), "已经帮你投稿：你好（ni'hao）、秋天（qiu'tian）") {
 		t.Fatal(last())
 	}
 	// 前面带一层客气话也认得出。
@@ -4876,11 +4884,28 @@ func TestQQParseWords(t *testing.T) {
 		"「」":                 "",
 	} {
 		var got []string
-		for _, e := range qqParseWords(content) {
+		entries, lettered := qqParseWords(content)
+		for _, e := range entries {
 			got = append(got, e.Word+"="+e.Pinyin)
 		}
-		if strings.Join(got, ";") != want {
-			t.Errorf("%q: %q want %q", content, strings.Join(got, ";"), want)
+		if strings.Join(got, ";") != want || lettered {
+			t.Errorf("%q: %q want %q (lettered %v)", content, strings.Join(got, ";"), want, lettered)
+		}
+	}
+	// 开头的汉字后面紧跟字母、拆出来的拼音又对不上时，字母是词语的一部分；拼音连着词语写、对得上的照常当拼音。
+	for content, want := range map[string]bool{
+		"栓Q shuan q":      true,
+		"栓Q":              true,
+		"打call da call":   true,
+		"你好 ni hao，牛B":    true,
+		"你好 ni hao":       false,
+		"水杉shuishan":      false,
+		"你好nihao":         false,
+		"扛把子（kang ba zi）": false,
+		"yyds":            false,
+	} {
+		if _, lettered := qqParseWords(content); lettered != want {
+			t.Errorf("%q: lettered %v want %v", content, lettered, want)
 		}
 	}
 }
@@ -5676,6 +5701,75 @@ func TestQQSelfTestSummary(t *testing.T) {
 	}
 	if r := qqSelfTestFailed(context.Background(), qqSelfTestResult{}, "判分", errors.New("chat: status 502")); r.TimedOut || r.Reason != "判分出错" {
 		t.Fatal(r)
+	}
+}
+
+// 答题提示词：对比类按水杉自己的文档答、不现查；没说平台时只有一条规则（都能一行说清就每平台一行，否则只追问系统），原来互相冲突的两条不再同时出现；不写「没查到」；夹字母的词不建议加词。
+func TestQQAnswerPromptRules(t *testing.T) {
+	for _, want := range []string{
+		"和其他输入法对比、问值不值得换时，挑水杉的功能、隐私、平台与下载段落",
+		"只有问到对方产品的具体事实（价格、某项功能有没有）时才为 true；笼统对比、问值不值得换为 false",
+	} {
+		if !strings.Contains(qqSelectPrompt, want) {
+			t.Errorf("qqSelectPrompt missing %q", want)
+		}
+	}
+	for _, want := range []string{
+		"水杉自己的功能和隐私只按文档段落说，不用网上查到的内容或 issue 介绍水杉；不根据 issue 说水杉现在没有某功能；不把开着的 issue 数量或 0.x 版本号当成缺点。",
+		"用户没说平台时：各平台做法都能用一行（不超过 40 字）说清的，每个平台一行，只写入口；有任何一个平台要多步操作的，answer 只写一句追问「你用的是哪个系统？」",
+		"资料没写到的平台或细节，能用常识就用常识说一句",
+		"不写「没查到」「没看到说明」「不确定具体入口」这类话",
+		"词里有字母、数字或符号（如栓Q、yyds）时不要建议加词",
+	} {
+		if !strings.Contains(qqAnswerPrompt, want) {
+			t.Errorf("qqAnswerPrompt missing %q", want)
+		}
+	}
+	for _, gone := range []string{"各平台的入口各用一行写", "不列各平台的清单", "我这边没有…说明"} {
+		if strings.Contains(qqAnswerPrompt, gone) {
+			t.Errorf("qqAnswerPrompt still has %q", gone)
+		}
+	}
+	if strings.Count(qqAnswerPrompt, "用户没说平台时") != 1 {
+		t.Error("qqAnswerPrompt has more than one rule for questions without a platform")
+	}
+	if !strings.Contains(qqResearchPrompt, "web_search 只用来查水杉以外的东西，不要搜水杉自身") {
+		t.Error(qqResearchPrompt)
+	}
+}
+
+// 「怎么卸载」先按字数和行数硬性检查，超了直接判不过、不再调判分模型；行数上限是平台数加 1。
+func TestQQSelfTestLimits(t *testing.T) {
+	for question := range qqSelfTestLimits {
+		if !slices.ContainsFunc(qqSelfTestCases, func(c qqSelfTestCase) bool { return c.Question == question }) {
+			t.Errorf("limit for a question not in qqSelfTestCases: %q", question)
+		}
+	}
+	limit := qqSelfTestLimits["怎么卸载"]
+	if qqPlatformCount() != 4 {
+		t.Fatal(qqPlatformCount())
+	}
+	for answer, want := range map[string]string{
+		"你用的是哪个系统？": "",
+		"Windows 正式版：设置→应用里卸载\nmacOS：把它拖进废纸篓\nLinux：用包管理器卸载\nAndroid：长按图标卸载\n\n你用的是哪个？": "",
+		strings.Repeat("长", 201):  "回答 201 字，超过 200 字",
+		strings.Repeat("一行\n", 6): "回答 6 行，超过 5 行",
+	} {
+		if got := limit(answer); got != want {
+			t.Errorf("%q: %q want %q", answer, got, want)
+		}
+	}
+	s, fake, _ := qqServer(t)
+	s.qq.config.Admins = []string{"ADMIN1"}
+	fake.answer = `{"type":"answered","answer":"` + strings.Repeat("长", 250) + `"}`
+	qqPost(t, s, qqMessageFrom("m-selftest-limit", "ADMIN1", "自测"))
+	s.qqWorkers.Wait()
+	last := fake.replyTexts()[len(fake.replyTexts())-1]
+	if want := fmt.Sprintf("自测 %d/%d 通过。没通过的：\n- 「怎么卸载」回答 250 字，超过 200 字（回答：%s…）", len(qqSelfTestCases)-1, len(qqSelfTestCases), strings.Repeat("长", qqSelfTestAnswerRunes)); last != want {
+		t.Fatalf("%q", last)
+	}
+	if got := strings.Count(strings.Join(fake.chatCalls, ","), "judge"); got != len(qqSelfTestCases)-1 {
+		t.Fatal(got, fake.chatCalls)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -71,6 +72,8 @@ type QQBotConfig struct {
 	Labels []string `json:"labels"`
 	// Groups 是接受反馈的群（group_openid）。为空时接受机器人所在的每个群。
 	Groups []string `json:"groups"`
+	// FallbackModel 是主模型请求失败或输出不合格式时重试一次用的模型，同样经 chat 端点调用；为空时不重试。主模型选回答质量好但上游不够稳的模型时，用便宜稳定的模型兜底，群友就不会看到「暂时处理不了」。
+	FallbackModel string `json:"fallback_model"`
 	// Model 是整理反馈和判断重复用的模型，通过 chat 端点调用（接入地址和密钥都沿用 chat）；为空时用 chat.model。AI 联想用的模型追求快和便宜，整理 issue 需要更可靠地理解长段描述，所以可以单独指定，例如 EveryAPI 上的 claude-haiku-5-5。
 	Model string `json:"model"`
 	// Admins 是额外认作管理员的 member_openid。只有管理员 @ 机器人描述 bug 或需求时才会提 issue；普通群友 @ 机器人只做答疑，知识库答不上时 @ 管理员。群主和群管理员本来由「获取群成员信息」接口自动识别（见 qq_roles.go），但那个接口还在内邀阶段，没开通时只认这份名单：任何人 @ 机器人发「我的ID」会收到自己的 member_openid 和机器人认定的身份。
@@ -98,7 +101,7 @@ var (
 
 func (c *QQBotConfig) validate(cfg *Config) error {
 	if !c.enabled() {
-		if c.APIURL != "" || c.Repo != "" || c.Model != "" || c.KnowledgeRepo != "" || c.KnowledgeDir != "" || len(c.Labels) > 0 || len(c.Groups) > 0 || len(c.Admins) > 0 {
+		if c.APIURL != "" || c.Repo != "" || c.Model != "" || c.FallbackModel != "" || c.KnowledgeRepo != "" || c.KnowledgeDir != "" || len(c.Labels) > 0 || len(c.Groups) > 0 || len(c.Admins) > 0 {
 			return errors.New("qq_bot settings require app_id")
 		}
 		return nil
@@ -120,6 +123,9 @@ func (c *QQBotConfig) validate(cfg *Config) error {
 	}
 	if strings.TrimSpace(c.Model) != c.Model || c.Model == "" || len(c.Model) > 200 || strings.ContainsAny(c.Model, " \r\n\t") {
 		return errors.New("qq_bot model must be a model name without whitespace")
+	}
+	if len(c.FallbackModel) > 200 || strings.ContainsAny(c.FallbackModel, " \r\n\t") {
+		return errors.New("qq_bot fallback_model must be a model name without whitespace")
 	}
 	if c.SecretEnv == "" {
 		c.SecretEnv = defaultQQBotSecretEnv
@@ -515,7 +521,24 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, question string, r
 		reply(qqUnknownReply(s.qqGroupAdmins(group)))
 		return
 	}
+	if answer.Type == "answered" && answer.Escalate {
+		reply(answer.Answer + qqEscalation(s.qqGroupAdmins(group)))
+		return
+	}
 	reply(answer.Answer)
+}
+
+// qqEscalation 接在群友报问题时的答案后面：先给文档里的排查办法，再请管理员跟进。没有管理员可 @ 时只说管理员会来看。
+func qqEscalation(admins []string) string {
+	if len(admins) == 0 {
+		return "\n\n如果还不行，管理员看到后会跟进。"
+	}
+	var b strings.Builder
+	b.WriteString("\n\n如果还不行，请管理员看一下：")
+	for _, admin := range admins {
+		b.WriteString(`<qqbot-at-user id="` + admin + `" />`)
+	}
+	return b.String()
 }
 
 // qqFeedbackText 去掉消息里的 @ 标记、表情等尖括号标签和首尾空白。
@@ -608,8 +631,21 @@ func (s *Server) qqSummarise(ctx context.Context, text string) (qqReport, error)
 
 // qqChat 用 chat 端点和 qq_bot.model 做一次 JSON 输出的补全，把模型返回的对象解码进 out。用户消息之后总是追加 jsonObjectInstruction，否则经 EveryAPI 转发的 OpenAI 模型会因为用户消息里没有 json 一词拒绝 json_object 模式。模型有时会把 JSON 包在代码块里，这里一并去掉。
 func (s *Server) qqChat(ctx context.Context, system, user string, out any) error {
+	err := s.qqChatWith(ctx, s.qq.config.Model, system, user, out)
+	if err == nil || s.qq.config.FallbackModel == "" {
+		return err
+	}
+	// 主模型失败（上游拒绝、超时或输出不合格式）时用备用模型重答一次；先清掉上一次可能解码了一半的结果。
+	slog.Warn("qq bot: model failed, trying the fallback model", "reason", err.Error())
+	v := reflect.ValueOf(out).Elem()
+	v.Set(reflect.Zero(v.Type()))
+	return s.qqChatWith(ctx, s.qq.config.FallbackModel, system, user, out)
+}
+
+// qqChatWith 是用指定模型做的一次 qqChat。
+func (s *Server) qqChatWith(ctx context.Context, model, system, user string, out any) error {
 	e := s.config.Chat
-	payload, _ := json.Marshal(chatRequest{Model: s.qq.config.Model, MaxTokens: contract.ChatMaxTokens, ResponseFormat: &responseFormat{Type: "json_object"},
+	payload, _ := json.Marshal(chatRequest{Model: model, MaxTokens: contract.ChatMaxTokens, ResponseFormat: &responseFormat{Type: "json_object"},
 		Messages: []message{{Role: "system", Content: system}, {Role: "user", Content: user}, {Role: "user", Content: jsonObjectInstruction}}})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.URL, bytes.NewReader(payload))
 	if err != nil {

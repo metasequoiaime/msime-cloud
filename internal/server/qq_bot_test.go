@@ -157,6 +157,9 @@ type qqFake struct {
 	chatCalls    []string
 	chatBodies   []string
 	chatStatus   int
+	// failModel 是请求会被拒绝（502）的模型，models 记下每次请求的模型。
+	failModel string
+	models    []string
 	// 知识库（GitHub 内容接口）
 	knowledgeStatus int
 	knowledgeCalls  int
@@ -170,12 +173,17 @@ type qqFake struct {
 	roles     map[string]string
 	roleCalls int
 	// GitHub
-	searchQuery  string
-	searchItems  []map[string]any
-	searchStatus int
-	created      []map[string]any
-	createStatus int
-	comments     map[string]map[string]any
+	searchQuery string
+	// searchQueries 记下每次搜索；releases 是各仓库 Release 列表的响应（缺省的仓库返回 500）。
+	searchQueries  []string
+	searchMaxTerms int
+	releases       map[string]string
+	releaseCalls   int
+	searchItems    []map[string]any
+	searchStatus   int
+	created        []map[string]any
+	createStatus   int
+	comments       map[string]map[string]any
 }
 
 func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -185,8 +193,9 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	switch {
 	case r.URL.Path == "/" || r.URL.Path == "":
-		if f.chatStatus != 0 {
-			w.WriteHeader(f.chatStatus)
+		f.models = append(f.models, fmt.Sprint(body["model"]))
+		if f.chatStatus != 0 || body["model"] == f.failModel {
+			w.WriteHeader(max(f.chatStatus, 502))
 			return
 		}
 		messages := body["messages"].([]any)
@@ -194,7 +203,7 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		user := messages[1].(map[string]any)["content"].(string)
 		// 经 EveryAPI 转发的 OpenAI 模型只在用户消息里找 json，最后一条必须是格式指令。
 		last := messages[len(messages)-1].(map[string]any)
-		if body["model"] != "claude-haiku-5-5" || len(messages) != 3 || last["role"] != "user" || last["content"] != jsonObjectInstruction {
+		if (body["model"] != "claude-haiku-5-5" && body["model"] != "fallback-model") || len(messages) != 3 || last["role"] != "user" || last["content"] != jsonObjectInstruction {
 			f.t.Error("chat request", body["model"], messages)
 		}
 		content := f.summary
@@ -283,7 +292,20 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"encoding": "base64", "content": base64.StdEncoding.EncodeToString([]byte(file))})
+	case strings.HasSuffix(r.URL.Path, "/releases"):
+		f.releaseCalls++
+		body, ok := f.releases[strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/repos/"), "/releases")]
+		if !ok {
+			w.WriteHeader(500)
+			return
+		}
+		_, _ = io.WriteString(w, body)
+	case r.URL.Path == "/search/issues" && f.searchMaxTerms > 0 && len(strings.Fields(r.URL.Query().Get("q"))) > f.searchMaxTerms+2:
+		// 模拟 GitHub 每个词都要匹配：词太多时搜不到（repo: 和 is:issue 两个限定词不算）。
+		f.searchQueries = append(f.searchQueries, r.URL.Query().Get("q"))
+		_, _ = io.WriteString(w, `{"items":[]}`)
 	case r.URL.Path == "/search/issues":
+		f.searchQueries = append(f.searchQueries, r.URL.Query().Get("q"))
 		f.searchQuery = r.URL.Query().Get("q")
 		if f.searchStatus != 0 {
 			w.WriteHeader(f.searchStatus)
@@ -1156,5 +1178,146 @@ func TestQQBotRecognisesGroupAdmins(t *testing.T) {
 	b.token = ""
 	if _, err := b.memberRole(context.Background(), "G", "M"); err == nil {
 		t.Fatal("token failure accepted")
+	}
+}
+
+// 群友报问题时，文档里有排查办法就先给办法，再 @ 管理员跟进；只问用法时不 @。
+func TestQQBotEscalatesProblemReports(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.qq.config.Admins = []string{"ADMIN1"}
+	fake.answer = `{"type":"answered","answer":"在「外观」里打开「候选窗口跟随光标」。","escalate":true}`
+	qqDeliver(t, s, "m-escalate", "候选框老是跑到屏幕左上角")
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "在「外观」里打开「候选窗口跟随光标」。\n\n如果还不行，请管理员看一下：<qqbot-at-user id=\"ADMIN1\" />" {
+		t.Fatalf("%q", last)
+	}
+	fake.answer = `{"type":"answered","answer":"在设置里选五笔。","escalate":false}`
+	qqDeliver(t, s, "m-howto", "五笔怎么切换")
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "在设置里选五笔。" {
+		t.Fatalf("%q", last)
+	}
+	if qqEscalation(nil) != "\n\n如果还不行，管理员看到后会跟进。" {
+		t.Fatal(qqEscalation(nil))
+	}
+}
+
+// 主模型失败时用备用模型重答一次；没有备用模型或备用也失败时照旧回复暂时处理不了。
+func TestQQBotFallbackModel(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.qq.config.Admins = nil
+	s.qq.config.FallbackModel = "fallback-model"
+	fake.failModel = "claude-haiku-5-5"
+	qqDeliver(t, s, "m-fallback", "五笔怎么切换")
+	if replies := fake.replyTexts(); len(replies) != 1 || replies[0] != "在设置的「输入方案」里选五笔。" || strings.Join(fake.models, ",") != "claude-haiku-5-5,fallback-model,claude-haiku-5-5,fallback-model" {
+		t.Fatal(replies, fake.models)
+	}
+	fake.failModel, fake.chatStatus, fake.models = "", 502, nil
+	qqDeliver(t, s, "m-both-fail", "五笔怎么切换")
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != qqReplyUnavailable || len(fake.models) != 2 {
+		t.Fatal(last, fake.models)
+	}
+	s.qq.config.FallbackModel, fake.models = "", nil
+	qqDeliver(t, s, "m-no-fallback", "五笔怎么切换")
+	if len(fake.models) != 1 {
+		t.Fatal("no fallback configured must not retry", fake.models)
+	}
+	// 配置校验。
+	t.Setenv("TEST_QQ_SECRET", qqTestSecret)
+	c := qqValidConfig()
+	c.QQBot.FallbackModel = "bad model"
+	if c.QQBot.validate(&c) == nil {
+		t.Fatal("fallback model with whitespace accepted")
+	}
+	c = Config{QQBot: QQBotConfig{FallbackModel: "x"}}
+	if c.QQBot.validate(&c) == nil {
+		t.Fatal("fallback model without app_id accepted")
+	}
+}
+
+// 答疑时按模型给的关键词在每个仓库搜 issue、按需查各平台最新版本，结果和文档段落一起交给回答的模型；查询失败不影响答疑。
+func TestQQBotAnswersWithGitHubContext(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.qq.config.Admins = nil
+	s.config.Admin.GitHub.Platforms = []AdminPlatformConfig{{ID: "windows", Name: "Windows", Repo: "o/win", TagPrefix: "v"}, {ID: "android", Name: "Android", Repo: "o/r", TagPrefix: "android-v"}, {ID: "harmony", Name: "HarmonyOS", Repo: "o/r", TagPrefix: "harmony-v"}}
+	fake.selected = `{"sections":[1],"issue_search":"候选框 repo:x 左上角","releases":true}`
+	fake.searchItems = []map[string]any{
+		{"number": 818, "title": "大小写倒置", "state": "closed", "state_reason": "completed", "updated_at": "2026-10-11T03:00:00Z", "labels": []map[string]string{{"name": "bug"}}},
+		{"number": 9, "title": "PR", "pull_request": map[string]string{"url": "x"}},
+		{"number": 820, "title": "快捷键输入英文", "state": "open", "updated_at": "2026-10-10T03:00:00Z"},
+		{"number": 700, "title": "旧需求", "state": "closed", "state_reason": "not_planned", "updated_at": "2026-09-01T00:00:00Z"},
+	}
+	fake.releases = map[string]string{
+		"o/win": `[{"tag_name":"v0.9.6-beta","prerelease":true,"published_at":"2026-10-11T00:00:00Z"},{"tag_name":"v0.9.5","published_at":"2026-10-05T00:00:00Z"},{"tag_name":"v0.9.4","published_at":"2026-10-03T00:00:00Z"}]`,
+		"o/r":   `[{"tag_name":"windows-v0.2.1","prerelease":true,"published_at":"2026-10-08T00:00:00Z"},{"tag_name":"android-v0.3.1","published_at":"2026-10-08T00:00:00Z"},{"tag_name":"android-vnext","published_at":"2026-10-09T00:00:00Z"},{"tag_name":"draft-x","draft":true}]`,
+	}
+	qqDeliver(t, s, "m-gh", "候选框跑到左上角修好了没")
+	if strings.Join(fake.searchQueries, "|") != "repo:o/r is:issue 候选框 repo x 左上角|repo:o/win is:issue 候选框 repo x 左上角" {
+		t.Fatal(fake.searchQueries)
+	}
+	for _, want := range []string{
+		"### GitHub 上搜到的相关 issue",
+		"- win #818（已解决，更新于 2026-10-11，标签：bug）大小写倒置",
+		"- win #820（开着，更新于 2026-10-10，标签：）快捷键输入英文",
+		"- r #700（不计划处理，更新于 2026-09-01，标签：）旧需求",
+		"### 各平台最新版本（GitHub Release）",
+		"- Windows（msime-windows 仓库）：", // placeholder replaced below
+	} {
+		if want == "- Windows（msime-windows 仓库）：" {
+			continue
+		}
+		if !strings.Contains(fake.answerSystem, want) {
+			t.Fatalf("answer material missing %q:\n%s", want, fake.answerSystem)
+		}
+	}
+	for _, want := range []string{
+		"- Windows（win 仓库）：正式版 v0.9.5（2026-10-05 发布）；预发布 v0.9.6-beta（2026-10-11 发布）；r 仓库的新版预览 windows-v0.2.1（2026-10-08 发布）",
+		"- Android（r 仓库）：正式版 android-v0.3.1（2026-10-08 发布）",
+		"- HarmonyOS（r 仓库）：还没有发布",
+	} {
+		if !strings.Contains(fake.answerSystem, want) {
+			t.Fatalf("releases missing %q:\n%s", want, fake.answerSystem)
+		}
+	}
+	if strings.Contains(fake.answerSystem, "#9") {
+		t.Fatal("pull requests must be skipped")
+	}
+	// 同一次回答里每个仓库的 Release 只读一次。
+	if fake.releaseCalls != 2 {
+		t.Fatal(fake.releaseCalls)
+	}
+	// 搜索和 Release 都失败时照常回答，只是没有 GitHub 段落。
+	fake.searchStatus, fake.releases = 500, map[string]string{}
+	s.adminGitHub.Invalidate("")
+	qqDeliver(t, s, "m-gh-down", "候选框跑到左上角修好了没")
+	if strings.Contains(fake.answerSystem, "### GitHub 上搜到") || strings.Contains(fake.answerSystem, "Windows（") || fake.replyTexts()[len(fake.replyTexts())-1] != "在设置的「输入方案」里选五笔。" {
+		t.Fatal(fake.answerSystem)
+	}
+	// 模型没有要求时不查。
+	fake.selected, fake.searchQueries, fake.releaseCalls = `{"sections":[1]}`, nil, 0
+	qqDeliver(t, s, "m-gh-none", "五笔怎么切换")
+	if len(fake.searchQueries) != 0 || fake.releaseCalls != 0 {
+		t.Fatal(fake.searchQueries, fake.releaseCalls)
+	}
+	if qqIssueState("closed", "") != "已关闭" {
+		t.Fatal(qqIssueState("closed", ""))
+	}
+}
+
+// GitHub 要求每个词都匹配，搜不到时依次只用前两个、前一个词再搜。
+func TestQQIssueSearchNarrows(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.config.Admin.GitHub.Platforms = nil
+	fake.searchMaxTerms = 2
+	fake.searchItems = []map[string]any{{"number": 818, "title": "大小写倒置", "state": "open", "updated_at": "2026-10-11T00:00:00Z"}}
+	found := s.qqSearchIssues(context.Background(), "大小写 倒置 报过")
+	if !strings.Contains(found, "#818") || strings.Join(fake.searchQueries, "|") != "repo:o/r is:issue 大小写 倒置 报过|repo:o/r is:issue 大小写 倒置" {
+		t.Fatal(found, fake.searchQueries)
+	}
+	fake.searchQueries, fake.searchMaxTerms = nil, -1
+	fake.searchItems = nil
+	if s.qqSearchIssues(context.Background(), "a b c") != "" || len(fake.searchQueries) != 3 {
+		t.Fatal(fake.searchQueries)
+	}
+	if s.qqSearchIssues(context.Background(), "  ") != "" {
+		t.Fatal("blank keywords must not search")
 	}
 }

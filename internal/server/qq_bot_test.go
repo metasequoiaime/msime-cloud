@@ -2553,17 +2553,24 @@ func TestQQBotAdminMessagesNeedExplicitIntent(t *testing.T) {
 	if len(fake.created) != 4 {
 		t.Fatal("model intent must file", len(fake.created))
 	}
-	// 明确要求记录、但缺信息时照旧追问，提示补充时用「提issue」（补充的那条消息往往不会再说「记一下」）；Windows 没说版本时先问版本。
+	// 明确要求记录、但缺信息时追问，同时存成草稿，补一句「提交 D编号 …」就行，不用把整段描述重打一遍；Windows 没说版本时先问版本，并告诉他不知道版本可以写「版本 未知」。
 	fake.summary = `{"kind":"bug","title":"打不出字","problem":"偶尔打不出字","intent":true}`
 	qqDeliver(t, s, "m-intent-missing", "偶尔打不出字，记一下")
-	if len(fake.created) != 4 || last() != "还差一点信息："+qqDefaultQuestion+qqReplyResend {
-		t.Fatal(len(fake.created), last())
+	if want := "还差：" + qqDefaultQuestion + "已存为 D1，补一句就行：\n@水杉助手 提交 D1 版本 0.9.5"; len(fake.created) != 4 || last() != want || len(drafts.drafts) != 1 || !account.QQDraftOwnedBy(drafts.drafts[0], "GROUP1/MEMBER1") {
+		t.Fatal(len(fake.created), last(), drafts.drafts)
 	}
 	fake.summary = `{"kind":"bug","title":"候选框停在左上角","platform":"windows","problem":"候选框停在左上角","steps":"在记事本里打字","keywords":"候选框"}`
 	qqDeliver(t, s, "m-intent-windows", "Windows 上候选框停在左上角，记一下")
+	if want := "还差：" + qqWindowsVersionQuestion + "已存为 D2，补一句就行：\n@水杉助手 提交 D2 版本 0.9.5\n不知道版本就写「版本 未知」。"; len(fake.created) != 4 || last() != want || len(drafts.drafts) != 2 {
+		t.Fatal(len(fake.created), last())
+	}
+	// 没有草稿存储时照旧请他补充后重发。
+	s.qqDrafts = nil
+	qqDeliver(t, s, "m-intent-windows-nodrafts", "Windows 上候选框停在左上角，记一下")
 	if len(fake.created) != 4 || last() != "还差一点信息："+qqWindowsVersionQuestion+qqReplyResend {
 		t.Fatal(len(fake.created), last())
 	}
+	s.qqDrafts = drafts
 	fake.summary = `{"kind":"bug","title":"候选框停在左上角","platform":"windows","ime_version":"0.2.1","problem":"候选框停在左上角","steps":"在记事本里打字","keywords":"候选框"}`
 	qqDeliver(t, s, "m-intent-windows-new", "Windows 上水杉 0.2.1 候选框停在左上角，记一下")
 	if len(fake.created) != 5 || fake.created[4]["_repo"] != "o/r" || fmt.Sprint(fake.created[4]["labels"]) != "[bug platform/windows source/qq]" {
@@ -3638,16 +3645,31 @@ func (m *memoryDrafts) SetQQDraftIssue(ctx context.Context, id int64, ref string
 	m.drafts[id-1].IssueRef = ref
 	return nil
 }
-func (m *memoryDrafts) OpenQQDrafts(_ context.Context, limit int) ([]account.QQDraft, error) {
+func (m *memoryDrafts) DismissQQDraft(_ context.Context, id int64) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.unclaimed(id) {
+		return false, nil
+	}
+	m.drafts[id-1].Filed, m.drafts[id-1].FiledAt, m.drafts[id-1].IssueRef = true, time.Now(), account.QQDraftIgnored
+	return true, nil
+}
+
+// OpenQQDrafts 和 account 包一样最早的在前（这里按编号），总数不受 limit 影响。
+func (m *memoryDrafts) OpenQQDrafts(_ context.Context, limit int) ([]account.QQDraft, int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []account.QQDraft
-	for i := len(m.drafts) - 1; i >= 0 && len(out) < limit; i-- {
-		if m.unclaimed(m.drafts[i].ID) {
-			out = append(out, m.drafts[i])
+	total := 0
+	for _, d := range m.drafts {
+		if m.unclaimed(d.ID) {
+			total++
+			if len(out) < limit {
+				out = append(out, d)
+			}
 		}
 	}
-	return out, nil
+	return out, total, nil
 }
 
 // qqMessageFrom 是 member 发的一条 @ 消息。
@@ -3771,7 +3793,7 @@ func TestQQBotDraftSupplementFailures(t *testing.T) {
 	fake.summary = `{"kind":"bug","title":"候选框不见了","platform":"windows","problem":"打字时看不到候选框","steps":"在微信里打字","keywords":"候选框"}`
 	deliver("m-s1-more2", "MEMBER1", "补充 D1 Windows 11，在微信里打字")
 	deliver("m-s1-file-missing", "ADMIN1", "提交 D1")
-	if want := "草稿 D1 还差：" + qqWindowsVersionQuestion + "可以 @我 发「提交 D1 版本 0.9.5」把缺的信息带上一起提交。"; last() != want || len(fake.created) != 0 {
+	if want := "草稿 D1 还差：" + qqWindowsVersionQuestion + "可以 @我 发「提交 D1 版本 0.9.5」把缺的信息带上一起提交。不知道版本就写「版本 未知」。"; last() != want || len(fake.created) != 0 {
 		t.Fatalf("%q", last())
 	}
 	// 认领时数据库出错：回「稍后再试」，不说已经在提交。
@@ -3999,6 +4021,157 @@ func TestQQBotDraftFilingInterrupted(t *testing.T) {
 	}
 }
 
+// 「看 D编号」看整理结果和原话，只有发起人和管理员能看；「忽略 D编号」只有管理员能用，忽略后不再列出，提交、补充、再忽略都回「已忽略」。
+func TestQQBotDraftViewAndDismiss(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	drafts := &memoryDrafts{}
+	s.qqDrafts = drafts
+	s.qq.config.Admins = []string{"ADMIN1"}
+	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
+	deliver := func(id, member, content string) {
+		t.Helper()
+		qqPost(t, s, qqMessageFrom(id, member, content))
+		s.qqWorkers.Wait()
+	}
+	report := `{"kind":"bug","title":"候选框停在屏幕左上角","platform":"android","ime_version":"0.9.5","problem":"打字时候选框一直在左上角","steps":"在微信里打字","expected":"候选框跟着光标","keywords":"候选框 左上角"}`
+	for range 2 {
+		if _, err := drafts.CreateQQDraft(context.Background(), "GROUP1/MEMBER1", "候选框一直跑到左上角，安卓 0.9.5，微信里", report); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deliver("m-view-other", "MEMBER2", "看 D1")
+	if last() != "只有发起这份草稿的人和管理员能看。" {
+		t.Fatal(last())
+	}
+	deliver("m-view-owner", "MEMBER1", "看d1")
+	if want := "草稿 D1（bug，10-12 09:00，待提交）\n标题：候选框停在屏幕左上角\n平台：Android\n输入法版本：0.9.5\n现象：打字时候选框一直在左上角\n复现步骤：在微信里打字\n期望：候选框跟着光标\n原话：候选框一直跑到左上角，安卓 0.9.5，微信里"; last() != want {
+		t.Fatalf("%q", last())
+	}
+	deliver("m-view-admin", "ADMIN1", "看 D1")
+	if !strings.HasSuffix(last(), "\n要提交就 @我 发「提交 D1」，不提交就发「忽略 D1」。") {
+		t.Fatalf("%q", last())
+	}
+	deliver("m-view-missing", "ADMIN1", "看 D9")
+	if last() != "没有找到草稿 D9，可能已经过期了。" {
+		t.Fatal(last())
+	}
+	deliver("m-dismiss-member", "MEMBER1", "忽略 D1")
+	if last() != "只有管理员能忽略草稿。" || drafts.drafts[0].Filed {
+		t.Fatal(last())
+	}
+	deliver("m-dismiss", "ADMIN1", "忽略 D1")
+	if last() != "已忽略草稿 D1，不会提交。" || drafts.drafts[0].IssueRef != account.QQDraftIgnored {
+		t.Fatal(last(), drafts.drafts[0])
+	}
+	deliver("m-dismiss-list", "ADMIN1", "草稿")
+	if strings.Contains(last(), "D1（") || !strings.Contains(last(), "- D2（bug，") || !strings.HasPrefix(last(), "待处理的草稿共 1 份（「看 D编号」看全文，「提交 D编号」提交，「忽略 D编号」不提交）：") {
+		t.Fatal(last())
+	}
+	for i, content := range []string{"提交 D1", "补充 D1 Android 14", "忽略 D1"} {
+		deliver("m-dismissed-"+strconv.Itoa(i), "ADMIN1", content)
+		if last() != "草稿 D1 已忽略。" || len(fake.created) != 0 {
+			t.Fatal(content, last())
+		}
+	}
+	deliver("m-view-dismissed", "ADMIN1", "看 D1")
+	if !strings.HasPrefix(last(), "草稿 D1（bug，10-12 09:00，已忽略）") || strings.Contains(last(), "要提交就") {
+		t.Fatalf("%q", last())
+	}
+	// 正在提交的草稿不能忽略。
+	drafts.drafts[1].Filed, drafts.drafts[1].FiledAt = true, time.Now()
+	deliver("m-dismiss-filing", "ADMIN1", "忽略 D2")
+	if last() != "草稿 D2 正在提交，请稍等一两分钟再看。" || drafts.drafts[1].IssueRef != "" {
+		t.Fatal(last())
+	}
+}
+
+// 草稿列表最早的在前，表头写总数，超过一屏时说只列了最早的几份；有效期剩下不到 3 天的标上还剩几天。
+func TestQQBotDraftListOldestFirst(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	drafts := &memoryDrafts{}
+	s.qqDrafts = drafts
+	now := time.Date(2026, 11, 10, 3, 0, 0, 0, time.UTC)
+	s.qq.now = func() time.Time { return now }
+	report := `{"kind":"bug","title":"候选框停在屏幕左上角","platform":"android","ime_version":"0.9.5","problem":"打字时候选框一直在左上角","steps":"在微信里打字","keywords":"候选框"}`
+	for range qqDraftList + 2 {
+		if _, err := drafts.CreateQQDraft(context.Background(), "GROUP1/MEMBER2", "候选框一直跑到左上角", report); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range drafts.drafts {
+		drafts.drafts[i].CreatedAt = now.Add(-account.QQDraftWindow + time.Duration(i)*24*time.Hour + time.Hour)
+	}
+	qqDeliver(t, s, "m-list-old", "草稿")
+	list := fake.replyTexts()[len(fake.replyTexts())-1]
+	lines := strings.Split(list, "\n")
+	if lines[0] != "待处理的草稿共 12 份，先列最早的 10 份（「看 D编号」看全文，「提交 D编号」提交，「忽略 D编号」不提交）：" || len(lines) != qqDraftList+1 {
+		t.Fatalf("%q", list)
+	}
+	if !strings.HasPrefix(lines[1], "- D1（") || !strings.HasSuffix(lines[1], "（1 天后过期）") || !strings.HasSuffix(lines[3], "（3 天后过期）") || strings.Contains(lines[4], "过期") || strings.Contains(list, "D11") {
+		t.Fatalf("%q", list)
+	}
+}
+
+func TestQQExpiryNote(t *testing.T) {
+	created := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	window := 30 * 24 * time.Hour
+	for _, c := range []struct {
+		now  time.Time
+		want string
+	}{
+		{created.Add(20 * 24 * time.Hour), ""},
+		{created.Add(27 * 24 * time.Hour), ""},
+		{created.Add(27*24*time.Hour + time.Minute), "（3 天后过期）"},
+		{created.Add(29*24*time.Hour + 23*time.Hour), "（1 天后过期）"},
+		{created.Add(window), ""},
+		{created.Add(31 * 24 * time.Hour), ""},
+	} {
+		if got := qqExpiryNote(created, window, c.now); got != c.want {
+			t.Errorf("%v: %q want %q", c.now, got, c.want)
+		}
+	}
+}
+
+// 管理员提 issue 缺版本号时存成草稿，「提交 D编号 版本 未知」不再追问，Windows 按平台配置提交，正文写明版本未知；维护者标注写进示例，照着发不会丢。「版本 未知」只对管理员生效：群友补充这一句，管理员提交时照样追问。
+func TestQQBotAdminVersionUnknown(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	drafts := &memoryDrafts{}
+	s.qqDrafts = drafts
+	s.qq.config.Admins = []string{"ADMIN1"}
+	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
+	deliver := func(id, member, content string) {
+		t.Helper()
+		qqPost(t, s, qqMessageFrom(id, member, content))
+		s.qqWorkers.Wait()
+	}
+	fake.summary = `{"kind":"bug","title":"候选框停在左上角","platform":"windows","version":"Windows 11","problem":"候选框停在左上角","steps":"在记事本里打字","keywords":"候选框"}`
+	deliver("m-admin-missing", "ADMIN1", "提issue Windows 11 上候选框停在左上角，记事本里打字就出现 优先级 高")
+	if want := "还差：" + qqWindowsVersionQuestion + "已存为 D1，补一句就行：\n@水杉助手 提交 D1 版本 0.9.5 优先级 高\n不知道版本就写「版本 未知」。"; last() != want || len(fake.created) != 0 || len(drafts.drafts) != 1 || strings.Contains(drafts.drafts[0].Original, "优先级") {
+		t.Fatalf("%q %v", last(), drafts.drafts)
+	}
+	deliver("m-admin-unknown", "ADMIN1", "提交 D1 版本 未知")
+	if len(fake.created) != 1 || fake.created[0]["_repo"] != "o/win" || !strings.HasPrefix(last(), "草稿 D1 已提交为 win #123") || drafts.drafts[0].IssueRef != "win #123" {
+		t.Fatal(fake.created, last())
+	}
+	if body := fake.created[0]["body"].(string); !strings.Contains(body, "### 系统与输入法版本\n\nWindows，Windows 11，输入法版本未知") {
+		t.Fatalf("%q", body)
+	}
+	// 群友自己补「版本 未知」不算，管理员提交时照样追问。
+	if _, err := drafts.CreateQQDraft(context.Background(), "GROUP1/MEMBER2", "Windows 上候选框停在左上角", fake.summary); err != nil {
+		t.Fatal(err)
+	}
+	deliver("m-member-unknown", "MEMBER2", "补充 D2 版本 未知")
+	deliver("m-admin-file-member-unknown", "ADMIN1", "提交 D2")
+	if !strings.HasPrefix(last(), "草稿 D2 还差："+qqWindowsVersionQuestion) || len(fake.created) != 1 {
+		t.Fatal(last())
+	}
+	// 直接「提issue」写明版本未知也照常提交。
+	deliver("m-admin-direct-unknown", "ADMIN1", "提issue Windows 11 上候选框停在左上角，版本 未知")
+	if len(fake.created) != 2 || fake.created[1]["_repo"] != "o/win" || !strings.HasPrefix(last(), "已记录为 win #123") || len(drafts.drafts) != 2 {
+		t.Fatal(fake.created, last())
+	}
+}
+
 func TestQQQuestionEnd(t *testing.T) {
 	for in, want := range map[string]string{
 		"你用的是哪个系统":      "你用的是哪个系统？",
@@ -4199,16 +4372,22 @@ func (m *memoryFAQCandidates) QQFAQCandidate(_ context.Context, id int64) (accou
 	}
 	return m.items[id-1], nil
 }
-func (m *memoryFAQCandidates) OpenQQFAQCandidates(_ context.Context, limit int) ([]account.QQFAQCandidate, error) {
+
+// OpenQQFAQCandidates 和 account 包一样最早的在前（这里按编号），总数不受 limit 影响。
+func (m *memoryFAQCandidates) OpenQQFAQCandidates(_ context.Context, limit int) ([]account.QQFAQCandidate, int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []account.QQFAQCandidate
-	for i := len(m.items) - 1; i >= 0 && len(out) < limit; i-- {
-		if m.state[m.items[i].ID] == "" {
-			out = append(out, m.items[i])
+	total := 0
+	for _, c := range m.items {
+		if m.state[c.ID] == "" {
+			total++
+			if len(out) < limit {
+				out = append(out, c)
+			}
 		}
 	}
-	return out, nil
+	return out, total, nil
 }
 func (m *memoryFAQCandidates) CloseQQFAQCandidate(_ context.Context, id int64, state, ref string) (bool, error) {
 	m.mu.Lock()
@@ -4259,8 +4438,8 @@ func TestQQBotFAQCandidates(t *testing.T) {
 		t.Fatal(last())
 	}
 	deliver("m-c-list", "ADMIN1", "文档缺口")
-	if !strings.Contains(last(), "- F2 双拼词库怎么导入（未答）") || !strings.Contains(last(), "- F1 水杉有几个开发？ → 主仓库有 1 位贡献者 houko。") {
-		t.Fatal(last())
+	if want := "答疑里文档没写到的问题共 2 条（「写进FAQ F编号」开 PR，没答上的在后面写「答：……」，「忽略 F编号」拿掉）：\n- F1 水杉有几个开发？ → 主仓库有 1 位贡献者 houko。\n- F2 双拼词库怎么导入（未答）"; last() != want {
+		t.Fatalf("%q", last())
 	}
 	// 没答案的要补上。
 	deliver("m-c-noanswer", "ADMIN1", "写进FAQ F2")

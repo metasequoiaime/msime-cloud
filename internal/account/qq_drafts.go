@@ -20,7 +20,10 @@ var qqDraftUnclaimed = `(filed_at IS NULL OR (issue_ref='' AND filed_at<now()-'`
 // ErrQQDraftNotFound 表示草稿不存在或已经过期。
 var ErrQQDraftNotFound = errors.New("qq draft not found")
 
-// QQDraft 是一份 issue 草稿。Subject 是群和成员标识的摘要。Filed 表示已经被认领提交，FiledAt 是认领的时间（没认领时为零值）；IssueRef 为空时还在提交，或者提交被打断了，见 QQDraftClaimStale。
+// QQDraftIgnored 是管理员「忽略 D编号」后草稿的 issue_ref：被忽略的草稿和提交过的一样 filed_at 非空，不再列出、不能补充和提交，只是没有对应的 issue。
+const QQDraftIgnored = "ignored"
+
+// QQDraft 是一份 issue 草稿。Subject 是群和成员标识的摘要。Filed 表示已经被认领提交（或者被忽略），FiledAt 是认领的时间（没认领时为零值）；IssueRef 为空时还在提交，或者提交被打断了，见 QQDraftClaimStale；为 QQDraftIgnored 时是被管理员忽略了。
 type QQDraft struct {
 	ID        int64
 	Subject   string
@@ -88,20 +91,27 @@ func (a *Service) SetQQDraftIssue(ctx context.Context, id int64, ref string) err
 	return err
 }
 
-// OpenQQDrafts 列出有效期内还没提交的草稿（包括认领超时的），最新的在前。
-func (a *Service) OpenQQDrafts(ctx context.Context, limit int) ([]QQDraft, error) {
-	rows, err := a.store.pool.Query(ctx, `SELECT id,subject,original,report,created_at FROM qq_drafts WHERE `+qqDraftUnclaimed+` AND created_at>now()-$1::interval ORDER BY created_at DESC LIMIT $2`, QQDraftWindow.String(), limit)
+// DismissQQDraft 忽略一份还没提交的草稿（包括认领超时的），返回是否忽略了：已经在提交、提交过或者忽略过的不改。忽略后 filed_at 记成现在、issue_ref 记成 QQDraftIgnored，不再列出，也不能再补充或提交。
+func (a *Service) DismissQQDraft(ctx context.Context, id int64) (bool, error) {
+	tag, err := a.store.pool.Exec(ctx, `UPDATE qq_drafts SET filed_at=now(),issue_ref=$3 WHERE id=$1 AND `+qqDraftUnclaimed+` AND created_at>now()-$2::interval`, id, QQDraftWindow.String(), QQDraftIgnored)
+	return tag.RowsAffected() == 1, err
+}
+
+// OpenQQDrafts 列出有效期内还没提交的草稿（包括认领超时的），最早的在前，另外返回这样的草稿一共有多少份。原来最新的在前，积压超过 limit 份时最早的那些永远排不到，30 天后被 Store.Prune 悄悄删掉；最早的在前，快过期的先被看到。
+func (a *Service) OpenQQDrafts(ctx context.Context, limit int) ([]QQDraft, int, error) {
+	rows, err := a.store.pool.Query(ctx, `SELECT id,subject,original,report,created_at,count(*) OVER() FROM qq_drafts WHERE `+qqDraftUnclaimed+` AND created_at>now()-$1::interval ORDER BY created_at ASC, id ASC LIMIT $2`, QQDraftWindow.String(), limit)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	var drafts []QQDraft
+	total := 0
 	for rows.Next() {
 		var d QQDraft
-		if err := rows.Scan(&d.ID, &d.Subject, &d.Original, &d.Report, &d.CreatedAt); err != nil {
-			return nil, err
+		if err := rows.Scan(&d.ID, &d.Subject, &d.Original, &d.Report, &d.CreatedAt, &total); err != nil {
+			return nil, 0, err
 		}
 		drafts = append(drafts, d)
 	}
-	return drafts, rows.Err()
+	return drafts, total, rows.Err()
 }

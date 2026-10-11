@@ -39,22 +39,23 @@ func (a *Service) QQFAQCandidate(ctx context.Context, id int64) (QQFAQCandidate,
 	return c, err
 }
 
-// OpenQQFAQCandidates 列出有效期内还没处理的候选，最新的在前。
-func (a *Service) OpenQQFAQCandidates(ctx context.Context, limit int) ([]QQFAQCandidate, error) {
-	rows, err := a.store.pool.Query(ctx, `SELECT id,question,answer,created_at FROM qq_faq_candidates WHERE state='open' AND created_at>now()-$1::interval ORDER BY created_at DESC LIMIT $2`, QQFAQCandidateWindow.String(), limit)
+// OpenQQFAQCandidates 列出有效期内还没处理的候选，最早的在前，另外返回这样的候选一共有多少条：和 OpenQQDrafts 一样，积压超过 limit 条时最早的那些原来排不到就过期了。
+func (a *Service) OpenQQFAQCandidates(ctx context.Context, limit int) ([]QQFAQCandidate, int, error) {
+	rows, err := a.store.pool.Query(ctx, `SELECT id,question,answer,created_at,count(*) OVER() FROM qq_faq_candidates WHERE state='open' AND created_at>now()-$1::interval ORDER BY created_at ASC, id ASC LIMIT $2`, QQFAQCandidateWindow.String(), limit)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	var out []QQFAQCandidate
+	total := 0
 	for rows.Next() {
 		var c QQFAQCandidate
-		if err := rows.Scan(&c.ID, &c.Question, &c.Answer, &c.CreatedAt); err != nil {
-			return nil, err
+		if err := rows.Scan(&c.ID, &c.Question, &c.Answer, &c.CreatedAt, &total); err != nil {
+			return nil, 0, err
 		}
 		out = append(out, c)
 	}
-	return out, rows.Err()
+	return out, total, rows.Err()
 }
 
 // CloseQQFAQCandidate 把候选标成 done（写进了 FAQ，ref 是 PR）或 ignored，返回是否改了（已经处理过的不再改）。

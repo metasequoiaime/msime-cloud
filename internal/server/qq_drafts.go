@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -15,7 +16,7 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
 
-// 群友报的 bug 和需求整理成 issue 草稿，管理员一句「提交 D编号」就提上去。原来群友报问题只把一句话概括记进汇总 issue，管理员要自己重新组织、再发「提issue」。现在答疑时模型判断群友在报 bug 或提需求（escalate），机器人照常先给排查办法，同时用管理员提 issue 的同一套整理（qqSummarise）把反馈整理成草稿存进数据库（account.QQDraft，所有副本共享），回复里告诉群友草稿编号；缺平台、版本、复现步骤时一并问出来，群友发「补充 D编号 内容」补上，也可以直接回答追问（「Windows 11，0.9.5」），见 qqSupplementFollowUp。只有管理员能提交，这条规则不变：「草稿」列出待处理的草稿，「提交 D编号」查重后提交，可以顺带补一句（例如「提交 D12 版本 0.9.5」）。提交前先在数据库里认领草稿，两个副本不会提两遍；提交失败放回，放回时不受处理消息的时限影响；副本中途被杀掉来不及放回时，认领超过 5 分钟（account.QQDraftClaimTimeout）还没记下 issue 就当作提交被打断，可以再提交，万一真的提了两次，fileQQReport 的查重会把第二次补充到已有的 issue。群友的截图不存进公开 bucket，草稿里只有看图得到的文字描述。
+// 群友报的 bug 和需求整理成 issue 草稿，管理员一句「提交 D编号」就提上去。原来群友报问题只把一句话概括记进汇总 issue，管理员要自己重新组织、再发「提issue」。现在答疑时模型判断群友在报 bug 或提需求（escalate），机器人照常先给排查办法，同时用管理员提 issue 的同一套整理（qqSummarise）把反馈整理成草稿存进数据库（account.QQDraft，所有副本共享），回复里告诉群友草稿编号；缺平台、版本、复现步骤时一并问出来，群友发「补充 D编号 内容」补上，也可以直接回答追问（「Windows 11，0.9.5」），见 qqSupplementFollowUp。只有管理员能提交，这条规则不变：「草稿」列出待处理的草稿，最早的在前（快过期的先被看到），「看 D编号」看整理结果和原话，「提交 D编号」查重后提交，可以顺带补一句（例如「提交 D12 版本 0.9.5」），误判的草稿「忽略 D编号」拿掉。管理员自己「提issue」缺信息时也存成草稿，补一句「提交 D编号 …」就行，不用把整段描述重打一遍（见 qqAdminDraft）。提交前先在数据库里认领草稿，两个副本不会提两遍；提交失败放回，放回时不受处理消息的时限影响；副本中途被杀掉来不及放回时，认领超过 5 分钟（account.QQDraftClaimTimeout）还没记下 issue 就当作提交被打断，可以再提交，万一真的提了两次，fileQQReport 的查重会把第二次补充到已有的 issue。群友的截图不存进公开 bucket，草稿里只有看图得到的文字描述。
 
 const (
 	// qqDraftsDaily 是每个群友每天最多新建的草稿数（auth_rates）。
@@ -36,11 +37,12 @@ type qqDraftStore interface {
 	ClaimQQDraft(ctx context.Context, id int64) (bool, error)
 	ReleaseQQDraft(ctx context.Context, id int64) error
 	SetQQDraftIssue(ctx context.Context, id int64, ref string) error
-	OpenQQDrafts(ctx context.Context, limit int) ([]account.QQDraft, error)
+	DismissQQDraft(ctx context.Context, id int64) (bool, error)
+	OpenQQDrafts(ctx context.Context, limit int) ([]account.QQDraft, int, error)
 }
 
-// qqDraftCommand 匹配「提交 D12 …」「补充 D12 …」，分组是命令、编号和后面的内容。也认「提交D12」、小写的 d、命令后的冒号（「补充：D1 Windows 11」）、编号前的「#」、d 和数字之间的空格（「补充 d 1 win11」），编号后面可以用句号、分号、顿号隔开内容：原来多一个冒号就认不出，补充的内容被当成提问交给模型。
-var qqDraftCommand = regexp.MustCompile(`^(提交|补充)\s*[:：]?\s*[#＃]?[Dd]\s*([0-9]{1,9})(?:[\s:：,，。.;；、]+([\s\S]*))?$`)
+// qqDraftCommand 匹配「提交 D12 …」「补充 D12 …」「看 D12」「忽略 D12」，分组是命令、编号和后面的内容（「看」「忽略」不用后面的内容）。也认「提交D12」、小写的 d、命令后的冒号（「补充：D1 Windows 11」）、编号前的「#」、d 和数字之间的空格（「补充 d 1 win11」），编号后面可以用句号、分号、顿号隔开内容：原来多一个冒号就认不出，补充的内容被当成提问交给模型。
+var qqDraftCommand = regexp.MustCompile(`^(提交|补充|看|忽略)\s*[:：]?\s*[#＃]?[Dd]\s*([0-9]{1,9})(?:[\s:：,，。.;；、]+([\s\S]*))?$`)
 
 func qqDraftCode(id int64) string { return "D" + strconv.FormatInt(id, 10) }
 
@@ -49,7 +51,7 @@ func (s *Server) qqDraftMissing(ctx context.Context, report qqReport, original s
 	if report.Missing != "" {
 		return report.Missing
 	}
-	_, _, question := s.qqTarget(ctx, report, original)
+	_, _, question := s.qqTarget(ctx, report, original, false)
 	return question
 }
 
@@ -93,7 +95,45 @@ func (s *Server) qqDraftReport(ctx context.Context, subject, text string) string
 	return note
 }
 
-// qqDraftCommands 处理「草稿」「提交 D编号」「补充 D编号」，返回处理结果的名字；不是这几个命令时返回空字符串。
+// qqAdminDraft 在管理员提 issue 缺信息时把反馈存成草稿，返回给管理员的回复；没有草稿存储或存不进去时 ok 为 false，调用方照旧请他补充后重发。原来要把整段描述连同「提issue」重打一遍，现在补一句「提交 D编号 版本 0.9.5」就行。text 是去掉维护者标注后的反馈，标注不存进草稿，示例里带上，照着发不会丢；question 是缺的信息。截图和视频不存进草稿（和群友的草稿一样只留看图得到的文字），提交时不会附上，有附件时说一声。
+func (s *Server) qqAdminDraft(ctx context.Context, m qqGroupMessage, text string, report qqReport, notes qqNotes, question string) (string, bool) {
+	if s.qqDrafts == nil {
+		return "", false
+	}
+	raw, _ := json.Marshal(report)
+	id, err := s.qqDrafts.CreateQQDraft(ctx, m.GroupOpenID+"/"+m.Author.MemberOpenID, qqTruncate(text, qqDraftOriginalRunes), string(raw))
+	if err != nil {
+		slog.Warn("qq bot: admin draft not stored", "reason", err.Error())
+		return "", false
+	}
+	code := qqDraftCode(id)
+	note := "还差：" + qqQuestionEnd(question) + "已存为 " + code + "，补一句就行：\n@水杉助手 提交 " + code + " 版本 0.9.5" + qqNotesText(notes)
+	if question == qqWindowsVersionQuestion {
+		note += "\n不知道版本就写「版本 未知」。"
+	}
+	if len(m.Attachments) > 0 {
+		note += "\n截图和视频不会跟着草稿提交，需要的话提交后在 issue 里补上。"
+	}
+	return note, true
+}
+
+// qqNotesText 把维护者标注写回「优先级 高」「effort S」的样子，开头带一个空格；没有标注时返回空字符串。
+func qqNotesText(notes qqNotes) string {
+	text := ""
+	if notes.Priority != "" {
+		name := qqPriorityNames[notes.Priority]
+		if name == "" {
+			name = notes.Priority
+		}
+		text += " 优先级 " + name
+	}
+	if notes.Effort != "" {
+		text += " effort " + notes.Effort
+	}
+	return text
+}
+
+// qqDraftCommands 处理「草稿」「看 D编号」「提交 D编号」「补充 D编号」「忽略 D编号」，返回处理结果的名字；不是这几个命令时返回空字符串。
 func (s *Server) qqDraftCommands(ctx context.Context, m qqGroupMessage, text string, admin bool, reply func(string)) string {
 	compact := qqCompact(text)
 	if compact == "草稿" || compact == "草稿列表" {
@@ -110,6 +150,10 @@ func (s *Server) qqDraftCommands(ctx context.Context, m qqGroupMessage, text str
 	}
 	id, _ := strconv.ParseInt(match[2], 10, 64)
 	extra := strings.TrimSpace(match[3])
+	if match[1] == "忽略" && !admin {
+		reply("只有管理员能忽略草稿。")
+		return "cmd_draft_dismiss"
+	}
 	if s.qqDrafts == nil {
 		reply(qqReplyUnavailable)
 		return "cmd_draft"
@@ -123,6 +167,17 @@ func (s *Server) qqDraftCommands(ctx context.Context, m qqGroupMessage, text str
 		slog.Warn("qq bot: draft unavailable", "reason", err.Error())
 		reply(qqReplyUnavailable)
 		return "cmd_draft"
+	case match[1] == "看":
+		// 草稿里有群友的原话，和列表一样不给别的群友看；发起人可以看自己的。
+		if !admin && !account.QQDraftOwnedBy(draft, m.GroupOpenID+"/"+m.Author.MemberOpenID) {
+			reply("只有发起这份草稿的人和管理员能看。")
+		} else {
+			reply(s.qqDraftDetail(ctx, draft, admin))
+		}
+		return "cmd_draft_view"
+	case draft.Filed && draft.IssueRef == account.QQDraftIgnored:
+		reply("草稿 " + qqDraftCode(id) + " 已忽略。")
+		return "cmd_draft"
 	case draft.Filed && draft.IssueRef != "":
 		reply("草稿 " + qqDraftCode(id) + " 已经提交过了：" + draft.IssueRef + "。")
 		return "cmd_draft"
@@ -132,6 +187,19 @@ func (s *Server) qqDraftCommands(ctx context.Context, m qqGroupMessage, text str
 		return "cmd_draft"
 	}
 	// 认领超时还没记下 issue 的草稿当作提交被打断，和没提交的一样往下走。
+	if match[1] == "忽略" {
+		ok, err := s.qqDrafts.DismissQQDraft(ctx, id)
+		switch {
+		case err != nil:
+			slog.Warn("qq bot: draft not dismissed", "reason", err.Error())
+			reply(qqReplyUnavailable)
+		case !ok:
+			reply("草稿 " + qqDraftCode(id) + " 已经在提交或提交过了。")
+		default:
+			reply("已忽略草稿 " + qqDraftCode(id) + "，不会提交。")
+		}
+		return "cmd_draft_dismiss"
+	}
 	if match[1] == "补充" {
 		if !admin && !account.QQDraftOwnedBy(draft, m.GroupOpenID+"/"+m.Author.MemberOpenID) {
 			reply("只有发起这份草稿的人和管理员能补充。")
@@ -288,9 +356,18 @@ func (s *Server) qqFileDraft(ctx context.Context, draft account.QQDraft, extra s
 		}
 		report, original = updated, qqTruncate(draft.Original+"\n补充："+text, qqDraftOriginalRunes)
 	}
-	repo, label, question := s.qqTarget(ctx, report, original)
+	// 管理员写了「版本 未知」时不再追问版本，正文写明版本未知（qqMarkVersionUnknown）；只看管理员这次补的内容，群友补充里的「版本 未知」不算。
+	unknown := qqVersionUnknown.MatchString(text)
+	if unknown {
+		report = qqMarkVersionUnknown(report)
+	}
+	repo, label, question := s.qqTarget(ctx, report, original, unknown)
 	if question != "" {
-		reply("草稿 " + code + " 还差：" + qqQuestionEnd(question) + "可以 @我 发「提交 " + code + " 版本 0.9.5」把缺的信息带上一起提交。")
+		message := "草稿 " + code + " 还差：" + qqQuestionEnd(question) + "可以 @我 发「提交 " + code + " 版本 0.9.5」把缺的信息带上一起提交。"
+		if question == qqWindowsVersionQuestion {
+			message += "不知道版本就写「版本 未知」。"
+		}
+		reply(message)
 		return "needs_info"
 	}
 	claimed, err := s.qqDrafts.ClaimQQDraft(ctx, draft.ID)
@@ -329,13 +406,13 @@ func (s *Server) qqFileDraft(ctx context.Context, draft account.QQDraft, extra s
 	return "filed"
 }
 
-// qqListDrafts 回复待处理的草稿：编号、标题和还缺的信息。
+// qqListDrafts 回复待处理的草稿：总数，最早的 qqDraftList 份的编号、标题、还缺的信息，快过期的标上还剩几天。
 func (s *Server) qqListDrafts(ctx context.Context, reply func(string)) {
 	if s.qqDrafts == nil {
 		reply(qqReplyUnavailable)
 		return
 	}
-	drafts, err := s.qqDrafts.OpenQQDrafts(ctx, qqDraftList)
+	drafts, total, err := s.qqDrafts.OpenQQDrafts(ctx, qqDraftList)
 	if err != nil {
 		slog.Warn("qq bot: drafts unavailable", "reason", err.Error())
 		reply(qqReplyUnavailable)
@@ -346,7 +423,12 @@ func (s *Server) qqListDrafts(ctx context.Context, reply func(string)) {
 		return
 	}
 	var b strings.Builder
-	b.WriteString("待处理的草稿（发「提交 D编号」提交）：")
+	fmt.Fprintf(&b, "待处理的草稿共 %d 份", total)
+	if total > len(drafts) {
+		fmt.Fprintf(&b, "，先列最早的 %d 份", len(drafts))
+	}
+	b.WriteString("（「看 D编号」看全文，「提交 D编号」提交，「忽略 D编号」不提交）：")
+	now := s.qq.now()
 	for _, d := range drafts {
 		var report qqReport
 		_ = json.Unmarshal([]byte(d.Report), &report)
@@ -358,6 +440,63 @@ func (s *Server) qqListDrafts(ctx context.Context, reply func(string)) {
 		if missing := s.qqDraftMissing(ctx, report, d.Original); missing != "" {
 			b.WriteString("（缺：" + missing + "）")
 		}
+		b.WriteString(qqExpiryNote(d.CreatedAt, account.QQDraftWindow, now))
 	}
 	reply(b.String())
+}
+
+// qqExpiryDays 是列表里开始标「n 天后过期」的剩余天数。
+const qqExpiryDays = 3
+
+// qqExpiryNote 是列表里快过期的条目后面的「（n 天后过期）」：有效期剩下不到 qqExpiryDays 天时才标，不足一天按一天算；已经过了有效期（等着被 Store.Prune 删掉）或者还早时返回空字符串。原来过期的条目悄悄消失，管理员不知道哪些该先处理。
+func qqExpiryNote(created time.Time, window time.Duration, now time.Time) string {
+	left := created.Add(window).Sub(now)
+	if left <= 0 || left >= qqExpiryDays*24*time.Hour {
+		return ""
+	}
+	return fmt.Sprintf("（%d 天后过期）", int(math.Ceil(left.Hours()/24)))
+}
+
+// qqDraftDetail 是「看 D编号」的回复：状态、整理结果的各项和群友的原话（截到 300 字），管理员先看清楚再决定提交还是忽略。原来列表只有一句标题，管理员看不到现象、步骤和平台就得决定要不要在 GitHub 上公开提 issue。
+func (s *Server) qqDraftDetail(ctx context.Context, draft account.QQDraft, admin bool) string {
+	code := qqDraftCode(draft.ID)
+	var report qqReport
+	_ = json.Unmarshal([]byte(draft.Report), &report)
+	kind := "bug"
+	if report.Kind == "feature" {
+		kind = "需求"
+	}
+	pending := false
+	status := "待提交"
+	switch {
+	case draft.Filed && draft.IssueRef == account.QQDraftIgnored:
+		status = "已忽略"
+	case draft.Filed && draft.IssueRef != "":
+		status = "已提交为 " + draft.IssueRef
+	case draft.Filed && !account.QQDraftClaimStale(draft, s.qq.now()):
+		status = "正在提交"
+	default:
+		pending = true
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "草稿 %s（%s，%s，%s）", code, kind, draft.CreatedAt.In(qqStatsZone).Format("01-02 15:04"), status)
+	platform := qqPlatformNames[report.Platform]
+	if platform == "" {
+		platform = report.Platform
+	}
+	for _, field := range [][2]string{{"标题", report.Title}, {"平台", platform}, {"输入法版本", report.IMEVersion}, {"现象", report.Problem}, {"复现步骤", report.Steps}, {"期望", report.Expected}, {"使用场景", report.Scenario}, {"建议", report.Proposal}} {
+		if strings.TrimSpace(field[1]) != "" {
+			b.WriteString("\n" + field[0] + "：" + field[1])
+		}
+	}
+	b.WriteString("\n原话：" + qqTruncate(draft.Original, 300))
+	if pending {
+		if missing := s.qqDraftMissing(ctx, report, draft.Original); missing != "" {
+			b.WriteString("\n还缺：" + missing)
+		}
+		if admin {
+			b.WriteString("\n要提交就 @我 发「提交 " + code + "」，不提交就发「忽略 " + code + "」。")
+		}
+	}
+	return b.String()
 }

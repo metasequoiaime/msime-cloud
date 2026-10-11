@@ -25,7 +25,7 @@ const (
 type qqFAQCandidateStore interface {
 	AddQQFAQCandidate(ctx context.Context, question, answer string) (int64, error)
 	QQFAQCandidate(ctx context.Context, id int64) (account.QQFAQCandidate, error)
-	OpenQQFAQCandidates(ctx context.Context, limit int) ([]account.QQFAQCandidate, error)
+	OpenQQFAQCandidates(ctx context.Context, limit int) ([]account.QQFAQCandidate, int, error)
 	CloseQQFAQCandidate(ctx context.Context, id int64, state, ref string) (bool, error)
 }
 
@@ -120,9 +120,9 @@ func (s *Server) qqFAQCandidateCommands(ctx context.Context, text string, admin 
 	return "cmd_faq_candidate_write"
 }
 
-// qqListFAQCandidates 回复最近的文档候选。
+// qqListFAQCandidates 回复文档候选：总数，最早的 qqFAQCandidateList 条，快过期的标上还剩几天。
 func (s *Server) qqListFAQCandidates(ctx context.Context, reply func(string)) {
-	list, err := s.qqFAQCandidates.OpenQQFAQCandidates(ctx, qqFAQCandidateList)
+	list, total, err := s.qqFAQCandidates.OpenQQFAQCandidates(ctx, qqFAQCandidateList)
 	if err != nil {
 		slog.Warn("qq bot: faq candidates unavailable", "reason", err.Error())
 		reply(qqReplyUnavailable)
@@ -133,7 +133,12 @@ func (s *Server) qqListFAQCandidates(ctx context.Context, reply func(string)) {
 		return
 	}
 	var b strings.Builder
-	b.WriteString("最近答疑里文档没写到的问题（「写进FAQ F编号」开 PR，没答上的在后面写「答：……」，「忽略 F编号」拿掉）：")
+	fmt.Fprintf(&b, "答疑里文档没写到的问题共 %d 条", total)
+	if total > len(list) {
+		fmt.Fprintf(&b, "，先列最早的 %d 条", len(list))
+	}
+	b.WriteString("（「写进FAQ F编号」开 PR，没答上的在后面写「答：……」，「忽略 F编号」拿掉）：")
+	now := s.qq.now()
 	for _, c := range list {
 		fmt.Fprintf(&b, "\n- F%d %s", c.ID, qqTruncate(c.Question, 60))
 		if c.Answer == "" {
@@ -141,6 +146,7 @@ func (s *Server) qqListFAQCandidates(ctx context.Context, reply func(string)) {
 		} else {
 			b.WriteString(" → " + qqTruncate(c.Answer, 60))
 		}
+		b.WriteString(qqExpiryNote(c.CreatedAt, account.QQFAQCandidateWindow, now))
 	}
 	reply(b.String())
 }

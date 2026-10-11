@@ -30,7 +30,7 @@ func qqVoteBody(n int) string {
 
 // qqVoteFeature 在已有的同一个需求下记一票，返回答案发出后单独回复的说明；没找到同一个需求、仓库要追问版本或者出错时返回空字符串，调用方照旧起草稿。
 func (s *Server) qqVoteFeature(ctx context.Context, subject string, report qqReport, text string) string {
-	repo, _, question := s.qqTarget(ctx, report, text)
+	repo, _, question := s.qqTarget(ctx, report, text, false)
 	if question != "" {
 		return ""
 	}

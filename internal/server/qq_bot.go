@@ -260,6 +260,8 @@ type qqBot struct {
 	// stats 是缓存的仓库统计和统计的时间，见 qqRepoStats；由 mu 保护。
 	stats   string
 	statsAt time.Time
+	// repoVisibility 缓存现查时各仓库是否公开，见 qqResearchPublic；由 mu 保护。
+	repoVisibility map[string]qqRepoVisibility
 }
 
 // probeMemberRole 在每个副本第一次收到 @ 消息时记一行日志，说明事件里有没有带群身份（author.member_role）：开放平台的文档写了这个字段，但没确认生产的事件里真的有。有的话群主和群管理员不用加进名单就能识别（见 qq_roles.go）。

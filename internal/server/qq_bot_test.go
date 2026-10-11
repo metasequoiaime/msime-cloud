@@ -256,6 +256,9 @@ type qqFake struct {
 	researchTools       []bool
 	answerAfterResearch string
 	extraGitHub         map[string]string
+	// repoVisibility 是现查前检查仓库是否公开（GET /repos/{owner}/{name}）的响应，按「owner/name」，缺省是公开仓库；「!500」这样的值表示回这个错误状态。repoChecks 按顺序记下检查过的仓库。
+	repoVisibility map[string]string
+	repoChecks     []string
 	// researchHang 为 true 时，调研里已经调用过工具、又给了工具的那一轮一直不返回，直到客户端放弃，用来模拟调研卡在中途。
 	researchHang bool
 	// 「记录答案」：faq 是整理 FAQ 的模型输出；faqFiles 不为 nil 时知识库仓库按它返回文件（要求按 qqFAQHead 读），faqWrites 按顺序记下建树、建提交、建分支、开 PR 的请求，faqFailPath 是会返回 422 的写接口路径。
@@ -632,11 +635,27 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.comments[r.URL.Path] = body
 		w.WriteHeader(201)
 		_, _ = w.Write([]byte(`{"id":1}`))
+	case qqFakeRepoPath.MatchString(r.URL.Path) && r.Method == "GET":
+		repo := strings.TrimPrefix(r.URL.Path, "/repos/")
+		f.repoChecks = append(f.repoChecks, repo)
+		body, ok := f.repoVisibility[repo]
+		if !ok {
+			body = `{"private":false,"visibility":"public"}`
+		}
+		if code, found := strings.CutPrefix(body, "!"); found {
+			status, _ := strconv.Atoi(code)
+			w.WriteHeader(status)
+			return
+		}
+		_, _ = io.WriteString(w, body)
 	default:
 		f.t.Error("unexpected upstream call", r.Method, r.URL.Path)
 		w.WriteHeader(404)
 	}
 }
+
+// qqFakeRepoPath 匹配仓库本身的路径 /repos/{owner}/{name}，不含子路径。
+var qqFakeRepoPath = regexp.MustCompile(`^/repos/[^/]+/[^/]+$`)
 
 func (f *qqFake) replyTexts() []string {
 	f.mu.Lock()
@@ -3358,6 +3377,86 @@ func TestQQBotResearchesGitHub(t *testing.T) {
 	}
 }
 
+// qqTestGitHubGet 是模型发来的一次 github_get 调用。
+func qqTestGitHubGet(path string) qqResearchToolCall {
+	call := qqResearchToolCall{}
+	call.Function.Name = "github_get"
+	call.Function.Arguments = `{"path":"` + path + `"}`
+	return call
+}
+
+// 现查只读公开仓库：私有仓库、不是 public 的仓库、检查失败时都不发出子路径的请求（假 GitHub 收到没配置的子路径会报 unexpected upstream call）；检查结果按仓库缓存一小时，失败不缓存。
+func TestQQResearchRefusesPrivateRepos(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	now := time.Date(2026, 10, 12, 10, 0, 0, 0, time.UTC)
+	s.qq.now = func() time.Time { return now }
+	fake.repoVisibility = map[string]string{
+		"metasequoiaime/secret":   `{"private":true,"visibility":"private"}`,
+		"metasequoiaime/internal": `{"private":false,"visibility":"internal"}`,
+		"metasequoiaime/odd":      `{"visibility":"public"}`,
+		"metasequoiaime/broken":   "!500",
+	}
+	fake.extraGitHub = map[string]string{"/repos/metasequoiaime/msime/contents/README.md": `{"name":"README.md","content":"aGVsbG8="}`}
+	for _, c := range []struct{ path, want string }{
+		{"/repos/metasequoiaime/secret/contents/README.md", "这个仓库不公开，不能查。"},
+		{"/repos/metasequoiaime/secret/commits?per_page=5", "这个仓库不公开，不能查。"},
+		{"/repos/metasequoiaime/internal/issues", "这个仓库不公开，不能查。"},
+		{"/repos/metasequoiaime/odd/issues", "确认不了这个仓库是否公开，不能查。"},
+		{"/repos/metasequoiaime/broken/contents/README.md", "确认不了这个仓库是否公开，不能查。"},
+		{"/repos/metasequoiaime/broken/contents/README.md", "确认不了这个仓库是否公开，不能查。"},
+	} {
+		if got := s.qqResearchCall(context.Background(), qqTestGitHubGet(c.path)); got != c.want {
+			t.Errorf("%s: %q", c.path, got)
+		}
+	}
+	// 私有仓库查一次就缓存；查询失败的每次都重新查。
+	if got := strings.Join(fake.repoChecks, ","); got != "metasequoiaime/secret,metasequoiaime/internal,metasequoiaime/odd,metasequoiaime/broken,metasequoiaime/broken" {
+		t.Fatal(got)
+	}
+	// 公开仓库照常查；/users、/orgs 和搜索不检查。
+	if got := s.qqResearchCall(context.Background(), qqTestGitHubGet("/repos/metasequoiaime/msime/contents/README.md")); got != `{"content":"aGVsbG8=","name":"README.md"}` {
+		t.Fatal(got)
+	}
+	fake.extraGitHub["/users/houko"] = `{"login":"houko"}`
+	if got := s.qqResearchCall(context.Background(), qqTestGitHubGet("/users/houko")); got != `{"login":"houko"}` || len(fake.repoChecks) != 6 || fake.repoChecks[5] != "metasequoiaime/msime" {
+		t.Fatal(got, fake.repoChecks)
+	}
+	// 一小时内用缓存，过了一小时重新查：仓库改成私有后不再能查。
+	fake.repoVisibility["metasequoiaime/msime"] = `{"private":true,"visibility":"private"}`
+	if got := s.qqResearchCall(context.Background(), qqTestGitHubGet("/repos/metasequoiaime/msime/contents/README.md")); got != `{"content":"aGVsbG8=","name":"README.md"}` || len(fake.repoChecks) != 6 {
+		t.Fatal(got, fake.repoChecks)
+	}
+	now = now.Add(qqResearchVisibilityTTL)
+	if got := s.qqResearchCall(context.Background(), qqTestGitHubGet("/repos/metasequoiaime/msime/contents/README.md")); got != "这个仓库不公开，不能查。" || len(fake.repoChecks) != 7 {
+		t.Fatal(got, fake.repoChecks)
+	}
+}
+
+// /users/账号 的返回只把白名单里的字段交给模型：所在地、公司、邮箱、简介、博客、社交账号都不交。
+func TestQQResearchUserWhitelist(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	fake.extraGitHub = map[string]string{"/users/houko": `{"login":"houko","id":1,"name":"小莫","type":"User","public_repos":12,"followers":30,"created_at":"2015-01-02T00:00:00Z","location":"某城市","company":"@某公司","email":"a@example.com","bio":"全栈工程师","blog":"example.com","twitter_username":"x","hireable":true,"avatar_url":"https://x"}`}
+	got := s.qqResearchCall(context.Background(), qqTestGitHubGet("/users/houko"))
+	if want := `{"created_at":"2015-01-02T00:00:00Z","followers":30,"login":"houko","name":"小莫","public_repos":12,"type":"User"}`; got != want {
+		t.Fatal(got)
+	}
+	for _, key := range []string{"location", "company", "email", "bio", "blog", "twitter_username"} {
+		if strings.Contains(got, key) {
+			t.Errorf("%s kept: %s", key, got)
+		}
+	}
+	if got, _ := json.Marshal(qqResearchUserWhitelist([]any{map[string]any{"location": "x"}})); string(got) != "{}" {
+		t.Fatal(string(got))
+	}
+	// 提示词不再要求查个人资料，回答时只说贡献。
+	if strings.Contains(qqResearchPrompt, "不是打探隐私") || !strings.Contains(qqResearchPrompt, "/users/账号 只用来确认账号存在和注册时间") || !strings.Contains(qqResearchPrompt, "不要用 web_search 搜个人信息") {
+		t.Fatal(qqResearchPrompt)
+	}
+	if !strings.Contains(qqAnswerPrompt, "不说所在地、单位、简介和联系方式") {
+		t.Fatal(qqAnswerPrompt)
+	}
+}
+
 func TestQQResearchTarget(t *testing.T) {
 	for raw, want := range map[string]string{
 		"/repos/metasequoiaime/msime/contributors?per_page=100":                "metasequoiaime/msime /repos/metasequoiaime/msime/contributors?per_page=100",
@@ -3379,6 +3478,11 @@ func TestQQResearchTarget(t *testing.T) {
 	}
 	trimmed, _ := json.Marshal(qqResearchTrim(map[string]any{"title": "t", "html_url": "x", "node_id": "n", "body": strings.Repeat("长", qqResearchBodyRunes+10), "user": map[string]any{"login": "a", "avatar_url": "b"}, "assets": []any{map[string]any{"name": "setup.exe", "size": 1, "uploader": map[string]any{"login": "bot"}}}}))
 	if want := `{"assets":["setup.exe"],"body":"` + strings.Repeat("长", qqResearchBodyRunes) + `…","title":"t","user":"a"}`; string(trimmed) != want {
+		t.Fatal(string(trimmed))
+	}
+	// 文件内容接口返回的 content（base64 的文件原文）和正文一样截断。
+	trimmed, _ = json.Marshal(qqResearchTrim(map[string]any{"name": "README.md", "encoding": "base64", "content": strings.Repeat("QUJD", qqResearchBodyRunes)}))
+	if want := `{"content":"` + strings.Repeat("QUJD", qqResearchBodyRunes/4) + `…","encoding":"base64","name":"README.md"}`; string(trimmed) != want {
 		t.Fatal(string(trimmed))
 	}
 }

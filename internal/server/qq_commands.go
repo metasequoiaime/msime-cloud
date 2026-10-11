@@ -107,7 +107,7 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 		return "cmd_search"
 	}
 	if ref := qqIssueRefPattern.FindStringSubmatch(strings.TrimSpace(strings.ReplaceAll(text, "＃", "#"))); ref != nil {
-		reply(s.qqIssueStatus(ctx, ref[1], ref[2]))
+		reply(s.qqIssueStatus(ctx, ref[1], ref[2], qqMaintainerShortRunes))
 		return "cmd_issue"
 	}
 	if content, ok := qqCommandArg(text, "提文档", "文档反馈"); ok {
@@ -144,8 +144,8 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 	return ""
 }
 
-// qqIssueStatus 查一个 issue 的标题和状态。仓库名为空时在每个答疑仓库里查同一个编号；仓库名只能是答疑仓库之一（按名字或 owner/name 匹配）。
-func (s *Server) qqIssueStatus(ctx context.Context, name, number string) string {
+// qqIssueStatus 查一个 issue 的标题和状态，以及修复有没有发版和维护者最近的评论（截到 commentRunes 字，见 qq_issue_context.go）。仓库名为空时在每个答疑仓库里查同一个编号；仓库名只能是答疑仓库之一（按名字或 owner/name 匹配）。
+func (s *Server) qqIssueStatus(ctx context.Context, name, number string, commentRunes int) string {
 	repos := s.qqGitHubRepos()
 	if name != "" {
 		repos = slices.DeleteFunc(slices.Clone(repos), func(r string) bool {
@@ -170,27 +170,24 @@ func (s *Server) qqIssueStatus(ctx context.Context, name, number string) string 
 		}
 		var issue struct {
 			qqIssue
-			State       string `json:"state"`
-			StateReason string `json:"state_reason"`
-			UpdatedAt   string `json:"updated_at"`
-			Labels      []struct {
-				Name string `json:"name"`
-			} `json:"labels"`
+			qqIssueDetail
+			UpdatedAt string `json:"updated_at"`
 		}
 		if r.Decode(&issue) != nil {
 			continue
 		}
-		labels := []string{}
-		for _, label := range issue.Labels {
-			labels = append(labels, label.Name)
-		}
+		labels := issue.labelNames()
 		_, short, _ := strings.Cut(repo, "/")
 		kind := ""
 		if len(issue.PullRequest) > 0 && string(issue.PullRequest) != "null" {
 			kind = "（拉取请求）"
 		}
 		updated, _, _ := strings.Cut(issue.UpdatedAt, "T")
-		lines = append(lines, fmt.Sprintf("%s #%s%s %s：%s，更新于 %s", short, number, kind, issue.Title, qqIssueState(issue.State, issue.StateReason, labels), updated))
+		line := fmt.Sprintf("%s #%s%s %s：%s，更新于 %s", short, number, kind, issue.Title, qqIssueState(issue.State, issue.StateReason, labels), updated)
+		if kind == "" {
+			line += "\n" + strings.TrimSuffix(s.qqIssueExtras(ctx, repo, issue.Number, issue.qqIssueDetail, commentRunes, ""), "\n")
+		}
+		lines = append(lines, strings.TrimSuffix(line, "\n"))
 	}
 	if len(lines) == 0 {
 		return "没有查到 #" + number + "。"
@@ -218,7 +215,7 @@ func (s *Server) qqMentionedIssues(ctx context.Context, question string) string 
 		}) {
 			name = ""
 		}
-		lines = append(lines, s.qqIssueStatus(ctx, name, m[2]))
+		lines = append(lines, s.qqIssueStatus(ctx, name, m[2], qqMaintainerRunes))
 	}
 	return strings.Join(lines, "\n")
 }

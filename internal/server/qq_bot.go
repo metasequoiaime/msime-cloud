@@ -455,7 +455,7 @@ func (s *Server) acceptQQMessage(ctx context.Context, raw json.RawMessage) bool 
 	return true
 }
 
-// 回复给群友的固定文字。开放平台只允许消息里出现报备过的域名，所以回复只给 issue 编号，不带链接。
+// 回复给群友的固定文字。提到 issue 和 PR 时附上 GitHub 链接（qqIssueNumberText）；开放平台只允许报备过的域名，拒收时去掉链接重发。
 const (
 	qqReplyUsage   = "有水杉输入法的使用问题可以直接 @我 问，例如：五笔怎么切换？"
 	qqReplyTooLong = "内容太长了，请精简到 2000 字以内再 @我。"
@@ -495,7 +495,14 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		}
 		sendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), qqBotReplyTimeout)
 		defer cancel()
-		if err := s.qq.reply(sendCtx, m.GroupOpenID, m.ID, seq, text); err != nil {
+		err := s.qq.reply(sendCtx, m.GroupOpenID, m.ID, seq, text)
+		// 带链接的回复被开放平台拒收时（只允许报备过的域名），去掉链接重发一次，日志里记下错误码。
+		if err != nil && strings.Contains(text, "://") {
+			slog.Warn("qq bot: reply with a link rejected, resending without it", "reason", err.Error())
+			seq++
+			err = s.qq.reply(sendCtx, m.GroupOpenID, m.ID, seq, qqWithoutLinks(text))
+		}
+		if err != nil {
 			slog.Warn("qq bot: reply failed", "reason", err.Error())
 		}
 	}
@@ -727,6 +734,14 @@ const (
 	qqEscalation           = "\n\n如果还不行，这个问题已经记下来了，管理员看到后会跟进。"
 	qqEscalationUnrecorded = "\n\n如果还不行，可以等管理员看到，或者请管理员帮忙提 issue。"
 )
+
+// qqLinkNote 匹配回复里括在全角括号里的链接，例如 qqIssueNumberText 附上的「（https://github.com/…）」。
+var qqLinkNote = regexp.MustCompile(`（[A-Za-z][A-Za-z0-9+.-]*://[^）]*）`)
+
+// qqWithoutLinks 去掉回复里的链接，连同包着它的括号。
+func qqWithoutLinks(text string) string {
+	return qqStripLinks(qqLinkNote.ReplaceAllString(text, ""))
+}
 
 // qqFeedbackText 去掉消息里的 @ 标记、表情等尖括号标签和首尾空白。
 func qqFeedbackText(content string) string {

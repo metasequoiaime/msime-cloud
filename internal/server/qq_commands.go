@@ -34,6 +34,8 @@ var (
 	// qqIssueRefPattern 匹配「#818」「msime-windows #818」「metasequoiaime/msime-windows #818」这样的 issue 编号查询（全角「＃」先换成「#」）；qqIssueMentionPattern 找出普通提问里提到的编号，例如「#818 修好了吗」。
 	qqIssueRefPattern     = regexp.MustCompile(`^(?:([A-Za-z0-9._/-]{1,100})\s*)?#([0-9]{1,7})$`)
 	qqIssueMentionPattern = regexp.MustCompile(`(?:([A-Za-z0-9._/-]{1,100})\s*)?#([0-9]{1,7})\b`)
+	// qqIssueLinkPattern 匹配本组织 issue 和 PR 的网页地址，提到编号时先换成「仓库名 #编号」再找。
+	qqIssueLinkPattern = regexp.MustCompile(`https?://github\.com/metasequoiaime/([A-Za-z0-9._-]{1,100})/(?:issues|pull)/([0-9]{1,7})`)
 	// qqPriorityPattern、qqEffortPattern 匹配管理员在反馈里写的优先级和工作量。
 	// 优先级的值后面要是空白、标点或结尾，「自定义短语的优先级高于词库」不算标注。
 	qqPriorityPattern = regexp.MustCompile(`(?i)(?:优先级|priority)\s*[:：]?\s*(紧急|高|中|低|p[0-3])(?:[\s,，.。;；、!！?？)）]|$)`)
@@ -207,7 +209,9 @@ func (s *Server) qqIssueStatus(ctx context.Context, name, number string, comment
 func (s *Server) qqMentionedIssues(ctx context.Context, question string) string {
 	var lines []string
 	seen := map[string]bool{}
-	for _, m := range qqIssueMentionPattern.FindAllStringSubmatch(strings.ReplaceAll(question, "＃", "#"), -1) {
+	question = qqIssueLinkPattern.ReplaceAllString(strings.ReplaceAll(question, "＃", "#"), " $1 #$2 ")
+	mentions := qqIssueMentionPattern.FindAllStringSubmatch(question, -1)
+	for _, m := range mentions {
 		key := strings.ToLower(m[1]) + "#" + m[2]
 		if seen[key] {
 			continue
@@ -224,8 +228,41 @@ func (s *Server) qqMentionedIssues(ctx context.Context, question string) string 
 			name = ""
 		}
 		lines = append(lines, s.qqIssueStatus(ctx, name, m[2], qqMaintainerRunes))
+		// 只提到一两个 issue 时多半是在问这个 issue 本身（「对 #785 提点改进意见」），把正文也交给模型。
+		if len(mentions) <= 2 {
+			if body := s.qqIssueBodyText(ctx, name, m[2]); body != "" {
+				lines = append(lines, "正文："+body)
+			}
+		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// qqIssueBodyRunes 是交给模型的 issue 正文长度上限。
+const qqIssueBodyRunes = 3000
+
+// qqIssueBodyText 读一个 issue 或 PR 的正文（去掉图片和链接，截到 qqIssueBodyRunes 字）；name 为空时在每个答疑仓库里找这个编号，用第一个找到的。
+func (s *Server) qqIssueBodyText(ctx context.Context, name, number string) string {
+	client := s.adminGitHub
+	for _, repo := range s.qqGitHubRepos() {
+		_, short, _ := strings.Cut(repo, "/")
+		if name != "" && !strings.EqualFold(short, name) && !strings.EqualFold(repo, name) {
+			continue
+		}
+		token, err := client.Token(ctx, repo, qqGitHubReadPerms)
+		if err != nil {
+			continue
+		}
+		r, err := client.Get(ctx, token, "/repos/"+repo+"/issues/"+number)
+		var issue struct {
+			Body string `json:"body"`
+		}
+		if err != nil || !r.OK() || r.Decode(&issue) != nil {
+			continue
+		}
+		return qqTruncate(strings.TrimSpace(qqStripLinks(qqImagePattern.ReplaceAllString(issue.Body, " "))), qqIssueBodyRunes)
+	}
+	return ""
 }
 
 // qqMentionedIssueLimit 是一次提问里最多查的 issue 数。
@@ -358,7 +395,12 @@ func (s *Server) qqTopicLabels(ctx context.Context, repoLabels []string, exclude
 
 // qqIssueNumberText 是回复里提到的 issue，例如「GitHub metasequoiaime/msime 的 #12」。
 func qqIssueNumberText(repo string, number int64) string {
-	return "GitHub " + repo + " 的 #" + strconv.FormatInt(number, 10)
+	return "GitHub " + repo + " 的 #" + strconv.FormatInt(number, 10) + "（" + qqGitHubLink(repo, number) + "）"
+}
+
+// qqGitHubLink 是 issue 或 PR 的网页地址（issues 地址对 PR 也会跳转过去）。QQ 拒收带这个链接的消息时，回复会去掉链接重发，见 handleQQFeedback。
+func qqGitHubLink(repo string, number int64) string {
+	return "https://github.com/" + repo + "/issues/" + strconv.FormatInt(number, 10)
 }
 
 // qqProgressHint 接在提交 issue 的回复后面，告诉群友怎么查进度；只有答疑仓库里的 issue 能用「#编号」查。

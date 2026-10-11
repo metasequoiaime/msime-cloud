@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"regexp"
 	"slices"
@@ -306,6 +305,6 @@ func (s *Server) recordQQAnswer(ctx context.Context, text string, reply func(str
 		fail("pull", githubFailure("pull", r, err))
 		return 0
 	}
-	reply(fmt.Sprintf("已整理成 FAQ「%s」，开了 PR：GitHub %s 的 #%d，维护者核对合并后，机器人就能回答这个问题。", entry.Question, repo, pull.Number))
+	reply("已整理成 FAQ「" + entry.Question + "」，开了 PR：" + qqIssueNumberText(repo, pull.Number) + "，维护者核对合并后，机器人就能回答这个问题。")
 	return pull.Number
 }

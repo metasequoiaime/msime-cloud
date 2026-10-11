@@ -169,7 +169,7 @@ func (s *Server) qqAddWords(ctx context.Context, subject, content string, reply 
 		for _, e := range entries {
 			labels = append(labels, e.Word+"（"+e.Pinyin+"）")
 		}
-		message := "已经提交到词库：" + strings.Join(labels, "、") + "，在 GitHub " + ws.config.GitHub.Repository + " 的 #" + strconv.Itoa(number) + "，维护者审核合并后，词库更新就能打出来了。"
+		message := "已经提交到词库：" + strings.Join(labels, "、") + "，在 " + qqIssueNumberText(ws.config.GitHub.Repository, int64(number)) + "，维护者审核合并后，词库更新就能打出来了。"
 		if guessed {
 			message += "没写拼音的词按常用读音标了，读音不对的话发「加词 词语 正确拼音」再提交一次。"
 		}

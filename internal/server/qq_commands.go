@@ -33,8 +33,9 @@ const (
 )
 
 var (
-	// qqIssueRefPattern 匹配「#818」「msime-windows #818」这样的 issue 编号查询。
-	qqIssueRefPattern = regexp.MustCompile(`^(?:([A-Za-z0-9._-]{1,100})\s*)?#([0-9]{1,7})$`)
+	// qqIssueRefPattern 匹配「#818」「msime-windows #818」「metasequoiaime/msime-windows #818」这样的 issue 编号查询（全角「＃」先换成「#」）；qqIssueMentionPattern 找出普通提问里提到的编号，例如「#818 修好了吗」。
+	qqIssueRefPattern     = regexp.MustCompile(`^(?:([A-Za-z0-9._/-]{1,100})\s*)?#([0-9]{1,7})$`)
+	qqIssueMentionPattern = regexp.MustCompile(`(?:([A-Za-z0-9._/-]{1,100})\s*)?#([0-9]{1,7})\b`)
 	// qqPriorityPattern、qqEffortPattern 匹配管理员在反馈里写的优先级和工作量。
 	// 优先级的值后面要是空白、标点或结尾，「自定义短语的优先级高于词库」不算标注。
 	qqPriorityPattern = regexp.MustCompile(`(?i)(?:优先级|priority)\s*[:：]?\s*(紧急|高|中|低|p[0-3])(?:[\s,，.。;；、!！?？)）]|$)`)
@@ -68,8 +69,8 @@ func qqCommandArg(text string, words ...string) (string, bool) {
 	return "", false
 }
 
-// qqCommand 处理群里的命令，返回是否已经处理。
-func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, admin bool, reply func(string)) bool {
+// qqCommand 处理群里的命令，返回处理结果的名字（写进每条消息的处理日志，见 handleQQFeedback），不是命令时返回空字符串。
+func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, admin bool, reply func(string)) string {
 	compact := strings.ToLower(strings.Join(strings.Fields(text), ""))
 	switch compact {
 	case "帮助", "help", "菜单", "命令":
@@ -78,7 +79,7 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 		} else {
 			reply(qqHelpText)
 		}
-		return true
+		return "cmd_help"
 	case "版本", "最新版本", "最新版":
 		releases := strings.TrimSpace(s.qqLatestReleases(ctx))
 		if releases == "" {
@@ -86,12 +87,12 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 		} else {
 			reply("各平台最新版本（GitHub Release）：\n" + releases + "\n\n下载入口见水杉输入法官网的下载页。")
 		}
-		return true
+		return "cmd_releases"
 	}
 	if terms, ok := qqCommandArg(text, "查", "搜索", "搜"); ok {
 		if terms == "" {
 			reply("请在「查」后面写要搜的关键词，例如「查 候选框 左上角」。")
-			return true
+			return "cmd_search"
 		}
 		found, failed := s.qqSearchIssues(ctx, terms)
 		found = strings.TrimSpace(found)
@@ -103,45 +104,44 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 		default:
 			reply("GitHub 上搜到的相关 issue：\n" + found)
 		}
-		return true
+		return "cmd_search"
 	}
-	if ref := qqIssueRefPattern.FindStringSubmatch(strings.TrimSpace(text)); ref != nil {
+	if ref := qqIssueRefPattern.FindStringSubmatch(strings.TrimSpace(strings.ReplaceAll(text, "＃", "#"))); ref != nil {
 		reply(s.qqIssueStatus(ctx, ref[1], ref[2]))
-		return true
+		return "cmd_issue"
 	}
 	if content, ok := qqCommandArg(text, "提文档", "文档反馈"); ok {
 		if content == "" {
 			reply("请在「提文档」后面写文档缺了什么或哪里不对，例如「提文档 FAQ 没写鸿蒙版的发布状态」。")
-			return true
+			return "cmd_docs"
 		}
 		s.fileQQDocs(ctx, content, admin, reply)
-		return true
+		return "cmd_docs"
 	}
 	if content, ok := qqCommandArg(text, "提issue", "提 issue", "提交issue"); ok {
 		if !admin {
 			reply("只有管理员能用「提issue」。有问题可以直接描述，我先帮你看看。")
-			return true
+			return "cmd_report"
 		}
 		if content == "" {
 			reply("请在「提issue」后面写要反馈的问题或需求。")
-			return true
+			return "cmd_report"
 		}
-		s.fileAdminFeedback(ctx, m, content, true, reply)
-		return true
+		return "cmd_report_" + s.fileAdminFeedback(ctx, m, content, true, reply)
 	}
 	if content, ok := qqCommandArg(text, "记录答案", "记答案"); ok {
 		if !admin {
 			reply("只有管理员能用「记录答案」。")
-			return true
+			return "cmd_record_answer"
 		}
 		if content == "" {
 			reply("请在「记录答案」后面写问题和答案，例如「记录答案 问：鸿蒙版在哪下载？ 答：在华为应用市场搜索水杉输入法」。")
-			return true
+			return "cmd_record_answer"
 		}
 		s.recordQQAnswer(ctx, content, reply)
-		return true
+		return "cmd_record_answer"
 	}
-	return false
+	return ""
 }
 
 // qqIssueStatus 查一个 issue 的标题和状态。仓库名为空时在每个答疑仓库里查同一个编号；仓库名只能是答疑仓库之一（按名字或 owner/name 匹配）。
@@ -173,9 +173,16 @@ func (s *Server) qqIssueStatus(ctx context.Context, name, number string) string 
 			State       string `json:"state"`
 			StateReason string `json:"state_reason"`
 			UpdatedAt   string `json:"updated_at"`
+			Labels      []struct {
+				Name string `json:"name"`
+			} `json:"labels"`
 		}
 		if r.Decode(&issue) != nil {
 			continue
+		}
+		labels := []string{}
+		for _, label := range issue.Labels {
+			labels = append(labels, label.Name)
 		}
 		_, short, _ := strings.Cut(repo, "/")
 		kind := ""
@@ -183,13 +190,41 @@ func (s *Server) qqIssueStatus(ctx context.Context, name, number string) string 
 			kind = "（拉取请求）"
 		}
 		updated, _, _ := strings.Cut(issue.UpdatedAt, "T")
-		lines = append(lines, fmt.Sprintf("%s #%s%s %s：%s，更新于 %s", short, number, kind, issue.Title, qqIssueState(issue.State, issue.StateReason), updated))
+		lines = append(lines, fmt.Sprintf("%s #%s%s %s：%s，更新于 %s", short, number, kind, issue.Title, qqIssueState(issue.State, issue.StateReason, labels), updated))
 	}
 	if len(lines) == 0 {
 		return "没有查到 #" + number + "。"
 	}
 	return strings.Join(lines, "\n")
 }
+
+// qqMentionedIssues 查普通提问里提到的 issue（最多 qqMentionedIssueLimit 个）的状态，作为答疑资料；没有提到时为空。只靠挑段落的模型把编号写进搜索词的话，结果不稳定。
+func (s *Server) qqMentionedIssues(ctx context.Context, question string) string {
+	var lines []string
+	seen := map[string]bool{}
+	for _, m := range qqIssueMentionPattern.FindAllStringSubmatch(strings.ReplaceAll(question, "＃", "#"), -1) {
+		key := strings.ToLower(m[1]) + "#" + m[2]
+		if seen[key] {
+			continue
+		}
+		if seen[key] = true; len(seen) > qqMentionedIssueLimit {
+			break
+		}
+		// 编号前面的词不是答疑仓库的名字时（例如「Windows #818」）不当仓库名，在每个仓库里查。
+		name := m[1]
+		if !slices.ContainsFunc(s.qqGitHubRepos(), func(r string) bool {
+			_, short, _ := strings.Cut(r, "/")
+			return strings.EqualFold(short, name) || strings.EqualFold(r, name)
+		}) {
+			name = ""
+		}
+		lines = append(lines, s.qqIssueStatus(ctx, name, m[2]))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// qqMentionedIssueLimit 是一次提问里最多查的 issue 数。
+const qqMentionedIssueLimit = 3
 
 // qqNotes 是管理员在反馈里写的维护者标注。
 type qqNotes struct {
@@ -319,4 +354,17 @@ func (s *Server) qqTopicLabels(ctx context.Context, repoLabels []string, exclude
 // qqIssueNumberText 是回复里提到的 issue，例如「GitHub metasequoiaime/msime 的 #12」。
 func qqIssueNumberText(repo string, number int64) string {
 	return "GitHub " + repo + " 的 #" + strconv.FormatInt(number, 10)
+}
+
+// qqProgressHint 接在提交 issue 的回复后面，告诉群友怎么查进度；只有答疑仓库里的 issue 能用「#编号」查。
+func (s *Server) qqProgressHint(repo string, number int64) string {
+	if !slices.Contains(s.qqGitHubRepos(), repo) {
+		return ""
+	}
+	ref := "#" + strconv.FormatInt(number, 10)
+	if !strings.EqualFold(repo, s.qq.config.Repo) {
+		_, short, _ := strings.Cut(repo, "/")
+		ref = short + " " + ref
+	}
+	return "之后 @我 发「" + ref + "」可以查进度。"
 }

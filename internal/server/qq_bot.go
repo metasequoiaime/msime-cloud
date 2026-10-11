@@ -423,8 +423,10 @@ func (s *Server) acceptQQMessage(ctx context.Context, raw json.RawMessage) bool 
 
 // 回复给群友的固定文字。开放平台只允许消息里出现报备过的域名，所以回复只给 issue 编号，不带链接。
 const (
-	qqReplyUsage        = "有水杉输入法的使用问题可以直接 @我 问，例如：五笔怎么切换？"
-	qqReplyTooLong      = "内容太长了，请精简到 2000 字以内再 @我。"
+	qqReplyUsage   = "有水杉输入法的使用问题可以直接 @我 问，例如：五笔怎么切换？"
+	qqReplyTooLong = "内容太长了，请精简到 2000 字以内再 @我。"
+	// qqReplyScreenshot 是只发了截图、没有文字时的回复：机器人看不了图片。
+	qqReplyScreenshot   = "我暂时看不了截图，请把报错文字、系统和输入法版本打出来再 @我。"
 	qqReplyLimited      = "你 24 小时内问得已经够多了，请过一阵再来。"
 	qqReplyGroupLimited = "这个群 24 小时内问得太多了，请过一阵再来。"
 	qqReplyUnavailable  = "我暂时处理不了，请稍后再 @我 发一次。"
@@ -446,6 +448,11 @@ var qqWhoAmI = []string{"我的id", "myid"}
 
 // handleQQFeedback 在后台处理一条已认领的 @ 消息，所有结果都以被动回复告诉群友：先处理命令；管理员明确要求记录的具体 bug 或需求提 issue（见 fileAdminFeedback），其他消息（包括普通群友的所有消息）按知识库答疑。不记录消息内容，日志里只有失败原因。
 func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
+	// 每条消息记一行处理结果（不含内容和 openid），答上率、闲聊、命令、限流各占多少才能量化：Loki 里按 outcome 汇总。
+	started, outcome, admin := s.qq.now(), "failed", false
+	defer func() {
+		slog.Info("qq bot: handled", "outcome", outcome, "admin", admin, "ms", s.qq.now().Sub(started).Milliseconds())
+	}()
 	seq := 0
 	reply := func(text string) {
 		seq++
@@ -465,17 +472,24 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 			role = "管理员"
 		}
 		reply("你的 ID 是 " + m.Author.MemberOpenID + "，机器人把你当作" + role + "。")
+		outcome = "cmd_whoami"
 		return
 	}
 	switch n := utf8.RuneCountInString(text); {
+	case n == 0 && slices.ContainsFunc(m.Attachments, func(a qqAttachment) bool { return strings.HasPrefix(a.ContentType, "image/") }):
+		reply(qqReplyScreenshot)
+		outcome = "screenshot_only"
+		return
 	case n == 0:
 		reply(qqReplyUsage)
+		outcome = "empty"
 		return
 	case n > qqBotMaxRunes:
 		reply(qqReplyTooLong)
+		outcome = "too_long"
 		return
 	}
-	admin := s.qqIsAdmin(ctx, m.GroupOpenID, m.Author.MemberOpenID, m.Author.MemberRole)
+	admin = s.qqIsAdmin(ctx, m.GroupOpenID, m.Author.MemberOpenID, m.Author.MemberRole)
 	type qqLimit struct {
 		scope, subject string
 		daily          int
@@ -488,8 +502,8 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 	for _, limit := range limits {
 		switch err := s.limits.RateLimit(ctx, limit.scope, limit.subject, limit.daily, 24*time.Hour); {
 		case errors.Is(err, account.ErrLimited):
-			slog.Info("qq bot: limited", "scope", limit.scope)
 			reply(limit.text)
+			outcome = "limited_" + strings.TrimPrefix(limit.scope, "qq-bot-")
 			return
 		case err != nil:
 			slog.Error("qq bot: rate limit unavailable", "reason", err.Error())
@@ -497,15 +511,16 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 			return
 		}
 	}
-	if s.qqCommand(ctx, m, text, admin, reply) {
+	if command := s.qqCommand(ctx, m, text, admin, reply); command != "" {
+		outcome = command
 		return
 	}
 	// 普通群友的消息都按问题回答。管理员的消息先整理一遍：只有明确要求记录（qqIssueIntent 或模型给出的 intent）的具体反馈才提交，其余的回复机器人的理解并提示用「提issue」。曾经管理员的每条消息都先自动判断、像反馈就提交，群里讨论和吐槽也被提成了 issue。
 	if admin {
-		s.fileAdminFeedback(ctx, m, text, false, reply)
+		outcome = "admin_" + s.fileAdminFeedback(ctx, m, text, false, reply)
 		return
 	}
-	s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, text, reply)
+	outcome = s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, text, reply)
 }
 
 // qqIssueIntentWords 是表示「请把这条记成 issue」的说法，与去掉空白、转成小写后的消息比较。只收祈使的说法：单独的「记录」会误中「历史记录丢了」这类 bug 描述。
@@ -518,22 +533,21 @@ func qqIssueIntent(text string) bool {
 }
 
 // fileAdminFeedback 处理管理员的一条消息。explicit 表示来自「提issue」命令。先整理成 bug 或需求：不是具体反馈时，命令请管理员写具体些，普通消息转去答疑；是具体反馈时先对照知识库，文档说明功能已经有了或现象是正常的就回复文档的说法、不提交；没有明确要求记录的只回复机器人的理解，提示用「提issue」；其余的按平台选仓库、查重、带上附件和标签提交。
-func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text string, explicit bool, reply func(string)) {
+func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text string, explicit bool, reply func(string)) string {
 	original := text
 	text, notes := qqParseNotes(text)
 	report, err := s.qqSummarise(ctx, text)
 	if err != nil {
 		slog.Warn("qq bot: summarise failed", "reason", err.Error())
 		reply(qqReplyUnavailable)
-		return
+		return "failed"
 	}
 	if report.Kind == "other" {
 		if explicit {
 			reply("没看出要提的是 bug 还是需求，请把问题或想要的功能描述具体一点。")
-		} else {
-			s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, original, reply)
+			return "not_report"
 		}
-		return
+		return s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, original, reply)
 	}
 	switch answer, err := s.qqTriage(ctx, text); {
 	case err != nil:
@@ -541,20 +555,20 @@ func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text s
 		slog.Warn("qq bot: knowledge check failed", "reason", err.Error())
 	case answer != "":
 		reply(answer + qqReplyExisting)
-		return
+		return "existing"
 	}
 	if !explicit && !report.Intent && !qqIssueIntent(text) {
 		reply("我理解的是：" + qqStripLinks(report.Title) + "。" + qqReplyNoIntent)
-		return
+		return "no_intent"
 	}
 	if report.Missing != "" {
 		reply("还差一点信息：" + report.Missing + qqReplyResend)
-		return
+		return "needs_info"
 	}
 	repo, label, known := s.qqTarget(report)
 	if !known {
 		reply("还差一点信息：" + qqWindowsVersionQuestion + qqReplyResend)
-		return
+		return "needs_version"
 	}
 	reply(qqReplyWorking)
 	media, failed := s.publishQQMedia(ctx, m.Attachments)
@@ -562,17 +576,18 @@ func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text s
 	if err != nil {
 		slog.Warn("qq bot: file issue failed", "repo", repo, "reason", err.Error())
 		reply(qqReplyUnavailable)
-		return
+		return "failed"
 	}
 	if duplicate {
-		reply("这个问题已经有人反馈过，已补充到 " + qqIssueNumberText(repo, number) + "。" + qqReplyPublic)
-		return
+		reply("这个问题已经有人反馈过，已补充到 " + qqIssueNumberText(repo, number) + "。" + s.qqProgressHint(repo, number) + qqReplyPublic)
+		return "filed_duplicate"
 	}
-	reply("已记录为 " + qqIssueNumberText(repo, number) + "，开发者会在那里跟进。" + qqReplyPublic)
+	reply("已记录为 " + qqIssueNumberText(repo, number) + "，开发者会在那里跟进。" + s.qqProgressHint(repo, number) + qqReplyPublic)
+	return "filed"
 }
 
 // answerQQQuestion 用知识库回答一条消息；答不上的问题和群友报告的问题记进汇总 issue（qq_gaps.go），由管理员跟进。
-func (s *Server) answerQQQuestion(ctx context.Context, group, member, question string, reply func(string)) {
+func (s *Server) answerQQQuestion(ctx context.Context, group, member, question string, reply func(string)) string {
 	subject := group + "/" + member
 	var history []account.QQTurn
 	if s.qqHistory != nil {
@@ -586,19 +601,22 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 	if err != nil {
 		slog.Warn("qq bot: answer failed", "reason", err.Error())
 		reply(qqReplyUnavailable)
-		return
+		return "failed"
 	}
-	recorded := answer.Answer
+	recorded, outcome := answer.Answer, answer.Type
 	// 先记进汇总 issue 再回复，按有没有记下选说法，不承诺没做到的事。
 	switch {
 	case answer.Type == "unknown":
 		recorded = qqUnansweredTurn
+		outcome = "unknown_unrecorded"
 		if s.recordQQGap(ctx, "群友问：", answer.Topic) {
 			reply(qqUnknownReply)
+			outcome = "unknown"
 		} else {
 			reply(qqUnknownUnrecordedReply)
 		}
 	case answer.Type == "answered" && answer.Escalate:
+		outcome = "answered_escalate"
 		if s.recordQQReport(ctx, answer.Topic) {
 			reply(answer.Answer + qqEscalation)
 		} else {
@@ -612,7 +630,11 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 			slog.Warn("qq bot: conversation not recorded", "reason", err.Error())
 		}
 	}
+	return outcome
 }
+
+// qqPrimaryModelTimeout 是配置了备用模型时主模型每次调用的时限，见 qqChat；测试里改短。
+var qqPrimaryModelTimeout = 50 * time.Second
 
 // qqHistoryTurns 是答疑时带上的最近问答轮数；qqUnansweredTurn 是答不上时记下的答案，让下一轮追问知道上一轮没有解决。
 const (
@@ -740,9 +762,15 @@ func (s *Server) qqSummarise(ctx context.Context, text string) (qqReport, error)
 
 // qqChat 用 chat 端点和 qq_bot.model 做一次 JSON 输出的补全，把模型返回的对象解码进 out。用户消息之后总是追加 jsonObjectInstruction，否则经 EveryAPI 转发的 OpenAI 模型会因为用户消息里没有 json 一词拒绝 json_object 模式。模型有时会把 JSON 包在代码块里，这里一并去掉。
 func (s *Server) qqChat(ctx context.Context, system, user string, out any) error {
-	err := s.qqChatWith(ctx, s.qq.config.Model, system, user, out)
-	if err == nil || s.qq.config.FallbackModel == "" {
-		return err
+	if s.qq.config.FallbackModel == "" {
+		return s.qqChatWith(ctx, s.qq.config.Model, system, user, out)
+	}
+	// 有备用模型时主模型单独限时：chat 端点的超时是 120 秒，主模型挂起时答疑的两步各等满 120 秒就用完了 4 分钟，备用模型来不及上场。
+	primary, cancel := context.WithTimeout(ctx, qqPrimaryModelTimeout)
+	err := s.qqChatWith(primary, s.qq.config.Model, system, user, out)
+	cancel()
+	if err == nil {
+		return nil
 	}
 	// 主模型失败（上游拒绝、超时或输出不合格式）时用备用模型重答一次；先清掉上一次可能解码了一半的结果。
 	slog.Warn("qq bot: model failed, trying the fallback model", "reason", err.Error())

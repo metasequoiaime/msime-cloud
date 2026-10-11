@@ -33,13 +33,25 @@ func (s *Server) qqGitHubRepos() []string {
 	return repos
 }
 
-// qqIssueState 是 issue 状态的中文写法：已关闭的按 state_reason 区分已解决和不计划处理，因为关闭不一定代表修好了。
-func qqIssueState(state, reason string) string {
+// qqIssueState 是 issue 状态的中文写法：已关闭的按 state_reason 区分已完成和不计划处理，因为关闭不一定代表修好了；打了 invalid、duplicate、wontfix 标签的按标签说（这类 issue 也常以 completed 关闭）。msime 合进开发分支就关 issue，修复要等下一个版本才发布，所以 completed 写「已完成」，不写「已解决」。
+func qqIssueState(state, reason string, labels []string) string {
+	if state != "open" {
+		for _, label := range labels {
+			switch strings.ToLower(label) {
+			case "invalid":
+				return "已关闭（无效）"
+			case "duplicate":
+				return "已关闭（重复）"
+			case "wontfix":
+				return "已关闭（不修）"
+			}
+		}
+	}
 	switch {
 	case state == "open":
 		return "开着"
 	case reason == "completed":
-		return "已解决"
+		return "已完成"
 	case reason == "not_planned":
 		return "不计划处理"
 	default:
@@ -110,7 +122,7 @@ func (s *Server) qqSearchIssuesFor(ctx context.Context, terms string) (string, b
 				labels = append(labels, label.Name)
 			}
 			updated, _, _ := strings.Cut(issue.UpdatedAt, "T")
-			fmt.Fprintf(&b, "- %s #%d（%s，更新于 %s，标签：%s）%s\n", name, issue.Number, qqIssueState(issue.State, issue.StateReason), updated, strings.Join(labels, "、"), issue.Title)
+			fmt.Fprintf(&b, "- %s #%d（%s，更新于 %s，标签：%s）%s\n", name, issue.Number, qqIssueState(issue.State, issue.StateReason, labels), updated, strings.Join(labels, "、"), issue.Title)
 		}
 	}
 	return b.String(), failed

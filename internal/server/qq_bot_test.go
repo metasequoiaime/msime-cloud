@@ -161,8 +161,9 @@ type qqFake struct {
 	chatCalls    []string
 	chatBodies   []string
 	chatStatus   int
-	// failModel 是请求会被拒绝（502）的模型，models 记下每次请求的模型。
+	// failModel 是请求会被拒绝（502）的模型，hangModel 是请求一直不返回、直到客户端放弃的模型，models 记下每次请求的模型。
 	failModel string
+	hangModel string
 	models    []string
 	// 知识库（GitHub 内容接口）
 	knowledgeStatus int
@@ -215,6 +216,12 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == "/" || r.URL.Path == "":
 		f.models = append(f.models, fmt.Sprint(body["model"]))
+		if body["model"] == f.hangModel {
+			f.mu.Unlock()
+			<-r.Context().Done()
+			f.mu.Lock()
+			return
+		}
 		if f.chatStatus != 0 || body["model"] == f.failModel {
 			w.WriteHeader(max(f.chatStatus, 502))
 			return
@@ -908,7 +915,8 @@ func TestQQBotAnswersMembersFromKnowledge(t *testing.T) {
 		t.Fatal(replies, fake.chatCalls, fake.created)
 	}
 	// 目录列出全部段落：子目录、非 Markdown 文件和没有正文的标题不收，代码块里的 # 不算标题。
-	for _, want := range []string{"1. [常见问题] 输入 > 五笔怎么切换\n", "2. [常见问题] 数据\n", "3. [windows] 安装\n"} {
+	// 文档名前面标出适用平台，标题后面附上正文摘要。
+	for _, want := range []string{"1. [FAQ · 常见问题] 输入 > 五笔怎么切换：在设置的「输入方案」里选五笔。\n", "2. [FAQ · 常见问题] 数据：", "3. [Windows 正式版 · windows] 安装：双击安装包。\n"} {
 		if !strings.Contains(fake.selectSystem, want) {
 			t.Fatalf("toc missing %q:\n%s", want, fake.selectSystem)
 		}
@@ -917,7 +925,7 @@ func TestQQBotAnswersMembersFromKnowledge(t *testing.T) {
 		t.Fatal("toc", fake.selectSystem)
 	}
 	// 回答只拿到挑出的段落，重复和越界的编号被忽略。
-	if !strings.Contains(fake.answerSystem, "### [常见问题] 输入 > 五笔怎么切换\n在设置的「输入方案」里选五笔。") || !strings.Contains(fake.answerSystem, "### [windows] 安装\n双击安装包。") || strings.Contains(fake.answerSystem, "同步需要登录") || strings.Count(fake.answerSystem, "五笔怎么切换") != 1 {
+	if !strings.Contains(fake.answerSystem, "### [FAQ · 常见问题] 输入 > 五笔怎么切换\n在设置的「输入方案」里选五笔。") || !strings.Contains(fake.answerSystem, "### [Windows 正式版 · windows] 安装\n双击安装包。") || strings.Contains(fake.answerSystem, "同步需要登录") || strings.Count(fake.answerSystem, "五笔怎么切换") != 1 {
 		t.Fatal(fake.answerSystem)
 	}
 	if limiter.counts["qq-bot-member|GROUP1/MEMBER1"] != 1 {
@@ -1037,6 +1045,23 @@ func TestQQSplitMarkdown(t *testing.T) {
 	want := []string{"guide|一|3", "guide|一 > 一.一|3", "guide|一 > 一.一 > 一.一.一|3", "guide|二|" + strconv.Itoa(qqSectionRunes), "guide|二 > 跳级|3"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatal(got)
+	}
+	// 一级标题下的导语成为「概述」一段。
+	sections = qqSplitMarkdown("macos", "前言\n# macOS 使用指南\n\n要求 macOS 13 及以上。\n\n## 安装\n拖进应用程序。\n")
+	if len(sections) != 2 || sections[0].Doc != "macOS 使用指南" || sections[0].Title != "概述" || sections[0].Text != "要求 macOS 13 及以上。" || sections[1].Title != "安装" {
+		t.Fatal(sections)
+	}
+}
+
+func TestQQSnippet(t *testing.T) {
+	for text, want := range map[string]string{
+		"先看 **渲染方式**，再看 **字体** 和 **渲染方式**。":   "渲染方式、字体",
+		"打开 [设置](https://x.y/a) 里的 `外观` 页。":   "打开 设置 里的 外观 页。",
+		strings.Repeat("长", qqSnippetRunes+5): strings.Repeat("长", qqSnippetRunes) + "…",
+	} {
+		if got := qqSnippet(text); got != want {
+			t.Errorf("%q: %q want %q", text, got, want)
+		}
 	}
 }
 
@@ -1395,6 +1420,15 @@ func TestQQBotFallbackModel(t *testing.T) {
 	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != qqReplyUnavailable || len(fake.models) != 2 {
 		t.Fatal(last, fake.models)
 	}
+	// 主模型挂起时不等满 chat 端点的超时，限时一到就换备用模型。
+	defer func(timeout time.Duration) { qqPrimaryModelTimeout = timeout }(qqPrimaryModelTimeout)
+	qqPrimaryModelTimeout = 50 * time.Millisecond
+	fake.chatStatus, fake.hangModel, fake.models = 0, "claude-haiku-5-5", nil
+	qqDeliver(t, s, "m-primary-hangs", "五笔怎么切换")
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "在设置的「输入方案」里选五笔。" || strings.Join(fake.models, ",") != "claude-haiku-5-5,fallback-model,claude-haiku-5-5,fallback-model" {
+		t.Fatal(last, fake.models)
+	}
+	fake.hangModel, fake.chatStatus = "", 502
 	s.qq.config.FallbackModel, fake.models = "", nil
 	qqDeliver(t, s, "m-no-fallback", "五笔怎么切换")
 	if len(fake.models) != 1 {
@@ -1435,7 +1469,7 @@ func TestQQBotAnswersWithGitHubContext(t *testing.T) {
 	}
 	for _, want := range []string{
 		"### GitHub 上搜到的相关 issue",
-		"- win #818（已解决，更新于 2026-10-11，标签：bug）大小写倒置",
+		"- win #818（已完成，更新于 2026-10-11，标签：bug）大小写倒置",
 		"- win #820（开着，更新于 2026-10-10，标签：）快捷键输入英文",
 		"- r #700（不计划处理，更新于 2026-09-01，标签：）旧需求",
 		"### 各平台最新版本（GitHub Release）",
@@ -1477,8 +1511,21 @@ func TestQQBotAnswersWithGitHubContext(t *testing.T) {
 	if len(fake.searchQueries) != 0 || fake.releaseCalls != 0 {
 		t.Fatal(fake.searchQueries, fake.releaseCalls)
 	}
-	if qqIssueState("closed", "") != "已关闭" {
-		t.Fatal(qqIssueState("closed", ""))
+	for _, tc := range []struct {
+		state, reason string
+		labels        []string
+		want          string
+	}{
+		{"closed", "", nil, "已关闭"},
+		{"closed", "completed", []string{"bug"}, "已完成"},
+		{"closed", "completed", []string{"Invalid"}, "已关闭（无效）"},
+		{"closed", "not_planned", []string{"duplicate"}, "已关闭（重复）"},
+		{"closed", "not_planned", nil, "不计划处理"},
+		{"open", "", []string{"wontfix"}, "开着"},
+	} {
+		if got := qqIssueState(tc.state, tc.reason, tc.labels); got != tc.want {
+			t.Error(tc, got)
+		}
 	}
 }
 
@@ -1739,11 +1786,11 @@ func TestQQBotCommands(t *testing.T) {
 		"o/r/issues/818":   `{"number":818,"title":"别的","state":"open","updated_at":"2026-10-01T00:00:00Z","pull_request":{"url":"x"}}`,
 	}
 	qqDeliver(t, s, "m-ref", "#818")
-	if last() != "r #818（拉取请求） 别的：开着，更新于 2026-10-01\nwin #818 大小写倒置：已解决，更新于 2026-10-12" {
+	if last() != "r #818（拉取请求） 别的：开着，更新于 2026-10-01\nwin #818 大小写倒置：已完成，更新于 2026-10-12" {
 		t.Fatalf("%q", last())
 	}
 	qqDeliver(t, s, "m-ref-repo", "win #818")
-	if last() != "win #818 大小写倒置：已解决，更新于 2026-10-12" {
+	if last() != "win #818 大小写倒置：已完成，更新于 2026-10-12" {
 		t.Fatalf("%q", last())
 	}
 	qqDeliver(t, s, "m-ref-missing", "#999")
@@ -1906,7 +1953,7 @@ func TestQQBotSkipsFeaturesTheDocsAlreadyCover(t *testing.T) {
 		}
 	}
 	// 对照只用文档段落，不查 GitHub；交给模型的是去掉「提issue」后的反馈。
-	if !strings.Contains(fake.triageSystem, "### [常见问题] 输入 > 五笔怎么切换\n") || strings.Contains(fake.triageSystem, "GitHub 上搜到") || strings.Contains(fake.triageSystem, "最新版本") || fake.chatBodies[len(fake.chatBodies)-1] != "希望常用候选词能够前置" {
+	if !strings.Contains(fake.triageSystem, "### [FAQ · 常见问题] 输入 > 五笔怎么切换\n") || strings.Contains(fake.triageSystem, "GitHub 上搜到") || strings.Contains(fake.triageSystem, "最新版本") || fake.chatBodies[len(fake.chatBodies)-1] != "希望常用候选词能够前置" {
 		t.Fatalf("%q %q", fake.triageSystem, fake.chatBodies[len(fake.chatBodies)-1])
 	}
 	// 文档说明 bug 描述的是正常行为时同样不提交。
@@ -2189,5 +2236,41 @@ func TestQQCommandArg(t *testing.T) {
 		if _, ok := qqCommandArg(text, "查", "搜索", "搜"); ok {
 			t.Errorf("%q treated as a command", text)
 		}
+	}
+}
+
+// 每条消息记一行处理结果；只发截图时提示把文字打出来；提交 issue 后告诉群友怎么查进度；普通提问里提到的 issue 编号查出状态交给回答的模型。
+func TestQQBotOutcomesAndHints(t *testing.T) {
+	logs := issueCaptureLogs(t)
+	s, fake, _ := qqServer(t)
+	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
+	qqPost(t, s, qqMessageWithAttachments("m-shot", "", []map[string]string{{"url": "https://multimedia.nt.qq.com.cn/a.png", "content_type": "image/png"}}))
+	s.qqWorkers.Wait()
+	if last() != qqReplyScreenshot {
+		t.Fatal(last())
+	}
+	fake.summary = `{"kind":"bug","title":"候选框位置不对","platform":"windows","ime_version":"0.9.5","problem":"候选框停在左上角","steps":"在记事本里打字","keywords":""}`
+	qqDeliver(t, s, "m-filed", "提issue Windows 上候选框停在左上角，版本 0.9.5")
+	if !strings.Contains(last(), "之后 @我 发「win #123」可以查进度。") {
+		t.Fatal(last())
+	}
+	s.qq.config.Admins = nil
+	fake.issues = map[string]string{"o/r/issues/818": `{"number":818,"title":"大小写倒置","state":"closed","state_reason":"completed","labels":[{"name":"duplicate"}],"updated_at":"2026-10-11T00:00:00Z"}`}
+	qqDeliver(t, s, "m-mention", "Windows ＃818 修好了吗")
+	if !strings.Contains(fake.answerSystem, "### 用户提到的 issue\nr #818 大小写倒置：已关闭（重复）") {
+		t.Fatal(fake.answerSystem)
+	}
+	qqDeliver(t, s, "m-ref", "o/r #818")
+	if !strings.HasPrefix(last(), "r #818 大小写倒置：已关闭（重复）") {
+		t.Fatal(last())
+	}
+	var outcomes []string
+	for _, entry := range logs() {
+		if entry["msg"] == "qq bot: handled" {
+			outcomes = append(outcomes, fmt.Sprint(entry["outcome"], "/", entry["admin"]))
+		}
+	}
+	if strings.Join(outcomes, ",") != "screenshot_only/false,cmd_report_filed/true,answered/false,cmd_issue/false" {
+		t.Fatal(outcomes)
 	}
 }

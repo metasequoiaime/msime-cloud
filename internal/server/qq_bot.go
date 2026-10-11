@@ -800,6 +800,10 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 	}
 	// 要现查或者重答时先回一句，查一次要几十秒，免得群友以为机器人没反应。和截图提示、「我想一下」共用一个标志，已经回过过渡语时不再说。
 	ask := qqAsk{progress: func() { progress(qqReplyLookingUp) }}
+	// 机器人上一轮追问了草稿缺的信息、群友直接回「Windows 11，0.9.5」时补进那份草稿，不当成新问题去答，也不再起一份新草稿（见 qqSupplementFollowUp）。排在差评之前：追问之后的短句多半是在回答追问；只有一句否定的消息（「不对」「还是不行」）不算补充，照旧走差评重答。
+	if outcome := s.qqSupplementFollowUp(ctx, subject, history, question, reply); outcome != "" {
+		return outcome
+	}
 	// 群友说上一个回答不对：记下来，强制现查、换思路把上一个问题重答一次（见 qq_bad_answers.go）。
 	retrying, feedback := qqIsBadAnswerFeedback(history, question), question
 	var last account.QQTurn
@@ -847,8 +851,10 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 		outcome = "answered_escalate"
 		// 群友在报 bug 或提需求：整理成草稿等管理员一句话提交（见 qq_drafts.go）；整理不成时照旧记进汇总 issue。先把能先试的办法发出去，再整理草稿或记汇总，记下了什么单独回一句：整理草稿要再调一次模型、查重、建草稿，曾经等这些做完才连同答案一起发，群友要多等好几秒才看到排查办法。一条消息最多被动回复 qqBotMaxReplies（5）次，这条路径最多用满：过渡语 1 + 答案 1 + 这句说明 1 + 带链接被拒收时去掉链接重发 1 + 被拒收时的补发 1，以后不能再在这里加回复。
 		reply(answer.Answer)
-		if note := s.qqDraftReport(ctx, subject, question); note != "" {
+		// 整理草稿用群友这几轮说的话（qqDraftText），不只这一句：先问「候选框跑到左上角怎么办」、再说「试了还是不行，win11 0.9.3」时，只看第二句整理不出现象。草稿说明也记进对话历史，下一轮的模型看得到草稿编号和追问，群友直接回答追问时也靠它找到草稿（qqSupplementFollowUp）。
+		if note := s.qqDraftReport(ctx, subject, qqDraftText(history, question)); note != "" {
 			outcome = "answered_draft"
+			recorded = answer.Answer + note
 			reply(note)
 		} else if s.recordQQReport(ctx, answer.Topic) {
 			reply(qqEscalation)

@@ -10,11 +10,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
 
-// 群友报的 bug 和需求整理成 issue 草稿，管理员一句「提交 D编号」就提上去。原来群友报问题只把一句话概括记进汇总 issue，管理员要自己重新组织、再发「提issue」。现在答疑时模型判断群友在报 bug 或提需求（escalate），机器人照常先给排查办法，同时用管理员提 issue 的同一套整理（qqSummarise）把反馈整理成草稿存进数据库（account.QQDraft，所有副本共享），回复里告诉群友草稿编号；缺平台、版本、复现步骤时一并问出来，群友发「补充 D编号 内容」补上。只有管理员能提交，这条规则不变：「草稿」列出待处理的草稿，「提交 D编号」查重后提交，可以顺带补一句（例如「提交 D12 版本 0.9.5」）。提交前先在数据库里认领草稿，两个副本不会提两遍；提交失败放回，放回时不受处理消息的时限影响；副本中途被杀掉来不及放回时，认领超过 5 分钟（account.QQDraftClaimTimeout）还没记下 issue 就当作提交被打断，可以再提交，万一真的提了两次，fileQQReport 的查重会把第二次补充到已有的 issue。群友的截图不存进公开 bucket，草稿里只有看图得到的文字描述。
+// 群友报的 bug 和需求整理成 issue 草稿，管理员一句「提交 D编号」就提上去。原来群友报问题只把一句话概括记进汇总 issue，管理员要自己重新组织、再发「提issue」。现在答疑时模型判断群友在报 bug 或提需求（escalate），机器人照常先给排查办法，同时用管理员提 issue 的同一套整理（qqSummarise）把反馈整理成草稿存进数据库（account.QQDraft，所有副本共享），回复里告诉群友草稿编号；缺平台、版本、复现步骤时一并问出来，群友发「补充 D编号 内容」补上，也可以直接回答追问（「Windows 11，0.9.5」），见 qqSupplementFollowUp。只有管理员能提交，这条规则不变：「草稿」列出待处理的草稿，「提交 D编号」查重后提交，可以顺带补一句（例如「提交 D12 版本 0.9.5」）。提交前先在数据库里认领草稿，两个副本不会提两遍；提交失败放回，放回时不受处理消息的时限影响；副本中途被杀掉来不及放回时，认领超过 5 分钟（account.QQDraftClaimTimeout）还没记下 issue 就当作提交被打断，可以再提交，万一真的提了两次，fileQQReport 的查重会把第二次补充到已有的 issue。群友的截图不存进公开 bucket，草稿里只有看图得到的文字描述。
 
 const (
 	// qqDraftsDaily 是每个群友每天最多新建的草稿数（auth_rates）。
@@ -144,12 +145,7 @@ func (s *Server) qqDraftCommands(ctx context.Context, m qqGroupMessage, text str
 		if !ok {
 			return "cmd_draft_supplement"
 		}
-		code := qqDraftCode(id)
-		if missing := s.qqDraftMissing(ctx, report, draft.Original+"\n补充："+extra); missing != "" {
-			reply("已补充到 " + code + "。还想知道：" + qqQuestionEnd(missing) + "再 @我 发「补充 " + code + " …」补上就行。")
-		} else {
-			reply("已补充到 " + code + "，信息齐了，等管理员确认提交。")
-		}
+		reply(s.qqSupplementedNote(ctx, draft, report, extra))
 		return "cmd_draft_supplement"
 	}
 	if !admin {
@@ -189,6 +185,81 @@ func (s *Server) qqSupplementDraft(ctx context.Context, draft account.QQDraft, e
 		return report, false
 	}
 	return report, true
+}
+
+// qqSupplementedNote 是补充成功后的回复：还缺信息时接着问并教群友怎么补，信息齐了就说等管理员提交。还缺信息的写法带着「还想知道」和「补充 D编号」，群友下一句直接回答也能补进草稿（qqDraftFollowUp）。
+func (s *Server) qqSupplementedNote(ctx context.Context, draft account.QQDraft, report qqReport, extra string) string {
+	code := qqDraftCode(draft.ID)
+	if missing := s.qqDraftMissing(ctx, report, draft.Original+"\n补充："+extra); missing != "" {
+		return "已补充到 " + code + "。还想知道：" + qqQuestionEnd(missing) + "再 @我 发「补充 " + code + " …」补上就行。"
+	}
+	return "已补充到 " + code + "，信息齐了，等管理员确认提交。"
+}
+
+// qqDraftFollowUpRunes 是群友直接回答追问时算作补充的消息长度上限：更长的多半是在说别的事。
+const qqDraftFollowUpRunes = 80
+
+var (
+	// qqDraftFollowUp 匹配机器人追问草稿缺的信息的回复，分组是草稿编号：「还想知道：…」后面教群友发的「补充 D编号 …」。起草稿的说明（qqDraftReport）和补充后还缺信息的回复（qqSupplementedNote）都是这个写法，两者都会记进对话历史。
+	qqDraftFollowUp = regexp.MustCompile(`还想知道[\s\S]*「补充 D([0-9]{1,9})`)
+	// qqDraftTurn 匹配已经起过草稿、补充过草稿或者在已有需求下记过票的一轮回复：这一轮之前群友说的话已经在那份草稿或那个需求里了。
+	qqDraftTurn = regexp.MustCompile(`编号 D[0-9]+|已补充到 D[0-9]+|这个需求已经有人提过`)
+	// qqDraftAck 匹配去掉 qqBadAnswerFiller 之后只剩客气话或应答的消息：「好的」「谢谢」「收到」「知道了」「OK」。追问之后群友回一句「谢谢」很常见，这不是补充。
+	qqDraftAck = regexp.MustCompile(`(?i)^(?:(?:好|行|嗯|哦|噢|ok|okay|谢谢|多谢|感谢|谢|收到|明白|知道|了解|辛苦|麻烦|thx|thanks)了?)+$`)
+)
+
+// qqDraftText 是整理草稿用的原话：群友这次和之前几轮说的话，较早的在前，用换行拼起来。只拼群友说的，不拼机器人的回答，免得整理时把排查建议当成群友的描述。从最近一轮起过草稿、补充过草稿或记过票的回复之后拼起：那之前说的已经记在别处，再拼进来，新草稿会混进上一个问题。
+func qqDraftText(history []account.QQTurn, question string) string {
+	start := 0
+	for i, turn := range history {
+		if qqDraftTurn.MatchString(turn.Answer) {
+			start = i + 1
+		}
+	}
+	parts := make([]string, 0, len(history)-start+1)
+	for _, turn := range history[start:] {
+		parts = append(parts, turn.Question)
+	}
+	return strings.Join(append(parts, question), "\n")
+}
+
+// qqDraftNoContent 判断消息里有没有能补进草稿的内容：去掉语气字、标点和表情后什么都不剩，或者只剩客气话（qqDraftAck）、只剩一句否定（qqBadAnswerPattern，交给差评重答）时没有。
+func qqDraftNoContent(text string) bool {
+	stripped := qqBadAnswerFiller.ReplaceAllString(text, "")
+	return stripped == "" || qqDraftAck.MatchString(stripped) || qqBadAnswerPattern.MatchString(stripped)
+}
+
+// qqSupplementFollowUp 处理机器人追问草稿缺的信息之后群友的直接回答，补进那份草稿，返回处理结果的名字；不算补充时返回空字符串，调用方照常答疑。原来只认「补充 D编号 内容」，群友多半直接回「Windows 11，0.9.5」，被当成新问题去答，模型的历史里也没有草稿编号，常常又判成报问题、再开一份草稿，原来那份一直缺信息。同时满足才算补充：上一轮回复是追问（qqDraftFollowUp，草稿编号从这里取，比扫待处理的草稿更不容易补错）；消息不超过 qqDraftFollowUpRunes 字，不是问句（qqCommandQuestion），也不是只有客气话或否定（qqDraftNoContent）；草稿还在、没提交，而且是这位群友发起的。补充成功时这一轮记进对话历史，还缺信息时下一句照样能接上；补充失败时 qqSupplementDraft 已经回复过，不记这一轮，上一轮的追问还在，群友再说一句仍能补上。
+func (s *Server) qqSupplementFollowUp(ctx context.Context, subject string, history []account.QQTurn, text string, reply func(string)) string {
+	if s.qqDrafts == nil || s.qqHistory == nil || len(history) == 0 {
+		return ""
+	}
+	match := qqDraftFollowUp.FindStringSubmatch(history[len(history)-1].Answer)
+	text = strings.TrimSpace(text)
+	if match == nil || utf8.RuneCountInString(text) > qqDraftFollowUpRunes || qqCommandQuestion.MatchString(text) || qqDraftNoContent(text) {
+		return ""
+	}
+	id, _ := strconv.ParseInt(match[1], 10, 64)
+	draft, err := s.qqDrafts.QQDraft(ctx, id)
+	if err != nil {
+		if !errors.Is(err, account.ErrQQDraftNotFound) {
+			slog.Warn("qq bot: draft unavailable", "reason", err.Error())
+		}
+		return ""
+	}
+	if !account.QQDraftOwnedBy(draft, subject) || (draft.Filed && !account.QQDraftClaimStale(draft, s.qq.now())) {
+		return ""
+	}
+	report, ok := s.qqSupplementDraft(ctx, draft, text, false, reply)
+	if !ok {
+		return "cmd_draft_supplement_followup"
+	}
+	note := s.qqSupplementedNote(ctx, draft, report, text)
+	reply(note)
+	if err := s.qqHistory.RecordQQTurn(ctx, subject, text, note); err != nil {
+		slog.Warn("qq bot: conversation not recorded", "reason", err.Error())
+	}
+	return "cmd_draft_supplement_followup"
 }
 
 // qqQuestionEnd 给模型写的追问补上句末的问号，后面好直接接下一句；已经以标点结尾时原样返回。

@@ -3789,6 +3789,154 @@ func TestQQBotDraftSupplementFailures(t *testing.T) {
 	}
 }
 
+// 机器人追问草稿缺的信息后，群友不带「补充 D编号」直接回答也能补进草稿，不当成新问题去答、也不再起一份草稿；补充后还缺信息时下一句照样能接上。问句、客气话、一句否定都不算补充：问句照常答疑，「谢谢」交给闲聊，「不对」照旧走差评重答。
+func TestQQBotDraftFollowUp(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	drafts := &memoryDrafts{}
+	s.qqDrafts = drafts
+	history := &memoryConversations{}
+	s.qqHistory = history
+	bad := &memoryBadAnswers{}
+	s.qqBadAnswers = bad
+	s.qq.config.Admins = []string{"ADMIN1"}
+	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
+	deliver := func(id, member, content string) {
+		t.Helper()
+		qqPost(t, s, qqMessageFrom(id, member, content))
+		s.qqWorkers.Wait()
+	}
+	answers := func() int { return strings.Count(strings.Join(fake.chatCalls, " "), "answer") }
+	report := func(id, member string) {
+		t.Helper()
+		fake.answer = `{"type":"answered","answer":"先在「外观」里打开「候选窗口跟随光标」试试。","escalate":true,"topic":"候选框停在左上角"}`
+		fake.summary = `{"kind":"bug","title":"候选框停在屏幕左上角","platform":"","problem":"打字时候选框一直在左上角","steps":"","keywords":"候选框 左上角"}`
+		deliver(id, member, "候选框一直跑到左上角")
+	}
+	report("m-f1", "MEMBER1")
+	// 草稿说明连同答案记进对话历史，下一轮的模型看得到草稿编号和追问。
+	if turns := history.turns["GROUP1/MEMBER1"]; len(turns) != 1 || turns[0].Answer != "先在「外观」里打开「候选窗口跟随光标」试试。"+last() || !strings.Contains(turns[0].Answer, "编号 D1") {
+		t.Fatal(turns)
+	}
+	// 直接回答追问：补进 D1，不调答疑模型，不起新草稿；还缺信息时接着问。
+	before := answers()
+	fake.summary = `{"kind":"bug","title":"候选框停在屏幕左上角","platform":"windows","ime_version":"0.9.5","problem":"打字时候选框一直在左上角","steps":"","missing":"是在哪个软件里打字时出现的","keywords":"候选框 左上角"}`
+	deliver("m-f1-more", "MEMBER1", "Windows 11，0.9.5")
+	if want := "已补充到 D1。还想知道：是在哪个软件里打字时出现的？再 @我 发「补充 D1 …」补上就行。"; last() != want || answers() != before || len(drafts.drafts) != 1 || !strings.HasSuffix(drafts.drafts[0].Original, "\n补充：Windows 11，0.9.5") {
+		t.Fatalf("%q %d %q", last(), len(drafts.drafts), drafts.drafts[0].Original)
+	}
+	if turns := history.turns["GROUP1/MEMBER1"]; len(turns) != 2 || turns[1].Question != "Windows 11，0.9.5" || turns[1].Answer != last() {
+		t.Fatal(turns)
+	}
+	// 补充后的追问也能直接回答。
+	fake.summary = `{"kind":"bug","title":"候选框停在屏幕左上角","platform":"windows","ime_version":"0.9.5","problem":"打字时候选框一直在左上角","steps":"在微信里打字","keywords":"候选框 左上角"}`
+	deliver("m-f1-more2", "MEMBER1", "在微信里")
+	if last() != "已补充到 D1，信息齐了，等管理员确认提交。" || answers() != before || !strings.HasSuffix(drafts.drafts[0].Original, "\n补充：Windows 11，0.9.5\n补充：在微信里") {
+		t.Fatalf("%q %q", last(), drafts.drafts[0].Original)
+	}
+	// 信息齐了以后不再追问，下一句照常答疑。
+	fake.answer = `{"type":"answered","answer":"在设置里选五笔。"}`
+	deliver("m-f1-new", "MEMBER1", "五笔切换")
+	if last() != "在设置里选五笔。" || answers() != before+1 || strings.Contains(drafts.drafts[0].Original, "五笔切换") {
+		t.Fatalf("%q %q", last(), drafts.drafts[0].Original)
+	}
+	// 追问之后问的是问题：照常答疑，草稿不改。
+	report("m-f2", "MEMBER2")
+	original := drafts.drafts[1].Original
+	fake.answer = `{"type":"answered","answer":"在设置的「关于」里能看到版本号。"}`
+	deliver("m-f2-ask", "MEMBER2", "版本号在哪里看？")
+	if last() != "在设置的「关于」里能看到版本号。" || drafts.drafts[1].Original != original {
+		t.Fatalf("%q %q", last(), drafts.drafts[1].Original)
+	}
+	// 追问之后只说一句「谢谢」：交给闲聊，草稿不改。
+	report("m-f3", "MEMBER3")
+	original = drafts.drafts[2].Original
+	fake.answer = `{"type":"chat","answer":"不客气～"}`
+	deliver("m-f3-thanks", "MEMBER3", "好的，谢谢！")
+	if last() != "不客气～" || drafts.drafts[2].Original != original {
+		t.Fatalf("%q %q", last(), drafts.drafts[2].Original)
+	}
+	// 追问之后说「不对」：照旧记差评、重答，草稿不改。
+	report("m-f4", "MEMBER4")
+	original = drafts.drafts[3].Original
+	fake.answer = `{"type":"answered","answer":"换个思路：先重启输入法。"}`
+	deliver("m-f4-bad", "MEMBER4", "不对")
+	if len(bad.items) != 1 || drafts.drafts[3].Original != original || !strings.HasPrefix(last(), qqRetryPrefix) {
+		t.Fatalf("%q %d %q", last(), len(bad.items), drafts.drafts[3].Original)
+	}
+	// 草稿已经提交了：不再往里补，照常答疑。
+	report("m-f5", "MEMBER5")
+	drafts.drafts[4].Filed, drafts.drafts[4].FiledAt, drafts.drafts[4].IssueRef = true, time.Now(), "win #1"
+	original = drafts.drafts[4].Original
+	fake.answer = `{"type":"answered","answer":"收到。"}`
+	deliver("m-f5-more", "MEMBER5", "Windows 11，0.9.5")
+	if last() != "收到。" || drafts.drafts[4].Original != original {
+		t.Fatalf("%q %q", last(), drafts.drafts[4].Original)
+	}
+	// 草稿编号对不上发起人（例如对话历史和草稿不一致）：不补。
+	report("m-f6", "MEMBER6")
+	drafts.drafts[5].Subject = account.QQDraftSubject("GROUP1/SOMEONE")
+	original = drafts.drafts[5].Original
+	fake.answer = `{"type":"answered","answer":"收到。"}`
+	deliver("m-f6-more", "MEMBER6", "Windows 11，0.9.5")
+	if last() != "收到。" || drafts.drafts[5].Original != original {
+		t.Fatalf("%q %q", last(), drafts.drafts[5].Original)
+	}
+	// 补充时整理失败：qqSupplementDraft 回「稍后再试」，这一轮不记进历史，再说一句仍能补上。
+	report("m-f7", "MEMBER7")
+	fake.summary = "好的，这是一个 bug"
+	deliver("m-f7-broken", "MEMBER7", "Windows 11，0.9.5")
+	if last() != qqReplyUnavailable || len(history.turns["GROUP1/MEMBER7"]) != 1 {
+		t.Fatalf("%q %v", last(), history.turns["GROUP1/MEMBER7"])
+	}
+	fake.summary = `{"kind":"bug","title":"候选框停在屏幕左上角","platform":"windows","ime_version":"0.9.5","problem":"打字时候选框一直在左上角","steps":"在微信里打字","keywords":"候选框 左上角"}`
+	deliver("m-f7-again", "MEMBER7", "Windows 11，0.9.5，在微信里")
+	if last() != "已补充到 D7，信息齐了，等管理员确认提交。" {
+		t.Fatalf("%q", last())
+	}
+}
+
+// 整理草稿用群友这几轮说的话：先问「候选框跑到左上角怎么办」、再说「试了还是不行，win11 0.9.3」时，草稿里带着第一句的现象；不拼机器人的回答；已经起过草稿的那几轮不再拼进下一份草稿。
+func TestQQBotDraftUsesEarlierTurns(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	drafts := &memoryDrafts{}
+	s.qqDrafts = drafts
+	history := &memoryConversations{}
+	s.qqHistory = history
+	s.qq.config.Admins = []string{"ADMIN1"}
+	deliver := func(id, content string) {
+		t.Helper()
+		qqPost(t, s, qqMessageFrom(id, "MEMBER1", content))
+		s.qqWorkers.Wait()
+	}
+	lastSummarised := func() string {
+		for i := len(fake.chatCalls) - 1; i >= 0; i-- {
+			if fake.chatCalls[i] == "summarise" {
+				return fake.chatBodies[i]
+			}
+		}
+		return ""
+	}
+	fake.answer = `{"type":"answered","answer":"在「外观」里打开「候选窗口跟随光标」。"}`
+	deliver("m-h1", "候选框跑到左上角怎么办")
+	fake.answer = `{"type":"answered","answer":"再试试重启输入法。","escalate":true,"topic":"Windows 候选框停在左上角"}`
+	fake.summary = `{"kind":"bug","title":"Windows 11 候选框停在屏幕左上角","platform":"windows","ime_version":"0.9.3","problem":"候选框跑到左上角，打开跟随光标也不行","steps":"打字","keywords":"候选框 左上角"}`
+	deliver("m-h2", "试了还是不行，win11 0.9.3")
+	want := "候选框跑到左上角怎么办\n试了还是不行，win11 0.9.3"
+	if got := lastSummarised(); got != want {
+		t.Fatalf("%q", got)
+	}
+	if len(drafts.drafts) != 1 || drafts.drafts[0].Original != want || strings.Contains(drafts.drafts[0].Original, "跟随光标") {
+		t.Fatal(drafts.drafts)
+	}
+	// 信息齐了不再追问，下一句另报一个问题时起新草稿，不带已经记进 D1 的那两句。
+	fake.answer = `{"type":"answered","answer":"先切回拼音再切五笔试试。","escalate":true,"topic":"Windows 切换五笔后打不出字"}`
+	fake.summary = `{"kind":"bug","title":"切换五笔后打不出字","platform":"windows","ime_version":"0.9.3","problem":"切换五笔后打不出字","steps":"切换到五笔","keywords":"五笔"}`
+	deliver("m-h3", "另外切换五笔后打不出字")
+	if got := lastSummarised(); got != "另外切换五笔后打不出字" || len(drafts.drafts) != 2 || drafts.drafts[1].Original != "另外切换五笔后打不出字" {
+		t.Fatalf("%q %v", got, drafts.drafts)
+	}
+}
+
 // 提交草稿被打断（处理消息的 ctx 被取消或超时，例如滚动更新）时照样放回认领，再发一次「提交」能正常提交；认领了还没记下 issue 的草稿说「正在提交」而不是「已经提交过了」，认领超过 account.QQDraftClaimTimeout 当作副本被杀掉、来不及放回，可以重新提交。
 func TestQQBotDraftFilingInterrupted(t *testing.T) {
 	if account.QQDraftClaimTimeout <= qqBotProcessTimeout {

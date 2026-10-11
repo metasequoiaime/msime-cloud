@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -21,6 +22,8 @@ const (
 	// qqFAQAnswerRunes 是答案的最少字数：官网（msime-web 的 seo-output.test.mjs）要求每条繁体答案渲染后超过 50 字、简体超过 20 字，太短的条目会让官网下次更新文档子模块时测试失败。
 	qqFAQAnswerRunes = 60
 	qqFAQBranchStamp = "20060102-150405"
+	// qqFAQReplyRunes 是开完 PR 的回复里带上的答案长度。
+	qqFAQReplyRunes = 150
 )
 
 // errQQFAQTooShort 表示模型整理出的答案太短，要请管理员补充。
@@ -248,6 +251,12 @@ func (s *Server) recordQQAnswer(ctx context.Context, text string, reply func(str
 		reply("没看出要记录的问题和答案，请写成「记录答案 问：… 答：…」。")
 		return 0
 	}
+	// 同一问题已经有还没合并的 PR 时不再新开，返回那个 PR 的编号（从文档候选、差评写进来的照样标成已处理）：原来只看默认分支的 FAQ，前一个 PR 还没合并时再记一次、或者两个管理员同时写同一条，都会多开一个内容相同的 PR。
+	if number := s.qqOpenFAQPull(ctx, token, repo, entry.Question); number > 0 {
+		_, short, _ := strings.Cut(repo, "/")
+		reply("「" + entry.Question + "」已有 PR " + short + " #" + strconv.FormatInt(number, 10) + "，还没合并，不再新开。")
+		return number
+	}
 	index := slices.Index(categories, entry.Category)
 	newFAQ, ok := qqInsertFAQ(faq, index, entry.Question, entry.Answer, "本页于")
 	if !ok {
@@ -307,6 +316,30 @@ func (s *Server) recordQQAnswer(ctx context.Context, text string, reply func(str
 		fail("pull", githubFailure("pull", r, err))
 		return 0
 	}
-	reply("已整理成 FAQ「" + entry.Question + "」，开了 PR：" + qqIssueNumberText(repo, pull.Number) + "，维护者核对合并后，机器人就能回答这个问题。")
+	// 回复里带上写进去的答案（截到 150 字）：答案是模型改写过的，原来管理员要去 GitHub 打开 PR 才知道写成了什么。
+	reply("已整理成 FAQ「" + entry.Question + "」，开了 PR：" + qqIssueNumberText(repo, pull.Number) + "，维护者核对合并后，机器人就能回答这个问题。\n写进去的答案：" + qqTruncate(entry.Answer, qqFAQReplyRunes))
 	return pull.Number
+}
+
+// qqOpenFAQPull 在知识库仓库开着的 PR 里找「记录答案」开的（分支以 qq-faq/ 开头）、标题含同一个问题的，返回它的编号，没有时返回 0。只看最近的 100 个开着的 PR；列不出来时只记日志、返回 0，照常开 PR：重复的 PR 合并前还有人工核对，不值得因此拦下这次记录。
+func (s *Server) qqOpenFAQPull(ctx context.Context, token, repo, question string) int64 {
+	r, err := s.adminGitHub.Do(ctx, token, "GET", "/repos/"+repo+"/pulls?state=open&per_page=100", nil)
+	var pulls []struct {
+		Number int64  `json:"number"`
+		Title  string `json:"title"`
+		Head   struct {
+			Ref string `json:"ref"`
+		} `json:"head"`
+	}
+	if err != nil || !r.OK() || r.Decode(&pulls) != nil {
+		slog.Warn("qq bot: open faq pulls unavailable", "reason", githubFailure("pulls", r, err).Error())
+		return 0
+	}
+	title := "「" + githubReferenceBreaker.Replace(question) + "」"
+	for _, pull := range pulls {
+		if strings.HasPrefix(pull.Head.Ref, "qq-faq/") && strings.Contains(pull.Title, title) {
+			return pull.Number
+		}
+	}
+	return 0
 }

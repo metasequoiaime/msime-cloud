@@ -1207,7 +1207,7 @@ func TestQQBotAnswersMembersFromKnowledge(t *testing.T) {
 	}
 	// 目录列出全部段落：子目录、非 Markdown 文件和没有正文的标题不收，代码块里的 # 不算标题。
 	// 文档名前面标出适用平台，标题后面附上正文摘要。
-	for _, want := range []string{"1. [FAQ · 常见问题] 输入 > 五笔怎么切换：在设置的「输入方案」里选五笔。\n", "2. [FAQ · 常见问题] 数据：", "3. [Windows 正式版 · windows] 安装：双击安装包。\n"} {
+	for _, want := range []string{"1. [FAQ · 以 Windows 正式版为主 · 常见问题] 输入 > 五笔怎么切换：在设置的「输入方案」里选五笔。\n", "2. [FAQ · 以 Windows 正式版为主 · 常见问题] 数据：", "3. [Windows 正式版 · windows] 安装：双击安装包。\n"} {
 		if !strings.Contains(fake.selectSystem, want) {
 			t.Fatalf("toc missing %q:\n%s", want, fake.selectSystem)
 		}
@@ -1216,11 +1216,11 @@ func TestQQBotAnswersMembersFromKnowledge(t *testing.T) {
 		t.Fatal("toc", fake.selectSystem)
 	}
 	// 回答只拿到挑出的段落，重复和越界的编号被忽略。
-	if !strings.Contains(fake.answerSystem, "### [FAQ · 常见问题] 输入 > 五笔怎么切换\n在设置的「输入方案」里选五笔。") || !strings.Contains(fake.answerSystem, "### [Windows 正式版 · windows] 安装\n双击安装包。") || strings.Contains(fake.answerSystem, "同步需要登录") || strings.Count(fake.answerSystem, "五笔怎么切换") != 1 {
+	if !strings.Contains(fake.answerSystem, "### [FAQ · 以 Windows 正式版为主 · 常见问题] 输入 > 五笔怎么切换\n在设置的「输入方案」里选五笔。") || !strings.Contains(fake.answerSystem, "### [Windows 正式版 · windows] 安装\n双击安装包。") || strings.Contains(fake.answerSystem, "同步需要登录") || strings.Count(fake.answerSystem, "五笔怎么切换") != 1 {
 		t.Fatal(fake.answerSystem)
 	}
 	// 回答的系统说明列出 qqDocPlatforms 里的平台（不含 FAQ、通用、各平台这类标签），资料只有部分平台时不会说成其他平台没有。
-	if qqPlatformList != "Android、Linux、macOS、Windows 正式版" || !strings.Contains(fake.answerSystem, "水杉有 Android、Linux、macOS、Windows 正式版 等版本；资料里只有部分平台的说明时，不要说其他平台没有这个功能或没有这个版本。") {
+	if qqPlatformList != "Android、iOS、Linux、macOS、Windows 正式版" || !strings.Contains(fake.answerSystem, "水杉有 Android、iOS、Linux、macOS、Windows 正式版 等版本；资料里只有部分平台的说明时，不要说其他平台没有这个功能或没有这个版本。") {
 		t.Fatal(qqPlatformList, fake.answerSystem)
 	}
 	if limiter.counts["qq-bot-member|GROUP1/MEMBER1"] != 1 {
@@ -1357,10 +1357,64 @@ func TestQQSnippet(t *testing.T) {
 		"先看 **渲染方式**，再看 **字体** 和 **渲染方式**。":   "渲染方式、字体",
 		"打开 [设置](https://x.y/a) 里的 `外观` 页。":   "打开 设置 里的 外观 页。",
 		strings.Repeat("长", qqSnippetRunes+5): strings.Repeat("长", qqSnippetRunes) + "…",
+		// 没有加粗词时列出「- 标签：说明」列表项的标签，去重；冒号太靠后的、冒号后面是链接的、不是列表项的行不算。
+		"- 删除：按住删除键。\n* `撤销`: 摇一摇。\n- 删除：再说一遍。\n- 这一行的冒号离开头太远了超过十二个字：不算\n- 见 https://x.y\n正文：不是列表": "删除、撤销",
+		// 只有一个标签时退回正文开头。
+		"- 删除：按住删除键。": "- 删除：按住删除键。",
 	} {
 		if got := qqSnippet(text); got != want {
 			t.Errorf("%q: %q want %q", text, got, want)
 		}
+	}
+	// 安卓指南「常用操作」的原文（列表项没有加粗）：摘要列出各项操作，问「安卓版能换皮肤吗」时目录里看得到「换皮肤」。原来只取正文前 50 字，目录里只露出「选择候选：点候选栏里的词上屏…」。
+	android := "- 选择候选：点候选栏里的词上屏；候选多于一行时，点右端的箭头展开整页。\n- 删除：按住删除键会逐渐加速连删；按住后往上滑，键上方会出现「快速删除」框，滑进框里松手会删掉光标前的全部文字，滑回框外再松手则什么也不删。\n- 换皮肤：点键盘工具栏上的衣架图标，或在「设置 → 皮肤」里选择。\n- 隐私：键盘默认离线，只有使用云候选、AI、语音、账号同步等功能时才联网，详见 [PRIVACY.md](https://github.com/metasequoiaime/msime/blob/develop/PRIVACY.md)。\n"
+	if got := qqSnippet(android); got != "选择候选、删除、换皮肤、隐私" {
+		t.Fatal(got)
+	}
+}
+
+// FAQ 按每一问的标题打平台标签：适用于所有平台的三问标「各平台」，标题里写了平台的标这个平台，其余标「FAQ · 以 Windows 正式版为主」，这个标签不进版本清单。
+func TestQQFAQPlatform(t *testing.T) {
+	for title, want := range map[string]string{
+		"安装与启动 > 水杉输入法支持哪些系统，去哪里下载？":                 "各平台",
+		"安装与启动 > GitHub 下载太慢或打不开，还有别的下载渠道吗？":         "各平台",
+		"安装与启动 > 有鸿蒙（HarmonyOS）版吗？":                  "各平台",
+		"字体与显示 > Windows 10 悬浮工具栏图标变成方框或空白，但按钮仍能点击？": "Windows",
+		"输入与快捷键 > macOS 上输入方案自己变成笔画、五笔或双拼，怎么改回全拼？":   "macOS",
+		"字体与显示 > Linux 版打开了悬浮工具栏，为什么桌面上看不到？":         "Linux",
+		"安装与启动 > iOS 版为什么不在 App Store？":              "iOS",
+		"安装与启动 > iPad 上切换到水杉后，马上又跳回原来的键盘？":           "iOS",
+		"安装与启动 > 鸿蒙版怎么装？":                            "鸿蒙",
+		"字体与显示 > 打字时汉字显示成方框，应该安装什么字体？":               "FAQ · 以 Windows 正式版为主",
+		"安装与启动 > 安装后切换不了输入法，Server 反复退出，或设置窗口一闪即关？":  "FAQ · 以 Windows 正式版为主",
+		"概述": "FAQ · 以 Windows 正式版为主",
+	} {
+		if got := qqFAQPlatform(title); got != want {
+			t.Errorf("%q: %q want %q", title, got, want)
+		}
+	}
+	if strings.Contains(qqPlatformList, "FAQ") || !strings.Contains(qqPlatformList, "iOS") {
+		t.Fatal(qqPlatformList)
+	}
+	// 拉知识库时 faq.md 的段落按标题打标签，其他文档照旧按文件名打。
+	sections := qqSplitMarkdown("faq", "# 常见问题\n\n## 安装与启动\n\n### iOS 版为什么不在 App Store？\n\n在测试。\n\n### 装不上？\n\n先装运行库。\n")
+	if len(sections) != 2 || qqFAQPlatform(sections[0].Title) != "iOS" || qqFAQPlatform(sections[1].Title) != qqFAQDefaultPlatform {
+		t.Fatal(sections)
+	}
+}
+
+// 「提文档」整理反馈时可选的页面取自 qqDocPlatforms，新增的指南（android、ios）自动出现。
+func TestQQDocsPromptPages(t *testing.T) {
+	for name := range qqDocPlatforms {
+		if !strings.Contains(qqDocsPrompt, name) {
+			t.Errorf("qqDocsPrompt missing page %q", name)
+		}
+	}
+	if !strings.Contains(qqDocsPrompt, "page：涉及的文档，accessibility、android、faq、ios、linux、macos、macos-voice、migration、windows 之一") {
+		t.Fatal(qqDocsPrompt)
+	}
+	if qqDocPlatforms["migration"] != "Windows 正式版" || qqDocPlatforms["ios"] != "iOS" {
+		t.Fatal(qqDocPlatforms)
 	}
 }
 
@@ -2683,7 +2737,7 @@ func TestQQBotSkipsFeaturesTheDocsAlreadyCover(t *testing.T) {
 		t.Fatalf("%q %v", last(), fake.created)
 	}
 	// 对照只用文档段落，不查 GitHub；交给模型的是去掉维护者标注后的反馈。
-	if !strings.Contains(fake.triageSystem, "### [FAQ · 常见问题] 输入 > 五笔怎么切换\n") || strings.Contains(fake.triageSystem, "GitHub 上搜到") || strings.Contains(fake.triageSystem, "最新版本") || fake.chatBodies[len(fake.chatBodies)-1] != "希望常用候选词能够前置" {
+	if !strings.Contains(fake.triageSystem, "### [FAQ · 以 Windows 正式版为主 · 常见问题] 输入 > 五笔怎么切换\n") || strings.Contains(fake.triageSystem, "GitHub 上搜到") || strings.Contains(fake.triageSystem, "最新版本") || fake.chatBodies[len(fake.chatBodies)-1] != "希望常用候选词能够前置" {
 		t.Fatalf("%q %q", fake.triageSystem, fake.chatBodies[len(fake.chatBodies)-1])
 	}
 	// 「提issue」即使知识库判成已有也照常提交，不调用对照的模型。
@@ -3525,7 +3579,7 @@ func TestQQVectorRecall(t *testing.T) {
 	fake.selected = `{"sections":[]}`
 	fake.answer = `{"type":"answered","answer":"在设置的「输入方案」里选五笔。"}`
 	qqDeliver(t, s, "m-vec", "五笔怎么切换，是在设置的输入方案里选五笔吗")
-	if !strings.Contains(fake.answerSystem, "### [FAQ · 常见问题] 输入 > 五笔怎么切换\n") {
+	if !strings.Contains(fake.answerSystem, "### [FAQ · 以 Windows 正式版为主 · 常见问题] 输入 > 五笔怎么切换\n") {
 		t.Fatal(fake.answerSystem)
 	}
 	qqDeliver(t, s, "m-vec-history", "候选框停在屏幕左上角怎么办")
@@ -5704,10 +5758,17 @@ func TestQQSelfTestSummary(t *testing.T) {
 	}
 }
 
+// 挑段落的提示词说「标成『各平台』的段落适用于所有平台」，不再引用 faq.md 里并不存在的「平台与下载」小节。
+func TestQQSelectPromptPlatformLabels(t *testing.T) {
+	if !strings.Contains(qqSelectPrompt, "标成「各平台」的段落适用于所有平台") || strings.Contains(qqSelectPrompt, "FAQ 里「平台与下载」") || strings.Contains(qqSelectPrompt, "（FAQ「平台与下载」") {
+		t.Fatal(qqSelectPrompt)
+	}
+}
+
 // 答题提示词：对比类按水杉自己的文档答、不现查；没说平台时只有一条规则（都能一行说清就每平台一行，否则只追问系统），原来互相冲突的两条不再同时出现；不写「没查到」；夹字母的词不建议加词。
 func TestQQAnswerPromptRules(t *testing.T) {
 	for _, want := range []string{
-		"和其他输入法对比、问值不值得换时，挑水杉的功能、隐私、平台与下载段落",
+		"和其他输入法对比、问值不值得换时，挑水杉的功能、隐私、平台与下载段落（标成「各平台」的 FAQ 段落、各平台的功能总览、隐私段落）",
 		"只有问到对方产品的具体事实（价格、某项功能有没有）时才为 true；笼统对比、问值不值得换为 false",
 	} {
 		if !strings.Contains(qqSelectPrompt, want) {
@@ -5746,14 +5807,14 @@ func TestQQSelfTestLimits(t *testing.T) {
 		}
 	}
 	limit := qqSelfTestLimits["怎么卸载"]
-	if qqPlatformCount() != 4 {
+	if qqPlatformCount() != 5 {
 		t.Fatal(qqPlatformCount())
 	}
 	for answer, want := range map[string]string{
 		"你用的是哪个系统？": "",
-		"Windows 正式版：设置→应用里卸载\nmacOS：把它拖进废纸篓\nLinux：用包管理器卸载\nAndroid：长按图标卸载\n\n你用的是哪个？": "",
+		"Windows 正式版：设置→应用里卸载\nmacOS：把它拖进废纸篓\nLinux：用包管理器卸载\nAndroid：长按图标卸载\niOS：长按图标删除 App\n\n你用的是哪个？": "",
 		strings.Repeat("长", 201):  "回答 201 字，超过 200 字",
-		strings.Repeat("一行\n", 6): "回答 6 行，超过 5 行",
+		strings.Repeat("一行\n", 7): "回答 7 行，超过 6 行",
 	} {
 		if got := limit(answer); got != want {
 			t.Errorf("%q: %q want %q", answer, got, want)

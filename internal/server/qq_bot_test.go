@@ -4223,7 +4223,7 @@ func TestQQQuestionEnd(t *testing.T) {
 	}
 }
 
-// 「加词」走官网投稿同一条流程写进词库的滚动 PR：拼音可以用空格分隔或连写，没写拼音时让模型按常用读音标上；校验不过、额度用完时如实回复。
+// 「加词」走官网投稿同一条流程写进词库的滚动 PR：拼音可以用空格分隔或连写，没写拼音时让模型按常用读音标上；校验不过时用 QQ 的写法报错、不扣当天提交的额度，没写进去时退回额度，额度用完时如实回复。
 func TestQQBotAddWords(t *testing.T) {
 	s, fake, limiter := qqServer(t)
 	upstream := newFakeWordsUpstream(t)
@@ -4236,8 +4236,8 @@ func TestQQBotAddWords(t *testing.T) {
 	s.words.now = func() time.Time { return time.Date(2026, 9, 30, 12, 34, 56, 0, time.UTC) }
 	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
 	qqDeliver(t, s, "m-words", "加词 扛把子 kang ba zi，二〇二六 erlingerliu")
-	if !strings.HasPrefix(last(), "已经提交到词库：扛把子（kang'ba'zi）、二〇二六（er'ling'er'liu），在 msime-dictionary #12") {
-		t.Fatal(last())
+	if want := "已经帮你投稿：扛把子（kang'ba'zi）、二〇二六（er'ling'er'liu），编号 msime-dictionary #12（https://github.com/metasequoiaime/msime-dictionary/issues/12）。审核通过后，下次词库更新就能打出来～"; last() != want {
+		t.Fatalf("%q", last())
 	}
 	if !strings.HasSuffix(upstream.content, "扛把子\tkang'ba'zi\t5000\n二〇二六\ter'ling'er'liu\t5000\n") {
 		t.Fatalf("%q", upstream.content)
@@ -4245,13 +4245,29 @@ func TestQQBotAddWords(t *testing.T) {
 	// 没写拼音时让模型标上，回复里写明。
 	fake.summary = `{"pinyin":["shui'shan"]}`
 	qqDeliver(t, s, "m-words-guess", "加词水杉")
-	if !strings.Contains(last(), "水杉（shui'shan）") || !strings.Contains(last(), "按常用读音标了") {
+	if !strings.Contains(last(), "水杉（shui'shan）") || !strings.HasSuffix(last(), "～没写拼音的词按常用读音标了，读音不对的话，@我 发「加词 水杉 正确拼音」再交一次。") {
 		t.Fatal(last())
 	}
-	// 校验不过、写错了、额度用完。
-	qqDeliver(t, s, "m-words-bad", "加词 打call da call")
-	if !strings.Contains(last(), "拼音") && !strings.Contains(last(), "音节") {
-		t.Fatal(last())
+	// 校验不过时用 QQ 的写法报错，词语只出现一次，也不扣当天提交的额度。
+	used := limiter.counts["qq-bot-words|GROUP1/MEMBER1"]
+	for _, tc := range []struct{ id, text, want string }{
+		{"m-words-bad", "加词 打call da call", "「打」的拼音里「call」不是有效的拼音（ü 写作 v，如 lv）。"},
+		{"m-words-count", "加词 扛把子 kang ba", "「扛把子」是 3 个字，拼音却是 2 个音节，对一下再发。"},
+		{"m-words-digits", "加词 扛把子 kang4 ba3 zi3", "「扛把子」的拼音只能写字母，音节之间空一格，比如 @我 发「加词 扛把子 kang ba zi」。"},
+		{"m-words-twice", "加词 扛把子 kang ba zi，扛把子 kang ba zi", "「扛把子」重复填写了。"},
+	} {
+		qqDeliver(t, s, tc.id, tc.text)
+		if last() != tc.want {
+			t.Errorf("%q: %q want %q", tc.text, last(), tc.want)
+		}
+	}
+	if got := limiter.counts["qq-bot-words|GROUP1/MEMBER1"]; got != used {
+		t.Fatalf("validation failures used the words limit: %d -> %d", used, got)
+	}
+	// 词库里已经有了，没写进去，退回这次的额度。
+	qqDeliver(t, s, "m-words-listed", "加词 扛把子 kang ba zi")
+	if !strings.HasPrefix(last(), "「扛把子」词库里已经有了") || limiter.counts["qq-bot-words|GROUP1/MEMBER1"] != used {
+		t.Fatal(last(), limiter.counts)
 	}
 	qqDeliver(t, s, "m-words-empty", "加词")
 	if !strings.HasPrefix(last(), "请在「加词」后面写词语和拼音") {
@@ -4268,11 +4284,37 @@ func TestQQBotAddWords(t *testing.T) {
 	if last() != "你今天加词的次数用完了，明天再来吧。" {
 		t.Fatal(last())
 	}
+	// 发的次数另有宽松的上限，不管成没成都计，挡住反复刷补拼音的模型调用。
+	limiter.counts["qq-bot-words-try|GROUP1/MEMBER1"] = qqWordsTryDaily
+	fake.summary = `{"pinyin":["da'gong"]}`
+	qqDeliver(t, s, "m-words-try-limited", "加词 打工")
+	if last() != "你今天加词试了太多次，明天再来吧。" || strings.Contains(upstream.content, "打工\t") {
+		t.Fatal(last())
+	}
 	// 没有启用词条投稿时引导去官网。
 	s.words = nil
 	qqDeliver(t, s, "m-words-off", "加词 未来可期 wei lai ke qi")
 	if !strings.HasPrefix(last(), "加词暂时用不了") {
 		t.Fatal(last())
+	}
+}
+
+// 群友照手机键盘打出带声调的拼音、给拼音加括号、给词语加引号，都能照常提交。
+func TestQQBotAddWordsLenient(t *testing.T) {
+	for i, text := range []string{"加词 扛把子 kàng bǎ zǐ", "加词「扛把子」", "加词 扛把子（kang ba zi）"} {
+		s, fake, _ := qqServer(t)
+		upstream := newFakeWordsUpstream(t)
+		c := wordsConfig(t, upstream.server.URL)
+		if err := c.validate(true, []string{wordsTestOrigin}); err != nil {
+			t.Fatal(err)
+		}
+		s.words = newWordSubmitter(c, []string{wordsTestOrigin}, &fakeLimiter{})
+		s.words.client = upstream.server.Client()
+		fake.summary = `{"pinyin":["kang'ba'zi"]}`
+		qqDeliver(t, s, "m-words-lenient-"+strconv.Itoa(i), text)
+		if replies := fake.replyTexts(); len(replies) == 0 || !strings.HasPrefix(replies[len(replies)-1], "已经帮你投稿：扛把子（kang'ba'zi），编号 msime-dictionary #12") || !strings.HasSuffix(upstream.content, "扛把子\tkang'ba'zi\t5000\n") {
+			t.Errorf("%q: %q %q", text, replies, upstream.content)
+		}
 	}
 }
 
@@ -4320,6 +4362,16 @@ func TestQQParseWords(t *testing.T) {
 		"西安 xian":                   "西安=xi'an",
 		"绿色 LÜ-SE，未来可期":             "绿色=lv'se;未来可期=",
 		"女儿 nv'er\n未来 wei’lai":      "女儿=nv'er;未来=wei'lai",
+		// 带声调、带括号和引号的拼音，加了引号、书名号的词语。
+		"扛把子 kàng bǎ zǐ":     "扛把子=kang'ba'zi",
+		"绿色 lǜ sè，女儿 NǙ ÉR":  "绿色=lv'se;女儿=nv'er",
+		"扛把子（kang ba zi）":    "扛把子=kang'ba'zi",
+		"扛把子 (kang ba zi)":   "扛把子=kang'ba'zi",
+		"扛把子【kang ba zi】":    "扛把子=kang'ba'zi",
+		"「扛把子」":              "扛把子=",
+		"《扛把子》 kang ba zi":   "扛把子=kang'ba'zi",
+		"“扛把子” “kang ba zi”": "扛把子=kang'ba'zi",
+		"「」":                 "",
 	} {
 		var got []string
 		for _, e := range qqParseWords(content) {

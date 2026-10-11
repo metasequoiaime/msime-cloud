@@ -198,6 +198,8 @@ type qqFake struct {
 	created        []map[string]any
 	createStatus   int
 	comments       map[string]map[string]any
+	// issueComments 是按路径列出 issue 评论的响应（GET），缺省为空列表。
+	issueComments map[string]string
 	// 「记录答案」：faq 是整理 FAQ 的模型输出；faqFiles 不为 nil 时知识库仓库按它返回文件（要求按 qqFAQHead 读），faqWrites 按顺序记下建树、建提交、建分支、开 PR 的请求，faqFailPath 是会返回 422 的写接口路径。
 	faq         string
 	faqFiles    map[string]string
@@ -409,6 +411,12 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.created = append(f.created, body)
 		w.WriteHeader(201)
 		_, _ = w.Write([]byte(`{"number":123,"html_url":"https://github.com/o/r/issues/123"}`))
+	case strings.HasPrefix(r.URL.Path, "/repos/") && strings.HasSuffix(r.URL.Path, "/comments") && r.Method == "GET":
+		body := f.issueComments[r.URL.Path]
+		if body == "" {
+			body = "[]"
+		}
+		_, _ = io.WriteString(w, body)
 	case strings.HasPrefix(r.URL.Path, "/repos/") && strings.HasSuffix(r.URL.Path, "/comments") && f.commentStatus != 0:
 		w.WriteHeader(f.commentStatus)
 	case strings.HasPrefix(r.URL.Path, "/repos/") && strings.HasSuffix(r.URL.Path, "/comments"):
@@ -2302,5 +2310,45 @@ func TestQQBotOutcomesAndHints(t *testing.T) {
 	}
 	if strings.Join(outcomes, ",") != "screenshot_only/false,cmd_report_filed/true,answered/false,cmd_issue/false" {
 		t.Fatal(outcomes)
+	}
+}
+
+// 已完成的 issue 按关闭时间和该平台的 Release 说明修复有没有发版，并带上维护者最近的一条评论；搜到的前几个 issue 也补上这些。
+func TestQQIssueContext(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.config.Admin.GitHub.Platforms = []AdminPlatformConfig{{ID: "windows", Repo: "o/win", TagPrefix: "v"}, {ID: "android", Repo: "o/r", Label: "platform/android", TagPrefix: "android-v"}}
+	fake.releases = map[string]string{
+		"o/win": `[{"tag_name":"v0.9.7","published_at":"2026-10-11T00:00:00Z","draft":true},{"tag_name":"v0.9.6","published_at":"2026-10-10T00:00:00Z","prerelease":true},{"tag_name":"v0.9.5","published_at":"2026-10-07T00:00:00Z"},{"tag_name":"v0.9.4","published_at":"2026-10-01T00:00:00Z"}]`,
+		"o/r":   `[{"tag_name":"windows-v0.2.1","published_at":"2026-10-10T00:00:00Z"},{"tag_name":"android-v0.3.1","published_at":"2026-10-08T00:00:00Z"}]`,
+	}
+	fake.issues = map[string]string{
+		"o/win/issues/818": `{"number":818,"title":"候选框错位","state":"closed","state_reason":"completed","closed_at":"2026-10-06T00:00:00Z","comments":3,"labels":[],"updated_at":"2026-10-06T00:00:00Z"}`,
+		"o/r/issues/900":   `{"number":900,"title":"安卓闪退","state":"closed","state_reason":"completed","closed_at":"2026-10-09T00:00:00Z","comments":0,"labels":[{"name":"platform/android"}],"updated_at":"2026-10-09T00:00:00Z"}`,
+		"o/r/issues/901":   `{"number":901,"title":"重复","state":"closed","state_reason":"completed","closed_at":"2026-10-01T00:00:00Z","comments":0,"labels":[{"name":"platform/android"},{"name":"duplicate"}],"updated_at":"2026-10-01T00:00:00Z"}`,
+	}
+	fake.issueComments = map[string]string{"/repos/o/win/issues/818/comments": `[{"body":"我也遇到了","author_association":"NONE"},{"body":"在设置里关掉「硬件加速」就好，见 https://x.y/a ![截图](https://x.y/b.png)\n\n下个版本修。","author_association":"MEMBER"},{"body":"谢谢","author_association":"NONE"}]`}
+	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
+	qqDeliver(t, s, "m-ctx-win", "win #818")
+	if want := "win #818 候选框错位：已完成，更新于 2026-10-06\n修复已包含在 v0.9.5 及之后的版本\n维护者最近说：在设置里关掉「硬件加速」就好，见 下个版本修。"; last() != want {
+		t.Fatalf("%q", last())
+	}
+	qqDeliver(t, s, "m-ctx-android", "r #900")
+	if want := "r #900 安卓闪退：已完成，更新于 2026-10-09\n修复已合入（2026-10-09 关闭），之后还没有发布新版本"; last() != want {
+		t.Fatalf("%q", last())
+	}
+	// 无效类标签和看不出平台的不说发版。
+	qqDeliver(t, s, "m-ctx-dup", "r #901")
+	if last() != "r #901 重复：已关闭（重复），更新于 2026-10-01" {
+		t.Fatalf("%q", last())
+	}
+	if got := s.qqFixRelease(context.Background(), "o/r", qqIssueDetail{State: "closed", StateReason: "completed", ClosedAt: "2026-10-09T00:00:00Z"}); got != "" {
+		t.Fatal(got)
+	}
+	// 搜索结果里补上下文，缩进写在 issue 那一行下面。
+	s.config.Admin.GitHub.Platforms = s.config.Admin.GitHub.Platforms[:1]
+	fake.searchItems = []map[string]any{{"number": 818, "title": "候选框错位", "state": "closed", "state_reason": "completed", "closed_at": "2026-10-06T00:00:00Z", "comments": 3, "updated_at": "2026-10-06T00:00:00Z"}}
+	found, _ := s.qqSearchIssues(context.Background(), "候选框")
+	if !strings.Contains(found, "- win #818（已完成，更新于 2026-10-06，标签：）候选框错位\n  修复已包含在 v0.9.5 及之后的版本\n  维护者最近说：在设置里关掉") {
+		t.Fatal(found)
 	}
 }

@@ -84,6 +84,8 @@ func (s *Server) qqSearchIssuesFor(ctx context.Context, terms string) (string, b
 	client := s.adminGitHub
 	var b strings.Builder
 	failed := false
+	// detailed 是已经补过上下文的 issue 数，见 qq_issue_context.go。
+	detailed := 0
 	for _, repo := range s.qqGitHubRepos() {
 		token, err := client.Token(ctx, repo, qqGitHubReadPerms)
 		if err != nil {
@@ -100,12 +102,8 @@ func (s *Server) qqSearchIssuesFor(ctx context.Context, terms string) (string, b
 		var found struct {
 			Items []struct {
 				qqIssue
-				State       string `json:"state"`
-				StateReason string `json:"state_reason"`
-				UpdatedAt   string `json:"updated_at"`
-				Labels      []struct {
-					Name string `json:"name"`
-				} `json:"labels"`
+				qqIssueDetail
+				UpdatedAt string `json:"updated_at"`
 			} `json:"items"`
 		}
 		if r.Decode(&found) != nil {
@@ -117,12 +115,13 @@ func (s *Server) qqSearchIssuesFor(ctx context.Context, terms string) (string, b
 			if len(issue.PullRequest) > 0 && string(issue.PullRequest) != "null" || issue.Number <= 0 {
 				continue
 			}
-			labels := []string{}
-			for _, label := range issue.Labels {
-				labels = append(labels, label.Name)
-			}
+			labels := issue.labelNames()
 			updated, _, _ := strings.Cut(issue.UpdatedAt, "T")
 			fmt.Fprintf(&b, "- %s #%d（%s，更新于 %s，标签：%s）%s\n", name, issue.Number, qqIssueState(issue.State, issue.StateReason, labels), updated, strings.Join(labels, "、"), issue.Title)
+			if detailed < qqIssueContextResults {
+				detailed++
+				b.WriteString(s.qqIssueExtras(ctx, repo, issue.Number, issue.qqIssueDetail, qqMaintainerRunes, "  "))
+			}
 		}
 	}
 	return b.String(), failed

@@ -137,6 +137,7 @@ var qqDocPlatforms = map[string]string{
 	"macos":         "macOS",
 	"macos-voice":   "macOS",
 	"linux":         "Linux",
+	"android":       "Android",
 	"faq":           "FAQ",
 	"migration":     "通用",
 	"accessibility": "各平台",

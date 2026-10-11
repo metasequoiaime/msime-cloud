@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
+	"golang.org/x/sync/errgroup"
 )
 
 // QQ 群答疑的知识库。知识库就是 msime-docs 的用户指南（qq_bot.knowledge_repo 的 qq_bot.knowledge_dir 目录下的 Markdown 文件，不含子目录，所以 zh-TW 等译本不收），与官网 FAQ 页同一份来源，维护方式是给 msime-docs 提 PR。服务端用管理后台的 GitHub App 只读拉取，按标题切成段落，最多每 qqKnowledgeTTL 刷新一次（读请求带 ETag 缓存）。回答分两步：先把段落目录交给模型挑出相关的几段，再只用这几段原文回答，资料里没有的答案由模型标成 unknown，群里 @ 管理员。管理员的反馈在提交 issue 之前也用同样的办法挑段落，由模型判断文档是否已经说明功能已有或现象正常（qqTriage），是的话回复文档的说法、不提交。
@@ -298,12 +299,13 @@ func qqStripLinks(text string) string {
 }
 
 // qqAnswerQuestion 用知识库回答一个问题：先按目录挑段落，再只用挑出的段落回答。
-// qqAsk 是一次查资料的选项：github 为 true 时还查 GitHub 上的 issue、版本和统计；force 为 true 时不管挑段落的判断都现查（群友说上一个回答不对时）；progress 在开始现查前调用一次（回复「我查一下」），可以为空。researched 由 qqKnowledgeMaterial 在回答前现查过时置位，不管查没查到：回答的模型标成 unknown 时不再现查第二次，曾经第一次现查返回空时会再查一遍，白等一两分钟。
+// qqAsk 是一次查资料的选项：github 为 true 时还查 GitHub 上的 issue、版本和统计；force 为 true 时不管挑段落的判断都现查（群友说上一个回答不对时）；progress 在开始现查前调用一次（回复「我查一下」），可以为空。researched 由 qqKnowledgeMaterial 在回答前现查过时置位，不管查没查到：回答的模型标成 unknown 时不再现查第二次，曾经第一次现查返回空时会再查一遍，白等一两分钟。known 由 qqKnowledgeMaterial 填上已经查好的用户提到的 issue 和搜到的 issue（见 qqResearchKnown），答不上再现查时一并交给现查的模型，免得它把同一个 issue 再查一遍。
 type qqAsk struct {
 	github     bool
 	force      bool
 	progress   func()
 	researched bool
+	known      string
 }
 
 func (s *Server) qqAnswerQuestion(ctx context.Context, history []account.QQTurn, question string, ask qqAsk) (qqAnswer, error) {
@@ -329,7 +331,7 @@ func (s *Server) qqAnswerQuestion(ctx context.Context, history []account.QQTurn,
 			if ask.progress != nil {
 				ask.progress()
 			}
-			findings := s.qqResearch(ctx, question)
+			findings := s.qqResearch(ctx, question, ask.known)
 			switch {
 			case findings == "":
 			case qqRemaining(ctx) < qqReanswerMinRemaining:
@@ -478,15 +480,43 @@ func (s *Server) qqKnowledgeMaterial(ctx context.Context, question string, ask *
 	if !github {
 		return material.String(), s.qqAnswerModel(picked.Chat, picked.Strong), nil
 	}
-	if mentioned := s.qqMentionedIssues(ctx, question); mentioned != "" {
+	// 用户提到的 issue、搜 issue、仓库统计、各平台最新版本之间没有依赖，同时查，各写各的变量，最后照原来的顺序拼进资料，顺序不随谁先查完而变。曾经一样查完再查下一样，冷缓存时光仓库统计就要七八秒。现查要知道前两样查到了什么（见 qqResearchKnown），所以等前两样查完再开始现查，统计和版本在后台接着查，现查完再等它们。这几样查询失败只记日志、不返回错误，errgroup 只用来等。
+	var (
+		mentioned, issues, stats, releases string
+		searchFailed                       bool
+		lookups, extras                    errgroup.Group
+	)
+	lookups.Go(func() error {
+		mentioned = s.qqMentionedIssues(ctx, question)
+		return nil
+	})
+	lookups.Go(func() error {
+		issues, searchFailed = s.qqSearchIssues(ctx, picked.IssueSearch)
+		return nil
+	})
+	if picked.Stats {
+		extras.Go(func() error {
+			stats = s.qqRepoStats(ctx)
+			return nil
+		})
+	}
+	if picked.Releases {
+		extras.Go(func() error {
+			releases = s.qqLatestReleases(ctx)
+			return nil
+		})
+	}
+	_ = lookups.Wait()
+	if mentioned != "" {
 		material.WriteString("### 用户提到的 issue\n" + mentioned + "\n\n")
 	}
-	switch issues, failed := s.qqSearchIssues(ctx, picked.IssueSearch); {
+	switch {
 	case issues != "":
 		material.WriteString("### GitHub 上搜到的相关 issue\n" + issues + "\n")
-	case failed:
+	case searchFailed:
 		material.WriteString("### GitHub 上的相关 issue\n暂时搜不了（GitHub 出错或限流），不能据此说没有人反馈过。\n\n")
 	}
+	ask.known = qqResearchKnown(mentioned, issues)
 	if len(recall.history) > 0 {
 		material.WriteString("### 语义相近的历史 issue 和 PR\n" + qqHistoryMaterial(recall.history) + "\n")
 	}
@@ -500,20 +530,17 @@ func (s *Server) qqKnowledgeMaterial(ctx context.Context, question string, ask *
 			if ask.progress != nil {
 				ask.progress()
 			}
-			if findings := s.qqResearch(ctx, question); findings != "" {
+			if findings := s.qqResearch(ctx, question, ask.known); findings != "" {
 				material.WriteString(qqResearchHeading + findings + "\n\n")
 			}
 		}
 	}
-	if picked.Stats {
-		if stats := s.qqRepoStats(ctx); stats != "" {
-			material.WriteString("### GitHub 仓库统计（现在的数量）\n" + stats + "\n")
-		}
+	_ = extras.Wait()
+	if stats != "" {
+		material.WriteString("### GitHub 仓库统计（现在的数量）\n" + stats + "\n")
 	}
-	if picked.Releases {
-		if releases := s.qqLatestReleases(ctx); releases != "" {
-			material.WriteString("### 各平台最新版本（GitHub Release）\n" + releases + "\n")
-		}
+	if releases != "" {
+		material.WriteString("### 各平台最新版本（GitHub Release）\n" + releases + "\n")
 	}
 	return material.String(), s.qqAnswerModel(picked.Chat, picked.Strong || picked.Lookup), nil
 }

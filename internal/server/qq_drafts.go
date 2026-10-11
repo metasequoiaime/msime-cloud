@@ -50,7 +50,7 @@ func (s *Server) qqDraftMissing(ctx context.Context, report qqReport, original s
 	return question
 }
 
-// qqDraftReport 把群友报的问题整理成草稿，返回接在答案后面的说明；不是具体的 bug 或需求、额度用完或者出错时返回空字符串，调用方照旧记进汇总 issue。
+// qqDraftReport 把群友报的问题整理成草稿，返回答案发出后单独回复的说明；不是具体的 bug 或需求、额度用完或者出错时返回空字符串，调用方照旧记进汇总 issue。
 func (s *Server) qqDraftReport(ctx context.Context, subject, text string) string {
 	if s.qqDrafts == nil {
 		return ""
@@ -83,7 +83,7 @@ func (s *Server) qqDraftReport(ctx context.Context, subject, text string) string
 	}
 	code := qqDraftCode(id)
 	// 群友看到的说法不用「草稿」「GitHub」这类内部叫法；编号要留着，补充时用得到。
-	note := "\n\n我已经把这个问题记下来了，编号 " + code + "，管理员确认后会转给开发者。"
+	note := "我已经把这个问题记下来了，编号 " + code + "，管理员确认后会转给开发者。"
 	if missing := s.qqDraftMissing(ctx, report, text); missing != "" {
 		note += "还想知道：" + qqQuestionEnd(missing) + "补上后 @我 发「补充 " + code + " Windows 11，版本 0.9.5」这样就行。"
 	}

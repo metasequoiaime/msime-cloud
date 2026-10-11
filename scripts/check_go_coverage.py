@@ -52,16 +52,37 @@ def check(stats, minimum=90):
             raise ValueError(f"{scope}: {covered / total:.2%} is below {minimum}%")
 
 
+# 不带原生引擎、只跑 internal/account 与 internal/server 时的下限（「用户体系 PostgreSQL 集成测试」）。这两个包有一部分只在真实引擎下执行，2026-10 实测分别是 87.2% 和 90.6%，下限各留约两个半百分点。
+DATABASE_MINIMUMS = {"/internal/account": 85, "/internal/server": 88}
+
+
+def check_database(stats):
+    module = "github.com/metasequoiaime/MSIME-Backend"
+    for suffix, minimum in DATABASE_MINIMUMS.items():
+        scope = module + suffix
+        if scope not in stats or stats[scope][0] <= 0:
+            raise ValueError("coverage profile is missing package: " + scope)
+        total, covered = stats[scope]
+        if covered * 100 < total * minimum:
+            raise ValueError(f"{scope}: {covered / total:.2%} is below {minimum}%")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("profile", type=Path)
+    parser.add_argument("--database", action="store_true",
+                        help="只检查 internal/account 与 internal/server，按不带原生引擎时的下限")
     args = parser.parse_args()
     try:
         stats = coverage(args.profile.read_text())
-        check(stats)
+        check_database(stats) if args.database else check(stats)
     except (OSError, ValueError) as error:
         print(f"Coverage gate failed: {error}", file=sys.stderr)
         return 1
+    if args.database:
+        limits = ", ".join(f"{suffix.rsplit('/', 1)[1]} >= {minimum}%" for suffix, minimum in DATABASE_MINIMUMS.items())
+        print(f"Go statement coverage passed without the native engine: {limits}")
+        return 0
     total, covered = stats["total"]
     print(f"Go statement coverage passed: {covered}/{total} ({covered / total:.2%}); account/server >= 90%")
     return 0

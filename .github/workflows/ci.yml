@@ -66,10 +66,12 @@ jobs:
         with:
           go-version-file: go.mod
       - run: python3 -m unittest discover -s scripts -p 'test_candidate_skins_seed.py'
-      - run: go test -race ./internal/account
-      - run: go test -race ./internal/server
+      - run: python3 -m unittest discover -s scripts -p 'test_go_coverage.py'
+      # 拉取请求上的覆盖率门禁在这里：它在每个拉取请求上跑，失败就合不进去。没有原生引擎，只量 internal/account 与 internal/server，下限见 check_go_coverage.py 的 DATABASE_MINIMUMS。`-count=1` 的理由见原生引擎任务；`-p 1` 让两个包不同时改同一个测试库。
+      - run: go test -race -count=1 -p 1 -coverpkg=./internal/account,./internal/server -coverprofile=database.cover ./internal/account ./internal/server
+      - run: python3 scripts/check_go_coverage.py --database database.cover
 
-  # 判断拉取请求有没有改到原生引擎：引擎子模块、internal/engine、原生资源、镜像和引擎相关脚本。
+  # 判断这次改动有没有碰到原生引擎：引擎子模块、internal/engine、internal/server 里调用引擎的在线查询与词条投稿及依赖引擎的测试、原生资源、镜像和引擎相关脚本。拉取请求比对目标分支，main 上的推送比对推送前的提交；推送前的提交不可用（新建分支、强推）时按碰到处理。
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -80,9 +82,9 @@ jobs:
           fetch-depth: 0
       - id: diff
         env:
-          BASE: ${{ github.event.pull_request.base.sha }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          if [ -z "$BASE" ] || git diff --name-only "$BASE" HEAD | grep -qE '^(Dockerfile|\.dockerignore|third_party/|native/|internal/engine/|scripts/(fetch_engine_resources|smoke_container|test_native)\.py)'; then
+          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null || git diff --name-only "$BASE" HEAD | grep -qE '^(Dockerfile|\.dockerignore|third_party/|native/|internal/engine/|internal/server/(input|word_submissions|cloud_native_test|native_e2e_test)\.go|scripts/(fetch_engine_resources|smoke_container|test_native)\.py)'; then
             echo "native=true" >> "$GITHUB_OUTPUT"
           else
             echo "native=false" >> "$GITHUB_OUTPUT"
@@ -90,7 +92,7 @@ jobs:
 
   native-engine:
     name: 公共引擎与发布词库集成测试
-    # 编译 Rust 引擎、跑带真实引擎的全量测试和覆盖率门禁、构建生产镜像，单次十几分钟。拉取请求只在改到原生引擎时跑；main 上的推送每次都跑，覆盖率回退会在合并后发现。
+    # 编译 Rust 引擎、跑带真实引擎的全量测试和全仓覆盖率门禁、构建生产镜像，单次十几分钟。拉取请求和 main 上的推送都只在碰到原生引擎时跑：main 上的推送不会等它，发版工作流同时就推出了镜像，每次都跑只是事后通知；平时的覆盖率回退由「用户体系 PostgreSQL 集成测试」在合并前拦下。
     needs: changes
     if: needs.changes.outputs.native == 'true'
     runs-on: ubuntu-latest

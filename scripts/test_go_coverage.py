@@ -1,5 +1,5 @@
 import unittest
-from check_go_coverage import coverage, check
+from check_go_coverage import coverage, check, check_database
 
 
 class CoverageTests(unittest.TestCase):
@@ -26,6 +26,18 @@ class CoverageTests(unittest.TestCase):
         del stats[module + "/cmd/msime-server"]
         with self.assertRaises(ValueError):
             check(stats)
+
+    def test_database_scope_checks_only_account_and_server(self):
+        module = "github.com/metasequoiaime/MSIME-Backend"
+        account, server = module + "/internal/account", module + "/internal/server"
+        stats = {"total": (100, 10), account: (100, 85), server: (100, 88)}
+        check_database(stats)
+        for scope, failing in ((account, (10000, 8499)), (server, (10000, 8799))):
+            with self.subTest(scope=scope), self.assertRaises(ValueError):
+                check_database(dict(stats, **{scope: failing}))
+        for scope in (account, server):
+            with self.subTest(missing=scope), self.assertRaises(ValueError):
+                check_database({key: value for key, value in stats.items() if key != scope})
 
 
 if __name__ == "__main__":

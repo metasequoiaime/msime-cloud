@@ -365,6 +365,10 @@
   "platform.ios.nine_key": {
     "type": "boolean"
   },
+  "platform.ios.keyboard_layout": {
+    "type": "string",
+    "maxLength": 32
+  },
   "platform.ios.sound_enabled": {
     "type": "boolean"
   },

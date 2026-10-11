@@ -294,7 +294,7 @@ GitHub App 只安装到 msime-dictionary，仓库权限只给 Contents: Read and
 
 ### 各平台设置同步
 
-用户设置支持 `platform.ios.*` 字段：`nine_key`、`sound_enabled`、`haptics_enabled`、`haptic_strength`、`dictionary_learning`、`keyboard_skin` 和 `custom_keyboard_skin`。自定义皮肤是最长 768 KiB 的 JSON 字符串（支持 512 KB 的照片背景）；完整设置请求上限为 1 MiB；客户端按本地皮肤模型解码并校验。公共输入方案与简繁体继续使用 `input.schema`、`input.shuangpin_schema` 和 `input.character_set`。
+用户设置支持 `platform.ios.*` 字段：`nine_key`、`keyboard_layout`、`sound_enabled`、`haptics_enabled`、`haptic_strength`、`dictionary_learning`、`keyboard_skin` 和 `custom_keyboard_skin`。`keyboard_layout` 与 Android 的 `platform.android.keyboard_layout` 一样是最长 32 字节的字符串，服务端不限定取值，客户端写 `twenty_six_key`、`nine_key`、`fourteen_key` 等布局名，能表达布尔值 `nine_key` 表达不了的 14 键；`nine_key` 继续保留，旧版 iOS 客户端只读写它。自定义皮肤是最长 768 KiB 的 JSON 字符串（支持 512 KB 的照片背景）；完整设置请求上限为 1 MiB；客户端按本地皮肤模型解码并校验。公共输入方案与简繁体继续使用 `input.schema`、`input.shuangpin_schema` 和 `input.character_set`。
 
 Android 使用 `platform.android.*` 字段：既有的主题、键盘布局、键盘高度微调（−46…55）、按键与行间距、语音快捷键、按键音、振动及强度、当前自定义键盘皮肤，以及新版设置页的 `one_handed`、`key_popup`、`swipe_down_symbols`、`space_cursor`、`space_voice`、`key_animation`、`key_sound_pack`（字段表里没有通用的 `plugins.key_sound.pack` 键，所以按键音包用这个 Android 键）、`toolbar_*` 工具栏按钮、`handwriting_*` 手写设置、`voice_language`、`voice_offline_fallback` 和整个自定义键盘皮肤库 `custom_keyboard_skins`（最长 768 KiB 的 JSON 字符串，只含设计参数，不含图片）。公共字段新增 `general.app_theme`、`helpcode.quanpin_helpcode_mode`、`helpcode.shuangpin_helpcode_mode`，以及 `input.chinese_punctuation`、`input.learning`、`input.wubi_code_hint`。无编码常用语走单独的 `/v1/users/me/phrases`（见 [用户体系](docs/user-auth.md#常用语同步)），不进设置文档。
 

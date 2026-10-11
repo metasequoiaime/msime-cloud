@@ -18,6 +18,10 @@ func TestPreferenceValidation(t *testing.T) {
 	}{
 		{"general.enable_emoji", "true", true},
 		{"platform.ios.nine_key", "true", true},
+		{"platform.ios.keyboard_layout", `"fourteen_key"`, true},
+		{"platform.ios.keyboard_layout", `"` + strings.Repeat("a", 32) + `"`, true},
+		{"platform.ios.keyboard_layout", `"` + strings.Repeat("a", 33) + `"`, false},
+		{"platform.ios.keyboard_layout", "true", false},
 		{"platform.ios.sound_enabled", "false", true},
 		{"platform.ios.haptics_enabled", `"true"`, false},
 		{"platform.ios.dictionary_learning", "true", true},

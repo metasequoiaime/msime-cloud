@@ -845,14 +845,15 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 		reply(answer.Answer + qqReplyAdminHint)
 	case answer.Type == "answered" && answer.Escalate:
 		outcome = "answered_escalate"
-		// 群友在报 bug 或提需求：整理成草稿等管理员一句话提交（见 qq_drafts.go）；整理不成时照旧记进汇总 issue。
+		// 群友在报 bug 或提需求：整理成草稿等管理员一句话提交（见 qq_drafts.go）；整理不成时照旧记进汇总 issue。先把能先试的办法发出去，再整理草稿或记汇总，记下了什么单独回一句：整理草稿要再调一次模型、查重、建草稿，曾经等这些做完才连同答案一起发，群友要多等好几秒才看到排查办法。一条消息最多被动回复 qqBotMaxReplies（5）次，这条路径最多用满：过渡语 1 + 答案 1 + 这句说明 1 + 带链接被拒收时去掉链接重发 1 + 被拒收时的补发 1，以后不能再在这里加回复。
+		reply(answer.Answer)
 		if note := s.qqDraftReport(ctx, subject, question); note != "" {
 			outcome = "answered_draft"
-			reply(answer.Answer + note)
+			reply(note)
 		} else if s.recordQQReport(ctx, answer.Topic) {
-			reply(answer.Answer + qqEscalation)
+			reply(qqEscalation)
 		} else {
-			reply(answer.Answer + qqEscalationUnrecorded)
+			reply(qqEscalationUnrecorded)
 		}
 	default:
 		reply(answer.Answer)
@@ -929,10 +930,10 @@ func qqQuestionWithHistory(history []account.QQTurn, question string) string {
 	return b.String()
 }
 
-// qqEscalation 接在群友报问题时的答案后面：先给文档里的排查办法，再说明问题已经记进汇总 issue（recordQQReport），转给了管理员；没记下时用 qqEscalationUnrecorded，请群友在群里找管理员转给开发者，不说会跟进。提需求时也接这两句，所以不写「如果还不行」（接在需求后面读不通），也不写「提 issue」这类行话。不插 <qqbot-at-user> 标签，原因见 qqUnknownReply。
+// qqEscalation 是群友报问题时、答案发出后单独回复的一句：先给文档里的排查办法，再说明问题已经记进汇总 issue（recordQQReport），转给了管理员；没记下时用 qqEscalationUnrecorded，请群友在群里找管理员转给开发者，不说会跟进。提需求时也接这两句，所以不写「如果还不行」（接在需求后面读不通），也不写「提 issue」这类行话。不插 <qqbot-at-user> 标签，原因见 qqUnknownReply。
 const (
-	qqEscalation           = "\n\n这个情况我已经记下来转给管理员了。"
-	qqEscalationUnrecorded = "\n\n要是还没解决，可以在群里找管理员，请他转给开发者。"
+	qqEscalation           = "这个情况我已经记下来转给管理员了。"
+	qqEscalationUnrecorded = "要是还没解决，可以在群里找管理员，请他转给开发者。"
 )
 
 // qqLinkNote 匹配回复里括在全角括号里的链接，例如 qqIssueNumberText 附上的「（https://github.com/…）」。

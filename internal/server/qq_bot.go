@@ -424,7 +424,11 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		reply("还差一点信息：" + report.Missing + " 补充后请 @我 把问题完整描述一次。")
 		return
 	}
-	repo, label := s.qqTarget(report)
+	repo, label, known := s.qqTarget(report)
+	if !known {
+		reply("还差一点信息：" + qqWindowsVersionQuestion + " 补充后请 @我 把问题完整描述一次。")
+		return
+	}
 	number, duplicate, err := s.fileQQReport(ctx, repo, label, report)
 	if err != nil {
 		slog.Warn("qq bot: file issue failed", "repo", repo, "reason", err.Error())
@@ -449,13 +453,15 @@ type qqReport struct {
 	Title    string `json:"title"`
 	Platform string `json:"platform"`
 	Version  string `json:"version"`
-	Problem  string `json:"problem"`
-	Steps    string `json:"steps"`
-	Expected string `json:"expected"`
-	Scenario string `json:"scenario"`
-	Proposal string `json:"proposal"`
-	Missing  string `json:"missing"`
-	Keywords string `json:"keywords"`
+	// IMEVersion 只是水杉输入法自己的版本号，例如 0.9.5；Windows 反馈靠它区分两个产品，见 qqTarget。
+	IMEVersion string `json:"ime_version"`
+	Problem    string `json:"problem"`
+	Steps      string `json:"steps"`
+	Expected   string `json:"expected"`
+	Scenario   string `json:"scenario"`
+	Proposal   string `json:"proposal"`
+	Missing    string `json:"missing"`
+	Keywords   string `json:"keywords"`
 }
 
 // qqPlatformNames 是模型可以返回的平台及其在 issue 里的写法。
@@ -468,6 +474,7 @@ const qqSummarisePrompt = `你在为开源输入法「水杉输入法」整理 Q
 - title：一句话概括，不超过 40 个汉字，不带 [Bug] 之类的前缀。
 - platform：windows、macos、linux、android、ios、harmony 之一；看不出来就留空。
 - version：提到的系统版本和输入法版本；没提到就留空。
+- ime_version：只写水杉输入法自己的版本号，形如 0.9.5，不带 v 前缀和系统版本；没提到就留空。
 - problem：bug 写遇到了什么问题；feature 写现在是怎么做的、哪里不方便。
 - steps：bug 的操作步骤，每步一行；没有就留空。
 - expected：bug 的期望结果；没有就留空。
@@ -484,7 +491,7 @@ func (s *Server) qqSummarise(ctx context.Context, text string) (qqReport, error)
 	if err := s.qqChat(ctx, qqSummarisePrompt, text, &report); err != nil {
 		return report, err
 	}
-	fields := []*string{&report.Kind, &report.Title, &report.Platform, &report.Version, &report.Problem, &report.Steps, &report.Expected, &report.Scenario, &report.Proposal, &report.Missing, &report.Keywords}
+	fields := []*string{&report.Kind, &report.Title, &report.Platform, &report.Version, &report.IMEVersion, &report.Problem, &report.Steps, &report.Expected, &report.Scenario, &report.Proposal, &report.Missing, &report.Keywords}
 	for _, field := range fields {
 		*field = strings.TrimSpace(*field)
 		if utf8.RuneCountInString(*field) > qqBotFieldRunes {
@@ -567,14 +574,63 @@ type qqIssue struct {
 	PullRequest json.RawMessage `json:"pull_request"`
 }
 
-// qqTarget 是反馈要提交到的仓库和平台标签：与崩溃 issue 一样按 admin.github.platforms 分发（例如 Windows 在 msime-windows），看不出平台或平台没有配置时提交到 qq_bot.repo，不加平台标签。
-func (s *Server) qqTarget(report qqReport) (repo, label string) {
-	for _, p := range s.config.Admin.GitHub.Platforms {
-		if p.ID == report.Platform {
-			return p.Repo, p.Label
+// Windows 上有两个产品：msime-windows（Metasequoia IME 水杉输入法，现在的正式版）和 msime 仓库里迁移出来的新实现（水杉输入法及水杉拼音、五笔等版本）。群友说的输入法版本不低于 qqWindowsSplitVersion 时是前者，低于它是后者。这是按 2026-10 两边的版本号（msime-windows v0.9.x，msime 的 windows-v0.2.x）定的规则，msime 的 Windows 版本号追到 0.9 之前要改掉。
+var qqWindowsSplitVersion = [3]int{0, 9, 0}
+
+// qqWindowsLabel 是 msime 仓库里 Windows 的平台标签；admin.github.platforms 的 windows 条目指向 msime-windows，那里没有平台标签。
+const qqWindowsLabel = "platform/windows"
+
+// qqWindowsVersionQuestion 是 Windows 反馈没有说输入法版本时的追问。
+const qqWindowsVersionQuestion = "你用的水杉输入法是哪个版本？在设置的「关于」页能看到。"
+
+var qqVersionPattern = regexp.MustCompile(`([0-9]+)\.([0-9]+)(?:\.([0-9]+))?`)
+
+// qqParseVersion 取 text 里第一个形如 0.9 或 0.9.5 的版本号。
+func qqParseVersion(text string) ([3]int, bool) {
+	m := qqVersionPattern.FindStringSubmatch(text)
+	if m == nil {
+		return [3]int{}, false
+	}
+	var v [3]int
+	for i := range 3 {
+		if m[i+1] == "" {
+			continue
+		}
+		n, err := strconv.Atoi(m[i+1])
+		if err != nil || n > 1_000_000 {
+			return [3]int{}, false
+		}
+		v[i] = n
+	}
+	return v, true
+}
+
+func qqVersionAtLeast(v, floor [3]int) bool {
+	for i := range 3 {
+		if v[i] != floor[i] {
+			return v[i] > floor[i]
 		}
 	}
-	return s.qq.config.Repo, ""
+	return true
+}
+
+// qqTarget 是反馈要提交到的仓库和平台标签：与崩溃 issue 一样按 admin.github.platforms 分发，看不出平台或平台没有配置时提交到 qq_bot.repo，不加平台标签。Windows 例外：输入法版本不低于 qqWindowsSplitVersion 时按平台配置提交（msime-windows），低于它时提交到 qq_bot.repo 并加 qqWindowsLabel；没有版本号时 known 为 false，调用方先追问版本。
+func (s *Server) qqTarget(report qqReport) (repo, label string, known bool) {
+	if report.Platform == "windows" {
+		version, ok := qqParseVersion(report.IMEVersion)
+		if !ok {
+			return "", "", false
+		}
+		if !qqVersionAtLeast(version, qqWindowsSplitVersion) {
+			return s.qq.config.Repo, qqWindowsLabel, true
+		}
+	}
+	for _, p := range s.config.Admin.GitHub.Platforms {
+		if p.ID == report.Platform {
+			return p.Repo, p.Label, true
+		}
+	}
+	return s.qq.config.Repo, "", true
 }
 
 // fileQQReport 把一条反馈提交到 repo：模型判断与某个开启的 issue 是同一件事时在那里补充评论，否则新建 issue。返回 issue 编号以及是否是补充到已有 issue。

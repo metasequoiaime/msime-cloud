@@ -28,9 +28,11 @@ type TranslationEndpoint struct {
 	AppIDEnv    string `json:"app_id_env"`
 	APIKeyEnv   string `json:"apikey_env"`
 	Region      string `json:"region"`
-	secretID    string
-	appID       string
-	apiKey      string
+	// RequestsPerSecond 是这个服务商整个账号的每秒请求上限，各副本平分（向下取整，至少 1）。还有后备服务商时，本副本这一秒的额度不够发完一个请求的全部文本，就直接交给下一家，不去撞服务商的限流。0 表示不限；小牛（niutrans）为 0 时按 5 次计算，这是当前账号被拒时错误码 10001 报出的上限。
+	RequestsPerSecond int `json:"requests_per_second,omitempty"`
+	secretID          string
+	appID             string
+	apiKey            string
 }
 
 // NiuTransEndpoint contains credentials for one of NiuTrans' asynchronous
@@ -348,9 +350,15 @@ func validateTranslationEndpoint(e *TranslationEndpoint, requireProvider bool) e
 			}
 		}
 	}
+	if e.RequestsPerSecond < 0 || e.RequestsPerSecond > 10000 {
+		return errors.New("translation requests_per_second must be 0..10000")
+	}
 	if e.Provider == "niutrans" {
 		if e.URL == "" {
 			e.URL = "https://api.niutrans.com/v2/text/translate"
+		}
+		if e.RequestsPerSecond == 0 {
+			e.RequestsPerSecond = niutransDefaultRequestsPerSecond
 		}
 		u, err := url.Parse(e.URL)
 		if err != nil || u.Path != "/v2/text/translate" || u.RawQuery != "" || u.ForceQuery {

@@ -69,6 +69,9 @@ type Server struct {
 	logMaxDuration time.Duration
 	// mux 是 /v1 等主接口的路由表，请求日志在请求没有到达它时用来查路由模式。
 	mux *http.ServeMux
+	// budgets 是各翻译服务商在本副本的每秒请求额度，见 translationBudget；budgetsMu 保护它。
+	budgets   map[string]*providerBudget
+	budgetsMu sync.Mutex
 	// limits is the PostgreSQL rate limiter every replica shares (account.Service.RateLimit), used by limitShared; nil without a database.
 	limits rateLimiter
 

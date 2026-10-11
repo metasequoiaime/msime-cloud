@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 	"unicode/utf16"
 	"unicode/utf8"
@@ -194,8 +195,12 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var last *httptest.ResponseRecorder
-	for _, e := range endpoints {
+	for i, e := range endpoints {
 		if e.URL == "" {
+			continue
+		}
+		// 还有后备服务商时，本副本这一秒的额度不够就直接交给下一家，不发注定被服务商限流拒绝的请求；最后一家照常调用。
+		if b := s.translationBudget(e); b != nil && hasTranslationEndpoint(endpoints[i+1:]) && !b.take(time.Now(), len(v.list())) {
 			continue
 		}
 		rr := httptest.NewRecorder()
@@ -214,6 +219,59 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fail(w, 503, "translation_disabled")
+}
+
+func hasTranslationEndpoint(endpoints []TranslationEndpoint) bool {
+	for _, e := range endpoints {
+		if e.URL != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// providerBudget 是一个翻译服务商在本副本的每秒请求额度：记下最近一秒内发出的请求时刻，再发 n 个会超过 perSecond 时不发。
+type providerBudget struct {
+	mu        sync.Mutex
+	perSecond int
+	sent      []time.Time
+}
+
+func (b *providerBudget) take(now time.Time, n int) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	kept := b.sent[:0]
+	for _, at := range b.sent {
+		if now.Sub(at) < time.Second {
+			kept = append(kept, at)
+		}
+	}
+	b.sent = kept
+	if len(b.sent)+n > b.perSecond {
+		return false
+	}
+	for range n {
+		b.sent = append(b.sent, now)
+	}
+	return true
+}
+
+// translationBudget 返回服务商 e 在本副本的额度，没有设置 requests_per_second 时返回 nil。额度按 replicas 平分并向下取整（至少 1），第一次用到时创建；服务商名在翻译链里不会重复。
+func (s *Server) translationBudget(e TranslationEndpoint) *providerBudget {
+	if e.RequestsPerSecond <= 0 {
+		return nil
+	}
+	s.budgetsMu.Lock()
+	defer s.budgetsMu.Unlock()
+	if s.budgets == nil {
+		s.budgets = map[string]*providerBudget{}
+	}
+	b := s.budgets[e.Provider]
+	if b == nil {
+		b = &providerBudget{perSecond: max(1, e.RequestsPerSecond/max(1, s.config.Replicas))}
+		s.budgets[e.Provider] = b
+	}
+	return b
 }
 
 func (s *Server) translateEndpoint(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint) {

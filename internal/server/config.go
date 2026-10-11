@@ -95,6 +95,8 @@ type Config struct {
 	SiteProxySecretEnv string `json:"site_proxy_secret_env,omitempty"`
 	siteProxySecret    string
 	WordSubmissions    WordSubmissionsConfig `json:"word_submissions"`
+	// QQBot 是 QQ 群反馈机器人，见 qq_bot.go。
+	QQBot QQBotConfig `json:"qq_bot"`
 	// Replicas is how many server processes share the fleet-wide request budget; the main token bucket lives in each process's memory, so every replica enforces its share of each limit.
 	Replicas int `json:"replicas"`
 	// RequestLog 控制每个请求一行的请求日志，省略时开启，写 false 关闭。见 request_log.go。
@@ -280,7 +282,7 @@ func (c *Config) Validate() error {
 	if c.Admin.Enabled && c.Admin.GitHub.enabled() && c.WordSubmissions.enabled() && !strings.EqualFold(c.Admin.GitHub.DictionaryRepo, c.WordSubmissions.GitHub.Repository) {
 		return errors.New("admin github dictionary_repo must be the word_submissions github repository: submission notes are matched to pull requests by number")
 	}
-	return nil
+	return c.QQBot.validate(c)
 }
 
 // resolveClientIPHeader 确定所有按地址限额共用的那一个客户端地址头：顶层 `client_ip_header`，或只设置了旧的 `word_submissions.client_ip_header` 时用后者。两者都设置且不同时拒绝，否则各项限额对客户端身份的判断会不一致。

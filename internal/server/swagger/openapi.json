@@ -17217,6 +17217,108 @@
         }
       }
     },
+    "/v1/community/qq-bot/events": {
+      "post": {
+        "summary": "QQ 群反馈机器人的 Webhook 回调",
+        "tags": [
+          "QQ 群反馈"
+        ],
+        "security": [],
+        "description": "只供 QQ 开放平台调用，在开放平台把回调地址配置为本接口。不使用设备令牌或用户会话，靠 X-Signature-Ed25519 与 X-Signature-Timestamp 两个头校验签名：签名内容是时间戳紧接原始请求体，密钥由机器人 AppSecret 派生，签名不对返回 401 invalid_signature。请求体最多 64 KiB。op 13 是配置回调地址时的校验，返回 plain_token 和对 event_ts+plain_token 的签名；op 1 心跳返回 op 11；op 0 事件返回 op 12 应答，d 为 0 表示已接收，为 1 时开放平台稍后重推。只处理 GROUP_AT_MESSAGE_CREATE（群友在群里 @机器人），其余事件直接应答成功。每条消息按消息 id 在所有副本间只处理一次，应答后在后台由 chat 端点整理成反馈：判断为 bug 或功能建议时，先在 qq_bot.repo 搜索开启的同类 issue，由模型判断重复则在那里补充评论，否则新建 issue；结果以被动回复告诉群友，回复只含 issue 编号。issue 只包含模型转述的内容，不含群友原话、昵称或 openid，并打断 @ 提及、# 引用和链接。每个群友每天最多处理 5 条，每个群每天 50 条。未配置 qq_bot 时返回 503 feature_disabled。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "type": "integer",
+                    "enum": [
+                      0,
+                      1,
+                      13
+                    ]
+                  },
+                  "t": {
+                    "type": "string",
+                    "description": "op 0 时的事件类型，例如 GROUP_AT_MESSAGE_CREATE。"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "d": {
+                    "description": "事件数据：op 13 为 {plain_token,event_ts}；GROUP_AT_MESSAGE_CREATE 为 {id,content,group_openid,author:{member_openid}}。"
+                  }
+                },
+                "required": [
+                  "op"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "校验结果、心跳应答或事件应答",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "plain_token": {
+                          "type": "string"
+                        },
+                        "signature": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "plain_token",
+                        "signature"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "op": {
+                          "type": "integer",
+                          "enum": [
+                            11,
+                            12
+                          ]
+                        },
+                        "d": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "op",
+                        "d"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求体不是 JSON 或校验请求缺字段"
+          },
+          "401": {
+            "description": "签名无效"
+          },
+          "413": {
+            "description": "请求体超过 64 KiB"
+          },
+          "503": {
+            "description": "未配置 qq_bot"
+          }
+        }
+      }
+    },
     "/v1/telemetry/events": {
       "post": {
         "summary": "上报崩溃、匿名设备活跃与会话事件，以及官网镜像下载",

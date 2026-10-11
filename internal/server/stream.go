@@ -22,6 +22,7 @@ func (s *Server) Close() {
 	s.mu.Unlock()
 	s.streams.Wait()
 	s.skinWorkers.Wait()
+	s.qqWorkers.Wait()
 	s.adminJobs.Wait()
 	// The final metrics flush runs only now: cancelled streaming sessions record their call after their close handshake, and a flush started when lifetime ended would miss them.
 	if s.config.Admin.Enabled && s.accounts != nil {

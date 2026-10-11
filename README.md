@@ -83,6 +83,7 @@ curl -G -H "Authorization: Bearer $MSIME_CLIENT_TOKEN" \
 - Apple 网页登录（安卓）的上线顺序：1）把带新路由和新列的后端部署到全部副本；2）在 Apple Developer 为 Services ID `app.msime.signin` 登记 Return URL `https://api.msime.app/v1/auth/apple/callback`，再把 `app.msime.signin` 加进生产的 `auth.apple.client_ids`（不需要 .p8 私钥）并滚动重启；3）此后 `GET /v1/auth/providers` 才返回 `apple_web: true`，只有 Services ID 在 `client_ids` 里时它才为真；4）客户端按 `apple_web` 显示 Apple 按钮。顺序反过来时，客户端看到的是 `apple_web: false`，不会把用户带到一个回调落在旧副本上的流程里。回调是全站唯一不做 Origin 检查的路由（Apple 的 form_post 带 `Origin: https://appleid.apple.com`），不要把 `appleid.apple.com` 加进 `allowed_origins`，那样会给它开 CORS。详见 [用户体系](docs/user-auth.md#apple-网页登录安卓)。
 - 候选窗皮肤保留 ID（`candidate_skins_id_check`、`community_candidate_skins_package_id_check` 两条约束加入 msime-windows 的 `autumn_osmanthus`、`microsoft` 与 `default`）：新版本启动时 `Ready` 发现约束是旧的，就在 advisory lock 下替换这两条约束；按最小权限部署时先用有 DDL 权限的账号执行 `-migrate-users`，否则运行角色无权改约束，服务拒绝启动。新约束以 `NOT VALID` 添加，已有行不回头校验；若库里已有用这三个 ID 的行，它们照常保留和下载，但任何改写该行的 `UPDATE`（审核、改可见性等）都会因约束失败，需要时由管理员删除后让作者换 ID 重新发布。旧版本副本不检查这两条约束，滚动升级期间可以并存。
 - 个人词库的 98 版五笔（`user_dictionary_entries_kind_check` 约束加入 `wubi98`）：安卓客户端导出的快照里 98 版五笔词条的 kind 是 `wubi98`，此前快照解码、引擎校验和这条约束都不认它，含这类词条的快照恢复每次都返回 400 `invalid_dictionary_snapshot`。新版本启动时 `Ready` 发现约束不含 `wubi98`，就在 advisory lock 下按约束名替换它；按最小权限部署时先用有 DDL 权限的账号执行 `-migrate-users`，否则运行角色无权改约束，服务拒绝启动。新约束只放宽取值，以 `NOT VALID` 添加，不扫描、不改写已有行，替换时短暂持有该表的排他锁。服务端要和能识别 `wubi98` 的引擎（`third_party/msime` 子模块）一起发布：旧引擎在校验时就拒绝 `wubi98`，所以库里不会出现这类行；但已经存了 `wubi98` 词条的库不能再回退到旧引擎，否则这些用户的个人词库查询会返回 502 `engine_failure`。旧版本副本不写 `wubi98`，滚动升级期间可以并存，落到旧副本的请求仍返回 400，客户端下一轮同步重试即可。
+- 顶层 `qq_bot`（QQ 群反馈机器人，见下文「QQ 群反馈机器人」）同理：旧版本不认识它。上线顺序是先让所有副本运行新版本，再把 AppSecret 写进部署的 Secret（以环境变量 `MSIME_QQ_BOT_SECRET` 注入）、在配置里加入 `qq_bot` 并滚动重启，最后才在 QQ 开放平台填写回调地址；回退到旧版本之前先删除它。消息去重和每日限额都记在 `auth_rates`，所有副本共享，不新增表。
 - 按副本计算：主接口 token bucket（设备令牌和登录用户），每个副本执行 ⌈额度 / `replicas`⌉；`max_concurrent` 并发槽（实时语音会话也各占所在副本的一个）；插件发布 4 个、下载 8 个名额，原生 Engine 查询 4 路，候选皮肤图片解码 2 路，词库快照恢复 1 路；管理后台服务日志的日志流每个管理员 2 个、合计 10 个（同一个管理员的两个连接落在不同副本时可以各开 2 个）。这些上限的总量随副本数增加，设置时按单个副本的资源计算。
 - 可容忍的短暂不一致：敏感词改动最多 30 秒后在所有副本生效；管理后台的全局搜索索引在各副本内存里分别建立，可能短时不同；一个副本写 GitHub 后，其他副本的 GitHub 读缓存最多 60 秒后才看到变化；上游调用指标先在内存中累积、每分钟写回数据库，副本被强制终止时最多丢失最近约 1 分钟的计数。
 
@@ -279,6 +280,27 @@ EveryAPI 合作服务实时语音配置：
 ```
 
 GitHub App 只安装到 msime-dictionary，仓库权限只给 Contents: Read and write 与 Pull requests: Read and write（Metadata 只读为默认）；服务端签发的安装令牌再次限定到该仓库和这两项权限。私钥（PEM，PKCS#1 或 PKCS#8，可用 `\n` 表示换行）通过 `private_key_env` 注入。顶层 `client_ip_header` 为空时只信任 TCP 对端；部署在反向代理后必须填写由代理覆盖写入的头（`CF-Connecting-IP`、`X-Real-IP`，或取最后一段的 `X-Forwarded-For`），否则所有访客共享同一份额度。客户端能自带的头不要填。这个设置同时用于账号和社区接口、匿名开户、遥测、后台登录和词条投稿的按地址限额；旧的 `word_submissions.client_ip_header` 写法仍然有效。
+
+## QQ 群反馈机器人
+
+群友在 QQ 群里 @机器人 描述遇到的问题或想要的功能，服务端把它整理成 GitHub issue，再在群里回复编号。官方机器人只能收到 @它 的消息（`GROUP_AT_MESSAGE_CREATE`），收不到群里的其他聊天，所以它是一个反馈入口，不会旁听。
+
+QQ 开放平台以 Webhook 把事件推到 `POST /v1/community/qq-bot/events`。服务端用机器人 AppSecret 派生的 Ed25519 密钥校验 `X-Signature-Ed25519` 签名，按消息 id 在 `auth_rates` 里认领（7 天内同一 id 只处理一次，开放平台重推的同一事件直接应答成功），然后立即应答，在后台继续处理：
+
+1. 去掉 @ 标记和表情标签；少于 6 个字回复用法，超过 2000 字请群友精简。每个群友每天最多处理 5 条、每个群每天 50 条（`auth_rates` 作用域 `qq-bot-member`、`qq-bot-group`），闲聊和追问也计数，因为它们同样要交给模型。
+2. 用 `chat` 端点（JSON 输出）把这段话整理成 bug 或功能建议的各个栏目，栏目与 msime 的 `bug_report.yml`、`feature_request.yml` 模板一致。判断不是反馈时回复说明；bug 既看不出平台、也看不出在什么操作下出现时，回复一句追问，不提交。
+3. 用模型给出的关键词在 `qq_bot.repo` 搜索开启的 issue（关键词去掉冒号和引号，写不进 `repo:`、`is:` 这类限定词），交给模型判断是否重复。重复时在那个 issue 下补充评论，否则新建 issue，标签为 `bug` 或 `enhancement`、`admin.github.platforms` 里同一仓库对应平台的 `label`，以及 `qq_bot.labels`。
+4. 被动回复群友 issue 编号。开放平台只允许消息里出现报备过的域名，所以回复不带链接。被动回复只能在收到消息后 5 分钟内发出，后台处理限时 4 分钟。
+
+issue 和评论只包含模型转述的内容，不含群友的原话、昵称或 openid，并打断 @ 提及、# 引用和链接（与官网词条提交的备注相同）。消息内容不写日志，日志里只有失败原因；`qq_bot.groups` 非空时，来自其他群的消息会以 `group_openid` 记一条日志，方便查出要填的群标识。开放平台不提供群号，`groups` 只能填 `group_openid`；为空时接受机器人所在的每个群。
+
+需要用户体系（PostgreSQL）、管理后台的 GitHub App（`admin.github`，安装在 `qq_bot.repo` 上并有 Issues: Read and write）和 `chat` 端点。`app_id` 为空时功能关闭；填写后缺任何一项服务都拒绝启动：
+
+```json
+{"qq_bot":{"app_id":"102030405","secret_env":"MSIME_QQ_BOT_SECRET","repo":"metasequoiaime/msime","labels":["source/qq"]}}
+```
+
+`labels` 里的标签要先在仓库里建好。在 QQ 开放平台的「开发 → 回调配置」填写 `https://api.msime.app/v1/community/qq-bot/events` 并勾选群 @ 消息事件；保存时开放平台发来的 op 13 校验请求由服务端用同一把密钥签名应答，所以要先部署好配置再填回调地址。机器人在沙箱阶段只能进沙箱配置里的群。
 
 ## 用户皮肤社区
 

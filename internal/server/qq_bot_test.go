@@ -3,13 +3,16 @@ package server
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -143,12 +146,19 @@ type qqFake struct {
 	t  *testing.T
 	mu sync.Mutex
 	// chat
-	summary    string
-	finish     string
-	duplicate  string
-	chatCalls  []string
-	chatBodies []string
-	chatStatus int
+	summary      string
+	finish       string
+	duplicate    string
+	selected     string
+	answer       string
+	selectSystem string
+	answerSystem string
+	chatCalls    []string
+	chatBodies   []string
+	chatStatus   int
+	// 知识库（GitHub 内容接口）
+	knowledgeStatus int
+	knowledgeCalls  int
 	// QQ
 	tokenCalls  int
 	tokenStatus int
@@ -184,10 +194,17 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			f.t.Error("chat request", body["model"], messages)
 		}
 		content := f.summary
-		if system == qqDuplicatePrompt {
+		switch {
+		case system == qqDuplicatePrompt:
 			content = f.duplicate
 			f.chatCalls = append(f.chatCalls, "duplicate")
-		} else {
+		case strings.HasPrefix(system, qqSelectPrompt):
+			content, f.selectSystem = f.selected, system
+			f.chatCalls = append(f.chatCalls, "select")
+		case strings.HasPrefix(system, qqAnswerPrompt):
+			content, f.answerSystem = f.answer, system
+			f.chatCalls = append(f.chatCalls, "answer")
+		default:
 			f.chatCalls = append(f.chatCalls, "summarise")
 		}
 		f.chatBodies = append(f.chatBodies, user)
@@ -221,6 +238,18 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"id":"reply"}`))
 	case r.URL.Path == "/app/installations/77/access_tokens":
 		_ = json.NewEncoder(w).Encode(map[string]any{"token": "ghs_test", "expires_at": time.Now().Add(time.Hour)})
+	case strings.HasPrefix(r.URL.Path, "/repos/o/docs/contents/"):
+		f.knowledgeCalls++
+		if f.knowledgeStatus != 0 {
+			w.WriteHeader(f.knowledgeStatus)
+			return
+		}
+		file, ok := qqTestKnowledge[strings.TrimPrefix(r.URL.Path, "/repos/o/docs/contents/")]
+		if !ok {
+			_, _ = io.WriteString(w, `[{"type":"file","name":"faq.md","path":"guides/faq.md"},{"type":"file","name":"windows.md","path":"guides/windows.md"},{"type":"dir","name":"zh-TW","path":"guides/zh-TW"},{"type":"file","name":"logo.png","path":"guides/logo.png"}]`)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"encoding": "base64", "content": base64.StdEncoding.EncodeToString([]byte(file))})
 	case r.URL.Path == "/search/issues":
 		f.searchQuery = r.URL.Query().Get("q")
 		if f.searchStatus != 0 {
@@ -262,14 +291,21 @@ func (f *qqFake) replyTexts() []string {
 
 const qqBugSummary = `{"kind":"bug","title":"候选框不跟随光标 @octocat","platform":"Windows","version":"Windows 11、水杉 1.2.0","ime_version":"1.2.0","problem":"在记事本里打字时候选框停在屏幕左上角，见 #12 和 https://evil.example","steps":"1. 打开记事本\n2. 输入 nihao","expected":"候选框出现在光标下方","scenario":"","proposal":"","missing":"","keywords":"候选框 光标 repo:other/x \"is:closed\" Windows a b c"}`
 
+// qqTestKnowledge 是测试用的知识库文件，键是内容接口里的路径。
+var qqTestKnowledge = map[string]string{
+	"guides/faq.md":     "# 常见问题\n\n## 输入\n\n### 五笔怎么切换\n\n在设置的「输入方案」里选五笔。\n\n### 空标题\n\n## 数据\n\n```sh\n# 这一行在代码块里，不是标题\n```\n同步需要登录。\n",
+	"guides/windows.md": "## 安装\r\n\r\n双击安装包。\r\n",
+}
+
 func qqServer(t *testing.T) (*Server, *qqFake, *qqLimiter) {
 	t.Helper()
-	fake := &qqFake{t: t, summary: qqBugSummary, duplicate: `{"duplicate":0}`}
+	fake := &qqFake{t: t, summary: qqBugSummary, duplicate: `{"duplicate":0}`, selected: `{"sections":[1]}`, answer: `{"type":"answered","answer":"在设置的「输入方案」里选五笔。"}`}
 	s := fixture(t, fake.ServeHTTP)
 	base := s.config.Chat.URL
 	// 与生产一致：Windows 在独立仓库且没有平台标签，其他平台在默认仓库并有平台标签。
 	s.config.Admin.GitHub.Platforms = []AdminPlatformConfig{{ID: "windows", Repo: "o/win"}, {ID: "android", Repo: "o/r", Label: "platform/android"}}
-	s.qq = newQQBot(QQBotConfig{AppID: "102030405", Repo: "o/r", Labels: []string{"source/qq"}, Model: "claude-haiku-5-5", APIURL: base, secret: qqTestSecret})
+	// MEMBER1（qqMessage 的发送者）是管理员，所以提 issue 的用例照常成立；普通群友的用例另外改名单。
+	s.qq = newQQBot(QQBotConfig{AppID: "102030405", Repo: "o/r", Labels: []string{"source/qq"}, Model: "claude-haiku-5-5", Admins: []string{"MEMBER1", "ADMIN2"}, KnowledgeRepo: "o/docs", KnowledgeDir: "guides", APIURL: base, secret: qqTestSecret})
 	s.qq.client = s.client
 	limiter := &qqLimiter{}
 	s.limits = limiter
@@ -493,14 +529,13 @@ func TestQQBotRepliesWithoutFiling(t *testing.T) {
 		setup   func(*qqFake, *qqLimiter)
 		want    string
 	}{
-		{"too short", "<@!1> 有bug", nil, qqReplyUsage},
+		{"only a mention", "<@!1> ", nil, qqReplyUsage},
 		{"too long", strings.Repeat("长", qqBotMaxRunes+1), nil, qqReplyTooLong},
-		{"member limit", "", func(_ *qqFake, l *qqLimiter) {
-			l.counts = map[string]int{"qq-bot-member|GROUP1/MEMBER1": qqBotMemberDaily}
+		{"group limit applies to admins", "", func(_ *qqFake, l *qqLimiter) {
+			l.counts = map[string]int{"qq-bot-group|GROUP1": qqBotGroupDaily}
 		}, qqReplyLimited},
-		{"group limit", "", func(_ *qqFake, l *qqLimiter) { l.counts = map[string]int{"qq-bot-group|GROUP1": qqBotGroupDaily} }, qqReplyLimited},
-		{"limit unavailable", "", func(_ *qqFake, l *qqLimiter) { l.err = map[string]error{"qq-bot-member": errors.New("down")} }, qqReplyUnavailable},
-		{"not feedback", "", func(f *qqFake, _ *qqLimiter) { f.summary = `{"kind":"other"}` }, qqReplyNotFeedback},
+		{"limit unavailable", "", func(_ *qqFake, l *qqLimiter) { l.err = map[string]error{"qq-bot-group": errors.New("down")} }, qqReplyUnavailable},
+		{"admin question goes to the knowledge base", "", func(f *qqFake, _ *qqLimiter) { f.summary = `{"kind":"other"}` }, "在设置的「输入方案」里选五笔。"},
 		{"needs details", "", func(f *qqFake, _ *qqLimiter) {
 			f.summary = `{"kind":"bug","title":"打不出字","problem":"打不出字","missing":"你用的是哪个系统？"}`
 		}, "还差一点信息：你用的是哪个系统？ 补充后请 @我 把问题完整描述一次。"},
@@ -679,5 +714,182 @@ func TestQQParseVersion(t *testing.T) {
 	}
 	if qqVersionAtLeast([3]int{0, 8, 99}, qqWindowsSplitVersion) || !qqVersionAtLeast([3]int{0, 9, 0}, qqWindowsSplitVersion) {
 		t.Fatal("split comparison")
+	}
+}
+
+// 普通群友 @ 机器人只做答疑：先按目录挑段落，再只用挑出的段落回答；不调用整理反馈的模型，也不提 issue。
+func TestQQBotAnswersMembersFromKnowledge(t *testing.T) {
+	s, fake, limiter := qqServer(t)
+	s.qq.config.Admins = []string{"ADMIN1", "ADMIN2"}
+	fake.selected = `{"sections":[1,1,99,0,3]}`
+	fake.answer = `{"type":"answered","answer":"在设置的「输入方案」里选五笔，详见 https://msime.app/docs 。"}`
+	qqDeliver(t, s, "m-qa", "五笔怎么切换")
+	replies := fake.replyTexts()
+	if len(replies) != 1 || replies[0] != "在设置的「输入方案」里选五笔，详见  。" || len(fake.created) != 0 || strings.Join(fake.chatCalls, ",") != "select,answer" {
+		t.Fatal(replies, fake.chatCalls, fake.created)
+	}
+	// 目录列出全部段落：子目录、非 Markdown 文件和没有正文的标题不收，代码块里的 # 不算标题。
+	for _, want := range []string{"1. [常见问题] 输入 > 五笔怎么切换\n", "2. [常见问题] 数据\n", "3. [windows] 安装\n"} {
+		if !strings.Contains(fake.selectSystem, want) {
+			t.Fatalf("toc missing %q:\n%s", want, fake.selectSystem)
+		}
+	}
+	if strings.Contains(fake.selectSystem, "空标题") || strings.Contains(fake.selectSystem, "4. ") {
+		t.Fatal("toc", fake.selectSystem)
+	}
+	// 回答只拿到挑出的段落，重复和越界的编号被忽略。
+	if !strings.Contains(fake.answerSystem, "### [常见问题] 输入 > 五笔怎么切换\n在设置的「输入方案」里选五笔。") || !strings.Contains(fake.answerSystem, "### [windows] 安装\n双击安装包。") || strings.Contains(fake.answerSystem, "同步需要登录") || strings.Count(fake.answerSystem, "五笔怎么切换") != 1 {
+		t.Fatal(fake.answerSystem)
+	}
+	if limiter.counts["qq-bot-member|GROUP1/MEMBER1"] != 1 {
+		t.Fatal("members are counted", limiter.counts)
+	}
+	// 知识库在 TTL 内只拉一次。
+	calls := fake.knowledgeCalls
+	qqDeliver(t, s, "m-qa-2", "五笔怎么切换")
+	if fake.knowledgeCalls != calls {
+		t.Fatal("knowledge refetched within the TTL", calls, fake.knowledgeCalls)
+	}
+	// 答不上时 @ 名单里的全部管理员。
+	fake.answer = `{"type":"unknown","answer":"不该出现"}`
+	qqDeliver(t, s, "m-unknown", "Windows 上候选框一直停在左上角")
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != `这个问题我还不确定，请管理员看一下：<qqbot-at-user id="ADMIN1" /><qqbot-at-user id="ADMIN2" />` || len(fake.created) != 0 {
+		t.Fatal(last)
+	}
+	// 闲聊照模型的话回应；没有挑出段落时告诉模型没有资料。
+	fake.selected, fake.answer = `{"sections":[]}`, `{"type":"chat","answer":"你好！有水杉输入法的问题可以问我。"}`
+	qqDeliver(t, s, "m-chat", "在吗")
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "你好！有水杉输入法的问题可以问我。" || !strings.Contains(fake.answerSystem, "（没有找到相关资料）") {
+		t.Fatal(last, fake.answerSystem)
+	}
+	// 过长的答案截断。
+	fake.answer = `{"type":"answered","answer":"` + strings.Repeat("长", qqAnswerRunes+10) + `"}`
+	qqDeliver(t, s, "m-long", "说说五笔")
+	if last := []rune(fake.replyTexts()[len(fake.replyTexts())-1]); len(last) != qqAnswerRunes || string(last[len(last)-1]) != "…" {
+		t.Fatal(len(last))
+	}
+	// 普通群友的个人限额。
+	limiter.counts["qq-bot-member|GROUP1/MEMBER1"] = qqBotMemberDaily
+	qqDeliver(t, s, "m-limited", "五笔怎么切换")
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != qqReplyLimited {
+		t.Fatal(last)
+	}
+}
+
+func TestQQBotWhoAmIAndUnknownWithoutAdmins(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	qqDeliver(t, s, "m-whoami", "<@!1> 我的 ID")
+	if replies := fake.replyTexts(); len(replies) != 1 || !strings.Contains(replies[0], "MEMBER1") || len(fake.chatCalls) != 0 {
+		t.Fatal(replies, fake.chatCalls)
+	}
+	if qqUnknownReply(nil) != "这个问题我还不确定，管理员看到后会回复你。" {
+		t.Fatal(qqUnknownReply(nil))
+	}
+}
+
+func TestQQBotAnswerFailures(t *testing.T) {
+	for name, setup := range map[string]func(*qqFake){
+		"knowledge unavailable": func(f *qqFake) { f.knowledgeStatus = 500 },
+		"select not json":       func(f *qqFake) { f.selected = "第一段" },
+		"answer not json":       func(f *qqFake) { f.answer = "在设置里选" },
+		"unknown answer type":   func(f *qqFake) { f.answer = `{"type":"maybe","answer":"x"}` },
+		"empty answer":          func(f *qqFake) { f.answer = `{"type":"answered","answer":"  "}` },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, fake, _ := qqServer(t)
+			s.qq.config.Admins = nil
+			setup(fake)
+			qqDeliver(t, s, "m-"+strings.ReplaceAll(name, " ", "-"), "五笔怎么切换")
+			if replies := fake.replyTexts(); len(replies) != 1 || replies[0] != qqReplyUnavailable {
+				t.Fatal(replies)
+			}
+		})
+	}
+	// 刷新失败时继续用已加载的知识库。
+	s, fake, _ := qqServer(t)
+	s.qq.config.Admins = nil
+	qqDeliver(t, s, "m-first", "五笔怎么切换")
+	fake.knowledgeStatus = 500
+	s.qq.knowledge.loaded = time.Now().Add(-2 * qqKnowledgeTTL)
+	s.adminGitHub.Invalidate("")
+	qqDeliver(t, s, "m-stale", "五笔怎么切换")
+	if replies := fake.replyTexts(); len(replies) != 2 || replies[1] != "在设置的「输入方案」里选五笔。" {
+		t.Fatal(replies)
+	}
+}
+
+func TestQQSplitMarkdown(t *testing.T) {
+	sections := qqSplitMarkdown("guide", "前言没有标题，不收。\n## 一\n正文一\n### 一.一\n正文二\n#### 一.一.一\n正文三\n## 二\n"+strings.Repeat("字", qqSectionRunes+5)+"\n##### 跳级\n正文四\n")
+	got := []string{}
+	for _, section := range sections {
+		got = append(got, section.Doc+"|"+section.Title+"|"+strconv.Itoa(len([]rune(section.Text))))
+	}
+	want := []string{"guide|一|3", "guide|一 > 一.一|3", "guide|一 > 一.一 > 一.一.一|3", "guide|二|" + strconv.Itoa(qqSectionRunes), "guide|二 > 跳级|3"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatal(got)
+	}
+}
+
+func TestQQBotKnowledgeConfig(t *testing.T) {
+	t.Setenv("TEST_QQ_SECRET", qqTestSecret)
+	c := qqValidConfig()
+	if err := c.QQBot.validate(&c); err != nil || c.QQBot.KnowledgeRepo != defaultQQKnowledgeRepo || c.QQBot.KnowledgeDir != defaultQQKnowledgeDir {
+		t.Fatal(err, c.QQBot.KnowledgeRepo, c.QQBot.KnowledgeDir)
+	}
+	for name, mutate := range map[string]func(*Config){
+		"admins without app_id": func(c *Config) { c.QQBot.AppID, c.QQBot.Admins = "", []string{"A1"} },
+		"bad admin":             func(c *Config) { c.QQBot.Admins = []string{"a b"} },
+		"duplicate admin":       func(c *Config) { c.QQBot.Admins = []string{"A1", "A1"} },
+		"too many admins":       func(c *Config) { c.QQBot.Admins = make([]string, 51) },
+		"bad knowledge repo":    func(c *Config) { c.QQBot.KnowledgeRepo = "msime-docs" },
+		"absolute dir":          func(c *Config) { c.QQBot.KnowledgeDir = "/guides" },
+		"dir escapes":           func(c *Config) { c.QQBot.KnowledgeDir = "guides/../secrets" },
+	} {
+		c := qqValidConfig()
+		mutate(&c)
+		if c.QQBot.validate(&c) == nil {
+			t.Fatal(name, "accepted")
+		}
+	}
+}
+
+// 知识库拉取时 GitHub 的各种异常响应都报错，不会把半截知识库当成可用的。
+func TestQQKnowledgeLoadFailures(t *testing.T) {
+	listing := `[{"type":"file","name":"faq.md","path":"guides/faq.md"}]`
+	good := `{"encoding":"base64","content":"` + base64.StdEncoding.EncodeToString([]byte("## 一\n正文\n")) + `"}`
+	for name, files := range map[string]map[string]string{
+		"list not json":     {"guides": "{"},
+		"list rejected":     {"guides": "!404"},
+		"file rejected":     {"guides": listing, "guides/faq.md": "!500"},
+		"file not base64":   {"guides": listing, "guides/faq.md": `{"encoding":"utf-8","content":"## 一"}`},
+		"file bad base64":   {"guides": listing, "guides/faq.md": `{"encoding":"base64","content":"!!!"}`},
+		"file not utf8":     {"guides": listing, "guides/faq.md": `{"encoding":"base64","content":"` + base64.StdEncoding.EncodeToString([]byte{0xff, 0xfe}) + `"}`},
+		"no sections":       {"guides": listing, "guides/faq.md": `{"encoding":"base64","content":"` + base64.StdEncoding.EncodeToString([]byte("只有前言")) + `"}`},
+		"no markdown files": {"guides": `[{"type":"dir","name":"zh-TW","path":"guides/zh-TW"}]`},
+		"token rejected":    {"token": "!401", "guides": listing, "guides/faq.md": good},
+	} {
+		t.Run(name, func(t *testing.T) {
+			upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				key := strings.TrimPrefix(r.URL.Path, "/repos/o/docs/contents/")
+				if strings.HasSuffix(r.URL.Path, "/access_tokens") {
+					key = "token"
+					if _, ok := files[key]; !ok {
+						_ = json.NewEncoder(w).Encode(map[string]any{"token": "ghs_test", "expires_at": time.Now().Add(time.Hour)})
+						return
+					}
+				}
+				body := files[key]
+				if status, err := strconv.Atoi(strings.TrimPrefix(body, "!")); strings.HasPrefix(body, "!") && err == nil {
+					w.WriteHeader(status)
+					return
+				}
+				_, _ = io.WriteString(w, body)
+			}))
+			defer upstream.Close()
+			s := &Server{adminGitHub: &githubapp.Client{AppID: 42, InstallationID: 77, Key: wordsKey(t), APIURL: upstream.URL, HTTP: upstream.Client()}, qq: &qqBot{config: QQBotConfig{KnowledgeRepo: "o/docs", KnowledgeDir: "guides"}, now: time.Now}}
+			if _, err := s.qqKnowledgeSections(context.Background()); err == nil {
+				t.Fatal("accepted")
+			}
+		})
 	}
 }

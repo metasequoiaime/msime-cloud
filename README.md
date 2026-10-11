@@ -285,26 +285,34 @@ GitHub App 只安装到 msime-dictionary，仓库权限只给 Contents: Read and
 
 ## QQ 群反馈机器人
 
-群友在 QQ 群里 @机器人 描述遇到的问题或想要的功能，服务端把它整理成 GitHub issue，再在群里回复编号。官方机器人只能收到 @它 的消息（`GROUP_AT_MESSAGE_CREATE`），收不到群里的其他聊天，所以它是一个反馈入口，不会旁听。
+群友在 QQ 群里 @机器人 问水杉输入法的使用问题，机器人按知识库回答，答不上时 @ 管理员。`qq_bot.admins` 里的管理员 @机器人 描述 bug 或功能需求时，服务端把它整理成 GitHub issue，再在群里回复编号；管理员的其他消息和普通群友一样当问题回答。官方机器人只能收到 @它 的消息（`GROUP_AT_MESSAGE_CREATE`），收不到群里的其他聊天，不会旁听。
+
+开放平台不提供群管理员身份，管理员名单由 `qq_bot.admins`（member_openid）维护。任何人 @机器人 发「我的ID」，机器人会回复他在这个机器人里的 member_openid，管理员把它发给维护者加进配置。
 
 QQ 开放平台以 Webhook 把事件推到 `POST /v1/community/qq-bot/events`。服务端用机器人 AppSecret 派生的 Ed25519 密钥校验 `X-Signature-Ed25519` 签名，按消息 id 在 `auth_rates` 里认领（7 天内同一 id 只处理一次，开放平台重推的同一事件直接应答成功），然后立即应答，在后台继续处理：
 
-1. 去掉 @ 标记和表情标签；少于 6 个字回复用法，超过 2000 字请群友精简。每个群友每天最多处理 5 条、每个群每天 50 条（`auth_rates` 作用域 `qq-bot-member`、`qq-bot-group`），闲聊和追问也计数，因为它们同样要交给模型。
-2. 用 `chat` 端点（JSON 输出）和 `qq_bot.model` 把这段话整理成 bug 或功能建议的各个栏目，栏目与 msime 的 `bug_report.yml`、`feature_request.yml` 模板一致。判断不是反馈时回复说明；bug 既看不出平台、也没有操作步骤时，回复一句追问，不提交。这条规则由服务端判定，模型没给出追问时用固定的问题。
+1. 去掉 @ 标记和表情标签；没有文字时回复用法，超过 2000 字请群友精简。每个群每天最多处理 300 条、每个普通群友每天 20 条（`auth_rates` 作用域 `qq-bot-group`、`qq-bot-member`，管理员不受个人限额限制），问答、闲聊和追问都计数，因为它们同样要交给模型。
+2. 普通群友的消息直接答疑，见下文「答疑知识库」。管理员的消息先用 `chat` 端点（JSON 输出）和 `qq_bot.model` 整理成 bug 或功能建议的各个栏目，栏目与 msime 的 `bug_report.yml`、`feature_request.yml` 模板一致；判断不是反馈时转去答疑。bug 既看不出平台、也没有操作步骤时，回复一句追问，不提交。这条规则由服务端判定，模型没给出追问时用固定的问题。
 3. 按平台选仓库，规则与崩溃 issue 相同：能看出平台时用 `admin.github.platforms` 里该平台的 `repo`（生产上 Windows 是 msime-windows，其余平台是 msime），看不出平台时用 `qq_bot.repo`。Windows 上有两个产品，按群友说的水杉输入法版本区分：不低于 0.9 的是 msime-windows（Metasequoia IME 水杉输入法），按上面的平台配置提交；低于 0.9 的是 msime 仓库里的新实现，提交到 `qq_bot.repo` 并加 `platform/windows`；没说版本时先追问版本，不提交。分界版本是代码里的常量 `qqWindowsSplitVersion`，按 2026-10 两边的版本号定，msime 的 Windows 版本号接近 0.9 之前要改。用模型给出的关键词在这个仓库里搜索开启的 issue（关键词去掉冒号和引号，写不进 `repo:`、`is:` 这类限定词），交给模型判断是否重复。重复时在那个 issue 下补充评论，否则新建 issue，标签为 `bug` 或 `enhancement`、该平台的 `label`（为空时不加），以及 `qq_bot.labels`。
 4. 被动回复群友 issue 编号。开放平台只允许消息里出现报备过的域名，所以回复不带链接。被动回复只能在收到消息后 5 分钟内发出，后台处理限时 4 分钟。
+
+### 答疑知识库
+
+知识库是 msime-docs 的用户指南，与官网 FAQ 页同一份来源：`qq_bot.knowledge_repo`（默认 `metasequoiaime/msime-docs`）的 `qq_bot.knowledge_dir`（默认 `guides`）目录下的 Markdown 文件，不含子目录，所以 `zh-TW` 译本不收。补充或修改问答就给 msime-docs 提 PR，合并后最多 10 分钟机器人就用上（每个副本最多每 10 分钟刷新一次，读请求带 ETag 缓存，刷新失败时继续用已加载的版本）。服务端用管理后台的 GitHub App 只读拉取（安装令牌只有 contents 和 metadata 读权限），按标题把文档切成段落，标题链形如「安装 > 卸载」。
+
+回答分两步：先把段落目录（编号、文档名和标题）交给模型挑出最多 4 个相关段落，再只用这几段原文（合计不超过 16000 字）回答。模型把结果标成三类：资料能回答的直接回答，不超过 300 字，纯文本、不带链接（残留的链接会被去掉）；资料里没有答案、或者群友是在报 bug、提需求的，回复「这个问题我还不确定」并 @ `qq_bot.admins` 里的全部管理员（`<qqbot-at-user id="…" />`）；问候和闲聊简短回应。
 
 issue 和评论只包含模型转述的内容，不含群友的原话、昵称或 openid，并打断 @ 提及、# 引用和链接（与官网词条提交的备注相同）。消息内容不写日志，日志里只有失败原因；`qq_bot.groups` 非空时，来自其他群的消息会以 `group_openid` 记一条日志，方便查出要填的群标识。开放平台不提供群号，`groups` 只能填 `group_openid`；为空时接受机器人所在的每个群。
 
 需要用户体系（PostgreSQL）、管理后台的 GitHub App（`admin.github`）和 `chat` 端点。`app_id` 为空时功能关闭；填写后缺任何一项服务都拒绝启动：
 
 ```json
-{"qq_bot":{"app_id":"102030405","secret_env":"MSIME_QQ_BOT_SECRET","repo":"metasequoiaime/msime","labels":["source/qq"],"model":"claude-haiku-5-5"}}
+{"qq_bot":{"app_id":"102030405","secret_env":"MSIME_QQ_BOT_SECRET","repo":"metasequoiaime/msime","labels":["source/qq"],"model":"claude-haiku-5-5","admins":["<member_openid>"]}}
 ```
 
 `model` 经 `chat` 端点调用，接入地址和密钥都沿用 `chat`（生产是 EveryAPI），为空时用 `chat.model`。AI 联想的 `gpt-5.6-luna` 也能用，但整理长段描述时偶尔要 20–30 秒；EveryAPI 上的 `claude-haiku-5-5` 每次 1–4 秒，分类和去重判断都准确，输入价格更低，所以推荐单独指定它。每次请求都会在用户消息后追加一条含小写 json 的格式指令：EveryAPI 转发 OpenAI 模型时只在用户消息里找这个词，找不到就拒绝 `json_object` 模式。
 
-`labels` 里的标签要先在所有可能提交到的仓库（`qq_bot.repo` 和各平台的 `repo`）里建好，GitHub App 也要在这些仓库上有 Issues 写权限。在 QQ 开放平台的「开发 → 回调配置」填写 `https://api.msime.app/v1/community/qq-bot/events` 并勾选群 @ 消息事件；保存时开放平台发来的 op 13 校验请求由服务端用同一把密钥签名应答，所以要先部署好配置再填回调地址。机器人在沙箱阶段只能进沙箱配置里的群。
+`labels` 里的标签要先在所有可能提交到的仓库（`qq_bot.repo` 和各平台的 `repo`）里建好，GitHub App 也要在这些仓库上有 Issues 写权限。在 QQ 开放平台的「开发 → 回调配置」填写 `https://api.msime.app/v1/community/qq-bot/events` 并勾选群 @ 消息事件；保存时开放平台发来的 op 13 校验请求由服务端用同一把密钥签名应答，所以要先部署好配置再填回调地址。机器人没有认证时只有管理员能用，只能加到管理员当群主的群里；个人认证后可以设成公开，最多 500 个群。`admins`、`knowledge_repo`、`knowledge_dir` 是新增的配置字段，要等所有副本都运行支持它们的版本之后再写进配置。
 
 ## 用户皮肤社区
 

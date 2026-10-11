@@ -36,8 +36,8 @@ type qqDraftStore interface {
 	OpenQQDrafts(ctx context.Context, limit int) ([]account.QQDraft, error)
 }
 
-// qqDraftCommand 匹配「提交 D12 …」「补充 D12 …」（也认「提交D12」和小写的 d），分组是命令、编号和后面的内容。
-var qqDraftCommand = regexp.MustCompile(`^(提交|补充)\s*[Dd]([0-9]{1,9})(?:[\s:：,，]+([\s\S]*))?$`)
+// qqDraftCommand 匹配「提交 D12 …」「补充 D12 …」，分组是命令、编号和后面的内容。也认「提交D12」、小写的 d、命令后的冒号（「补充：D1 Windows 11」）、编号前的「#」、d 和数字之间的空格（「补充 d 1 win11」），编号后面可以用句号、分号、顿号隔开内容：原来多一个冒号就认不出，补充的内容被当成提问交给模型。
+var qqDraftCommand = regexp.MustCompile(`^(提交|补充)\s*[:：]?\s*[#＃]?[Dd]\s*([0-9]{1,9})(?:[\s:：,，。.;；、]+([\s\S]*))?$`)
 
 func qqDraftCode(id int64) string { return "D" + strconv.FormatInt(id, 10) }
 
@@ -92,7 +92,7 @@ func (s *Server) qqDraftReport(ctx context.Context, subject, text string) string
 
 // qqDraftCommands 处理「草稿」「提交 D编号」「补充 D编号」，返回处理结果的名字；不是这几个命令时返回空字符串。
 func (s *Server) qqDraftCommands(ctx context.Context, m qqGroupMessage, text string, admin bool, reply func(string)) string {
-	compact := strings.Join(strings.Fields(text), "")
+	compact := qqCompact(text)
 	if compact == "草稿" || compact == "草稿列表" {
 		if !admin {
 			reply("只有管理员能看草稿列表。")

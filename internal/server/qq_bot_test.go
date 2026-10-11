@@ -2063,6 +2063,127 @@ func TestQQBotCommands(t *testing.T) {
 	}
 }
 
+func TestQQCompact(t *testing.T) {
+	for in, want := range map[string]string{
+		"帮助？":      "帮助",
+		"帮助!":      "帮助",
+		" / Help ": "help",
+		"／帮助":      "帮助",
+		"版本！":      "版本",
+		"最新版本🙏":    "最新版本",
+		"最新版本👍️":   "最新版本",
+		"我的 ID？":   "我的id",
+		"草稿。。":     "草稿",
+		"怎么用~":     "怎么用",
+		"你能做什么…":   "你能做什么",
+		"？":        "?",
+		"??":       "?",
+		"＃８１８":     "#818",
+		"五笔怎么切换":   "五笔怎么切换",
+	} {
+		if got := qqCompact(in); got != want {
+			t.Errorf("qqCompact(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// 句末带标点、表情、斜杠、全角数字的命令和新人常问的「你能做什么」「怎么用」都直接当命令处理，不交给模型；补充草稿、写进 FAQ 多一个冒号或换个动词也认。
+func TestQQBotCommandVariants(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.qqDrafts = &memoryDrafts{}
+	s.qqFAQCandidates = &memoryFAQCandidates{}
+	s.qq.config.Admins = []string{"ADMIN1"}
+	s.config.Admin.GitHub.Platforms = []AdminPlatformConfig{{ID: "windows", Name: "Windows", Repo: "o/win", TagPrefix: "v"}}
+	fake.releases = map[string]string{"o/win": `[{"tag_name":"v0.9.5","published_at":"2026-10-05T00:00:00Z"}]`, "o/r": `[]`}
+	fake.issues = map[string]string{"o/win/issues/818": `{"number":818,"title":"大小写倒置","state":"closed","state_reason":"completed","updated_at":"2026-10-12T00:00:00Z"}`, "o/r/issues/818": "!404"}
+	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
+	deliver := func(id, member, content string) {
+		t.Helper()
+		qqPost(t, s, qqMessageFrom(id, member, content))
+		s.qqWorkers.Wait()
+	}
+	for i, tc := range []struct{ member, content, want string }{
+		{"MEMBER1", "帮助？", qqHelpText},
+		{"MEMBER1", "/help", qqHelpText},
+		{"MEMBER1", "你能做什么", qqHelpText},
+		{"MEMBER1", "怎么用", qqHelpText},
+		{"MEMBER1", "？", qqHelpText},
+		{"ADMIN1", "帮助！", qqHelpText + qqAdminHelpText},
+		{"MEMBER1", "版本！", "各平台最新版本（GitHub Release）：\n- Windows（win 仓库）：正式版 v0.9.5"},
+		{"MEMBER1", "最新版本🙏", "各平台最新版本（GitHub Release）："},
+		{"MEMBER1", "我的id？", "你的 ID 是 MEMBER1"},
+		{"MEMBER1", "＃８１８", "win #818 大小写倒置：已完成"},
+		{"MEMBER1", "补充：D1 Windows 11", "没有找到草稿 D1"},
+		{"MEMBER1", "补充 d 1 win11", "没有找到草稿 D1"},
+		{"ADMIN1", "写进FAQ：F3", "没有找到 F3"},
+		{"ADMIN1", "写入FAQ F3", "没有找到 F3"},
+		{"ADMIN1", "忽略：F3", "没有找到 F3"},
+	} {
+		deliver(fmt.Sprintf("m-variant-%d", i), tc.member, tc.content)
+		if !strings.HasPrefix(last(), tc.want) {
+			t.Errorf("%q: got %q", tc.content, last())
+		}
+	}
+	if len(fake.chatCalls) != 0 {
+		t.Fatal("commands must not call the model", fake.chatCalls)
+	}
+	// 编号后面的内容照常取出：「补充 d 1 win11」补的是「win11」。
+	for in, want := range map[string][]string{
+		"补充：D1 Windows 11": {"补充", "1", "Windows 11"},
+		"补充 d 1 win11":     {"补充", "1", "win11"},
+		"提交 #D12。版本 0.9.5": {"提交", "12", "版本 0.9.5"},
+		"提交D12":            {"提交", "12", ""},
+	} {
+		if m := qqDraftCommand.FindStringSubmatch(in); m == nil || !slices.Equal(m[1:], want) {
+			t.Errorf("%q: %q", in, m)
+		}
+	}
+	if m := qqFAQWriteCommand.FindStringSubmatch("写进 faq：#f3 答：在设置的词库页点导入"); m == nil || m[1] != "3" || m[2] != "答：在设置的词库页点导入" {
+		t.Errorf("%q", m)
+	}
+	for _, in := range []string{"补充一下 D1 的情况", "写进FAQ吧", "忽略这个问题"} {
+		if qqDraftCommand.MatchString(in) || qqFAQWriteCommand.MatchString(in) || qqFAQIgnoreCommand.MatchString(in) {
+			t.Errorf("%q must not be a command", in)
+		}
+	}
+}
+
+// 不调模型的命令（帮助、版本、草稿列表、#编号）排在额度之前：群额度和个人额度用完后照样能用，也不占这两个额度，只计宽松的 qq-bot-free；加词、查这些命令仍然受群额度限制。
+func TestQQBotFreeCommandsSkipModelQuota(t *testing.T) {
+	s, fake, limiter := qqServer(t)
+	stats := &memoryStats{}
+	s.qqStats = stats
+	s.qq.config.Admins = []string{"ADMIN1"}
+	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
+	deliver := func(id, member, content string) {
+		t.Helper()
+		qqPost(t, s, qqMessageFrom(id, member, content))
+		s.qqWorkers.Wait()
+	}
+	limiter.counts = map[string]int{"qq-bot-group|GROUP1": qqBotGroupDaily, "qq-bot-member|GROUP1/MEMBER2": qqBotMemberDaily}
+	deliver("m-free-help", "MEMBER1", "帮助")
+	if last() != qqHelpText {
+		t.Fatal(last())
+	}
+	deliver("m-free-help-member-limited", "MEMBER2", "帮助？")
+	if last() != qqHelpText {
+		t.Fatal(last())
+	}
+	if limiter.counts["qq-bot-group|GROUP1"] != qqBotGroupDaily || limiter.counts["qq-bot-member|GROUP1/MEMBER1"] != 0 || limiter.counts["qq-bot-free|GROUP1/MEMBER1"] != 1 {
+		t.Fatal(limiter.counts)
+	}
+	deliver("m-free-search", "MEMBER1", "查 候选框")
+	if last() != qqReplyGroupLimited {
+		t.Fatal(last())
+	}
+	// qq-bot-free 用完时照常回个人额度的说法。
+	limiter.counts["qq-bot-free|GROUP1/MEMBER1"] = qqBotFreeDaily
+	deliver("m-free-limited", "MEMBER1", "帮助")
+	if last() != qqReplyLimited || stats.counts["limited_free"] != 1 || stats.counts["cmd_help"] != 2 {
+		t.Fatal(last(), stats.counts)
+	}
+}
+
 // 管理员提 issue 时，模型从仓库分类标签里挑标签（只能挑列表里的、流程标签不给它挑），优先级和工作量有对应标签就打上，没有就写进正文。
 func TestQQBotIssueLabelsAndNotes(t *testing.T) {
 	s, fake, _ := qqServer(t)

@@ -29,8 +29,11 @@ type qqFAQCandidateStore interface {
 	CloseQQFAQCandidate(ctx context.Context, id int64, state, ref string) (bool, error)
 }
 
-// qqFAQCandidateCommand 匹配「写进FAQ F12 …」「忽略 F12」，分组是命令、编号和后面的内容。
-var qqFAQCandidateCommand = regexp.MustCompile(`(?i)^(写进\s*faq|忽略)\s*f([0-9]{1,9})(?:[\s:：,，]+([\s\S]*))?$`)
+// qqFAQWriteCommand 匹配「写进FAQ F12 …」，分组是编号和后面的内容；qqFAQIgnoreCommand 匹配「忽略 F12」，分组是编号。动词也认「写入」「加进」「加到」「放进」「记进」，也认命令后的冒号、编号前的「#」和 f 与数字之间的空格：原来管理员写成「写进FAQ：F3」「写入FAQ F3」就被当成反馈去整理，F3 没写进 FAQ。
+var (
+	qqFAQWriteCommand  = regexp.MustCompile(`(?i)^(?:写进|写入|加进|加到|放进|记进)\s*faq\s*[:：]?\s*[#＃]?f\s*([0-9]{1,9})(?:[\s:：,，。.;；、]+([\s\S]*))?$`)
+	qqFAQIgnoreCommand = regexp.MustCompile(`(?i)^忽略\s*[:：]?\s*[#＃]?f\s*([0-9]{1,9})(?:[\s:：,，。.;；、]+[\s\S]*)?$`)
+)
 
 // qqAnswerPrefix 是「写进FAQ F12 答：……」里答案的开头。
 var qqAnswerPrefix = regexp.MustCompile(`^答[:：]\s*`)
@@ -57,9 +60,9 @@ func (s *Server) recordQQFAQCandidate(ctx context.Context, question, answer stri
 
 // qqFAQCandidateCommands 处理「文档缺口」「写进FAQ F编号」「忽略 F编号」，只有管理员能用；返回处理结果的名字，不是这几个命令时返回空字符串。
 func (s *Server) qqFAQCandidateCommands(ctx context.Context, text string, admin bool, reply func(string)) string {
-	compact := strings.Join(strings.Fields(text), "")
-	match := qqFAQCandidateCommand.FindStringSubmatch(strings.TrimSpace(text))
-	if compact != "文档缺口" && match == nil {
+	write := qqFAQWriteCommand.FindStringSubmatch(strings.TrimSpace(text))
+	ignore := qqFAQIgnoreCommand.FindStringSubmatch(strings.TrimSpace(text))
+	if qqCompact(text) != "文档缺口" && write == nil && ignore == nil {
 		return ""
 	}
 	if !admin {
@@ -70,12 +73,17 @@ func (s *Server) qqFAQCandidateCommands(ctx context.Context, text string, admin 
 		reply(qqReplyUnavailable)
 		return "cmd_faq_candidates"
 	}
-	if match == nil {
+	if write == nil && ignore == nil {
 		s.qqListFAQCandidates(ctx, reply)
 		return "cmd_faq_candidates"
 	}
-	id, _ := strconv.ParseInt(match[2], 10, 64)
-	code := "F" + match[2]
+	match := write
+	if match == nil {
+		match = ignore
+	}
+	number := match[1]
+	id, _ := strconv.ParseInt(number, 10, 64)
+	code := "F" + number
 	candidate, err := s.qqFAQCandidates.QQFAQCandidate(ctx, id)
 	switch {
 	case errors.Is(err, account.ErrQQFAQCandidateNotFound):
@@ -86,7 +94,7 @@ func (s *Server) qqFAQCandidateCommands(ctx context.Context, text string, admin 
 		reply(qqReplyUnavailable)
 		return "cmd_faq_candidate"
 	}
-	if strings.HasPrefix(match[1], "忽略") {
+	if ignore != nil {
 		if _, err := s.qqFAQCandidates.CloseQQFAQCandidate(ctx, id, "ignored", ""); err != nil {
 			slog.Warn("qq bot: faq candidate not closed", "reason", err.Error())
 			reply(qqReplyUnavailable)
@@ -95,7 +103,7 @@ func (s *Server) qqFAQCandidateCommands(ctx context.Context, text string, admin 
 		reply("已忽略 " + code + "。")
 		return "cmd_faq_candidate_ignore"
 	}
-	answer := strings.TrimSpace(qqAnswerPrefix.ReplaceAllString(strings.TrimSpace(match[3]), ""))
+	answer := strings.TrimSpace(qqAnswerPrefix.ReplaceAllString(strings.TrimSpace(write[2]), ""))
 	if answer == "" {
 		answer = candidate.Answer
 	}

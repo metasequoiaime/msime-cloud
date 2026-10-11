@@ -40,10 +40,11 @@ const (
 	qqBotProcessTimeout = 4 * time.Minute
 	// qqBotMessageWindow 是消息 id 的去重期。QQ 在没有收到成功应答时会重推同一个事件，重推间隔远小于这个时长。
 	qqBotMessageWindow = 7 * 24 * time.Hour
-	// 每个群友、每个群、每个管理员 24 小时内最多处理的消息数（auth_rates，所有副本共享，窗口从这段时间的第一条消息算起）。它们限制的是交给模型的次数，所以问答、闲聊和追问都计数。普通群友先查个人限额、通过了才计入群限额，超了个人限额的消息不占群的额度；管理员不受个人和群限额限制，只有自己的 qqBotAdminDaily 兜底，群额度用完时也能提 issue。
+	// 每个群友、每个群、每个管理员 24 小时内最多处理的消息数（auth_rates，所有副本共享，窗口从这段时间的第一条消息算起）。它们限制的是交给模型的次数，所以问答、闲聊和追问都计数。普通群友先查个人限额、通过了才计入群限额，超了个人限额的消息不占群的额度；管理员不受个人和群限额限制，只有自己的 qqBotAdminDaily 兜底，群额度用完时也能提 issue。不调模型的命令（帮助、版本、草稿列表、#编号，见 qqFreeCommand）不占这几个额度，每人（群友和管理员都算）另有宽松的 qqBotFreeDaily 防刷。
 	qqBotMemberDaily = 20
 	qqBotGroupDaily  = 300
 	qqBotAdminDaily  = 100
+	qqBotFreeDaily   = 60
 	// qqBotReplyTimeout 是每次被动回复的时限。回复不跟随处理消息的 ctx：处理超时或副本关停取消了 ctx 后，「暂时处理不了」这样的兜底回复仍要发出去，消息已经认领，开放平台不会重推。
 	qqBotReplyTimeout = 10 * time.Second
 	qqBotMaxRunes     = 2000
@@ -467,7 +468,7 @@ func (s *Server) acceptQQMessage(ctx context.Context, raw json.RawMessage) bool 
 
 // 回复给群友的固定文字。提到 issue 和 PR 时附上 GitHub 链接（qqIssueNumberText）；开放平台只允许报备过的域名，拒收时去掉链接重发。
 const (
-	qqReplyUsage   = "有水杉输入法的使用问题可以直接 @我 问，例如：五笔怎么切换？"
+	qqReplyUsage   = "有水杉输入法的使用问题可以直接 @我 问，例如：五笔怎么切换？发「帮助」看我还能做什么。"
 	qqReplyTooLong = "内容太长了，请精简到 2000 字以内再 @我。"
 	// qqReplyScreenshot 是只发了截图、截图又没能看成（下载失败、格式不支持、模型出错）时的回复。
 	qqReplyScreenshot = "这张截图我没看清，可以把报错文字、系统和输入法版本打出来再 @我。"
@@ -492,7 +493,7 @@ const (
 	qqDefaultQuestion = "你用的是哪个系统（Windows、macOS、安卓等）和输入法版本？是在什么操作下出现的？"
 )
 
-// qqWhoAmI 是查询自己 member_openid 的命令，比较时忽略空白和大小写。
+// qqWhoAmI 是查询自己 member_openid 的命令，和 qqCompact 后的消息比较（忽略空白、大小写和句末标点）。
 var qqWhoAmI = []string{"我的id", "myid"}
 
 // handleQQFeedback 在后台处理一条已认领的 @ 消息，所有结果都以被动回复告诉群友：先处理命令；管理员明确要求记录的具体 bug 或需求提 issue（见 fileAdminFeedback），其他消息（包括普通群友的所有消息）按知识库答疑。不记录消息内容，日志里只有失败原因。
@@ -523,7 +524,7 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		}
 	}
 	text := qqFeedbackText(m.Content)
-	if slices.Contains(qqWhoAmI, strings.ToLower(strings.Join(strings.Fields(text), ""))) {
+	if slices.Contains(qqWhoAmI, qqCompact(text)) {
 		role := "普通成员"
 		if s.qqIsAdmin(ctx, m.GroupOpenID, m.Author.MemberOpenID, m.Author.MemberRole) {
 			role = "管理员"
@@ -547,6 +548,21 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		return
 	}
 	admin = s.qqIsAdmin(ctx, m.GroupOpenID, m.Author.MemberOpenID, m.Author.MemberRole)
+	// 不调模型的命令排在额度之前，只计宽松的 qqBotFreeDaily：群额度用完后帮助和查编号照样能用。加词、提文档、查、提issue 仍然要过下面的额度。
+	if qqFreeCommand(text) {
+		switch err := s.limits.RateLimit(ctx, "qq-bot-free", m.GroupOpenID+"/"+m.Author.MemberOpenID, qqBotFreeDaily, 24*time.Hour); {
+		case errors.Is(err, account.ErrLimited):
+			reply(qqReplyLimited)
+			outcome = "limited_free"
+			return
+		case err != nil:
+			slog.Error("qq bot: rate limit unavailable", "reason", err.Error())
+			reply(qqReplyUnavailable)
+			return
+		}
+		outcome = s.qqCommand(ctx, m, text, admin, reply)
+		return
+	}
 	type qqLimit struct {
 		scope, subject string
 		daily          int

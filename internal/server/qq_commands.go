@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
@@ -63,7 +64,7 @@ const (
 )
 
 var (
-	// qqIssueRefPattern 匹配「#818」「msime-windows #818」「metasequoiaime/msime-windows #818」这样的 issue 编号查询（全角「＃」先换成「#」）；qqIssueMentionPattern 找出普通提问里提到的编号，例如「#818 修好了吗」。
+	// qqIssueRefPattern 匹配「#818」「msime-windows #818」「metasequoiaime/msime-windows #818」这样的 issue 编号查询（全角的「＃８１８」先用 qqFoldWidth 折成半角）；qqIssueMentionPattern 找出普通提问里提到的编号，例如「#818 修好了吗」。
 	qqIssueRefPattern     = regexp.MustCompile(`^(?:([A-Za-z0-9._/-]{1,100})\s*)?#([0-9]{1,7})$`)
 	qqIssueMentionPattern = regexp.MustCompile(`(?:([A-Za-z0-9._/-]{1,100})\s*)?#([0-9]{1,7})\b`)
 	// qqIssueLinkPattern 匹配本组织 issue 和 PR 的网页地址，提到编号时先换成「仓库名 #编号」再找。
@@ -76,6 +77,49 @@ var (
 
 // qqLooseCommands 是后面不跟分隔符、直接接内容也算命令的命令词：「提issue候选框不跟随」很常见，而以这几个词开头的普通提问几乎没有。以 ASCII 字母结尾的命令词（「提issue」）同样放宽；「查」「搜」这类单字命令保持要分隔符，免得「查不到词库怎么办」被当成命令。
 var qqLooseCommands = []string{"提文档", "文档反馈", "记录答案", "记答案", "加词", "添加词条", "加个词"}
+
+// qqHelpAliases 是「帮助」的各种说法，qqReleaseAliases 是「版本」的，都和 qqCompact 后的消息比较。新人问「你能做什么」「怎么用」原来交给模型，模型手上没有机器人的功能清单，要么泛泛而谈，要么判成答不上、在文档缺口里多记一条假缺口。
+var (
+	qqHelpAliases    = []string{"帮助", "help", "菜单", "命令", "怎么用", "怎么使用", "使用说明", "说明", "你能做什么", "你能干嘛", "你会什么", "有什么功能", "功能", "指令", "命令列表", "?"}
+	qqReleaseAliases = []string{"版本", "最新版本", "最新版"}
+)
+
+// qqFoldWidth 把全角的 ASCII 字符（U+FF01–U+FF5E：全角数字、字母和「＃」「？」「！」「～」等）折成半角，输入法全角模式下打的「＃８１８」「帮助？」和半角写法一样认。
+func qqFoldWidth(text string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 0xFF01 && r <= 0xFF5E {
+			return r - 0xFEE0
+		}
+		return r
+	}, text)
+}
+
+// qqCommandTrailing 是 qqCompact 从末尾去掉的标点，全角的已经先折成半角。
+const qqCommandTrailing = "?!。.~…"
+
+// qqCompact 把消息规范成和精确匹配的命令词比较的形状：全角折成半角，去掉所有空白，转小写，去掉开头的「/」，再循环去掉末尾的问号、感叹号、句号、波浪号、省略号和表情符号（unicode.So、unicode.Sk，以及表情后面的变体选择符和零宽连接符）。原来只去掉空白，中文输入法习惯在句末打的「帮助？」、QQ 机器人用户习惯的「/help」、「最新版本🙏」都认不出，绕到模型那里等十几秒。只剩一个字符时不再去掉，「?」本身就是帮助的别名。
+func qqCompact(text string) string {
+	compact := strings.TrimPrefix(strings.ToLower(strings.Join(strings.Fields(qqFoldWidth(text)), "")), "/")
+	for utf8.RuneCountInString(compact) > 1 {
+		r, size := utf8.DecodeLastRuneInString(compact)
+		if !strings.ContainsRune(qqCommandTrailing, r) && !unicode.In(r, unicode.So, unicode.Sk) && r != 0xFE0F && r != 0x200D {
+			break
+		}
+		compact = compact[:len(compact)-size]
+	}
+	return compact
+}
+
+// qqIssueRef 匹配「#编号」查进度的命令（qqIssueRefPattern），先把全角折成半角；不是这个命令时返回 nil。
+func qqIssueRef(text string) []string {
+	return qqIssueRefPattern.FindStringSubmatch(strings.TrimSpace(qqFoldWidth(text)))
+}
+
+// qqFreeCommand 判断消息是不是不调模型的命令：帮助、版本、草稿列表和「#编号」。handleQQFeedback 把它们排在个人和群的额度之前，只按人计一个宽松的 qqBotFreeDaily：群额度用完后，新人发「帮助」原来只能收到「额度用完了」，刚上手多试几个命令也在花自己交给模型的额度。版本和「#编号」要读 GitHub，但读请求有缓存。
+func qqFreeCommand(text string) bool {
+	compact := qqCompact(text)
+	return slices.Contains(qqHelpAliases, compact) || slices.Contains(qqReleaseAliases, compact) || compact == "草稿" || compact == "草稿列表" || qqIssueRef(text) != nil
+}
 
 // qqCommandSeparators 是命令词和参数之间可以有的分隔符。
 const qqCommandSeparators = ":： \n\t,，、"
@@ -149,7 +193,7 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 	if command := s.qqFAQCandidateCommands(ctx, text, admin, reply); command != "" {
 		return command
 	}
-	if compact := strings.Join(strings.Fields(text), ""); compact == "周报" || compact == "自测" {
+	if compact := qqCompact(text); compact == "周报" || compact == "自测" {
 		switch {
 		case !admin:
 			reply("只有管理员能用「" + compact + "」。")
@@ -160,7 +204,7 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 		}
 		return "cmd_" + map[string]string{"周报": "digest", "自测": "selftest"}[compact]
 	}
-	if compact := strings.Join(strings.Fields(text), ""); compact == "差评" || compact == "答错的" {
+	if compact := qqCompact(text); compact == "差评" || compact == "答错的" {
 		if !admin {
 			reply("只有管理员能看差评。觉得我答错了，@我 说一句「不对」，我会重新查。")
 		} else {
@@ -168,16 +212,16 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 		}
 		return "cmd_bad_answers"
 	}
-	compact := strings.ToLower(strings.Join(strings.Fields(text), ""))
-	switch compact {
-	case "帮助", "help", "菜单", "命令":
+	compact := qqCompact(text)
+	switch {
+	case slices.Contains(qqHelpAliases, compact):
 		if admin {
 			reply(qqHelpText + qqAdminHelpText)
 		} else {
 			reply(qqHelpText)
 		}
 		return "cmd_help"
-	case "版本", "最新版本", "最新版":
+	case slices.Contains(qqReleaseAliases, compact):
 		releases := strings.TrimSpace(s.qqLatestReleases(ctx))
 		if releases == "" {
 			reply("暂时查不到版本信息，请稍后再试。")
@@ -204,7 +248,7 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 		}
 		return "cmd_search"
 	}
-	if ref := qqIssueRefPattern.FindStringSubmatch(strings.TrimSpace(strings.ReplaceAll(text, "＃", "#"))); ref != nil {
+	if ref := qqIssueRef(text); ref != nil {
 		reply(s.qqIssueStatus(ctx, ref[1], ref[2], qqMaintainerShortRunes))
 		return "cmd_issue"
 	}
@@ -313,7 +357,7 @@ func (s *Server) qqIssueStatus(ctx context.Context, name, number string, comment
 func (s *Server) qqMentionedIssues(ctx context.Context, question string) string {
 	var lines []string
 	seen := map[string]bool{}
-	question = qqIssueLinkPattern.ReplaceAllString(strings.ReplaceAll(question, "＃", "#"), " $1 #$2 ")
+	question = qqIssueLinkPattern.ReplaceAllString(qqFoldWidth(question), " $1 #$2 ")
 	mentions := qqIssueMentionPattern.FindAllStringSubmatch(question, -1)
 	for _, m := range mentions {
 		key := strings.ToLower(m[1]) + "#" + m[2]

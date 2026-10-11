@@ -235,6 +235,8 @@ type qqFake struct {
 	researchTools       []bool
 	answerAfterResearch string
 	extraGitHub         map[string]string
+	// researchHang 为 true 时，调研里已经调用过工具、又给了工具的那一轮一直不返回，直到客户端放弃，用来模拟调研卡在中途。
+	researchHang bool
 	// 「记录答案」：faq 是整理 FAQ 的模型输出；faqFiles 不为 nil 时知识库仓库按它返回文件（要求按 qqFAQHead 读），faqWrites 按顺序记下建树、建提交、建分支、开 PR 的请求，faqFailPath 是会返回 422 的写接口路径。
 	faq         string
 	faqFiles    map[string]string
@@ -297,11 +299,19 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					tool = m.(map[string]any)["content"].(string)
 				}
 			}
+			if f.researchHang && tool != "" && body["tools"] != nil {
+				f.mu.Unlock()
+				<-r.Context().Done()
+				f.mu.Lock()
+				return
+			}
 			reply := map[string]any{"role": "assistant", "content": "查到：" + tool}
 			finish := "stop"
 			switch {
 			case f.researchPath == "":
 				reply["content"] = "不需要查"
+			case body["tools"] == nil:
+				// 没给工具的一轮只能用已经查到的内容作答。
 			case tool == "" && f.researchQuery != "":
 				reply = map[string]any{"role": "assistant", "content": "", "tool_calls": []any{map[string]any{"id": "call-1", "type": "function", "function": map[string]any{"name": "web_search", "arguments": `{"query":"` + f.researchQuery + `"}`}}}}
 				finish = "tool_calls"
@@ -1666,6 +1676,130 @@ func TestQQBotFallbackModel(t *testing.T) {
 	c = Config{QQBot: QQBotConfig{FallbackModel: "x"}}
 	if c.QQBot.validate(&c) == nil {
 		t.Fatal("fallback model without app_id accepted")
+	}
+}
+
+// 主模型的时限按模型选：qq_bot.model 15 秒，strong_model 和 chat_model 35 秒；时限还要给备用模型留出 25 秒，剩余不到 20 秒时不再试备用模型。
+func TestQQBotModelTimeoutBudget(t *testing.T) {
+	if qqPrimaryModelTimeout != 15*time.Second || qqStrongModelTimeout != 35*time.Second {
+		t.Fatal(qqPrimaryModelTimeout, qqStrongModelTimeout)
+	}
+	s, fake, _ := qqServer(t)
+	s.qq.config.FallbackModel = "fallback-model"
+	s.qq.config.StrongModel, s.qq.config.ChatModel = "strong-model", "chat-model"
+	if s.qqPrimaryTimeout("claude-haiku-5-5") != 15*time.Second || s.qqPrimaryTimeout("strong-model") != 35*time.Second || s.qqPrimaryTimeout("chat-model") != 35*time.Second {
+		t.Fatal("primary timeouts")
+	}
+	fake.fallbackAnswer = `{"type":"answered","answer":"备用模型的回答。"}`
+	ask := func(ctx context.Context, model string) (qqAnswer, time.Duration, error) {
+		var answer qqAnswer
+		started := time.Now()
+		err := s.qqChatModel(ctx, model, qqAnswerPrompt, "五笔怎么切换", &answer)
+		return answer, time.Since(started), err
+	}
+	defer func(primary, strong time.Duration) { qqPrimaryModelTimeout, qqStrongModelTimeout = primary, strong }(qqPrimaryModelTimeout, qqStrongModelTimeout)
+	// haiku 挂起时按短的时限换备用模型，strong_model 挂起时按长的时限换。
+	qqPrimaryModelTimeout, qqStrongModelTimeout = 50*time.Millisecond, 400*time.Millisecond
+	fake.hangModel, fake.models = "claude-haiku-5-5", nil
+	if answer, took, err := ask(context.Background(), "claude-haiku-5-5"); err != nil || answer.Answer != "备用模型的回答。" || took >= 400*time.Millisecond || strings.Join(fake.models, ",") != "claude-haiku-5-5,fallback-model" {
+		t.Fatal(answer, took, err, fake.models)
+	}
+	fake.hangModel, fake.models = "strong-model", nil
+	if answer, took, err := ask(context.Background(), "strong-model"); err != nil || answer.Answer != "备用模型的回答。" || took < 400*time.Millisecond || strings.Join(fake.models, ",") != "strong-model,fallback-model" {
+		t.Fatal(answer, took, err, fake.models)
+	}
+	// 剩余 25.2 秒时主模型只有 0.2 秒（给备用留 25 秒），不等满 35 秒。
+	qqStrongModelTimeout = 35 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), qqFallbackReserve+200*time.Millisecond)
+	defer cancel()
+	fake.models = nil
+	if answer, took, err := ask(ctx, "strong-model"); err != nil || answer.Answer != "备用模型的回答。" || took > 5*time.Second || strings.Join(fake.models, ",") != "strong-model,fallback-model" {
+		t.Fatal(answer, took, err, fake.models)
+	}
+	// 剩余不到 20 秒时主模型失败就直接返回错误，不再试备用模型。
+	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	fake.hangModel, fake.failModel, fake.models = "", "strong-model", nil
+	if _, _, err := ask(ctx, "strong-model"); err == nil || strings.Join(fake.models, ",") != "strong-model" {
+		t.Fatal(err, fake.models)
+	}
+}
+
+// 现查按剩余时间收缩：剩余不到 90 秒不现查；回答前已经现查过的（不管查没查到）答不上时不再查第二次；调研快到截止或某一轮卡住时，用已经查到的内容总结，不整份丢掉。
+func TestQQBotResearchBudget(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	fake.answer = `{"type":"unknown","topic":"水杉输入法有几个开发者"}`
+	fake.researchPath = "/repos/metasequoiaime/msime/contributors?per_page=100"
+	fake.extraGitHub = map[string]string{"/repos/metasequoiaime/msime/contributors?per_page=100": `[{"login":"houko","type":"User","contributions":5000}]`}
+	fake.answerAfterResearch = `{"type":"answered","answer":"msime 仓库有 1 位贡献者。"}`
+	progressed := 0
+	ask := qqAsk{progress: func() { progressed++ }}
+	short, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	for _, selected := range []string{`{"sections":[1]}`, `{"sections":[1],"lookup":true}`} {
+		fake.selected, fake.chatCalls = selected, nil
+		answer, err := s.qqAnswerQuestion(short, nil, "水杉输入法现在有几个开发？", ask)
+		if err != nil || answer.Type != "unknown" || strings.Join(fake.chatCalls, ",") != "select,answer" || progressed != 0 {
+			t.Fatal(selected, answer, err, fake.chatCalls, progressed)
+		}
+	}
+	// 回答前现查返回空（模型说不需要查），回答的模型又标成 unknown：不再现查第二次，也只说一次「我查一下」。
+	long, cancel := context.WithTimeout(context.Background(), qqBotProcessTimeout)
+	defer cancel()
+	fake.selected, fake.researchPath, fake.chatCalls = `{"sections":[1],"lookup":true}`, "", nil
+	if answer, err := s.qqAnswerQuestion(long, nil, "水杉输入法现在有几个开发？", ask); err != nil || answer.Type != "unknown" || strings.Join(fake.chatCalls, ",") != "select,research,answer" || progressed != 1 {
+		t.Fatal(answer, err, fake.chatCalls, progressed)
+	}
+	// 调研的时间不到 qqResearchWrapUp（剩余 55 秒减去给重答留的 40 秒）：第一轮就不给工具，直接作答。
+	fake.researchPath, fake.researchTools = "/repos/metasequoiaime/msime/contributors?per_page=100", nil
+	wrapUp, cancel := context.WithTimeout(context.Background(), qqResearchReserve+15*time.Second)
+	defer cancel()
+	if findings := s.qqResearch(wrapUp, "水杉输入法现在有几个开发？"); findings != "查到：" || fmt.Sprint(fake.researchTools) != "[false]" {
+		t.Fatal(findings, fake.researchTools)
+	}
+	// 查到一次以后下一轮卡住：到留给总结的时间就停下，用已经查到的内容不带工具再答一次。
+	fake.researchHang, fake.researchTools = true, nil
+	hang, cancel := context.WithTimeout(context.Background(), qqResearchReserve+qqResearchWrapUp+time.Second)
+	defer cancel()
+	findings := s.qqResearch(hang, "水杉输入法现在有几个开发？")
+	if !strings.Contains(findings, `"login":"houko"`) || len(fake.researchTools) < 2 || !fake.researchTools[0] || fake.researchTools[len(fake.researchTools)-1] {
+		t.Fatal(findings, fake.researchTools)
+	}
+}
+
+// 4 分钟的处理时间用完时回「查了太久没查完」并请群友说具体些，处理结果记为 timeout；剩余时间不够、不再试备用模型时也一样。时间充裕时的上游失败照旧回「暂时处理不了」。
+func TestQQBotTimedOutReply(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.qq.config.Admins = nil
+	stats := &memoryStats{}
+	s.qqStats = stats
+	m := qqGroupMessage{ID: "m-timeout", Content: "五笔怎么切换", GroupOpenID: "GROUP1"}
+	m.Author.MemberOpenID = "MEMBER1"
+	fake.hangModel = "claude-haiku-5-5"
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	s.handleQQFeedback(ctx, m)
+	if replies := fake.replyTexts(); len(replies) != 1 || replies[0] != qqReplyTimedOut || stats.counts["timeout"] != 1 {
+		t.Fatal(replies, stats.counts)
+	}
+	s.qq.config.FallbackModel = "fallback-model"
+	fake.hangModel, fake.failModel, fake.models = "", "claude-haiku-5-5", nil
+	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	m.ID = "m-budget"
+	s.handleQQFeedback(ctx, m)
+	if replies := fake.replyTexts(); replies[len(replies)-1] != qqReplyTimedOut || stats.counts["timeout"] != 2 || strings.Join(fake.models, ",") != "claude-haiku-5-5" {
+		t.Fatal(replies, stats.counts, fake.models)
+	}
+	ctx, cancel = context.WithTimeout(context.Background(), qqBotProcessTimeout)
+	defer cancel()
+	fake.chatStatus, m.ID = 502, "m-upstream"
+	s.handleQQFeedback(ctx, m)
+	if replies := fake.replyTexts(); replies[len(replies)-1] != qqReplyUnavailable || stats.counts["failed"] != 1 {
+		t.Fatal(replies, stats.counts)
+	}
+	if qqOutcomeKind("timeout") != "failed" {
+		t.Fatal("timeout must count as failed in the digest")
 	}
 }
 

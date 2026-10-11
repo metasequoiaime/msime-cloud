@@ -43,7 +43,8 @@ func qqOutcomeKind(outcome string) string {
 		return "command"
 	case strings.HasPrefix(outcome, "limited_"):
 		return "limited"
-	case outcome == "failed":
+	// timeout 是 4 分钟的处理时间用完（见 handleQQFeedback），和 failed 一样算出错。
+	case outcome == "failed" || outcome == "timeout":
 		return "failed"
 	default:
 		return "other"

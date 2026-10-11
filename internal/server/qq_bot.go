@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -480,6 +481,8 @@ const (
 	qqReplyRestarting = "机器人正在更新，请一分钟后再 @我 发一次。"
 	qqReplyWorking    = "收到，正在整理成 issue。"
 	qqReplyPublic     = "内容由机器人转述后公开在 GitHub 上，不包含你的昵称和原话。"
+	// qqReplyTimedOut 在 4 分钟的处理时间用完时代替 qqReplyUnavailable（见 qqOutOfTime）：这时再原样发一次多半还是超时，所以请群友把问题说具体，挑段落和现查才找得准。
+	qqReplyTimedOut = "这个问题查了太久没查完。可以说具体一点（哪个系统、哪个功能、看到了什么）再 @我。"
 	// 下面几句是过渡语，一条消息最多发其中一句（见 handleQQFeedback 的 progress）：qqReplyShot 在看截图前，qqReplyThinking 在 qqThinkingDelay 后还没回复时，qqReplyLookingUp 在现查前。qqReplyReportAck 和 qqReplyReportShotAck 是管理员发「提issue」后马上回的「收到」，后面可能判成文档已有、缺信息或不是具体反馈，所以不说「正在整理成 issue」。
 	qqReplyShot          = "我看一下截图～"
 	qqReplyThinking      = "收到，我想一下～"
@@ -517,14 +520,19 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		progressed bool
 		thinking   *time.Timer
 		finished   bool
+		timedOut   bool
 	)
 	send := func(text string) {
 		if thinking != nil {
 			thinking.Stop()
 		}
 		seq++
-		if text == qqReplyUnavailable && errors.Is(ctx.Err(), context.Canceled) {
+		// 「暂时处理不了」按失败的原因换说法：副本关停取消了处理时说正在更新；4 分钟用完时请群友说具体些，处理结果记为 timeout。
+		switch {
+		case text == qqReplyUnavailable && errors.Is(ctx.Err(), context.Canceled):
 			text = qqReplyRestarting
+		case text == qqReplyUnavailable && qqOutOfTime(ctx):
+			text, timedOut = qqReplyTimedOut, true
 		}
 		sendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), qqBotReplyTimeout)
 		defer cancel()
@@ -553,13 +561,16 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 			send(text)
 		}
 	}
-	// 退出前停掉计时器并标记结束，计时器的回调拿到锁时看到 finished 就不再发：处理完以后不会再冒出一句「我想一下」。
+	// 退出前停掉计时器并标记结束，计时器的回调拿到锁时看到 finished 就不再发：处理完以后不会再冒出一句「我想一下」。因为时间用完回了 qqReplyTimedOut 的，处理结果统一记为 timeout（这个 defer 在记日志的那个之前执行）。
 	defer func() {
 		mu.Lock()
 		defer mu.Unlock()
 		finished = true
 		if thinking != nil {
 			thinking.Stop()
+		}
+		if timedOut {
+			outcome = "timeout"
 		}
 	}()
 	text := qqFeedbackText(m.Content)
@@ -826,8 +837,36 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 // qqThinkingDelay 是常规答疑还没回复时先回「收到，我想一下～」的等待时间，见 handleQQFeedback；测试里改短。
 var qqThinkingDelay = 8 * time.Second
 
-// qqPrimaryModelTimeout 是配置了备用模型时主模型每次调用的时限，见 qqChat；测试里改短。
-var qqPrimaryModelTimeout = 50 * time.Second
+// qqPrimaryModelTimeout 和 qqStrongModelTimeout 是配置了备用模型时主模型每次调用的时限，见 qqChatModel；测试里改短。qqPrimaryModelTimeout 给 qq_bot.model（claude-haiku-5-5，挑段落、整理反馈、查重、选标签这类结构化的活，实测一般 1–4 秒），qqStrongModelTimeout 给 strong_model 和 chat_model：Sonnet 写一段长答案要 15 秒左右，不能再压。曾经一律 50 秒，是实测中位数的十倍以上，主模型挂起时白等 50 秒才换备用，生产上出现过一条消息 70 秒才回。
+var (
+	qqPrimaryModelTimeout = 15 * time.Second
+	qqStrongModelTimeout  = 35 * time.Second
+)
+
+// 处理一条消息的 4 分钟（qqBotProcessTimeout）是所有步骤共用的预算，各步按剩下的时间收缩，不再各自写死：曾经挑段落、回答、现查、重答串起来能超过 4 分钟，上游一慢就整条只回「暂时处理不了」，已经查到的结果也白查了。
+const (
+	// qqFallbackReserve 是主模型调用给备用模型留的时间：主模型的时限不超过剩余时间减去它。剩余不到 qqFallbackMinRemaining 时不再试备用模型，直接返回错误。
+	qqFallbackReserve      = 25 * time.Second
+	qqFallbackMinRemaining = 20 * time.Second
+	// qqResearchMinRemaining 是现查的门槛：剩余不到它时不现查，把时间留给回答的模型。qqResearchReserve 是现查给之后的重答留的时间，见 qqResearch。
+	qqResearchMinRemaining = 90 * time.Second
+	qqResearchReserve      = 40 * time.Second
+	// qqReanswerMinRemaining 是现查之后重答的门槛：剩余不到它时不重答，用第一次的答案。
+	qqReanswerMinRemaining = 25 * time.Second
+)
+
+// qqRemaining 返回 ctx 离截止还剩多久；没有截止时间时返回最大值，当作时间充裕。
+func qqRemaining(ctx context.Context) time.Duration {
+	if deadline, ok := ctx.Deadline(); ok {
+		return time.Until(deadline)
+	}
+	return math.MaxInt64
+}
+
+// qqOutOfTime 判断这条消息的处理是不是因为时间用完才失败：ctx 已经超时，或者剩余不到 qqFallbackMinRemaining（qqChatModel 这时不再试备用模型，ctx 还没到期，但失败的原因同样是时间不够）。
+func qqOutOfTime(ctx context.Context) bool {
+	return errors.Is(ctx.Err(), context.DeadlineExceeded) || (ctx.Err() == nil && qqRemaining(ctx) < qqFallbackMinRemaining)
+}
 
 // qqHistoryTurns 是答疑时带上的最近问答轮数；qqUnansweredTurn 是答不上时记下的答案，让下一轮追问知道上一轮没有解决。
 const (
@@ -980,17 +1019,33 @@ func (s *Server) qqStrongModel() string {
 	return cmp.Or(s.qq.config.StrongModel, s.qq.config.Model)
 }
 
+// qqPrimaryTimeout 按模型选主模型调用的时限：qq_bot.model 用 qqPrimaryModelTimeout，strong_model 和 chat_model 用 qqStrongModelTimeout。没单独配置 strong_model、chat_model 时它们就是 qq_bot.model，按短的算。
+func (s *Server) qqPrimaryTimeout(model string) time.Duration {
+	if model == s.qq.config.Model {
+		return qqPrimaryModelTimeout
+	}
+	return qqStrongModelTimeout
+}
+
 // qqChatModel 是用指定模型做的 qqChat，失败时同样换备用模型重答一次。
 func (s *Server) qqChatModel(ctx context.Context, model, system, user string, out any) error {
 	if s.qq.config.FallbackModel == "" {
 		return s.qqChatWith(ctx, model, system, user, out)
 	}
-	// 有备用模型时主模型单独限时：chat 端点的超时是 120 秒，主模型挂起时答疑的两步各等满 120 秒就用完了 4 分钟，备用模型来不及上场。
-	primary, cancel := context.WithTimeout(ctx, qqPrimaryModelTimeout)
+	// 有备用模型时主模型单独限时：chat 端点的超时是 120 秒，主模型挂起时答疑的两步各等满 120 秒就用完了 4 分钟，备用模型来不及上场。时限还要给备用模型留出 qqFallbackReserve；剩余时间连这都不够时主模型用完剩下的全部时间，之后也不再试备用模型。
+	timeout := min(s.qqPrimaryTimeout(model), qqRemaining(ctx)-qqFallbackReserve)
+	primary, cancel := ctx, context.CancelFunc(func() {})
+	if timeout > 0 {
+		primary, cancel = context.WithTimeout(ctx, timeout)
+	}
 	err := s.qqChatWith(primary, model, system, user, out)
 	cancel()
 	if err == nil {
 		return nil
+	}
+	if qqRemaining(ctx) < qqFallbackMinRemaining {
+		slog.Warn("qq bot: budget exhausted", "stage", "fallback", "model", model, "reason", err.Error())
+		return err
 	}
 	// 主模型失败（上游拒绝、超时或输出不合格式）时用备用模型重答一次；先清掉上一次可能解码了一半的结果。
 	slog.Warn("qq bot: model failed, trying the fallback model", "model", model, "reason", err.Error())

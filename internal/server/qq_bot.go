@@ -427,6 +427,8 @@ const (
 	// qqReplyNoIntent 接在管理员没有要求记录的反馈的一句话概括后面；qqReplyExisting 接在知识库说明功能已有或现象正常时的答案后面。
 	qqReplyNoIntent = "没有提 issue；需要记录的话，请 @我 发「提issue」加上这段描述。"
 	qqReplyExisting = "\n\n文档里已经有说明，所以没有提 issue。如果文档的办法不够用，请 @我 发「提issue」并说明哪里不够。"
+	// qqReplyResend 接在追问后面。重新描述时也要带上「提issue」：管理员第一次用「记一下」这类说法要求记录时，补充的那条消息往往不会再说一遍，没有命令就只会得到一句话概括。
+	qqReplyResend = " 补充后请 @我 发「提issue」把问题完整描述一次。"
 	// qqDefaultQuestion 是 bug 既看不出平台、也没有操作步骤，而模型没有给出追问时用的问题。
 	qqDefaultQuestion = "你用的是哪个系统（Windows、macOS、安卓等）和输入法版本？是在什么操作下出现的？"
 )
@@ -533,12 +535,12 @@ func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text s
 		return
 	}
 	if report.Missing != "" {
-		reply("还差一点信息：" + report.Missing + " 补充后请 @我 把问题完整描述一次。")
+		reply("还差一点信息：" + report.Missing + qqReplyResend)
 		return
 	}
 	repo, label, known := s.qqTarget(report)
 	if !known {
-		reply("还差一点信息：" + qqWindowsVersionQuestion + " 补充后请 @我 把问题完整描述一次。")
+		reply("还差一点信息：" + qqWindowsVersionQuestion + qqReplyResend)
 		return
 	}
 	reply(qqReplyWorking)

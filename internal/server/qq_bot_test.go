@@ -643,10 +643,10 @@ func TestQQBotRepliesWithoutFiling(t *testing.T) {
 		{"forced report that is not a report", "", func(f *qqFake, _ *qqLimiter) { f.summary = `{"kind":"other"}` }, "没看出要提的是 bug 还是需求，请把问题或想要的功能描述具体一点。"},
 		{"needs details", "", func(f *qqFake, _ *qqLimiter) {
 			f.summary = `{"kind":"bug","title":"打不出字","problem":"打不出字","missing":"你用的是哪个系统？"}`
-		}, "还差一点信息：你用的是哪个系统？ 补充后请 @我 把问题完整描述一次。"},
+		}, "还差一点信息：你用的是哪个系统？" + qqReplyResend},
 		{"vague bug without a question", "", func(f *qqFake, _ *qqLimiter) {
 			f.summary = `{"kind":"bug","title":"打不出字","problem":"偶尔打不出字","missing":""}`
-		}, "还差一点信息：" + qqDefaultQuestion + " 补充后请 @我 把问题完整描述一次。"},
+		}, "还差一点信息：" + qqDefaultQuestion + qqReplyResend},
 		{"chat down", "", func(f *qqFake, _ *qqLimiter) { f.chatStatus = 502 }, qqReplyUnavailable},
 		{"chat cut off", "", func(f *qqFake, _ *qqLimiter) { f.finish = "length" }, qqReplyUnavailable},
 		{"chat not json", "", func(f *qqFake, _ *qqLimiter) { f.summary = "好的，这是一个 bug" }, qqReplyUnavailable},
@@ -810,7 +810,7 @@ func TestQQBotWindowsProductsByVersion(t *testing.T) {
 	s, fake, _ := qqServer(t)
 	fake.summary = `{"kind":"feature","title":"支持自定义快捷键","platform":"windows","proposal":"希望能自定义切换快捷键","keywords":""}`
 	qqDeliver(t, s, "m-win-no-version", "提issue Windows 上希望能自定义切换快捷键")
-	if replies := fake.replyTexts(); len(fake.created) != 0 || replies[len(replies)-1] != "还差一点信息："+qqWindowsVersionQuestion+" 补充后请 @我 把问题完整描述一次。" {
+	if replies := fake.replyTexts(); len(fake.created) != 0 || replies[len(replies)-1] != "还差一点信息："+qqWindowsVersionQuestion+qqReplyResend {
 		t.Fatal(replies, fake.created)
 	}
 }
@@ -1721,10 +1721,27 @@ func TestQQBotAdminMessagesNeedExplicitIntent(t *testing.T) {
 	if len(fake.created) != 4 {
 		t.Fatal("model intent must file", len(fake.created))
 	}
+	// 明确要求记录、但缺信息时照旧追问，提示补充时用「提issue」（补充的那条消息往往不会再说「记一下」）；Windows 没说版本时先问版本。
+	fake.summary = `{"kind":"bug","title":"打不出字","problem":"偶尔打不出字","intent":true}`
+	qqDeliver(t, s, "m-intent-missing", "偶尔打不出字，记一下")
+	if len(fake.created) != 4 || last() != "还差一点信息："+qqDefaultQuestion+qqReplyResend {
+		t.Fatal(len(fake.created), last())
+	}
+	fake.summary = `{"kind":"bug","title":"候选框停在左上角","platform":"windows","problem":"候选框停在左上角","steps":"在记事本里打字","keywords":"候选框"}`
+	qqDeliver(t, s, "m-intent-windows", "Windows 上候选框停在左上角，记一下")
+	if len(fake.created) != 4 || last() != "还差一点信息："+qqWindowsVersionQuestion+qqReplyResend {
+		t.Fatal(len(fake.created), last())
+	}
+	fake.summary = `{"kind":"bug","title":"候选框停在左上角","platform":"windows","ime_version":"0.2.1","problem":"候选框停在左上角","steps":"在记事本里打字","keywords":"候选框"}`
+	qqDeliver(t, s, "m-intent-windows-new", "Windows 上水杉 0.2.1 候选框停在左上角，记一下")
+	if len(fake.created) != 5 || fake.created[4]["_repo"] != "o/r" || fmt.Sprint(fake.created[4]["labels"]) != "[bug platform/windows source/qq]" {
+		t.Fatal(len(fake.created), fake.created[len(fake.created)-1])
+	}
+	fake.summary = strings.Replace(qqBugSummary, `"missing"`, `"intent":true,"missing"`, 1)
 	// 明确要求记录、而且已经有人报过：照旧补充到已有 issue。
 	fake.searchItems, fake.duplicate = []map[string]any{{"number": 7, "title": "候选框位置不对", "body": "b"}}, `{"duplicate":7}`
 	qqDeliver(t, s, "m-intent-dup", "Windows 11 上水杉 1.2.0 候选框停在左上角，记一下")
-	if len(fake.created) != 4 || fake.comments["/repos/o/win/issues/7/comments"] == nil || !strings.HasPrefix(last(), "这个问题已经有人反馈过，已补充到 GitHub o/win 的 #7") {
+	if len(fake.created) != 5 || fake.comments["/repos/o/win/issues/7/comments"] == nil || !strings.HasPrefix(last(), "这个问题已经有人反馈过，已补充到 GitHub o/win 的 #7") {
 		t.Fatal(len(fake.created), fake.comments, last())
 	}
 }
@@ -1781,7 +1798,7 @@ func TestQQIssueIntent(t *testing.T) {
 			t.Errorf("%q not recognised", text)
 		}
 	}
-	for _, text := range []string{"历史记录丢了", "输入记录不见了", "这个 issue 已经修好了", "开发版什么时候出", "记忆功能怎么用"} {
+	for _, text := range []string{"历史记录丢了", "输入记录不见了", "这个 issue 已经修好了", "开发版什么时候出", "记忆功能怎么用", "提文档 FAQ 没写怎么置顶候选", "文档反馈：历史记录那一页过时了"} {
 		if qqIssueIntent(text) {
 			t.Errorf("%q recognised", text)
 		}
@@ -1848,5 +1865,28 @@ func TestQQBotDocsCommand(t *testing.T) {
 		if last() != qqReplyUnavailable {
 			t.Fatal(bad, last())
 		}
+	}
+}
+
+// 「提文档」是命令，先于「提issue」的说法判断：内容里写了「记一下」「提个 issue」也只走文档反馈，不整理成 bug 或需求、不对照知识库，也不提到代码仓库；普通群友写了这些说法同样只追加到汇总 issue，不会被当成提 issue 拒绝或转去答疑。
+func TestQQBotDocsCommandIsNotIssueIntent(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
+	fake.docs = `{"title":"FAQ 补充候选置顶","kind":"补充","page":"faq","problem":"FAQ 没写怎么置顶候选","suggestion":"","keywords":"置顶"}`
+	fake.triage = `{"decision":"existing","answer":"不该用到"}`
+	for i, content := range []string{"提文档 FAQ 没写怎么置顶候选，记一下", "提文档：FAQ 没写怎么置顶候选，帮忙提个 issue", "文档反馈 FAQ 没写怎么置顶候选，反馈给开发"} {
+		fake.chatCalls = nil
+		qqDeliver(t, s, "m-docs-intent-"+strconv.Itoa(i), content)
+		if strings.Join(fake.chatCalls, ",") != "docs" || len(fake.created) != i+1 || fake.created[i]["_repo"] != "o/docs" || !strings.HasPrefix(fake.created[i]["title"].(string), "[文档]: ") || !strings.HasPrefix(last(), "已记录为 GitHub o/docs 的 #123") {
+			t.Fatal(content, fake.chatCalls, len(fake.created), last())
+		}
+	}
+	s.qq.config.Admins = nil
+	s.qq.config.GapsRepo = "o/docs"
+	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题"}]`
+	fake.chatCalls = nil
+	qqDeliver(t, s, "m-docs-member-intent", "提文档 FAQ 没写怎么置顶候选，提issue 记一下")
+	if strings.Join(fake.chatCalls, ",") != "docs" || len(fake.created) != 3 || fake.comments["/repos/o/docs/issues/77/comments"] == nil || last() != "已经记下，维护者会据此更新文档。" {
+		t.Fatal(fake.chatCalls, len(fake.created), last())
 	}
 }

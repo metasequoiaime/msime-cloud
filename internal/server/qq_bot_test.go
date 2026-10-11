@@ -47,7 +47,7 @@ func TestQQBotSignatureMatchesPlatformVector(t *testing.T) {
 }
 
 func qqValidConfig() Config {
-	return Config{Auth: account.Config{Enabled: true}, Admin: AdminConfig{Enabled: true, GitHub: AdminGitHubConfig{AppID: 1}}, Chat: Endpoint{URL: "https://chat.example.com/v1/chat/completions"},
+	return Config{Auth: account.Config{Enabled: true}, Admin: AdminConfig{Enabled: true, GitHub: AdminGitHubConfig{AppID: 1}}, Chat: Endpoint{URL: "https://chat.example.com/v1/chat/completions", Model: "gpt-5.6-luna"},
 		QQBot: QQBotConfig{AppID: "102030405", SecretEnv: "TEST_QQ_SECRET"}}
 }
 
@@ -57,12 +57,17 @@ func TestQQBotConfigValidation(t *testing.T) {
 	if err := c.QQBot.validate(&c); err != nil {
 		t.Fatal(err)
 	}
-	if c.QQBot.Repo != defaultQQBotRepo || c.QQBot.APIURL != defaultQQBotAPIURL || c.QQBot.secret != qqTestSecret {
+	if c.QQBot.Repo != defaultQQBotRepo || c.QQBot.APIURL != defaultQQBotAPIURL || c.QQBot.secret != qqTestSecret || c.QQBot.Model != "gpt-5.6-luna" {
 		t.Fatal("defaults", c.QQBot)
 	}
 	// 再次校验（LoadConfig 后 New 还会校验一次）结果不变。
 	if err := c.QQBot.validate(&c); err != nil || c.QQBot.APIURL != defaultQQBotAPIURL {
 		t.Fatal("validate must be idempotent", err)
+	}
+	explicit := qqValidConfig()
+	explicit.QQBot.Model = "claude-haiku-5-5"
+	if err := explicit.QQBot.validate(&explicit); err != nil || explicit.QQBot.Model != "claude-haiku-5-5" {
+		t.Fatal("explicit model", err, explicit.QQBot.Model)
 	}
 	disabled := Config{}
 	if err := disabled.QQBot.validate(&disabled); err != nil {
@@ -86,6 +91,9 @@ func TestQQBotConfigValidation(t *testing.T) {
 		"bad group":               func(c *Config) { c.QQBot.Groups = []string{"829919142/x"} },
 		"duplicate group":         func(c *Config) { c.QQBot.Groups = []string{"G1", "G1"} },
 		"plain http api":          func(c *Config) { c.QQBot.APIURL = "http://api.bot.qq.com" },
+		"model with space":        func(c *Config) { c.QQBot.Model = "claude haiku" },
+		"no model anywhere":       func(c *Config) { c.Chat.Model = "" },
+		"model without app_id":    func(c *Config) { c.QQBot.AppID, c.QQBot.Model = "", "claude-haiku-5-5" },
 	} {
 		c := qqValidConfig()
 		if name == "settings without app_id" {
@@ -166,6 +174,11 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		messages := body["messages"].([]any)
 		system := messages[0].(map[string]any)["content"].(string)
 		user := messages[1].(map[string]any)["content"].(string)
+		// 经 EveryAPI 转发的 OpenAI 模型只在用户消息里找 json，最后一条必须是格式指令。
+		last := messages[len(messages)-1].(map[string]any)
+		if body["model"] != "claude-haiku-5-5" || len(messages) != 3 || last["role"] != "user" || last["content"] != jsonObjectInstruction {
+			f.t.Error("chat request", body["model"], messages)
+		}
 		content := f.summary
 		if system == qqDuplicatePrompt {
 			content = f.duplicate
@@ -250,7 +263,7 @@ func qqServer(t *testing.T) (*Server, *qqFake, *qqLimiter) {
 	s := fixture(t, fake.ServeHTTP)
 	base := s.config.Chat.URL
 	s.config.Admin.GitHub.Platforms = []AdminPlatformConfig{{ID: "windows", Repo: "O/R", Label: "platform/windows"}, {ID: "android", Repo: "other/x", Label: "platform/android"}}
-	s.qq = newQQBot(QQBotConfig{AppID: "102030405", Repo: "o/r", Labels: []string{"source/qq"}, APIURL: base, secret: qqTestSecret})
+	s.qq = newQQBot(QQBotConfig{AppID: "102030405", Repo: "o/r", Labels: []string{"source/qq"}, Model: "claude-haiku-5-5", APIURL: base, secret: qqTestSecret})
 	s.qq.client = s.client
 	limiter := &qqLimiter{}
 	s.limits = limiter
@@ -479,6 +492,9 @@ func TestQQBotRepliesWithoutFiling(t *testing.T) {
 		{"needs details", "", func(f *qqFake, _ *qqLimiter) {
 			f.summary = `{"kind":"bug","title":"打不出字","problem":"打不出字","missing":"你用的是哪个系统？"}`
 		}, "还差一点信息：你用的是哪个系统？ 补充后请 @我 把问题完整描述一次。"},
+		{"vague bug without a question", "", func(f *qqFake, _ *qqLimiter) {
+			f.summary = `{"kind":"bug","title":"打不出字","problem":"偶尔打不出字","missing":""}`
+		}, "还差一点信息：" + qqDefaultQuestion + " 补充后请 @我 把问题完整描述一次。"},
 		{"chat down", "", func(f *qqFake, _ *qqLimiter) { f.chatStatus = 502 }, qqReplyUnavailable},
 		{"chat cut off", "", func(f *qqFake, _ *qqLimiter) { f.finish = "length" }, qqReplyUnavailable},
 		{"chat not json", "", func(f *qqFake, _ *qqLimiter) { f.summary = "好的，这是一个 bug" }, qqReplyUnavailable},

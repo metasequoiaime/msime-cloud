@@ -73,6 +73,8 @@ type QQBotConfig struct {
 	Labels []string `json:"labels"`
 	// Groups 是接受反馈的群（group_openid）。为空时接受机器人所在的每个群。
 	Groups []string `json:"groups"`
+	// Model 是整理反馈和判断重复用的模型，通过 chat 端点调用（接入地址和密钥都沿用 chat）；为空时用 chat.model。AI 联想用的模型追求快和便宜，整理 issue 需要更可靠地理解长段描述，所以可以单独指定，例如 EveryAPI 上的 claude-haiku-5-5。
+	Model string `json:"model"`
 	// APIURL 覆盖 https://api.bot.qq.com，供测试使用。
 	APIURL string `json:"api_url,omitempty"`
 	secret string
@@ -91,7 +93,7 @@ var (
 
 func (c *QQBotConfig) validate(cfg *Config) error {
 	if !c.enabled() {
-		if c.APIURL != "" || c.Repo != "" || len(c.Labels) > 0 || len(c.Groups) > 0 {
+		if c.APIURL != "" || c.Repo != "" || c.Model != "" || len(c.Labels) > 0 || len(c.Groups) > 0 {
 			return errors.New("qq_bot settings require app_id")
 		}
 		return nil
@@ -107,6 +109,12 @@ func (c *QQBotConfig) validate(cfg *Config) error {
 	}
 	if cfg.Chat.URL == "" {
 		return errors.New("qq_bot requires chat: feedback is summarised by the chat endpoint")
+	}
+	if c.Model == "" {
+		c.Model = cfg.Chat.Model
+	}
+	if strings.TrimSpace(c.Model) != c.Model || c.Model == "" || len(c.Model) > 200 || strings.ContainsAny(c.Model, " \r\n\t") {
+		return errors.New("qq_bot model must be a model name without whitespace")
 	}
 	if c.SecretEnv == "" {
 		c.SecretEnv = defaultQQBotSecretEnv
@@ -365,6 +373,8 @@ const (
 	qqReplyWorking     = "收到，正在整理成 issue。"
 	qqReplyNotFeedback = "这条看起来不是 bug 或功能建议，没有提交。如果是，请 @我 再具体描述一下。"
 	qqReplyPublic      = "内容由机器人转述后公开在 GitHub 上，不包含你的昵称和原话。"
+	// qqDefaultQuestion 是 bug 既看不出平台、也没有操作步骤，而模型没有给出追问时用的问题。
+	qqDefaultQuestion = "你用的是哪个系统（Windows、macOS、安卓等）和输入法版本？是在什么操作下出现的？"
 )
 
 // handleQQFeedback 在后台处理一条已认领的 @ 消息，所有结果都以被动回复告诉群友。不记录消息内容，日志里只有失败原因。
@@ -491,6 +501,10 @@ func (s *Server) qqSummarise(ctx context.Context, text string) (qqReport, error)
 		if report.Problem == "" {
 			return report, errors.New("model returned a bug without a problem")
 		}
+		// 什么时候追问是确定的规则，不交给模型临场判断：同一条含糊的反馈，模型有时追问、有时直接放行。
+		if report.Missing == "" && report.Platform == "" && report.Steps == "" {
+			report.Missing = qqDefaultQuestion
+		}
 	case "feature":
 		if report.Proposal == "" && report.Problem == "" {
 			return report, errors.New("model returned a feature without a proposal")
@@ -508,11 +522,11 @@ func (s *Server) qqSummarise(ctx context.Context, text string) (qqReport, error)
 	return report, nil
 }
 
-// qqChat 用 chat 端点做一次 JSON 输出的补全，把模型返回的对象解码进 out。模型有时会把 JSON 包在代码块里，这里一并去掉。
+// qqChat 用 chat 端点和 qq_bot.model 做一次 JSON 输出的补全，把模型返回的对象解码进 out。用户消息之后总是追加 jsonObjectInstruction，否则经 EveryAPI 转发的 OpenAI 模型会因为用户消息里没有 json 一词拒绝 json_object 模式。模型有时会把 JSON 包在代码块里，这里一并去掉。
 func (s *Server) qqChat(ctx context.Context, system, user string, out any) error {
 	e := s.config.Chat
-	payload, _ := json.Marshal(chatRequest{Model: e.Model, MaxTokens: contract.ChatMaxTokens, ResponseFormat: &responseFormat{Type: "json_object"},
-		Messages: []message{{Role: "system", Content: system}, {Role: "user", Content: user}}})
+	payload, _ := json.Marshal(chatRequest{Model: s.qq.config.Model, MaxTokens: contract.ChatMaxTokens, ResponseFormat: &responseFormat{Type: "json_object"},
+		Messages: []message{{Role: "system", Content: system}, {Role: "user", Content: user}, {Role: "user", Content: jsonObjectInstruction}}})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.URL, bytes.NewReader(payload))
 	if err != nil {
 		return errors.New("invalid chat endpoint")

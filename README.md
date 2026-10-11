@@ -288,7 +288,7 @@ GitHub App 只安装到 msime-dictionary，仓库权限只给 Contents: Read and
 QQ 开放平台以 Webhook 把事件推到 `POST /v1/community/qq-bot/events`。服务端用机器人 AppSecret 派生的 Ed25519 密钥校验 `X-Signature-Ed25519` 签名，按消息 id 在 `auth_rates` 里认领（7 天内同一 id 只处理一次，开放平台重推的同一事件直接应答成功），然后立即应答，在后台继续处理：
 
 1. 去掉 @ 标记和表情标签；少于 6 个字回复用法，超过 2000 字请群友精简。每个群友每天最多处理 5 条、每个群每天 50 条（`auth_rates` 作用域 `qq-bot-member`、`qq-bot-group`），闲聊和追问也计数，因为它们同样要交给模型。
-2. 用 `chat` 端点（JSON 输出）把这段话整理成 bug 或功能建议的各个栏目，栏目与 msime 的 `bug_report.yml`、`feature_request.yml` 模板一致。判断不是反馈时回复说明；bug 既看不出平台、也看不出在什么操作下出现时，回复一句追问，不提交。
+2. 用 `chat` 端点（JSON 输出）和 `qq_bot.model` 把这段话整理成 bug 或功能建议的各个栏目，栏目与 msime 的 `bug_report.yml`、`feature_request.yml` 模板一致。判断不是反馈时回复说明；bug 既看不出平台、也没有操作步骤时，回复一句追问，不提交。这条规则由服务端判定，模型没给出追问时用固定的问题。
 3. 用模型给出的关键词在 `qq_bot.repo` 搜索开启的 issue（关键词去掉冒号和引号，写不进 `repo:`、`is:` 这类限定词），交给模型判断是否重复。重复时在那个 issue 下补充评论，否则新建 issue，标签为 `bug` 或 `enhancement`、`admin.github.platforms` 里同一仓库对应平台的 `label`，以及 `qq_bot.labels`。
 4. 被动回复群友 issue 编号。开放平台只允许消息里出现报备过的域名，所以回复不带链接。被动回复只能在收到消息后 5 分钟内发出，后台处理限时 4 分钟。
 
@@ -297,8 +297,10 @@ issue 和评论只包含模型转述的内容，不含群友的原话、昵称�
 需要用户体系（PostgreSQL）、管理后台的 GitHub App（`admin.github`，安装在 `qq_bot.repo` 上并有 Issues: Read and write）和 `chat` 端点。`app_id` 为空时功能关闭；填写后缺任何一项服务都拒绝启动：
 
 ```json
-{"qq_bot":{"app_id":"102030405","secret_env":"MSIME_QQ_BOT_SECRET","repo":"metasequoiaime/msime","labels":["source/qq"]}}
+{"qq_bot":{"app_id":"102030405","secret_env":"MSIME_QQ_BOT_SECRET","repo":"metasequoiaime/msime","labels":["source/qq"],"model":"claude-haiku-5-5"}}
 ```
+
+`model` 经 `chat` 端点调用，接入地址和密钥都沿用 `chat`（生产是 EveryAPI），为空时用 `chat.model`。AI 联想的 `gpt-5.6-luna` 也能用，但整理长段描述时偶尔要 20–30 秒；EveryAPI 上的 `claude-haiku-5-5` 每次 1–4 秒，分类和去重判断都准确，输入价格更低，所以推荐单独指定它。每次请求都会在用户消息后追加一条含小写 json 的格式指令：EveryAPI 转发 OpenAI 模型时只在用户消息里找这个词，找不到就拒绝 `json_object` 模式。
 
 `labels` 里的标签要先在仓库里建好。在 QQ 开放平台的「开发 → 回调配置」填写 `https://api.msime.app/v1/community/qq-bot/events` 并勾选群 @ 消息事件；保存时开放平台发来的 op 13 校验请求由服务端用同一把密钥签名应答，所以要先部署好配置再填回调地址。机器人在沙箱阶段只能进沙箱配置里的群。
 

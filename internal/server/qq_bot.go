@@ -459,8 +459,8 @@ func (s *Server) acceptQQMessage(ctx context.Context, raw json.RawMessage) bool 
 const (
 	qqReplyUsage   = "有水杉输入法的使用问题可以直接 @我 问，例如：五笔怎么切换？"
 	qqReplyTooLong = "内容太长了，请精简到 2000 字以内再 @我。"
-	// qqReplyScreenshot 是只发了截图、没有文字时的回复：机器人看不了图片。
-	qqReplyScreenshot   = "我暂时看不了截图，请把报错文字、系统和输入法版本打出来再 @我。"
+	// qqReplyScreenshot 是只发了截图、截图又没能看成（下载失败、格式不支持、模型出错）时的回复。
+	qqReplyScreenshot   = "这张截图我没看清，可以把报错文字、系统和输入法版本打出来再 @我。"
 	qqReplyLimited      = "你 24 小时内问得已经够多了，请过一阵再来。"
 	qqReplyGroupLimited = "这个群 24 小时内问得太多了，请过一阵再来。"
 	qqReplyUnavailable  = "我暂时处理不了，请稍后再 @我 发一次。"
@@ -509,11 +509,11 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		outcome = "cmd_whoami"
 		return
 	}
+	// 只发了截图时先过限额，再看图（见 qq_vision.go）。
+	imageOnly := false
 	switch n := utf8.RuneCountInString(text); {
-	case n == 0 && slices.ContainsFunc(m.Attachments, func(a qqAttachment) bool { return strings.HasPrefix(a.ContentType, "image/") }):
-		reply(qqReplyScreenshot)
-		outcome = "screenshot_only"
-		return
+	case n == 0 && qqHasImages(m.Attachments):
+		imageOnly = true
 	case n == 0:
 		reply(qqReplyUsage)
 		outcome = "empty"
@@ -545,9 +545,22 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 			return
 		}
 	}
+	if imageOnly {
+		shot := s.qqDescribeImages(ctx, m.Attachments)
+		if shot == "" {
+			reply(qqReplyScreenshot)
+			outcome = "screenshot_only"
+			return
+		}
+		text = qqWithShot("", shot)
+	}
 	if command := s.qqCommand(ctx, m, text, admin, reply); command != "" {
 		outcome = command
 		return
+	}
+	// 文字带截图时把截图描述接在问题后面再答。命令不带截图描述：「查」「#编号」用不上，「提issue」在 fileAdminFeedback 里自己看图。
+	if !imageOnly && qqHasImages(m.Attachments) {
+		text = qqWithShot(text, s.qqDescribeImages(ctx, m.Attachments))
 	}
 	// 普通群友的消息都按问题回答。管理员的消息先整理一遍：只有明确要求记录（qqIssueIntent 或模型给出的 intent）的具体反馈才提交，其余的回复机器人的理解并提示用「提issue」。曾经管理员的每条消息都先自动判断、像反馈就提交，群里讨论和吐槽也被提成了 issue。
 	if admin {
@@ -568,6 +581,10 @@ func qqIssueIntent(text string) bool {
 
 // fileAdminFeedback 处理管理员的一条消息。explicit 表示来自「提issue」命令。先整理成 bug 或需求：不是具体反馈时，命令请管理员写具体些，普通消息转去答疑；是具体反馈时先对照知识库，文档说明功能已经有了或现象是正常的就回复文档的说法、不提交；没有明确要求记录的只回复机器人的理解，提示用「提issue」；其余的按平台选仓库、查重、带上附件和标签提交。
 func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text string, explicit bool, reply func(string)) string {
+	// 「提issue」带了截图时把截图描述并进反馈，整理出的 issue 才写得清现象；截图本身照旧存进公开 bucket。
+	if qqHasImages(m.Attachments) && !strings.Contains(text, qqShotMarker) {
+		text = qqWithShot(text, s.qqDescribeImages(ctx, m.Attachments))
+	}
 	original := text
 	text, notes := qqParseNotes(text)
 	report, err := s.qqSummarise(ctx, text)

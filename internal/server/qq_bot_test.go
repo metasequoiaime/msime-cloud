@@ -212,6 +212,9 @@ type qqFake struct {
 	embedCalls   int
 	// tokenPerms 记下每次申请 GitHub App 令牌时要的权限。
 	tokenPerms []string
+	// 看截图：vision 是看图模型的输出（为空时给一段默认描述），visionCalls 记下收到的图片数据地址的开头。
+	vision      string
+	visionCalls []string
 	// 现查 GitHub：researchPath 是模型第一轮要调用的路径（为空时直接回复「不需要查」），researchTools 记下每轮是否给了工具；answerAfterResearch 是资料里有现查结果时回答模型的输出；extraGitHub 是按路径（含查询参数）给的额外 GitHub 响应。
 	researchPath        string
 	researchTools       []bool
@@ -283,6 +286,20 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				finish = "tool_calls"
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": reply, "finish_reason": finish}}})
+			return
+		}
+		// 看截图的请求：用户消息是文字加图片的数组。
+		if parts, ok := messages[1].(map[string]any)["content"].([]any); ok {
+			for _, part := range parts {
+				if image, ok := part.(map[string]any)["image_url"].(map[string]any); ok {
+					f.visionCalls = append(f.visionCalls, image["url"].(string)[:min(len(image["url"].(string)), 22)])
+				}
+			}
+			content := f.vision
+			if content == "" {
+				content = `{"description":"Windows 上水杉的候选框停在屏幕左上角，截图里的版本号是 0.9.5"}`
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"role": "assistant", "content": content}, "finish_reason": "stop"}}})
 			return
 		}
 		user := messages[1].(map[string]any)["content"].(string)
@@ -2356,7 +2373,9 @@ func TestQQBotOutcomesAndHints(t *testing.T) {
 	logs := issueCaptureLogs(t)
 	s, fake, _ := qqServer(t)
 	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
-	qqPost(t, s, qqMessageWithAttachments("m-shot", "", []map[string]string{{"url": "https://multimedia.nt.qq.com.cn/a.png", "content_type": "image/png"}}))
+	qqTestMediaHosts(s)
+	// 截图下载不下来时，请群友把文字打出来。
+	qqPost(t, s, qqMessageWithAttachments("m-shot", "", []map[string]string{{"url": s.config.Chat.URL + "/media/missing.png", "content_type": "image/png"}}))
 	s.qqWorkers.Wait()
 	if last() != qqReplyScreenshot {
 		t.Fatal(last())
@@ -2382,7 +2401,7 @@ func TestQQBotOutcomesAndHints(t *testing.T) {
 			outcomes = append(outcomes, fmt.Sprint(entry["outcome"], "/", entry["admin"]))
 		}
 	}
-	if strings.Join(outcomes, ",") != "screenshot_only/false,cmd_report_filed/true,answered/false,cmd_issue/false" {
+	if strings.Join(outcomes, ",") != "screenshot_only/true,cmd_report_filed/true,answered/false,cmd_issue/false" {
 		t.Fatal(outcomes)
 	}
 }
@@ -2769,5 +2788,63 @@ func TestQQBotStrongModelRouting(t *testing.T) {
 	c.QQBot.StrongModel = "bad model"
 	if c.QQBot.validate(&c) == nil {
 		t.Fatal("strong model with whitespace accepted")
+	}
+}
+
+// qqTestMediaHosts 让附件下载走测试用的上游。
+func qqTestMediaHosts(s *Server) {
+	host := strings.TrimPrefix(s.config.Chat.URL, "https://")
+	s.qq.mediaHosts = append(append([]string(nil), qqMediaHosts...), strings.Split(host, ":")[0])
+	s.qq.mediaClient = newQQMediaClient(&s.qq.mediaHosts)
+	s.qq.mediaClient.Transport = s.client.Transport
+}
+
+// 看截图：只发截图时看图后按问题回答，文字带截图时把截图描述接在问题后面，管理员「提issue」带截图时描述并进 issue；看图失败时请群友把文字打出来。
+func TestQQBotScreenshots(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	qqTestMediaHosts(s)
+	s.qq.config.Admins = nil
+	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
+	shot := []map[string]string{{"url": s.config.Chat.URL + "/media/shot.png", "content_type": "image/png"}}
+	qqPost(t, s, qqMessageWithAttachments("m-shot-only", "", shot))
+	s.qqWorkers.Wait()
+	if len(fake.visionCalls) != 1 || fake.visionCalls[0] != "data:image/png;base64," || fake.chatBodies[len(fake.chatBodies)-1] != "（群友只发了截图，没写文字）（群友附了截图，截图内容：Windows 上水杉的候选框停在屏幕左上角，截图里的版本号是 0.9.5）" || last() != "在设置的「输入方案」里选五笔。" {
+		t.Fatal(fake.visionCalls, fake.chatBodies, last())
+	}
+	// 文字带截图。
+	qqPost(t, s, qqMessageWithAttachments("m-shot-text", "这是怎么回事", shot))
+	s.qqWorkers.Wait()
+	if !strings.HasPrefix(fake.chatBodies[len(fake.chatBodies)-1], "这是怎么回事\n（群友附了截图，截图内容：Windows 上水杉的候选框") {
+		t.Fatal(fake.chatBodies)
+	}
+	// 命令不看图。
+	calls := len(fake.visionCalls)
+	qqPost(t, s, qqMessageWithAttachments("m-shot-cmd", "版本", shot))
+	s.qqWorkers.Wait()
+	if len(fake.visionCalls) != calls {
+		t.Fatal("commands must not look at screenshots")
+	}
+	// 管理员「提issue」带截图：描述并进整理反馈的模型输入。
+	s.qq.config.Admins = []string{"MEMBER1"}
+	media := &fakeMedia{}
+	s.media = media
+	qqPost(t, s, qqMessageWithAttachments("m-shot-issue", "提issue 候选框不对", shot))
+	s.qqWorkers.Wait()
+	summarised := false
+	for i, call := range fake.chatCalls {
+		if call == "summarise" && strings.Contains(fake.chatBodies[i], "候选框不对\n（群友附了截图") {
+			summarised = true
+		}
+	}
+	if !summarised || len(fake.created) != 1 {
+		t.Fatal(fake.chatCalls, len(fake.created))
+	}
+	// 模型输出不合格式时请群友打字。
+	s.qq.config.Admins = nil
+	fake.vision = "not json"
+	qqPost(t, s, qqMessageWithAttachments("m-shot-bad", "", shot))
+	s.qqWorkers.Wait()
+	if last() != qqReplyScreenshot {
+		t.Fatal(last())
 	}
 }

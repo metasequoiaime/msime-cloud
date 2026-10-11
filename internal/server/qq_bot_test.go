@@ -2981,3 +2981,68 @@ func TestQQBotDrafts(t *testing.T) {
 		t.Fatal(last(), len(drafts.drafts))
 	}
 }
+
+// 「加词」走官网投稿同一条流程写进词库的滚动 PR：拼音可以用空格分隔或连写，没写拼音时让模型按常用读音标上；校验不过、额度用完时如实回复。
+func TestQQBotAddWords(t *testing.T) {
+	s, fake, limiter := qqServer(t)
+	upstream := newFakeWordsUpstream(t)
+	c := wordsConfig(t, upstream.server.URL)
+	if err := c.validate(true, []string{wordsTestOrigin}); err != nil {
+		t.Fatal(err)
+	}
+	s.words = newWordSubmitter(c, []string{wordsTestOrigin}, &fakeLimiter{})
+	s.words.client = upstream.server.Client()
+	s.words.now = func() time.Time { return time.Date(2026, 9, 30, 12, 34, 56, 0, time.UTC) }
+	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
+	qqDeliver(t, s, "m-words", "加词 扛把子 kang ba zi，二〇二六 erlingerliu")
+	if !strings.HasPrefix(last(), "已经提交到词库：扛把子（kang'ba'zi）、二〇二六（er'ling'er'liu），在 GitHub metasequoiaime/msime-dictionary 的 #12") {
+		t.Fatal(last())
+	}
+	if !strings.HasSuffix(upstream.content, "扛把子\tkang'ba'zi\t5000\n二〇二六\ter'ling'er'liu\t5000\n") {
+		t.Fatalf("%q", upstream.content)
+	}
+	// 没写拼音时让模型标上，回复里写明。
+	fake.summary = `{"pinyin":["shui'shan"]}`
+	qqDeliver(t, s, "m-words-guess", "加词水杉")
+	if !strings.Contains(last(), "水杉（shui'shan）") || !strings.Contains(last(), "按常用读音标了") {
+		t.Fatal(last())
+	}
+	// 校验不过、写错了、额度用完。
+	qqDeliver(t, s, "m-words-bad", "加词 打call da call")
+	if !strings.Contains(last(), "拼音") && !strings.Contains(last(), "音节") {
+		t.Fatal(last())
+	}
+	qqDeliver(t, s, "m-words-empty", "加词")
+	if !strings.HasPrefix(last(), "请在「加词」后面写词语和拼音") {
+		t.Fatal(last())
+	}
+	limiter.counts["qq-bot-words|GROUP1/MEMBER1"] = qqWordsDaily
+	qqDeliver(t, s, "m-words-limited", "加词 未来可期 wei lai ke qi")
+	if last() != "你今天加词的次数用完了，明天再来吧。" {
+		t.Fatal(last())
+	}
+	// 没有启用词条投稿时引导去官网。
+	s.words = nil
+	qqDeliver(t, s, "m-words-off", "加词 未来可期 wei lai ke qi")
+	if !strings.HasPrefix(last(), "加词暂时用不了") {
+		t.Fatal(last())
+	}
+}
+
+func TestQQParseWords(t *testing.T) {
+	for content, want := range map[string]string{
+		"水杉输入法 shui shan shu ru fa": "水杉输入法=shui'shan'shu'ru'fa",
+		"水杉输入法 shuishanshurufa":     "水杉输入法=shui'shan'shu'ru'fa",
+		"西安 xian":                   "西安=xi'an",
+		"绿色 LÜ-SE，未来可期":             "绿色=lv'se;未来可期=",
+		"女儿 nv'er\n未来 wei’lai":      "女儿=nv'er;未来=wei'lai",
+	} {
+		var got []string
+		for _, e := range qqParseWords(content) {
+			got = append(got, e.Word+"="+e.Pinyin)
+		}
+		if strings.Join(got, ";") != want {
+			t.Errorf("%q: %q want %q", content, strings.Join(got, ";"), want)
+		}
+	}
+}

@@ -27,8 +27,9 @@ const (
 	// qqResearchResultRunes 是每次工具调用交给模型的结果长度上限，qqResearchBodyRunes 是结果里每段正文的长度上限。
 	qqResearchResultRunes = 6000
 	qqResearchBodyRunes   = 400
-	// qqResearchTimeout 是整次调研的时限。
+	// qqResearchTimeout 是整次调研的时限，剩下的处理时间不够时再缩短，见 qqResearch。qqResearchWrapUp 是留给最后一轮总结的时间：离调研的截止不到它时不再给工具，用已经查到的内容作答。
 	qqResearchTimeout = 100 * time.Second
+	qqResearchWrapUp  = 20 * time.Second
 	qqResearchOrg     = "metasequoiaime"
 )
 
@@ -72,19 +73,32 @@ type qqResearchMessage struct {
 	ToolCallID string               `json:"tool_call_id,omitempty"`
 }
 
-// qqResearch 让模型用 github_get 查 GitHub，返回它列出的事实；不需要查、查不到或者出错时返回空字符串。
+// qqResearch 让模型用 github_get 查 GitHub，返回它列出的事实；不需要查、查不到或者出错时返回空字符串。时限是 qqResearchTimeout 和剩余处理时间减去 qqResearchReserve 中较短的一个，给之后的重答留出时间。
 func (s *Server) qqResearch(ctx context.Context, question string) string {
-	ctx, cancel := context.WithTimeout(ctx, qqResearchTimeout)
+	ctx, cancel := context.WithTimeout(ctx, min(qqResearchTimeout, qqRemaining(ctx)-qqResearchReserve))
 	defer cancel()
+	deadline, _ := ctx.Deadline()
 	messages := []qqResearchMessage{{Role: "system", Content: qqResearchPrompt + "\n\n今天是 " + s.qq.now().In(qqStatsZone).Format("2006-01-02") + "（北京时间）。"}, {Role: "user", Content: question}}
 	calls := 0
 	for round := 0; round < qqResearchRounds; round++ {
-		reply, finish, err := s.qqResearchChat(ctx, messages, calls < qqResearchCalls)
+		// 离截止不到 qqResearchWrapUp 时这一轮不给工具，用已经查到的内容总结；之前的轮次最多用到截止前 qqResearchWrapUp，某一轮卡住时还留着总结的时间。曾经任何一轮出错或超时就返回空，前几轮查到的结果整份丢掉。
+		final := time.Until(deadline) < qqResearchWrapUp
+		roundCtx, cancelRound := ctx, context.CancelFunc(func() {})
+		if !final {
+			roundCtx, cancelRound = context.WithDeadline(ctx, deadline.Add(-qqResearchWrapUp))
+		}
+		reply, finish, err := s.qqResearchChat(roundCtx, messages, calls < qqResearchCalls && !final)
+		cancelRound()
+		if err != nil && !final && calls > 0 && ctx.Err() == nil {
+			slog.Warn("qq bot: research round failed, summarising what was found", "calls", calls, "reason", err.Error())
+			final = true
+			reply, finish, err = s.qqResearchChat(ctx, messages, false)
+		}
 		if err != nil {
 			slog.Warn("qq bot: research failed", "reason", err.Error())
 			return ""
 		}
-		if finish != "tool_calls" || len(reply.ToolCalls) == 0 {
+		if final || finish != "tool_calls" || len(reply.ToolCalls) == 0 {
 			findings := strings.TrimSpace(reply.Content)
 			if findings == "" || strings.Contains(findings, "不需要查") {
 				return ""

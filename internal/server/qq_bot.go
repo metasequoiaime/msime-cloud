@@ -86,6 +86,8 @@ type QQBotConfig struct {
 	KnowledgeDir  string `json:"knowledge_dir"`
 	// GapsRepo 是汇总「机器人答不上的问题」的仓库，例如 metasequoiaime/msime-docs：答不上时把模型对问题的一句话概括作为评论追加到其中名为「QQ 机器人答不上的问题」的开放 issue，没有时新建。为空时不记录。GitHub App 要有这个仓库的 Issues 写权限。
 	GapsRepo string `json:"gaps_repo"`
+	// EmbeddingModel 是答疑向量检索用的 embedding 模型，经 chat 端点所在服务的 /embeddings 接口调用（密钥沿用 chat）；为空时用 defaultQQEmbeddingModel，写 none 关闭向量检索。见 qq_vectors.go。
+	EmbeddingModel string `json:"embedding_model"`
 	// APIURL 覆盖 https://api.bot.qq.com，供测试使用。
 	APIURL string `json:"api_url,omitempty"`
 	secret string
@@ -106,7 +108,7 @@ var (
 
 func (c *QQBotConfig) validate(cfg *Config) error {
 	if !c.enabled() {
-		if c.APIURL != "" || c.Repo != "" || c.Model != "" || c.FallbackModel != "" || c.KnowledgeRepo != "" || c.KnowledgeDir != "" || c.GapsRepo != "" || len(c.Labels) > 0 || len(c.Groups) > 0 || len(c.Admins) > 0 {
+		if c.APIURL != "" || c.Repo != "" || c.Model != "" || c.FallbackModel != "" || c.KnowledgeRepo != "" || c.KnowledgeDir != "" || c.GapsRepo != "" || c.EmbeddingModel != "" || len(c.Labels) > 0 || len(c.Groups) > 0 || len(c.Admins) > 0 {
 			return errors.New("qq_bot settings require app_id")
 		}
 		return nil
@@ -131,6 +133,12 @@ func (c *QQBotConfig) validate(cfg *Config) error {
 	}
 	if len(c.FallbackModel) > 200 || strings.ContainsAny(c.FallbackModel, " \r\n\t") {
 		return errors.New("qq_bot fallback_model must be a model name without whitespace")
+	}
+	if c.EmbeddingModel == "" {
+		c.EmbeddingModel = defaultQQEmbeddingModel
+	}
+	if len(c.EmbeddingModel) > 200 || strings.ContainsAny(c.EmbeddingModel, " \r\n\t") {
+		return errors.New("qq_bot embedding_model must be a model name without whitespace")
 	}
 	if c.SecretEnv == "" {
 		c.SecretEnv = defaultQQBotSecretEnv

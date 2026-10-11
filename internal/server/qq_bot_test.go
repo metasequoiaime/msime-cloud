@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -9,7 +10,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -19,6 +22,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
@@ -202,6 +206,10 @@ type qqFake struct {
 	comments     map[string]map[string]any
 	// issueComments 是按路径列出 issue 评论的响应（GET），缺省为空列表。
 	issueComments map[string]string
+	// history 是向量同步读的 issue 和 PR 列表（issues 接口带 state=all），按仓库和页码；historySince 记下每次请求的 since。embedCalls 是 embedding 接口收到的文本数。
+	history      map[string][]string
+	historySince []string
+	embedCalls   int
 	// 「记录答案」：faq 是整理 FAQ 的模型输出；faqFiles 不为 nil 时知识库仓库按它返回文件（要求按 qqFAQHead 读），faqWrites 按顺序记下建树、建提交、建分支、开 PR 的请求，faqFailPath 是会返回 422 的写接口路径。
 	faq         string
 	faqFiles    map[string]string
@@ -218,6 +226,17 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var body map[string]any
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	switch {
+	case r.URL.Path == "/embeddings":
+		var inputs []string
+		for _, v := range body["input"].([]any) {
+			inputs = append(inputs, v.(string))
+		}
+		f.embedCalls += len(inputs)
+		data := []map[string]any{}
+		for i, text := range inputs {
+			data = append(data, map[string]any{"index": i, "embedding": qqTestEmbedding(text)})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
 	case r.URL.Path == "/" || r.URL.Path == "":
 		f.models = append(f.models, fmt.Sprint(body["model"]))
 		if body["model"] == f.hangModel {
@@ -401,6 +420,15 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			result["total_count"] = total
 		}
 		_ = json.NewEncoder(w).Encode(result)
+	case qqIssuesPath.MatchString(r.URL.Path) && r.Method == "GET" && r.URL.Query().Get("state") == "all":
+		f.historySince = append(f.historySince, r.URL.Query().Get("since"))
+		pages := f.history[qqIssuesPath.FindStringSubmatch(r.URL.Path)[1]]
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		if page < 1 || page > len(pages) {
+			_, _ = io.WriteString(w, "[]")
+			return
+		}
+		_, _ = io.WriteString(w, pages[page-1])
 	case qqIssuesPath.MatchString(r.URL.Path) && r.Method == "GET":
 		f.openIssueCalls++
 		if f.openIssues == "" {
@@ -2372,5 +2400,185 @@ func TestQQBotRepoStats(t *testing.T) {
 	}
 	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "msime 现在开着 120 个 issue。" {
 		t.Fatal(last)
+	}
+}
+
+// qqTestEmbedding 是测试用的确定性向量：把文本里相邻两个字（去掉空白和标点）散列到 2048 维上，用词相近的文本相似度高。
+func qqTestEmbedding(text string) []float32 {
+	v := make([]float32, account.QQEmbeddingDims)
+	var runes []rune
+	for _, r := range text {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
+			runes = append(runes, unicode.ToLower(r))
+		}
+	}
+	for i := 0; i+1 < len(runes); i++ {
+		h := fnv.New32a()
+		_, _ = h.Write([]byte(string(runes[i : i+2])))
+		v[h.Sum32()%account.QQEmbeddingDims]++
+	}
+	return v
+}
+
+// memoryVectors 是测试用的向量索引，按余弦相似度精确召回。
+type memoryVectors struct {
+	mu      sync.Mutex
+	items   map[string]account.QQKnowledgeItem
+	cursors map[string]time.Time
+	err     error
+}
+
+func (m *memoryVectors) QQVectorsReady(context.Context) error { return m.err }
+func (m *memoryVectors) QQKnowledgeHashes(_ context.Context, ids []string) (map[string]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := map[string]string{}
+	for _, id := range ids {
+		if item, ok := m.items[id]; ok {
+			out[id] = item.ContentHash
+		}
+	}
+	return out, nil
+}
+func (m *memoryVectors) UpsertQQKnowledge(_ context.Context, items []account.QQKnowledgeItem) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.items == nil {
+		m.items = map[string]account.QQKnowledgeItem{}
+	}
+	for _, item := range items {
+		if len(item.Embedding) != account.QQEmbeddingDims {
+			return errors.New("bad embedding")
+		}
+		m.items[item.ID] = item
+	}
+	return nil
+}
+func (m *memoryVectors) DeleteQQKnowledgeDocs(_ context.Context, keep []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, item := range m.items {
+		if item.Kind == "doc" && !slices.Contains(keep, id) {
+			delete(m.items, id)
+		}
+	}
+	return nil
+}
+func (m *memoryVectors) SearchQQKnowledge(_ context.Context, embedding []float32, kinds []string, limit int) ([]account.QQKnowledgeHit, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cosine := func(a, b []float32) float64 {
+		var dot, na, nb float64
+		for i := range a {
+			dot += float64(a[i]) * float64(b[i])
+			na += float64(a[i]) * float64(a[i])
+			nb += float64(b[i]) * float64(b[i])
+		}
+		if na == 0 || nb == 0 {
+			return 0
+		}
+		return dot / math.Sqrt(na*nb)
+	}
+	var hits []account.QQKnowledgeHit
+	for _, item := range m.items {
+		if slices.Contains(kinds, item.Kind) {
+			hits = append(hits, account.QQKnowledgeHit{QQKnowledgeItem: item, Similarity: cosine(embedding, item.Embedding)})
+		}
+	}
+	slices.SortFunc(hits, func(a, b account.QQKnowledgeHit) int { return cmp.Compare(b.Similarity, a.Similarity) })
+	return hits[:min(limit, len(hits))], nil
+}
+func (m *memoryVectors) QQKnowledgeCursor(_ context.Context, repo string) (time.Time, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.cursors[repo], nil
+}
+func (m *memoryVectors) SetQQKnowledgeCursor(_ context.Context, repo string, since time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.cursors == nil {
+		m.cursors = map[string]time.Time{}
+	}
+	m.cursors[repo] = since
+	return nil
+}
+
+// 向量索引的同步：文档段落和 issue、PR 都算成向量存起来，内容没变的不重算，issue 带上维护者的回复，按仓库记下同步进度；同一个间隔里只有认领到的副本同步。
+func TestQQVectorSync(t *testing.T) {
+	s, fake, limiter := qqServer(t)
+	store := &memoryVectors{}
+	s.qqVectors = store
+	s.qq.config.EmbeddingModel = defaultQQEmbeddingModel
+	s.config.Admin.GitHub.Platforms = nil
+	fake.history = map[string][]string{"o/r": {
+		`[{"number":5,"title":"候选框停在屏幕左上角","body":"Windows 上打字时候选框一直在左上角 ![图](https://x.y/a.png)","state":"closed","state_reason":"completed","comments":1,"labels":[],"updated_at":"2026-10-01T00:00:00Z"},{"number":6,"title":"修复候选框位置","body":"跟随光标","state":"closed","comments":0,"labels":[],"updated_at":"2026-10-02T00:00:00Z","pull_request":{"merged_at":"2026-10-02T00:00:00Z"}}]`,
+	}}
+	fake.issueComments = map[string]string{"/repos/o/r/issues/5/comments": `[{"body":"打开「候选窗口跟随光标」就好","author_association":"OWNER"}]`}
+	s.syncQQVectors(context.Background())
+	docs, issue, pr := 0, store.items["o/r#5"], store.items["o/r#6"]
+	for _, item := range store.items {
+		if item.Kind == "doc" {
+			docs++
+		}
+	}
+	if docs != 3 || issue.Kind != "issue" || issue.Summary != "已完成；Windows 上打字时候选框一直在左上角；维护者说：打开「候选窗口跟随光标」就好" || pr.Kind != "pr" || !strings.HasPrefix(pr.Summary, "已合并 2026-10-02；") || pr.Repo != "r" {
+		t.Fatal(docs, issue, pr)
+	}
+	if !store.cursors["o/r"].Equal(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)) || fake.historySince[0] != "" {
+		t.Fatal(store.cursors, fake.historySince)
+	}
+	// 同一个间隔里不再同步；下一个间隔从记下的时间往后拉，内容没变的不重算向量。
+	calls := fake.embedCalls
+	s.syncQQVectors(context.Background())
+	if len(fake.historySince) != 1 {
+		t.Fatal("synced twice within one interval", fake.historySince)
+	}
+	delete(limiter.counts, "qq-vector-sync|all")
+	s.syncQQVectors(context.Background())
+	if fake.embedCalls != calls || fake.historySince[len(fake.historySince)-1] != "2026-10-02T00:00:00Z" {
+		t.Fatal(fake.embedCalls, calls, fake.historySince)
+	}
+	// 没装 pgvector、embedding 关闭时不同步。
+	delete(limiter.counts, "qq-vector-sync|all")
+	store.err = account.ErrQQVectorsUnavailable
+	s.syncQQVectors(context.Background())
+	if limiter.counts["qq-vector-sync|all"] != 0 {
+		t.Fatal("synced without pgvector")
+	}
+	store.err = nil
+	s.qq.config.EmbeddingModel = "none"
+	s.syncQQVectors(context.Background())
+	if limiter.counts["qq-vector-sync|all"] != 0 {
+		t.Fatal("synced with embeddings disabled")
+	}
+}
+
+// 答疑时按问题的向量召回：模型从目录没挑出来的段落也会补进资料，语义相近的历史 issue 和 PR 单独列出。
+func TestQQVectorRecall(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	store := &memoryVectors{}
+	s.qqVectors = store
+	s.qq.config.EmbeddingModel = defaultQQEmbeddingModel
+	s.qq.config.Admins = nil
+	s.config.Admin.GitHub.Platforms = nil
+	fake.history = map[string][]string{"o/r": {`[{"number":6,"title":"修复候选框停在屏幕左上角","body":"候选框跟随光标","state":"closed","comments":0,"labels":[],"updated_at":"2026-10-02T00:00:00Z","pull_request":{"merged_at":"2026-10-02T00:00:00Z"}}]`}}
+	s.syncQQVectors(context.Background())
+	fake.selected = `{"sections":[]}`
+	fake.answer = `{"type":"answered","answer":"在设置的「输入方案」里选五笔。"}`
+	qqDeliver(t, s, "m-vec", "五笔怎么切换，是在设置的输入方案里选五笔吗")
+	if !strings.Contains(fake.answerSystem, "### [FAQ · 常见问题] 输入 > 五笔怎么切换\n") {
+		t.Fatal(fake.answerSystem)
+	}
+	qqDeliver(t, s, "m-vec-history", "候选框停在屏幕左上角怎么办")
+	if !strings.Contains(fake.answerSystem, "### 语义相近的历史 issue 和 PR\n- r #6（PR）修复候选框停在屏幕左上角：已合并 2026-10-02；候选框跟随光标\n") {
+		t.Fatal(fake.answerSystem)
+	}
+	// 不相关的问题不硬塞资料。
+	qqDeliver(t, s, "m-vec-none", "今天天气怎么样")
+	if strings.Contains(fake.answerSystem, "### 语义相近的历史") || strings.Contains(fake.answerSystem, "五笔怎么切换") {
+		t.Fatal(fake.answerSystem)
+	}
+	if got := (&Server{qq: &qqBot{config: QQBotConfig{EmbeddingModel: "m"}}, config: Config{Chat: ChatEndpoint{Endpoint: Endpoint{URL: "https://api.everyapi.ai/v1/chat/completions"}}}}).qqEmbeddingURL(); got != "https://api.everyapi.ai/v1/embeddings" {
+		t.Fatal(got)
 	}
 }

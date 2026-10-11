@@ -61,6 +61,9 @@ var diagnosticsSchema string
 //go:embed qq_conversations_schema.sql
 var qqConversationsSchema string
 
+//go:embed qq_stats_schema.sql
+var qqStatsSchema string
+
 //go:embed qq_bad_answers_schema.sql
 var qqBadAnswersSchema string
 
@@ -199,7 +202,7 @@ func (s *Store) MigrateAs(ctx context.Context, role string) error {
 			return e
 		}
 	}
-	if _, e = tx.Exec(ctx, schema+"\n"+userDataSchema+"\n"+communitySchema+"\n"+adminSchema+"\n"+translationSchema+"\n"+candidateSkinSchema+"\n"+communityCandidateSkinSchema+"\n"+communityPluginSchema+"\n"+adminOpsSchema+"\n"+skinJobSchema+"\n"+feedbackSchema+"\n"+voiceContributionsSchema+"\n"+diagnosticsSchema+"\n"+qqConversationsSchema+"\n"+qqDraftsSchema+"\n"+qqFAQCandidatesSchema+"\n"+qqBadAnswersSchema); e != nil {
+	if _, e = tx.Exec(ctx, schema+"\n"+userDataSchema+"\n"+communitySchema+"\n"+adminSchema+"\n"+translationSchema+"\n"+candidateSkinSchema+"\n"+communityCandidateSkinSchema+"\n"+communityPluginSchema+"\n"+adminOpsSchema+"\n"+skinJobSchema+"\n"+feedbackSchema+"\n"+voiceContributionsSchema+"\n"+diagnosticsSchema+"\n"+qqConversationsSchema+"\n"+qqDraftsSchema+"\n"+qqFAQCandidatesSchema+"\n"+qqBadAnswersSchema+"\n"+qqStatsSchema); e != nil {
 		return e
 	}
 	// QQ 答疑的向量索引要用 pgvector：它的 halfvec 类型在当前 search_path 里解析得到才建表（扩展要超级用户安装，迁移角色装不了），否则答疑退回只用目录挑段落，服务照常启动。判断类型而不是判断扩展装没装：扩展装在 public，而 search_path 不含 public 的连接（例如测试用的独立 schema）解析不到它的类型，建表会让整个迁移失败。
@@ -287,6 +290,10 @@ SELECT id,snapshot_id,tool,arguments,result_count,bytes,at FROM diagnostic_acces
 	}
 	// QQ 答疑沉淀进文档的候选；缺表时启动走迁移。
 	if _, e := s.pool.Exec(ctx, `SELECT id,question,answer,state,ref,created_at FROM qq_faq_candidates WHERE false`); e != nil {
+		return e
+	}
+	// QQ 答疑每天的处理结果计数；缺表时启动走迁移。
+	if _, e := s.pool.Exec(ctx, `SELECT day,outcome,count FROM qq_daily_stats WHERE false`); e != nil {
 		return e
 	}
 	// 被群友说答错的回答；缺表时启动走迁移。
@@ -686,6 +693,7 @@ func (s *Store) Prune(ctx context.Context) {
 		"DELETE FROM qq_drafts WHERE created_at<now()-interval '30 days'",
 		"DELETE FROM qq_faq_candidates WHERE created_at<now()-interval '30 days'",
 		"DELETE FROM qq_bad_answers WHERE created_at<now()-interval '30 days'",
+		"DELETE FROM qq_daily_stats WHERE day<current_date-90",
 		// 语音贡献只保留 voiceContributionRetentionDays 天。
 		"DELETE FROM voice_contributions WHERE created_at<now()-interval '" + strconv.Itoa(voiceContributionRetentionDays) + " days'",
 		// 云剪贴板按用户设置的保留天数清理，置顶的条目不受保留期影响；0 表示一直保留。

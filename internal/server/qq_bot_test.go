@@ -215,6 +215,8 @@ type qqFake struct {
 	embedCalls   int
 	// tokenPerms 记下每次申请 GitHub App 令牌时要的权限。
 	tokenPerms []string
+	// judge 是自测判分模型的输出（为空时判通过）。
+	judge string
 	// 看截图：vision 是看图模型的输出（为空时给一段默认描述），visionCalls 记下收到的图片数据地址的开头。
 	vision      string
 	visionCalls []string
@@ -347,6 +349,12 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				content = `{"decision":"needs_issue"}`
 			}
 			f.chatCalls = append(f.chatCalls, "triage")
+		case system == qqSelfTestJudgePrompt:
+			content = f.judge
+			if content == "" {
+				content = `{"pass":true,"reason":"满足要求"}`
+			}
+			f.chatCalls = append(f.chatCalls, "judge")
 		case strings.HasPrefix(system, qqFAQPrompt):
 			content = f.faq
 			f.chatCalls = append(f.chatCalls, "faq")
@@ -3335,6 +3343,98 @@ func TestQQBotBadAnswerRetry(t *testing.T) {
 	}
 	deliver("m-b-list", "ADMIN1", "差评")
 	if last := fake.replyTexts()[len(fake.replyTexts())-1]; !strings.Contains(last, "问：五笔怎么切换\n答：在设置里选五笔。\n群友：不对啊\n重答：按 Ctrl+` 打开方案菜单选五笔。") {
+		t.Fatal(last)
+	}
+}
+
+// memoryStats 是测试用的处理结果计数。
+type memoryStats struct {
+	mu     sync.Mutex
+	counts map[string]int
+}
+
+func (m *memoryStats) IncrQQOutcome(_ context.Context, _ time.Time, outcome string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.counts == nil {
+		m.counts = map[string]int{}
+	}
+	m.counts[outcome]++
+	return nil
+}
+func (m *memoryStats) QQOutcomes(context.Context, time.Time) (map[string]int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := map[string]int{}
+	for k, v := range m.counts {
+		out[k] = v
+	}
+	return out, nil
+}
+
+// 每条消息的处理结果按天计数；管理员「周报」汇总最近 7 天，普通群友不能用。
+func TestQQBotWeeklyDigest(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	stats := &memoryStats{}
+	s.qqStats = stats
+	s.qqDrafts = &memoryDrafts{}
+	s.qqFAQCandidates = &memoryFAQCandidates{}
+	s.qqBadAnswers = &memoryBadAnswers{}
+	s.qq.config.Admins = []string{"ADMIN1"}
+	s.qq.now = func() time.Time { return time.Date(2026, 10, 12, 4, 0, 0, 0, time.UTC) }
+	deliver := func(id, member, content string) {
+		t.Helper()
+		qqPost(t, s, qqMessageFrom(id, member, content))
+		s.qqWorkers.Wait()
+	}
+	deliver("m-d-1", "MEMBER1", "五笔怎么切换")
+	fake.answer = `{"type":"unknown","topic":"x"}`
+	deliver("m-d-2", "MEMBER1", "怎么挂载 Rime")
+	deliver("m-d-3", "MEMBER1", "版本")
+	if stats.counts["answered"] != 1 || stats.counts["unknown_unrecorded"] != 1 || stats.counts["cmd_releases"] != 1 {
+		t.Fatal(stats.counts)
+	}
+	deliver("m-d-member", "MEMBER1", "周报")
+	if fake.replyTexts()[len(fake.replyTexts())-1] != "只有管理员能用「周报」。" {
+		t.Fatal(fake.replyTexts())
+	}
+	fake.searchTotals = map[string]int{`repo:o/r is:issue label:"source/qq" created:>=2026-10-06T00:00:00+08:00`: 2, `repo:o/win is:issue label:"source/qq" created:>=2026-10-06T00:00:00+08:00`: 1}
+	deliver("m-d-digest", "ADMIN1", "周报")
+	last := fake.replyTexts()[len(fake.replyTexts())-1]
+	for _, want := range []string{"最近 7 天（10-06 到 10-12）：", "收到 4 条 @：答上 1、答不上 1（答上率 50%）、闲聊 0、命令 2", "群友说答错 0 次", "待提交的草稿 0 份", "文档缺口 1 条", "这周从 QQ 提的 issue 3 个"} {
+		if !strings.Contains(last, want) {
+			t.Fatalf("missing %q in %q", want, last)
+		}
+	}
+}
+
+// 「自测」用固定的题目跑真实的答疑流程再判分，回复通过数和没通过的原因；不记差评、不记文档候选。
+func TestQQBotSelfTest(t *testing.T) {
+	s, fake, limiter := qqServer(t)
+	s.qq.config.Admins = []string{"ADMIN1"}
+	candidates := &memoryFAQCandidates{}
+	s.qqFAQCandidates = candidates
+	fake.judge = `{"pass":true,"reason":"满足要求"}`
+	qqPost(t, s, qqMessageFrom("m-selftest", "ADMIN1", "自测"))
+	s.qqWorkers.Wait()
+	replies := fake.replyTexts()
+	if len(replies) != 2 || !strings.HasPrefix(replies[0], "开始自测") || replies[1] != fmt.Sprintf("自测 %d/%d 通过。", len(qqSelfTestCases), len(qqSelfTestCases)) {
+		t.Fatal(replies)
+	}
+	if strings.Count(strings.Join(fake.chatCalls, ","), "judge") != len(qqSelfTestCases) || len(candidates.items) != 0 {
+		t.Fatal(fake.chatCalls, candidates.items)
+	}
+	// 判不过、答不上的列出原因。
+	fake.judge = `{"pass":false,"reason":"只复述了资料"}`
+	qqPost(t, s, qqMessageFrom("m-selftest-2", "ADMIN1", "自测"))
+	s.qqWorkers.Wait()
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; !strings.HasPrefix(last, fmt.Sprintf("自测 0/%d 通过。没通过的：\n- 「五笔怎么切换」只复述了资料", len(qqSelfTestCases))) {
+		t.Fatal(last)
+	}
+	limiter.counts["qq-bot-selftest|ADMIN1"] = qqSelfTestDaily
+	qqPost(t, s, qqMessageFrom("m-selftest-3", "ADMIN1", "自测"))
+	s.qqWorkers.Wait()
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "今天自测的次数用完了，明天再来。" {
 		t.Fatal(last)
 	}
 }

@@ -496,6 +496,7 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 	started, outcome, admin := s.qq.now(), "failed", false
 	defer func() {
 		slog.Info("qq bot: handled", "outcome", outcome, "admin", admin, "ms", s.qq.now().Sub(started).Milliseconds())
+		s.recordQQOutcome(ctx, outcome)
 	}()
 	seq := 0
 	reply := func(text string) {

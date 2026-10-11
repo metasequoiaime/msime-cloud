@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -17,9 +18,17 @@ import (
 // 「记录答案」：管理员在群里回答了机器人答不上的问题后，用「记录答案 问：… 答：…」把这组问答整理成知识库 FAQ 的一条，在知识库仓库开 PR，维护者核对后合并，之后同样的问题机器人就能自己回答。简体 FAQ、繁体译文和译文核对哈希（zh-TW/sources.json）在同一个提交里改；只有现有译文和简体原文同步（哈希一致）时才同步繁体，否则只改简体并在 PR 里说明，不伪造「译文已同步」。
 
 const (
-	qqFAQRunes       = 3000
+	qqFAQRunes = 3000
+	// qqFAQAnswerRunes 是答案的最少字数：官网（msime-web 的 seo-output.test.mjs）要求每条繁体答案渲染后超过 50 字、简体超过 20 字，太短的条目会让官网下次更新文档子模块时测试失败。
+	qqFAQAnswerRunes = 60
 	qqFAQBranchStamp = "20060102-150405"
 )
+
+// errQQFAQTooShort 表示模型整理出的答案太短，要请管理员补充。
+var errQQFAQTooShort = errors.New("model answer too short")
+
+// qqCodeBlockPattern 匹配 Markdown 代码块；官网测试要求繁体译文的代码块与简体原文逐字相同。
+var qqCodeBlockPattern = regexp.MustCompile("```[^\n]*\n[\\s\\S]*?```")
 
 var qqFAQPerms = map[string]string{"contents": "write", "pull_requests": "write", "metadata": "read"}
 
@@ -27,9 +36,9 @@ const qqFAQPrompt = `你在为开源输入法「水杉输入法」的常见问�
 
 只输出一个 JSON 对象，值都是字符串：
 - question：FAQ 的问题标题，一句话，以问号结尾，不超过 40 个汉字，写成用户会怎么问的样子。
-- answer：答案正文，简体中文 Markdown，只写管理员给出的内容，不要补充他没说的事实；可以分段，操作步骤用有序列表；不写链接。
+- answer：答案正文，简体中文 Markdown，只写管理员给出的内容，不要补充他没说的事实；可以分段，操作步骤用有序列表；不写链接。写成完整的几句话，交代适用的平台或场景再给做法，不少于 60 个字；管理员给的信息实在不够写这么多时也不要编造。
 - category：从下面列出的 FAQ 分类里选一个最合适的，必须原样照抄分类名。
-- question_tw、answer_tw：question 和 answer 的繁体中文（台湾用语）译文；程序名、命令、文件名和引号里的应用选项保留原文。
+- question_tw、answer_tw：question 和 answer 的繁体中文（台湾用语）译文；程序名、命令、文件名和引号里的应用选项保留原文，代码块原样照抄、一个字都不改。
 - valid：内容里确实有一个问题和它的答案时写 "yes"，否则写 "no"。
 
 不要写入人名、昵称、QQ 号、手机号、邮箱或其他个人信息。`
@@ -137,6 +146,12 @@ func (s *Server) qqSummariseFAQ(ctx context.Context, text string, categories []s
 			}
 		}
 	}
+	if strings.Join(qqCodeBlockPattern.FindAllString(entry.Answer, -1), "\n") != strings.Join(qqCodeBlockPattern.FindAllString(entry.AnswerTW, -1), "\n") {
+		return entry, errors.New("model translation changed code blocks")
+	}
+	if utf8.RuneCountInString(entry.Answer) < qqFAQAnswerRunes || utf8.RuneCountInString(entry.AnswerTW) < qqFAQAnswerRunes {
+		return entry, errQQFAQTooShort
+	}
 	return entry, nil
 }
 
@@ -215,16 +230,21 @@ func (s *Server) recordQQAnswer(ctx context.Context, text string, reply func(str
 		return
 	}
 	entry, err := s.qqSummariseFAQ(ctx, text, categories)
+	// 已有同名问题时先说这个，答案太短也不用补充了。
+	if (err == nil || errors.Is(err, errQQFAQTooShort)) && entry.Valid == "yes" && strings.Contains(faq, "\n### "+entry.Question+"\n") {
+		reply("FAQ 里已经有「" + entry.Question + "」这一问了。")
+		return
+	}
+	if errors.Is(err, errQQFAQTooShort) {
+		reply("答案太短，写进 FAQ 不够用。请补充适用的平台或场景、具体怎么操作，再发一次「记录答案」。")
+		return
+	}
 	if err != nil {
 		fail("summarise", err)
 		return
 	}
 	if entry.Valid != "yes" {
 		reply("没看出要记录的问题和答案，请写成「记录答案 问：… 答：…」。")
-		return
-	}
-	if strings.Contains(faq, "\n### "+entry.Question+"\n") {
-		reply("FAQ 里已经有「" + entry.Question + "」这一问了。")
 		return
 	}
 	index := slices.Index(categories, entry.Category)
@@ -272,7 +292,7 @@ func (s *Server) recordQQAnswer(ctx context.Context, text string, reply func(str
 		fail("branch", githubFailure("branch", r, err))
 		return
 	}
-	body := "QQ 群管理员在群里回答了一个机器人答不上的问题，机器人把它整理成 FAQ 的一条，归入「" + entry.Category + "」。\n\n请核对问题标题和答案是否准确、措辞是否合适，再合并；合并后机器人最多 10 分钟就能回答这个问题。"
+	body := "QQ 群管理员在群里回答了一个机器人答不上的问题，机器人把它整理成 FAQ 的一条，归入「" + entry.Category + "」。\n\n请核对问题标题和答案是否准确、措辞是否合适，再合并；合并后机器人最多 10 分钟就能回答这个问题。官网 msime-web 下次更新文档子模块时，`scripts/seo-output.test.mjs` 里简体和繁体的 FAQ 条数要各加一。"
 	if translated {
 		body += "\n\n繁体译文（`" + twPath + "`）由模型翻译，已同步插入并更新 `" + sourcesPath + "` 的核对哈希，请一并核对。"
 	} else {

@@ -1941,7 +1941,7 @@ func TestQQBotRecordAnswer(t *testing.T) {
 	s, fake, _ := qqServer(t)
 	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
 	fake.faqFiles = map[string]string{"guides/faq.md": qqTestFAQ, "guides/zh-TW/faq.md": qqTestFAQTW, "guides/zh-TW/sources.json": qqTestFAQSources(qqTestFAQ)}
-	fake.faq = `{"valid":"yes","question":"鸿蒙版在哪下载？","answer":"在华为应用市场搜索水杉输入法，见 https://evil.example","category":"安装与启动","question_tw":"鴻蒙版在哪下載？","answer_tw":"在華為應用市場搜尋水杉輸入法。"}`
+	fake.faq = `{"valid":"yes","question":"鸿蒙版在哪下载？","answer":"鸿蒙版已经上架华为应用市场。在鸿蒙手机上打开华为应用市场，搜索「水杉输入法」安装即可，安装后到系统设置的输入法里把它设为默认输入法，就能正常打字了，见 https://evil.example","category":"安装与启动","question_tw":"鴻蒙版在哪下載？","answer_tw":"鴻蒙版已經上架華為應用市場。在鴻蒙手機上打開華為應用市場，搜尋「水杉輸入法」安裝即可，安裝後到系統設定的輸入法裡把它設為預設輸入法，就能正常打字了。"}`
 	qqDeliver(t, s, "m-faq", "记录答案 问：鸿蒙版在哪下载 答：华为应用市场搜水杉")
 	if len(fake.faqWrites) != 4 || !strings.Contains(last(), "开了 PR：GitHub o/docs 的 #42") {
 		t.Fatal(fake.faqWrites, fake.replyTexts())
@@ -1955,8 +1955,8 @@ func TestQQBotRecordAnswer(t *testing.T) {
 		entry := f.(map[string]any)
 		files[entry["path"].(string)] = entry["content"].(string)
 	}
-	wantFAQ := strings.Replace(qqTestFAQ, "先装运行库。\n\n", "先装运行库。\n\n### 鸿蒙版在哪下载？\n\n在华为应用市场搜索水杉输入法，见\n\n", 1)
-	wantTW := strings.Replace(qqTestFAQTW, "先裝執行庫。\n\n", "先裝執行庫。\n\n### 鴻蒙版在哪下載？\n\n在華為應用市場搜尋水杉輸入法。\n\n", 1)
+	wantFAQ := strings.Replace(qqTestFAQ, "先装运行库。\n\n", "先装运行库。\n\n### 鸿蒙版在哪下载？\n\n鸿蒙版已经上架华为应用市场。在鸿蒙手机上打开华为应用市场，搜索「水杉输入法」安装即可，安装后到系统设置的输入法里把它设为默认输入法，就能正常打字了，见\n\n", 1)
+	wantTW := strings.Replace(qqTestFAQTW, "先裝執行庫。\n\n", "先裝執行庫。\n\n### 鴻蒙版在哪下載？\n\n鴻蒙版已經上架華為應用市場。在鴻蒙手機上打開華為應用市場，搜尋「水杉輸入法」安裝即可，安裝後到系統設定的輸入法裡把它設為預設輸入法，就能正常打字了。\n\n", 1)
 	if len(files) != 3 || files["guides/faq.md"] != wantFAQ || files["guides/zh-TW/faq.md"] != wantTW || files["guides/zh-TW/sources.json"] != qqTestFAQSources(wantFAQ) {
 		t.Fatalf("%q", files)
 	}
@@ -1972,13 +1972,13 @@ func TestQQBotRecordAnswer(t *testing.T) {
 	// 译文本来就没同步：只改简体，插在第一个分类的末尾，PR 里说明。
 	fake.faqWrites = nil
 	fake.faqFiles["guides/zh-TW/sources.json"] = qqTestFAQSources("旧原文")
-	fake.faq = `{"valid":"yes","question":"字体发虚？","answer":"换成 GDI 渲染。","category":"字体与显示","question_tw":"字型發虛？","answer_tw":"換成 GDI 渲染。"}`
+	fake.faq = `{"valid":"yes","question":"字体发虚？","answer":"字体发虚通常是渲染方式不合适。打开设置里的外观页，把候选框的渲染方式从默认的 DirectWrite 换成 GDI，保存后重新打字看看，一般就清楚了。","category":"字体与显示","question_tw":"字型發虛？","answer_tw":"字型發虛通常是渲染方式不合適。打開設定裡的外觀頁，把候選框的渲染方式從預設的 DirectWrite 換成 GDI，儲存後重新打字看看，一般就清楚了。"}`
 	qqDeliver(t, s, "m-faq-stale", "记录答案 字体发虚怎么办，换 GDI 渲染")
 	if len(fake.faqWrites) != 4 {
 		t.Fatal(fake.faqWrites, fake.replyTexts())
 	}
 	entries := fake.faqWrites[0]["tree"].([]any)
-	if len(entries) != 1 || entries[0].(map[string]any)["content"] != strings.Replace(qqTestFAQ, "在设置里调大。\n\n", "在设置里调大。\n\n### 字体发虚？\n\n换成 GDI 渲染。\n\n", 1) || !strings.Contains(fake.faqWrites[3]["body"].(string), "这次只改了简体") {
+	if len(entries) != 1 || entries[0].(map[string]any)["content"] != strings.Replace(qqTestFAQ, "在设置里调大。\n\n", "在设置里调大。\n\n### 字体发虚？\n\n字体发虚通常是渲染方式不合适。打开设置里的外观页，把候选框的渲染方式从默认的 DirectWrite 换成 GDI，保存后重新打字看看，一般就清楚了。\n\n", 1) || !strings.Contains(fake.faqWrites[3]["body"].(string), "这次只改了简体") {
 		t.Fatal(entries, fake.faqWrites[3])
 	}
 	// 已有同名问题、看不出问答、模型输出不合格式、写接口失败：不开 PR。
@@ -1986,6 +1986,11 @@ func TestQQBotRecordAnswer(t *testing.T) {
 	fake.faq = `{"valid":"yes","question":"装不上？","answer":"a","category":"安装与启动","question_tw":"裝不上？","answer_tw":"a"}`
 	qqDeliver(t, s, "m-faq-dup", "记录答案 装不上怎么办")
 	if last() != "FAQ 里已经有「装不上？」这一问了。" {
+		t.Fatal(last())
+	}
+	fake.faq = `{"valid":"yes","question":"短？","answer":"太短了。","category":"安装与启动","question_tw":"短？","answer_tw":"太短了。"}`
+	qqDeliver(t, s, "m-faq-short", "记录答案 问：短 答：短")
+	if !strings.HasPrefix(last(), "答案太短") || len(fake.faqWrites) != 0 {
 		t.Fatal(last())
 	}
 	fake.faq = `{"valid":"no"}`
@@ -1998,6 +2003,7 @@ func TestQQBotRecordAnswer(t *testing.T) {
 		`{"valid":"yes","question":"q\n## 注入？","answer":"a","category":"安装与启动","question_tw":"q？","answer_tw":"a"}`,
 		`{"valid":"yes","question":"q？","answer":"a\n## 新分类","category":"安装与启动","question_tw":"q？","answer_tw":"a"}`,
 		`{"valid":"yes","question":"q？","answer":"a","category":"安装与启动","question_tw":"","answer_tw":"a"}`,
+		`{"valid":"yes","question":"q？","answer":"这是一段足够长的答案，用来测试开 PR 失败时的处理，内容本身没有意义，只是为了凑够六十个字的最低要求，再多写几个字确保足够。\n` + "```sh\\nmsime --a\\n```" + `","category":"安装与启动","question_tw":"q？","answer_tw":"这是一段足够长的答案，用来测试开 PR 失败时的处理，内容本身没有意义，只是为了凑够六十个字的最低要求，再多写几个字确保足够。\n` + "```sh\\nmsime --b\\n```" + `"}`,
 		`not json`,
 	} {
 		fake.faq = bad
@@ -2006,7 +2012,7 @@ func TestQQBotRecordAnswer(t *testing.T) {
 			t.Fatal(bad, last())
 		}
 	}
-	fake.faq = `{"valid":"yes","question":"新问题？","answer":"a","category":"安装与启动","question_tw":"新問題？","answer_tw":"a"}`
+	fake.faq = `{"valid":"yes","question":"新问题？","answer":"这是一段足够长的答案，用来测试开 PR 失败时的处理，内容本身没有意义，只是为了凑够六十个字的最低要求，再多写几个字确保足够。","category":"安装与启动","question_tw":"新問題？","answer_tw":"这是一段足够长的答案，用来测试开 PR 失败时的处理，内容本身没有意义，只是为了凑够六十个字的最低要求，再多写几个字确保足够。"}`
 	fake.faqFailPath = "/repos/o/docs/pulls"
 	qqDeliver(t, s, "m-faq-pull-fail", "记录答案 新问题")
 	if last() != qqReplyUnavailable || len(fake.faqWrites) != 3 {

@@ -545,7 +545,7 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 	case answer.Type == "unknown":
 		recorded = qqUnansweredTurn
 		reply(qqUnknownReply)
-		s.recordQQGap(ctx, answer.Topic)
+		s.recordQQGap(ctx, "群友问：", answer.Topic)
 	case answer.Type == "answered" && answer.Escalate:
 		reply(answer.Answer + qqEscalation)
 	default:

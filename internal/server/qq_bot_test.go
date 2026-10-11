@@ -177,6 +177,7 @@ type qqFake struct {
 	// searchQueries 记下每次搜索；releases 是各仓库 Release 列表的响应（缺省的仓库返回 500）。
 	// topics 是挑分类标签的模型输出，repoLabels 是各仓库标签列表的响应，issues 是按「owner/name/issues/编号」查单个 issue 的响应。
 	topics     string
+	docs       string
 	repoLabels map[string]string
 	issues     map[string]string
 	// openIssues 是列出开放 issue 的响应（为空时返回 500），openIssueCalls 记下调用次数；commentStatus 非 0 时评论失败。
@@ -222,6 +223,9 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case strings.HasPrefix(system, qqSelectPrompt):
 			content, f.selectSystem = f.selected, system
 			f.chatCalls = append(f.chatCalls, "select")
+		case system == qqDocsPrompt:
+			content = f.docs
+			f.chatCalls = append(f.chatCalls, "docs")
 		case system == qqTopicPrompt:
 			content = f.topics
 			if content == "" {
@@ -1499,22 +1503,22 @@ func TestQQBotRecordsUnansweredTopics(t *testing.T) {
 	}
 	// 没有配置 gaps_repo、概括为空或限流出错时都不记。
 	s.qq.config.GapsRepo = ""
-	s.recordQQGap(context.Background(), "x")
+	s.recordQQGap(context.Background(), "群友问：", "x")
 	s.qq.config.GapsRepo = "o/docs"
-	s.recordQQGap(context.Background(), "   ")
+	s.recordQQGap(context.Background(), "群友问：", "   ")
 	limiter.err = map[string]error{"qq-bot-gap": errors.New("down")}
-	s.recordQQGap(context.Background(), "限流出错")
+	s.recordQQGap(context.Background(), "群友问：", "限流出错")
 	limiter.err = nil
 	// 列 issue 失败、取锁失败、概括过长。
 	s.qq.gapsIssue = 0
 	fake.openIssues = ""
-	s.recordQQGap(context.Background(), "列表失败")
+	s.recordQQGap(context.Background(), "群友问：", "列表失败")
 	locks.err = errors.New("busy")
-	s.recordQQGap(context.Background(), "取锁失败")
+	s.recordQQGap(context.Background(), "群友问：", "取锁失败")
 	locks.err = nil
 	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题"}]`
 	delete(limiter.counts, "qq-bot-gaps-day|o/docs")
-	s.recordQQGap(context.Background(), strings.Repeat("长", qqGapRunes+20))
+	s.recordQQGap(context.Background(), "群友问：", strings.Repeat("长", qqGapRunes+20))
 	if c := fake.comments["/repos/o/docs/issues/77/comments"]; c == nil || len([]rune(c["body"].(string))) != len([]rune("群友问："))+qqGapRunes {
 		t.Fatal(fake.comments)
 	}
@@ -1677,5 +1681,68 @@ func TestQQBotAdminMessagesAreNotFiledWithoutCommand(t *testing.T) {
 	}
 	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "在设置的「输入方案」里选五笔。" {
 		t.Fatal(last)
+	}
+}
+
+// 「提文档」：管理员在知识库仓库开文档 issue（只打仓库已有的标签，重复时补充评论）；普通群友的反馈追加到汇总 issue。
+func TestQQBotDocsCommand(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
+	fake.docs = `{"title":"FAQ 补充鸿蒙版的发布状态 @octocat","kind":"补充","page":"faq","problem":"FAQ 没写鸿蒙版有没有发布","suggestion":"","keywords":"鸿蒙"}`
+	fake.repoLabels = map[string]string{"o/docs": `[{"name":"Documentation"},{"name":"bug"}]`}
+	qqDeliver(t, s, "m-docs", "提文档 FAQ 没写鸿蒙版有没有发布")
+	if len(fake.created) != 1 {
+		t.Fatal(fake.created, fake.replyTexts())
+	}
+	issue := fake.created[0]
+	if issue["_repo"] != "o/docs" || issue["title"] != "[文档]: FAQ 补充鸿蒙版的发布状态 @\u200boctocat" || fmt.Sprint(issue["labels"]) != "[Documentation]" {
+		t.Fatal(issue)
+	}
+	body := issue["body"].(string)
+	for _, want := range []string{"### 要补充的内容\n\nFAQ 没写鸿蒙版有没有发布", "### 建议怎么写\n\n反馈中没有说明。", "### 涉及的文档\n\nfaq", qqIssueFooter} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("body missing %q:\n%s", want, body)
+		}
+	}
+	if !strings.HasPrefix(last(), "已记录为 GitHub o/docs 的 #123") {
+		t.Fatal(last())
+	}
+	// 重复时在原 issue 下补充。
+	fake.searchItems = []map[string]any{{"number": 5, "title": "补充鸿蒙版说明", "body": "b"}}
+	fake.duplicate = `{"duplicate":5}`
+	fake.docs = `{"title":"FAQ 补充鸿蒙版","kind":"更正","page":"","problem":"鸿蒙版说法过时","suggestion":"写成已发布","keywords":"鸿蒙"}`
+	qqDeliver(t, s, "m-docs-dup", "提文档 鸿蒙那条过时了")
+	if c := fake.comments["/repos/o/docs/issues/5/comments"]; c == nil || !strings.Contains(c["body"].(string), "建议：写成已发布") || !strings.HasPrefix(last(), "这处文档已经有人反馈过，已补充到 GitHub o/docs 的 #5") {
+		t.Fatal(fake.comments, last())
+	}
+	// 普通群友：追加到汇总 issue；没有配置汇总时如实回复。
+	s.qq.config.Admins = nil
+	s.qq.config.GapsRepo = ""
+	qqDeliver(t, s, "m-docs-member-off", "提文档 FAQ 没写鸿蒙版")
+	if !strings.HasPrefix(last(), "暂时记不下来") {
+		t.Fatal(last())
+	}
+	s.qq.config.GapsRepo = "o/docs"
+	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题"}]`
+	qqDeliver(t, s, "m-docs-member", "提文档 FAQ 没写鸿蒙版")
+	if c := fake.comments["/repos/o/docs/issues/77/comments"]; c == nil || c["body"] != "群友反馈文档：FAQ 补充鸿蒙版（鸿蒙版说法过时）" || last() != "已经记下，维护者会据此更新文档。" {
+		t.Fatal(fake.comments, last())
+	}
+	// 看不出是文档反馈、没写内容、模型输出不合格式。
+	fake.docs = `{"kind":"other"}`
+	qqDeliver(t, s, "m-docs-other", "提文档 你好")
+	if !strings.HasPrefix(last(), "没看出文档要补充或更正什么") {
+		t.Fatal(last())
+	}
+	qqDeliver(t, s, "m-docs-empty", "文档反馈")
+	if !strings.HasPrefix(last(), "请在「提文档」后面写") {
+		t.Fatal(last())
+	}
+	for i, bad := range []string{`{"kind":"改写","title":"t","problem":"p"}`, `{"kind":"补充","title":"","problem":"p"}`, `not json`} {
+		fake.docs = bad
+		qqDeliver(t, s, "m-docs-bad-"+strconv.Itoa(i), "提文档 内容")
+		if last() != qqReplyUnavailable {
+			t.Fatal(bad, last())
+		}
 	}
 }

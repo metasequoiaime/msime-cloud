@@ -73,11 +73,11 @@ func (s *Server) qqGapsIssue(ctx context.Context, token string) (int64, error) {
 	return number, nil
 }
 
-// recordQQGap 把一个答不上的问题（模型的概括）追加到汇总 issue。失败只记日志。
-func (s *Server) recordQQGap(ctx context.Context, topic string) {
+// recordQQGap 把一个答不上的问题（模型的概括）追加到汇总 issue，prefix 是评论开头，例如「群友问：」。返回是否已经记下（7 天内记过的同一个概括也算记下）；失败只记日志。
+func (s *Server) recordQQGap(ctx context.Context, prefix, topic string) bool {
 	topic = strings.Join(strings.Fields(topic), " ")
 	if s.qq.config.GapsRepo == "" || topic == "" {
-		return
+		return false
 	}
 	if runes := []rune(topic); len(runes) > qqGapRunes {
 		topic = string(runes[:qqGapRunes])
@@ -89,29 +89,31 @@ func (s *Server) recordQQGap(ctx context.Context, topic string) {
 	}{{"qq-bot-gap", topic, 1, 7 * 24 * time.Hour}, {"qq-bot-gaps-day", s.qq.config.GapsRepo, qqGapsDaily, 24 * time.Hour}} {
 		switch err := s.limits.RateLimit(ctx, limit.scope, limit.subject, limit.count, limit.window); {
 		case errors.Is(err, account.ErrLimited):
-			return
+			return limit.scope == "qq-bot-gap"
 		case err != nil:
 			slog.Warn("qq bot: gap not recorded", "reason", err.Error())
-			return
+			return false
 		}
 	}
 	client, repo := s.adminGitHub, s.qq.config.GapsRepo
 	token, err := client.Token(ctx, repo, issueTokenPerms)
 	if err != nil {
 		slog.Warn("qq bot: gap not recorded", "reason", err.Error())
-		return
+		return false
 	}
 	number, err := s.qqGapsIssue(ctx, token)
 	if err != nil {
 		slog.Warn("qq bot: gap not recorded", "reason", err.Error())
-		return
+		return false
 	}
-	r, err := client.Do(ctx, token, "POST", "/repos/"+repo+"/issues/"+strconv.FormatInt(number, 10)+"/comments", map[string]string{"body": "群友问：" + githubReferenceBreaker.Replace(topic)})
+	r, err := client.Do(ctx, token, "POST", "/repos/"+repo+"/issues/"+strconv.FormatInt(number, 10)+"/comments", map[string]string{"body": prefix + githubReferenceBreaker.Replace(topic)})
 	if err != nil || !r.OK() {
 		// 汇总 issue 可能已经被关闭或删除；清掉缓存，下一次重新查找或新建。
 		s.qq.mu.Lock()
 		s.qq.gapsIssue = 0
 		s.qq.mu.Unlock()
 		slog.Warn("qq bot: gap not recorded", "reason", githubFailure("gaps comment", r, err).Error())
+		return false
 	}
+	return true
 }

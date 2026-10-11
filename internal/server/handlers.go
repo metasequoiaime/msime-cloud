@@ -23,6 +23,10 @@ type message struct {
 type responseFormat struct {
 	Type string `json:"type"`
 }
+
+// jsonObjectInstruction 是 json_object 模式下追加的用户消息。部分 Chat-to-Responses 网关（例如 EveryAPI 转发 OpenAI 模型时）只在用户消息里找小写的 json，系统指令里写了也不算，找不到就返回 400。
+const jsonObjectInstruction = "Return only a valid json object matching the requested schema."
+
 type chatRequest struct {
 	EnableThinking *bool           `json:"enable_thinking,omitempty"`
 	ResponseFormat *responseFormat `json:"response_format,omitempty"`
@@ -78,7 +82,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if !hasJSONInstruction {
-			v.Messages = append(v.Messages, message{Role: "user", Content: "Return only a valid json object matching the requested schema."})
+			v.Messages = append(v.Messages, message{Role: "user", Content: jsonObjectInstruction})
 		}
 	}
 	v.EnableThinking = nil

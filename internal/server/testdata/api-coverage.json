@@ -414,6 +414,15 @@
       "internal/server/skin_jobs_test.go::TestSkinJobCapacityCancelExpiryAndShutdown",
       "internal/server/skin_jobs_test.go::TestSharedSkinJobDeleteOnAnotherReplicaStopsUpstream"
     ],
+    "POST /v1/community/qq-bot/events": [
+      "internal/server/qq_bot_test.go::TestQQBotCallbackProtocol",
+      "internal/server/qq_bot_test.go::TestQQBotOpensIssue",
+      "internal/server/qq_bot_test.go::TestQQBotAddsToDuplicate",
+      "internal/server/qq_bot_test.go::TestQQBotFeatureRequest",
+      "internal/server/qq_bot_test.go::TestQQBotRepliesWithoutFiling",
+      "internal/server/qq_bot_test.go::TestQQBotUpstreamFailures",
+      "internal/server/qq_bot_test.go::TestQQBotStopsWithServer"
+    ],
     "GET /v1/community/word-submissions": [
       "internal/server/word_submissions_test.go::TestWordSubmissionSettings"
     ],

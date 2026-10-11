@@ -41,6 +41,9 @@ type Server struct {
 	skinWorkers   sync.WaitGroup
 
 	words *wordSubmitter
+	// qq 是 QQ 群反馈机器人，未配置或没有数据库时为 nil；qqWorkers 跟踪它在后台处理的消息，Close 等它们结束。
+	qq        *qqBot
+	qqWorkers sync.WaitGroup
 
 	adminStore  adminAuthStore
 	adminGoogle *adminGoogleAuth
@@ -125,6 +128,9 @@ func New(c Config) (*Server, error) {
 		s.words = newWordSubmitter(c.WordSubmissions, c.AllowedOrigins, s.accounts)
 		s.words.locks = s.accounts
 	}
+	if c.QQBot.enabled() && s.limits != nil {
+		s.qq = newQQBot(c.QQBot)
+	}
 	mux := http.NewServeMux()
 	// Anonymous website endpoints: the /v1/community/ prefix skips Bearer authentication in the middleware, and the handlers apply their own origin, Turnstile and rate checks.
 	mux.HandleFunc("GET "+wordSubmissionsPath, s.wordSubmissionSettings)
@@ -132,6 +138,7 @@ func New(c Config) (*Server, error) {
 	mux.HandleFunc("POST /v1/skins/generate", s.generateSkinArtwork)
 	mux.HandleFunc("POST /v1/skins/jobs", s.createSkinArtworkJob)
 	mux.HandleFunc("POST "+voiceContributionsPath, s.voiceContribution)
+	mux.HandleFunc("POST "+qqBotEventsPath, s.qqBotEvents)
 	mux.HandleFunc("GET /v1/skins/jobs/{job}", s.getSkinArtworkJob)
 	mux.HandleFunc("DELETE /v1/skins/jobs/{job}", s.deleteSkinArtworkJob)
 	mux.HandleFunc("GET /v1/skins", s.skinCatalog)

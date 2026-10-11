@@ -43,11 +43,15 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(status)
 		return
 	}
-	if strings.HasSuffix(r.URL.Path, "/access_tokens") {
+	if strings.HasSuffix(r.URL.Path, "/access_tokens") || r.URL.Path == "/app" {
 		parsed, err := jwt.ParseSigned(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), []jose.SignatureAlgorithm{jose.RS256})
 		var claims jwt.Claims
 		if err != nil || parsed.Claims(&f.key.PublicKey, &claims) != nil || claims.Issuer != "42" {
 			w.WriteHeader(401)
+			return
+		}
+		if r.URL.Path == "/app" {
+			_, _ = w.Write([]byte(`{"id":42,"slug":"msime-bot"}`))
 			return
 		}
 		f.tokenFor++
@@ -112,6 +116,21 @@ func TestTokenScopeAndCache(t *testing.T) {
 	unreachable.APIURL = "http://127.0.0.1:1"
 	if _, err := unreachable.Token(ctx, "metasequoiaime/other", perms); !errors.Is(err, ErrUnavailable) {
 		t.Fatal(err)
+	}
+}
+
+func TestAppAuthenticatesAsTheApp(t *testing.T) {
+	c, f, _ := fakeClient(t)
+	r, err := c.App(context.Background())
+	var app struct {
+		Slug string `json:"slug"`
+	}
+	if err != nil || !r.OK() || r.Decode(&app) != nil || app.Slug != "msime-bot" {
+		t.Fatal(r.Status, string(r.Body), err)
+	}
+	// GET /app uses the App JWT and never mints an installation token.
+	if f.tokenFor != 0 || f.calls["GET /app"] != 1 {
+		t.Fatal(f.tokenFor, f.calls)
 	}
 }
 

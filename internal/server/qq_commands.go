@@ -267,7 +267,7 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 			reply("请在「提文档」后面写文档缺了什么或哪里不对，例如「提文档 FAQ 没写鸿蒙版的发布状态」。")
 			return "cmd_docs"
 		}
-		s.fileQQDocs(ctx, content, admin, reply)
+		s.fileQQDocs(ctx, m.GroupOpenID+"/"+m.Author.MemberOpenID, content, admin, reply)
 		return "cmd_docs"
 	}
 	if content, ok := qqCommandArg(text, "提issue", "提 issue", "提交issue"); ok {

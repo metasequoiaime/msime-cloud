@@ -153,6 +153,7 @@ func New(c Config) (*Server, error) {
 		go func() {
 			defer s.adminJobs.Done()
 			s.warmQQKnowledge(s.lifetime)
+			s.warmQQAppLogin(s.lifetime)
 		}()
 		if s.accounts != nil {
 			s.media = s.accounts

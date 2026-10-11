@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -24,7 +25,74 @@ const (
 	qqGapsIssueTTL = time.Hour
 )
 
-// qqGapsIssue 返回 gaps_repo 里标题为 qqGapsTitle 的开放 issue 编号，没有时新建。编号缓存在本副本；新建时持跨副本锁，免得两个副本各建一个。
+// qqContactPatterns 是写进汇总 issue 前要删掉的联系方式：手机号（可带 +86）、邮箱，以及「QQ / 群 / 微信」后面跟着的号码。概括是模型对群友原话的转述，提示词要求不写个人信息，但代码以前不检查：群友不小心带上的手机号会被照抄出去，「提文档 FAQ 应写上官方售后 QQ 12345678」这类话也会把联系方式发到公开仓库。微信号可以是字母开头的串，只在写明「微信号」或带冒号时才删，免得把「微信 windows版」这类正常说法删掉。
+var qqContactPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}`),
+	regexp.MustCompile(`\+?\b(?:86[- ]?)?1[3-9]\d{9}\b`),
+	regexp.MustCompile(`(?i)(?:qq|扣扣|群|微信|vx|wx)\s*(?:号码|号)?\s*[:：]?\s*\d{5,}`),
+	regexp.MustCompile(`(?i)(?:微信|vx|wx)(?:\s*(?:号码|号)\s*[:：]?|\s*[:：])\s*[a-z][-_a-z0-9]{5,19}`),
+}
+
+// qqContactRedacted 代替删掉的联系方式，维护者看得出这里原来有东西。
+const qqContactRedacted = "（已隐去）"
+
+// qqRedactContacts 删掉 text 里的联系方式，见 qqContactPatterns。
+func qqRedactContacts(text string) string {
+	for _, pattern := range qqContactPatterns {
+		text = pattern.ReplaceAllString(text, qqContactRedacted)
+	}
+	return text
+}
+
+// qqAppLoginTimeout 是启动时取 App 的 bot 账号的时限。
+const qqAppLoginTimeout = 15 * time.Second
+
+// qqAppLogin 返回管理后台 GitHub App 的 bot 账号「<slug>[bot]」：用 installation token 写的 issue 和评论，作者都是这个账号。启动时取一次（warmQQAppLogin），取到后缓存在本副本；没取到时下次用到再取。
+func (s *Server) qqAppLogin(ctx context.Context) (string, error) {
+	b := s.qq
+	b.mu.Lock()
+	login := b.appLogin
+	b.mu.Unlock()
+	if login != "" {
+		return login, nil
+	}
+	r, err := s.adminGitHub.App(ctx)
+	var app struct {
+		Slug string `json:"slug"`
+	}
+	if err != nil || !r.OK() || r.Decode(&app) != nil || app.Slug == "" {
+		return "", githubFailure("app", r, err)
+	}
+	login = app.Slug + "[bot]"
+	b.mu.Lock()
+	b.appLogin = login
+	b.mu.Unlock()
+	return login, nil
+}
+
+// warmQQAppLogin 在启动时取一次 App 的 bot 账号，失败只记日志。
+func (s *Server) warmQQAppLogin(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, qqAppLoginTimeout)
+	defer cancel()
+	if _, err := s.qqAppLogin(ctx); err != nil {
+		slog.Warn("qq bot: app login not loaded", "reason", err.Error())
+	}
+}
+
+// qqWrittenByApp 判断一个 issue 或一条评论是不是机器人自己写的：performed_via_github_app 是管理后台的 App，或者作者是它的 bot 账号。汇总 issue 和计数评论以前只看标题和内容，外人新开一个同名 issue 就能把答不上的问题都引到他那里，留一条带计数标记的评论就能让机器人改写它、在群里念出假的人数。known 为 false 表示 performed_via_github_app 没写、bot 账号又没取到，判断不了。
+func (s *Server) qqWrittenByApp(ctx context.Context, author qqGitHubAuthor) (owned, known bool) {
+	if author.App != nil {
+		return author.App.ID == s.adminGitHub.AppID, true
+	}
+	login, err := s.qqAppLogin(ctx)
+	if err != nil {
+		slog.Warn("qq bot: app login unavailable", "reason", err.Error())
+		return false, false
+	}
+	return strings.EqualFold(author.User.Login, login), true
+}
+
+// qqGapsIssue 返回 gaps_repo 里标题为 qqGapsTitle、由机器人自己建的开放 issue 编号，没有时新建。编号缓存在本副本；新建时持跨副本锁，免得两个副本各建一个。分不清同名 issue 是不是机器人建的（bot 账号没取到）时返回错误，不新建：多半是机器人自己那个，再建一个就重复了。
 func (s *Server) qqGapsIssue(ctx context.Context, token string) (int64, error) {
 	b := s.qq
 	b.mu.Lock()
@@ -52,11 +120,20 @@ func (s *Server) qqGapsIssue(ctx context.Context, token string) (int64, error) {
 	if r.Decode(&issues) != nil {
 		return 0, errors.New("gaps list: invalid response")
 	}
+	unknown := false
 	for _, issue := range issues {
-		if issue.Title == qqGapsTitle && (len(issue.PullRequest) == 0 || string(issue.PullRequest) == "null") {
+		if issue.Title != qqGapsTitle || len(issue.PullRequest) != 0 && string(issue.PullRequest) != "null" {
+			continue
+		}
+		owned, known := s.qqWrittenByApp(ctx, issue.qqGitHubAuthor)
+		if owned {
 			number = issue.Number
 			break
 		}
+		unknown = unknown || !known
+	}
+	if number == 0 && unknown {
+		return 0, errors.New("gaps list: app login unavailable")
 	}
 	if number == 0 {
 		r, err := client.Do(ctx, token, "POST", "/repos/"+repo+"/issues", map[string]any{"title": qqGapsTitle, "body": qqGapsBody})
@@ -86,7 +163,8 @@ func (s *Server) recordQQReport(ctx context.Context, topic string) bool {
 
 // recordQQGapIn 是 recordQQGap 和 recordQQReport 的实现，dailyScope、daily 是每天的额度。
 func (s *Server) recordQQGapIn(ctx context.Context, dailyScope string, daily int, prefix, topic string) bool {
-	topic = strings.Join(strings.Fields(topic), " ")
+	// 联系方式在去重和截断之前删掉：7 天去重的键和写进 issue 的是同一段文字。
+	topic = qqRedactContacts(strings.Join(strings.Fields(topic), " "))
 	switch {
 	case s.qq.config.GapsRepo == "":
 		slog.Info("qq bot: gap skipped", "reason", "no_repo")

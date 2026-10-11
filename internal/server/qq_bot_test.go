@@ -236,6 +236,9 @@ type qqFake struct {
 	embedCalls   int
 	// tokenPerms 记下每次申请 GitHub App 令牌时要的权限。
 	tokenPerms []string
+	// appCalls 记下 GET /app 的次数，appStatus 非 0 时它返回这个错误状态；App 的 slug 是 msime-bot。
+	appCalls  int
+	appStatus int
 	// judge 是自测判分模型的输出（为空时判通过）。
 	judge string
 	// 看截图：vision 是看图模型的输出（为空时给一段默认描述），visionCalls 记下收到的图片数据地址的开头。
@@ -499,6 +502,13 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(body)
 	case f.extraGitHub[r.URL.RequestURI()] != "":
 		_, _ = io.WriteString(w, f.extraGitHub[r.URL.RequestURI()])
+	case r.URL.Path == "/app" && r.Method == "GET":
+		f.appCalls++
+		if f.appStatus != 0 {
+			w.WriteHeader(f.appStatus)
+			return
+		}
+		_, _ = io.WriteString(w, `{"id":42,"slug":"msime-bot"}`)
 	case r.URL.Path == "/app/installations/77/access_tokens":
 		f.tokenPerms = append(f.tokenPerms, fmt.Sprint(body["permissions"]))
 		_ = json.NewEncoder(w).Encode(map[string]any{"token": "ghs_test", "expires_at": time.Now().Add(time.Hour)})
@@ -674,6 +684,9 @@ var qqTestKnowledge = map[string]string{
 	"guides/faq.md":     "# 常见问题\n\n## 输入\n\n### 五笔怎么切换\n\n在设置的「输入方案」里选五笔。\n\n### 空标题\n\n## 数据\n\n```sh\n# 这一行在代码块里，不是标题\n```\n同步需要登录。\n",
 	"guides/windows.md": "## 安装\r\n\r\n双击安装包。\r\n",
 }
+
+// qqAppAuthor 是机器人自己（测试里的 App 42，slug msime-bot）写的 issue 和评论带的作者字段，拼在 JSON 对象里。
+const qqAppAuthor = `"user":{"login":"msime-bot[bot]"},"performed_via_github_app":{"id":42}`
 
 func qqServer(t *testing.T) (*Server, *qqFake, *qqLimiter) {
 	t.Helper()
@@ -892,11 +905,18 @@ func TestQQBotFeatureRequest(t *testing.T) {
 	if last := fake.created[len(fake.created)-1]; last["_repo"] != "o/r" || fmt.Sprint(last["labels"]) != "[bug source/qq]" {
 		t.Fatal(last["_repo"], last["labels"])
 	}
-	if comment := qqCommentBody(qqReport{Kind: "feature", Problem: "p", Proposal: "建议"}, ""); !strings.Contains(comment, "建议") || strings.Contains(comment, "环境") {
+	if comment := qqCommentBody(qqReport{Kind: "feature", Problem: "p", Proposal: "建议"}, "", false); !strings.Contains(comment, "建议") || strings.Contains(comment, "环境") || !strings.HasSuffix(comment, qqIssueFooter) {
 		t.Fatal(comment)
 	}
-	if body := qqIssueBody(qqReport{Kind: "bug", Problem: "p"}, ""); !strings.Contains(body, "### 系统与输入法版本\n\n反馈中没有说明。") {
+	if body := qqIssueBody(qqReport{Kind: "bug", Problem: "p"}, "", false); !strings.Contains(body, "### 系统与输入法版本\n\n反馈中没有说明。") || !strings.HasSuffix(body, qqIssueFooter) {
 		t.Fatal(body)
+	}
+	// 附上了截图或视频时页脚只说文字部分不含身份。
+	if body := qqIssueBody(qqReport{Kind: "bug", Problem: "p"}, "", true); !strings.HasSuffix(body, qqIssueFooterMedia) {
+		t.Fatal(body)
+	}
+	if comment := qqCommentBody(qqReport{Kind: "bug", Problem: "p"}, "", true); !strings.HasSuffix(comment, qqIssueFooterMedia) {
+		t.Fatal(comment)
 	}
 }
 
@@ -1211,7 +1231,7 @@ func TestQQBotAnswersMembersFromKnowledge(t *testing.T) {
 		t.Fatal(last)
 	}
 	s.qq.config.GapsRepo = "o/docs"
-	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题"}]`
+	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题",` + qqAppAuthor + `}]`
 	qqDeliver(t, s, "m-unknown", "Windows 上候选框一直停在左上角")
 	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != qqUnknownReply || len(fake.created) != 0 || fake.comments["/repos/o/docs/issues/77/comments"]["body"] != "群友问：候选框停在左上角怎么办" {
 		t.Fatal(last, fake.comments)
@@ -1512,21 +1532,33 @@ func TestQQBotStoresAdminMediaInIssue(t *testing.T) {
 	if strings.Join(types, ",") != "image/jpeg,image/png,video/mp4" {
 		t.Fatal(types)
 	}
-	for _, want := range []string{"### 截图与视频", "![截图 1](https://media.example.test/qq-feedback/", "![截图 2](https://media.example.test/qq-feedback/", "[视频 1](https://media.example.test/qq-feedback/", "另有 5 个附件没能保存。"} {
+	for _, want := range []string{"### 截图与视频\n\n附件为原图，未做脱敏。\n", "![截图 1](https://media.example.test/qq-feedback/", "![截图 2](https://media.example.test/qq-feedback/", "[视频 1](https://media.example.test/qq-feedback/", "另有 5 个附件没能保存。"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body missing %q:\n%s", want, body)
 		}
 	}
-	if strings.Index(body, "### 截图与视频") > strings.Index(body, qqIssueFooter) {
+	// 附件是原图：页脚只说文字部分不含身份，不能再说整个 issue 不含。
+	if !strings.HasSuffix(body, qqIssueFooterMedia) || strings.Contains(body, qqIssueFooter) {
+		t.Fatal("footer with media", body)
+	}
+	if strings.Index(body, "### 截图与视频") > strings.Index(body, qqIssueFooterMedia) {
 		t.Fatal("media must come before the footer")
+	}
+	// 回复不再说「不包含你的昵称」，改成提醒在 issue 里删掉带个人信息的图片；看图前的过渡语提醒先打码。
+	replies := fake.replyTexts()
+	if len(replies) != 2 || replies[0] != qqReplyReportShotAck || !strings.Contains(replies[0], "转发群友截图前先打码") || !strings.HasSuffix(replies[1], qqReplyPublicMedia) || strings.Contains(replies[1], "不包含你的昵称") {
+		t.Fatal(replies)
 	}
 	// 去重时附件写进补充评论。
 	fake.searchItems = []map[string]any{{"number": 7, "title": "候选框位置不对", "body": "b"}}
 	fake.duplicate = `{"duplicate":7}`
 	qqPost(t, s, qqMessageWithAttachments("m-media-dup", "提issue Windows 11 上水杉 1.2.0 候选框停在左上角", attachments[:1]))
 	s.qqWorkers.Wait()
-	if comment := fake.comments["/repos/o/win/issues/7/comments"]; comment == nil || !strings.Contains(comment["body"].(string), "![截图 1](https://media.example.test/") {
+	if comment := fake.comments["/repos/o/win/issues/7/comments"]; comment == nil || !strings.Contains(comment["body"].(string), "![截图 1](https://media.example.test/") || !strings.HasSuffix(comment["body"].(string), qqIssueFooterMedia) {
 		t.Fatal(fake.comments)
+	}
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; !strings.HasPrefix(last, "这个问题已经有人反馈过") || !strings.HasSuffix(last, qqReplyPublicMedia) || strings.Contains(last, "不包含你的昵称") {
+		t.Fatal(last)
 	}
 	// 普通群友的附件不处理。
 	before := len(media.objects)
@@ -1543,7 +1575,8 @@ func TestQQBotMediaWithoutBucket(t *testing.T) {
 	s.media = nil
 	qqPost(t, s, qqMessageWithAttachments("m-nobucket", "提issue Windows 11 上水杉 1.2.0 候选框停在左上角", []map[string]string{{"content_type": "image/png", "url": "https://multimedia.nt.qq.com.cn/download?x=1"}, {"content_type": "voice", "url": "x"}}))
 	s.qqWorkers.Wait()
-	if len(fake.created) != 1 || !strings.Contains(fake.created[0]["body"].(string), "另有 1 个附件没能保存。") {
+	// 一个附件都没存进公开 bucket 时不说原图，页脚照旧。
+	if len(fake.created) != 1 || !strings.Contains(fake.created[0]["body"].(string), "另有 1 个附件没能保存。") || strings.Contains(fake.created[0]["body"].(string), "未做脱敏") || !strings.HasSuffix(fake.created[0]["body"].(string), qqIssueFooter) {
 		t.Fatal(fake.created)
 	}
 	// 回复里也告诉管理员有附件没附上。
@@ -1720,7 +1753,7 @@ func TestQQBotEscalatesProblemReports(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 	s.qq.config.GapsRepo = "o/docs"
-	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题"}]`
+	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题",` + qqAppAuthor + `}]`
 	qqDeliver(t, s, "m-escalate", "候选框老是跑到屏幕左上角")
 	if got := lastTwo(); got != "在「外观」里打开「候选窗口跟随光标」。|这个情况我已经记下来转给管理员了。" {
 		t.Fatalf("%q", got)
@@ -2172,7 +2205,7 @@ func TestQQBotRecordsUnansweredTopics(t *testing.T) {
 	}
 	// 缓存过期后重新查找，找到已有的同名 issue 就不新建。
 	s.qq.gapsIssueAt = time.Now().Add(-2 * qqGapsIssueTTL)
-	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题"}]`
+	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题",` + qqAppAuthor + `}]`
 	createdBefore := len(fake.created)
 	fake.answer = `{"type":"unknown","topic":"第三个问题"}`
 	qqDeliver(t, s, "m-gap-4", "第三个")
@@ -2224,7 +2257,7 @@ func TestQQBotRecordsUnansweredTopics(t *testing.T) {
 	locks.err = errors.New("busy")
 	s.recordQQGap(context.Background(), "群友问：", "取锁失败")
 	locks.err = nil
-	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题"}]`
+	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题",` + qqAppAuthor + `}]`
 	delete(limiter.counts, "qq-bot-gaps-day|o/docs")
 	s.recordQQGap(context.Background(), "群友问：", strings.Repeat("长", qqGapRunes+20))
 	if c := fake.comments["/repos/o/docs/issues/77/comments"]; c == nil || len([]rune(c["body"].(string))) != len([]rune("群友问："))+qqGapRunes {
@@ -2550,7 +2583,7 @@ func TestQQBotAdminMessagesNeedExplicitIntent(t *testing.T) {
 	drafts := &memoryDrafts{}
 	s.qqDrafts = drafts
 	s.qq.config.GapsRepo = "o/docs"
-	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题"}]`
+	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题",` + qqAppAuthor + `}]`
 	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
 	// 玩笑：整理反馈的模型判为 other，即使提到了 issue 也只答疑，不对照知识库、不搜 GitHub。
 	fake.summary = `{"kind":"other"}`
@@ -2696,7 +2729,7 @@ func TestQQIssueIntent(t *testing.T) {
 
 // 「提文档」：管理员在知识库仓库开文档 issue（只打仓库已有的标签，重复时补充评论）；普通群友的反馈追加到汇总 issue。
 func TestQQBotDocsCommand(t *testing.T) {
-	s, fake, _ := qqServer(t)
+	s, fake, limiter := qqServer(t)
 	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
 	fake.docs = `{"title":"FAQ 补充鸿蒙版的发布状态 @octocat","kind":"补充","page":"faq","problem":"FAQ 没写鸿蒙版有没有发布","suggestion":"","keywords":"鸿蒙"}`
 	fake.repoLabels = map[string]string{"o/docs": `[{"name":"Documentation"},{"name":"bug"}]`}
@@ -2737,9 +2770,32 @@ func TestQQBotDocsCommand(t *testing.T) {
 		t.Fatal(last())
 	}
 	s.qq.config.GapsRepo = "o/docs"
-	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题"}]`
+	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题",` + qqAppAuthor + `}]`
 	qqDeliver(t, s, "m-docs-member", "提文档 FAQ 没写鸿蒙版")
 	if c := fake.comments["/repos/o/docs/issues/77/comments"]; c == nil || c["body"] != "群友反馈文档：FAQ 补充鸿蒙版（鸿蒙版说法过时）" || last() != "已经记下，管理员会据此更新文档。" {
+		t.Fatal(fake.comments, last())
+	}
+	// 每位群友每天最多记 qqDocsMemberDaily 条：没记下的那次退回了名额，第 4 次被拒，不写汇总 issue。
+	if n := limiter.counts["qq-bot-docs-member|GROUP1/MEMBER1"]; n != 1 {
+		t.Fatal("member docs slots", n)
+	}
+	for i := 2; i <= qqDocsMemberDaily; i++ {
+		fake.docs = `{"title":"FAQ 补充第` + strconv.Itoa(i) + `条","kind":"补充","page":"faq","problem":"缺了","suggestion":"","keywords":"补充"}`
+		qqDeliver(t, s, "m-docs-member-"+strconv.Itoa(i), "提文档 FAQ 缺了一条")
+		if last() != "已经记下，管理员会据此更新文档。" {
+			t.Fatal(i, last())
+		}
+	}
+	delete(fake.comments, "/repos/o/docs/issues/77/comments")
+	fake.docs = `{"title":"FAQ 补充第四条","kind":"补充","page":"faq","problem":"缺了","suggestion":"","keywords":"补充"}`
+	qqDeliver(t, s, "m-docs-member-over", "提文档 FAQ 又缺了一条")
+	if fake.comments["/repos/o/docs/issues/77/comments"] != nil || last() != "今天已经记了几条了，明天再提，或者请管理员用「提文档」提交。" {
+		t.Fatal(fake.comments, last())
+	}
+	// 别的群友不受影响。
+	qqPost(t, s, qqMessageFrom("m-docs-member-other", "MEMBER2", "提文档 FAQ 又缺了一条"))
+	s.qqWorkers.Wait()
+	if fake.comments["/repos/o/docs/issues/77/comments"] == nil || last() != "已经记下，管理员会据此更新文档。" {
 		t.Fatal(fake.comments, last())
 	}
 	// 看不出是文档反馈、没写内容、模型输出不合格式。
@@ -2762,6 +2818,60 @@ func TestQQBotDocsCommand(t *testing.T) {
 	}
 }
 
+// 写进汇总 issue 的概括先删掉联系方式：手机号、邮箱、「QQ / 群 / 微信」后面的号码；正常的版本号和说法不动。
+func TestQQBotGapRedactsContacts(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.qq.config.GapsRepo = "o/docs"
+	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题",` + qqAppAuthor + `}]`
+	if !s.recordQQGap(context.Background(), "群友反馈文档：", "FAQ 应写上官方售后 QQ 12345678 和 QQ群：87654321，电话 +86 13812345678 或13912345678，邮箱 a.b@example.com，微信号：abc_def12") {
+		t.Fatal("not recorded")
+	}
+	body, _ := fake.comments["/repos/o/docs/issues/77/comments"]["body"].(string)
+	for _, leaked := range []string{"12345678", "87654321", "13812345678", "13912345678", "example", "abc_def12"} {
+		if strings.Contains(body, leaked) {
+			t.Fatalf("%q leaked: %s", leaked, body)
+		}
+	}
+	if !strings.HasPrefix(body, "群友反馈文档：FAQ 应写上官方售后 "+qqContactRedacted) {
+		t.Fatal(body)
+	}
+	for _, kept := range []string{"微信 windows版 0.9.5 打不出字", "QQ 群里有人问 1.2.0 版本", "群友问 2026 年的版本", "Windows 11 22631 版本", "微信里候选框闪"} {
+		if got := qqRedactContacts(kept); got != kept {
+			t.Errorf("%q became %q", kept, got)
+		}
+	}
+	for raw, want := range map[string]string{"加我微信 wx：mallory_01": "加我微信 " + qqContactRedacted, "扣扣号 1234567 联系": qqContactRedacted + " 联系", "手机 18600001111。": "手机 " + qqContactRedacted + "。"} {
+		if got := qqRedactContacts(raw); got != want {
+			t.Errorf("%q became %q, want %q", raw, got, want)
+		}
+	}
+}
+
+// 汇总 issue 只认机器人自己建的：外人新开的同名 issue 不会被选中；分不清的时候不新建。
+func TestQQBotGapsIssueOwnedByApp(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.qq.config.GapsRepo = "o/docs"
+	outsider := `{"number":90,"title":"QQ 机器人答不上的问题","user":{"login":"mallory"}}`
+	otherApp := `{"number":91,"title":"QQ 机器人答不上的问题","user":{"login":"other[bot]"},"performed_via_github_app":{"id":7}}`
+	// 外人的 issue 排在前面（列表按创建时间倒序）；机器人那个没带 performed_via_github_app，按 bot 账号认出来。
+	fake.openIssues = `[` + outsider + `,` + otherApp + `,{"number":77,"title":"QQ 机器人答不上的问题","user":{"login":"MSIME-Bot[bot]"}}]`
+	if !s.recordQQGap(context.Background(), "群友问：", "第一个问题") || fake.comments["/repos/o/docs/issues/77/comments"] == nil || len(fake.created) != 0 || fake.appCalls != 1 {
+		t.Fatal(fake.comments, fake.created, fake.appCalls)
+	}
+	// bot 账号没取到、只剩外人的同名 issue：分不清，不新建也不评论到外人那里。
+	s.qq.gapsIssue, s.qq.appLogin, fake.comments = 0, "", nil
+	fake.appStatus = 500
+	fake.openIssues = `[` + outsider + `,` + otherApp + `]`
+	if s.recordQQGap(context.Background(), "群友问：", "第二个问题") || len(fake.created) != 0 || len(fake.comments) != 0 {
+		t.Fatal(fake.created, fake.comments)
+	}
+	// 取到 bot 账号后确认都不是机器人的，新建自己的汇总 issue。
+	fake.appStatus = 0
+	if !s.recordQQGap(context.Background(), "群友问：", "第二个问题") || len(fake.created) != 1 || fake.created[0]["title"] != qqGapsTitle || fake.comments["/repos/o/docs/issues/123/comments"] == nil || fake.comments["/repos/o/docs/issues/90/comments"] != nil {
+		t.Fatal(fake.created, fake.comments)
+	}
+}
+
 // 「提文档」是命令，先于「提issue」的说法判断：内容里写了「记一下」「提个 issue」也只走文档反馈，不整理成 bug 或需求、不对照知识库，也不提到代码仓库；普通群友写了这些说法同样只追加到汇总 issue，不会被当成提 issue 拒绝或转去答疑。
 func TestQQBotDocsCommandIsNotIssueIntent(t *testing.T) {
 	s, fake, _ := qqServer(t)
@@ -2777,7 +2887,7 @@ func TestQQBotDocsCommandIsNotIssueIntent(t *testing.T) {
 	}
 	s.qq.config.Admins = nil
 	s.qq.config.GapsRepo = "o/docs"
-	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题"}]`
+	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题",` + qqAppAuthor + `}]`
 	fake.chatCalls = nil
 	qqDeliver(t, s, "m-docs-member-intent", "提文档 FAQ 没写怎么置顶候选，提issue 记一下")
 	if strings.Join(fake.chatCalls, ",") != "docs" || len(fake.created) != 3 || fake.comments["/repos/o/docs/issues/77/comments"] == nil || last() != "已经记下，管理员会据此更新文档。" {
@@ -4609,7 +4719,7 @@ func TestQQBotFeatureVotes(t *testing.T) {
 		t.Fatalf("%q %d", last(), len(drafts.drafts))
 	}
 	// 第二个人：改同一条计数评论。
-	fake.issueComments = map[string]string{"/repos/o/r/issues/7/comments": `[{"id":55,"body":"` + strings.ReplaceAll(qqVoteBody(1), `"`, `\"`) + `"}]`}
+	fake.issueComments = map[string]string{"/repos/o/r/issues/7/comments": `[{"id":55,"body":"` + strings.ReplaceAll(qqVoteBody(1), `"`, `\"`) + `",` + qqAppAuthor + `}]`}
 	deliver("m-vote-2", "MEMBER2", "候选框透明度什么时候能有")
 	if p := fake.patched["/repos/o/r/issues/comments/55"]; p == nil || p["body"] != qqVoteBody(2) || !strings.Contains(last(), "一共 2 人需要") {
 		t.Fatal(fake.patched, last())
@@ -4626,10 +4736,36 @@ func TestQQBotFeatureVotes(t *testing.T) {
 	if fake.patched != nil || !strings.Contains(last(), "开发者会在那里跟进") {
 		t.Fatal(fake.patched, last())
 	}
-	fake.issueComments = map[string]string{"/repos/o/r/issues/7/comments": `[{"id":55,"body":"` + strings.ReplaceAll(qqVoteBody(2), `"`, `\"`) + `"}]`}
+	fake.issueComments = map[string]string{"/repos/o/r/issues/7/comments": `[{"id":55,"body":"` + strings.ReplaceAll(qqVoteBody(2), `"`, `\"`) + `",` + qqAppAuthor + `}]`}
 	deliver("m-vote-retry", "MEMBER3", "候选框透明度加一个")
 	if p := fake.patched["/repos/o/r/issues/comments/55"]; p == nil || p["body"] != qqVoteBody(3) || !strings.Contains(last(), "一共 3 人需要") {
 		t.Fatal(fake.patched, last())
+	}
+	// 外人留了一条带计数标记的评论、App 的 bot 账号又没取到：分不清是谁发的，这一票不记，也不新建计数评论。
+	outsider := `{"id":54,"body":"<!-- qq-votes:9999 -->","user":{"login":"mallory"}}`
+	fake.patched, fake.comments, fake.appStatus = nil, nil, 500
+	fake.issueComments = map[string]string{"/repos/o/r/issues/7/comments": `[` + outsider + `]`}
+	deliver("m-vote-unknown", "MEMBER4", "候选框透明度加一")
+	if fake.patched != nil || fake.comments["/repos/o/r/issues/7/comments"] != nil || !strings.Contains(last(), "开发者会在那里跟进") {
+		t.Fatal(fake.patched, fake.comments, last())
+	}
+	// 取到 bot 账号后，外人的评论直接跳过，不 PATCH，另起一条机器人自己的计数评论。
+	fake.appStatus = 0
+	deliver("m-vote-outsider", "MEMBER5", "候选框透明度加一")
+	if c := fake.comments["/repos/o/r/issues/7/comments"]; fake.patched != nil || c == nil || c["body"] != qqVoteBody(1) || !strings.Contains(last(), "一共 1 人需要") {
+		t.Fatal(fake.patched, fake.comments, last())
+	}
+	// 别的 App 发的带标记评论也不算；机器人自己的那条照常加一。
+	calls := fake.appCalls
+	fake.comments = nil
+	fake.issueComments = map[string]string{"/repos/o/r/issues/7/comments": `[` + outsider + `,{"id":53,"body":"<!-- qq-votes:500 -->","performed_via_github_app":{"id":7}},{"id":56,"body":"` + strings.ReplaceAll(qqVoteBody(3), `"`, `\"`) + `",` + qqAppAuthor + `}]`}
+	deliver("m-vote-mixed", "MEMBER6", "候选框透明度加一")
+	if len(fake.patched) != 1 || fake.patched["/repos/o/r/issues/comments/56"]["body"] != qqVoteBody(4) || fake.comments != nil || !strings.Contains(last(), "一共 4 人需要") {
+		t.Fatal(fake.patched, fake.comments, last())
+	}
+	// bot 账号取到一次后缓存，不再请求 GET /app。
+	if fake.appCalls != calls {
+		t.Fatal("app login fetched again", fake.appCalls, calls)
 	}
 	// 没有同一个需求时照旧起草稿。
 	fake.duplicate = `{"duplicate":0}`

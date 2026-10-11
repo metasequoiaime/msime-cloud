@@ -149,13 +149,7 @@ func (c Client) cachedToken(key string) (string, bool) {
 
 // mint requests a new installation token from GitHub and caches it under key.
 func (c Client) mint(ctx context.Context, key, repo string, perms map[string]string) (string, error) {
-	now := c.now()
-	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: c.Key}, (&jose.SignerOptions{}).WithType("JWT"))
-	if err != nil {
-		return "", err
-	}
-	// GitHub rejects app JWTs that live longer than ten minutes; issuing a minute in the past absorbs clock drift.
-	assertion, err := jwt.Signed(signer).Claims(jwt.Claims{Issuer: strconv.FormatInt(c.AppID, 10), IssuedAt: jwt.NewNumericDate(now.Add(-time.Minute)), Expiry: jwt.NewNumericDate(now.Add(9 * time.Minute))}).Serialize()
+	assertion, err := c.appJWT()
 	if err != nil {
 		return "", err
 	}
@@ -186,6 +180,26 @@ func (c Client) mint(ctx context.Context, key, repo string, perms map[string]str
 		c.Cache.mu.Unlock()
 	}
 	return result.Token, nil
+}
+
+// appJWT signs the short-lived JWT that authenticates as the App itself rather than as an installation.
+func (c Client) appJWT() (string, error) {
+	now := c.now()
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: c.Key}, (&jose.SignerOptions{}).WithType("JWT"))
+	if err != nil {
+		return "", err
+	}
+	// GitHub rejects app JWTs that live longer than ten minutes; issuing a minute in the past absorbs clock drift.
+	return jwt.Signed(signer).Claims(jwt.Claims{Issuer: strconv.FormatInt(c.AppID, 10), IssuedAt: jwt.NewNumericDate(now.Add(-time.Minute)), Expiry: jwt.NewNumericDate(now.Add(9 * time.Minute))}).Serialize()
+}
+
+// App performs GET /app authenticated as the App itself, which returns the App's own metadata such as its slug; content written with an installation token is attributed to the user "<slug>[bot]".
+func (c Client) App(ctx context.Context) (Response, error) {
+	assertion, err := c.appJWT()
+	if err != nil {
+		return Response{}, err
+	}
+	return c.Do(ctx, assertion, "GET", "/app", nil)
 }
 
 func tokenKey(repo string, perms map[string]string) string {

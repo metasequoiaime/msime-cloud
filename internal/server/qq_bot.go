@@ -262,6 +262,8 @@ type qqBot struct {
 	statsAt time.Time
 	// repoVisibility 缓存现查时各仓库是否公开，见 qqResearchPublic；由 mu 保护。
 	repoVisibility map[string]qqRepoVisibility
+	// appLogin 是管理后台 GitHub App 的 bot 账号「<slug>[bot]」，取到后不再变，见 qqAppLogin；由 mu 保护。
+	appLogin string
 }
 
 // probeMemberRole 在每个副本第一次收到 @ 消息时记一行日志，说明事件里有没有带群身份（author.member_role）：开放平台的文档写了这个字段，但没确认生产的事件里真的有。有的话群主和群管理员不用加进名单就能识别（见 qq_roles.go）。
@@ -487,14 +489,16 @@ const (
 	qqReplyUndelivered = "回答没能发出来（可能被平台拦了），可以换个说法再 @我 问一次。"
 	qqReplyWorking     = "收到，正在整理成 issue。"
 	qqReplyPublic      = "内容由机器人转述后公开在 GitHub 上，不包含你的昵称和原话。"
+	// qqReplyPublicMedia 在 issue 里附上了截图或视频时代替 qqReplyPublic：附件是原图原视频（见 publishQQMedia），里面常有转发来的聊天窗口，带着昵称、QQ 号，说「不包含你的昵称」会让管理员放心不去打码。
+	qqReplyPublicMedia = "截图和视频原样附在 issue 里，里面如果有昵称、QQ 号等个人信息，请在 issue 里删掉对应的图片。"
 	// qqReplyTimedOut 在 4 分钟的处理时间用完时代替 qqReplyUnavailable（见 qqOutOfTime）：这时再原样发一次多半还是超时，所以请群友把问题说具体，挑段落和现查才找得准。
 	qqReplyTimedOut = "这个问题查了太久没查完。可以说具体一点（哪个系统、哪个功能、看到了什么）再 @我。"
-	// 下面几句是过渡语，一条消息最多发其中一句（见 handleQQFeedback 的 progress）：qqReplyShot 在看截图前，qqReplyThinking 在 qqThinkingDelay 后还没回复时，qqReplyLookingUp 在现查前。qqReplyReportAck 和 qqReplyReportShotAck 是管理员发「提issue」后马上回的「收到」，后面可能判成文档已有、缺信息或不是具体反馈，所以不说「正在整理成 issue」。
+	// 下面几句是过渡语，一条消息最多发其中一句（见 handleQQFeedback 的 progress）：qqReplyShot 在看截图前，qqReplyThinking 在 qqThinkingDelay 后还没回复时，qqReplyLookingUp 在现查前。qqReplyReportAck 和 qqReplyReportShotAck 是管理员发「提issue」后马上回的「收到」，后面可能判成文档已有、缺信息或不是具体反馈，所以不说「正在整理成 issue」。qqReplyReportShotAck 顺带提醒截图会原样公开：管理员常把群友的截图转发过来提交，要在提交之前打码。群友的截图不存进公开 bucket，所以 qqReplyShot 不提这句。
 	qqReplyShot          = "我看一下截图～"
 	qqReplyThinking      = "收到，我想一下～"
 	qqReplyLookingUp     = "我查一下，稍等～"
 	qqReplyReportAck     = "收到，我先整理一下～"
-	qqReplyReportShotAck = "收到，先看下截图再整理～"
+	qqReplyReportShotAck = "收到，先看下截图再整理～截图会公开，转发群友截图前先打码。"
 	// qqReplyNoIntent 曾接在管理员没有要求记录的反馈的一句话概括后面；现在这类消息直接答疑（见 fileAdminFeedback），不再引用，按规范保留。qqReplyExisting 接在管理员用「记一下」这类说法要求记录、知识库说明功能已有或现象正常时的答案后面；用「提issue」命令时不对照知识库，所以这里请他发「提issue」强制提交。
 	qqReplyNoIntent = "没有提 issue；需要记录的话，请 @我 发「提issue」加上这段描述。"
 	qqReplyExisting = "\n\n文档里已经写了这个，所以先不提 issue。要是这个办法不管用，@我 发「提issue」说一下哪里不行。"
@@ -784,7 +788,7 @@ func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text s
 	// 已经回过「收到」或其他过渡语时不再多说一句。
 	progress(qqReplyWorking)
 	media, failed := s.publishQQMedia(ctx, m.Attachments)
-	number, duplicate, err := s.fileQQReport(ctx, repo, label, report, qqMediaSection(media, failed), notes)
+	number, duplicate, err := s.fileQQReport(ctx, repo, label, report, media, failed, notes)
 	if err != nil {
 		slog.Warn("qq bot: file issue failed", "repo", repo, "reason", err.Error())
 		reply(qqReplyUnavailable)
@@ -795,11 +799,15 @@ func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text s
 	if failed > 0 {
 		missed = fmt.Sprintf("有 %d 个截图或视频没能附上，需要的话请在 issue 里手动补上。", failed)
 	}
+	public := qqReplyPublic
+	if len(media) > 0 {
+		public = qqReplyPublicMedia
+	}
 	if duplicate {
-		reply("这个问题已经有人反馈过，已补充到 " + qqIssueNumberText(repo, number) + "。" + s.qqProgressHint(repo, number) + missed + qqReplyPublic)
+		reply("这个问题已经有人反馈过，已补充到 " + qqIssueNumberText(repo, number) + "。" + s.qqProgressHint(repo, number) + missed + public)
 		return "filed_duplicate"
 	}
-	reply("已记录为 " + qqIssueNumberText(repo, number) + "，开发者会在那里跟进。" + s.qqProgressHint(repo, number) + missed + qqReplyPublic)
+	reply("已记录为 " + qqIssueNumberText(repo, number) + "，开发者会在那里跟进。" + s.qqProgressHint(repo, number) + missed + public)
 	return "filed"
 }
 
@@ -1174,6 +1182,17 @@ type qqIssue struct {
 	Title       string          `json:"title"`
 	Body        string          `json:"body"`
 	PullRequest json.RawMessage `json:"pull_request"`
+	qqGitHubAuthor
+}
+
+// qqGitHubAuthor 是 issue 和评论里说明是谁写的两个字段，用来认出机器人自己（管理后台的 GitHub App）写的内容，见 qqWrittenByApp。
+type qqGitHubAuthor struct {
+	User struct {
+		Login string `json:"login"`
+	} `json:"user"`
+	App *struct {
+		ID int64 `json:"id"`
+	} `json:"performed_via_github_app"`
 }
 
 // Windows 上有两个产品：msime-windows（Metasequoia IME 水杉输入法，现在的正式版）和 msime 仓库里迁移出来的新实现（水杉输入法及水杉拼音、五笔等版本）。两边的版本号会重叠，所以按两边实际的 GitHub Release 实时判断（qqWindowsProduct），不写死分界：新实现的范围从 qqWindowsNewFrom 到 qq_bot.repo 里最新的「windows-v」版本再往后一个 minor（覆盖还没发布的预览构建），msime 的 Windows 升版本不用改代码。曾经写死成 0.9 以下、后来写死成 [0.1, 0.4)，前者把 msime-windows 0.0.x 和 0.4 到 0.8 的老用户提错了仓库，后者在新实现升到 0.4 后会把它的反馈提到 msime-windows。Release 查不到时退回 [qqWindowsNewFrom, qqWindowsNewBelow)。
@@ -1327,8 +1346,9 @@ func (s *Server) qqTarget(ctx context.Context, report qqReport, text string, ver
 	return s.qq.config.Repo, "", ""
 }
 
-// fileQQReport 把一条反馈提交到 repo：模型判断与某个开启的 issue 是同一件事时在那里补充评论，否则新建 issue。返回 issue 编号以及是否是补充到已有 issue。
-func (s *Server) fileQQReport(ctx context.Context, repo, platformLabel string, report qqReport, mediaSection string, notes qqNotes) (int64, bool, error) {
+// fileQQReport 把一条反馈提交到 repo：模型判断与某个开启的 issue 是同一件事时在那里补充评论，否则新建 issue。media 和 failed 是 publishQQMedia 存好的附件和没能保存的个数，草稿提交时没有附件。返回 issue 编号以及是否是补充到已有 issue。
+func (s *Server) fileQQReport(ctx context.Context, repo, platformLabel string, report qqReport, media []qqMedia, failed int, notes qqNotes) (int64, bool, error) {
+	mediaSection, published := qqMediaSection(media, failed), len(media) > 0
 	client := s.adminGitHub
 	token, err := client.Token(ctx, repo, issueTokenPerms)
 	if err != nil {
@@ -1339,7 +1359,7 @@ func (s *Server) fileQQReport(ctx context.Context, repo, platformLabel string, r
 		return 0, false, err
 	}
 	if duplicate > 0 {
-		r, err := client.Do(ctx, token, "POST", "/repos/"+repo+"/issues/"+strconv.FormatInt(duplicate, 10)+"/comments", map[string]string{"body": qqCommentBody(report, mediaSection)})
+		r, err := client.Do(ctx, token, "POST", "/repos/"+repo+"/issues/"+strconv.FormatInt(duplicate, 10)+"/comments", map[string]string{"body": qqCommentBody(report, mediaSection, published)})
 		if err != nil || !r.OK() {
 			return 0, false, githubFailure("comment", r, err)
 		}
@@ -1351,7 +1371,7 @@ func (s *Server) fileQQReport(ctx context.Context, repo, platformLabel string, r
 	labels = append(labels, s.qqTopicLabels(ctx, repoLabels, labels, report)...)
 	noteLabels, noteSection := qqNoteLabels(repoLabels, notes)
 	labels = append(labels, noteLabels...)
-	request := map[string]any{"title": qqIssueTitle(report), "body": qqIssueBody(report, noteSection+mediaSection), "labels": labels}
+	request := map[string]any{"title": qqIssueTitle(report), "body": qqIssueBody(report, noteSection+mediaSection, published), "labels": labels}
 	r, err := client.Do(ctx, token, "POST", "/repos/"+repo+"/issues", request)
 	if err != nil || !r.OK() {
 		return 0, false, githubFailure("create", r, err)
@@ -1472,8 +1492,19 @@ func qqEnvironment(report qqReport) string {
 
 const qqIssueFooter = "\n\n---\n\n来自 QQ 群反馈，由机器人转述整理，不包含反馈者的原话和身份。"
 
-// qqIssueBody 按 msime 的 issue 模板栏目写正文，mediaSection（qqMediaSection 的结果，可能为空）放在页脚之前。
-func qqIssueBody(report qqReport, mediaSection string) string {
+// qqIssueFooterMedia 是附上了截图或视频时的页脚：附件是原图，可能带着昵称、QQ 号，只有机器人转述的文字部分才不含身份。
+const qqIssueFooterMedia = "\n\n---\n\n来自 QQ 群反馈，由机器人转述整理，文字部分不包含反馈者的原话和身份。"
+
+// qqFooter 按有没有附上截图或视频选页脚。
+func qqFooter(published bool) string {
+	if published {
+		return qqIssueFooterMedia
+	}
+	return qqIssueFooter
+}
+
+// qqIssueBody 按 msime 的 issue 模板栏目写正文，mediaSection（qqMediaSection 的结果，可能为空）放在页脚之前；published 表示附上了截图或视频，页脚改成只说文字部分不含身份。
+func qqIssueBody(report qqReport, mediaSection string, published bool) string {
 	var b strings.Builder
 	section := func(heading, text string) {
 		if b.Len() > 0 {
@@ -1492,11 +1523,11 @@ func qqIssueBody(report qqReport, mediaSection string) string {
 		section("希望怎样改进", report.Proposal)
 		section("输入法版本", qqEnvironment(report))
 	}
-	return b.String() + mediaSection + qqIssueFooter
+	return b.String() + mediaSection + qqFooter(published)
 }
 
-// qqCommentBody 是补充到已有 issue 的评论，mediaSection 放在页脚之前。
-func qqCommentBody(report qqReport, mediaSection string) string {
+// qqCommentBody 是补充到已有 issue 的评论，mediaSection 放在页脚之前，published 的意思同 qqIssueBody。
+func qqCommentBody(report qqReport, mediaSection string, published bool) string {
 	text := report.Problem
 	if report.Kind == "feature" && report.Proposal != "" {
 		text = report.Proposal
@@ -1505,5 +1536,5 @@ func qqCommentBody(report qqReport, mediaSection string) string {
 	if environment := qqEnvironment(report); environment != "" {
 		body += "\n\n环境：" + qqPublic(environment)
 	}
-	return body + mediaSection + qqIssueFooter
+	return body + mediaSection + qqFooter(published)
 }

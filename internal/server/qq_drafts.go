@@ -381,7 +381,7 @@ func (s *Server) qqFileDraft(ctx context.Context, draft account.QQDraft, extra s
 		return "duplicate"
 	}
 	reply("收到，正在提交草稿 " + code + "。")
-	number, duplicate, err := s.fileQQReport(ctx, repo, label, report, "", notes)
+	number, duplicate, err := s.fileQQReport(ctx, repo, label, report, nil, 0, notes)
 	if err != nil {
 		slog.Warn("qq bot: draft not filed", "repo", repo, "reason", err.Error())
 		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), qqDraftStoreTimeout)

@@ -170,13 +170,16 @@ func qqMediaName() string {
 	return hex.EncodeToString(b)
 }
 
-// qqMediaSection 是写进 issue 正文或评论的附件一节：图片直接显示，视频给链接（GitHub 只内嵌它自己托管的视频）；有没能保存的附件时注明个数。没有附件时为空。
+// qqMediaSection 是写进 issue 正文或评论的附件一节：图片直接显示，视频给链接（GitHub 只内嵌它自己托管的视频）；有没能保存的附件时注明个数。没有附件时为空。存好的附件是原图原视频，开头注明没有脱敏，维护者看到个人信息时知道要删。
 func qqMediaSection(media []qqMedia, failed int) string {
 	if len(media) == 0 && failed == 0 {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString("\n\n### 截图与视频\n")
+	if len(media) > 0 {
+		b.WriteString("\n附件为原图，未做脱敏。\n")
+	}
 	images, videos := 0, 0
 	for _, m := range media {
 		if m.Video {

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -134,6 +135,9 @@ func (l *qqLimiter) RateLimit(_ context.Context, scope, subject string, limit in
 	return nil
 }
 
+// qqIssuesPath 匹配新建 issue 的路径，第一个分组是 owner/name。
+var qqIssuesPath = regexp.MustCompile(`^/repos/([^/]+/[^/]+)/issues$`)
+
 // qqFake 同时扮演 chat 端点、QQ 开放平台和 GitHub REST API。
 type qqFake struct {
 	t  *testing.T
@@ -224,15 +228,16 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"items": f.searchItems})
-	case r.URL.Path == "/repos/o/r/issues" && r.Method == "POST":
+	case qqIssuesPath.MatchString(r.URL.Path) && r.Method == "POST":
 		if f.createStatus != 0 {
 			w.WriteHeader(f.createStatus)
 			return
 		}
+		body["_repo"] = qqIssuesPath.FindStringSubmatch(r.URL.Path)[1]
 		f.created = append(f.created, body)
 		w.WriteHeader(201)
 		_, _ = w.Write([]byte(`{"number":123,"html_url":"https://github.com/o/r/issues/123"}`))
-	case strings.HasPrefix(r.URL.Path, "/repos/o/r/issues/") && strings.HasSuffix(r.URL.Path, "/comments"):
+	case strings.HasPrefix(r.URL.Path, "/repos/") && strings.HasSuffix(r.URL.Path, "/comments"):
 		if f.comments == nil {
 			f.comments = map[string]map[string]any{}
 		}
@@ -262,7 +267,8 @@ func qqServer(t *testing.T) (*Server, *qqFake, *qqLimiter) {
 	fake := &qqFake{t: t, summary: qqBugSummary, duplicate: `{"duplicate":0}`}
 	s := fixture(t, fake.ServeHTTP)
 	base := s.config.Chat.URL
-	s.config.Admin.GitHub.Platforms = []AdminPlatformConfig{{ID: "windows", Repo: "O/R", Label: "platform/windows"}, {ID: "android", Repo: "other/x", Label: "platform/android"}}
+	// 与生产一致：Windows 在独立仓库且没有平台标签，其他平台在默认仓库并有平台标签。
+	s.config.Admin.GitHub.Platforms = []AdminPlatformConfig{{ID: "windows", Repo: "o/win"}, {ID: "android", Repo: "o/r", Label: "platform/android"}}
 	s.qq = newQQBot(QQBotConfig{AppID: "102030405", Repo: "o/r", Labels: []string{"source/qq"}, Model: "claude-haiku-5-5", APIURL: base, secret: qqTestSecret})
 	s.qq.client = s.client
 	limiter := &qqLimiter{}
@@ -362,7 +368,7 @@ func TestQQBotOpensIssue(t *testing.T) {
 		t.Fatal("ack", d)
 	}
 	replies := fake.replyTexts()
-	if len(replies) != 2 || replies[0] != qqReplyWorking || !strings.Contains(replies[1], "o/r 的 #123") || !strings.Contains(replies[1], qqReplyPublic) || strings.Contains(replies[1], "://") {
+	if len(replies) != 2 || replies[0] != qqReplyWorking || !strings.Contains(replies[1], "o/win 的 #123") || !strings.Contains(replies[1], qqReplyPublic) || strings.Contains(replies[1], "://") {
 		t.Fatal(replies)
 	}
 	for i, r := range fake.replies {
@@ -378,7 +384,7 @@ func TestQQBotOpensIssue(t *testing.T) {
 		t.Fatalf("%q", fake.chatBodies[0])
 	}
 	// 搜索词去掉了冒号和引号，模型写不进 repo: 或 is: 限定词，最多 6 个词。
-	if fake.searchQuery != "repo:o/r is:issue is:open 候选框 光标 repo other/x is closed" {
+	if fake.searchQuery != "repo:o/win is:issue is:open 候选框 光标 repo other/x is closed" {
 		t.Fatalf("%q", fake.searchQuery)
 	}
 	if len(fake.created) != 1 {
@@ -389,8 +395,9 @@ func TestQQBotOpensIssue(t *testing.T) {
 		t.Fatalf("%q", issue["title"])
 	}
 	labels, _ := json.Marshal(issue["labels"])
-	if string(labels) != `["bug","platform/windows","source/qq"]` {
-		t.Fatal(string(labels))
+	// Windows 反馈按平台配置提交到它自己的仓库，那里没有平台标签。
+	if issue["_repo"] != "o/win" || string(labels) != `["bug","source/qq"]` {
+		t.Fatal(issue["_repo"], string(labels))
 	}
 	body := issue["body"].(string)
 	for _, want := range []string{"### 遇到了什么问题\n\n在记事本里打字时候选框停在屏幕左上角，见 #\u200b12 和 https:\u200b//evil.example", "### 怎样操作会出现\n\n1. 打开记事本\n2. 输入 nihao", "### 你期望的结果\n\n候选框出现在光标下方", "### 系统与输入法版本\n\nWindows，Windows 11、水杉 1.2.0", qqIssueFooter} {
@@ -420,11 +427,11 @@ func TestQQBotAddsToDuplicate(t *testing.T) {
 	if len(fake.created) != 0 {
 		t.Fatal("duplicate must not open an issue", fake.created)
 	}
-	comment := fake.comments["/repos/o/r/issues/7/comments"]
+	comment := fake.comments["/repos/o/win/issues/7/comments"]
 	if comment == nil || !strings.HasPrefix(comment["body"].(string), "QQ 群里又有用户反馈了同样的情况") || !strings.Contains(comment["body"].(string), "环境：Windows，Windows 11、水杉 1.2.0") {
 		t.Fatal(fake.comments)
 	}
-	if replies := fake.replyTexts(); !strings.Contains(replies[len(replies)-1], "已补充到 GitHub o/r 的 #7") {
+	if replies := fake.replyTexts(); !strings.Contains(replies[len(replies)-1], "已补充到 GitHub o/win 的 #7") {
 		t.Fatal(replies)
 	}
 	// 拉取请求不交给模型；正文截断到 qqBotCandidateRunes。
@@ -456,15 +463,20 @@ func TestQQBotFeatureRequest(t *testing.T) {
 	}
 	issue := fake.created[0]
 	labels, _ := json.Marshal(issue["labels"])
-	// android 平台配置的仓库不是 o/r，所以不加它的标签。
-	if issue["title"] != "[Feature]: 安卓支持手写笔" || string(labels) != `["enhancement","source/qq"]` {
-		t.Fatal(issue["title"], string(labels))
+	if issue["title"] != "[Feature]: 安卓支持手写笔" || issue["_repo"] != "o/r" || string(labels) != `["enhancement","platform/android","source/qq"]` {
+		t.Fatal(issue["title"], issue["_repo"], string(labels))
 	}
 	body := issue["body"].(string)
 	for _, want := range []string{"### 在什么情况下用到\n\n平板上记笔记", "### 现在是怎么做的，哪里不方便\n\n现在只能用手指", "### 希望怎样改进\n\n支持在输入框里直接用手写笔写字", "### 输入法版本\n\nAndroid"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body missing %q:\n%s", want, body)
 		}
+	}
+	// 看不出平台、但有操作步骤的 bug 不追问，提交到 qq_bot.repo，不加平台标签。
+	fake.summary = `{"kind":"bug","title":"联想词重复","problem":"同一个词出现两次","steps":"输入 shijian","keywords":""}`
+	qqDeliver(t, s, "m-no-platform", "输入 shijian 的时候同一个联想词出现两次")
+	if last := fake.created[len(fake.created)-1]; last["_repo"] != "o/r" || fmt.Sprint(last["labels"]) != "[bug source/qq]" {
+		t.Fatal(last["_repo"], last["labels"])
 	}
 	if comment := qqCommentBody(qqReport{Kind: "feature", Problem: "p", Proposal: "建议"}); !strings.Contains(comment, "建议") || strings.Contains(comment, "环境") {
 		t.Fatal(comment)

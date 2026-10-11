@@ -43,7 +43,7 @@ MSIME_TEST_LARGE_RESTORE=1 go test -race ./internal/account -run '^TestSnapshotR
 
 ## 语句覆盖率门禁
 
-`check_go_coverage.py` 要求全仓库、`internal/account`、`internal/server` 的语句覆盖率分别达到 **90%**。统计包括 CLI 入口、Go 内嵌前端和所有有可执行语句的包，不排除低覆盖文件。`-coverpkg=./...` 计入跨包调用，并按代码块合并重复记录；CI 以未四舍五入的覆盖数判断门槛。`-p 1` 让包测试依次运行，减少原生引擎与编译任务的资源竞争。
+`check_go_coverage.py` 要求全仓库、`internal/account`、`internal/server` 的语句覆盖率分别达到 **90%**，这是带真实引擎的全量统计，在 CI 的原生引擎任务里检查，只在改到原生引擎时运行。统计包括 CLI 入口、Go 内嵌前端和所有有可执行语句的包，不排除低覆盖文件。`-coverpkg=./...` 计入跨包调用，并按代码块合并重复记录；CI 以未四舍五入的覆盖数判断门槛。`-p 1` 让包测试依次运行，减少原生引擎与编译任务的资源竞争。每个拉取请求上，PostgreSQL 集成测试另用 `--database` 模式检查：不带引擎，只跑并统计 `internal/account` 与 `internal/server`，下限是 `DATABASE_MINIMUMS`（**85%** 与 **88%**，2026-10 实测为 87.2% 与 90.6%；只在真实引擎下执行的代码不计入，所以比全量低）。
 
 数据库故障测试使用独立测试库，在 pgx 查询入口逐条取消 SQL，检查事务前后的词库、变更流、剪贴板、偏好、会话、社区资源与审计数据一致。原生编辑、排序、恢复与导入仍使用真实引擎。公开 HTTP 路由的成功和鉴权测试继续经过路由器；事务故障测试直接调用处理器，以免 IP 限流的数据库写入提前遮蔽待验证的失败分支。
 

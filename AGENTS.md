@@ -42,7 +42,7 @@ gofmt -l ./cmd ./internal
 
 - 依赖 PostgreSQL 的测试在没有 `MSIME_TEST_DATABASE_URL` 时会跳过，`go test` 显示 ok 不代表它们跑过。改动 `internal/account` 或 `internal/server` 中涉及数据库的代码时，本地起一个 PostgreSQL 并设置该变量再跑这两个包，CI 的「用户体系 PostgreSQL 集成测试」用的是 `postgres:17-alpine`。
 - `go test` 在 CI 中同时跑 ubuntu 和 windows。测试不能假设 Unix 专有行为，例如文件权限位（Windows 上 `0600` 读回来是 `0666`）、路径分隔符或 shell 命令；确实只在 Unix 上成立的断言要按 `runtime.GOOS` 区分并写明原因。
-- CI 有 Go 语句覆盖率门禁（`scripts/check_go_coverage.py`）：全仓、`internal/account`、`internal/server` 各自不低于 90%。门禁在「公共引擎与发布词库集成测试」里跑，这个任务只在拉取请求改到原生引擎（引擎子模块、`internal/engine`、`native/`、Dockerfile、引擎相关脚本）时运行，以及每次推送到 main 时运行；其他拉取请求上不检查，所以合并前自己在本地按上面的命令确认覆盖率，不要等 main 上失败。新增的代码要带测试；新增可执行包时，同时把它加进该脚本要求出现的包清单及 `scripts/test_go_coverage.py`。
+- CI 有两道 Go 语句覆盖率门禁（`scripts/check_go_coverage.py`）。每个拉取请求上，「用户体系 PostgreSQL 集成测试」不带原生引擎只量 `internal/account` 和 `internal/server`，下限是脚本里的 `DATABASE_MINIMUMS`（85% 和 88%），不过就合不进去。「公共引擎与发布词库集成测试」带真实引擎量全仓、`internal/account`、`internal/server`，各自不低于 90%；这个任务只在改到原生引擎（引擎子模块、`internal/engine`、`internal/server` 里调用引擎的 `input.go`、`word_submissions.go` 和依赖引擎的测试、`native/`、Dockerfile、引擎相关脚本）时运行，拉取请求和 main 上的推送都一样。main 上的推送不等它，发版工作流同时就推出了镜像，所以改到引擎的拉取请求要等它在拉取请求上跑过。新增的代码要带测试；新增可执行包时，同时把它加进该脚本要求出现的包清单及 `scripts/test_go_coverage.py`。
 - 改动 `admin-web/` 后执行 `pnpm --dir admin-web lint` 和 `pnpm --dir admin-web build`，把重新生成的 `dist/` 一起提交，CI 会用 `git diff --exit-code -- admin-web/dist` 检查。后台的 CSP 限制和冒烟测试见 [admin-web/README.md](admin-web/README.md)。
 - Docker 构建只复制 `go.mod`、`go.sum`、`cmd`、`internal`、`VERSION`、`version.go` 和 `admin-web`（见 `Dockerfile`）。服务端不能依赖这些路径之外的文件：新增的 `go:embed` 资源要放在会被复制的目录里，或者像 `docs/docs.go` 那样放进只有命令行引用的独立包。
 

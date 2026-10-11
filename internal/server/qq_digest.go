@@ -43,8 +43,12 @@ func qqOutcomeKind(outcome string) string {
 		return "command"
 	case strings.HasPrefix(outcome, "limited_"):
 		return "limited"
-	case outcome == "failed":
+	// timeout 是 4 分钟的处理时间用完（见 handleQQFeedback），和 failed 一样算出错。
+	case outcome == "failed" || outcome == "timeout":
 		return "failed"
+	// reply_failed 是回答写好了却没发出去（见 handleQQFeedback），多半是被开放平台拒收，单独列出：多了说明答案里有内容被平台拦，要改的是提示词而不是上游。
+	case outcome == "reply_failed":
+		return "reply_failed"
 	default:
 		return "other"
 	}
@@ -71,7 +75,7 @@ func (s *Server) qqWeeklyDigest(ctx context.Context, reply func(string)) {
 			if asked := kinds["answered"] + kinds["unknown"]; asked > 0 {
 				rate = fmt.Sprintf("%d%%", kinds["answered"]*100/asked)
 			}
-			fmt.Fprintf(&b, "\n- 收到 %d 条 @：答上 %d、答不上 %d（答上率 %s）、闲聊 %d、命令 %d、限流 %d、出错 %d", total, kinds["answered"], kinds["unknown"], rate, kinds["chat"], kinds["command"], kinds["limited"], kinds["failed"])
+			fmt.Fprintf(&b, "\n- 收到 %d 条 @：答上 %d、答不上 %d（答上率 %s）、闲聊 %d、命令 %d、限流 %d、出错 %d、回复没发出去 %d", total, kinds["answered"], kinds["unknown"], rate, kinds["chat"], kinds["command"], kinds["limited"], kinds["failed"], kinds["reply_failed"])
 		}
 	}
 	if s.qqBadAnswers != nil {

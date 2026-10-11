@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 // 答疑时查 GitHub。群友常问「这个问题有人报过吗」「修好了没」「最新版本是多少」，文档答不了，所以挑段落那一步顺带让模型给出搜 issue 的关键词、判断要不要查版本，服务端用管理后台的 GitHub App 只读地查，把结果和文档段落一起交给回答的模型。查询失败只记日志，答疑照常进行。
@@ -80,52 +82,78 @@ func (s *Server) qqSearchIssues(ctx context.Context, keywords string) (found str
 	return "", false
 }
 
-// qqSearchIssuesFor 是用一组搜索词做的一轮 qqSearchIssues。
+// qqSearchIssuesFor 是用一组搜索词做的一轮 qqSearchIssues。各仓库同时搜，都搜完后同时给前 qqIssueContextResults 个 issue（按仓库顺序数，见 qq_issue_context.go）补上下文，最后按仓库顺序拼起来：结果和逐个仓库查时一样，只是不再一个仓库搜完、补完上下文再搜下一个。
 func (s *Server) qqSearchIssuesFor(ctx context.Context, terms string) (string, bool) {
 	client := s.adminGitHub
-	var b strings.Builder
-	failed := false
-	// detailed 是已经补过上下文的 issue 数，见 qq_issue_context.go。
-	detailed := 0
-	for _, repo := range s.qqGitHubRepos() {
-		token, err := client.Token(ctx, repo, qqGitHubReadPerms)
-		if err != nil {
-			slog.Warn("qq bot: issue search skipped", "repo", repo, "reason", err.Error())
-			failed = true
-			continue
-		}
-		r, err := client.Do(ctx, token, "GET", "/search/issues?per_page="+strconv.Itoa(qqIssueResults)+"&q="+url.QueryEscape("repo:"+repo+" is:issue "+terms), nil)
-		if err != nil || !r.OK() {
-			slog.Warn("qq bot: issue search failed", "repo", repo, "reason", githubFailure("search", r, err).Error())
-			failed = true
-			continue
-		}
-		var found struct {
-			Items []struct {
-				qqIssue
-				qqIssueDetail
-				UpdatedAt string `json:"updated_at"`
-			} `json:"items"`
-		}
-		if r.Decode(&found) != nil {
-			failed = true
-			continue
-		}
-		_, name, _ := strings.Cut(repo, "/")
-		for _, issue := range found.Items {
-			if len(issue.PullRequest) > 0 && string(issue.PullRequest) != "null" || issue.Number <= 0 {
-				continue
+	type hit struct {
+		qqIssue
+		qqIssueDetail
+		UpdatedAt string `json:"updated_at"`
+	}
+	repos := s.qqGitHubRepos()
+	hits := make([][]hit, len(repos))
+	failed := make([]bool, len(repos))
+	var search errgroup.Group
+	for i, repo := range repos {
+		search.Go(func() error {
+			token, err := client.Token(ctx, repo, qqGitHubReadPerms)
+			if err != nil {
+				slog.Warn("qq bot: issue search skipped", "repo", repo, "reason", err.Error())
+				failed[i] = true
+				return nil
 			}
+			r, err := client.Do(ctx, token, "GET", "/search/issues?per_page="+strconv.Itoa(qqIssueResults)+"&q="+url.QueryEscape("repo:"+repo+" is:issue "+terms), nil)
+			if err != nil || !r.OK() {
+				slog.Warn("qq bot: issue search failed", "repo", repo, "reason", githubFailure("search", r, err).Error())
+				failed[i] = true
+				return nil
+			}
+			var found struct {
+				Items []hit `json:"items"`
+			}
+			if r.Decode(&found) != nil {
+				failed[i] = true
+				return nil
+			}
+			for _, issue := range found.Items {
+				if len(issue.PullRequest) > 0 && string(issue.PullRequest) != "null" || issue.Number <= 0 {
+					continue
+				}
+				hits[i] = append(hits[i], issue)
+			}
+			return nil
+		})
+	}
+	_ = search.Wait()
+	// extras[i][j] 是第 i 个仓库第 j 个 issue 补的上下文；detailed 是已经安排补上下文的 issue 数。
+	extras := make([][]string, len(repos))
+	var details errgroup.Group
+	detailed := 0
+	for i, repo := range repos {
+		extras[i] = make([]string, len(hits[i]))
+		for j := range hits[i] {
+			if detailed == qqIssueContextResults {
+				break
+			}
+			detailed++
+			details.Go(func() error {
+				extras[i][j] = s.qqIssueExtras(ctx, repo, hits[i][j].Number, hits[i][j].qqIssueDetail, qqMaintainerRunes, "  ")
+				return nil
+			})
+		}
+	}
+	_ = details.Wait()
+	var b strings.Builder
+	for i, repo := range repos {
+		_, name, _ := strings.Cut(repo, "/")
+		for j, issue := range hits[i] {
 			labels := issue.labelNames()
 			updated, _, _ := strings.Cut(issue.UpdatedAt, "T")
 			fmt.Fprintf(&b, "- %s #%d（%s，更新于 %s，标签：%s）%s\n", name, issue.Number, qqIssueState(issue.State, issue.StateReason, labels), updated, strings.Join(labels, "、"), issue.Title)
-			if detailed < qqIssueContextResults {
-				detailed++
-				b.WriteString(s.qqIssueExtras(ctx, repo, issue.Number, issue.qqIssueDetail, qqMaintainerRunes, "  "))
-			}
+			b.WriteString(extras[i][j])
 		}
 	}
-	return b.String(), failed
+	return b.String(), slices.Contains(failed, true)
 }
 
 // qqRelease 是 GitHub Release 列表里用到的字段。
@@ -222,8 +250,11 @@ func (s *Server) qqLatestReleases(ctx context.Context) string {
 	return b.String()
 }
 
-// qqStatsTTL 是仓库统计在本副本的缓存时间：每次统计要打十几次搜索接口，而 GitHub 的搜索接口每分钟只给 30 次。
-const qqStatsTTL = 5 * time.Minute
+// qqStatsTTL 是仓库统计在本副本的缓存时间：每次统计要打十几次搜索接口，而 GitHub 的搜索接口每分钟只给 30 次。qqStatsParallel 是统计时每个仓库同时发的搜索请求数，不再加大，免得撞上 GitHub 对并发请求的次级限流。
+const (
+	qqStatsTTL      = 5 * time.Minute
+	qqStatsParallel = 3
+)
 
 // qqStatsZone 是统计「今天」用的时区：群友在国内，按北京时间算。
 var qqStatsZone = time.FixedZone("UTC+8", 8*3600)
@@ -244,32 +275,51 @@ func (s *Server) qqRepoStats(ctx context.Context) string {
 	queries := []string{"is:issue is:open", "is:issue is:closed", "is:pr is:open",
 		"is:issue created:>=" + day, "is:issue closed:>=" + day, "is:pr is:merged merged:>=" + day,
 		"is:issue created:>=" + week, "is:issue closed:>=" + week, "is:pr is:merged merged:>=" + week}
+	// 各仓库同时查，每个仓库里最多 qqStatsParallel 个查询同时发；某个数查不到时取消这个仓库剩下的查询（曾经串行时也是查不到就停），只记第一个失败的原因。曾经两个仓库 18 次搜索逐个发，冷缓存时要七到十秒。
 	client := s.adminGitHub
+	repos := s.qqGitHubRepos()
+	lines := make([]string, len(repos))
+	var all errgroup.Group
+	for i, repo := range repos {
+		all.Go(func() error {
+			token, err := client.Token(ctx, repo, qqGitHubReadPerms)
+			if err != nil {
+				slog.Warn("qq bot: repo stats skipped", "repo", repo, "reason", err.Error())
+				return nil
+			}
+			counts := make([]int, len(queries))
+			g, qctx := errgroup.WithContext(ctx)
+			g.SetLimit(qqStatsParallel)
+			for k, q := range queries {
+				g.Go(func() error {
+					if err := qctx.Err(); err != nil {
+						return err
+					}
+					r, err := client.Get(qctx, token, "/search/issues?per_page=1&q="+url.QueryEscape("repo:"+repo+" "+q))
+					var found struct {
+						TotalCount *int `json:"total_count"`
+					}
+					if err != nil || !r.OK() || r.Decode(&found) != nil || found.TotalCount == nil {
+						return githubFailure("stats", r, err)
+					}
+					counts[k] = *found.TotalCount
+					return nil
+				})
+			}
+			if err := g.Wait(); err != nil {
+				slog.Warn("qq bot: repo stats failed", "repo", repo, "reason", err.Error())
+				return nil
+			}
+			_, name, _ := strings.Cut(repo, "/")
+			lines[i] = fmt.Sprintf("- %s：现在开着的 issue %d 个，建仓以来累计关闭的 issue %d 个，开着的 PR %d 个；今天（北京时间 %s）新开 issue %d 个、关闭 issue %d 个、合并 PR %d 个；最近 7 天新开 issue %d 个、关闭 issue %d 个、合并 PR %d 个\n",
+				name, counts[0], counts[1], counts[2], today.Format("2006-01-02"), counts[3], counts[4], counts[5], counts[6], counts[7], counts[8])
+			return nil
+		})
+	}
+	_ = all.Wait()
 	var out strings.Builder
-	for _, repo := range s.qqGitHubRepos() {
-		token, err := client.Token(ctx, repo, qqGitHubReadPerms)
-		if err != nil {
-			slog.Warn("qq bot: repo stats skipped", "repo", repo, "reason", err.Error())
-			continue
-		}
-		counts := make([]int, 0, len(queries))
-		for _, q := range queries {
-			r, err := client.Get(ctx, token, "/search/issues?per_page=1&q="+url.QueryEscape("repo:"+repo+" "+q))
-			var found struct {
-				TotalCount *int `json:"total_count"`
-			}
-			if err != nil || !r.OK() || r.Decode(&found) != nil || found.TotalCount == nil {
-				slog.Warn("qq bot: repo stats failed", "repo", repo, "reason", githubFailure("stats", r, err).Error())
-				break
-			}
-			counts = append(counts, *found.TotalCount)
-		}
-		if len(counts) != len(queries) {
-			continue
-		}
-		_, name, _ := strings.Cut(repo, "/")
-		fmt.Fprintf(&out, "- %s：现在开着的 issue %d 个，建仓以来累计关闭的 issue %d 个，开着的 PR %d 个；今天（北京时间 %s）新开 issue %d 个、关闭 issue %d 个、合并 PR %d 个；最近 7 天新开 issue %d 个、关闭 issue %d 个、合并 PR %d 个\n",
-			name, counts[0], counts[1], counts[2], today.Format("2006-01-02"), counts[3], counts[4], counts[5], counts[6], counts[7], counts[8])
+	for _, line := range lines {
+		out.WriteString(line)
 	}
 	stats := out.String()
 	if stats != "" {

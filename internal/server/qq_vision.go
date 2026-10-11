@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 // 看群友的截图。输入法的问题，群友大多直接发截图（候选框位置、报错弹窗、设置界面），原来机器人只会回「请把文字打出来」，最后还是管理员看图回答。现在先让支持看图的模型（qq_bot.model，默认 claude-haiku-5-5）把截图转成文字描述：哪个界面、在什么系统上、截图里的原文（报错、版本号、设置项）、能看出的异常，再接到问题后面走原来的答疑和提 issue 流程。不走备用模型：实测 gpt-5.6-terra 连颜色都认错。截图只在内存里转一次，不保存（管理员提 issue 时的截图照旧存进公开 bucket，见 qq_media.go）。
@@ -24,6 +26,8 @@ const (
 	qqVisionTimeout = 40 * time.Second
 	// qqShotMarker 是附在问题后面的截图描述的开头，也用来判断已经看过截图。
 	qqShotMarker = "（群友附了截图，截图内容："
+	// qqShotMissedNote 是文字带截图、截图又没能看成时接在问题后面的说明，回答的模型据此在答案里请群友把报错文字打出来（见 handleQQFeedback）。
+	qqShotMissedNote = "\n（群友附了截图，但没能看清，回答时请提醒他把报错文字打出来）"
 )
 
 const qqVisionPrompt = `你在帮开源输入法「水杉输入法」QQ 群的答疑助手看群友发的截图。用简体中文描述截图，只写看得到的内容，不要猜：
@@ -45,22 +49,36 @@ func qqHasImages(attachments []qqAttachment) bool {
 	return false
 }
 
-// qqDescribeImages 把消息里的截图（最多 qqVisionImages 张）转成文字描述，拼成附在问题后面的一段；没有截图或都看不了时返回空字符串。
+// qqDescribeImages 把消息里的截图（最多 qqVisionImages 张）转成文字描述，拼成附在问题后面的一段；没有截图或都看不了时返回空字符串。前 qqVisionImages 张截图同时看，描述按截图原来的顺序拼：曾经一张看完再看下一张，两张截图最坏要等 80 秒。代价是某一张没看成时不再补看第 3 张（逐张看时会接着看下一张，凑满 qqVisionImages 张为止），群友一次发三张以上截图的情况很少。
 func (s *Server) qqDescribeImages(ctx context.Context, attachments []qqAttachment) string {
-	var parts []string
+	var images []qqAttachment
 	for _, a := range attachments {
-		if len(parts) == qqVisionImages {
+		if len(images) == qqVisionImages {
 			break
 		}
-		if !strings.HasPrefix(strings.ToLower(a.ContentType), "image/") {
-			continue
+		if strings.HasPrefix(strings.ToLower(a.ContentType), "image/") {
+			images = append(images, a)
 		}
-		description, err := s.qqDescribeImage(ctx, a)
-		if err != nil {
-			slog.Warn("qq bot: screenshot not described", "reason", err.Error())
-			continue
+	}
+	descriptions := make([]string, len(images))
+	var g errgroup.Group
+	for i, a := range images {
+		g.Go(func() error {
+			description, err := s.qqDescribeImage(ctx, a)
+			if err != nil {
+				slog.Warn("qq bot: screenshot not described", "reason", err.Error())
+				return nil
+			}
+			descriptions[i] = description
+			return nil
+		})
+	}
+	_ = g.Wait()
+	var parts []string
+	for _, description := range descriptions {
+		if description != "" {
+			parts = append(parts, description)
 		}
-		parts = append(parts, description)
 	}
 	if len(parts) == 0 {
 		return ""

@@ -2760,7 +2760,7 @@ func TestQQResearchTarget(t *testing.T) {
 	}
 }
 
-// 难题换更强的模型：挑段落的模型标了 strong（或 lookup）时回答用 strong_model，常规问题用 model；没有配置 strong_model 时一律用 model。
+// 回答一律用 strong_model，闲聊用 chat_model（同时标了难题时按难题处理），挑段落用 model；没有配置 strong_model 时一律用 model。
 func TestQQBotStrongModelRouting(t *testing.T) {
 	s, fake, _ := qqServer(t)
 	s.qq.config.Admins = nil
@@ -2775,9 +2775,10 @@ func TestQQBotStrongModelRouting(t *testing.T) {
 	if answerModel() != "strong-model" || fake.models[len(fake.models)-2] != "claude-haiku-5-5" {
 		t.Fatal(fake.models)
 	}
+	// 常规问题也用 strong_model 回答，挑段落仍用 model。
 	fake.selected = `{"sections":[1]}`
-	qqDeliver(t, s, "m-fast", "五笔怎么切换")
-	if answerModel() != "claude-haiku-5-5" {
+	qqDeliver(t, s, "m-plain", "五笔怎么切换")
+	if answerModel() != "strong-model" || fake.models[len(fake.models)-2] != "claude-haiku-5-5" {
 		t.Fatal(fake.models)
 	}
 	// 闲聊用 chat_model；同时标了难题时按难题处理。

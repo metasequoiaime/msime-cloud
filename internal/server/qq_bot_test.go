@@ -260,7 +260,7 @@ func (f *qqFake) replyTexts() []string {
 	return texts
 }
 
-const qqBugSummary = `{"kind":"bug","title":"候选框不跟随光标 @octocat","platform":"Windows","version":"Windows 11、水杉 1.2.0","problem":"在记事本里打字时候选框停在屏幕左上角，见 #12 和 https://evil.example","steps":"1. 打开记事本\n2. 输入 nihao","expected":"候选框出现在光标下方","scenario":"","proposal":"","missing":"","keywords":"候选框 光标 repo:other/x \"is:closed\" Windows a b c"}`
+const qqBugSummary = `{"kind":"bug","title":"候选框不跟随光标 @octocat","platform":"Windows","version":"Windows 11、水杉 1.2.0","ime_version":"1.2.0","problem":"在记事本里打字时候选框停在屏幕左上角，见 #12 和 https://evil.example","steps":"1. 打开记事本\n2. 输入 nihao","expected":"候选框出现在光标下方","scenario":"","proposal":"","missing":"","keywords":"候选框 光标 repo:other/x \"is:closed\" Windows a b c"}`
 
 func qqServer(t *testing.T) (*Server, *qqFake, *qqLimiter) {
 	t.Helper()
@@ -635,5 +635,49 @@ func TestQQSummariseValidation(t *testing.T) {
 	s.config.Chat.URL = "https://bad host"
 	if _, err := s.qqSummarise(context.Background(), "text"); err == nil {
 		t.Fatal("invalid chat endpoint accepted")
+	}
+}
+
+// Windows 上有两个产品，按群友说的输入法版本分：不低于 0.9 是 msime-windows，低于 0.9 是 msime 的新实现；没说版本先追问。
+func TestQQBotWindowsProductsByVersion(t *testing.T) {
+	cases := []struct {
+		name, imeVersion, repo, labels string
+	}{
+		{"new port", "0.2.1", "o/r", "[bug platform/windows source/qq]"},
+		{"split version", "0.9.0", "o/win", "[bug source/qq]"},
+		{"double digit minor", "v0.10.3", "o/win", "[bug source/qq]"},
+		{"major release", "1.0", "o/win", "[bug source/qq]"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, fake, _ := qqServer(t)
+			fake.summary = `{"kind":"bug","title":"候选框位置不对","platform":"windows","ime_version":"` + tc.imeVersion + `","problem":"候选框停在左上角","steps":"在记事本里打字","keywords":""}`
+			qqDeliver(t, s, "m-win-"+tc.imeVersion, "Windows 上候选框停在左上角，版本 "+tc.imeVersion)
+			if len(fake.created) != 1 || fake.created[0]["_repo"] != tc.repo || fmt.Sprint(fake.created[0]["labels"]) != tc.labels {
+				t.Fatal(fake.created)
+			}
+		})
+	}
+	s, fake, _ := qqServer(t)
+	fake.summary = `{"kind":"feature","title":"支持自定义快捷键","platform":"windows","proposal":"希望能自定义切换快捷键","keywords":""}`
+	qqDeliver(t, s, "m-win-no-version", "Windows 上希望能自定义切换快捷键")
+	if replies := fake.replyTexts(); len(fake.created) != 0 || replies[len(replies)-1] != "还差一点信息："+qqWindowsVersionQuestion+" 补充后请 @我 把问题完整描述一次。" {
+		t.Fatal(replies, fake.created)
+	}
+}
+
+func TestQQParseVersion(t *testing.T) {
+	for text, want := range map[string][3]int{"0.9.5": {0, 9, 5}, "v0.2.1": {0, 2, 1}, "水杉 1.2": {1, 2, 0}, "Windows 11 上 0.9": {0, 9, 0}} {
+		if got, ok := qqParseVersion(text); !ok || got != want {
+			t.Errorf("%q: %v %v want %v", text, got, ok, want)
+		}
+	}
+	for _, text := range []string{"", "最新版", "11", "99999999.1"} {
+		if _, ok := qqParseVersion(text); ok {
+			t.Errorf("%q parsed", text)
+		}
+	}
+	if qqVersionAtLeast([3]int{0, 8, 99}, qqWindowsSplitVersion) || !qqVersionAtLeast([3]int{0, 9, 0}, qqWindowsSplitVersion) {
+		t.Fatal("split comparison")
 	}
 }

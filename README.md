@@ -291,7 +291,7 @@ QQ 开放平台以 Webhook 把事件推到 `POST /v1/community/qq-bot/events`。
 
 1. 去掉 @ 标记和表情标签；少于 6 个字回复用法，超过 2000 字请群友精简。每个群友每天最多处理 5 条、每个群每天 50 条（`auth_rates` 作用域 `qq-bot-member`、`qq-bot-group`），闲聊和追问也计数，因为它们同样要交给模型。
 2. 用 `chat` 端点（JSON 输出）和 `qq_bot.model` 把这段话整理成 bug 或功能建议的各个栏目，栏目与 msime 的 `bug_report.yml`、`feature_request.yml` 模板一致。判断不是反馈时回复说明；bug 既看不出平台、也没有操作步骤时，回复一句追问，不提交。这条规则由服务端判定，模型没给出追问时用固定的问题。
-3. 按平台选仓库，规则与崩溃 issue 相同：能看出平台时用 `admin.github.platforms` 里该平台的 `repo`（生产上 Windows 是 msime-windows，其余平台是 msime），看不出平台时用 `qq_bot.repo`。用模型给出的关键词在这个仓库里搜索开启的 issue（关键词去掉冒号和引号，写不进 `repo:`、`is:` 这类限定词），交给模型判断是否重复。重复时在那个 issue 下补充评论，否则新建 issue，标签为 `bug` 或 `enhancement`、该平台的 `label`（为空时不加），以及 `qq_bot.labels`。
+3. 按平台选仓库，规则与崩溃 issue 相同：能看出平台时用 `admin.github.platforms` 里该平台的 `repo`（生产上 Windows 是 msime-windows，其余平台是 msime），看不出平台时用 `qq_bot.repo`。Windows 上有两个产品，按群友说的水杉输入法版本区分：不低于 0.9 的是 msime-windows（Metasequoia IME 水杉输入法），按上面的平台配置提交；低于 0.9 的是 msime 仓库里的新实现，提交到 `qq_bot.repo` 并加 `platform/windows`；没说版本时先追问版本，不提交。分界版本是代码里的常量 `qqWindowsSplitVersion`，按 2026-10 两边的版本号定，msime 的 Windows 版本号接近 0.9 之前要改。用模型给出的关键词在这个仓库里搜索开启的 issue（关键词去掉冒号和引号，写不进 `repo:`、`is:` 这类限定词），交给模型判断是否重复。重复时在那个 issue 下补充评论，否则新建 issue，标签为 `bug` 或 `enhancement`、该平台的 `label`（为空时不加），以及 `qq_bot.labels`。
 4. 被动回复群友 issue 编号。开放平台只允许消息里出现报备过的域名，所以回复不带链接。被动回复只能在收到消息后 5 分钟内发出，后台处理限时 4 分钟。
 
 issue 和评论只包含模型转述的内容，不含群友的原话、昵称或 openid，并打断 @ 提及、# 引用和链接（与官网词条提交的备注相同）。消息内容不写日志，日志里只有失败原因；`qq_bot.groups` 非空时，来自其他群的消息会以 `group_openid` 记一条日志，方便查出要填的群标识。开放平台不提供群号，`groups` 只能填 `group_openid`；为空时接受机器人所在的每个群。

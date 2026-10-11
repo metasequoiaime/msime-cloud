@@ -601,8 +601,8 @@ func qqIssueIntent(text string) bool {
 
 // fileAdminFeedback 处理管理员的一条消息。explicit 表示来自「提issue」命令。先整理成 bug 或需求：不是具体反馈时，命令请管理员写具体些，普通消息转去答疑；是具体反馈时先对照知识库，文档说明功能已经有了或现象是正常的就回复文档的说法、不提交；没有明确要求记录的只回复机器人的理解，提示用「提issue」；其余的按平台选仓库、查重、带上附件和标签提交。
 func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text string, explicit bool, reply func(string)) string {
-	// 「提issue」带了截图时把截图描述并进反馈，整理出的 issue 才写得清现象；截图本身照旧存进公开 bucket。
-	if qqHasImages(m.Attachments) && !strings.Contains(text, qqShotMarker) {
+	// 「提issue」带了截图时把截图描述并进反馈，整理出的 issue 才写得清现象；截图本身照旧存进公开 bucket。不是命令的消息在 handleQQFeedback 里已经看过图（看不成时也不再看第二遍）。
+	if explicit && qqHasImages(m.Attachments) && !strings.Contains(text, qqShotMarker) {
 		text = qqWithShot(text, s.qqDescribeImages(ctx, m.Attachments))
 	}
 	original := text

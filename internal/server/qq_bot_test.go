@@ -175,6 +175,10 @@ type qqFake struct {
 	// GitHub
 	searchQuery string
 	// searchQueries 记下每次搜索；releases 是各仓库 Release 列表的响应（缺省的仓库返回 500）。
+	// topics 是挑分类标签的模型输出，repoLabels 是各仓库标签列表的响应，issues 是按「owner/name/issues/编号」查单个 issue 的响应。
+	topics     string
+	repoLabels map[string]string
+	issues     map[string]string
 	// openIssues 是列出开放 issue 的响应（为空时返回 500），openIssueCalls 记下调用次数；commentStatus 非 0 时评论失败。
 	openIssues     string
 	openIssueCalls int
@@ -218,6 +222,12 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case strings.HasPrefix(system, qqSelectPrompt):
 			content, f.selectSystem = f.selected, system
 			f.chatCalls = append(f.chatCalls, "select")
+		case system == qqTopicPrompt:
+			content = f.topics
+			if content == "" {
+				content = `{"labels":[]}`
+			}
+			f.chatCalls = append(f.chatCalls, "topics")
 		case strings.HasPrefix(system, qqAnswerPrompt):
 			content, f.answerSystem = f.answer, system
 			f.chatCalls = append(f.chatCalls, "answer")
@@ -296,6 +306,19 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"encoding": "base64", "content": base64.StdEncoding.EncodeToString([]byte(file))})
+	case strings.HasSuffix(r.URL.Path, "/labels") && r.Method == "GET":
+		body := f.repoLabels[strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/repos/"), "/labels")]
+		if body == "" {
+			body = "[]"
+		}
+		_, _ = io.WriteString(w, body)
+	case strings.HasPrefix(r.URL.Path, "/repos/") && strings.Contains(r.URL.Path, "/issues/") && !strings.HasSuffix(r.URL.Path, "/comments") && r.Method == "GET":
+		body, ok := f.issues[strings.TrimPrefix(r.URL.Path, "/repos/")]
+		if !ok {
+			w.WriteHeader(404)
+			return
+		}
+		_, _ = io.WriteString(w, body)
 	case strings.HasSuffix(r.URL.Path, "/releases"):
 		f.releaseCalls++
 		body, ok := f.releases[strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/repos/"), "/releases")]
@@ -468,7 +491,7 @@ func TestQQBotCallbackProtocol(t *testing.T) {
 
 func TestQQBotOpensIssue(t *testing.T) {
 	s, fake, limiter := qqServer(t)
-	if d := qqDeliver(t, s, "ROBOT1.0_msg-1!!", " <@!102030405> Windows 11 上水杉 1.2.0 在记事本里打字，候选框一直停在左上角 <faceType=1,faceId=\"178\">"); d != 0 {
+	if d := qqDeliver(t, s, "ROBOT1.0_msg-1!!", "提issue  <@!102030405> Windows 11 上水杉 1.2.0 在记事本里打字，候选框一直停在左上角 <faceType=1,faceId=\"178\">"); d != 0 {
 		t.Fatal("ack", d)
 	}
 	replies := fake.replyTexts()
@@ -510,12 +533,12 @@ func TestQQBotOpensIssue(t *testing.T) {
 		}
 	}
 	// 同一事件重推：消息 id 已认领，直接应答成功，不再处理。
-	if d := qqDeliver(t, s, "ROBOT1.0_msg-1!!", "Windows 11 上水杉 1.2.0 在记事本里打字，候选框一直停在左上角"); d != 0 || len(fake.replyTexts()) != 2 || len(fake.created) != 1 {
+	if d := qqDeliver(t, s, "ROBOT1.0_msg-1!!", "提issue Windows 11 上水杉 1.2.0 在记事本里打字，候选框一直停在左上角"); d != 0 || len(fake.replyTexts()) != 2 || len(fake.created) != 1 {
 		t.Fatal("redelivery processed again", d)
 	}
 	// 认领时数据库不可用：应答失败，让开放平台重推。
 	limiter.err = map[string]error{"qq-bot-message": errors.New("database down")}
-	if d := qqDeliver(t, s, "ROBOT1.0_msg-2!!", "Windows 11 上候选框一直停在左上角"); d != 1 {
+	if d := qqDeliver(t, s, "ROBOT1.0_msg-2!!", "提issue Windows 11 上候选框一直停在左上角"); d != 1 {
 		t.Fatal("claim failure must ask for redelivery", d)
 	}
 }
@@ -527,7 +550,7 @@ func TestQQBotAddsToDuplicate(t *testing.T) {
 		{"number": 7, "title": "Windows 候选框位置不对", "body": strings.Repeat("长", qqBotCandidateRunes+50), "pull_request": nil},
 	}
 	fake.duplicate = "```json\n{\"duplicate\":7}\n```"
-	qqDeliver(t, s, "m-dup", "Windows 11 上候选框一直停在左上角")
+	qqDeliver(t, s, "m-dup", "提issue Windows 11 上候选框一直停在左上角")
 	if len(fake.created) != 0 {
 		t.Fatal("duplicate must not open an issue", fake.created)
 	}
@@ -545,14 +568,14 @@ func TestQQBotAddsToDuplicate(t *testing.T) {
 	}
 	// 模型给出不在搜索结果里的编号时新建 issue。
 	fake.duplicate = `{"duplicate":99}`
-	qqDeliver(t, s, "m-dup-2", "Windows 11 上候选框一直停在左上角")
+	qqDeliver(t, s, "m-dup-2", "提issue Windows 11 上候选框一直停在左上角")
 	if len(fake.created) != 1 {
 		t.Fatal("unknown duplicate number must open an issue")
 	}
 	// 搜索结果只有拉取请求时不调用去重模型。
 	fake.searchItems = fake.searchItems[:1]
 	calls := len(fake.chatCalls)
-	qqDeliver(t, s, "m-dup-3", "Windows 11 上候选框一直停在左上角")
+	qqDeliver(t, s, "m-dup-3", "提issue Windows 11 上候选框一直停在左上角")
 	if len(fake.chatCalls) != calls+1 || len(fake.created) != 2 {
 		t.Fatal(fake.chatCalls[calls:], len(fake.created))
 	}
@@ -561,7 +584,7 @@ func TestQQBotAddsToDuplicate(t *testing.T) {
 func TestQQBotFeatureRequest(t *testing.T) {
 	s, fake, _ := qqServer(t)
 	fake.summary = `{"kind":"feature","title":"安卓支持手写笔","platform":"android","version":"","problem":"现在只能用手指","steps":"","expected":"","scenario":"平板上记笔记","proposal":"支持在输入框里直接用手写笔写字","missing":"追问不应该出现","keywords":""}`
-	qqDeliver(t, s, "m-feature", "安卓平板上能不能支持手写笔直接写字")
+	qqDeliver(t, s, "m-feature", "提issue 安卓平板上能不能支持手写笔直接写字")
 	if fake.searchQuery != "" {
 		t.Fatal("empty keywords must skip the search", fake.searchQuery)
 	}
@@ -578,7 +601,7 @@ func TestQQBotFeatureRequest(t *testing.T) {
 	}
 	// 看不出平台、但有操作步骤的 bug 不追问，提交到 qq_bot.repo，不加平台标签。
 	fake.summary = `{"kind":"bug","title":"联想词重复","problem":"同一个词出现两次","steps":"输入 shijian","keywords":""}`
-	qqDeliver(t, s, "m-no-platform", "输入 shijian 的时候同一个联想词出现两次")
+	qqDeliver(t, s, "m-no-platform", "提issue 输入 shijian 的时候同一个联想词出现两次")
 	if last := fake.created[len(fake.created)-1]; last["_repo"] != "o/r" || fmt.Sprint(last["labels"]) != "[bug source/qq]" {
 		t.Fatal(last["_repo"], last["labels"])
 	}
@@ -603,7 +626,8 @@ func TestQQBotRepliesWithoutFiling(t *testing.T) {
 			l.counts = map[string]int{"qq-bot-group|GROUP1": qqBotGroupDaily}
 		}, qqReplyLimited},
 		{"limit unavailable", "", func(_ *qqFake, l *qqLimiter) { l.err = map[string]error{"qq-bot-group": errors.New("down")} }, qqReplyUnavailable},
-		{"admin question goes to the knowledge base", "", func(f *qqFake, _ *qqLimiter) { f.summary = `{"kind":"other"}` }, "在设置的「输入方案」里选五笔。"},
+		{"plain admin message goes to the knowledge base", "五笔怎么切换", nil, "在设置的「输入方案」里选五笔。"},
+		{"forced report that is not a report", "", func(f *qqFake, _ *qqLimiter) { f.summary = `{"kind":"other"}` }, "没看出要提的是 bug 还是需求，请把问题或想要的功能描述具体一点。"},
 		{"needs details", "", func(f *qqFake, _ *qqLimiter) {
 			f.summary = `{"kind":"bug","title":"打不出字","problem":"打不出字","missing":"你用的是哪个系统？"}`
 		}, "还差一点信息：你用的是哪个系统？ 补充后请 @我 把问题完整描述一次。"},
@@ -628,7 +652,7 @@ func TestQQBotRepliesWithoutFiling(t *testing.T) {
 			}
 			content := tc.content
 			if content == "" {
-				content = "Windows 11 上候选框一直停在左上角"
+				content = "提issue Windows 11 上候选框一直停在左上角"
 			}
 			qqDeliver(t, s, "m-"+strings.ReplaceAll(tc.name, " ", "-"), content)
 			replies := fake.replyTexts()
@@ -643,7 +667,7 @@ func TestQQBotUpstreamFailures(t *testing.T) {
 	s, fake, _ := qqServer(t)
 	// 发不出回复只记日志，处理照常进行。
 	fake.replyStatus = 500
-	qqDeliver(t, s, "m-reply-fails", "Windows 11 上候选框一直停在左上角")
+	qqDeliver(t, s, "m-reply-fails", "提issue Windows 11 上候选框一直停在左上角")
 	if len(fake.created) != 1 {
 		t.Fatal("issue must still be opened", len(fake.created))
 	}
@@ -755,7 +779,7 @@ func TestQQBotWindowsProductsByVersion(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s, fake, _ := qqServer(t)
 			fake.summary = `{"kind":"bug","title":"候选框位置不对","platform":"windows","ime_version":"` + tc.imeVersion + `","problem":"候选框停在左上角","steps":"在记事本里打字","keywords":""}`
-			qqDeliver(t, s, "m-win-"+tc.imeVersion, "Windows 上候选框停在左上角，版本 "+tc.imeVersion)
+			qqDeliver(t, s, "m-win-"+tc.imeVersion, "提issue Windows 上候选框停在左上角，版本 "+tc.imeVersion)
 			if len(fake.created) != 1 || fake.created[0]["_repo"] != tc.repo || fmt.Sprint(fake.created[0]["labels"]) != tc.labels {
 				t.Fatal(fake.created)
 			}
@@ -763,7 +787,7 @@ func TestQQBotWindowsProductsByVersion(t *testing.T) {
 	}
 	s, fake, _ := qqServer(t)
 	fake.summary = `{"kind":"feature","title":"支持自定义快捷键","platform":"windows","proposal":"希望能自定义切换快捷键","keywords":""}`
-	qqDeliver(t, s, "m-win-no-version", "Windows 上希望能自定义切换快捷键")
+	qqDeliver(t, s, "m-win-no-version", "提issue Windows 上希望能自定义切换快捷键")
 	if replies := fake.replyTexts(); len(fake.created) != 0 || replies[len(replies)-1] != "还差一点信息："+qqWindowsVersionQuestion+" 补充后请 @我 把问题完整描述一次。" {
 		t.Fatal(replies, fake.created)
 	}
@@ -1019,7 +1043,7 @@ func TestQQBotStoresAdminMediaInIssue(t *testing.T) {
 		{"content_type": "image/png", "url": base + "/media/missing.png"},
 		{"content_type": "voice", "url": base + "/media/voice.silk"},
 	}
-	w := qqPost(t, s, qqMessageWithAttachments("m-media", "Windows 11 上水杉 1.2.0 候选框停在左上角", attachments))
+	w := qqPost(t, s, qqMessageWithAttachments("m-media", "提issue Windows 11 上水杉 1.2.0 候选框停在左上角", attachments))
 	s.qqWorkers.Wait()
 	if w.Code != 200 || len(fake.created) != 1 {
 		t.Fatal(w.Code, fake.created)
@@ -1047,7 +1071,7 @@ func TestQQBotStoresAdminMediaInIssue(t *testing.T) {
 	// 去重时附件写进补充评论。
 	fake.searchItems = []map[string]any{{"number": 7, "title": "候选框位置不对", "body": "b"}}
 	fake.duplicate = `{"duplicate":7}`
-	qqPost(t, s, qqMessageWithAttachments("m-media-dup", "Windows 11 上水杉 1.2.0 候选框停在左上角", attachments[:1]))
+	qqPost(t, s, qqMessageWithAttachments("m-media-dup", "提issue Windows 11 上水杉 1.2.0 候选框停在左上角", attachments[:1]))
 	s.qqWorkers.Wait()
 	if comment := fake.comments["/repos/o/win/issues/7/comments"]; comment == nil || !strings.Contains(comment["body"].(string), "![截图 1](https://media.example.test/") {
 		t.Fatal(fake.comments)
@@ -1055,7 +1079,7 @@ func TestQQBotStoresAdminMediaInIssue(t *testing.T) {
 	// 普通群友的附件不处理。
 	before := len(media.objects)
 	s.qq.config.Admins = nil
-	qqPost(t, s, qqMessageWithAttachments("m-media-member", "五笔怎么切换", attachments[:1]))
+	qqPost(t, s, qqMessageWithAttachments("m-media-member", "提issue 五笔怎么切换", attachments[:1]))
 	s.qqWorkers.Wait()
 	if len(media.objects) != before {
 		t.Fatal("member attachments stored")
@@ -1065,7 +1089,7 @@ func TestQQBotStoresAdminMediaInIssue(t *testing.T) {
 func TestQQBotMediaWithoutBucket(t *testing.T) {
 	s, fake, _ := qqServer(t)
 	s.media = nil
-	qqPost(t, s, qqMessageWithAttachments("m-nobucket", "Windows 11 上水杉 1.2.0 候选框停在左上角", []map[string]string{{"content_type": "image/png", "url": "https://multimedia.nt.qq.com.cn/download?x=1"}, {"content_type": "voice", "url": "x"}}))
+	qqPost(t, s, qqMessageWithAttachments("m-nobucket", "提issue Windows 11 上水杉 1.2.0 候选框停在左上角", []map[string]string{{"content_type": "image/png", "url": "https://multimedia.nt.qq.com.cn/download?x=1"}, {"content_type": "voice", "url": "x"}}))
 	s.qqWorkers.Wait()
 	if len(fake.created) != 1 || !strings.Contains(fake.created[0]["body"].(string), "另有 1 个附件没能保存。") {
 		t.Fatal(fake.created)
@@ -1075,7 +1099,7 @@ func TestQQBotMediaWithoutBucket(t *testing.T) {
 	s.qq.mediaHosts = append(append([]string(nil), qqMediaHosts...), strings.Split(strings.TrimPrefix(s.config.Chat.URL, "https://"), ":")[0])
 	s.qq.mediaClient = newQQMediaClient(&s.qq.mediaHosts)
 	s.qq.mediaClient.Transport = s.client.Transport
-	qqPost(t, s, qqMessageWithAttachments("m-bucket-down", "Windows 11 上水杉 1.2.0 候选框停在左上角", []map[string]string{{"content_type": "image/png", "url": s.config.Chat.URL + "/media/shot.png"}}))
+	qqPost(t, s, qqMessageWithAttachments("m-bucket-down", "提issue Windows 11 上水杉 1.2.0 候选框停在左上角", []map[string]string{{"content_type": "image/png", "url": s.config.Chat.URL + "/media/shot.png"}}))
 	s.qqWorkers.Wait()
 	if len(fake.created) != 2 || !strings.Contains(fake.created[1]["body"].(string), "另有 1 个附件没能保存。") {
 		t.Fatal(fake.created)
@@ -1146,7 +1170,7 @@ func TestQQBotRecognisesGroupAdmins(t *testing.T) {
 	// 开通后：群管理员能提 issue，答不上时也会被 @。
 	s.qq.roles = qqRoles{}
 	fake.roles = map[string]string{"MEMBER1": "admin"}
-	qqDeliver(t, s, "m-role-admin", "Windows 11 上水杉 1.2.0 候选框停在左上角")
+	qqDeliver(t, s, "m-role-admin", "提issue Windows 11 上水杉 1.2.0 候选框停在左上角")
 	if len(fake.created) != 1 {
 		t.Fatal("group admin could not file an issue")
 	}
@@ -1500,5 +1524,158 @@ func TestQQBotRecordsUnansweredTopics(t *testing.T) {
 	c.QQBot.GapsRepo = "msime-docs"
 	if c.QQBot.validate(&c) == nil {
 		t.Fatal("bad gaps_repo accepted")
+	}
+}
+
+// 命令不经过模型：帮助、版本、查、#编号、提issue。
+func TestQQBotCommands(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.config.Admin.GitHub.Platforms = []AdminPlatformConfig{{ID: "windows", Name: "Windows", Repo: "o/win", TagPrefix: "v"}}
+	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
+	// 帮助：管理员多看到提 issue 的用法。
+	qqDeliver(t, s, "m-help-admin", "帮助")
+	if last() != qqHelpText+qqAdminHelpText {
+		t.Fatal(last())
+	}
+	s.qq.config.Admins = nil
+	qqDeliver(t, s, "m-help", "<@!1> help")
+	if last() != qqHelpText || len(fake.chatCalls) != 0 {
+		t.Fatal(last(), fake.chatCalls)
+	}
+	// 版本。
+	fake.releases = map[string]string{"o/win": `[{"tag_name":"v0.9.5","published_at":"2026-10-05T00:00:00Z"}]`, "o/r": `[]`}
+	qqDeliver(t, s, "m-ver", "最新版本")
+	if !strings.HasPrefix(last(), "各平台最新版本（GitHub Release）：\n- Windows（win 仓库）：正式版 v0.9.5（2026-10-05 发布）") {
+		t.Fatal(last())
+	}
+	fake.releases = map[string]string{}
+	s.adminGitHub.Invalidate("")
+	qqDeliver(t, s, "m-ver-down", "版本")
+	if last() != "暂时查不到版本信息，请稍后再试。" {
+		t.Fatal(last())
+	}
+	// 查：找到、没找到、没写关键词；「查不到…」不算命令。
+	fake.searchItems = []map[string]any{{"number": 818, "title": "大小写倒置", "state": "open", "updated_at": "2026-10-11T00:00:00Z"}}
+	qqDeliver(t, s, "m-search", "查：大小写 倒置")
+	if !strings.Contains(last(), "#818（开着") || !strings.Contains(fake.searchQuery, "大小写 倒置") {
+		t.Fatal(last(), fake.searchQuery)
+	}
+	fake.searchItems = nil
+	qqDeliver(t, s, "m-search-none", "搜 不存在的东西")
+	if last() != "GitHub 上没有找到相关的 issue。" {
+		t.Fatal(last())
+	}
+	qqDeliver(t, s, "m-search-empty", "查")
+	if !strings.HasPrefix(last(), "请在「查」后面写要搜的关键词") {
+		t.Fatal(last())
+	}
+	calls := len(fake.chatCalls)
+	qqDeliver(t, s, "m-not-command", "查不到词库怎么办")
+	if len(fake.chatCalls) == calls {
+		t.Fatal("a question starting with 查 must not be a command")
+	}
+	// #编号：两个仓库都查；指定仓库只查它；不认识的仓库给出可查的仓库。
+	fake.issues = map[string]string{
+		"o/win/issues/818": `{"number":818,"title":"大小写倒置","state":"closed","state_reason":"completed","updated_at":"2026-10-12T00:00:00Z"}`,
+		"o/r/issues/818":   `{"number":818,"title":"别的","state":"open","updated_at":"2026-10-01T00:00:00Z","pull_request":{"url":"x"}}`,
+	}
+	qqDeliver(t, s, "m-ref", "#818")
+	if last() != "r #818（拉取请求） 别的：开着，更新于 2026-10-01\nwin #818 大小写倒置：已解决，更新于 2026-10-12" {
+		t.Fatalf("%q", last())
+	}
+	qqDeliver(t, s, "m-ref-repo", "win #818")
+	if last() != "win #818 大小写倒置：已解决，更新于 2026-10-12" {
+		t.Fatalf("%q", last())
+	}
+	qqDeliver(t, s, "m-ref-missing", "#999")
+	if last() != "没有查到 #999。" {
+		t.Fatal(last())
+	}
+	qqDeliver(t, s, "m-ref-unknown", "other #1")
+	if !strings.HasPrefix(last(), "只能查这些仓库：") {
+		t.Fatal(last())
+	}
+	// 提issue：普通群友不能用；管理员强制提交，内容不像反馈时请他写具体些，没写内容时提示。
+	qqDeliver(t, s, "m-force-member", "提issue 候选框位置不对")
+	if !strings.HasPrefix(last(), "只有管理员能用「提issue」") || len(fake.created) != 0 {
+		t.Fatal(last())
+	}
+	s.qq.config.Admins = []string{"MEMBER1"}
+	qqDeliver(t, s, "m-force-empty", "提issue")
+	if !strings.HasPrefix(last(), "请在「提issue」后面写") {
+		t.Fatal(last())
+	}
+	fake.summary = `{"kind":"other"}`
+	qqDeliver(t, s, "m-force-other", "提issue 收到")
+	if !strings.HasPrefix(last(), "没看出要提的是 bug 还是需求") || len(fake.created) != 0 {
+		t.Fatal(last())
+	}
+	fake.summary = qqBugSummary
+	qqDeliver(t, s, "m-force", "提issue：Windows 11 上水杉 1.2.0 候选框停在左上角")
+	if len(fake.created) != 1 {
+		t.Fatal("forced report not filed")
+	}
+}
+
+// 管理员提 issue 时，模型从仓库分类标签里挑标签（只能挑列表里的、流程标签不给它挑），优先级和工作量有对应标签就打上，没有就写进正文。
+func TestQQBotIssueLabelsAndNotes(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	fake.repoLabels = map[string]string{"o/win": `[{"name":"bug"},{"name":"graphics"},{"name":"performance"},{"name":"size/S"},{"name":"platform/windows"},{"name":"source/qq"},{"name":"autorelease: pending"}]`}
+	fake.topics = `{"labels":["graphics","不存在的","graphics","bug","performance","size/S"]}`
+	qqDeliver(t, s, "m-labels", "提issue Windows 11 上水杉 1.2.0 候选框停在左上角 优先级：高 effort S")
+	if len(fake.created) != 1 {
+		t.Fatal(fake.created)
+	}
+	issue := fake.created[0]
+	if got := fmt.Sprint(issue["labels"]); got != "[bug source/qq graphics performance size/S]" {
+		t.Fatal(got)
+	}
+	body := issue["body"].(string)
+	if !strings.Contains(body, "### 维护者标注\n\n优先级：P1（高）") || strings.Contains(body, "工作量：S") {
+		t.Fatal(body)
+	}
+	// 交给模型的候选里没有流程标签和已经打上的标签。
+	if !strings.Contains(fake.chatBodies[len(fake.chatBodies)-1], "标签：graphics、performance\n") {
+		t.Fatalf("%q", fake.chatBodies[len(fake.chatBodies)-1])
+	}
+	// 标注从交给模型的文字里去掉。
+	if strings.Contains(fake.chatBodies[0], "优先级") || strings.Contains(fake.chatBodies[0], "effort") {
+		t.Fatalf("%q", fake.chatBodies[0])
+	}
+}
+
+func TestQQParseNotesAndNoteLabels(t *testing.T) {
+	for text, want := range map[string]qqNotes{
+		"问题 priority P0":   {Priority: "P0"},
+		"问题 优先级 低 工作量:xl":  {Priority: "P3", Effort: "XL"},
+		"问题 优先级中 effort m": {Priority: "P2", Effort: "M"},
+		"问题 优先级：紧急":        {Priority: "P0"},
+		"effortless 的设计":   {},
+	} {
+		if _, got := qqParseNotes(text); got != want {
+			t.Errorf("%q: %+v want %+v", text, got, want)
+		}
+	}
+	labels, section := qqNoteLabels([]string{"Priority/P1", "size/M"}, qqNotes{Priority: "P1", Effort: "M"})
+	if fmt.Sprint(labels) != "[Priority/P1 size/M]" || section != "" {
+		t.Fatal(labels, section)
+	}
+	if labels, section := qqNoteLabels(nil, qqNotes{}); labels != nil || section != "" {
+		t.Fatal(labels, section)
+	}
+	if _, section := qqNoteLabels(nil, qqNotes{Effort: "L"}); section != "\n\n### 维护者标注\n\n工作量：L" {
+		t.Fatalf("%q", section)
+	}
+}
+
+// 管理员不写「提issue」时，描述 bug 也只当提问回答，不提交：群里讨论和吐槽曾被提成 issue。
+func TestQQBotAdminMessagesAreNotFiledWithoutCommand(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	qqDeliver(t, s, "m-admin-chat", "Windows 11 上水杉 1.2.0 候选框停在左上角")
+	if len(fake.created) != 0 || slices.Contains(fake.chatCalls, "summarise") {
+		t.Fatal(fake.created, fake.chatCalls)
+	}
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "在设置的「输入方案」里选五笔。" {
+		t.Fatal(last)
 	}
 }

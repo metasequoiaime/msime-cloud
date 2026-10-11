@@ -265,6 +265,14 @@ SELECT id,snapshot_id,tool,arguments,result_count,bytes,at FROM diagnostic_acces
 	if _, e := s.pool.Exec(ctx, `SELECT id,subject,question,answer,created_at FROM qq_conversations WHERE false`); e != nil {
 		return e
 	}
+	// QQ 答疑的向量索引：pgvector 的 halfvec 解析得到、表却还没建时（扩展是在库已经迁移过之后才装的）启动走迁移；解析不到时这个功能本来就关闭，不算缺表。
+	var vectorsMissing bool
+	if e := s.pool.QueryRow(ctx, `SELECT to_regtype('halfvec') IS NOT NULL AND (to_regclass('qq_knowledge_items') IS NULL OR to_regclass('qq_knowledge_cursors') IS NULL)`).Scan(&vectorsMissing); e != nil {
+		return e
+	}
+	if vectorsMissing {
+		return errors.New("qq knowledge tables missing")
+	}
 	// AI skin artwork jobs are shared between replicas through this table; without it a poll on another replica could not find the job.
 	if _, e := s.pool.Exec(ctx, `SELECT id,owner,state,reason,artwork,cancelled,created_at,heartbeat_at,expires_at FROM skin_jobs WHERE false`); e != nil {
 		return e

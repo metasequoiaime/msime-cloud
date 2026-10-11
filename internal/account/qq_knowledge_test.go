@@ -13,7 +13,17 @@ func TestQQKnowledgeIndex(t *testing.T) {
 	if _, err := db.pool.Exec(ctx, `CREATE EXTENSION IF NOT EXISTS vector`); err != nil {
 		t.Skip("pgvector 不可用：", err)
 	}
+	// 扩展是后装的：库已经迁移过、表还没建时，Ready 报缺表，启动会走迁移把表建上。
+	if _, err := db.pool.Exec(ctx, `DROP TABLE IF EXISTS qq_knowledge_items, qq_knowledge_cursors`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Ready(ctx); err == nil {
+		t.Fatal("missing vector tables not reported")
+	}
 	if err := db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Ready(ctx); err != nil {
 		t.Fatal(err)
 	}
 	a := &Service{store: db}

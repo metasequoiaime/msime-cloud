@@ -1,5 +1,9 @@
 name: Go 后端验证
-on: [push, pull_request]
+# 分支上的推送由 pull_request 覆盖，push 只在 main 上触发，同一次改动不再跑两遍。
+on:
+  push:
+    branches: [main]
+  pull_request:
 env:
   PYTHONUTF8: "1"
 concurrency:
@@ -67,7 +71,7 @@ jobs:
   native-engine:
     name: 公共引擎与发布词库集成测试
     runs-on: ubuntu-latest
-    # The Rust engine is compiled twice from cold, on the runner for the tests and inside the image build.
+    # Rust 引擎在 runner 上的编译结果按子模块提交缓存；镜像构建里还会再编译一次，所以镜像验证只在改到镜像内容时跑（main 上每次都跑）。
     timeout-minutes: 45
     services:
       postgres:
@@ -83,9 +87,20 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           submodules: true
+          fetch-depth: 0
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version-file: go.mod
+      # 引擎子模块和工具链没变时，直接复用上次的编译结果；键里带子模块提交，任何引擎改动都会重新编译。
+      - id: engine
+        run: echo "commit=$(git -C third_party/msime rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            third_party/msime/target
+          key: native-engine-${{ runner.os }}-${{ steps.engine.outputs.commit }}-${{ hashFiles('third_party/msime/rust-toolchain.toml', 'third_party/msime/Cargo.lock') }}
       # msime-backend-engine from the msime submodule; rustup on the runner installs the toolchain its rust-toolchain.toml pins.
       - run: cd third_party/msime && cargo build -p msime-backend-engine --release --locked && install -D target/release/msime-backend-engine ../../bin/native/msime-engine
       - run: python3 scripts/fetch_engine_resources.py bin/resources
@@ -105,7 +120,18 @@ jobs:
       - name: 确认查询未修改基础词库
         run: python3 scripts/fetch_engine_resources.py bin/resources
 
+      # 拉取请求只在改到镜像内容（Dockerfile、引擎、原生资源、入口、管理后台、资源与冒烟脚本）时构建镜像；Go 代码的编译和测试由上面的步骤和 test 任务负责，合并后的发版流程也会构建镜像。
+      - id: image
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ -z "$BASE" ] || git diff --name-only "$BASE" HEAD | grep -qE '^(Dockerfile|\.dockerignore|third_party/|native/|internal/engine/|cmd/|admin-web/|go\.mod|go\.sum|scripts/(fetch_engine_resources|smoke_container)\.py)'; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: 验证只读生产镜像与内置原生资源
+        if: steps.image.outputs.build == 'true'
         run: |
           docker build -t msime-server:verification .
           python3 scripts/smoke_container.py --image msime-server:verification --native

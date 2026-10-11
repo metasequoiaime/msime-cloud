@@ -287,14 +287,15 @@ GitHub App 只安装到 msime-dictionary，仓库权限只给 Contents: Read and
 
 群友在 QQ 群里 @机器人 问水杉输入法的使用问题，机器人按知识库回答，答不上时 @ 管理员。`qq_bot.admins` 里的管理员 @机器人 描述 bug 或功能需求时，服务端把它整理成 GitHub issue，再在群里回复编号；管理员的其他消息和普通群友一样当问题回答。官方机器人只能收到 @它 的消息（`GROUP_AT_MESSAGE_CREATE`），收不到群里的其他聊天，不会旁听。
 
-开放平台不提供群管理员身份，管理员名单由 `qq_bot.admins`（member_openid）维护。任何人 @机器人 发「我的ID」，机器人会回复他在这个机器人里的 member_openid，管理员把它发给维护者加进配置。
+管理员是群主、群管理员，以及 `qq_bot.admins`（member_openid）里列出的人。群主和群管理员靠开放平台的「获取群成员信息」接口（`GET /v2/groups/{group_openid}/members/{member_openid}` 的 `member_role`）识别，结果在每个副本缓存 10 分钟；这个接口还在内邀阶段，没进白名单时返回错误码 11253，服务端此后一小时内不再调用、只认名单，白名单开通后不用重新部署就会生效（2026-10-11 实测本机器人返回 11253）。任何人 @机器人 发「我的ID」，机器人会回复他的 member_openid 和机器人认定的身份，名单就靠这个收集。答不上问题时 @ 的是名单里的人加上接口识别出的本群管理员。
 
 QQ 开放平台以 Webhook 把事件推到 `POST /v1/community/qq-bot/events`。服务端用机器人 AppSecret 派生的 Ed25519 密钥校验 `X-Signature-Ed25519` 签名，按消息 id 在 `auth_rates` 里认领（7 天内同一 id 只处理一次，开放平台重推的同一事件直接应答成功），然后立即应答，在后台继续处理：
 
 1. 去掉 @ 标记和表情标签；没有文字时回复用法，超过 2000 字请群友精简。每个群每天最多处理 300 条、每个普通群友每天 20 条（`auth_rates` 作用域 `qq-bot-group`、`qq-bot-member`，管理员不受个人限额限制），问答、闲聊和追问都计数，因为它们同样要交给模型。
 2. 普通群友的消息直接答疑，见下文「答疑知识库」。管理员的消息先用 `chat` 端点（JSON 输出）和 `qq_bot.model` 整理成 bug 或功能建议的各个栏目，栏目与 msime 的 `bug_report.yml`、`feature_request.yml` 模板一致；判断不是反馈时转去答疑。bug 既看不出平台、也没有操作步骤时，回复一句追问，不提交。这条规则由服务端判定，模型没给出追问时用固定的问题。
 3. 按平台选仓库，规则与崩溃 issue 相同：能看出平台时用 `admin.github.platforms` 里该平台的 `repo`（生产上 Windows 是 msime-windows，其余平台是 msime），看不出平台时用 `qq_bot.repo`。Windows 上有两个产品，按群友说的水杉输入法版本区分：不低于 0.9 的是 msime-windows（Metasequoia IME 水杉输入法），按上面的平台配置提交；低于 0.9 的是 msime 仓库里的新实现，提交到 `qq_bot.repo` 并加 `platform/windows`；没说版本时先追问版本，不提交。分界版本是代码里的常量 `qqWindowsSplitVersion`，按 2026-10 两边的版本号定，msime 的 Windows 版本号接近 0.9 之前要改。用模型给出的关键词在这个仓库里搜索开启的 issue（关键词去掉冒号和引号，写不进 `repo:`、`is:` 这类限定词），交给模型判断是否重复。重复时在那个 issue 下补充评论，否则新建 issue，标签为 `bug` 或 `enhancement`、该平台的 `label`（为空时不加），以及 `qq_bot.labels`。
-4. 被动回复群友 issue 编号。开放平台只允许消息里出现报备过的域名，所以回复不带链接。被动回复只能在收到消息后 5 分钟内发出，后台处理限时 4 分钟。
+4. 管理员消息里的图片和视频一并带上：GitHub 的 issue 接口不能上传附件，所以服务端从 QQ 下载附件（只访问 QQ 的 CDN 主机，重定向也一样），按文件头核实类型，只收 PNG、JPEG、GIF、WebP 图片和 MP4、MOV、WebM 视频（图片不超过 20 MB，视频不超过 50 MB，一条消息最多 9 个），写进 `auth.avatars` 的公开 bucket（前缀 `qq-feedback/`，对象名随机），再把链接写进 issue 正文或补充评论的「截图与视频」一节：图片直接显示，视频给链接。存储时的 Content-Type 用服务端认出的类型，不用 QQ 给的，所以 HTML、SVG 之类的内容不会出现在公开域名上。存不上的附件不影响提交，正文注明「另有 N 个附件没能保存」；语音不收，普通群友的附件也不处理。没有配置 `auth.avatars` 时图片和视频都算没能保存。
+5. 被动回复群友 issue 编号。开放平台只允许消息里出现报备过的域名，所以回复不带链接。被动回复只能在收到消息后 5 分钟内发出，后台处理限时 4 分钟。
 
 ### 答疑知识库
 

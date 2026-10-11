@@ -73,7 +73,7 @@ type QQBotConfig struct {
 	Groups []string `json:"groups"`
 	// Model 是整理反馈和判断重复用的模型，通过 chat 端点调用（接入地址和密钥都沿用 chat）；为空时用 chat.model。AI 联想用的模型追求快和便宜，整理 issue 需要更可靠地理解长段描述，所以可以单独指定，例如 EveryAPI 上的 claude-haiku-5-5。
 	Model string `json:"model"`
-	// Admins 是管理员的 member_openid。只有管理员 @ 机器人描述 bug 或需求时才会提 issue；普通群友 @ 机器人只做答疑，知识库答不上时 @ 这些管理员。开放平台不提供群管理员身份，所以名单由这里维护：任何人 @ 机器人发「我的ID」会收到自己的 member_openid。
+	// Admins 是额外认作管理员的 member_openid。只有管理员 @ 机器人描述 bug 或需求时才会提 issue；普通群友 @ 机器人只做答疑，知识库答不上时 @ 管理员。群主和群管理员本来由「获取群成员信息」接口自动识别（见 qq_roles.go），但那个接口还在内邀阶段，没开通时只认这份名单：任何人 @ 机器人发「我的ID」会收到自己的 member_openid 和机器人认定的身份。
 	Admins []string `json:"admins"`
 	// KnowledgeRepo 和 KnowledgeDir 是答疑知识库所在的仓库和目录，默认 metasequoiaime/msime-docs 的 guides；只收这个目录下的 Markdown 文件，不含子目录。管理后台的 GitHub App 要能读这个仓库。
 	KnowledgeRepo string `json:"knowledge_repo"`
@@ -198,11 +198,18 @@ type qqBot struct {
 	expires time.Time
 	// knowledge 是本副本缓存的答疑知识库，见 qq_knowledge.go。
 	knowledge qqKnowledge
+	// mediaClient 下载管理员消息里的图片和视频，只能访问 mediaHosts 里的主机，见 qq_media.go。
+	mediaClient *http.Client
+	mediaHosts  []string
+	// roles 缓存群成员身份，见 qq_roles.go。
+	roles qqRoles
 }
 
 func newQQBot(c QQBotConfig) *qqBot {
-	return &qqBot{config: c, key: qqBotKey(c.secret), now: time.Now,
+	b := &qqBot{config: c, key: qqBotKey(c.secret), now: time.Now, mediaHosts: qqMediaHosts,
 		client: &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	b.mediaClient = newQQMediaClient(&b.mediaHosts)
+	return b
 }
 
 // qqBotKey 按开放平台的签名规则从 AppSecret 派生 Ed25519 密钥：把 secret 重复到不短于种子长度，取前 32 字节作种子。
@@ -354,6 +361,8 @@ type qqGroupMessage struct {
 	Author      struct {
 		MemberOpenID string `json:"member_openid"`
 	} `json:"author"`
+	// Attachments 是消息里的图片、视频等附件；只有管理员提 issue 时才用到。
+	Attachments []qqAttachment `json:"attachments"`
 }
 
 // acceptQQMessage 认领一条 @ 消息并交给后台处理，返回是否应答成功。消息 id 在 auth_rates 里只能认领一次，重推的同一事件直接应答成功；数据库不可用时应答失败，让开放平台稍后重推。格式不对或来自未配置的群的消息直接丢弃，重推也不会变好。
@@ -419,7 +428,11 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 	}
 	text := qqFeedbackText(m.Content)
 	if slices.Contains(qqWhoAmI, strings.ToLower(strings.Join(strings.Fields(text), ""))) {
-		reply("你的 ID 是 " + m.Author.MemberOpenID + "（只在这个机器人里有效，管理员把它发给维护者加进名单）")
+		role := "普通成员"
+		if s.qqIsAdmin(ctx, m.GroupOpenID, m.Author.MemberOpenID) {
+			role = "管理员"
+		}
+		reply("你的 ID 是 " + m.Author.MemberOpenID + "，机器人把你当作" + role + "。")
 		return
 	}
 	switch n := utf8.RuneCountInString(text); {
@@ -430,7 +443,7 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		reply(qqReplyTooLong)
 		return
 	}
-	admin := slices.Contains(s.qq.config.Admins, m.Author.MemberOpenID)
+	admin := s.qqIsAdmin(ctx, m.GroupOpenID, m.Author.MemberOpenID)
 	limits := []struct {
 		scope, subject string
 		daily          int
@@ -453,7 +466,7 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		}
 	}
 	if !admin {
-		s.answerQQQuestion(ctx, text, reply)
+		s.answerQQQuestion(ctx, m.GroupOpenID, text, reply)
 		return
 	}
 	report, err := s.qqSummarise(ctx, text)
@@ -463,7 +476,7 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		return
 	}
 	if report.Kind == "other" {
-		s.answerQQQuestion(ctx, text, reply)
+		s.answerQQQuestion(ctx, m.GroupOpenID, text, reply)
 		return
 	}
 	if report.Missing != "" {
@@ -476,7 +489,8 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		return
 	}
 	reply(qqReplyWorking)
-	number, duplicate, err := s.fileQQReport(ctx, repo, label, report)
+	media, failed := s.publishQQMedia(ctx, m.Attachments)
+	number, duplicate, err := s.fileQQReport(ctx, repo, label, report, qqMediaSection(media, failed))
 	if err != nil {
 		slog.Warn("qq bot: file issue failed", "repo", repo, "reason", err.Error())
 		reply(qqReplyUnavailable)
@@ -489,8 +503,8 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 	reply(fmt.Sprintf("已记录为 GitHub %s 的 #%d，开发者会在那里跟进。%s", repo, number, qqReplyPublic))
 }
 
-// answerQQQuestion 用知识库回答一条消息；答不上时 @ 管理员。
-func (s *Server) answerQQQuestion(ctx context.Context, question string, reply func(string)) {
+// answerQQQuestion 用知识库回答一条消息；答不上时 @ 本群的管理员（qqGroupAdmins）。
+func (s *Server) answerQQQuestion(ctx context.Context, group, question string, reply func(string)) {
 	answer, err := s.qqAnswerQuestion(ctx, question)
 	if err != nil {
 		slog.Warn("qq bot: answer failed", "reason", err.Error())
@@ -498,7 +512,7 @@ func (s *Server) answerQQQuestion(ctx context.Context, question string, reply fu
 		return
 	}
 	if answer.Type == "unknown" {
-		reply(qqUnknownReply(s.qq.config.Admins))
+		reply(qqUnknownReply(s.qqGroupAdmins(group)))
 		return
 	}
 	reply(answer.Answer)
@@ -696,7 +710,7 @@ func (s *Server) qqTarget(report qqReport) (repo, label string, known bool) {
 }
 
 // fileQQReport 把一条反馈提交到 repo：模型判断与某个开启的 issue 是同一件事时在那里补充评论，否则新建 issue。返回 issue 编号以及是否是补充到已有 issue。
-func (s *Server) fileQQReport(ctx context.Context, repo, platformLabel string, report qqReport) (int64, bool, error) {
+func (s *Server) fileQQReport(ctx context.Context, repo, platformLabel string, report qqReport, mediaSection string) (int64, bool, error) {
 	client := s.adminGitHub
 	token, err := client.Token(ctx, repo, issueTokenPerms)
 	if err != nil {
@@ -707,13 +721,13 @@ func (s *Server) fileQQReport(ctx context.Context, repo, platformLabel string, r
 		return 0, false, err
 	}
 	if duplicate > 0 {
-		r, err := client.Do(ctx, token, "POST", "/repos/"+repo+"/issues/"+strconv.FormatInt(duplicate, 10)+"/comments", map[string]string{"body": qqCommentBody(report)})
+		r, err := client.Do(ctx, token, "POST", "/repos/"+repo+"/issues/"+strconv.FormatInt(duplicate, 10)+"/comments", map[string]string{"body": qqCommentBody(report, mediaSection)})
 		if err != nil || !r.OK() {
 			return 0, false, githubFailure("comment", r, err)
 		}
 		return duplicate, true, nil
 	}
-	request := map[string]any{"title": qqIssueTitle(report), "body": qqIssueBody(report)}
+	request := map[string]any{"title": qqIssueTitle(report), "body": qqIssueBody(report, mediaSection)}
 	request["labels"] = s.qqLabels(report, platformLabel)
 	r, err := client.Do(ctx, token, "POST", "/repos/"+repo+"/issues", request)
 	if err != nil || !r.OK() {
@@ -835,8 +849,8 @@ func qqEnvironment(report qqReport) string {
 
 const qqIssueFooter = "\n\n---\n\n来自 QQ 群反馈，由机器人转述整理，不包含反馈者的原话和身份。"
 
-// qqIssueBody 按 msime 的 issue 模板栏目写正文。
-func qqIssueBody(report qqReport) string {
+// qqIssueBody 按 msime 的 issue 模板栏目写正文，mediaSection（qqMediaSection 的结果，可能为空）放在页脚之前。
+func qqIssueBody(report qqReport, mediaSection string) string {
 	var b strings.Builder
 	section := func(heading, text string) {
 		if b.Len() > 0 {
@@ -855,11 +869,11 @@ func qqIssueBody(report qqReport) string {
 		section("希望怎样改进", report.Proposal)
 		section("输入法版本", qqEnvironment(report))
 	}
-	return b.String() + qqIssueFooter
+	return b.String() + mediaSection + qqIssueFooter
 }
 
-// qqCommentBody 是补充到已有 issue 的评论。
-func qqCommentBody(report qqReport) string {
+// qqCommentBody 是补充到已有 issue 的评论，mediaSection 放在页脚之前。
+func qqCommentBody(report qqReport, mediaSection string) string {
 	text := report.Problem
 	if report.Kind == "feature" && report.Proposal != "" {
 		text = report.Proposal
@@ -868,5 +882,5 @@ func qqCommentBody(report qqReport) string {
 	if environment := qqEnvironment(report); environment != "" {
 		body += "\n\n环境：" + qqPublic(environment)
 	}
-	return body + qqIssueFooter
+	return body + mediaSection + qqIssueFooter
 }

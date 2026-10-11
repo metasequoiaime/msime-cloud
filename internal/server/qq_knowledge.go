@@ -27,6 +27,8 @@ const (
 	defaultQQKnowledgeDir  = "guides"
 	// qqKnowledgeTTL 是知识库在本副本的刷新间隔；文档合并后最多这么久机器人才用上。
 	qqKnowledgeTTL = 10 * time.Minute
+	// qqKnowledgeWarmTimeout 是启动时预热知识库的时限（见 warmQQKnowledge）。
+	qqKnowledgeWarmTimeout = 2 * time.Minute
 	// qqKnowledgeFiles 和 qqSectionRunes 限制拉取的文件数和每段的长度，qqAnswerContextRunes 限制一次交给模型的资料总长。
 	qqKnowledgeFiles     = 50
 	qqSectionRunes       = 4000
@@ -72,6 +74,15 @@ func (s *Server) qqKnowledgeSections(ctx context.Context) ([]qqSection, error) {
 	}
 	k.sections, k.loaded = sections, s.qq.now()
 	return sections, nil
+}
+
+// warmQQKnowledge 在副本启动时加载一次知识库，不等第一条答疑才去拉：新副本第一次加载就碰上 GitHub 出错时，那条答疑只能带着空段落回答（见 qqKnowledgeMaterial）。失败只记日志，答疑时会再拉。
+func (s *Server) warmQQKnowledge(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, qqKnowledgeWarmTimeout)
+	defer cancel()
+	if _, err := s.qqKnowledgeSections(ctx); err != nil {
+		slog.Warn("qq bot: knowledge not preloaded", "reason", err.Error())
+	}
 }
 
 // loadQQKnowledge 拉取知识库目录下的 Markdown 文件并切成段落。
@@ -399,18 +410,28 @@ func (s *Server) qqAnswerModel(chat, strong bool) string {
 	return s.qqStrongModel()
 }
 
+// qqKnowledgeDown 是知识库读不到或挑段落失败、带着空段落答疑时放在资料开头的说明，见 qqKnowledgeMaterial。
+const qqKnowledgeDown = "### 注意\n文档暂时读不到。水杉输入法本身的事实不要编，答不上就用 unknown；常识和闲聊照常回答。\n\n"
+
 // qqKnowledgeMaterial 按目录让模型挑出与问题相关的段落，返回交给模型的资料；github 为 true 时还按模型的要求附上 GitHub 上的相关 issue 和各平台最新版本。没有挑出任何内容时返回空字符串。现查过时置位 ask.researched。
+//
+// 答疑时（github 为 true）知识库读不到或挑段落的模型出错，记一条 Warn 后带着空段落继续：照常查用户提到的 issue、搜 issue，资料开头加 qqKnowledgeDown，回答一律用 strong_model。曾经直接返回错误，连「在吗」都只得到「暂时处理不了」，而回答的模型本来就能答常识和闲聊。时间用完（qqOutOfTime）或 ctx 已经取消时仍返回错误，再调一次模型也来不及。提 issue 前的对照（github 为 false）照旧返回错误：没有文档就没法判断是不是已有功能，调用方会照常提交。
 func (s *Server) qqKnowledgeMaterial(ctx context.Context, question string, ask *qqAsk) (string, string, error) {
 	github := ask.github
+	degraded := false
 	sections, err := s.qqKnowledgeSections(ctx)
 	if err != nil {
-		return "", "", err
+		if !github || ctx.Err() != nil {
+			return "", "", err
+		}
+		slog.Warn("qq bot: knowledge unavailable, answering without it", "reason", err.Error())
+		degraded = true
 	}
 	var toc strings.Builder
 	for i, section := range sections {
 		fmt.Fprintf(&toc, "%d. [%s] %s：%s\n", i+1, section.Doc, section.Title, qqSnippet(section.Text))
 	}
-	var picked struct {
+	type selection struct {
 		Sections    []int  `json:"sections"`
 		IssueSearch string `json:"issue_search"`
 		Releases    bool   `json:"releases"`
@@ -419,15 +440,26 @@ func (s *Server) qqKnowledgeMaterial(ctx context.Context, question string, ask *
 		Strong      bool   `json:"strong"`
 		Chat        bool   `json:"chat"`
 	}
+	var picked selection
 	// 向量召回和模型挑段落同时进行，不拖慢回答（见 qq_vectors.go）。
 	recalled := make(chan qqVectorRecall, 1)
 	go func() { recalled <- s.qqRecall(ctx, question, sections, github) }()
 	if err := s.qqChat(ctx, qqSelectPrompt+"\n\n目录：\n"+toc.String(), question, &picked); err != nil {
-		<-recalled
-		return "", "", err
+		if !github || ctx.Err() != nil || qqOutOfTime(ctx) {
+			<-recalled
+			return "", "", err
+		}
+		slog.Warn("qq bot: section selection failed, answering without it", "reason", err.Error())
+		degraded = true
+		// 挑段落失败时可能已经解码了一半，清掉，按什么都没挑处理。
+		picked = selection{}
 	}
 	recall := <-recalled
 	var material strings.Builder
+	if degraded {
+		material.WriteString(qqKnowledgeDown)
+		picked.Strong = true
+	}
 	var valid []int
 	for _, n := range picked.Sections {
 		if n >= 1 && n <= len(sections) && !slices.Contains(valid, n-1) && len(valid) < qqSelectedSections {

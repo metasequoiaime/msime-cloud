@@ -22,6 +22,10 @@ const (
 	qqBadAnswerWindow = 14 * 24 * time.Hour
 	// qqRetryPrefix 是重答的开头。
 	qqRetryPrefix = "我重新查了一下："
+	// qqRetryFailed 是重答失败时记进差评的重答内容。
+	qqRetryFailed = "（重答失败）"
+	// qqBadAnswerStoreTimeout 是记一条差评的时限。
+	qqBadAnswerStoreTimeout = 3 * time.Second
 )
 
 // qqBadAnswerWords 是说上一个回答不对的说法。原来在消息里任意位置出现就算差评，30 分钟内的新问题「删除键没用了」「语音识别不准怎么办」会被当成差评，转去把上一个问题重答一遍，新问题没人理。
@@ -61,11 +65,13 @@ func qqRetryQuestion(last account.QQTurn, feedback string) string {
 	return last.Question + "\n\n（群友说上一个回答不对：「" + feedback + "」。上一个回答是：" + last.Answer + "。请重新查资料，换个思路认真回答，不要重复上一个回答里的错误。）"
 }
 
-// recordQQBadAnswer 记下被说答错的一轮，出错只记日志。
+// recordQQBadAnswer 记下被说答错的一轮，出错只记日志。不跟随处理消息的 ctx：重答失败多半是 4 分钟用完了，这时 ctx 已经到期，差评仍要记下；另限 qqBadAnswerStoreTimeout，数据库卡住时不拖住后面的回复。
 func (s *Server) recordQQBadAnswer(ctx context.Context, last account.QQTurn, feedback, retry string) {
 	if s.qqBadAnswers == nil {
 		return
 	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), qqBadAnswerStoreTimeout)
+	defer cancel()
 	if err := s.qqBadAnswers.AddQQBadAnswer(ctx, qqTruncate(last.Question, 1000), qqTruncate(last.Answer, 2000), qqTruncate(feedback, 200), qqTruncate(retry, 2000)); err != nil {
 		slog.Warn("qq bot: bad answer not stored", "reason", err.Error())
 	}

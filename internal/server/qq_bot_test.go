@@ -185,6 +185,9 @@ type qqFake struct {
 	replyStatus int
 	// rejectLinks 为 true 时像开放平台拒收未报备的域名那样，拒收带链接的回复。
 	rejectLinks bool
+	// rejectText 不为空时像内容审核那样拒收含这段文字的回复，rejected 记下被拒收的回复。
+	rejectText string
+	rejected   []string
 	// 群成员身份：roles 为 nil 时照生产现状返回 11253（接口未开通）。
 	roles     map[string]string
 	roleCalls int
@@ -433,6 +436,12 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if f.rejectLinks && strings.Contains(fmt.Sprint(body["content"]), "://") {
 			w.WriteHeader(400)
 			_, _ = w.Write([]byte(`{"code":304003,"message":"url not allowed"}`))
+			return
+		}
+		if f.rejectText != "" && strings.Contains(fmt.Sprint(body["content"]), f.rejectText) {
+			f.rejected = append(f.rejected, fmt.Sprint(body["content"]))
+			w.WriteHeader(400)
+			_, _ = w.Write([]byte(`{"code":304023,"message":"content not allowed"}`))
 			return
 		}
 		if f.replyStatus != 0 {
@@ -1210,11 +1219,9 @@ func TestQQBotWhoAmIAndUnknownWithoutAdmins(t *testing.T) {
 
 func TestQQBotAnswerFailures(t *testing.T) {
 	for name, setup := range map[string]func(*qqFake){
-		"knowledge unavailable": func(f *qqFake) { f.knowledgeStatus = 500 },
-		"select not json":       func(f *qqFake) { f.selected = "第一段" },
-		"answer not json":       func(f *qqFake) { f.answer = "在设置里选" },
-		"unknown answer type":   func(f *qqFake) { f.answer = `{"type":"maybe","answer":"x"}` },
-		"empty answer":          func(f *qqFake) { f.answer = `{"type":"answered","answer":"  "}` },
+		"answer not json":     func(f *qqFake) { f.answer = "在设置里选" },
+		"unknown answer type": func(f *qqFake) { f.answer = `{"type":"maybe","answer":"x"}` },
+		"empty answer":        func(f *qqFake) { f.answer = `{"type":"answered","answer":"  "}` },
 	} {
 		t.Run(name, func(t *testing.T) {
 			s, fake, _ := qqServer(t)
@@ -1292,6 +1299,47 @@ func TestQQBotKnowledgeConfig(t *testing.T) {
 }
 
 // 知识库拉取时 GitHub 的各种异常响应都报错，不会把半截知识库当成可用的。
+// 知识库读不到或挑段落失败时带着空段落答疑：「在吗」照常回答，资料开头说明文档读不到，回答一律用 strong_model；文档读得到时闲聊照常用 chat_model。提 issue 前的对照照旧当作出错，照常提交（见 TestQQBotSkipsFeaturesTheDocsAlreadyCover）。
+func TestQQBotAnswersWithoutKnowledge(t *testing.T) {
+	for name, setup := range map[string]func(*qqFake){
+		"knowledge unavailable": func(f *qqFake) { f.knowledgeStatus = 500 },
+		"select not json":       func(f *qqFake) { f.selected = "第一段" },
+		"knowledge available":   func(*qqFake) {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, fake, _ := qqServer(t)
+			s.qq.config.Admins = nil
+			s.qq.config.StrongModel, s.qq.config.ChatModel = "strong-model", "chat-model"
+			fake.selected = `{"sections":[],"chat":true}`
+			fake.answer = `{"type":"chat","answer":"在的～有什么想问的？"}`
+			setup(fake)
+			qqDeliver(t, s, "m-"+strings.ReplaceAll(name, " ", "-"), "在吗")
+			degraded, model := name != "knowledge available", "chat-model"
+			if degraded {
+				model = "strong-model"
+			}
+			if replies := fake.replyTexts(); len(replies) != 1 || replies[0] != "在的～有什么想问的？" || strings.Contains(fake.answerSystem, "资料：\n"+qqKnowledgeDown) != degraded || fake.models[len(fake.models)-1] != model {
+				t.Fatal(replies, fake.answerSystem, fake.models)
+			}
+		})
+	}
+}
+
+// 副本启动时预热一次知识库，第一条答疑不用再拉。
+func TestQQBotWarmsKnowledge(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.qq.config.Admins = nil
+	s.warmQQKnowledge(context.Background())
+	calls := fake.knowledgeCalls
+	if calls == 0 || len(s.qq.knowledge.sections) == 0 {
+		t.Fatal(calls, s.qq.knowledge.sections)
+	}
+	qqDeliver(t, s, "m-warm", "五笔怎么切换")
+	if fake.knowledgeCalls != calls || fake.replyTexts()[0] != "在设置的「输入方案」里选五笔。" {
+		t.Fatal(fake.knowledgeCalls, calls, fake.replyTexts())
+	}
+}
+
 func TestQQKnowledgeLoadFailures(t *testing.T) {
 	listing := `[{"type":"file","name":"faq.md","path":"guides/faq.md"}]`
 	good := `{"encoding":"base64","content":"` + base64.StdEncoding.EncodeToString([]byte("## 一\n正文\n")) + `"}`
@@ -1437,6 +1485,10 @@ func TestQQBotMediaWithoutBucket(t *testing.T) {
 	if len(fake.created) != 1 || !strings.Contains(fake.created[0]["body"].(string), "另有 1 个附件没能保存。") {
 		t.Fatal(fake.created)
 	}
+	// 回复里也告诉管理员有附件没附上。
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; !strings.HasPrefix(last, "已记录为 win #123") || !strings.HasSuffix(last, "有 1 个截图或视频没能附上，需要的话请在 issue 里手动补上。"+qqReplyPublic) {
+		t.Fatal(last)
+	}
 	// 存储失败也只算没能保存，issue 照提。
 	s.media = &fakeMedia{err: errors.New("bucket down")}
 	s.qq.mediaHosts = append(append([]string(nil), qqMediaHosts...), strings.Split(strings.TrimPrefix(s.config.Chat.URL, "https://"), ":")[0])
@@ -1540,6 +1592,23 @@ func TestQQBotRecognisesGroupAdmins(t *testing.T) {
 	if s.qqIsAdmin(context.Background(), "GROUP1", "MEMBER1", "") {
 		t.Fatal("a failed lookup must not grant admin")
 	}
+	// 缓存过期后接口临时出错时沿用旧的身份；从没查到过的人仍按普通成员处理。
+	s.qq.roles = qqRoles{}
+	fake.roles = map[string]string{"MEMBER1": "admin"}
+	if !s.qqIsAdmin(context.Background(), "GROUP1", "MEMBER1", "") {
+		t.Fatal("group admin not recognised")
+	}
+	now := s.qq.now
+	s.qq.now = func() time.Time { return now().Add(2 * qqRoleTTL) }
+	fake.roles = map[string]string{}
+	before := fake.roleCalls
+	if !s.qqIsAdmin(context.Background(), "GROUP1", "MEMBER1", "") || fake.roleCalls != before+1 {
+		t.Fatal("a failed lookup must fall back to the stale role", fake.roleCalls, before)
+	}
+	if s.qqIsAdmin(context.Background(), "GROUP1", "OTHER", "") {
+		t.Fatal("a failed lookup without a cached role must not grant admin")
+	}
+	s.qq.now = now
 	// 名单里的人不用查。
 	calls = fake.roleCalls
 	if !s.qqIsAdmin(context.Background(), "GROUP1", "LISTED", "") || fake.roleCalls != calls {
@@ -1647,9 +1716,10 @@ func TestQQBotFallbackModel(t *testing.T) {
 	if replies := fake.replyTexts(); len(replies) != 1 || replies[0] != "在设置的「输入方案」里选五笔。" || strings.Join(fake.models, ",") != "claude-haiku-5-5,fallback-model,claude-haiku-5-5,fallback-model" {
 		t.Fatal(replies, fake.models)
 	}
+	// 挑段落主备都失败时带着空段落接着答（见 qqKnowledgeMaterial），回答也主备都失败才回「暂时处理不了」。
 	fake.failModel, fake.chatStatus, fake.models = "", 502, nil
 	qqDeliver(t, s, "m-both-fail", "五笔怎么切换")
-	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != qqReplyUnavailable || len(fake.models) != 2 {
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != qqReplyUnavailable || len(fake.models) != 4 {
 		t.Fatal(last, fake.models)
 	}
 	// 主模型挂起时不等满 chat 端点的超时，限时一到就换备用模型。
@@ -1663,7 +1733,7 @@ func TestQQBotFallbackModel(t *testing.T) {
 	fake.hangModel, fake.chatStatus = "", 502
 	s.qq.config.FallbackModel, fake.models = "", nil
 	qqDeliver(t, s, "m-no-fallback", "五笔怎么切换")
-	if len(fake.models) != 1 {
+	if strings.Join(fake.models, ",") != "claude-haiku-5-5,claude-haiku-5-5" {
 		t.Fatal("no fallback configured must not retry", fake.models)
 	}
 	// 配置校验。
@@ -3269,6 +3339,13 @@ func TestQQBotScreenshots(t *testing.T) {
 	if last() != qqReplyScreenshot {
 		t.Fatal(last())
 	}
+	// 文字带截图、截图又没看成时，在问题后面注明，由回答的模型请群友把报错文字打出来，不另回一句。
+	before := len(fake.replyTexts())
+	qqPost(t, s, qqMessageWithAttachments("m-shot-missed", "这个报错什么意思", shot))
+	s.qqWorkers.Wait()
+	if body := fake.chatBodies[len(fake.chatBodies)-1]; body != "这个报错什么意思"+qqShotMissedNote || strings.Join(fake.replyTexts()[before:], "|") != qqReplyShot+"|在设置的「输入方案」里选五笔。" {
+		t.Fatal(body, fake.replyTexts()[before:])
+	}
 }
 
 // 常规答疑 qqThinkingDelay 后还没答完时先回「收到，我想一下～」，答得快时不回，处理完以后计时器也不会补发。一条消息最多一句过渡语：带截图时只有「我看一下截图～」，现查的「我查一下」也不再说；管理员「提issue」一进来就回「收到」（带截图时说先看截图），后面不再回 qqReplyWorking。
@@ -3838,6 +3915,40 @@ func TestQQBotResendsWithoutLinks(t *testing.T) {
 	}
 }
 
+// 回复被开放平台拒收、又不是因为链接（内容审核这类）时补发一句 qqReplyUndelivered，处理结果记为 reply_failed，命令仍记命令；兜底消息本身也被拒收时不再补发；过渡语被拒收时不补发，回答照常发。
+func TestQQBotReplyRejected(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	qqTestMediaHosts(s)
+	s.qq.config.Admins = nil
+	stats := &memoryStats{}
+	s.qqStats = stats
+	fake.rejectText = "选五笔"
+	qqDeliver(t, s, "m-rejected", "五笔怎么切换")
+	if replies := fake.replyTexts(); len(replies) != 1 || replies[0] != qqReplyUndelivered || fake.replies[0]["msg_seq"] != float64(2) || len(fake.rejected) != 1 || stats.counts["reply_failed"] != 1 || stats.counts["answered"] != 0 {
+		t.Fatal(replies, fake.replies, fake.rejected, stats.counts)
+	}
+	if qqOutcomeKind("reply_failed") != "reply_failed" {
+		t.Fatal("reply_failed must be counted on its own in the digest")
+	}
+	fake.rejectText, fake.rejected = "你的 ID 是", nil
+	qqDeliver(t, s, "m-rejected-cmd", "我的ID")
+	if replies := fake.replyTexts(); len(replies) != 2 || replies[1] != qqReplyUndelivered || stats.counts["cmd_whoami"] != 1 || stats.counts["reply_failed"] != 1 {
+		t.Fatal(replies, stats.counts)
+	}
+	// 回答和兜底消息都带「。」，都被拒收：只补发一次，不再重试。
+	fake.rejectText, fake.rejected = "。", nil
+	qqDeliver(t, s, "m-rejected-twice", "五笔怎么切换")
+	if len(fake.replyTexts()) != 2 || strings.Join(fake.rejected, "|") != "在设置的「输入方案」里选五笔。|"+qqReplyUndelivered || stats.counts["reply_failed"] != 2 {
+		t.Fatal(fake.replyTexts(), fake.rejected, stats.counts)
+	}
+	fake.rejectText, fake.rejected = qqReplyShot, nil
+	qqPost(t, s, qqMessageWithAttachments("m-rejected-interim", "这是怎么回事", []map[string]string{{"url": s.config.Chat.URL + "/media/shot.png", "content_type": "image/png"}}))
+	s.qqWorkers.Wait()
+	if replies := fake.replyTexts(); len(replies) != 3 || replies[2] != "在设置的「输入方案」里选五笔。" || strings.Join(fake.rejected, "|") != qqReplyShot || stats.counts["answered"] != 1 || stats.counts["reply_failed"] != 2 {
+		t.Fatal(replies, fake.rejected, stats.counts)
+	}
+}
+
 // 问水杉以外的软件时，模型用 web_search 联网搜索，搜到的内容作为现查结果交给回答的模型。
 func TestQQBotWebSearch(t *testing.T) {
 	s, fake, _ := qqServer(t)
@@ -3878,7 +3989,11 @@ type memoryBadAnswers struct {
 	items []account.QQBadAnswer
 }
 
-func (m *memoryBadAnswers) AddQQBadAnswer(_ context.Context, question, answer, feedback, retry string) error {
+func (m *memoryBadAnswers) AddQQBadAnswer(ctx context.Context, question, answer, feedback, retry string) error {
+	// 和数据库一样，ctx 已经到期时写不进去。
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.items = append([]account.QQBadAnswer{{ID: int64(len(m.items) + 1), Question: question, Answer: answer, Feedback: feedback, Retry: retry, CreatedAt: time.Date(2026, 10, 12, 1, 0, 0, 0, time.UTC)}}, m.items...)
@@ -3937,6 +4052,29 @@ func TestQQBotBadAnswerRetry(t *testing.T) {
 	deliver("m-b-list", "ADMIN1", "差评")
 	if last := fake.replyTexts()[len(fake.replyTexts())-1]; !strings.Contains(last, "问：五笔怎么切换\n答：在设置里选五笔。\n群友：不对啊\n重答：按 Ctrl+` 打开方案菜单选五笔。") {
 		t.Fatal(last)
+	}
+}
+
+// 重答超时时差评照样记下，重答内容记为 qqRetryFailed：记差评不跟随已经到期的处理 ctx。
+func TestQQBotBadAnswerRecordedWhenRetryFails(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.qq.config.Admins = nil
+	s.qqHistory = &memoryConversations{}
+	bad := &memoryBadAnswers{}
+	s.qqBadAnswers = bad
+	fake.answer = `{"type":"answered","answer":"在设置里选五笔。"}`
+	qqDeliver(t, s, "m-rf-1", "五笔怎么切换")
+	fake.hangModel = "claude-haiku-5-5"
+	m := qqGroupMessage{ID: "m-rf-2", Content: "不对啊", GroupOpenID: "GROUP1"}
+	m.Author.MemberOpenID = "MEMBER1"
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	s.handleQQFeedback(ctx, m)
+	if replies := fake.replyTexts(); replies[len(replies)-1] != qqReplyTimedOut {
+		t.Fatal(replies)
+	}
+	if len(bad.items) != 1 || bad.items[0].Question != "五笔怎么切换" || bad.items[0].Answer != "在设置里选五笔。" || bad.items[0].Feedback != "不对啊" || bad.items[0].Retry != qqRetryFailed {
+		t.Fatal(bad.items)
 	}
 }
 

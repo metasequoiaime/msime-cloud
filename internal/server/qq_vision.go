@@ -24,6 +24,8 @@ const (
 	qqVisionTimeout = 40 * time.Second
 	// qqShotMarker 是附在问题后面的截图描述的开头，也用来判断已经看过截图。
 	qqShotMarker = "（群友附了截图，截图内容："
+	// qqShotMissedNote 是文字带截图、截图又没能看成时接在问题后面的说明，回答的模型据此在答案里请群友把报错文字打出来（见 handleQQFeedback）。
+	qqShotMissedNote = "\n（群友附了截图，但没能看清，回答时请提醒他把报错文字打出来）"
 )
 
 const qqVisionPrompt = `你在帮开源输入法「水杉输入法」QQ 群的答疑助手看群友发的截图。用简体中文描述截图，只写看得到的内容，不要猜：

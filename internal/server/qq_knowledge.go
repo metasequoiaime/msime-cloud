@@ -355,16 +355,12 @@ func (s *Server) qqTriage(ctx context.Context, feedback string) (string, error) 
 	}
 }
 
-// qqAnswerModel 按问题选回答的模型：闲聊用 chat_model（便宜、语气自然），难题和要现查 GitHub 的用 strong_model，其余用 model（快、按资料作答准确）。两样都标了时按难题处理。
+// qqAnswerModel 选回答的模型：闲聊用 chat_model（便宜、语气自然），其余一律用 strong_model。曾经只有挑段落时标了 strong 的难题才用 strong_model、其余用 model（claude-haiku-5-5），结果「对这个 issue 提点改进意见」这类没被标上的请求只得到复述，群里评价「理解力不太行」；群里一天几十个问题，全用 strong_model 的花费可以忽略。model 只留给挑段落、整理反馈、看截图、标拼音这类结构化的活。两样都标了时按难题处理。
 func (s *Server) qqAnswerModel(chat, strong bool) string {
-	switch {
-	case strong:
-		return s.qqStrongModel()
-	case chat:
+	if chat && !strong {
 		return cmp.Or(s.qq.config.ChatModel, s.qq.config.Model)
-	default:
-		return s.qq.config.Model
 	}
+	return s.qqStrongModel()
 }
 
 // qqKnowledgeMaterial 按目录让模型挑出与问题相关的段落，返回交给模型的资料；github 为 true 时还按模型的要求附上 GitHub 上的相关 issue 和各平台最新版本。没有挑出任何内容时返回空字符串。

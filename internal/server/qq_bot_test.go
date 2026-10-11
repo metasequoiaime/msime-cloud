@@ -231,6 +231,12 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for _, v := range body["input"].([]any) {
 			inputs = append(inputs, v.(string))
 		}
+		// 与 doubao-embedding-vision 一样，一次超过 10 条就拒绝。
+		if len(inputs) > 10 {
+			w.WriteHeader(400)
+			_, _ = io.WriteString(w, `{"error":{"message":"Embeddings API input limit exceeded: max 10"}}`)
+			return
+		}
 		f.embedCalls += len(inputs)
 		data := []map[string]any{}
 		for i, text := range inputs {
@@ -2525,8 +2531,12 @@ func TestQQVectorSync(t *testing.T) {
 	s.qqVectors = store
 	s.qq.config.EmbeddingModel = defaultQQEmbeddingModel
 	s.config.Admin.GitHub.Platforms = nil
+	var extra []string
+	for n := 100; n < 112; n++ {
+		extra = append(extra, `{"number":`+strconv.Itoa(n)+`,"title":"旧需求 `+strconv.Itoa(n)+`","body":"正文","state":"open","comments":0,"labels":[],"updated_at":"2026-09-01T00:00:00Z"}`)
+	}
 	fake.history = map[string][]string{"o/r": {
-		`[{"number":5,"title":"候选框停在屏幕左上角","body":"Windows 上打字时候选框一直在左上角 ![图](https://x.y/a.png)","state":"closed","state_reason":"completed","comments":1,"labels":[],"updated_at":"2026-10-01T00:00:00Z"},{"number":6,"title":"修复候选框位置","body":"跟随光标","state":"closed","comments":0,"labels":[],"updated_at":"2026-10-02T00:00:00Z","pull_request":{"merged_at":"2026-10-02T00:00:00Z"}}]`,
+		`[` + strings.Join(extra, ",") + `,{"number":5,"title":"候选框停在屏幕左上角","body":"Windows 上打字时候选框一直在左上角 ![图](https://x.y/a.png)","state":"closed","state_reason":"completed","comments":1,"labels":[],"updated_at":"2026-10-01T00:00:00Z"},{"number":6,"title":"修复候选框位置","body":"跟随光标","state":"closed","comments":0,"labels":[],"updated_at":"2026-10-02T00:00:00Z","pull_request":{"merged_at":"2026-10-02T00:00:00Z"}}]`,
 	}}
 	fake.issueComments = map[string]string{"/repos/o/r/issues/5/comments": `[{"body":"打开「候选窗口跟随光标」就好","author_association":"OWNER"}]`}
 	s.syncQQVectors(context.Background())

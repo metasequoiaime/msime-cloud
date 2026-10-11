@@ -3256,3 +3256,15 @@ func TestQQBotWebSearch(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+// 消息里是 issue 的网页地址时也认得出，只提到一两个 issue 时把正文一起交给回答的模型。
+func TestQQBotReadsLinkedIssue(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.qq.config.Admins = nil
+	fake.issues = map[string]string{"o/r/issues/785": `{"number":785,"title":"临时输入、混输、方案切换一致体验","state":"open","body":"目标：统一临时英文、混输和方案切换。建议：Shift+方案键临时切换。![图](https://x.y/a.png)","labels":[],"updated_at":"2026-10-11T00:00:00Z"}`}
+	fake.answer = `{"type":"answered","answer":"建议先把三种切换的状态机统一。"}`
+	qqDeliver(t, s, "m-link-issue", "提出改进意见 https://github.com/metasequoiaime/r/issues/785")
+	if !strings.Contains(fake.answerSystem, "### 用户提到的 issue\nr #785 临时输入、混输、方案切换一致体验：开着") || !strings.Contains(fake.answerSystem, "正文：目标：统一临时英文、混输和方案切换。建议：Shift+方案键临时切换。") || strings.Contains(fake.answerSystem, "x.y/a.png") {
+		t.Fatal(fake.answerSystem)
+	}
+}

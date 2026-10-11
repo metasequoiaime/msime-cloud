@@ -68,10 +68,32 @@ jobs:
       - run: go test -race ./internal/account
       - run: go test -race ./internal/server
 
+  # 判断拉取请求有没有改到原生引擎：引擎子模块、internal/engine、原生资源、镜像和引擎相关脚本。
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      native: ${{ steps.diff.outputs.native }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ -z "$BASE" ] || git diff --name-only "$BASE" HEAD | grep -qE '^(Dockerfile|\.dockerignore|third_party/|native/|internal/engine/|scripts/(fetch_engine_resources|smoke_container|test_native)\.py)'; then
+            echo "native=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "native=false" >> "$GITHUB_OUTPUT"
+          fi
+
   native-engine:
     name: 公共引擎与发布词库集成测试
+    # 编译 Rust 引擎、跑带真实引擎的全量测试和覆盖率门禁、构建生产镜像，单次十几分钟。拉取请求只在改到原生引擎时跑；main 上的推送每次都跑，覆盖率回退会在合并后发现。
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     runs-on: ubuntu-latest
-    # Rust 引擎在 runner 上的编译结果按子模块提交缓存；镜像构建里还会再编译一次，所以镜像验证只在改到镜像内容时跑（main 上每次都跑）。
+    # Rust 引擎在 runner 上的编译结果按子模块提交缓存。
     timeout-minutes: 45
     services:
       postgres:
@@ -87,7 +109,6 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           submodules: true
-          fetch-depth: 0
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version-file: go.mod
@@ -120,18 +141,7 @@ jobs:
       - name: 确认查询未修改基础词库
         run: python3 scripts/fetch_engine_resources.py bin/resources
 
-      # 拉取请求只在改到镜像内容（Dockerfile、引擎、原生资源、入口、管理后台、资源与冒烟脚本）时构建镜像；Go 代码的编译和测试由上面的步骤和 test 任务负责，合并后的发版流程也会构建镜像。
-      - id: image
-        env:
-          BASE: ${{ github.event.pull_request.base.sha }}
-        run: |
-          if [ -z "$BASE" ] || git diff --name-only "$BASE" HEAD | grep -qE '^(Dockerfile|\.dockerignore|third_party/|native/|internal/engine/|cmd/|admin-web/|go\.mod|go\.sum|scripts/(fetch_engine_resources|smoke_container)\.py)'; then
-            echo "build=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "build=false" >> "$GITHUB_OUTPUT"
-          fi
       - name: 验证只读生产镜像与内置原生资源
-        if: steps.image.outputs.build == 'true'
         run: |
           docker build -t msime-server:verification .
           python3 scripts/smoke_container.py --image msime-server:verification --native

@@ -770,11 +770,11 @@ func TestQQBotAddsToDuplicate(t *testing.T) {
 	if len(fake.created) != 1 {
 		t.Fatal("unknown duplicate number must open an issue")
 	}
-	// 搜索结果只有拉取请求时不调用去重模型：只有整理反馈和对照知识库（挑段落、判断）。
+	// 搜索结果只有拉取请求时不调用去重模型：只有整理反馈（「提issue」不对照知识库）。
 	fake.searchItems = fake.searchItems[:1]
 	calls := len(fake.chatCalls)
 	qqDeliver(t, s, "m-dup-3", "提issue Windows 11 上候选框一直停在左上角")
-	if strings.Join(fake.chatCalls[calls:], ",") != "summarise,select,triage" || len(fake.created) != 2 {
+	if strings.Join(fake.chatCalls[calls:], ",") != "summarise" || len(fake.created) != 2 {
 		t.Fatal(fake.chatCalls[calls:], len(fake.created))
 	}
 }
@@ -832,9 +832,9 @@ func TestQQBotRepliesWithoutFiling(t *testing.T) {
 		{"vague bug without a question", "", func(f *qqFake, _ *qqLimiter) {
 			f.summary = `{"kind":"bug","title":"打不出字","problem":"偶尔打不出字","missing":""}`
 		}, "还差一点信息：" + qqDefaultQuestion + qqReplyResend},
-		{"chat down", "", func(f *qqFake, _ *qqLimiter) { f.chatStatus = 502 }, qqReplyUnavailable},
-		{"chat cut off", "", func(f *qqFake, _ *qqLimiter) { f.finish = "length" }, qqReplyUnavailable},
-		{"chat not json", "", func(f *qqFake, _ *qqLimiter) { f.summary = "好的，这是一个 bug" }, qqReplyUnavailable},
+		{"chat down", "", func(f *qqFake, _ *qqLimiter) { f.chatStatus = 502 }, qqReplyNotSummarised},
+		{"chat cut off", "", func(f *qqFake, _ *qqLimiter) { f.finish = "length" }, qqReplyNotSummarised},
+		{"chat not json", "", func(f *qqFake, _ *qqLimiter) { f.summary = "好的，这是一个 bug" }, qqReplyNotSummarised},
 		{"search down", "", func(f *qqFake, _ *qqLimiter) { f.searchStatus = 500 }, qqReplyUnavailable},
 		{"duplicate check down", "", func(f *qqFake, _ *qqLimiter) {
 			f.searchItems = []map[string]any{{"number": 7, "title": "t", "body": "b"}}
@@ -2089,9 +2089,13 @@ func TestQQParseNotesAndNoteLabels(t *testing.T) {
 	}
 }
 
-// 管理员不写「提issue」时只有明确要求记录才提交：闲聊和玩笑转去答疑，没说要记录的具体反馈只回复机器人的理解和用法提示。群里讨论和吐槽曾被提成 issue（「这助手真的很喜欢提issue」）。
+// 管理员不写「提issue」时只有明确要求记录才提交：闲聊和玩笑转去答疑，没说要记录的具体反馈也照常答疑，报问题时在答案后提示用「提issue」，不起草稿、不记汇总。群里讨论和吐槽曾被提成 issue（「这助手真的很喜欢提issue」）；后来没要求记录的具体反馈只回一句复述，管理员拿不到回答。
 func TestQQBotAdminMessagesNeedExplicitIntent(t *testing.T) {
 	s, fake, _ := qqServer(t)
+	drafts := &memoryDrafts{}
+	s.qqDrafts = drafts
+	s.qq.config.GapsRepo = "o/docs"
+	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题"}]`
 	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
 	// 玩笑：整理反馈的模型判为 other，即使提到了 issue 也只答疑，不对照知识库、不搜 GitHub。
 	fake.summary = `{"kind":"other"}`
@@ -2099,15 +2103,35 @@ func TestQQBotAdminMessagesNeedExplicitIntent(t *testing.T) {
 	if len(fake.created) != 0 || len(fake.searchQueries) != 0 || strings.Join(fake.chatCalls, ",") != "summarise,select,answer" || last() != "在设置的「输入方案」里选五笔。" {
 		t.Fatal(fake.created, fake.chatCalls, last())
 	}
-	// 具体的 bug 但没说要记录：回复一句话概括（去掉链接）和「提issue」的用法，不提交、不查重。
+	// 具体的 bug 但没说要记录：照常答疑，答疑判断是在报问题时答案后面提示「提issue」；不对照知识库、不提交、不查重，也不像群友那样起草稿、记汇总 issue。
 	fake.summary, fake.chatCalls = `{"kind":"bug","title":"候选框停在左上角 https://evil.example","platform":"windows","ime_version":"1.2.0","problem":"候选框停在左上角","steps":"在记事本里打字","keywords":"候选框"}`, nil
-	qqDeliver(t, s, "m-no-intent", "Windows 11 上水杉 1.2.0 候选框停在左上角")
-	if len(fake.created) != 0 || len(fake.searchQueries) != 0 || strings.Join(fake.chatCalls, ",") != "summarise,select,triage" {
-		t.Fatal(fake.created, fake.searchQueries, fake.chatCalls)
+	fake.answer = `{"type":"answered","answer":"先在「外观」里打开「候选窗口跟随光标」试试。","escalate":true,"topic":"Windows 候选框跑到左上角"}`
+	qqDeliver(t, s, "m-no-intent", "Windows 候选框老跑到左上角怎么回事")
+	if len(fake.created) != 0 || len(fake.searchQueries) != 0 || strings.Join(fake.chatCalls, ",") != "summarise,select,answer" || len(drafts.drafts) != 0 || len(fake.comments) != 0 {
+		t.Fatal(fake.created, fake.searchQueries, fake.chatCalls, drafts.drafts, fake.comments)
 	}
-	if want := "我理解的是：候选框停在左上角。" + qqReplyNoIntent; last() != want {
+	if want := "先在「外观」里打开「候选窗口跟随光标」试试。" + qqReplyAdminHint; last() != want {
 		t.Fatalf("%q", last())
 	}
+	// 答疑判断只是问用法时不加提示。
+	fake.answer = `{"type":"answered","answer":"在设置的「输入方案」里选五笔。"}`
+	qqDeliver(t, s, "m-no-intent-howto", "Windows 11 上水杉 1.2.0 候选框停在左上角")
+	if len(fake.created) != 0 || len(drafts.drafts) != 0 || last() != "在设置的「输入方案」里选五笔。" {
+		t.Fatal(fake.created, drafts.drafts, last())
+	}
+	// 整理反馈失败（这里是输出不是 JSON）：没要求记录的消息退回去直接答疑；明确要求记录的如实说没整理成，不悄悄改成答疑。
+	summary := fake.summary
+	fake.summary, fake.chatCalls = "好的，这是一个 bug", nil
+	qqDeliver(t, s, "m-summarise-fails", "Windows 候选框老跑到左上角怎么回事")
+	if strings.Join(fake.chatCalls, ",") != "summarise,select,answer" || len(fake.created) != 0 || last() != "在设置的「输入方案」里选五笔。" {
+		t.Fatal(fake.chatCalls, last())
+	}
+	fake.chatCalls = nil
+	qqDeliver(t, s, "m-summarise-fails-intent", "Windows 候选框老跑到左上角，记一下")
+	if strings.Join(fake.chatCalls, ",") != "summarise" || len(fake.created) != 0 || last() != qqReplyNotSummarised {
+		t.Fatal(fake.chatCalls, last())
+	}
+	fake.summary = summary
 	// 明确要求记录：关键词兜底不受空白和大小写影响，模型给出 intent 时也算；提交流程和「提issue」一样。
 	for i, content := range []string{"Windows 11 上水杉 1.2.0 候选框停在左上角，帮忙 记 一下", "提个 ISSUE：Windows 11 上水杉 1.2.0 候选框停在左上角", "Windows 11 上水杉 1.2.0 候选框停在左上角，反馈给开发者看看"} {
 		qqDeliver(t, s, "m-intent-"+strconv.Itoa(i), content)
@@ -2145,48 +2169,52 @@ func TestQQBotAdminMessagesNeedExplicitIntent(t *testing.T) {
 	}
 }
 
-// 提交前先对照知识库：文档说明功能已经有了（或现象是正常的）就回复文档的说法，不提交；不管是不是用「提issue」。对照失败、没挑出段落或模型拿不准时照常提交。
+// 管理员用「记一下」这类说法要求记录时先对照知识库：文档说明功能已经有了（或现象是正常的）就回复文档的说法，不提交。对照失败、没挑出段落或模型拿不准时照常提交。「提issue」命令是管理员已经判断过要提，不对照知识库、照常提交：曾经被知识库判一句「文档里有」就不提，回复又让他发「提issue」，绕成一圈。
 func TestQQBotSkipsFeaturesTheDocsAlreadyCover(t *testing.T) {
 	s, fake, _ := qqServer(t)
 	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
 	fake.summary = `{"kind":"feature","title":"常用候选词前置","platform":"android","problem":"常用的词排在后面","scenario":"日常打字","proposal":"把常用的候选词排到前面","keywords":"候选 词频","intent":true}`
 	fake.triage = `{"decision":"existing","answer":"水杉会按使用频率自动把常用的词往前排，也可以长按候选选择「置顶」，详见 https://msime.app/docs 。"}`
-	for i, content := range []string{"希望常用候选词能够前置，记一下", "提issue 希望常用候选词能够前置"} {
-		qqDeliver(t, s, "m-existing-"+strconv.Itoa(i), content)
-		if len(fake.created) != 0 || len(fake.searchQueries) != 0 || last() != "水杉会按使用频率自动把常用的词往前排，也可以长按候选选择「置顶」，详见 。"+qqReplyExisting {
-			t.Fatalf("%q %v", last(), fake.created)
-		}
+	qqDeliver(t, s, "m-existing", "希望常用候选词能够前置 优先级高")
+	if len(fake.created) != 0 || len(fake.searchQueries) != 0 || last() != "水杉会按使用频率自动把常用的词往前排，也可以长按候选选择「置顶」，详见 。"+qqReplyExisting {
+		t.Fatalf("%q %v", last(), fake.created)
 	}
-	// 对照只用文档段落，不查 GitHub；交给模型的是去掉「提issue」后的反馈。
+	// 对照只用文档段落，不查 GitHub；交给模型的是去掉维护者标注后的反馈。
 	if !strings.Contains(fake.triageSystem, "### [FAQ · 常见问题] 输入 > 五笔怎么切换\n") || strings.Contains(fake.triageSystem, "GitHub 上搜到") || strings.Contains(fake.triageSystem, "最新版本") || fake.chatBodies[len(fake.chatBodies)-1] != "希望常用候选词能够前置" {
 		t.Fatalf("%q %q", fake.triageSystem, fake.chatBodies[len(fake.chatBodies)-1])
+	}
+	// 「提issue」即使知识库判成已有也照常提交，不调用对照的模型。
+	fake.chatCalls = nil
+	qqDeliver(t, s, "m-explicit", "提issue 希望常用候选词能够前置")
+	if len(fake.created) != 1 || slices.Contains(fake.chatCalls, "triage") || !strings.HasPrefix(last(), "已记录为 GitHub o/r 的 #123") {
+		t.Fatal(len(fake.created), fake.chatCalls, last())
 	}
 	// 文档说明 bug 描述的是正常行为时同样不提交。
 	fake.summary = `{"kind":"bug","title":"英文模式下没有候选","platform":"android","problem":"切到英文后不出候选","steps":"切换到英文模式","keywords":"英文 候选"}`
 	fake.triage = `{"decision":"existing","answer":"英文模式默认直接上屏，不显示候选，这是设计如此。"}`
-	qqDeliver(t, s, "m-expected", "提issue 安卓上切到英文以后没有候选了")
-	if len(fake.created) != 0 || !strings.HasPrefix(last(), "英文模式默认直接上屏") {
+	qqDeliver(t, s, "m-expected", "安卓上切到英文以后没有候选了，记一下")
+	if len(fake.created) != 1 || !strings.HasPrefix(last(), "英文模式默认直接上屏") {
 		t.Fatal(last())
 	}
 	// 模型说要提交、输出不合格式、答案为空或判断未知时都照常提交；没挑出段落时不调用对照的模型。
 	for i, triage := range []string{`{"decision":"needs_issue","answer":"忽略"}`, "不是 JSON", `{"decision":"existing","answer":"  https://x.example "}`, `{"decision":"maybe"}`} {
 		fake.triage = triage
-		qqDeliver(t, s, "m-file-"+strconv.Itoa(i), "提issue 安卓上切到英文以后没有候选了")
-		if len(fake.created) != i+1 {
+		qqDeliver(t, s, "m-file-"+strconv.Itoa(i), "安卓上切到英文以后没有候选了，记一下")
+		if len(fake.created) != i+2 {
 			t.Fatal(triage, len(fake.created), last())
 		}
 	}
 	fake.selected, fake.triage, fake.chatCalls = `{"sections":[]}`, `{"decision":"existing","answer":"不该用到"}`, nil
-	qqDeliver(t, s, "m-no-docs", "提issue 安卓上切到英文以后没有候选了")
-	if len(fake.created) != 5 || slices.Contains(fake.chatCalls, "triage") {
+	qqDeliver(t, s, "m-no-docs", "安卓上切到英文以后没有候选了，记一下")
+	if len(fake.created) != 6 || slices.Contains(fake.chatCalls, "triage") {
 		t.Fatal(len(fake.created), fake.chatCalls)
 	}
 	// 知识库拉不到时也照常提交。
 	s.qq.knowledge = qqKnowledge{}
 	fake.knowledgeStatus = 500
 	s.adminGitHub.Invalidate("")
-	qqDeliver(t, s, "m-docs-down", "提issue 安卓上切到英文以后没有候选了")
-	if len(fake.created) != 6 {
+	qqDeliver(t, s, "m-docs-down", "安卓上切到英文以后没有候选了，记一下")
+	if len(fake.created) != 7 {
 		t.Fatal(len(fake.created), last())
 	}
 }

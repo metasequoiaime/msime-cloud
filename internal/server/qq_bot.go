@@ -478,9 +478,13 @@ const (
 	qqReplyRestarting = "机器人正在更新，请一分钟后再 @我 发一次。"
 	qqReplyWorking    = "收到，正在整理成 issue。"
 	qqReplyPublic     = "内容由机器人转述后公开在 GitHub 上，不包含你的昵称和原话。"
-	// qqReplyNoIntent 接在管理员没有要求记录的反馈的一句话概括后面；qqReplyExisting 接在知识库说明功能已有或现象正常时的答案后面。
+	// qqReplyNoIntent 曾接在管理员没有要求记录的反馈的一句话概括后面；现在这类消息直接答疑（见 fileAdminFeedback），不再引用，按规范保留。qqReplyExisting 接在管理员用「记一下」这类说法要求记录、知识库说明功能已有或现象正常时的答案后面；用「提issue」命令时不对照知识库，所以这里请他发「提issue」强制提交。
 	qqReplyNoIntent = "没有提 issue；需要记录的话，请 @我 发「提issue」加上这段描述。"
-	qqReplyExisting = "\n\n文档里已经有说明，所以没有提 issue。如果文档的办法不够用，请 @我 发「提issue」并说明哪里不够。"
+	qqReplyExisting = "\n\n文档里已经写了这个，所以先不提 issue。要是这个办法不管用，@我 发「提issue」说一下哪里不行。"
+	// qqReplyAdminHint 接在管理员没要求记录、答疑又判断他在报问题时的答案后面，代替群友的草稿和汇总 issue 那一句（见 answerQQQuestion）。
+	qqReplyAdminHint = "\n\n（要记成 issue 就 @我 发「提issue」加上描述。）"
+	// qqReplyNotSummarised 是明确要求记录、但整理反馈那一步失败时的回复。
+	qqReplyNotSummarised = "没能整理成 issue，请把问题再描述一遍后 @我 发「提issue」。"
 	// qqReplyResend 接在追问后面。重新描述时也要带上「提issue」：管理员第一次用「记一下」这类说法要求记录时，补充的那条消息往往不会再说一遍，没有命令就只会得到一句话概括。
 	qqReplyResend = " 补充后请 @我 发「提issue」把问题完整描述一次。"
 	// qqDefaultQuestion 是 bug 既看不出平台、也没有操作步骤，而模型没有给出追问时用的问题。
@@ -582,12 +586,12 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		reply("我看一下截图～")
 		text = qqWithShot(text, s.qqDescribeImages(ctx, m.Attachments))
 	}
-	// 普通群友的消息都按问题回答。管理员的消息先整理一遍：只有明确要求记录（qqIssueIntent 或模型给出的 intent）的具体反馈才提交，其余的回复机器人的理解并提示用「提issue」。曾经管理员的每条消息都先自动判断、像反馈就提交，群里讨论和吐槽也被提成了 issue。
+	// 普通群友的消息都按问题回答。管理员的消息先整理一遍：只有明确要求记录（qqIssueIntent 或模型给出的 intent）的具体反馈才提交，其余的照常答疑，报问题时在答案后提示用「提issue」。曾经管理员的每条消息都先自动判断、像反馈就提交，群里讨论和吐槽也被提成了 issue；后来没要求记录的具体反馈只回一句复述，管理员问「候选框老跑到左上角怎么回事」拿不到回答。
 	if admin {
 		outcome = "admin_" + s.fileAdminFeedback(ctx, m, text, false, reply)
 		return
 	}
-	outcome = s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, text, reply)
+	outcome = s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, text, false, reply)
 }
 
 // qqIssueIntentWords 是表示「请把这条记成 issue」的说法，与去掉空白、转成小写后的消息比较。只收祈使的说法：单独的「记录」会误中「历史记录丢了」这类 bug 描述。
@@ -599,7 +603,7 @@ func qqIssueIntent(text string) bool {
 	return slices.ContainsFunc(qqIssueIntentWords, func(word string) bool { return strings.Contains(compact, word) })
 }
 
-// fileAdminFeedback 处理管理员的一条消息。explicit 表示来自「提issue」命令。先整理成 bug 或需求：不是具体反馈时，命令请管理员写具体些，普通消息转去答疑；是具体反馈时先对照知识库，文档说明功能已经有了或现象是正常的就回复文档的说法、不提交；没有明确要求记录的只回复机器人的理解，提示用「提issue」；其余的按平台选仓库、查重、带上附件和标签提交。
+// fileAdminFeedback 处理管理员的一条消息。explicit 表示来自「提issue」命令。先整理成 bug 或需求：不是具体反馈、或者没有明确要求记录时转去答疑（命令不是具体反馈时请管理员写具体些）；用「记一下」这类说法要求记录的先对照知识库，文档说明功能已经有了或现象是正常的就回复文档的说法、不提交；「提issue」命令是管理员已经判断过要提，不对照知识库；其余的按平台选仓库、查重、带上附件和标签提交。
 func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text string, explicit bool, reply func(string)) string {
 	// 「提issue」带了截图时把截图描述并进反馈，整理出的 issue 才写得清现象；截图本身照旧存进公开 bucket。不是命令的消息在 handleQQFeedback 里已经看过图（看不成时也不再看第二遍）。
 	if explicit && qqHasImages(m.Attachments) && !strings.Contains(text, qqShotMarker) {
@@ -609,8 +613,17 @@ func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text s
 	text, notes := qqParseNotes(text)
 	report, err := s.qqSummarise(ctx, text)
 	if err != nil {
+		// 没要求记录的消息整理失败时退回去直接答疑：同一个问题普通群友问能答上，管理员问不该只得到「暂时处理不了」。明确要求记录时不能悄悄改成答疑，如实说没整理成；副本关停时仍回 qqReplyUnavailable，由 reply 换成「正在更新」。
+		if !explicit && !qqIssueIntent(text) {
+			slog.Warn("qq bot: summarise failed, answering instead", "reason", err.Error())
+			return s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, original, true, reply)
+		}
 		slog.Warn("qq bot: summarise failed", "reason", err.Error())
-		reply(qqReplyUnavailable)
+		if ctx.Err() != nil {
+			reply(qqReplyUnavailable)
+		} else {
+			reply(qqReplyNotSummarised)
+		}
 		return "failed"
 	}
 	if report.Kind == "other" {
@@ -618,19 +631,22 @@ func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text s
 			reply("没看出要提的是 bug 还是需求，请把问题或想要的功能描述具体一点。")
 			return "not_report"
 		}
-		return s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, original, reply)
+		return s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, original, true, reply)
 	}
-	switch answer, err := s.qqTriage(ctx, text); {
-	case err != nil:
-		// 对照知识库失败时照常往下走：宁可多提一个 issue，也不让管理员明确要求的提交卡在这一步。
-		slog.Warn("qq bot: knowledge check failed", "reason", err.Error())
-	case answer != "":
-		reply(answer + qqReplyExisting)
-		return "existing"
-	}
+	// 没要求记录的具体反馈直接答疑，不为了查重先跑一次知识库对照。
 	if !explicit && !report.Intent && !qqIssueIntent(text) {
-		reply("我理解的是：" + qqStripLinks(report.Title) + "。" + qqReplyNoIntent)
-		return "no_intent"
+		return s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, original, true, reply)
+	}
+	// 只有用「记一下」这类说法要求记录时才对照知识库；「提issue」命令照常提交，曾经被知识库判一句「文档里有」就不提，管理员只能和模型辩论。
+	if !explicit {
+		switch answer, err := s.qqTriage(ctx, text); {
+		case err != nil:
+			// 对照知识库失败时照常往下走：宁可多提一个 issue，也不让管理员明确要求的提交卡在这一步。
+			slog.Warn("qq bot: knowledge check failed", "reason", err.Error())
+		case answer != "":
+			reply(answer + qqReplyExisting)
+			return "existing"
+		}
 	}
 	if report.Missing != "" {
 		reply("还差一点信息：" + report.Missing + qqReplyResend)
@@ -657,8 +673,8 @@ func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text s
 	return "filed"
 }
 
-// answerQQQuestion 用知识库回答一条消息；答不上的问题和群友报告的问题记进汇总 issue（qq_gaps.go），由管理员跟进。
-func (s *Server) answerQQQuestion(ctx context.Context, group, member, question string, reply func(string)) string {
+// answerQQQuestion 用知识库回答一条消息；答不上的问题和群友报告的问题记进汇总 issue（qq_gaps.go），由管理员跟进。admin 表示提问的是管理员：他报问题时不起草稿、不记汇总 issue（那是给群友等管理员处理的），只在答案后提示用「提issue」。
+func (s *Server) answerQQQuestion(ctx context.Context, group, member, question string, admin bool, reply func(string)) string {
 	subject := group + "/" + member
 	var history []account.QQTurn
 	if s.qqHistory != nil {
@@ -712,6 +728,9 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 			reply(qqUnknownUnrecordedReply)
 		}
 		s.recordQQFAQCandidate(ctx, cmp.Or(answer.Topic, question), "")
+	case answer.Type == "answered" && answer.Escalate && admin:
+		outcome = "answered_hint"
+		reply(answer.Answer + qqReplyAdminHint)
 	case answer.Type == "answered" && answer.Escalate:
 		outcome = "answered_escalate"
 		// 群友在报 bug 或提需求：整理成草稿等管理员一句话提交（见 qq_drafts.go）；整理不成时照旧记进汇总 issue。
@@ -814,7 +833,7 @@ const qqSummarisePrompt = `你在为开源输入法「水杉输入法」整理 Q
 - kind：只有具体、开发者能据此着手处理的反馈才是 bug 或 feature，拿不准时一律是 other。
   - bug：说清楚了出了什么错（崩溃、打不出字、显示异常、卡顿、结果不对等），能据此去复现或排查。
   - feature：明确提出了要新增或改变的具体功能或行为，例如「希望能调候选框字号」「能不能支持手写笔直接写字」。
-  - other：其余所有消息，包括闲聊、玩笑、表态和回应（「这是个 bug 我来改」「收到」「我看看」「谢谢」「哈哈」「这助手真能提 issue」）、对机器人说的话、询问用法或某个功能有没有（「五笔怎么切换？」「有没有云同步？」），以及只有感受或笼统愿望、没说要改成什么的话（「希望更好用」「这个不太行」「要是更智能就好了」）。
+  - other：其余所有消息，包括闲聊、玩笑、表态和回应（「这是个 bug 我来改」「收到」「我看看」「谢谢」「哈哈」「这助手真能提 issue」）、对机器人说的话、询问用法或某个功能有没有（「五笔怎么切换？」「有没有云同步？」），以及只有感受或笼统愿望、没说要改成什么的话（「希望更好用」「这个不太行」「要是更智能就好了」）。请助手分析原因、给排查或修复建议、评价或写方案的消息（帮我分析、你觉得是什么原因、怎么排查、怎么修、给个方案），即使里面描述了 bug，也是 other。
 - intent：只有消息明确要求把它记录下来、提交 issue 或转给开发者时为 true，例如「提个 issue」「记一下」「记录一下」「反馈给开发」「建个 issue」；只是描述问题、提建议或抱怨时为 false。
 - title：一句话概括，不超过 40 个汉字，不带 [Bug] 之类的前缀。
 - platform：windows、macos、linux、android、ios、harmony 之一；看不出来就留空。

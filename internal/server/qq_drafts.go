@@ -69,6 +69,12 @@ func (s *Server) qqDraftReport(ctx context.Context, subject, text string) string
 		}
 		return ""
 	}
+	// 需求先找有没有人提过，提过就在那里记一票，不起新草稿（见 qq_votes.go）。
+	if report.Kind == "feature" {
+		if note := s.qqVoteFeature(ctx, subject, report, text); note != "" {
+			return note
+		}
+	}
 	raw, _ := json.Marshal(report)
 	id, err := s.qqDrafts.CreateQQDraft(ctx, subject, qqTruncate(text, qqDraftOriginalRunes), string(raw))
 	if err != nil {

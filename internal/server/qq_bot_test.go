@@ -204,8 +204,9 @@ type qqFake struct {
 	created      []map[string]any
 	createStatus int
 	comments     map[string]map[string]any
-	// issueComments 是按路径列出 issue 评论的响应（GET），缺省为空列表。
+	// issueComments 是按路径列出 issue 评论的响应（GET），缺省为空列表；patched 记下修改评论（PATCH）的请求。
 	issueComments map[string]string
+	patched       map[string]map[string]any
 	// history 是向量同步读的 issue 和 PR 列表（issues 接口带 state=all），按仓库和页码；historySince 记下每次请求的 since。embedCalls 是 embedding 接口收到的文本数。
 	history      map[string][]string
 	historySince []string
@@ -502,6 +503,12 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.created = append(f.created, body)
 		w.WriteHeader(201)
 		_, _ = w.Write([]byte(`{"number":123,"html_url":"https://github.com/o/r/issues/123"}`))
+	case strings.HasPrefix(r.URL.Path, "/repos/") && strings.Contains(r.URL.Path, "/issues/comments/") && r.Method == "PATCH":
+		if f.patched == nil {
+			f.patched = map[string]map[string]any{}
+		}
+		f.patched[r.URL.Path] = body
+		_, _ = io.WriteString(w, `{"id":1}`)
 	case strings.HasPrefix(r.URL.Path, "/repos/") && strings.HasSuffix(r.URL.Path, "/comments") && r.Method == "GET":
 		body := f.issueComments[r.URL.Path]
 		if body == "" {
@@ -3044,5 +3051,49 @@ func TestQQParseWords(t *testing.T) {
 		if strings.Join(got, ";") != want {
 			t.Errorf("%q: %q want %q", content, strings.Join(got, ";"), want)
 		}
+	}
+}
+
+// 群友提的需求已经有人提过时，不起草稿，在那个 issue 下的计数评论里记一票；同一个群友只算一次；找不到同一个需求时照旧起草稿。
+func TestQQBotFeatureVotes(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	drafts := &memoryDrafts{}
+	s.qqDrafts = drafts
+	s.qq.config.Admins = nil
+	s.config.Admin.GitHub.Platforms = nil
+	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
+	deliver := func(id, member, content string) {
+		t.Helper()
+		qqPost(t, s, qqMessageFrom(id, member, content))
+		s.qqWorkers.Wait()
+	}
+	fake.answer = `{"type":"answered","answer":"现在还不支持。","escalate":true,"topic":"希望支持候选框透明度"}`
+	fake.summary = `{"kind":"feature","title":"候选框支持透明度","proposal":"候选框背景可以调透明度","keywords":"候选框 透明度"}`
+	fake.searchItems = []map[string]any{{"number": 7, "title": "候选框透明度", "body": "希望能调透明度"}}
+	fake.duplicate = `{"duplicate":7}`
+	deliver("m-vote-1", "MEMBER1", "希望候选框能调透明度")
+	if c := fake.comments["/repos/o/r/issues/7/comments"]; c == nil || c["body"] != qqVoteBody(1) {
+		t.Fatal(fake.comments)
+	}
+	if want := "现在还不支持。\n\n这个需求已经有人提过：GitHub o/r 的 #7，我帮你在那里记了一票，现在 QQ 群里一共 1 人需要。之后 @我 发「#7」可以查进度。"; last() != want || len(drafts.drafts) != 0 {
+		t.Fatalf("%q %d", last(), len(drafts.drafts))
+	}
+	// 第二个人：改同一条计数评论。
+	fake.issueComments = map[string]string{"/repos/o/r/issues/7/comments": `[{"id":55,"body":"` + strings.ReplaceAll(qqVoteBody(1), `"`, `\"`) + `"}]`}
+	deliver("m-vote-2", "MEMBER2", "候选框透明度什么时候能有")
+	if p := fake.patched["/repos/o/r/issues/comments/55"]; p == nil || p["body"] != qqVoteBody(2) || !strings.Contains(last(), "一共 2 人需要") {
+		t.Fatal(fake.patched, last())
+	}
+	// 同一个人再说一次不重复计数。
+	fake.patched = nil
+	deliver("m-vote-again", "MEMBER1", "候选框透明度求求了")
+	if fake.patched != nil || !strings.Contains(last(), "你之前已经记过一票了") {
+		t.Fatal(fake.patched, last())
+	}
+	// 没有同一个需求时照旧起草稿。
+	fake.duplicate = `{"duplicate":0}`
+	deliver("m-vote-new", "MEMBER2", "希望支持自定义候选框圆角")
+	if len(drafts.drafts) != 1 || !strings.Contains(last(), "整理成了草稿 D1") {
+		t.Fatal(len(drafts.drafts), last())
 	}
 }

@@ -21,6 +21,14 @@ type Endpoint struct {
 	Models   []string `json:"models,omitempty"`
 	token    string
 }
+
+// ChatEndpoint 是 AI 联想和语音润色用的 chat 端点。
+type ChatEndpoint struct {
+	Endpoint
+	// FallbackModel 是 `/v1/chat/completions` 的备用模型：本次请求的模型（省略 model 时是 chat.model，也可能是客户端从 chat.models 里选的）上游失败、或回答不合格（没有非空白正文）时，换成它重试一次，接入地址和密钥沿用 chat。为空时不重试。客户端不选模型，由服务端兜底，所以主模型可以选回答好但上游不够稳的，备用模型选便宜稳定的。
+	FallbackModel string `json:"fallback_model,omitempty"`
+}
+
 type TranslationEndpoint struct {
 	Endpoint
 	Provider    string `json:"provider"`
@@ -82,7 +90,7 @@ type Config struct {
 	Streaming            StreamingEndpoint     `json:"streaming"`
 	Listen               string                `json:"listen"`
 	Clients              []Client              `json:"clients"`
-	Chat                 Endpoint              `json:"chat"`
+	Chat                 ChatEndpoint          `json:"chat"`
 	Translation          TranslationEndpoint   `json:"translation"`
 	TranslationFallbacks []TranslationEndpoint `json:"translation_fallbacks,omitempty"`
 	NiuTrans             NiuTransConfig        `json:"niutrans"`
@@ -141,6 +149,12 @@ func (c *Config) Validate() error {
 			return errors.New("invalid or duplicate chat model")
 		}
 		seenModels[model] = true
+	}
+	if len(c.Chat.FallbackModel) > 200 || strings.ContainsAny(c.Chat.FallbackModel, " \r\n\t") {
+		return errors.New("chat fallback_model must be a model name without whitespace")
+	}
+	if c.Chat.FallbackModel != "" && c.Chat.URL == "" {
+		return errors.New("chat fallback_model requires chat url")
 	}
 	if c.SkinsRoot != "" && !filepath.IsAbs(c.SkinsRoot) {
 		return errors.New("skins_root must be an absolute path")
@@ -223,7 +237,7 @@ func (c *Config) Validate() error {
 			e.appID, e.apiKey = "", ""
 		}
 	}
-	for name, e := range map[string]*Endpoint{"images": &c.Images, "chat": &c.Chat, "translation": &c.Translation.Endpoint, "transcription": &c.Transcription, "cloud": &c.Cloud} {
+	for name, e := range map[string]*Endpoint{"images": &c.Images, "chat": &c.Chat.Endpoint, "translation": &c.Translation.Endpoint, "transcription": &c.Transcription, "cloud": &c.Cloud} {
 		if e.URL == "" {
 			continue
 		}

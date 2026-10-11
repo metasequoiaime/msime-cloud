@@ -65,7 +65,8 @@
   "chat": {
     "url": "",
     "token_env": "MSIME_CHAT_TOKEN",
-    "model": ""
+    "model": "",
+    "fallback_model": ""
   },
   "translation": {
     "url": "",

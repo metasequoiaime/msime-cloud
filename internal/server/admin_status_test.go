@@ -353,7 +353,7 @@ func monitoringReplica(t *testing.T, upstream http.HandlerFunc) *Server {
 		Auth:    account.Config{Enabled: true, DatabaseEnv: "MSIME_TEST_DATABASE_URL", PepperEnv: "TEST_AUTH_PEPPER"},
 		Admin:   AdminConfig{Enabled: true, Host: "admin.example.com", TokenEnv: "TEST_ADMIN_TOKEN", Services: []AdminServiceConfig{{Key: "chat", Name: "AI 联想", Provider: "账号通道", Quota: AdminServiceQuota{Limit: 100, Unit: "calls", UnitPrice: 0.5}, SlowMS: 2000}, {Key: "translation", Name: "在线翻译", Provider: "腾讯 TMT"}}},
 		Clients: []Client{{ID: "device", TokenEnv: "TEST_CLIENT_TOKEN", RequestsPerMinute: 120}},
-		Chat:    Endpoint{URL: srv.URL, TokenEnv: "TEST_UPSTREAM_TOKEN", Model: "m"},
+		Chat:    ChatEndpoint{Endpoint: Endpoint{URL: srv.URL, TokenEnv: "TEST_UPSTREAM_TOKEN", Model: "m"}},
 	})
 	if err != nil {
 		t.Fatal(err)

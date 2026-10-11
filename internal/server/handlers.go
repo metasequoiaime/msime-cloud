@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -40,7 +41,7 @@ type chatRequest struct {
 }
 
 func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
-	if !enabled(w, s.config.Chat) {
+	if !enabled(w, s.config.Chat.Endpoint) {
 		return
 	}
 	var v chatRequest
@@ -109,9 +110,22 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		s.chatStream(w, r, v)
 		return
 	}
+	rr := s.chatOnce(r, v)
+	// 只有 502 才换备用模型：502 是上游连不上、非 2xx、正文不是 JSON 或回答没有非空白正文。504 表示请求的截止时间已到或客户端已经断开，没有时间再答一次；400 是本服务自己没能编码请求，换模型也一样。
+	if rr.Code == http.StatusBadGateway && s.chatFallback(v.Model) {
+		slog.Warn("chat: model failed, trying the fallback model", "model", v.Model, "fallback_model", s.config.Chat.FallbackModel)
+		v.Model = s.config.Chat.FallbackModel
+		rr = s.chatOnce(r, v)
+	}
+	copyResponse(w, rr)
+}
+
+// chatOnce 用 v.Model 向上游做一次非流式补全，响应先写进记录器，由 chat 决定是否换备用模型重试。每次上游调用各计一次 `chat`：主模型失败、备用模型成功时记一次失败一次成功，管理后台看到的是上游的真实状况；客户端的请求额度在中间件里按请求扣，重试不会多扣。
+func (s *Server) chatOnce(r *http.Request, v chatRequest) *httptest.ResponseRecorder {
+	rr := httptest.NewRecorder()
 	mr, call := metered(r, "chat", 0)
 	accepted := false
-	s.proxyJSON(w, mr, s.config.Chat, v, func(b []byte) bool {
+	s.proxyJSON(rr, mr, s.config.Chat.Endpoint, v, func(b []byte) bool {
 		var result struct {
 			Choices []struct {
 				Message message `json:"message"`
@@ -121,6 +135,13 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		return accepted
 	})
 	s.settleMeter(call, accepted)
+	return rr
+}
+
+// chatFallback 判断用 model 请求失败后有没有备用模型可换：配置了 chat.fallback_model，并且它不是刚失败的那个模型。不论 model 是省略后取的 chat.model、客户端显式发来的默认模型，还是 chat.models 里的其他模型，都一样兜底。请求是否已被取消或超时由调用方按 502/504 的区分另行判断。
+func (s *Server) chatFallback(model string) bool {
+	fallback := s.config.Chat.FallbackModel
+	return fallback != "" && fallback != model
 }
 
 type translationRequest struct {

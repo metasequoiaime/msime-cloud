@@ -50,7 +50,7 @@ func TestChatModelSelectionAndCatalog(t *testing.T) {
 }
 func TestChatModelConfiguration(t *testing.T) {
 	for _, models := range [][]string{{""}, {"bad\nmodel"}, {"same", "same"}, make([]string, 33)} {
-		c := Config{Chat: Endpoint{Models: models}}
+		c := Config{Chat: ChatEndpoint{Endpoint: Endpoint{Models: models}}}
 		if c.Validate() == nil {
 			t.Fatal("invalid models accepted", models)
 		}

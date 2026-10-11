@@ -20,6 +20,7 @@ func TestConfigurationBoundaries(t *testing.T) {
 	cases := map[string]func(*Config){
 		"models limit":         func(c *Config) { c.Chat.Models = make([]string, 33) },
 		"duplicate model":      func(c *Config) { c.Chat.Models = []string{"a", "a"} },
+		"fallback no chat":     func(c *Config) { c.Chat.FallbackModel = "b" },
 		"relative skins":       func(c *Config) { c.SkinsRoot = "relative" },
 		"relative engine":      func(c *Config) { c.Engine.Binary = "relative" },
 		"concurrency low":      func(c *Config) { c.MaxConcurrent = -1 },

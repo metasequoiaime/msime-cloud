@@ -85,8 +85,19 @@ func (c *cappedReader) Read(p []byte) (int, error) {
 //
 // 第一个字节之前的失败（上游连不上、非 2xx、在出现任何正文之前就结束或出错）沿用非流式的 JSON 错误和状态码；为此在累计正文出现非空白字符之前，角色等增量先缓存不发。流开始后上游失败则发 `chatStreamError` 后断开。整条流受中间件的请求截止时间（`timeout_seconds`）、`UpstreamResponseBytes` 和 `OutputTextBytes` 约束；客户端断开时请求上下文取消，上游请求随之取消。
 //
-// 计量与非流式一致：`chat` 按调用次数计，一次流就是一次调用，耗时取整条流的时长；客户端放弃的流不计。仓库没有按 token 计费的逻辑，所以不向上游请求 `stream_options.include_usage`，上游自发送来的 usage 事件（`choices` 为空）直接跳过。
+// 第一个字节之前出现会回答 502 的失败、并且配置了 `chat.fallback_model` 时，不回错误，换备用模型从头再请求一次（与非流式相同，见 chatFallback）；已经开始输出后不换模型，因为客户端已经收到了主模型的一部分回答。
+//
+// 计量与非流式一致：`chat` 按调用次数计，一次流就是一次调用，耗时取整条流的时长；客户端放弃的流不计。换备用模型时两次上游请求各计一次。仓库没有按 token 计费的逻辑，所以不向上游请求 `stream_options.include_usage`，上游自发送来的 usage 事件（`choices` 为空）直接跳过。
 func (s *Server) chatStream(w http.ResponseWriter, r *http.Request, v chatRequest) {
+	if !s.chatStreamOnce(w, r, v, s.chatFallback(v.Model)) {
+		return
+	}
+	v.Model = s.config.Chat.FallbackModel
+	s.chatStreamOnce(w, r, v, false)
+}
+
+// chatStreamOnce 用 v.Model 向上游请求一次流式补全。retry 为 true 时，第一个字节之前会回答 502 的失败不写任何响应，返回 true 让 chatStream 换备用模型；其余情况自己写完响应并返回 false。
+func (s *Server) chatStreamOnce(w http.ResponseWriter, r *http.Request, v chatRequest, retry bool) bool {
 	mr, call := metered(r, "chat", 0)
 	ctx, cancel := context.WithCancel(mr.Context())
 	defer cancel()
@@ -94,13 +105,13 @@ func (s *Server) chatStream(w http.ResponseWriter, r *http.Request, v chatReques
 	payload, err := json.Marshal(v)
 	if err != nil {
 		fail(w, 400, "invalid_request")
-		return
+		return false
 	}
 	e := s.config.Chat
 	req, err := http.NewRequestWithContext(ctx, "POST", e.URL, bytes.NewReader(payload))
 	if err != nil {
 		upstreamError(w, mr, err)
-		return
+		return false
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
@@ -119,18 +130,29 @@ func (s *Server) chatStream(w http.ResponseWriter, r *http.Request, v chatReques
 		captureMeter(mr.Context(), started, err)
 		s.settleMeter(call, accepted)
 	}
+	// failBefore 处理第一个字节之前的失败：会回答 502 且允许重试时什么都不写，交给备用模型；否则沿用非流式的 JSON 错误。cause 为空表示上游回答了但没有可用正文。
+	failBefore := func(cause error) bool {
+		if retry && !upstreamTimedOut(mr, cause) {
+			reason := "response rejected by validation"
+			if cause != nil {
+				reason = cause.Error()
+			}
+			slog.Warn("chat: model failed before streaming, trying the fallback model", "path", r.URL.Path, "model", v.Model, "fallback_model", s.config.Chat.FallbackModel, "reason", reason)
+			return true
+		}
+		upstreamError(w, mr, cause)
+		return false
+	}
 	resp, err := s.client.Do(req)
 	if err != nil {
 		finish(err, false)
-		upstreamError(w, mr, err)
-		return
+		return failBefore(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		err = errors.New("upstream rejected request")
 		finish(err, false)
-		upstreamError(w, mr, err)
-		return
+		return failBefore(err)
 	}
 
 	rc := http.NewResponseController(w)
@@ -236,12 +258,12 @@ func (s *Server) chatStream(w http.ResponseWriter, r *http.Request, v chatReques
 		err = write(append(pending, "data: [DONE]\n\n")...)
 		if err == nil {
 			finish(nil, true)
-			return
+			return false
 		}
 	}
 	if abandoned(err) {
 		finish(err, false)
-		return
+		return false
 	}
 	if !streaming {
 		finish(err, false)
@@ -249,8 +271,7 @@ func (s *Server) chatStream(w http.ResponseWriter, r *http.Request, v chatReques
 		if errors.Is(cause, errUpstreamRejected) {
 			cause = nil
 		}
-		upstreamError(w, mr, cause)
-		return
+		return failBefore(cause)
 	}
 	finish(err, false)
 	// 与 upstreamError 一致：超时记 Warn，其余失败记 Error；只记原因，不记上游正文。
@@ -261,4 +282,5 @@ func (s *Server) chatStream(w http.ResponseWriter, r *http.Request, v chatReques
 	}
 	_, _ = io.WriteString(w, chatStreamError)
 	_ = rc.Flush()
+	return false
 }

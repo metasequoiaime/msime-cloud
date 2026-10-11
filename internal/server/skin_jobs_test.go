@@ -46,7 +46,7 @@ func TestSkinJobReturnsBeforeUpstreamAndBindsOwner(t *testing.T) {
 		respond(w, 200, map[string]any{"data": []any{map[string]string{"b64_json": base64.StdEncoding.EncodeToString(encoded.Bytes())}}})
 	})
 	t.Cleanup(s.Close)
-	s.config.Images = s.config.Chat
+	s.config.Images = s.config.Chat.Endpoint
 	path := createArtworkJob(t, s) // Upstream cannot finish before this returns.
 	if w := call(s, "GET", path, ""); w.Code != 200 || !bytes.Contains(w.Body.Bytes(), []byte(`"running"`)) {
 		t.Fatal(w.Code, w.Body.String())
@@ -98,7 +98,7 @@ func TestSkinJobCapacityCancelExpiryAndShutdown(t *testing.T) {
 		<-r.Context().Done()
 	})
 	t.Cleanup(s.Close)
-	s.config.Images = s.config.Chat
+	s.config.Images = s.config.Chat.Endpoint
 	paths := []string{createArtworkJob(t, s), createArtworkJob(t, s), createArtworkJob(t, s)}
 	for range paths {
 		select {
@@ -142,7 +142,7 @@ func TestSkinJobInvalidImageIsFailedWithoutLeakingUpstream(t *testing.T) {
 		respond(w, 200, map[string]any{"data": []any{map[string]string{"url": "https://private.example/token"}}})
 	})
 	t.Cleanup(s.Close)
-	s.config.Images = s.config.Chat
+	s.config.Images = s.config.Chat.Endpoint
 	path := createArtworkJob(t, s)
 	s.skinWorkers.Wait()
 	w := call(s, "GET", path, "")
@@ -161,7 +161,7 @@ func TestFailedSkinJobReportsItsReason(t *testing.T) {
 		respond(w, 200, map[string]any{"data": []any{map[string]string{"url": "https://private.example/token"}}})
 	})
 	t.Cleanup(s.Close)
-	s.config.Images = s.config.Chat
+	s.config.Images = s.config.Chat.Endpoint
 	path := createArtworkJob(t, s)
 	s.skinWorkers.Wait()
 	w := call(s, "GET", path, "")
@@ -184,7 +184,7 @@ func TestSucceededSkinJobCarriesNoReason(t *testing.T) {
 		respond(w, 200, map[string]any{"data": []any{map[string]string{"b64_json": base64.StdEncoding.EncodeToString(encoded.Bytes())}}})
 	})
 	t.Cleanup(s.Close)
-	s.config.Images = s.config.Chat
+	s.config.Images = s.config.Chat.Endpoint
 	path := createArtworkJob(t, s)
 	s.skinWorkers.Wait()
 	w := call(s, "GET", path, "")

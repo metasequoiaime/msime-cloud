@@ -74,7 +74,7 @@ func (s *Server) qqGapsIssue(ctx context.Context, token string) (int64, error) {
 	return number, nil
 }
 
-// recordQQGap 把一个答不上的问题（模型的概括）追加到汇总 issue，prefix 是评论开头，例如「群友问：」。返回是否已经记下（7 天内记过的同一个概括也算记下）；失败只记日志。
+// recordQQGap 把一个答不上的问题（模型的概括）追加到汇总 issue，prefix 是评论开头，例如「群友问：」。返回是否已经记下（7 天内记过的同一个概括也算记下）；失败只记日志，并退回去重名额，下次遇到同一个问题会重新写。
 func (s *Server) recordQQGap(ctx context.Context, prefix, topic string) bool {
 	return s.recordQQGapIn(ctx, "qq-bot-gaps-day", qqGapsDaily, prefix, topic)
 }
@@ -114,15 +114,25 @@ func (s *Server) recordQQGapIn(ctx context.Context, dailyScope string, daily int
 			return false
 		}
 	}
+	// 去重名额在写 GitHub 之前就占了；后面任何一步失败都要退回，否则 7 天内再遇到同一个问题会被当成已经记下，回复「已经记下来了」，其实汇总 issue 里没有。每天的额度不退。ctx 这时可能已经失效，退名额用单独的时限。
+	release := func() {
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		defer cancel()
+		if err := s.limits.ReleaseRateLimit(rctx, "qq-bot-gap", topic); err != nil {
+			slog.Warn("qq bot: gap slot not released", "reason", err.Error())
+		}
+	}
 	client, repo := s.adminGitHub, s.qq.config.GapsRepo
 	token, err := client.Token(ctx, repo, issueTokenPerms)
 	if err != nil {
 		slog.Warn("qq bot: gap not recorded", "reason", err.Error())
+		release()
 		return false
 	}
 	number, err := s.qqGapsIssue(ctx, token)
 	if err != nil {
 		slog.Warn("qq bot: gap not recorded", "reason", err.Error())
+		release()
 		return false
 	}
 	r, err := client.Do(ctx, token, "POST", "/repos/"+repo+"/issues/"+strconv.FormatInt(number, 10)+"/comments", map[string]string{"body": prefix + githubReferenceBreaker.Replace(topic)})
@@ -132,6 +142,7 @@ func (s *Server) recordQQGapIn(ctx context.Context, dailyScope string, daily int
 		s.qq.gapsIssue = 0
 		s.qq.mu.Unlock()
 		slog.Warn("qq bot: gap not recorded", "reason", githubFailure("gaps comment", r, err).Error())
+		release()
 		return false
 	}
 	return true

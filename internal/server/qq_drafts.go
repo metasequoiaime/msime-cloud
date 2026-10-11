@@ -14,7 +14,7 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
 
-// 群友报的 bug 和需求整理成 issue 草稿，管理员一句「提交 D编号」就提上去。原来群友报问题只把一句话概括记进汇总 issue，管理员要自己重新组织、再发「提issue」。现在答疑时模型判断群友在报 bug 或提需求（escalate），机器人照常先给排查办法，同时用管理员提 issue 的同一套整理（qqSummarise）把反馈整理成草稿存进数据库（account.QQDraft，所有副本共享），回复里告诉群友草稿编号；缺平台、版本、复现步骤时一并问出来，群友发「补充 D编号 内容」补上。只有管理员能提交，这条规则不变：「草稿」列出待处理的草稿，「提交 D编号」查重后提交，可以顺带补一句（例如「提交 D12 版本 0.9.5」）。提交前先在数据库里认领草稿，两个副本不会提两遍；提交失败放回。群友的截图不存进公开 bucket，草稿里只有看图得到的文字描述。
+// 群友报的 bug 和需求整理成 issue 草稿，管理员一句「提交 D编号」就提上去。原来群友报问题只把一句话概括记进汇总 issue，管理员要自己重新组织、再发「提issue」。现在答疑时模型判断群友在报 bug 或提需求（escalate），机器人照常先给排查办法，同时用管理员提 issue 的同一套整理（qqSummarise）把反馈整理成草稿存进数据库（account.QQDraft，所有副本共享），回复里告诉群友草稿编号；缺平台、版本、复现步骤时一并问出来，群友发「补充 D编号 内容」补上。只有管理员能提交，这条规则不变：「草稿」列出待处理的草稿，「提交 D编号」查重后提交，可以顺带补一句（例如「提交 D12 版本 0.9.5」）。提交前先在数据库里认领草稿，两个副本不会提两遍；提交失败放回，放回时不受处理消息的时限影响；副本中途被杀掉来不及放回时，认领超过 5 分钟（account.QQDraftClaimTimeout）还没记下 issue 就当作提交被打断，可以再提交，万一真的提了两次，fileQQReport 的查重会把第二次补充到已有的 issue。群友的截图不存进公开 bucket，草稿里只有看图得到的文字描述。
 
 const (
 	// qqDraftsDaily 是每个群友每天最多新建的草稿数（auth_rates）。
@@ -23,6 +23,8 @@ const (
 	qqDraftList = 10
 	// qqDraftOriginalRunes 是草稿原话的长度上限，补充太多次时截掉最早的部分以外的内容。
 	qqDraftOriginalRunes = 4000
+	// qqDraftStoreTimeout 是提交结束后放回认领、记下 issue 编号的时限。这两步不用处理消息的 ctx：提交失败往往正是因为它被取消或超时了（滚动更新、4 分钟时限），再用它连数据库也会失败，草稿就会一直卡在「提交中」。
+	qqDraftStoreTimeout = 5 * time.Second
 )
 
 // qqDraftStore 是 account.Service 里的草稿，所有副本共享；没有数据库时为 nil。
@@ -120,14 +122,15 @@ func (s *Server) qqDraftCommands(ctx context.Context, m qqGroupMessage, text str
 		slog.Warn("qq bot: draft unavailable", "reason", err.Error())
 		reply(qqReplyUnavailable)
 		return "cmd_draft"
-	case draft.Filed:
-		done := " 已经提交过了"
-		if draft.IssueRef != "" {
-			done += "：" + draft.IssueRef
-		}
-		reply("草稿 " + qqDraftCode(id) + done + "。")
+	case draft.Filed && draft.IssueRef != "":
+		reply("草稿 " + qqDraftCode(id) + " 已经提交过了：" + draft.IssueRef + "。")
+		return "cmd_draft"
+	case draft.Filed && !account.QQDraftClaimStale(draft, s.qq.now()):
+		// 认领了但还没记下 issue：另一条消息正在提交。原来这里也说「已经提交过了」，提交被打断时 GitHub 上其实什么都没有。
+		reply("草稿 " + qqDraftCode(id) + " 正在提交，请稍等一两分钟再看。")
 		return "cmd_draft"
 	}
+	// 认领超时还没记下 issue 的草稿当作提交被打断，和没提交的一样往下走。
 	if match[1] == "补充" {
 		if !admin && !account.QQDraftOwnedBy(draft, m.GroupOpenID+"/"+m.Author.MemberOpenID) {
 			reply("只有发起这份草稿的人和管理员能补充。")
@@ -233,16 +236,20 @@ func (s *Server) qqFileDraft(ctx context.Context, draft account.QQDraft, extra s
 	number, duplicate, err := s.fileQQReport(ctx, repo, label, report, "", notes)
 	if err != nil {
 		slog.Warn("qq bot: draft not filed", "repo", repo, "reason", err.Error())
-		if err := s.qqDrafts.ReleaseQQDraft(ctx, draft.ID); err != nil {
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), qqDraftStoreTimeout)
+		if err := s.qqDrafts.ReleaseQQDraft(rctx, draft.ID); err != nil {
 			slog.Warn("qq bot: draft not released", "reason", err.Error())
 		}
+		cancel()
 		reply(qqReplyUnavailable)
 		return "failed"
 	}
 	_, short, _ := strings.Cut(repo, "/")
-	if err := s.qqDrafts.SetQQDraftIssue(ctx, draft.ID, short+" #"+strconv.FormatInt(number, 10)); err != nil {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), qqDraftStoreTimeout)
+	if err := s.qqDrafts.SetQQDraftIssue(rctx, draft.ID, short+" #"+strconv.FormatInt(number, 10)); err != nil {
 		slog.Warn("qq bot: draft issue not recorded", "reason", err.Error())
 	}
+	cancel()
 	if duplicate {
 		reply("草稿 " + code + " 和已有的问题重复，已补充到 " + qqIssueNumberText(repo, number) + "。" + s.qqProgressHint(repo, number))
 		return "filed_duplicate"

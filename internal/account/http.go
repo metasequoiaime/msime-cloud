@@ -168,6 +168,11 @@ func (a *Service) RateLimit(ctx context.Context, scope, subject string, limit in
 	return a.store.Rate(ctx, scope+":"+hash(subject), limit, window)
 }
 
+// ReleaseRateLimit 退回 RateLimit 为 subject 计过的一次：调用方先占了名额、后面的事没做成时用它，例如 QQ 机器人的去重名额（同一个问题 7 天只记一次）写 GitHub 失败后要退回，否则之后同一个问题会被说成「已经记下来了」。计数已经过期或不存在时什么也不做。
+func (a *Service) ReleaseRateLimit(ctx context.Context, scope, subject string) error {
+	return a.store.ReleaseRate(ctx, scope+":"+hash(subject))
+}
+
 // RateLimitUntil 与 RateLimit 相同，超限时另外返回窗口剩余时长，调用方用它写 Retry-After。
 func (a *Service) RateLimitUntil(ctx context.Context, scope, subject string, limit int, window time.Duration) (time.Duration, error) {
 	return a.store.RateUntil(ctx, scope+":"+hash(subject), limit, window)

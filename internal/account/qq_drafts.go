@@ -11,10 +11,16 @@ import (
 // QQDraftWindow 是草稿的有效期：更早的不再列出、不能提交，并由 Store.Prune 删除。
 const QQDraftWindow = 30 * 24 * time.Hour
 
+// QQDraftClaimTimeout 是认领的有效期：认领超过这么久还没记下 issue，就当作提交被打断了（例如副本被 SIGKILL，连放回认领都没来得及），草稿可以重新认领、补充，也重新出现在列表里。它要比 QQ 机器人一条消息的处理时限（4 分钟）长，正常还在提交的草稿不会被另一个副本抢走。
+const QQDraftClaimTimeout = 5 * time.Minute
+
+// qqDraftUnclaimed 是「可以认领」的条件：没被认领，或者认领已经超时而且没记下 issue。
+var qqDraftUnclaimed = `(filed_at IS NULL OR (issue_ref='' AND filed_at<now()-'` + QQDraftClaimTimeout.String() + `'::interval))`
+
 // ErrQQDraftNotFound 表示草稿不存在或已经过期。
 var ErrQQDraftNotFound = errors.New("qq draft not found")
 
-// QQDraft 是一份 issue 草稿。Subject 是群和成员标识的摘要。
+// QQDraft 是一份 issue 草稿。Subject 是群和成员标识的摘要。Filed 表示已经被认领提交，FiledAt 是认领的时间（没认领时为零值）；IssueRef 为空时还在提交，或者提交被打断了，见 QQDraftClaimStale。
 type QQDraft struct {
 	ID        int64
 	Subject   string
@@ -22,6 +28,7 @@ type QQDraft struct {
 	Report    string
 	CreatedAt time.Time
 	Filed     bool
+	FiledAt   time.Time
 	IssueRef  string
 }
 
@@ -35,9 +42,13 @@ func (a *Service) CreateQQDraft(ctx context.Context, subject, original, report s
 // QQDraft 读一份有效期内的草稿。
 func (a *Service) QQDraft(ctx context.Context, id int64) (QQDraft, error) {
 	var d QQDraft
-	err := a.store.pool.QueryRow(ctx, `SELECT id,subject,original,report,created_at,filed_at IS NOT NULL,issue_ref FROM qq_drafts WHERE id=$1 AND created_at>now()-$2::interval`, id, QQDraftWindow.String()).Scan(&d.ID, &d.Subject, &d.Original, &d.Report, &d.CreatedAt, &d.Filed, &d.IssueRef)
+	var filedAt *time.Time
+	err := a.store.pool.QueryRow(ctx, `SELECT id,subject,original,report,created_at,filed_at,issue_ref FROM qq_drafts WHERE id=$1 AND created_at>now()-$2::interval`, id, QQDraftWindow.String()).Scan(&d.ID, &d.Subject, &d.Original, &d.Report, &d.CreatedAt, &filedAt, &d.IssueRef)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return d, ErrQQDraftNotFound
+	}
+	if filedAt != nil {
+		d.Filed, d.FiledAt = true, *filedAt
 	}
 	return d, err
 }
@@ -48,15 +59,20 @@ func QQDraftSubject(subject string) string { return hash(subject) }
 // QQDraftOwnedBy 判断草稿是不是 subject 的。
 func QQDraftOwnedBy(d QQDraft, subject string) bool { return d.Subject == QQDraftSubject(subject) }
 
-// UpdateQQDraft 更新还没提交的草稿的原话和整理结果，返回是否更新了。
+// QQDraftClaimStale 判断草稿的认领是不是已经超时：认领了、没记下 issue，而且认领超过 QQDraftClaimTimeout。这样的草稿和没认领的一样可以再提交。
+func QQDraftClaimStale(d QQDraft, now time.Time) bool {
+	return d.Filed && d.IssueRef == "" && now.Sub(d.FiledAt) > QQDraftClaimTimeout
+}
+
+// UpdateQQDraft 更新还没提交的草稿的原话和整理结果，返回是否更新了。认领超时的草稿也算没提交。
 func (a *Service) UpdateQQDraft(ctx context.Context, id int64, original, report string) (bool, error) {
-	tag, err := a.store.pool.Exec(ctx, `UPDATE qq_drafts SET original=$2,report=$3,updated_at=now() WHERE id=$1 AND filed_at IS NULL AND created_at>now()-$4::interval`, id, original, report, QQDraftWindow.String())
+	tag, err := a.store.pool.Exec(ctx, `UPDATE qq_drafts SET original=$2,report=$3,updated_at=now() WHERE id=$1 AND `+qqDraftUnclaimed+` AND created_at>now()-$4::interval`, id, original, report, QQDraftWindow.String())
 	return tag.RowsAffected() == 1, err
 }
 
-// ClaimQQDraft 认领一份还没提交的草稿准备提交，返回是否认领到：两个副本同时收到「提交」时只有一个能认领，不会提两遍。
+// ClaimQQDraft 认领一份还没提交的草稿准备提交，返回是否认领到：两个副本同时收到「提交」时只有一个能认领，不会提两遍。认领超过 QQDraftClaimTimeout 还没记下 issue 的草稿可以重新认领，提交中途副本被杀掉、来不及放回认领时，草稿不会永远卡在「提交中」。
 func (a *Service) ClaimQQDraft(ctx context.Context, id int64) (bool, error) {
-	tag, err := a.store.pool.Exec(ctx, `UPDATE qq_drafts SET filed_at=now() WHERE id=$1 AND filed_at IS NULL AND created_at>now()-$2::interval`, id, QQDraftWindow.String())
+	tag, err := a.store.pool.Exec(ctx, `UPDATE qq_drafts SET filed_at=now() WHERE id=$1 AND `+qqDraftUnclaimed+` AND created_at>now()-$2::interval`, id, QQDraftWindow.String())
 	return tag.RowsAffected() == 1, err
 }
 
@@ -72,9 +88,9 @@ func (a *Service) SetQQDraftIssue(ctx context.Context, id int64, ref string) err
 	return err
 }
 
-// OpenQQDrafts 列出有效期内还没提交的草稿，最新的在前。
+// OpenQQDrafts 列出有效期内还没提交的草稿（包括认领超时的），最新的在前。
 func (a *Service) OpenQQDrafts(ctx context.Context, limit int) ([]QQDraft, error) {
-	rows, err := a.store.pool.Query(ctx, `SELECT id,subject,original,report,created_at FROM qq_drafts WHERE filed_at IS NULL AND created_at>now()-$1::interval ORDER BY created_at DESC LIMIT $2`, QQDraftWindow.String(), limit)
+	rows, err := a.store.pool.Query(ctx, `SELECT id,subject,original,report,created_at FROM qq_drafts WHERE `+qqDraftUnclaimed+` AND created_at>now()-$1::interval ORDER BY created_at DESC LIMIT $2`, QQDraftWindow.String(), limit)
 	if err != nil {
 		return nil, err
 	}

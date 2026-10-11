@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestQQDrafts(t *testing.T) {
@@ -40,6 +41,31 @@ func TestQQDrafts(t *testing.T) {
 	if ok, _ := a.ClaimQQDraft(ctx, id); !ok {
 		t.Fatal("released draft not claimable")
 	}
+	// 认领了还没记下 issue：带上认领时间，不能再认领、补充，也不再列出；认领超过 QQDraftClaimTimeout 当作提交被打断（例如副本被杀掉，没来得及放回），又可以认领、补充和列出。
+	if d, _ := a.QQDraft(ctx, id); !d.Filed || d.FiledAt.IsZero() || QQDraftClaimStale(d, time.Now()) {
+		t.Fatal(d)
+	}
+	if ok, _ := a.UpdateQQDraft(ctx, id, "候选框跑了\n补充：Windows 11", `{"kind":"bug","platform":"windows"}`); ok {
+		t.Fatal("claimed draft updated")
+	}
+	if drafts, _ := a.OpenQQDrafts(ctx, 10); len(drafts) != 0 {
+		t.Fatal(drafts)
+	}
+	if _, err := db.pool.Exec(ctx, `UPDATE qq_drafts SET filed_at=now()-interval '6 minutes' WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := a.QQDraft(ctx, id); !QQDraftClaimStale(d, time.Now()) {
+		t.Fatal("interrupted claim not stale", d)
+	}
+	if ok, err := a.UpdateQQDraft(ctx, id, "候选框跑了\n补充：Windows 11", `{"kind":"bug","platform":"windows"}`); err != nil || !ok {
+		t.Fatal("interrupted draft not updatable", ok, err)
+	}
+	if drafts, _ := a.OpenQQDrafts(ctx, 10); len(drafts) != 1 {
+		t.Fatal(drafts)
+	}
+	if ok, _ := a.ClaimQQDraft(ctx, id); !ok {
+		t.Fatal("interrupted draft not claimable")
+	}
 	if err := a.SetQQDraftIssue(ctx, id, "o/r#5"); err != nil {
 		t.Fatal(err)
 	}
@@ -48,6 +74,13 @@ func TestQQDrafts(t *testing.T) {
 	}
 	if d, _ := a.QQDraft(ctx, id); !d.Filed || d.IssueRef != "o/r#5" {
 		t.Fatal("filed draft released", d)
+	}
+	// 记下 issue 的草稿认领再久也不会被重新认领。
+	if _, err := db.pool.Exec(ctx, `UPDATE qq_drafts SET filed_at=now()-interval '1 day' WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := a.ClaimQQDraft(ctx, id); ok {
+		t.Fatal("filed draft claimed again")
 	}
 	if ok, _ := a.UpdateQQDraft(ctx, id, "x", "{}"); ok {
 		t.Fatal("filed draft updated")

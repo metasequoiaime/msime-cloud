@@ -265,6 +265,51 @@ func TestRateIsSharedAndBounded(t *testing.T) {
 		t.Fatal(n.Load())
 	}
 }
+
+// ReleaseRateLimit 退回一次计数：名额是 1 的去重键退回后可以再占一次；没有计数或窗口过期时什么也不做，也不会减成负数。
+func TestReleaseRateLimit(t *testing.T) {
+	s := testStore(t)
+	a := &Service{store: s}
+	ctx := context.Background()
+	if _, err := s.pool.Exec(ctx, `DELETE FROM auth_rates WHERE key LIKE 'qq-bot-gap:%'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.ReleaseRateLimit(ctx, "qq-bot-gap", "候选框"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.RateLimit(ctx, "qq-bot-gap", "候选框", 1, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.RateLimit(ctx, "qq-bot-gap", "候选框", 1, time.Hour); !errors.Is(err, ErrLimited) {
+		t.Fatal(err)
+	}
+	// 超限时计数停在上限加一，退回两次才回到 0。
+	for range 2 {
+		if err := a.ReleaseRateLimit(ctx, "qq-bot-gap", "候选框"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := a.ReleaseRateLimit(ctx, "qq-bot-gap", "候选框"); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := s.pool.QueryRow(ctx, `SELECT count FROM auth_rates WHERE key=$1`, "qq-bot-gap:"+hash("候选框")).Scan(&count); err != nil || count != 0 {
+		t.Fatal(count, err)
+	}
+	if err := a.RateLimit(ctx, "qq-bot-gap", "候选框", 1, time.Hour); err != nil {
+		t.Fatal("released slot not available", err)
+	}
+	// 窗口过期的计数不动，下次 RateLimit 重新开窗口。
+	if _, err := s.pool.Exec(ctx, `UPDATE auth_rates SET expires_at=now()-interval '1 minute' WHERE key=$1`, "qq-bot-gap:"+hash("候选框")); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.ReleaseRateLimit(ctx, "qq-bot-gap", "候选框"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT count FROM auth_rates WHERE key=$1`, "qq-bot-gap:"+hash("候选框")).Scan(&count); err != nil || count != 1 {
+		t.Fatal(count, err)
+	}
+}
 func TestOIDCSignatureAudienceIssuerNonceAndExpiry(t *testing.T) {
 	key, e := rsa.GenerateKey(rand.Reader, 2048)
 	if e != nil {

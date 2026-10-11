@@ -259,15 +259,5 @@ func (s *Server) qqAnswerQuestion(ctx context.Context, history []account.QQTurn,
 	return answer, nil
 }
 
-// qqUnknownReply 是知识库答不上时的回复：@ 名单里的全部管理员；没有配置管理员时只说管理员会回复。
-func qqUnknownReply(admins []string) string {
-	if len(admins) == 0 {
-		return "这个问题我还不确定，管理员看到后会回复你。"
-	}
-	var b strings.Builder
-	b.WriteString("这个问题我还不确定，请管理员看一下：")
-	for _, admin := range admins {
-		b.WriteString(`<qqbot-at-user id="` + admin + `" />`)
-	}
-	return b.String()
-}
+// qqUnknownReply 是知识库答不上时的回复。QQ 群文本消息里的 <qqbot-at-user id="…" /> 实测会原样显示成文字（2026-10-11），所以不 @ 人；管理员靠答不上问题的汇总（qq_gaps.go）跟进。
+const qqUnknownReply = "这个问题我还不确定，已经记下来了，管理员看到后会回复你。"

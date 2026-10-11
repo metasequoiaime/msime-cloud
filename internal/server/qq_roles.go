@@ -116,7 +116,7 @@ func (s *Server) qqIsAdmin(ctx context.Context, group, member string) bool {
 	return admin
 }
 
-// qqGroupAdmins 是答不上问题时要 @ 的人：qq_bot.admins，加上群身份接口识别出的本群管理员（按 member_openid 排序，去重）。
+// qqGroupAdmins 是要请来跟进的管理员：qq_bot.admins，加上群身份接口识别出的本群管理员（按 member_openid 排序，去重）。QQ 群文本消息里的 @ 标签实测原样显示，回复里暂时不 @ 人，这个列表留给确认了 @ 写法之后使用。
 func (s *Server) qqGroupAdmins(group string) []string {
 	admins := append([]string(nil), s.qq.config.Admins...)
 	r := &s.qq.roles

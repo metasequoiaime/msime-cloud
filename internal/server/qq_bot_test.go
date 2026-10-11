@@ -821,7 +821,7 @@ func TestQQBotAnswersMembersFromKnowledge(t *testing.T) {
 	// 答不上时 @ 名单里的全部管理员。
 	fake.answer = `{"type":"unknown","answer":"不该出现"}`
 	qqDeliver(t, s, "m-unknown", "Windows 上候选框一直停在左上角")
-	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != `这个问题我还不确定，请管理员看一下：<qqbot-at-user id="ADMIN1" /><qqbot-at-user id="ADMIN2" />` || len(fake.created) != 0 {
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != qqUnknownReply || len(fake.created) != 0 {
 		t.Fatal(last)
 	}
 	// 闲聊照模型的话回应；没有挑出段落时告诉模型没有资料。
@@ -850,8 +850,11 @@ func TestQQBotWhoAmIAndUnknownWithoutAdmins(t *testing.T) {
 	if replies := fake.replyTexts(); len(replies) != 1 || !strings.Contains(replies[0], "MEMBER1") || len(fake.chatCalls) != 0 {
 		t.Fatal(replies, fake.chatCalls)
 	}
-	if qqUnknownReply(nil) != "这个问题我还不确定，管理员看到后会回复你。" {
-		t.Fatal(qqUnknownReply(nil))
+	// QQ 群文本消息不解析 @ 标签，任何回复都不能带上它。
+	for _, reply := range fake.replyTexts() {
+		if strings.Contains(reply, "qqbot-at-user") {
+			t.Fatalf("mention tag leaked into a reply: %q", reply)
+		}
 	}
 }
 
@@ -1200,16 +1203,13 @@ func TestQQBotEscalatesProblemReports(t *testing.T) {
 	s.qq.config.Admins = []string{"ADMIN1"}
 	fake.answer = `{"type":"answered","answer":"在「外观」里打开「候选窗口跟随光标」。","escalate":true}`
 	qqDeliver(t, s, "m-escalate", "候选框老是跑到屏幕左上角")
-	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "在「外观」里打开「候选窗口跟随光标」。\n\n如果还不行，请管理员看一下：<qqbot-at-user id=\"ADMIN1\" />" {
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "在「外观」里打开「候选窗口跟随光标」。\n\n如果还不行，管理员看到后会跟进。" {
 		t.Fatalf("%q", last)
 	}
 	fake.answer = `{"type":"answered","answer":"在设置里选五笔。","escalate":false}`
 	qqDeliver(t, s, "m-howto", "五笔怎么切换")
 	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "在设置里选五笔。" {
 		t.Fatalf("%q", last)
-	}
-	if qqEscalation(nil) != "\n\n如果还不行，管理员看到后会跟进。" {
-		t.Fatal(qqEscalation(nil))
 	}
 }
 

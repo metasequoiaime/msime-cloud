@@ -53,7 +53,7 @@ func TestQQBotSignatureMatchesPlatformVector(t *testing.T) {
 }
 
 func qqValidConfig() Config {
-	return Config{Auth: account.Config{Enabled: true}, Admin: AdminConfig{Enabled: true, GitHub: AdminGitHubConfig{AppID: 1}}, Chat: Endpoint{URL: "https://chat.example.com/v1/chat/completions", Model: "gpt-5.6-luna"},
+	return Config{Auth: account.Config{Enabled: true}, Admin: AdminConfig{Enabled: true, GitHub: AdminGitHubConfig{AppID: 1}}, Chat: ChatEndpoint{Endpoint: Endpoint{URL: "https://chat.example.com/v1/chat/completions", Model: "gpt-5.6-luna"}},
 		QQBot: QQBotConfig{AppID: "102030405", SecretEnv: "TEST_QQ_SECRET"}}
 }
 

@@ -22,7 +22,7 @@ func TestSkinArtworkUsesFixedModelAndReturnsValidatedImage(t *testing.T) {
 		}
 		respond(w, 200, map[string]any{"data": []any{map[string]string{"b64_json": base64.StdEncoding.EncodeToString(encoded.Bytes())}}})
 	})
-	s.config.Images = s.config.Chat
+	s.config.Images = s.config.Chat.Endpoint
 	w := call(s, "POST", "/v1/skins/generate", `{"prompt":"森林里的小狐狸，绘本风格"}`)
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
@@ -47,7 +47,7 @@ func TestSkinArtworkRejectsRemoteURLAndDisabledProvider(t *testing.T) {
 	if w := call(s, "POST", "/v1/skins/generate", `{"prompt":"test"}`); w.Code != 503 {
 		t.Fatal(w.Code)
 	}
-	s.config.Images = s.config.Chat
+	s.config.Images = s.config.Chat.Endpoint
 	if w := call(s, "POST", "/v1/skins/generate", `{"prompt":"test"}`); w.Code != 502 {
 		t.Fatal(w.Code)
 	}

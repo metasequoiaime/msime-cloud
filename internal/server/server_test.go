@@ -24,7 +24,7 @@ func fixture(t *testing.T, h http.HandlerFunc) *Server {
 	upstream := httptest.NewTLSServer(h)
 	t.Cleanup(upstream.Close)
 	e := Endpoint{URL: upstream.URL, TokenEnv: "TEST_UPSTREAM_TOKEN", Model: "server-model"}
-	s, err := New(Config{Clients: []Client{{ID: "test", TokenEnv: "TEST_CLIENT_TOKEN", RequestsPerMinute: 100}}, Chat: e, Cloud: e, Translation: TranslationEndpoint{Endpoint: e}, Transcription: e})
+	s, err := New(Config{Clients: []Client{{ID: "test", TokenEnv: "TEST_CLIENT_TOKEN", RequestsPerMinute: 100}}, Chat: ChatEndpoint{Endpoint: e}, Cloud: e, Translation: TranslationEndpoint{Endpoint: e}, Transcription: e})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -79,6 +79,46 @@ var qqLooseCommands = []string{"提文档", "文档反馈", "记录答案", "记
 // qqCommandSeparators 是命令词和参数之间可以有的分隔符。
 const qqCommandSeparators = ":： \n\t,，、"
 
+var (
+	// qqCommandQuestion 匹配问句的说法。「加词」「提文档」「查」后面跟的是问句时，群友是在问这个功能怎么用，不是在下命令，交给答疑：「加词后不生效怎么办」曾被当成词条「后不生效怎么办」提交到公开的词库 PR。
+	qqCommandQuestion = regexp.MustCompile(`怎么|怎样|如何|为什么|为啥|吗|呢|吧|在哪|哪里|哪儿|什么|是不是|能不能|可不可以|不了|不生效|没用|失败|[?？]`)
+	// qqCommandPolite 是「加词」「提文档」前面常见的客气说法，去掉一层再认命令：「帮我加个词 扛把子」原来认不出，要白绕一轮模型。
+	qqCommandPolite = regexp.MustCompile(`^(?:帮我|帮忙|请|麻烦你?|我想|我要|想)\s*`)
+	// qqExplicitPinyin 匹配 qqNormalizePinyin 规范过的全拼。写了拼音的「加词」一定是在加词：「加词 酒吧 jiu ba」里的「吧」不是问句。
+	qqExplicitPinyin = regexp.MustCompile(`^[a-z]+(?:'[a-z]+)*$`)
+)
+
+// qqCommandGluedPrefixes 是紧跟在命令词后面、和命令词连成一句话的开头：「加词后不生效」「加词条怎么用」「提文档的格式」。中间有分隔符时不看这一条，「提文档 不够详细」「加词 了不起 liao bu qi」照常是命令。
+var qqCommandGluedPrefixes = []string{"后", "了", "的", "条", "功能", "库", "不"}
+
+// qqPoliteCommandArg 是「加词」「提文档」用的 qqCommandArg：先去掉一层客气前缀（qqCommandPolite），另外返回内容是不是直接接在命令词后面、中间没有分隔符。
+func qqPoliteCommandArg(text string, words ...string) (content string, glued, ok bool) {
+	trimmed := qqCommandPolite.ReplaceAllString(strings.TrimSpace(text), "")
+	if content, ok = qqCommandArg(trimmed, words...); !ok || content == "" {
+		return content, false, ok
+	}
+	last, _ := utf8.DecodeLastRuneInString(strings.TrimSuffix(trimmed, content))
+	return content, !strings.ContainsRune(qqCommandSeparators, last), true
+}
+
+// qqCommandAsks 判断命令词后面的内容是不是在问这个命令本身：开头就是问句的说法（「加词 怎么用」「提文档在哪」），或者紧接命令词、和它连成一句话（「加词后不生效怎么办」「加词条怎么用」）。只看开头：文档反馈本来就常写问句，「提文档 FAQ 没写鸿蒙版怎么下载」是命令。
+func qqCommandAsks(content string, glued bool) bool {
+	if loc := qqCommandQuestion.FindStringIndex(content); loc != nil && loc[0] == 0 {
+		return true
+	}
+	return glued && slices.ContainsFunc(qqCommandGluedPrefixes, func(prefix string) bool { return strings.HasPrefix(content, prefix) })
+}
+
+// qqWordsQuestion 判断「加词」后面的内容是不是提问。有一条写了拼音就是在加词；都没写拼音时，除了 qqCommandAsks，任何位置出现问句的说法也算提问（「加词扛把子怎么不生效」），因为误提交会进公开的词库 PR，而含「吧」「吗」的词（酒吧、吗啡）写上拼音照样能加。
+func qqWordsQuestion(content string, glued bool) bool {
+	for _, e := range qqParseWords(content) {
+		if qqExplicitPinyin.MatchString(e.Pinyin) {
+			return false
+		}
+	}
+	return qqCommandAsks(content, glued) || qqCommandQuestion.MatchString(content)
+}
+
 // qqCommandArg 判断 text 是不是以某个命令词开头、后面跟着分隔符（qqLooseCommands 和以 ASCII 字母结尾的命令词不要求），返回去掉命令词后的参数；「查不到词库怎么办」这类以同一个字开头的普通提问不算命令。
 func qqCommandArg(text string, words ...string) (string, bool) {
 	trimmed := strings.TrimSpace(text)
@@ -145,7 +185,8 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 		}
 		return "cmd_releases"
 	}
-	if terms, ok := qqCommandArg(text, "查", "搜索", "搜"); ok {
+	// 「查 为什么打不了字」是在提问，交给答疑。
+	if terms, ok := qqCommandArg(text, "查", "搜索", "搜"); ok && !qqCommandQuestion.MatchString(terms) {
 		if terms == "" {
 			reply("请在「查」后面写要搜的关键词，例如「查 候选框 左上角」。")
 			return "cmd_search"
@@ -166,11 +207,11 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 		reply(s.qqIssueStatus(ctx, ref[1], ref[2], qqMaintainerShortRunes))
 		return "cmd_issue"
 	}
-	if content, ok := qqCommandArg(text, "加词", "添加词条", "加个词"); ok {
+	if content, glued, ok := qqPoliteCommandArg(text, "加词", "添加词条", "加个词"); ok && !qqWordsQuestion(content, glued) {
 		s.qqAddWords(ctx, m.GroupOpenID+"/"+m.Author.MemberOpenID, content, reply)
 		return "cmd_words"
 	}
-	if content, ok := qqCommandArg(text, "提文档", "文档反馈"); ok {
+	if content, glued, ok := qqPoliteCommandArg(text, "提文档", "文档反馈"); ok && !qqCommandAsks(content, glued) {
 		if content == "" {
 			reply("请在「提文档」后面写文档缺了什么或哪里不对，例如「提文档 FAQ 没写鸿蒙版的发布状态」。")
 			return "cmd_docs"

@@ -1806,9 +1806,10 @@ func TestQQBotFollowUpsUseRecentTurns(t *testing.T) {
 	if fake.chatBodies[0] != "五笔怎么切换" {
 		t.Fatalf("first question carries no history: %q", fake.chatBodies[0])
 	}
+	// 单独一句「还是不行」算说上一个回答不对（见 TestQQIsBadAnswerFeedback），这里用一句带新情况的追问。
 	fake.answer = `{"type":"unknown"}`
-	qqDeliver(t, s, "m-turn-2", "还是不行")
-	want := "之前的对话（较早的在前）：\n问：五笔怎么切换\n答：在设置的「输入方案」里选五笔。\n\n现在的问题：还是不行"
+	qqDeliver(t, s, "m-turn-2", "切换后还是打不出字")
+	want := "之前的对话（较早的在前）：\n问：五笔怎么切换\n答：在设置的「输入方案」里选五笔。\n\n现在的问题：切换后还是打不出字"
 	if got := fake.chatBodies[len(fake.chatBodies)-1]; got != want || fake.chatBodies[len(fake.chatBodies)-2] != want {
 		t.Fatalf("%q", got)
 	}
@@ -1820,7 +1821,7 @@ func TestQQBotFollowUpsUseRecentTurns(t *testing.T) {
 	for i, q := range []string{"第三问", "第四问", "第五问", "第六问"} {
 		qqDeliver(t, s, "m-turn-more-"+strconv.Itoa(i), q)
 	}
-	if got := fake.chatBodies[len(fake.chatBodies)-1]; strings.Count(got, "问：") != 4 || strings.Contains(got, "问：五笔怎么切换") || !strings.Contains(got, "问：还是不行") || !strings.Contains(got, "问：第五问") {
+	if got := fake.chatBodies[len(fake.chatBodies)-1]; strings.Count(got, "问：") != 4 || strings.Contains(got, "问：五笔怎么切换") || !strings.Contains(got, "问：切换后还是打不出字") || !strings.Contains(got, "问：第五问") {
 		t.Fatalf("%q", got)
 	}
 	// 存储出错时照常回答。
@@ -3100,6 +3101,12 @@ func TestQQBotAddWords(t *testing.T) {
 	if !strings.HasPrefix(last(), "请在「加词」后面写词语和拼音") {
 		t.Fatal(last())
 	}
+	// 前面带一层客气话也认得出。
+	fake.summary = `{"pinyin":["da'gong'ren"]}`
+	qqDeliver(t, s, "m-words-polite", "帮我加个词 打工人")
+	if !strings.Contains(last(), "打工人（da'gong'ren）") || !strings.Contains(upstream.content, "打工人\tda'gong'ren\t") {
+		t.Fatal(last(), upstream.content)
+	}
 	limiter.counts["qq-bot-words|GROUP1/MEMBER1"] = qqWordsDaily
 	qqDeliver(t, s, "m-words-limited", "加词 未来可期 wei lai ke qi")
 	if last() != "你今天加词的次数用完了，明天再来吧。" {
@@ -3110,6 +3117,43 @@ func TestQQBotAddWords(t *testing.T) {
 	qqDeliver(t, s, "m-words-off", "加词 未来可期 wei lai ke qi")
 	if !strings.HasPrefix(last(), "加词暂时用不了") {
 		t.Fatal(last())
+	}
+}
+
+// 「加词」「提文档」「查」后面跟的是问句时是在问这个功能，不当命令，交给答疑；客气前缀去掉一层再认；写了拼音的加词、写着问句的文档反馈照常是命令。
+func TestQQBotCommandQuestions(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.qq.config.Admins = []string{"ADMIN1"}
+	stats := &memoryStats{}
+	s.qqStats = stats
+	for i, tc := range []struct{ text, outcome string }{
+		{"加词后不生效怎么办", "answered"},
+		{"加词怎么加", "answered"},
+		{"加词条怎么用", "answered"},
+		{"添加词条在哪里", "answered"},
+		{"加词 怎么用", "answered"},
+		{"我想加词怎么加", "answered"},
+		{"加词扛把子怎么不生效", "answered"},
+		{"加词 酒吧", "answered"},
+		{"提文档怎么用", "answered"},
+		{"提文档 在哪里看处理结果", "answered"},
+		{"提文档的格式是什么", "answered"},
+		{"查 为什么打不了字", "answered"},
+		{"加词水杉", "cmd_words"},
+		{"加词 扛把子 kang ba zi", "cmd_words"},
+		{"帮我加个词 扛把子", "cmd_words"},
+		{"请加词 酒吧 jiu ba", "cmd_words"},
+		{"加词 了不起 liao bu qi", "cmd_words"},
+		{"提文档 FAQ 没写鸿蒙版怎么下载", "cmd_docs"},
+		{"麻烦你提文档 不够详细，没写怎么导入", "cmd_docs"},
+		{"查 候选框 左上角", "cmd_search"},
+	} {
+		stats.counts = nil
+		qqPost(t, s, qqMessageFrom("m-cq-"+strconv.Itoa(i), "MEMBER"+strconv.Itoa(i), tc.text))
+		s.qqWorkers.Wait()
+		if stats.counts[tc.outcome] != 1 {
+			t.Errorf("%q: %v want %s (reply %q)", tc.text, stats.counts, tc.outcome, fake.replyTexts()[len(fake.replyTexts())-1])
+		}
 	}
 }
 
@@ -3391,6 +3435,37 @@ func TestQQBotBadAnswerRetry(t *testing.T) {
 	deliver("m-b-list", "ADMIN1", "差评")
 	if last := fake.replyTexts()[len(fake.replyTexts())-1]; !strings.Contains(last, "问：五笔怎么切换\n答：在设置里选五笔。\n群友：不对啊\n重答：按 Ctrl+` 打开方案菜单选五笔。") {
 		t.Fatal(last)
+	}
+}
+
+// 只有整句是一句否定、或者以否定开头再接纠正内容的短消息才算差评；提问和描述新问题时顺带出现的「没用」「不准」「看不懂」不算。
+func TestQQIsBadAnswerFeedback(t *testing.T) {
+	history := []account.QQTurn{{Question: "五笔怎么切换", Answer: "在设置里选五笔。"}}
+	for text, want := range map[string]bool{
+		"不对":          true,
+		"不对啊":         true,
+		"答错了":         true,
+		"没用啊":         true,
+		"不对，我是安卓":     true,
+		"不是这样的":       true,
+		"好像还是不行":      true,
+		"你的回答答非所问 🙄":  true,
+		"删除键没用了":      false,
+		"候选框不对":       false,
+		"语音识别不准怎么办":   false,
+		"候选词选错了怎么撤回":  false,
+		"这个功能我还没用过":   false,
+		"日文候选看不懂能翻译吗": false,
+		"设置看不懂":       false,
+		"五笔打错了怎么撤销":   false,
+		"不对？":         false,
+	} {
+		if got := qqIsBadAnswerFeedback(history, text); got != want {
+			t.Errorf("%q: %v want %v", text, got, want)
+		}
+	}
+	if qqIsBadAnswerFeedback(nil, "不对") || qqIsBadAnswerFeedback([]account.QQTurn{{Question: "q", Answer: qqUnansweredTurn}}, "不对") {
+		t.Fatal("feedback without an answered turn")
 	}
 }
 

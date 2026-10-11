@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
@@ -86,6 +87,8 @@ type QQBotConfig struct {
 	KnowledgeDir  string `json:"knowledge_dir"`
 	// GapsRepo 是汇总「机器人答不上的问题」的仓库，例如 metasequoiaime/msime-docs：答不上时把模型对问题的一句话概括作为评论追加到其中名为「QQ 机器人答不上的问题」的开放 issue，没有时新建。为空时不记录。GitHub App 要有这个仓库的 Issues 写权限。
 	GapsRepo string `json:"gaps_repo"`
+	// StrongModel 是难题用的更强的模型，经 chat 端点调用：挑段落的模型判断问题需要推理、文档以外的知识或现查 GitHub 时用它回答，常规模型答不上时也换它带着 GitHub 工具重答，现查 GitHub 的工具调用也用它。为空时用 defaultQQStrongModel，写 none 时一律用 model。
+	StrongModel string `json:"strong_model"`
 	// EmbeddingModel 是答疑向量检索用的 embedding 模型，经 chat 端点所在服务的 /embeddings 接口调用（密钥沿用 chat）；为空时用 defaultQQEmbeddingModel，写 none 关闭向量检索。见 qq_vectors.go。
 	EmbeddingModel string `json:"embedding_model"`
 	// APIURL 覆盖 https://api.bot.qq.com，供测试使用。
@@ -108,7 +111,7 @@ var (
 
 func (c *QQBotConfig) validate(cfg *Config) error {
 	if !c.enabled() {
-		if c.APIURL != "" || c.Repo != "" || c.Model != "" || c.FallbackModel != "" || c.KnowledgeRepo != "" || c.KnowledgeDir != "" || c.GapsRepo != "" || c.EmbeddingModel != "" || len(c.Labels) > 0 || len(c.Groups) > 0 || len(c.Admins) > 0 {
+		if c.APIURL != "" || c.Repo != "" || c.Model != "" || c.FallbackModel != "" || c.KnowledgeRepo != "" || c.KnowledgeDir != "" || c.GapsRepo != "" || c.EmbeddingModel != "" || c.StrongModel != "" || len(c.Labels) > 0 || len(c.Groups) > 0 || len(c.Admins) > 0 {
 			return errors.New("qq_bot settings require app_id")
 		}
 		return nil
@@ -136,6 +139,15 @@ func (c *QQBotConfig) validate(cfg *Config) error {
 	}
 	if c.EmbeddingModel == "" {
 		c.EmbeddingModel = defaultQQEmbeddingModel
+	}
+	switch c.StrongModel {
+	case "":
+		c.StrongModel = defaultQQStrongModel
+	case "none":
+		c.StrongModel = c.Model
+	}
+	if len(c.StrongModel) > 200 || strings.ContainsAny(c.StrongModel, " \r\n\t") {
+		return errors.New("qq_bot strong_model must be a model name without whitespace")
 	}
 	if len(c.EmbeddingModel) > 200 || strings.ContainsAny(c.EmbeddingModel, " \r\n\t") {
 		return errors.New("qq_bot embedding_model must be a model name without whitespace")
@@ -773,12 +785,25 @@ func (s *Server) qqSummarise(ctx context.Context, text string) (qqReport, error)
 
 // qqChat 用 chat 端点和 qq_bot.model 做一次 JSON 输出的补全，把模型返回的对象解码进 out。用户消息之后总是追加 jsonObjectInstruction，否则经 EveryAPI 转发的 OpenAI 模型会因为用户消息里没有 json 一词拒绝 json_object 模式。模型有时会把 JSON 包在代码块里，这里一并去掉。
 func (s *Server) qqChat(ctx context.Context, system, user string, out any) error {
+	return s.qqChatModel(ctx, s.qq.config.Model, system, user, out)
+}
+
+// defaultQQStrongModel 是 qq_bot.strong_model 的默认值。
+const defaultQQStrongModel = "claude-sonnet-5-5"
+
+// qqStrongModel 是难题用的模型；没有配置（测试里直接构造配置时）就用常规模型。
+func (s *Server) qqStrongModel() string {
+	return cmp.Or(s.qq.config.StrongModel, s.qq.config.Model)
+}
+
+// qqChatModel 是用指定模型做的 qqChat，失败时同样换备用模型重答一次。
+func (s *Server) qqChatModel(ctx context.Context, model, system, user string, out any) error {
 	if s.qq.config.FallbackModel == "" {
-		return s.qqChatWith(ctx, s.qq.config.Model, system, user, out)
+		return s.qqChatWith(ctx, model, system, user, out)
 	}
 	// 有备用模型时主模型单独限时：chat 端点的超时是 120 秒，主模型挂起时答疑的两步各等满 120 秒就用完了 4 分钟，备用模型来不及上场。
 	primary, cancel := context.WithTimeout(ctx, qqPrimaryModelTimeout)
-	err := s.qqChatWith(primary, s.qq.config.Model, system, user, out)
+	err := s.qqChatWith(primary, model, system, user, out)
 	cancel()
 	if err == nil {
 		return nil

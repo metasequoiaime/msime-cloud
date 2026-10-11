@@ -106,7 +106,7 @@ func (s *Server) qqResearch(ctx context.Context, question string) string {
 // qqResearchChat 是调研对话的一轮：tools 为 false 时不再给工具，模型只能作答。
 func (s *Server) qqResearchChat(ctx context.Context, messages []qqResearchMessage, tools bool) (qqResearchMessage, string, error) {
 	e := s.config.Chat
-	request := map[string]any{"model": s.qq.config.Model, "max_tokens": 2000, "messages": messages}
+	request := map[string]any{"model": s.qqStrongModel(), "max_tokens": 2000, "messages": messages}
 	if tools {
 		request["tools"] = qqResearchTool
 	}

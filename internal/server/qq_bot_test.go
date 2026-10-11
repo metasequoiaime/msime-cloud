@@ -162,9 +162,11 @@ type qqFake struct {
 	triageSystem string
 	selectSystem string
 	answerSystem string
-	chatCalls    []string
-	chatBodies   []string
-	chatStatus   int
+	// fallbackAnswer 不为空时，备用模型（fallback-model）答疑时返回它而不是 answer。
+	fallbackAnswer string
+	chatCalls      []string
+	chatBodies     []string
+	chatStatus     int
 	// failModel 是请求会被拒绝（502）的模型，hangModel 是请求一直不返回、直到客户端放弃的模型，models 记下每次请求的模型。
 	failModel string
 	hangModel string
@@ -368,6 +370,9 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			f.chatCalls = append(f.chatCalls, "answer")
 		case strings.HasPrefix(system, qqAnswerPrompt):
 			content, f.answerSystem = f.answer, system
+			if body["model"] == "fallback-model" && f.fallbackAnswer != "" {
+				content = f.fallbackAnswer
+			}
 			f.chatCalls = append(f.chatCalls, "answer")
 		default:
 			f.chatCalls = append(f.chatCalls, "summarise")
@@ -1571,6 +1576,35 @@ func TestQQBotEscalatesProblemReports(t *testing.T) {
 	qqDeliver(t, s, "m-howto", "五笔怎么切换")
 	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "在设置里选五笔。" {
 		t.Fatalf("%q", last)
+	}
+}
+
+// 模型先写正文、再附 JSON（或 ```json 代码块）时，从第一个对象解出答案，不换备用模型；纯正文仍然算失败，换备用模型重答。
+func TestQQBotLenientJSON(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.qq.config.Admins = nil
+	s.qq.config.FallbackModel = "fallback-model"
+	fake.fallbackAnswer = `{"type":"answered","answer":"备用模型的回答。"}`
+	for i, content := range []string{
+		"answer 如下，按顺序排查：\n\n```json\n{\"type\":\"answered\",\"answer\":\"在设置的「输入方案」里选五笔。\"}\n```",
+		"这个在设置里，{输入方案} 那一栏就是。\n\n{\n  \"type\": \"answered\",\n  \"answer\": \"在设置的「输入方案」里选五笔。\"\n}\n以上。",
+	} {
+		fake.answer, fake.models = content, nil
+		qqDeliver(t, s, fmt.Sprintf("m-lenient-%d", i), "五笔怎么切换")
+		if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "在设置的「输入方案」里选五笔。" || strings.Join(fake.models, ",") != "claude-haiku-5-5,claude-haiku-5-5" {
+			t.Fatal(i, last, fake.models)
+		}
+	}
+	fake.answer, fake.models = "Windows 正式版里是这样用的：\n1. 打开设置\n2. 在「输入方案」里选五笔", nil
+	qqDeliver(t, s, "m-plain-text", "五笔怎么切换")
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "备用模型的回答。" || strings.Join(fake.models, ",") != "claude-haiku-5-5,claude-haiku-5-5,fallback-model" {
+		t.Fatal(last, fake.models)
+	}
+	// 每个要求 JSON 的系统说明末尾都有格式硬要求。
+	for _, prompt := range []string{qqAnswerPrompt, qqSelectPrompt, qqTriagePrompt, qqSummarisePrompt} {
+		if !strings.HasSuffix(prompt, qqJSONOnlyRule) {
+			t.Fatal(prompt[:30])
+		}
 	}
 }
 

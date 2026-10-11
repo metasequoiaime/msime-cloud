@@ -828,7 +828,7 @@ const qqSummarisePrompt = `你在为开源输入法「水杉输入法」整理 Q
 - missing：只有 kind 是 bug、并且既看不出平台、也看不出是在什么操作下出现时，写一句向用户追问的话，不超过 40 个汉字；其他情况都留空。
 - keywords：3 到 6 个用来在 GitHub 上搜索同类 issue 的关键词，用空格分隔。
 
-要求：用你自己的话转述，写成简体中文，不要照抄原话；不要写入任何人名、昵称、QQ 号、手机号、邮箱、链接或其他个人信息；不要编造用户没有说的内容。kind 是 other 时其他字段都留空。`
+要求：用你自己的话转述，写成简体中文，不要照抄原话；不要写入任何人名、昵称、QQ 号、手机号、邮箱、链接或其他个人信息；不要编造用户没有说的内容。kind 是 other 时其他字段都留空。` + "\n\n" + qqJSONOnlyRule
 
 // qqSummarise 让模型把一段反馈整理成 qqReport，并校验模型的输出。
 func (s *Server) qqSummarise(ctx context.Context, text string) (qqReport, error) {
@@ -873,7 +873,10 @@ func (s *Server) qqSummarise(ctx context.Context, text string) (qqReport, error)
 	return report, nil
 }
 
-// qqChat 用 chat 端点和 qq_bot.model 做一次 JSON 输出的补全，把模型返回的对象解码进 out。用户消息之后总是追加 jsonObjectInstruction，否则经 EveryAPI 转发的 OpenAI 模型会因为用户消息里没有 json 一词拒绝 json_object 模式。模型有时会把 JSON 包在代码块里，这里一并去掉。
+// qqJSONOnlyRule 是加在每个要求 JSON 输出的系统说明末尾的格式硬要求。实测 claude-sonnet-5-5 只靠 json_object 和「只输出一个 JSON 对象」时约一半先写正文，加上这句后全部是纯 JSON。写成普通字符串是因为里面有反引号。
+const qqJSONOnlyRule = "整条回复只能是这个 JSON 对象本身：第一个字符必须是 {，最后一个字符必须是 }；前后不写任何文字，不用 ``` 包起来；字符串里的换行写成 \\n。"
+
+// qqChat 用 chat 端点和 qq_bot.model 做一次 JSON 输出的补全，把模型返回的对象解码进 out。用户消息之后总是追加 jsonObjectInstruction，否则经 EveryAPI 转发的 OpenAI 模型会因为用户消息里没有 json 一词拒绝 json_object 模式。模型有时会把 JSON 包在代码块里或在前面写一段正文，这里一并处理（见 qqChatWith）。
 func (s *Server) qqChat(ctx context.Context, system, user string, out any) error {
 	return s.qqChatModel(ctx, s.qq.config.Model, system, user, out)
 }
@@ -902,7 +905,7 @@ func (s *Server) qqChatModel(ctx context.Context, model, system, user string, ou
 		return nil
 	}
 	// 主模型失败（上游拒绝、超时或输出不合格式）时用备用模型重答一次；先清掉上一次可能解码了一半的结果。
-	slog.Warn("qq bot: model failed, trying the fallback model", "reason", err.Error())
+	slog.Warn("qq bot: model failed, trying the fallback model", "model", model, "reason", err.Error())
 	v := reflect.ValueOf(out).Elem()
 	v.Set(reflect.Zero(v.Type()))
 	return s.qqChatWith(ctx, s.qq.config.FallbackModel, system, user, out)
@@ -938,10 +941,30 @@ func (s *Server) qqChatWith(ctx context.Context, model, system, user string, out
 	content := strings.TrimSpace(result.Choices[0].Message.Content)
 	content = strings.TrimPrefix(strings.TrimPrefix(content, "```json"), "```")
 	content = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(content), "```"))
-	if json.Unmarshal([]byte(content), out) != nil {
-		return errors.New("chat response is not the requested JSON")
+	if json.Unmarshal([]byte(content), out) == nil {
+		return nil
 	}
-	return nil
+	// json_object 模式经 EveryAPI 转发给 Claude 时不起强制作用，Sonnet 实测约一半先写一段正文、再附 JSON 或 ```json 代码块。这时从第一个对象的开头解出第一个完整对象，后面的文字不管；不能从第一个 { 截到最后一个 }，正文里可能本来就有花括号。
+	if i := qqJSONObjectStart(content); i >= 0 && json.NewDecoder(strings.NewReader(content[i:])).Decode(out) == nil {
+		slog.Info("qq bot: lenient json", "model", model)
+		return nil
+	}
+	// 只记模型和长度，不记内容：内容里可能有群友的原话。
+	slog.Warn("qq bot: chat response is not JSON", "model", model, "chars", len(content))
+	return errors.New("chat response is not the requested JSON")
+}
+
+// qqJSONObjectStart 返回 content 里第一个 JSON 对象开头的位置：一个 {，后面（可以隔着空白）紧跟一个 "。没有时返回 -1。只认带键的对象，正文里「{设置}」这类花括号不算。
+func qqJSONObjectStart(content string) int {
+	for i := 0; i < len(content); i++ {
+		if content[i] != '{' {
+			continue
+		}
+		if rest := strings.TrimLeft(content[i+1:], " \t\r\n"); strings.HasPrefix(rest, `"`) {
+			return i
+		}
+	}
+	return -1
 }
 
 // qqIssue 是去重时从 GitHub 搜到的一个已有 issue。

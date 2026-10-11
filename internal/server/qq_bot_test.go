@@ -879,6 +879,36 @@ func TestQQBotWindowsProductsByVersion(t *testing.T) {
 			}
 		})
 	}
+	// 按两边的 Release 实时判断：新实现升版本后范围跟着变，不用改代码；落在 msime-windows 当前在发的 minor 上、两边都可能时先追问，安装包名能说明是哪个时直接用。
+	for _, tc := range []struct {
+		name, newest, imeVersion, text, repo string
+	}{
+		{"new port after a version bump", "windows-v0.5.2", "0.6.0", "", "o/r"},
+		{"old release outside the new range", "windows-v0.5.2", "0.7.1", "", "o/win"},
+		{"collision with the current release", "windows-v0.8.3", "0.9.5", "", ""},
+		{"collision resolved by the installer name", "windows-v0.8.3", "0.9.5", "装的是 MetasequoiaIME-Pinyin_Setup_v0.9.5.exe", "o/r"},
+		{"collision resolved as the stable product", "windows-v0.8.3", "0.9.5", "安装包是 MetasequoiaIME_Setup_v0.9.5.exe", "o/win"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, fake, _ := qqServer(t)
+			s.config.Admin.GitHub.Platforms[0].TagPrefix = "v"
+			fake.releases = map[string]string{
+				"o/r":   `[{"tag_name":"android-v9.9.9"},{"tag_name":"` + tc.newest + `","prerelease":true},{"tag_name":"windows-v0.1.0"},{"tag_name":"windows-v1.0.0","draft":true}]`,
+				"o/win": `[{"tag_name":"v0.9.5"},{"tag_name":"v0.8.0"}]`,
+			}
+			fake.summary = `{"kind":"bug","title":"候选框位置不对","platform":"windows","ime_version":"` + tc.imeVersion + `","problem":"候选框停在左上角","steps":"在记事本里打字","keywords":""}`
+			qqDeliver(t, s, "m-win-dyn", "提issue Windows 上候选框停在左上角，版本 "+tc.imeVersion+" "+tc.text)
+			if tc.repo == "" {
+				if replies := fake.replyTexts(); len(fake.created) != 0 || replies[len(replies)-1] != "还差一点信息："+qqWindowsProductQuestion+qqReplyResend {
+					t.Fatal(replies, fake.created)
+				}
+				return
+			}
+			if len(fake.created) != 1 || fake.created[0]["_repo"] != tc.repo {
+				t.Fatal(fake.created, fake.replyTexts())
+			}
+		})
+	}
 	s, fake, _ := qqServer(t)
 	fake.summary = `{"kind":"feature","title":"支持自定义快捷键","platform":"windows","proposal":"希望能自定义切换快捷键","keywords":""}`
 	qqDeliver(t, s, "m-win-no-version", "提issue Windows 上希望能自定义切换快捷键")

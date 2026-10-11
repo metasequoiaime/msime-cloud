@@ -565,9 +565,9 @@ func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text s
 		reply("还差一点信息：" + report.Missing + qqReplyResend)
 		return "needs_info"
 	}
-	repo, label, known := s.qqTarget(report)
-	if !known {
-		reply("还差一点信息：" + qqWindowsVersionQuestion + qqReplyResend)
+	repo, label, question := s.qqTarget(ctx, report, text)
+	if question != "" {
+		reply("还差一点信息：" + question + qqReplyResend)
 		return "needs_version"
 	}
 	reply(qqReplyWorking)
@@ -823,11 +823,79 @@ type qqIssue struct {
 	PullRequest json.RawMessage `json:"pull_request"`
 }
 
-// Windows 上有两个产品：msime-windows（Metasequoia IME 水杉输入法，现在的正式版）和 msime 仓库里迁移出来的新实现（水杉输入法及水杉拼音、五笔等版本）。群友说的输入法版本落在 [qqWindowsNewFrom, qqWindowsNewBelow) 里时是后者，其余是前者。按 2026-10 两边的发布记录定：msime 的 Windows 只发过 windows-v0.1.0 到 v0.2.1；msime-windows 发过 0.0.x 和 v0.1.2 到 v0.9.5，其中 0.0.x、0.4 到 0.8 只可能是它（曾经一律把 0.9 以下算成新实现，把老用户的反馈提错了仓库）。两边都有的 0.1 到 0.3 按新实现处理，那是现在仍在发布的版本；msime 的 Windows 版本号追到 0.4 之前要改掉。
+// Windows 上有两个产品：msime-windows（Metasequoia IME 水杉输入法，现在的正式版）和 msime 仓库里迁移出来的新实现（水杉输入法及水杉拼音、五笔等版本）。两边的版本号会重叠，所以按两边实际的 GitHub Release 实时判断（qqWindowsProduct），不写死分界：新实现的范围从 qqWindowsNewFrom 到 qq_bot.repo 里最新的「windows-v」版本再往后一个 minor（覆盖还没发布的预览构建），msime 的 Windows 升版本不用改代码。曾经写死成 0.9 以下、后来写死成 [0.1, 0.4)，前者把 msime-windows 0.0.x 和 0.4 到 0.8 的老用户提错了仓库，后者在新实现升到 0.4 后会把它的反馈提到 msime-windows。Release 查不到时退回 [qqWindowsNewFrom, qqWindowsNewBelow)。
 var (
 	qqWindowsNewFrom  = [3]int{0, 1, 0}
 	qqWindowsNewBelow = [3]int{0, 4, 0}
 )
+
+// qqWindowsNewWords、qqWindowsOldWords 是消息里能直接说明是哪个产品的说法（比较时转成小写）：新实现按方案分成完整版、拼音版、五笔版等几个安装包，文件名形如「MetasequoiaIME-Pinyin_Setup」；msime-windows 只有一个「MetasequoiaIME_Setup」。
+var (
+	qqWindowsNewWords = []string{"full_setup", "pinyin_setup", "wubi_setup", "japanese_setup", "tibetan_setup", "vietnamese_setup", "完整版", "拼音版", "五笔版", "日语版", "藏文版", "越南语版", "水杉拼音", "水杉五笔"}
+	qqWindowsOldWords = []string{"metasequoiaime_setup"}
+)
+
+// qqWindowsProductQuestion 是版本号两个产品都有、又看不出是哪个时的追问。
+const qqWindowsProductQuestion = "这个版本号两个 Windows 版都有：安装包文件名带「Full」「Pinyin」「Wubi」这类版本名的是新版，只叫「MetasequoiaIME_Setup」的是正式版，你装的是哪个？"
+
+// qqWindowsProduct 判断 Windows 反馈属于哪个产品：isNew 为 true 是 msime 的新实现；question 不为空时看不出来，要先追问。
+func (s *Server) qqWindowsProduct(ctx context.Context, version [3]int, text string) (isNew bool, question string) {
+	lower := strings.ToLower(text)
+	switch {
+	case slices.ContainsFunc(qqWindowsNewWords, func(w string) bool { return strings.Contains(lower, w) }):
+		return true, ""
+	case slices.ContainsFunc(qqWindowsOldWords, func(w string) bool { return strings.Contains(lower, w) }):
+		return false, ""
+	}
+	below, oldCurrent, haveOld := qqWindowsNewBelow, [3]int{}, false
+	if newest, ok := s.qqNewestRelease(ctx, s.qq.config.Repo, "windows-v"); ok {
+		below = [3]int{newest[0], newest[1] + 2, 0}
+	}
+	for _, p := range s.config.Admin.GitHub.Platforms {
+		if p.ID == "windows" && p.TagPrefix != "" && !strings.EqualFold(p.Repo, s.qq.config.Repo) {
+			if newest, ok := s.qqNewestRelease(ctx, p.Repo, p.TagPrefix); ok {
+				oldCurrent, haveOld = [3]int{newest[0], newest[1], 0}, true
+			}
+		}
+	}
+	if !qqVersionAtLeast(version, qqWindowsNewFrom) || qqVersionAtLeast(version, below) {
+		return false, ""
+	}
+	// 落在新实现的范围里，又落在 msime-windows 当前在发的 minor 及以后：两个产品都可能，版本号分不出来。更早的重叠（两边都发过的 0.1 到 0.3）按仍在发布的新实现处理。
+	if haveOld && qqVersionAtLeast(version, oldCurrent) {
+		return false, qqWindowsProductQuestion
+	}
+	return true, ""
+}
+
+// qqNewestRelease 返回 repo 里前缀为 prefix 的 Release（含预发布，不含草稿）中最大的版本号；查询失败或没有时 ok 为 false。读请求带 ETag 缓存。
+func (s *Server) qqNewestRelease(ctx context.Context, repo, prefix string) (newest [3]int, ok bool) {
+	client := s.adminGitHub
+	token, err := client.Token(ctx, repo, qqGitHubReadPerms)
+	if err != nil {
+		slog.Warn("qq bot: release lookup skipped", "repo", repo, "reason", err.Error())
+		return newest, false
+	}
+	r, err := client.Get(ctx, token, "/repos/"+repo+"/releases?per_page="+strconv.Itoa(qqReleasePage))
+	var list []qqRelease
+	if err != nil || !r.OK() || r.Decode(&list) != nil {
+		slog.Warn("qq bot: release lookup failed", "repo", repo, "reason", githubFailure("releases", r, err).Error())
+		return newest, false
+	}
+	for _, release := range list {
+		if release.Draft || !strings.HasPrefix(release.TagName, prefix) {
+			continue
+		}
+		rest := release.TagName[len(prefix):]
+		if rest == "" || rest[0] < '0' || rest[0] > '9' {
+			continue
+		}
+		if v, parsed := qqParseVersion(rest); parsed && (!ok || !qqVersionAtLeast(newest, v)) {
+			newest, ok = v, true
+		}
+	}
+	return newest, ok
+}
 
 // qqWindowsLabel 是 msime 仓库里 Windows 的平台标签；admin.github.platforms 的 windows 条目指向 msime-windows，那里没有平台标签。
 const qqWindowsLabel = "platform/windows"
@@ -866,23 +934,27 @@ func qqVersionAtLeast(v, floor [3]int) bool {
 	return true
 }
 
-// qqTarget 是反馈要提交到的仓库和平台标签：与崩溃 issue 一样按 admin.github.platforms 分发，看不出平台或平台没有配置时提交到 qq_bot.repo，不加平台标签。Windows 例外：输入法版本在 [qqWindowsNewFrom, qqWindowsNewBelow) 里时提交到 qq_bot.repo 并加 qqWindowsLabel，其余按平台配置提交（msime-windows）；没有版本号时 known 为 false，调用方先追问版本。
-func (s *Server) qqTarget(report qqReport) (repo, label string, known bool) {
+// qqTarget 是反馈要提交到的仓库和平台标签：与崩溃 issue 一样按 admin.github.platforms 分发，看不出平台或平台没有配置时提交到 qq_bot.repo，不加平台标签。Windows 例外：qqWindowsProduct 判断是 msime 的新实现时提交到 qq_bot.repo 并加 qqWindowsLabel，否则按平台配置提交（msime-windows）。text 是管理员的原话，用来找安装包名这类说明。question 不为空时（没有版本号，或者版本号两个产品都有）不提交，调用方先追问。
+func (s *Server) qqTarget(ctx context.Context, report qqReport, text string) (repo, label, question string) {
 	if report.Platform == "windows" {
 		version, ok := qqParseVersion(report.IMEVersion)
 		if !ok {
-			return "", "", false
+			return "", "", qqWindowsVersionQuestion
 		}
-		if qqVersionAtLeast(version, qqWindowsNewFrom) && !qqVersionAtLeast(version, qqWindowsNewBelow) {
-			return s.qq.config.Repo, qqWindowsLabel, true
+		isNew, question := s.qqWindowsProduct(ctx, version, text)
+		if question != "" {
+			return "", "", question
+		}
+		if isNew {
+			return s.qq.config.Repo, qqWindowsLabel, ""
 		}
 	}
 	for _, p := range s.config.Admin.GitHub.Platforms {
 		if p.ID == report.Platform {
-			return p.Repo, p.Label, true
+			return p.Repo, p.Label, ""
 		}
 	}
-	return s.qq.config.Repo, "", true
+	return s.qq.config.Repo, "", ""
 }
 
 // fileQQReport 把一条反馈提交到 repo：模型判断与某个开启的 issue 是同一件事时在那里补充评论，否则新建 issue。返回 issue 编号以及是否是补充到已有 issue。

@@ -176,7 +176,7 @@ func (s *Server) qqRepoFile(ctx context.Context, token, repo, path, ref string) 
 }
 
 // recordQQAnswer 处理「记录答案」：整理成 FAQ 条目，在知识库仓库新分支上一次提交简体、繁体和核对哈希，开 PR。
-func (s *Server) recordQQAnswer(ctx context.Context, text string, reply func(string)) {
+func (s *Server) recordQQAnswer(ctx context.Context, text string, reply func(string)) int64 {
 	client, repo, dir := s.adminGitHub, s.qq.config.KnowledgeRepo, s.qq.config.KnowledgeDir
 	fail := func(phase string, err error) {
 		slog.Warn("qq bot: record answer failed", "phase", phase, "reason", err.Error())
@@ -185,7 +185,7 @@ func (s *Server) recordQQAnswer(ctx context.Context, text string, reply func(str
 	token, err := client.Token(ctx, repo, qqFAQPerms)
 	if err != nil {
 		fail("token", err)
-		return
+		return 0
 	}
 	r, err := client.Do(ctx, token, "GET", "/repos/"+repo, nil)
 	var info struct {
@@ -193,7 +193,7 @@ func (s *Server) recordQQAnswer(ctx context.Context, text string, reply func(str
 	}
 	if err != nil || !r.OK() || r.Decode(&info) != nil || info.DefaultBranch == "" {
 		fail("repository", githubFailure("repository", r, err))
-		return
+		return 0
 	}
 	base := info.DefaultBranch
 	// 先定下默认分支当前的提交，文件都按这个提交读，新提交也以它为父提交，期间分支有新提交也不会覆盖掉。
@@ -205,7 +205,7 @@ func (s *Server) recordQQAnswer(ctx context.Context, text string, reply func(str
 	}
 	if err != nil || !r.OK() || r.Decode(&ref) != nil || ref.Object.SHA == "" {
 		fail("ref", githubFailure("ref", r, err))
-		return
+		return 0
 	}
 	head := ref.Object.SHA
 	r, err = client.Do(ctx, token, "GET", "/repos/"+repo+"/git/commits/"+head, nil)
@@ -216,42 +216,42 @@ func (s *Server) recordQQAnswer(ctx context.Context, text string, reply func(str
 	}
 	if err != nil || !r.OK() || r.Decode(&parent) != nil || parent.Tree.SHA == "" {
 		fail("parent", githubFailure("parent", r, err))
-		return
+		return 0
 	}
 	faqPath, twPath, sourcesPath := dir+"/faq.md", dir+"/zh-TW/faq.md", dir+"/zh-TW/sources.json"
 	faq, err := s.qqRepoFile(ctx, token, repo, faqPath, head)
 	if err != nil {
 		fail("faq", err)
-		return
+		return 0
 	}
 	categories := qqFAQCategories(faq)
 	if len(categories) == 0 {
 		fail("faq", errors.New("faq has no categories"))
-		return
+		return 0
 	}
 	entry, err := s.qqSummariseFAQ(ctx, text, categories)
 	// 已有同名问题时先说这个，答案太短也不用补充了。
 	if (err == nil || errors.Is(err, errQQFAQTooShort)) && entry.Valid == "yes" && strings.Contains(faq, "\n### "+entry.Question+"\n") {
 		reply("FAQ 里已经有「" + entry.Question + "」这一问了。")
-		return
+		return 0
 	}
 	if errors.Is(err, errQQFAQTooShort) {
 		reply("答案太短，写进 FAQ 不够用。请补充适用的平台或场景、具体怎么操作，再发一次「记录答案」。")
-		return
+		return 0
 	}
 	if err != nil {
 		fail("summarise", err)
-		return
+		return 0
 	}
 	if entry.Valid != "yes" {
 		reply("没看出要记录的问题和答案，请写成「记录答案 问：… 答：…」。")
-		return
+		return 0
 	}
 	index := slices.Index(categories, entry.Category)
 	newFAQ, ok := qqInsertFAQ(faq, index, entry.Question, entry.Answer, "本页于")
 	if !ok {
 		fail("insert", errors.New("category not found"))
-		return
+		return 0
 	}
 	files := []map[string]string{{"path": faqPath, "mode": "100644", "type": "blob", "content": newFAQ}}
 	// 只有现有译文和简体原文同步时才同步繁体，并把核对哈希更新成新的简体原文。
@@ -275,7 +275,7 @@ func (s *Server) recordQQAnswer(ctx context.Context, text string, reply func(str
 	}
 	if err != nil || !r.OK() || r.Decode(&tree) != nil || tree.SHA == "" {
 		fail("tree", githubFailure("tree", r, err))
-		return
+		return 0
 	}
 	message := "docs(faq): add " + entry.Question + "\n\nRecorded from a QQ group admin's answer by the QQ bot."
 	r, err = client.Do(ctx, token, "POST", "/repos/"+repo+"/git/commits", map[string]any{"message": message, "tree": tree.SHA, "parents": []string{head}})
@@ -284,13 +284,13 @@ func (s *Server) recordQQAnswer(ctx context.Context, text string, reply func(str
 	}
 	if err != nil || !r.OK() || r.Decode(&commit) != nil || commit.SHA == "" {
 		fail("commit", githubFailure("commit", r, err))
-		return
+		return 0
 	}
 	branch := "qq-faq/" + s.qq.now().UTC().Format(qqFAQBranchStamp) + "-" + qqMediaName()[:8]
 	r, err = client.Do(ctx, token, "POST", "/repos/"+repo+"/git/refs", map[string]string{"ref": "refs/heads/" + branch, "sha": commit.SHA})
 	if err != nil || !r.OK() {
 		fail("branch", githubFailure("branch", r, err))
-		return
+		return 0
 	}
 	body := "QQ 群管理员在群里回答了一个机器人答不上的问题，机器人把它整理成 FAQ 的一条，归入「" + entry.Category + "」。\n\n请核对问题标题和答案是否准确、措辞是否合适，再合并；合并后机器人最多 10 分钟就能回答这个问题。官网 msime-web 下次更新文档子模块时，`scripts/seo-output.test.mjs` 里简体和繁体的 FAQ 条数要各加一。"
 	if translated {
@@ -304,7 +304,8 @@ func (s *Server) recordQQAnswer(ctx context.Context, text string, reply func(str
 	}
 	if err != nil || !r.OK() || r.Decode(&pull) != nil || pull.Number <= 0 {
 		fail("pull", githubFailure("pull", r, err))
-		return
+		return 0
 	}
 	reply(fmt.Sprintf("已整理成 FAQ「%s」，开了 PR：GitHub %s 的 #%d，维护者核对合并后，机器人就能回答这个问题。", entry.Question, repo, pull.Number))
+	return pull.Number
 }

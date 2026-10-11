@@ -666,6 +666,7 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 		} else {
 			reply(qqUnknownUnrecordedReply)
 		}
+		s.recordQQFAQCandidate(ctx, cmp.Or(answer.Topic, question), "")
 	case answer.Type == "answered" && answer.Escalate:
 		outcome = "answered_escalate"
 		// 群友在报 bug 或提需求：整理成草稿等管理员一句话提交（见 qq_drafts.go）；整理不成时照旧记进汇总 issue。
@@ -679,6 +680,10 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 		}
 	default:
 		reply(answer.Answer)
+		// 靠现查 GitHub 才答上的问题，说明文档里缺这块。
+		if answer.Type == "answered" && answer.Researched {
+			s.recordQQFAQCandidate(ctx, question, answer.Answer)
+		}
 	}
 	if s.qqHistory != nil {
 		if err := s.qqHistory.RecordQQTurn(ctx, subject, question, recorded); err != nil {

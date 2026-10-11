@@ -253,6 +253,8 @@ type qqAnswer struct {
 	Type     string `json:"type"`
 	Answer   string `json:"answer"`
 	Escalate bool   `json:"escalate"`
+	// Researched 表示这次是靠现查 GitHub 答的（见 qq_research.go），答上的话说明文档里缺这块，记成文档候选。
+	Researched bool `json:"-"`
 	// Topic 是答不上时模型对问题的一句话概括，或者群友报问题时「平台 + 现象」的概括，供汇总给维护者（见 qq_gaps.go）。
 	Topic string `json:"topic"`
 }
@@ -290,8 +292,12 @@ func (s *Server) qqAnswerQuestion(ctx context.Context, history []account.QQTurn,
 			if err := s.qqChatModel(ctx, s.qqStrongModel(), qqAnswerPrompt+"\n\n资料：\n"+material+qqResearchHeading+findings+"\n", question, &retry); err == nil && retry.Type != "" {
 				retry.Topic = cmp.Or(retry.Topic, answer.Topic)
 				answer = retry
+				answer.Researched = true
 			}
 		}
+	}
+	if strings.Contains(material, qqResearchHeading) {
+		answer.Researched = true
 	}
 	answer.Answer = qqCleanAnswer(answer.Answer)
 	switch answer.Type {

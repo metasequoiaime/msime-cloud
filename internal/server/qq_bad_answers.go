@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -12,14 +14,15 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
 
-// 答错了能被记下来。原来机器人答错了没人知道，只能靠管理员在群里看到。现在群友在追问的时间范围里回一句「不对」「答错了」「没用」这类短话，机器人把上一轮的问答连同这句反馈记下来（account.QQBadAnswer），强制现查、用强模型把上一个问题重答一次；管理员发「差评」看最近被说答错的问题，用来改提示词和补文档。
+// 答错了能被记下来。原来机器人答错了没人知道，只能靠管理员在群里看到。现在群友在追问的时间范围里回一句「不对」「答错了」「没用」这类短话，机器人把上一轮的问答连同这句反馈记下来（account.QQBadAnswer），强制现查、用强模型把上一个问题重答一次；管理员发「差评」看最近两周还没处理的差评（编号 B7 这样，每条两行），「看 B7」看完整的问答，「写进FAQ B7」把重答写进 FAQ（重答也不对就在后面写「答：……」），「忽略 B7」拿掉；处理过的不再列出。原来列表没有编号、没有处理状态，想补进文档得把问答手抄一遍再发「记录答案」，处理过的下次照样列出来。
 
 const (
 	// qqBadAnswerRunes 是算作「说上一个回答不对」的消息长度上限：长消息多半是新问题。
 	qqBadAnswerRunes = 30
-	// qqBadAnswerList、qqBadAnswerWindow 是「差评」列出的条数和时间范围。
-	qqBadAnswerList   = 10
-	qqBadAnswerWindow = 14 * 24 * time.Hour
+	// qqBadAnswerList、qqBadAnswerWindow 是「差评」列出的条数和时间范围，qqBadAnswerListRunes 是列表里每段文字的长度。
+	qqBadAnswerList      = 10
+	qqBadAnswerWindow    = 14 * 24 * time.Hour
+	qqBadAnswerListRunes = 40
 	// qqRetryPrefix 是重答的开头。
 	qqRetryPrefix = "我重新查了一下："
 	// qqRetryFailed 是重答失败时记进差评的重答内容。
@@ -46,6 +49,9 @@ var (
 type qqBadAnswerStore interface {
 	AddQQBadAnswer(ctx context.Context, question, answer, feedback, retry string) error
 	RecentQQBadAnswers(ctx context.Context, since time.Duration, limit int) ([]account.QQBadAnswer, error)
+	OpenQQBadAnswers(ctx context.Context, since time.Duration, limit int) ([]account.QQBadAnswer, int, error)
+	QQBadAnswer(ctx context.Context, id int64) (account.QQBadAnswer, error)
+	CloseQQBadAnswer(ctx context.Context, id int64, state string) (bool, error)
 }
 
 // qqIsBadAnswerFeedback 判断这条消息是不是在说上一个回答不对：有上一轮、上一轮答了（不是答不上），消息很短、不是提问，并且整句只是一句否定（qqBadAnswerPattern），或者以否定开头再接纠正内容（qqBadAnswerLead）。
@@ -77,30 +83,118 @@ func (s *Server) recordQQBadAnswer(ctx context.Context, last account.QQTurn, fee
 	}
 }
 
-// qqListBadAnswers 回复最近被说答错的回答（管理员的「差评」）。
+// qqBadAnswerRetry 是差评里能写进 FAQ 的重答：没重答或者重答失败时为空。
+func qqBadAnswerRetry(item account.QQBadAnswer) string {
+	if item.Retry == qqRetryFailed {
+		return ""
+	}
+	return strings.TrimSpace(item.Retry)
+}
+
+// qqListBadAnswers 回复最近还没处理的差评（管理员的「差评」）：总数，最新的 qqBadAnswerList 条，每条两行：编号、时间、问题和群友的原话；重答（重答失败时是原来的回答）。
 func (s *Server) qqListBadAnswers(ctx context.Context, reply func(string)) {
 	if s.qqBadAnswers == nil {
 		reply(qqReplyUnavailable)
 		return
 	}
-	list, err := s.qqBadAnswers.RecentQQBadAnswers(ctx, qqBadAnswerWindow, qqBadAnswerList)
+	list, total, err := s.qqBadAnswers.OpenQQBadAnswers(ctx, qqBadAnswerWindow, qqBadAnswerList)
 	if err != nil {
 		slog.Warn("qq bot: bad answers unavailable", "reason", err.Error())
 		reply(qqReplyUnavailable)
 		return
 	}
 	if len(list) == 0 {
-		reply("最近两周没有人说答错。")
+		reply("最近两周没有待处理的差评。")
 		return
 	}
 	var b strings.Builder
-	b.WriteString("最近两周被说答错的回答（最新的在前）：")
+	fmt.Fprintf(&b, "最近两周被说答错、还没处理的共 %d 条", total)
+	if total > len(list) {
+		fmt.Fprintf(&b, "，先列最新的 %d 条", len(list))
+	}
+	b.WriteString("（「看 B编号」看全文，「写进FAQ B编号」把重答写进 FAQ，重答也不对就在后面写「答：……」，「忽略 B编号」拿掉）：")
 	for _, item := range list {
-		fmt.Fprintf(&b, "\n\n%s 问：%s\n答：%s\n群友：%s", item.CreatedAt.In(qqStatsZone).Format("01-02 15:04"), qqTruncate(item.Question, 80), qqTruncate(item.Answer, 80), item.Feedback)
-		if item.Retry != "" {
-			b.WriteString("\n重答：" + qqTruncate(item.Retry, 80))
+		fmt.Fprintf(&b, "\n- B%d %s 问：%s（群友：%s）", item.ID, item.CreatedAt.In(qqStatsZone).Format("01-02 15:04"), qqTruncate(item.Question, qqBadAnswerListRunes), qqTruncate(item.Feedback, qqBadAnswerListRunes))
+		if retry := qqBadAnswerRetry(item); retry != "" {
+			b.WriteString("\n  重答：" + qqTruncate(retry, qqBadAnswerListRunes))
+		} else {
+			b.WriteString("\n  重答失败，原来答的：" + qqTruncate(item.Answer, qqBadAnswerListRunes))
 		}
 	}
-	b.WriteString("\n\n答案该补进文档的，可以用「记录答案 问：… 答：…」写进 FAQ。")
 	reply(b.String())
+}
+
+// qqBadAnswerCommand 处理差评的「看 B编号」「写进FAQ B编号」「忽略 B编号」（action 是 view、write、ignore），只有管理员能用；answer 是「写进FAQ B7 答：……」里管理员写的答案，没写时用重答。返回处理结果的名字。
+func (s *Server) qqBadAnswerCommand(ctx context.Context, action string, id int64, answer string, admin bool, reply func(string)) string {
+	if !admin {
+		reply("只有管理员能处理差评。觉得我答错了，@我 说一句「不对」，我会重新查。")
+		return "cmd_bad_answer"
+	}
+	if s.qqBadAnswers == nil {
+		reply(qqReplyUnavailable)
+		return "cmd_bad_answer"
+	}
+	code := "B" + strconv.FormatInt(id, 10)
+	item, err := s.qqBadAnswers.QQBadAnswer(ctx, id)
+	switch {
+	case errors.Is(err, account.ErrQQBadAnswerNotFound):
+		reply("没有找到 " + code + "，可能已经处理过或过期了。")
+		return "cmd_bad_answer"
+	case err != nil:
+		slog.Warn("qq bot: bad answer unavailable", "reason", err.Error())
+		reply(qqReplyUnavailable)
+		return "cmd_bad_answer"
+	}
+	switch action {
+	case "view":
+		reply(qqBadAnswerDetail(item, code))
+		return "cmd_bad_answer_view"
+	case "ignore":
+		ok, err := s.qqBadAnswers.CloseQQBadAnswer(ctx, id, "ignored")
+		switch {
+		case err != nil:
+			slog.Warn("qq bot: bad answer not closed", "reason", err.Error())
+			reply(qqReplyUnavailable)
+			return "cmd_bad_answer"
+		case !ok:
+			reply(code + " 已经处理过了。")
+			return "cmd_bad_answer"
+		}
+		reply("已忽略 " + code + "。")
+		return "cmd_bad_answer_ignore"
+	}
+	if answer == "" {
+		answer = qqBadAnswerRetry(item)
+	}
+	if answer == "" {
+		reply(code + " 重答失败了，没有能写进去的答案，请写成「写进FAQ " + code + " 答：……」。")
+		return "cmd_bad_answer"
+	}
+	pull := s.recordQQAnswer(ctx, "问："+item.Question+"\n答："+answer, reply)
+	if pull > 0 {
+		// 不跟随处理消息的 ctx：PR 已经开了，ctx 这时到期也要标成已处理，免得下次「差评」还列出来。
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), qqBadAnswerStoreTimeout)
+		defer cancel()
+		if _, err := s.qqBadAnswers.CloseQQBadAnswer(sctx, id, "done"); err != nil {
+			slog.Warn("qq bot: bad answer not closed", "reason", err.Error())
+		}
+	}
+	return "cmd_bad_answer_write"
+}
+
+// qqBadAnswerDetail 是「看 B编号」的回复：问题、原来的回答、群友的原话、重答（各截到 qqFAQCandidateRunes 字）和下一步怎么发。
+func qqBadAnswerDetail(item account.QQBadAnswer, code string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s（%s）", code, item.CreatedAt.In(qqStatsZone).Format("01-02 15:04"))
+	b.WriteString("\n问：" + qqTruncate(item.Question, qqFAQCandidateRunes))
+	b.WriteString("\n原来答的：" + qqTruncate(item.Answer, qqFAQCandidateRunes))
+	b.WriteString("\n群友：" + item.Feedback)
+	if retry := qqBadAnswerRetry(item); retry != "" {
+		b.WriteString("\n重答：" + qqTruncate(retry, qqFAQCandidateRunes))
+		b.WriteString("\n照重答写进 FAQ 就 @我 发「写进FAQ " + code + "」，重答也不对就在后面写「答：……」，不用处理就发「忽略 " + code + "」。")
+	} else {
+		b.WriteString("\n重答：（重答失败）")
+		b.WriteString("\n补上答案写进 FAQ 就 @我 发「写进FAQ " + code + " 答：……」，不用处理就发「忽略 " + code + "」。")
+	}
+	return b.String()
 }

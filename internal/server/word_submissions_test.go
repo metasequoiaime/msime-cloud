@@ -230,6 +230,13 @@ func (l *fakeLimiter) RateLimit(_ context.Context, scope, subject string, limit 
 	return l.err
 }
 
+func (l *fakeLimiter) ReleaseRateLimit(_ context.Context, scope, subject string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.calls = append(l.calls, "release:"+scope+"|"+subject)
+	return nil
+}
+
 func wordsKeyPEM(t *testing.T, pkcs8 bool) string {
 	t.Helper()
 	if pkcs8 {

@@ -756,13 +756,27 @@ func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text s
 			return "existing"
 		}
 	}
+	// 缺信息时先存成草稿，管理员补一句「提交 D编号 …」就行（qqAdminDraft）；没有草稿存储或存不进去时照旧请他补充后重发。
 	if report.Missing != "" {
-		reply("还差一点信息：" + report.Missing + qqReplyResend)
+		if note, ok := s.qqAdminDraft(ctx, m, text, report, notes, report.Missing); ok {
+			reply(note)
+		} else {
+			reply("还差一点信息：" + report.Missing + qqReplyResend)
+		}
 		return "needs_info"
 	}
-	repo, label, question := s.qqTarget(ctx, report, text)
+	// 管理员写了「版本 未知」时不再追问版本，Windows 按平台配置提交，正文写明版本未知。
+	unknown := qqVersionUnknown.MatchString(text)
+	if unknown {
+		report = qqMarkVersionUnknown(report)
+	}
+	repo, label, question := s.qqTarget(ctx, report, text, unknown)
 	if question != "" {
-		reply("还差一点信息：" + question + qqReplyResend)
+		if note, ok := s.qqAdminDraft(ctx, m, text, report, notes, question); ok {
+			reply(note)
+		} else {
+			reply("还差一点信息：" + question + qqReplyResend)
+		}
 		return "needs_version"
 	}
 	// 已经回过「收到」或其他过渡语时不再多说一句。
@@ -800,6 +814,10 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 	}
 	// 要现查或者重答时先回一句，查一次要几十秒，免得群友以为机器人没反应。和截图提示、「我想一下」共用一个标志，已经回过过渡语时不再说。
 	ask := qqAsk{progress: func() { progress(qqReplyLookingUp) }}
+	// 机器人上一轮追问了草稿缺的信息、群友直接回「Windows 11，0.9.5」时补进那份草稿，不当成新问题去答，也不再起一份新草稿（见 qqSupplementFollowUp）。排在差评之前：追问之后的短句多半是在回答追问；只有一句否定的消息（「不对」「还是不行」）不算补充，照旧走差评重答。
+	if outcome := s.qqSupplementFollowUp(ctx, subject, history, question, reply); outcome != "" {
+		return outcome
+	}
 	// 群友说上一个回答不对：记下来，强制现查、换思路把上一个问题重答一次（见 qq_bad_answers.go）。
 	retrying, feedback := qqIsBadAnswerFeedback(history, question), question
 	var last account.QQTurn
@@ -847,8 +865,10 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 		outcome = "answered_escalate"
 		// 群友在报 bug 或提需求：整理成草稿等管理员一句话提交（见 qq_drafts.go）；整理不成时照旧记进汇总 issue。先把能先试的办法发出去，再整理草稿或记汇总，记下了什么单独回一句：整理草稿要再调一次模型、查重、建草稿，曾经等这些做完才连同答案一起发，群友要多等好几秒才看到排查办法。一条消息最多被动回复 qqBotMaxReplies（5）次，这条路径最多用满：过渡语 1 + 答案 1 + 这句说明 1 + 带链接被拒收时去掉链接重发 1 + 被拒收时的补发 1，以后不能再在这里加回复。
 		reply(answer.Answer)
-		if note := s.qqDraftReport(ctx, subject, question); note != "" {
+		// 整理草稿用群友这几轮说的话（qqDraftText），不只这一句：先问「候选框跑到左上角怎么办」、再说「试了还是不行，win11 0.9.3」时，只看第二句整理不出现象。草稿说明也记进对话历史，下一轮的模型看得到草稿编号和追问，群友直接回答追问时也靠它找到草稿（qqSupplementFollowUp）。
+		if note := s.qqDraftReport(ctx, subject, qqDraftText(history, question)); note != "" {
 			outcome = "answered_draft"
+			recorded = answer.Answer + note
 			reply(note)
 		} else if s.recordQQReport(ctx, answer.Topic) {
 			reply(qqEscalation)
@@ -1234,6 +1254,21 @@ const qqWindowsLabel = "platform/windows"
 // qqWindowsVersionQuestion 是 Windows 反馈没有说输入法版本时的追问。
 const qqWindowsVersionQuestion = "你用的水杉输入法是哪个版本？在设置的「关于」页能看到。"
 
+// qqVersionUnknown 匹配管理员写的「版本 未知」「版本：不知道」：群友没说版本、管理员也不知道时，Windows 的反馈原来根本提不上去。只在管理员提 issue、提交草稿时看（fileAdminFeedback、qqFileDraft），群友这样写照旧追问。
+var qqVersionUnknown = regexp.MustCompile(`版本\s*[:：]?\s*(?:未知|不详|不知道|不清楚)`)
+
+// qqMarkVersionUnknown 把整理结果标成输入法版本未知：IMEVersion 里没有版本号时写成「未知」，并在 Version（正文的「系统与输入法版本」）后面写明，issue 里看得出是确实不知道，不是漏问了。IMEVersion 里有版本号时原样返回。
+func qqMarkVersionUnknown(report qqReport) qqReport {
+	if _, ok := qqParseVersion(report.IMEVersion); ok {
+		return report
+	}
+	report.IMEVersion = "未知"
+	if !strings.Contains(report.Version, "未知") {
+		report.Version = strings.TrimLeft(report.Version+"，输入法版本未知", "，")
+	}
+	return report
+}
+
 var qqVersionPattern = regexp.MustCompile(`([0-9]+)\.([0-9]+)(?:\.([0-9]+))?`)
 
 // qqParseVersion 取 text 里第一个形如 0.9 或 0.9.5 的版本号。
@@ -1265,19 +1300,21 @@ func qqVersionAtLeast(v, floor [3]int) bool {
 	return true
 }
 
-// qqTarget 是反馈要提交到的仓库和平台标签：与崩溃 issue 一样按 admin.github.platforms 分发，看不出平台或平台没有配置时提交到 qq_bot.repo，不加平台标签。Windows 例外：qqWindowsProduct 判断是 msime 的新实现时提交到 qq_bot.repo 并加 qqWindowsLabel，否则按平台配置提交（msime-windows）。text 是管理员的原话，用来找安装包名这类说明。question 不为空时（没有版本号，或者版本号两个产品都有）不提交，调用方先追问。
-func (s *Server) qqTarget(ctx context.Context, report qqReport, text string) (repo, label, question string) {
+// qqTarget 是反馈要提交到的仓库和平台标签：与崩溃 issue 一样按 admin.github.platforms 分发，看不出平台或平台没有配置时提交到 qq_bot.repo，不加平台标签。Windows 例外：qqWindowsProduct 判断是 msime 的新实现时提交到 qq_bot.repo 并加 qqWindowsLabel，否则按平台配置提交（msime-windows）。text 是管理员的原话，用来找安装包名这类说明。question 不为空时（没有版本号，或者版本号两个产品都有）不提交，调用方先追问。versionUnknown 表示管理员确认版本未知（qqVersionUnknown）：没有版本号时不追问，按平台配置提交。
+func (s *Server) qqTarget(ctx context.Context, report qqReport, text string, versionUnknown bool) (repo, label, question string) {
 	if report.Platform == "windows" {
 		version, ok := qqParseVersion(report.IMEVersion)
-		if !ok {
+		switch {
+		case !ok && !versionUnknown:
 			return "", "", qqWindowsVersionQuestion
-		}
-		isNew, question := s.qqWindowsProduct(ctx, version, text)
-		if question != "" {
-			return "", "", question
-		}
-		if isNew {
-			return s.qq.config.Repo, qqWindowsLabel, ""
+		case ok:
+			isNew, question := s.qqWindowsProduct(ctx, version, text)
+			if question != "" {
+				return "", "", question
+			}
+			if isNew {
+				return s.qq.config.Repo, qqWindowsLabel, ""
+			}
 		}
 	}
 	for _, p := range s.config.Admin.GitHub.Platforms {

@@ -201,6 +201,8 @@ func parseGitHubAppKey(raw string) (*rsa.PrivateKey, error) {
 
 type rateLimiter interface {
 	RateLimit(ctx context.Context, scope, subject string, limit int, window time.Duration) error
+	// ReleaseRateLimit 退回 RateLimit 计过的一次，占了名额但事情没做成时用。
+	ReleaseRateLimit(ctx context.Context, scope, subject string) error
 }
 
 // sharedLocker is account.Service.WaitLock: a lock held across replicas until release, or account.ErrLockBusy after wait.

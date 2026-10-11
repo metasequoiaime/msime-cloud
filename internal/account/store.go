@@ -288,16 +288,16 @@ SELECT id,snapshot_id,tool,arguments,result_count,bytes,at FROM diagnostic_acces
 	if _, e := s.pool.Exec(ctx, `SELECT id,subject,original,report,created_at,updated_at,filed_at,issue_ref FROM qq_drafts WHERE false`); e != nil {
 		return e
 	}
-	// QQ 答疑沉淀进文档的候选；缺表时启动走迁移。
-	if _, e := s.pool.Exec(ctx, `SELECT id,question,answer,state,ref,created_at FROM qq_faq_candidates WHERE false`); e != nil {
+	// QQ 答疑沉淀进文档的候选；缺表或缺认领时间列时启动走迁移。state 认 writing 的 CHECK 和认领时间列在同一次迁移中换上，所以只探测列。
+	if _, e := s.pool.Exec(ctx, `SELECT id,question,answer,state,ref,created_at,claimed_at FROM qq_faq_candidates WHERE false`); e != nil {
 		return e
 	}
 	// QQ 答疑每天的处理结果计数；缺表时启动走迁移。
 	if _, e := s.pool.Exec(ctx, `SELECT day,outcome,count FROM qq_daily_stats WHERE false`); e != nil {
 		return e
 	}
-	// 被群友说答错的回答；缺表时启动走迁移。
-	if _, e := s.pool.Exec(ctx, `SELECT id,question,answer,feedback,retry,created_at FROM qq_bad_answers WHERE false`); e != nil {
+	// 被群友说答错的回答；缺表或缺处理状态列时启动走迁移（状态列的命名 CHECK 和列在同一次迁移中加上，只探测列）。
+	if _, e := s.pool.Exec(ctx, `SELECT id,question,answer,feedback,retry,state,created_at FROM qq_bad_answers WHERE false`); e != nil {
 		return e
 	}
 	// QQ 答疑的向量索引：pgvector 的 halfvec 解析得到、表却还没建时（扩展是在库已经迁移过之后才装的）启动走迁移；解析不到时这个功能本来就关闭，不算缺表。
@@ -400,6 +400,12 @@ func (s *Store) Rate(ctx context.Context, key string, limit int, window time.Dur
 		return ErrLimited
 	}
 	return nil
+}
+
+// ReleaseRate 把 key 在当前窗口里的计数减一，最少减到 0；窗口已经过期的不动，下次 Rate 会重新开窗口。
+func (s *Store) ReleaseRate(ctx context.Context, key string) error {
+	_, e := s.pool.Exec(ctx, `UPDATE auth_rates SET count=greatest(count-1,0) WHERE key=$1 AND expires_at>now()`, key)
+	return e
 }
 
 // RateUntil 与 Rate 计数方式相同，超限时额外返回当前窗口的剩余时长，供响应的 Retry-After 使用。

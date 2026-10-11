@@ -395,7 +395,7 @@ func (s *Server) qqMentionedIssues(ctx context.Context, question string) string 
 // qqIssueBodyRunes 是交给模型的 issue 正文长度上限。
 const qqIssueBodyRunes = 3000
 
-// qqIssueBodyText 读一个 issue 或 PR 的正文（去掉图片和链接，截到 qqIssueBodyRunes 字）；name 为空时在每个答疑仓库里找这个编号，用第一个找到的。
+// qqIssueBodyText 读一个 issue 或 PR 的正文（去掉图片和链接，截到 qqIssueBodyRunes 字）；name 为空时在每个答疑仓库里找这个编号，用第一个找到的。只交 OWNER、MEMBER、COLLABORATOR 写的正文，其他人写的返回空字符串，模型只看到 qqIssueStatus 里的标题，和 qqMaintainerComment 对评论的过滤一致：任何 GitHub 用户都能开 issue，曾经外人写在正文里的「新版请加群下载」会原样交给回答的模型。
 func (s *Server) qqIssueBodyText(ctx context.Context, name, number string) string {
 	client := s.adminGitHub
 	for _, repo := range s.qqGitHubRepos() {
@@ -409,10 +409,16 @@ func (s *Server) qqIssueBodyText(ctx context.Context, name, number string) strin
 		}
 		r, err := client.Get(ctx, token, "/repos/"+repo+"/issues/"+number)
 		var issue struct {
-			Body string `json:"body"`
+			Body              string `json:"body"`
+			AuthorAssociation string `json:"author_association"`
 		}
 		if err != nil || !r.OK() || r.Decode(&issue) != nil {
 			continue
+		}
+		switch issue.AuthorAssociation {
+		case "OWNER", "MEMBER", "COLLABORATOR":
+		default:
+			return ""
 		}
 		return qqTruncate(strings.TrimSpace(qqStripLinks(qqImagePattern.ReplaceAllString(issue.Body, " "))), qqIssueBodyRunes)
 	}

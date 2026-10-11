@@ -218,8 +218,9 @@ type qqFake struct {
 	// judge 是自测判分模型的输出（为空时判通过）。
 	judge string
 	// 看截图：vision 是看图模型的输出（为空时给一段默认描述），visionCalls 记下收到的图片数据地址的开头。
-	vision      string
-	visionCalls []string
+	vision       string
+	visionFinish string
+	visionCalls  []string
 	// 现查 GitHub：researchPath 是模型第一轮要调用的路径（为空时直接回复「不需要查」），researchTools 记下每轮是否给了工具；answerAfterResearch 是资料里有现查结果时回答模型的输出；extraGitHub 是按路径（含查询参数）给的额外 GitHub 响应。
 	researchPath string
 	// researchQuery 不为空时模型第一轮改为调用 web_search；webResults 是网关搜索接口返回的文字，webQueries 记下收到的搜索。
@@ -317,7 +318,11 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if content == "" {
 				content = `{"description":"Windows 上水杉的候选框停在屏幕左上角，截图里的版本号是 0.9.5"}`
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"role": "assistant", "content": content}, "finish_reason": "stop"}}})
+			finish := f.visionFinish
+			if finish == "" {
+				finish = "stop"
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"role": "assistant", "content": content}, "finish_reason": finish}}})
 			return
 		}
 		user := messages[1].(map[string]any)["content"].(string)
@@ -2876,8 +2881,16 @@ func TestQQBotScreenshots(t *testing.T) {
 	if !summarised || len(fake.created) != 1 {
 		t.Fatal(fake.chatCalls, len(fake.created))
 	}
-	// 模型输出不合格式时请群友打字。
+	// 截图字多、模型写到输出上限时，已经写出来的描述照样用。
 	s.qq.config.Admins = nil
+	fake.vision, fake.visionFinish = `{"description": "KDE 桌面上水杉输入法的托盘菜单，选中了双拼和辅助码：首右plus，下面还有很多`, "length"
+	qqPost(t, s, qqMessageWithAttachments("m-shot-long", "看看这个", shot))
+	s.qqWorkers.Wait()
+	if !strings.Contains(fake.chatBodies[len(fake.chatBodies)-1], "看看这个\n（群友附了截图，截图内容：KDE 桌面上水杉输入法的托盘菜单，选中了双拼和辅助码：首右plus，下面还有很多）") {
+		t.Fatal(fake.chatBodies[len(fake.chatBodies)-1])
+	}
+	// 模型输出不合格式时请群友打字。
+	fake.visionFinish = ""
 	fake.vision = "not json"
 	qqPost(t, s, qqMessageWithAttachments("m-shot-bad", "", shot))
 	s.qqWorkers.Wait()

@@ -193,9 +193,9 @@ func (s *Store) MigrateAs(ctx context.Context, role string) error {
 	if _, e = tx.Exec(ctx, schema+"\n"+userDataSchema+"\n"+communitySchema+"\n"+adminSchema+"\n"+translationSchema+"\n"+candidateSkinSchema+"\n"+communityCandidateSkinSchema+"\n"+communityPluginSchema+"\n"+adminOpsSchema+"\n"+skinJobSchema+"\n"+feedbackSchema+"\n"+voiceContributionsSchema+"\n"+diagnosticsSchema+"\n"+qqConversationsSchema); e != nil {
 		return e
 	}
-	// QQ 答疑的向量索引要用 pgvector：装了才建表（扩展要超级用户安装，迁移角色装不了），没装时答疑退回只用目录挑段落，服务照常启动。
+	// QQ 答疑的向量索引要用 pgvector：它的 halfvec 类型在当前 search_path 里解析得到才建表（扩展要超级用户安装，迁移角色装不了），否则答疑退回只用目录挑段落，服务照常启动。判断类型而不是判断扩展装没装：扩展装在 public，而 search_path 不含 public 的连接（例如测试用的独立 schema）解析不到它的类型，建表会让整个迁移失败。
 	var vectors bool
-	if e = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname='vector')`).Scan(&vectors); e != nil {
+	if e = tx.QueryRow(ctx, `SELECT to_regtype('halfvec') IS NOT NULL`).Scan(&vectors); e != nil {
 		return e
 	}
 	if vectors {

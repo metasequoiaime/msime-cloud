@@ -123,7 +123,7 @@ func (s *Server) qqReleases(ctx context.Context, repo string) ([]qqRelease, bool
 	return list, true
 }
 
-// qqMaintainerComment 返回维护者在 issue 下最近的一条评论（去掉链接、图片和多余空白，截到 limit 字）；没有评论或读取失败时为空。
+// qqMaintainerComment 返回维护者在 issue 下最近的一条评论（去掉图片后转成纯文本，见 qqPlainText，按句子截到 limit 字以内）；没有评论或读取失败时为空。
 func (s *Server) qqMaintainerComment(ctx context.Context, repo string, number int64, issue qqIssueDetail, limit int) string {
 	if issue.Comments == 0 {
 		return ""
@@ -150,14 +150,11 @@ func (s *Server) qqMaintainerComment(ctx context.Context, repo string, number in
 		default:
 			continue
 		}
-		text := strings.Join(strings.Fields(qqStripLinks(qqImagePattern.ReplaceAllString(comments[i].Body, " "))), " ")
+		text := qqPlainText(qqImagePattern.ReplaceAllString(comments[i].Body, " "))
 		if text == "" {
 			continue
 		}
-		if runes := []rune(text); len(runes) > limit {
-			text = string(runes[:limit]) + "…"
-		}
-		return text
+		return qqTruncateSentence(text, limit)
 	}
 	return ""
 }

@@ -1,10 +1,12 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -62,11 +64,28 @@ func qqIssueState(state, reason string, labels []string) string {
 	}
 }
 
-// qqSearchIssues 在每个仓库里按关键词搜 issue（开着的和已关闭的都算，不含拉取请求），返回给模型看的文字；没有结果时为空。GitHub 要求每个词都匹配，模型多给一个词就可能一条都搜不到，所以搜不到时依次只用前两个、前一个词再搜。failed 表示有仓库没搜成（限流、GitHub 出错）：这时结果为空不等于没有相关 issue，也不再退词重搜，免得被限流时多打几轮请求。
+// qqIssueHit 是搜到的一个 issue：Name 是仓库短名，State 是 qqIssueState 的说法，UpdatedAt 只留日期；Extras 是补的上下文（见 qqIssueExtras），只有交给模型时才补。
+type qqIssueHit struct {
+	Name      string
+	Number    int64
+	Title     string
+	State     string
+	Labels    []string
+	UpdatedAt string
+	Extras    string
+}
+
+// qqSearchIssues 在每个仓库里按关键词搜 issue（开着的和已关闭的都算，不含拉取请求），返回给模型看的文字（见 qqIssueListForModel）；没有结果时为空。failed 的含义见 qqSearchIssueHits。
 func (s *Server) qqSearchIssues(ctx context.Context, keywords string) (found string, failed bool) {
+	hits, failed := s.qqSearchIssueHits(ctx, keywords, true)
+	return qqIssueListForModel(hits), failed
+}
+
+// qqSearchIssueHits 是 qqSearchIssues 的结构化结果，「查」命令用它给群友另写一份短列表（见 qqIssueListForMembers），和给模型的资料不共用文字。extras 为 true 时给前 qqIssueContextResults 个 issue 补上下文。GitHub 要求每个词都匹配，模型多给一个词就可能一条都搜不到，所以搜不到时依次只用前两个、前一个词再搜。failed 表示有仓库没搜成（限流、GitHub 出错）：这时结果为空不等于没有相关 issue，也不再退词重搜，免得被限流时多打几轮请求。
+func (s *Server) qqSearchIssueHits(ctx context.Context, keywords string, extras bool) (hits []qqIssueHit, failed bool) {
 	words := strings.Fields(qqSearchTerms(keywords))
 	if len(words) == 0 {
-		return "", false
+		return nil, false
 	}
 	attempts := []string{strings.Join(words, " ")}
 	for _, n := range []int{2, 1} {
@@ -75,15 +94,15 @@ func (s *Server) qqSearchIssues(ctx context.Context, keywords string) (found str
 		}
 	}
 	for _, terms := range attempts {
-		if found, failed = s.qqSearchIssuesFor(ctx, terms); found != "" || failed {
-			return found, failed
+		if hits, failed = s.qqSearchIssuesFor(ctx, terms, extras); len(hits) > 0 || failed {
+			return hits, failed
 		}
 	}
-	return "", false
+	return nil, false
 }
 
-// qqSearchIssuesFor 是用一组搜索词做的一轮 qqSearchIssues。各仓库同时搜，都搜完后同时给前 qqIssueContextResults 个 issue（按仓库顺序数，见 qq_issue_context.go）补上下文，最后按仓库顺序拼起来：结果和逐个仓库查时一样，只是不再一个仓库搜完、补完上下文再搜下一个。
-func (s *Server) qqSearchIssuesFor(ctx context.Context, terms string) (string, bool) {
+// qqSearchIssuesFor 是用一组搜索词做的一轮 qqSearchIssueHits。各仓库同时搜，都搜完后（extras 为 true 时）同时给前 qqIssueContextResults 个 issue（按仓库顺序数，见 qq_issue_context.go）补上下文，最后按仓库顺序排好：结果和逐个仓库查时一样，只是不再一个仓库搜完、补完上下文再搜下一个。
+func (s *Server) qqSearchIssuesFor(ctx context.Context, terms string, extras bool) ([]qqIssueHit, bool) {
 	client := s.adminGitHub
 	type hit struct {
 		qqIssue
@@ -125,35 +144,61 @@ func (s *Server) qqSearchIssuesFor(ctx context.Context, terms string) (string, b
 		})
 	}
 	_ = search.Wait()
-	// extras[i][j] 是第 i 个仓库第 j 个 issue 补的上下文；detailed 是已经安排补上下文的 issue 数。
-	extras := make([][]string, len(repos))
+	// contexts[i][j] 是第 i 个仓库第 j 个 issue 补的上下文；detailed 是已经安排补上下文的 issue 数。
+	contexts := make([][]string, len(repos))
 	var details errgroup.Group
 	detailed := 0
 	for i, repo := range repos {
-		extras[i] = make([]string, len(hits[i]))
+		contexts[i] = make([]string, len(hits[i]))
 		for j := range hits[i] {
-			if detailed == qqIssueContextResults {
+			if !extras || detailed == qqIssueContextResults {
 				break
 			}
 			detailed++
 			details.Go(func() error {
-				extras[i][j] = s.qqIssueExtras(ctx, repo, hits[i][j].Number, hits[i][j].qqIssueDetail, qqMaintainerRunes, "  ")
+				contexts[i][j] = s.qqIssueExtras(ctx, repo, hits[i][j].Number, hits[i][j].qqIssueDetail, qqMaintainerRunes, "  ")
 				return nil
 			})
 		}
 	}
 	_ = details.Wait()
-	var b strings.Builder
+	var out []qqIssueHit
 	for i, repo := range repos {
 		_, name, _ := strings.Cut(repo, "/")
 		for j, issue := range hits[i] {
 			labels := issue.labelNames()
 			updated, _, _ := strings.Cut(issue.UpdatedAt, "T")
-			fmt.Fprintf(&b, "- %s #%d（%s，更新于 %s，标签：%s）%s\n", name, issue.Number, qqIssueState(issue.State, issue.StateReason, labels), updated, strings.Join(labels, "、"), issue.Title)
-			b.WriteString(extras[i][j])
+			out = append(out, qqIssueHit{Name: name, Number: issue.Number, Title: issue.Title, State: qqIssueState(issue.State, issue.StateReason, labels), Labels: labels, UpdatedAt: updated, Extras: contexts[i][j]})
 		}
 	}
-	return b.String(), slices.Contains(failed, true)
+	return out, slices.Contains(failed, true)
+}
+
+// qqIssueListForModel 是交给模型的搜索结果：每个 issue 一行，带状态、更新日期和标签，补的上下文缩进写在下面。
+func qqIssueListForModel(hits []qqIssueHit) string {
+	var b strings.Builder
+	for _, hit := range hits {
+		fmt.Fprintf(&b, "- %s #%d（%s，更新于 %s，标签：%s）%s\n", hit.Name, hit.Number, hit.State, hit.UpdatedAt, strings.Join(hit.Labels, "、"), hit.Title)
+		b.WriteString(hit.Extras)
+	}
+	return b.String()
+}
+
+// qqMemberIssueResults 是「查」命令回复群友时最多列的 issue 数。
+const qqMemberIssueResults = 5
+
+// qqIssueTitleTag 匹配 issue 标题开头的「[Bug]」「[Feature]:」这类模板前缀。
+var qqIssueTitleTag = regexp.MustCompile(`^\s*\[[^\]]{1,20}\]\s*:?\s*`)
+
+// qqIssueListForMembers 是「查」命令发到群里的短列表：最多 qqMemberIssueResults 条，每条一行「msime #7066 标题（还没解决）」，标题去掉模板前缀，不带标签、日期和维护者评论，最后一行告诉群友怎么看某条的进展。曾经直接发给模型看的资料，最多十行，带英文标签，外加三段几百字没清洗的维护者评论，在千人群里刷屏。
+func qqIssueListForMembers(hits []qqIssueHit) string {
+	var b strings.Builder
+	for _, hit := range hits[:min(len(hits), qqMemberIssueResults)] {
+		title := cmp.Or(strings.TrimSpace(qqIssueTitleTag.ReplaceAllString(hit.Title, "")), strings.TrimSpace(hit.Title))
+		fmt.Fprintf(&b, "%s #%d %s（%s）\n", hit.Name, hit.Number, title, hit.State)
+	}
+	b.WriteString("以上是 GitHub 上搜到的相关 issue，想看某条的进展，@我 发「#编号」")
+	return b.String()
 }
 
 // qqRelease 是 GitHub Release 列表里用到的字段。

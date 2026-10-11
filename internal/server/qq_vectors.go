@@ -279,7 +279,7 @@ func (s *Server) syncQQHistoryVectors(ctx context.Context, repo string) (int, er
 					state = "已关闭未合并"
 				}
 			}
-			body := strings.Join(strings.Fields(qqStripLinks(qqImagePattern.ReplaceAllString(issue.Body, " "))), " ")
+			body := qqPlainText(qqImagePattern.ReplaceAllString(issue.Body, " "))
 			h := qqContentHash(issue.Title, state, body, strconv.Itoa(issue.Comments))
 			if hashes[ids[i]] == h {
 				continue

@@ -1230,11 +1230,17 @@ func TestQQBotAnswersMembersFromKnowledge(t *testing.T) {
 	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "你好！有水杉输入法的问题可以问我。" || !strings.Contains(fake.answerSystem, "（没有找到相关资料）") {
 		t.Fatal(last, fake.answerSystem)
 	}
-	// 过长的答案截断。
+	// 过长的答案截断到 qqAnswerRunes 以内，后面提示可以再问；没有句末标点时硬截。
 	fake.answer = `{"type":"answered","answer":"` + strings.Repeat("长", qqAnswerRunes+10) + `"}`
 	qqDeliver(t, s, "m-long", "说说五笔")
-	if last := []rune(fake.replyTexts()[len(fake.replyTexts())-1]); len(last) != qqAnswerRunes || string(last[len(last)-1]) != "…" {
-		t.Fatal(len(last))
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != strings.Repeat("长", qqAnswerRunes-1)+"…"+qqAnswerMoreHint {
+		t.Fatal(len([]rune(last)))
+	}
+	// 有句末标点时截在最后一个完整的句子后面，不停在半句话上。
+	fake.answer = `{"type":"answered","answer":"` + strings.Repeat("这是一句完整的话。", qqAnswerRunes/9+5) + `"}`
+	qqDeliver(t, s, "m-long-sentences", "说说五笔")
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; !strings.HasSuffix(last, "这是一句完整的话。…"+qqAnswerMoreHint) || len([]rune(strings.TrimSuffix(last, qqAnswerMoreHint))) > qqAnswerRunes {
+		t.Fatal(last)
 	}
 	// 普通群友的个人限额：超了个人限额的消息不再计入群的额度。
 	limiter.counts["qq-bot-member|GROUP1/MEMBER1"] = qqBotMemberDaily
@@ -2263,7 +2269,7 @@ func TestQQBotCommands(t *testing.T) {
 	// 查：找到、没找到、没写关键词；「查不到…」不算命令。
 	fake.searchItems = []map[string]any{{"number": 818, "title": "大小写倒置", "state": "open", "updated_at": "2026-10-11T00:00:00Z"}}
 	qqDeliver(t, s, "m-search", "查：大小写 倒置")
-	if !strings.Contains(last(), "#818（还没解决") || !strings.Contains(fake.searchQuery, "大小写 倒置") {
+	if !strings.Contains(last(), "#818 大小写倒置（还没解决）\n") || !strings.Contains(fake.searchQuery, "大小写 倒置") {
 		t.Fatal(last(), fake.searchQuery)
 	}
 	fake.searchItems = nil
@@ -3030,6 +3036,90 @@ func TestQQIssueContext(t *testing.T) {
 	found, _ := s.qqSearchIssues(context.Background(), "候选框")
 	if !strings.Contains(found, "- win #818（已完成，更新于 2026-10-06，标签：）候选框错位\n  已修好，v0.9.5 及之后的版本都有\n  开发者最近说：在设置里关掉") {
 		t.Fatal(found)
+	}
+	// 「查」命令给群友的是短列表：最多 5 条，标题去掉 [Bug] 这类前缀，不带标签、日期和维护者评论，连同最后一行提示不超过 6 行。
+	fake.searchItems = []map[string]any{
+		{"number": 818, "title": "[Bug] 候选框错位", "state": "closed", "state_reason": "completed", "closed_at": "2026-10-06T00:00:00Z", "comments": 3, "updated_at": "2026-10-06T00:00:00Z", "labels": []map[string]string{{"name": "enhancement"}, {"name": "size/L"}}},
+		{"number": 820, "title": "[Feature]: 候选框透明度", "state": "open", "updated_at": "2026-10-05T00:00:00Z"},
+		{"number": 821, "title": "候选框字体", "state": "open", "updated_at": "2026-10-04T00:00:00Z"},
+	}
+	qqDeliver(t, s, "m-search-members", "查 候选框")
+	reply := last()
+	lines := strings.Split(reply, "\n")
+	if len(lines) > 6 || !slices.Contains(lines, "win #818 候选框错位（已完成）") || !slices.Contains(lines, "win #820 候选框透明度（还没解决）") || lines[len(lines)-1] != "以上是 GitHub 上搜到的相关 issue，想看某条的进展，@我 发「#编号」" {
+		t.Fatalf("%q", reply)
+	}
+	for _, noise := range []string{"标签：", "开发者最近说", "更新于", "[Bug]", "[Feature]", "enhancement"} {
+		if strings.Contains(reply, noise) {
+			t.Fatalf("%q contains %q", reply, noise)
+		}
+	}
+}
+
+// 维护者评论转成纯文本：用 msime-windows #730 和 msime #7162 的真实评论做样例，群里看到的「#编号」回复不再有 Markdown 符号和半截链接。
+func TestQQPlainText(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{
+			"# 插件支持路线图 方案讨论稿\n\n对应 issue [#730](https://github.com/metasequoiaime/msime-windows/issues/730)，关联 issue [#729](https://github.com/metasequoiaime/msime-windows/issues/729)。\n\n## 一、想要什么\n\n1. 第三方词库\n2. **脚本扩展**\n\n| 阶段 | 内容 |\n|---|---|\n| 一 | 词库 |\n\n> 先做词库，见 https://msime.app/docs",
+			"插件支持路线图 方案讨论稿 对应 issue #730，关联 issue #729。 一、想要什么 第三方词库 脚本扩展 先做词库，见",
+		},
+		{
+			"在 Android 模拟器（API 28，develop `3314892c8c` 构建的 APK）上确认过了：**字母不会被吞。**\n\n全拼、关闭辅助码，点 `n i h a o` 后按 ⇧ 再按 `O`：\n\n- 输入框里的组字从 `nihao` 变成 `nihaoO`\n  - 候选栏__不变__\n\n```kotlin\nval x = 1 // **not** text\n```\n\n![截图](https://x.y/a.png)",
+			"在 Android 模拟器（API 28，develop 3314892c8c 构建的 APK）上确认过了：字母不会被吞。 全拼、关闭辅助码，点 n i h a o 后按 ⇧ 再按 O： 输入框里的组字从 nihao 变成 nihaoO 候选栏不变 截图",
+		},
+		{"> - 引用里的列表\n+ 加号列表", "引用里的列表 加号列表"},
+	} {
+		got := qqPlainText(c.in)
+		if got != c.want {
+			t.Errorf("qqPlainText(%q) = %q, want %q", c.in, got, c.want)
+		}
+		for _, noise := range []string{"](", "**", "`", "##", "val x"} {
+			if strings.Contains(got, noise) {
+				t.Errorf("qqPlainText(%q) = %q contains %q", c.in, got, noise)
+			}
+		}
+	}
+}
+
+// 按句子截断：句末标点在后半段时截在那里，只在前半段或没有时硬截；结果连同「…」不超过上限，没超过时原样返回。
+func TestQQTruncateSentence(t *testing.T) {
+	for _, c := range []struct {
+		in    string
+		limit int
+		want  string
+	}{
+		{"第一句话说完了。第二句没说完就超了", 12, "第一句话说完了。…"},
+		{"短。后面是一长串没有标点的文字一直写下去", 12, "短。后面是一长串没有标…"},
+		{"一长串没有任何标点的文字一直写下去", 10, "一长串没有任何标点…"},
+		{"第一行写完\n第二行没写完就超了", 10, "第一行写完…"},
+		{"没超过。", 10, "没超过。"},
+	} {
+		got := qqTruncateSentence(c.in, c.limit)
+		if got != c.want || len([]rune(got)) > c.limit {
+			t.Errorf("qqTruncateSentence(%q, %d) = %q, want %q", c.in, c.limit, got, c.want)
+		}
+	}
+}
+
+// 答案的格式统一：弯引号换成「」『』，字面的 \t 和制表符换成空格（有 Windows 路径时字面的 \t 不动），去掉加粗和行首的 #（issue 编号不动），多个连续空行压成一个。
+func TestQQNormalizeAnswer(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"打开“展开全部候选”，再看‘双拼标注’。", "打开「展开全部候选」，再看『双拼标注』。"},
+		{"don’t worry", "don't worry"},
+		{`你好\tni'hao\t10`, "你好 ni'hao 10"},
+		{"你好\tni'hao", "你好 ni'hao"},
+		{`日志在 C:\temp\msime.log`, `日志在 C:\temp\msime.log`},
+		{"## 设置方法\n**第一步**打开设置\n- 第二步 __重启__", "设置方法\n第一步打开设置\n- 第二步 重启"},
+		{"#123 已经修好了", "#123 已经修好了"},
+		{"第一段\n\n\n\n第二段", "第一段\n\n第二段"},
+	} {
+		if got := qqNormalizeAnswer(c.in); got != c.want {
+			t.Errorf("qqNormalizeAnswer(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	// qqCleanAnswer 先统一格式再去链接、截断。
+	if got := qqCleanAnswer("### 结论\n“可以”，见 https://x.y/a"); got != "结论\n「可以」，见" {
+		t.Fatalf("%q", got)
 	}
 }
 

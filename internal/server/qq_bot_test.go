@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -196,7 +197,15 @@ type qqFake struct {
 	created        []map[string]any
 	createStatus   int
 	comments       map[string]map[string]any
+	// 「记录答案」：faq 是整理 FAQ 的模型输出；faqFiles 不为 nil 时知识库仓库按它返回文件（要求按 qqFAQHead 读），faqWrites 按顺序记下建树、建提交、建分支、开 PR 的请求，faqFailPath 是会返回 422 的写接口路径。
+	faq         string
+	faqFiles    map[string]string
+	faqWrites   []map[string]any
+	faqFailPath string
 }
+
+// qqFAQHead 是测试里知识库默认分支当前的提交。
+const qqFAQHead = "head-sha"
 
 func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
@@ -241,6 +250,9 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				content = `{"decision":"needs_issue"}`
 			}
 			f.chatCalls = append(f.chatCalls, "triage")
+		case strings.HasPrefix(system, qqFAQPrompt):
+			content = f.faq
+			f.chatCalls = append(f.chatCalls, "faq")
 		case strings.HasPrefix(system, qqAnswerPrompt):
 			content, f.answerSystem = f.answer, system
 			f.chatCalls = append(f.chatCalls, "answer")
@@ -307,6 +319,28 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(body)
 	case r.URL.Path == "/app/installations/77/access_tokens":
 		_ = json.NewEncoder(w).Encode(map[string]any{"token": "ghs_test", "expires_at": time.Now().Add(time.Hour)})
+	case r.URL.Path == "/repos/o/docs" && r.Method == "GET":
+		_, _ = io.WriteString(w, `{"default_branch":"main"}`)
+	case r.URL.Path == "/repos/o/docs/git/ref/heads/main":
+		_, _ = io.WriteString(w, `{"object":{"sha":"`+qqFAQHead+`"}}`)
+	case r.URL.Path == "/repos/o/docs/git/commits/"+qqFAQHead && r.Method == "GET":
+		_, _ = io.WriteString(w, `{"sha":"`+qqFAQHead+`","tree":{"sha":"head-tree"}}`)
+	case r.Method == "POST" && slices.Contains([]string{"/repos/o/docs/git/trees", "/repos/o/docs/git/commits", "/repos/o/docs/git/refs", "/repos/o/docs/pulls"}, r.URL.Path):
+		if r.URL.Path == f.faqFailPath {
+			w.WriteHeader(422)
+			return
+		}
+		body["_path"] = r.URL.Path
+		f.faqWrites = append(f.faqWrites, body)
+		w.WriteHeader(201)
+		_, _ = io.WriteString(w, `{"sha":"new-`+strconv.Itoa(len(f.faqWrites))+`","number":42}`)
+	case f.faqFiles != nil && strings.HasPrefix(r.URL.Path, "/repos/o/docs/contents/"):
+		file, ok := f.faqFiles[strings.TrimPrefix(r.URL.Path, "/repos/o/docs/contents/")]
+		if r.URL.Query().Get("ref") != qqFAQHead || !ok {
+			w.WriteHeader(404)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"encoding": "base64", "content": base64.StdEncoding.EncodeToString([]byte(file))})
 	case strings.HasPrefix(r.URL.Path, "/repos/o/docs/contents/"):
 		f.knowledgeCalls++
 		if f.knowledgeStatus != 0 {
@@ -1888,5 +1922,128 @@ func TestQQBotDocsCommandIsNotIssueIntent(t *testing.T) {
 	qqDeliver(t, s, "m-docs-member-intent", "提文档 FAQ 没写怎么置顶候选，提issue 记一下")
 	if strings.Join(fake.chatCalls, ",") != "docs" || len(fake.created) != 3 || fake.comments["/repos/o/docs/issues/77/comments"] == nil || last() != "已经记下，维护者会据此更新文档。" {
 		t.Fatal(fake.chatCalls, len(fake.created), last())
+	}
+}
+
+// 测试用的 FAQ：两个分类，页尾有核对说明；繁体译文结构相同。
+const (
+	qqTestFAQ   = "# 常见问题\n\n## 字体与显示\n\n### 字体太小？\n\n在设置里调大。\n\n## 安装与启动\n\n### 装不上？\n\n先装运行库。\n\n本页于 2026-09-08 核对。\n"
+	qqTestFAQTW = "# 常見問題\n\n## 字型與顯示\n\n### 字型太小？\n\n在設定裡調大。\n\n## 安裝與啟動\n\n### 裝不上？\n\n先裝執行庫。\n\n本頁於 2026-09-08 核對。\n"
+)
+
+func qqTestFAQSources(faq string) string {
+	sum := sha256.Sum256([]byte(faq))
+	return "{\n  \"locale\": \"zh-Hant-TW\",\n  \"files\": {\n    \"windows.md\": {\n      \"sourceSha256\": \"aaaa\"\n    },\n    \"faq.md\": {\n      \"source\": \"guides/faq.md\",\n      \"sourceSha256\": \"" + hex.EncodeToString(sum[:]) + "\"\n    }\n  },\n  \"sourceBaseCommit\": \"abc\"\n}\n"
+}
+
+// 「记录答案」：管理员把群里的问答整理成 FAQ 的一条，在知识库仓库新分支上一次提交简体、繁体和译文核对哈希，开 PR；译文本来就没同步时只改简体。
+func TestQQBotRecordAnswer(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
+	fake.faqFiles = map[string]string{"guides/faq.md": qqTestFAQ, "guides/zh-TW/faq.md": qqTestFAQTW, "guides/zh-TW/sources.json": qqTestFAQSources(qqTestFAQ)}
+	fake.faq = `{"valid":"yes","question":"鸿蒙版在哪下载？","answer":"在华为应用市场搜索水杉输入法，见 https://evil.example","category":"安装与启动","question_tw":"鴻蒙版在哪下載？","answer_tw":"在華為應用市場搜尋水杉輸入法。"}`
+	qqDeliver(t, s, "m-faq", "记录答案 问：鸿蒙版在哪下载 答：华为应用市场搜水杉")
+	if len(fake.faqWrites) != 4 || !strings.Contains(last(), "开了 PR：GitHub o/docs 的 #42") {
+		t.Fatal(fake.faqWrites, fake.replyTexts())
+	}
+	tree, commit, ref, pull := fake.faqWrites[0], fake.faqWrites[1], fake.faqWrites[2], fake.faqWrites[3]
+	if tree["_path"] != "/repos/o/docs/git/trees" || tree["base_tree"] != "head-tree" {
+		t.Fatal(tree)
+	}
+	files := map[string]string{}
+	for _, f := range tree["tree"].([]any) {
+		entry := f.(map[string]any)
+		files[entry["path"].(string)] = entry["content"].(string)
+	}
+	wantFAQ := strings.Replace(qqTestFAQ, "先装运行库。\n\n", "先装运行库。\n\n### 鸿蒙版在哪下载？\n\n在华为应用市场搜索水杉输入法，见\n\n", 1)
+	wantTW := strings.Replace(qqTestFAQTW, "先裝執行庫。\n\n", "先裝執行庫。\n\n### 鴻蒙版在哪下載？\n\n在華為應用市場搜尋水杉輸入法。\n\n", 1)
+	if len(files) != 3 || files["guides/faq.md"] != wantFAQ || files["guides/zh-TW/faq.md"] != wantTW || files["guides/zh-TW/sources.json"] != qqTestFAQSources(wantFAQ) {
+		t.Fatalf("%q", files)
+	}
+	if commit["tree"] != "new-1" || fmt.Sprint(commit["parents"]) != "["+qqFAQHead+"]" || !strings.HasPrefix(commit["message"].(string), "docs(faq): add 鸿蒙版在哪下载？") {
+		t.Fatal(commit)
+	}
+	if ref["sha"] != "new-2" || !strings.HasPrefix(ref["ref"].(string), "refs/heads/qq-faq/") {
+		t.Fatal(ref)
+	}
+	if pull["head"] != strings.TrimPrefix(ref["ref"].(string), "refs/heads/") || pull["base"] != "main" || !strings.Contains(pull["body"].(string), "归入「安装与启动」") || !strings.Contains(pull["body"].(string), "已同步插入") {
+		t.Fatal(pull)
+	}
+	// 译文本来就没同步：只改简体，插在第一个分类的末尾，PR 里说明。
+	fake.faqWrites = nil
+	fake.faqFiles["guides/zh-TW/sources.json"] = qqTestFAQSources("旧原文")
+	fake.faq = `{"valid":"yes","question":"字体发虚？","answer":"换成 GDI 渲染。","category":"字体与显示","question_tw":"字型發虛？","answer_tw":"換成 GDI 渲染。"}`
+	qqDeliver(t, s, "m-faq-stale", "记录答案 字体发虚怎么办，换 GDI 渲染")
+	if len(fake.faqWrites) != 4 {
+		t.Fatal(fake.faqWrites, fake.replyTexts())
+	}
+	entries := fake.faqWrites[0]["tree"].([]any)
+	if len(entries) != 1 || entries[0].(map[string]any)["content"] != strings.Replace(qqTestFAQ, "在设置里调大。\n\n", "在设置里调大。\n\n### 字体发虚？\n\n换成 GDI 渲染。\n\n", 1) || !strings.Contains(fake.faqWrites[3]["body"].(string), "这次只改了简体") {
+		t.Fatal(entries, fake.faqWrites[3])
+	}
+	// 已有同名问题、看不出问答、模型输出不合格式、写接口失败：不开 PR。
+	fake.faqWrites = nil
+	fake.faq = `{"valid":"yes","question":"装不上？","answer":"a","category":"安装与启动","question_tw":"裝不上？","answer_tw":"a"}`
+	qqDeliver(t, s, "m-faq-dup", "记录答案 装不上怎么办")
+	if last() != "FAQ 里已经有「装不上？」这一问了。" {
+		t.Fatal(last())
+	}
+	fake.faq = `{"valid":"no"}`
+	qqDeliver(t, s, "m-faq-invalid", "记录答案 你好")
+	if !strings.HasPrefix(last(), "没看出要记录的问题和答案") {
+		t.Fatal(last())
+	}
+	for i, bad := range []string{
+		`{"valid":"yes","question":"q？","answer":"a","category":"不存在的分类","question_tw":"q？","answer_tw":"a"}`,
+		`{"valid":"yes","question":"q\n## 注入？","answer":"a","category":"安装与启动","question_tw":"q？","answer_tw":"a"}`,
+		`{"valid":"yes","question":"q？","answer":"a\n## 新分类","category":"安装与启动","question_tw":"q？","answer_tw":"a"}`,
+		`{"valid":"yes","question":"q？","answer":"a","category":"安装与启动","question_tw":"","answer_tw":"a"}`,
+		`not json`,
+	} {
+		fake.faq = bad
+		qqDeliver(t, s, "m-faq-bad-"+strconv.Itoa(i), "记录答案 内容")
+		if last() != qqReplyUnavailable {
+			t.Fatal(bad, last())
+		}
+	}
+	fake.faq = `{"valid":"yes","question":"新问题？","answer":"a","category":"安装与启动","question_tw":"新問題？","answer_tw":"a"}`
+	fake.faqFailPath = "/repos/o/docs/pulls"
+	qqDeliver(t, s, "m-faq-pull-fail", "记录答案 新问题")
+	if last() != qqReplyUnavailable || len(fake.faqWrites) != 3 {
+		t.Fatal(last(), len(fake.faqWrites))
+	}
+	// 没写内容；普通群友不能用，也不调模型。
+	qqDeliver(t, s, "m-faq-empty", "记录答案")
+	if !strings.HasPrefix(last(), "请在「记录答案」后面写问题和答案") {
+		t.Fatal(last())
+	}
+	s.qq.config.Admins = nil
+	fake.chatCalls = nil
+	qqDeliver(t, s, "m-faq-member", "记录答案 问：a 答：b")
+	if last() != "只有管理员能用「记录答案」。" || len(fake.chatCalls) != 0 {
+		t.Fatal(last(), fake.chatCalls)
+	}
+}
+
+func TestQQInsertFAQAndSyncSources(t *testing.T) {
+	// 没有页尾说明时接在文末；分类序号越界时不改。
+	got, ok := qqInsertFAQ("## A\n\n### x？\n\ny\n", 0, "q？", "a\n", "本页于")
+	if !ok || got != "## A\n\n### x？\n\ny\n\n### q？\n\na\n" {
+		t.Fatalf("%q", got)
+	}
+	if _, ok := qqInsertFAQ("## A\n", 1, "q？", "a", "本页于"); ok {
+		t.Fatal("out of range index accepted")
+	}
+	if got := qqFAQCategories(qqTestFAQ); fmt.Sprint(got) != "[字体与显示 安装与启动]" {
+		t.Fatal(got)
+	}
+	// 只替换哈希，键顺序和缩进不变；哈希对不上或格式不对时不改。
+	if got, ok := qqSyncFAQSources(qqTestFAQSources("old"), "old", "new"); !ok || got != qqTestFAQSources("new") {
+		t.Fatalf("%q", got)
+	}
+	for _, sources := range []string{qqTestFAQSources("other"), "not json", `{"files":{}}`} {
+		if _, ok := qqSyncFAQSources(sources, "old", "new"); ok {
+			t.Fatal(sources)
+		}
 	}
 }

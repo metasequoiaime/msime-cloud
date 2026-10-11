@@ -185,8 +185,8 @@ func qqCommandArg(text string, words ...string) (string, bool) {
 	return "", false
 }
 
-// qqCommand 处理群里的命令，返回处理结果的名字（写进每条消息的处理日志，见 handleQQFeedback），不是命令时返回空字符串。
-func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, admin bool, reply func(string)) string {
+// qqCommand 处理群里的命令，返回处理结果的名字（写进每条消息的处理日志，见 handleQQFeedback），不是命令时返回空字符串。progress 发过渡语，同一条消息只发一句（见 handleQQFeedback）。
+func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, admin bool, reply, progress func(string)) string {
 	if command := s.qqDraftCommands(ctx, m, text, admin, reply); command != "" {
 		return command
 	}
@@ -273,7 +273,7 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 			reply("请在「提issue」后面写要反馈的问题或需求。")
 			return "cmd_report"
 		}
-		return "cmd_report_" + s.fileAdminFeedback(ctx, m, content, true, reply)
+		return "cmd_report_" + s.fileAdminFeedback(ctx, m, content, true, reply, progress)
 	}
 	if content, ok := qqCommandArg(text, "记录答案", "记答案"); ok {
 		if !admin {

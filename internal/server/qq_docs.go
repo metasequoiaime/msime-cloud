@@ -72,6 +72,8 @@ func qqDocsIssueBody(request qqDocsRequest) string {
 
 // fileQQDocs 处理「提文档」。管理员的反馈在知识库仓库开 issue（重复时在原 issue 下补充）；普通群友的反馈追加到答不上问题的汇总 issue。
 func (s *Server) fileQQDocs(ctx context.Context, text string, admin bool, reply func(string)) {
+	// 整理、查重、建 issue 要十几秒，先回一句。
+	reply("收到，正在整理文档反馈～")
 	request, err := s.qqSummariseDocs(ctx, text)
 	if err != nil {
 		slog.Warn("qq bot: docs request failed", "reason", err.Error())

@@ -480,6 +480,12 @@ const (
 	qqReplyRestarting = "机器人正在更新，请一分钟后再 @我 发一次。"
 	qqReplyWorking    = "收到，正在整理成 issue。"
 	qqReplyPublic     = "内容由机器人转述后公开在 GitHub 上，不包含你的昵称和原话。"
+	// 下面几句是过渡语，一条消息最多发其中一句（见 handleQQFeedback 的 progress）：qqReplyShot 在看截图前，qqReplyThinking 在 qqThinkingDelay 后还没回复时，qqReplyLookingUp 在现查前。qqReplyReportAck 和 qqReplyReportShotAck 是管理员发「提issue」后马上回的「收到」，后面可能判成文档已有、缺信息或不是具体反馈，所以不说「正在整理成 issue」。
+	qqReplyShot          = "我看一下截图～"
+	qqReplyThinking      = "收到，我想一下～"
+	qqReplyLookingUp     = "我查一下，稍等～"
+	qqReplyReportAck     = "收到，我先整理一下～"
+	qqReplyReportShotAck = "收到，先看下截图再整理～"
 	// qqReplyNoIntent 曾接在管理员没有要求记录的反馈的一句话概括后面；现在这类消息直接答疑（见 fileAdminFeedback），不再引用，按规范保留。qqReplyExisting 接在管理员用「记一下」这类说法要求记录、知识库说明功能已有或现象正常时的答案后面；用「提issue」命令时不对照知识库，所以这里请他发「提issue」强制提交。
 	qqReplyNoIntent = "没有提 issue；需要记录的话，请 @我 发「提issue」加上这段描述。"
 	qqReplyExisting = "\n\n文档里已经写了这个，所以先不提 issue。要是这个办法不管用，@我 发「提issue」说一下哪里不行。"
@@ -504,8 +510,18 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		slog.Info("qq bot: handled", "outcome", outcome, "admin", admin, "ms", s.qq.now().Sub(started).Milliseconds())
 		s.recordQQOutcome(ctx, outcome)
 	}()
-	seq := 0
-	reply := func(text string) {
+	// 回复可能来自两个 goroutine（主流程和「我想一下」的计时器），seq、progressed 和计时器都由 mu 保护，发送也在锁里做，msg_seq 和群里看到的顺序一致。progressed 表示这条消息已经发过一句过渡语（「我看一下截图～」「我查一下，稍等～」「收到，我想一下～」、「提issue」的「收到」），一条消息最多一句：开放平台每条消息最多被动回复 5 次，过渡语只能占其中一次。
+	var (
+		mu         sync.Mutex
+		seq        int
+		progressed bool
+		thinking   *time.Timer
+		finished   bool
+	)
+	send := func(text string) {
+		if thinking != nil {
+			thinking.Stop()
+		}
 		seq++
 		if text == qqReplyUnavailable && errors.Is(ctx.Err(), context.Canceled) {
 			text = qqReplyRestarting
@@ -523,6 +539,29 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 			slog.Warn("qq bot: reply failed", "reason", err.Error())
 		}
 	}
+	reply := func(text string) {
+		mu.Lock()
+		defer mu.Unlock()
+		send(text)
+	}
+	// progress 发一句过渡语，这条消息已经发过过渡语时什么都不做。
+	progress := func(text string) {
+		mu.Lock()
+		defer mu.Unlock()
+		if !progressed {
+			progressed = true
+			send(text)
+		}
+	}
+	// 退出前停掉计时器并标记结束，计时器的回调拿到锁时看到 finished 就不再发：处理完以后不会再冒出一句「我想一下」。
+	defer func() {
+		mu.Lock()
+		defer mu.Unlock()
+		finished = true
+		if thinking != nil {
+			thinking.Stop()
+		}
+	}()
 	text := qqFeedbackText(m.Content)
 	if slices.Contains(qqWhoAmI, qqCompact(text)) {
 		role := "普通成员"
@@ -560,7 +599,7 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 			reply(qqReplyUnavailable)
 			return
 		}
-		outcome = s.qqCommand(ctx, m, text, admin, reply)
+		outcome = s.qqCommand(ctx, m, text, admin, reply, progress)
 		return
 	}
 	type qqLimit struct {
@@ -585,7 +624,7 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		}
 	}
 	if imageOnly {
-		reply("我看一下截图～")
+		progress(qqReplyShot)
 		shot := s.qqDescribeImages(ctx, m.Attachments)
 		if shot == "" {
 			reply(qqReplyScreenshot)
@@ -594,21 +633,32 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		}
 		text = qqWithShot("", shot)
 	}
-	if command := s.qqCommand(ctx, m, text, admin, reply); command != "" {
+	if command := s.qqCommand(ctx, m, text, admin, reply, progress); command != "" {
 		outcome = command
 		return
 	}
+	// 常规答疑要挑段落、回答两次模型调用，常常 10–30 秒才答完，期间群友什么都收不到，以为机器人坏了就重发。qqThinkingDelay 后还没发过任何回复、也没发过过渡语时先回一句。阈值取 8 秒：闲聊一般 5–7 秒答完，「在吗」不该先收到一句「我想一下」。命令自己回「收到」（见 fileAdminFeedback、recordQQAnswer、fileQQDocs），所以计时器在命令之后才起。
+	mu.Lock()
+	thinking = time.AfterFunc(qqThinkingDelay, func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if !finished && seq == 0 && !progressed {
+			progressed = true
+			send(qqReplyThinking)
+		}
+	})
+	mu.Unlock()
 	// 文字带截图时把截图描述接在问题后面再答。命令不带截图描述：「查」「#编号」用不上，「提issue」在 fileAdminFeedback 里自己看图。
 	if !imageOnly && qqHasImages(m.Attachments) {
-		reply("我看一下截图～")
+		progress(qqReplyShot)
 		text = qqWithShot(text, s.qqDescribeImages(ctx, m.Attachments))
 	}
 	// 普通群友的消息都按问题回答。管理员的消息先整理一遍：只有明确要求记录（qqIssueIntent 或模型给出的 intent）的具体反馈才提交，其余的照常答疑，报问题时在答案后提示用「提issue」。曾经管理员的每条消息都先自动判断、像反馈就提交，群里讨论和吐槽也被提成了 issue；后来没要求记录的具体反馈只回一句复述，管理员问「候选框老跑到左上角怎么回事」拿不到回答。
 	if admin {
-		outcome = "admin_" + s.fileAdminFeedback(ctx, m, text, false, reply)
+		outcome = "admin_" + s.fileAdminFeedback(ctx, m, text, false, reply, progress)
 		return
 	}
-	outcome = s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, text, false, reply)
+	outcome = s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, text, false, reply, progress)
 }
 
 // qqIssueIntentWords 是表示「请把这条记成 issue」的说法，与去掉空白、转成小写后的消息比较。只收祈使的说法：单独的「记录」会误中「历史记录丢了」这类 bug 描述。
@@ -621,10 +671,14 @@ func qqIssueIntent(text string) bool {
 }
 
 // fileAdminFeedback 处理管理员的一条消息。explicit 表示来自「提issue」命令。先整理成 bug 或需求：不是具体反馈、或者没有明确要求记录时转去答疑（命令不是具体反馈时请管理员写具体些）；用「记一下」这类说法要求记录的先对照知识库，文档说明功能已经有了或现象是正常的就回复文档的说法、不提交；「提issue」命令是管理员已经判断过要提，不对照知识库；其余的按平台选仓库、查重、带上附件和标签提交。
-func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text string, explicit bool, reply func(string)) string {
-	// 「提issue」带了截图时把截图描述并进反馈，整理出的 issue 才写得清现象；截图本身照旧存进公开 bucket。不是命令的消息在 handleQQFeedback 里已经看过图（看不成时也不再看第二遍）。
-	if explicit && qqHasImages(m.Attachments) && !strings.Contains(text, qqShotMarker) {
+func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text string, explicit bool, reply, progress func(string)) string {
+	// 「提issue」一进来就回「收到」：后面看图、整理、选仓库加起来常常十几秒到几十秒，曾经要做完这些才回 qqReplyWorking，带截图时全程没有一句话，管理员以为没收到又发一遍。不是命令的消息由 handleQQFeedback 的计时器和截图提示负责。「提issue」带了截图时把截图描述并进反馈，整理出的 issue 才写得清现象；截图本身照旧存进公开 bucket。不是命令的消息在 handleQQFeedback 里已经看过图（看不成时也不再看第二遍）。
+	switch {
+	case explicit && qqHasImages(m.Attachments) && !strings.Contains(text, qqShotMarker):
+		progress(qqReplyReportShotAck)
 		text = qqWithShot(text, s.qqDescribeImages(ctx, m.Attachments))
+	case explicit:
+		progress(qqReplyReportAck)
 	}
 	original := text
 	text, notes := qqParseNotes(text)
@@ -633,7 +687,7 @@ func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text s
 		// 没要求记录的消息整理失败时退回去直接答疑：同一个问题普通群友问能答上，管理员问不该只得到「暂时处理不了」。明确要求记录时不能悄悄改成答疑，如实说没整理成；副本关停时仍回 qqReplyUnavailable，由 reply 换成「正在更新」。
 		if !explicit && !qqIssueIntent(text) {
 			slog.Warn("qq bot: summarise failed, answering instead", "reason", err.Error())
-			return s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, original, true, reply)
+			return s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, original, true, reply, progress)
 		}
 		slog.Warn("qq bot: summarise failed", "reason", err.Error())
 		if ctx.Err() != nil {
@@ -648,11 +702,11 @@ func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text s
 			reply("没看出要提的是 bug 还是需求，请把问题或想要的功能描述具体一点。")
 			return "not_report"
 		}
-		return s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, original, true, reply)
+		return s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, original, true, reply, progress)
 	}
 	// 没要求记录的具体反馈直接答疑，不为了查重先跑一次知识库对照。
 	if !explicit && !report.Intent && !qqIssueIntent(text) {
-		return s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, original, true, reply)
+		return s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, original, true, reply, progress)
 	}
 	// 只有用「记一下」这类说法要求记录时才对照知识库；「提issue」命令照常提交，曾经被知识库判一句「文档里有」就不提，管理员只能和模型辩论。
 	if !explicit {
@@ -674,7 +728,8 @@ func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text s
 		reply("还差一点信息：" + question + qqReplyResend)
 		return "needs_version"
 	}
-	reply(qqReplyWorking)
+	// 已经回过「收到」或其他过渡语时不再多说一句。
+	progress(qqReplyWorking)
 	media, failed := s.publishQQMedia(ctx, m.Attachments)
 	number, duplicate, err := s.fileQQReport(ctx, repo, label, report, qqMediaSection(media, failed), notes)
 	if err != nil {
@@ -691,7 +746,7 @@ func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text s
 }
 
 // answerQQQuestion 用知识库回答一条消息；答不上的问题和群友报告的问题记进汇总 issue（qq_gaps.go），由管理员跟进。admin 表示提问的是管理员：他报问题时不起草稿、不记汇总 issue（那是给群友等管理员处理的），只在答案后提示用「提issue」。
-func (s *Server) answerQQQuestion(ctx context.Context, group, member, question string, admin bool, reply func(string)) string {
+func (s *Server) answerQQQuestion(ctx context.Context, group, member, question string, admin bool, reply, progress func(string)) string {
 	subject := group + "/" + member
 	var history []account.QQTurn
 	if s.qqHistory != nil {
@@ -701,14 +756,8 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 		}
 		history = turns
 	}
-	// 要现查或者重答时先回一句，查一次要几十秒，免得群友以为机器人没反应。只回一次。
-	progressed := false
-	ask := qqAsk{progress: func() {
-		if !progressed {
-			progressed = true
-			reply("我查一下，稍等～")
-		}
-	}}
+	// 要现查或者重答时先回一句，查一次要几十秒，免得群友以为机器人没反应。和截图提示、「我想一下」共用一个标志，已经回过过渡语时不再说。
+	ask := qqAsk{progress: func() { progress(qqReplyLookingUp) }}
 	// 群友说上一个回答不对：记下来，强制现查、换思路把上一个问题重答一次（见 qq_bad_answers.go）。
 	retrying, feedback := qqIsBadAnswerFeedback(history, question), question
 	var last account.QQTurn
@@ -773,6 +822,9 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 	}
 	return outcome
 }
+
+// qqThinkingDelay 是常规答疑还没回复时先回「收到，我想一下～」的等待时间，见 handleQQFeedback；测试里改短。
+var qqThinkingDelay = 8 * time.Second
 
 // qqPrimaryModelTimeout 是配置了备用模型时主模型每次调用的时限，见 qqChat；测试里改短。
 var qqPrimaryModelTimeout = 50 * time.Second

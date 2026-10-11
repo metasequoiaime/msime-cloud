@@ -170,6 +170,8 @@ type qqFake struct {
 	duplicate string
 	selected  string
 	answer    string
+	// sameDraft 是判断新反馈和刚起的草稿是不是同一件事的模型输出，为空时不是。
+	sameDraft string
 	// triage 是提交前对照知识库的模型输出，为空时是 needs_issue；triageSystem 记下最近一次交给它的说明和资料。
 	triage       string
 	triageSystem string
@@ -385,6 +387,12 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case system == qqDuplicatePrompt:
 			content = f.duplicate
 			f.chatCalls = append(f.chatCalls, "duplicate")
+		case system == qqSameDraftPrompt:
+			content = f.sameDraft
+			if content == "" {
+				content = `{"same":false}`
+			}
+			f.chatCalls = append(f.chatCalls, "same")
 		case strings.HasPrefix(system, qqSelectPrompt):
 			content, f.selectSystem = f.selected, system
 			f.chatCalls = append(f.chatCalls, "select")
@@ -3928,7 +3936,7 @@ type memoryDrafts struct {
 func (m *memoryDrafts) CreateQQDraft(_ context.Context, subject, original, report string) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.drafts = append(m.drafts, account.QQDraft{ID: int64(len(m.drafts) + 1), Subject: account.QQDraftSubject(subject), Original: original, Report: report, CreatedAt: time.Date(2026, 10, 12, 1, 0, 0, 0, time.UTC)})
+	m.drafts = append(m.drafts, account.QQDraft{ID: int64(len(m.drafts) + 1), Subject: account.QQDraftSubject(subject), Original: original, Report: report, CreatedAt: time.Date(2026, 10, 12, 1, 0, 0, 0, time.UTC), UpdatedAt: time.Now()})
 	return int64(len(m.drafts)), nil
 }
 func (m *memoryDrafts) QQDraft(_ context.Context, id int64) (account.QQDraft, error) {
@@ -3954,7 +3962,7 @@ func (m *memoryDrafts) UpdateQQDraft(_ context.Context, id int64, original, repo
 	if !m.unclaimed(id) {
 		return false, nil
 	}
-	m.drafts[id-1].Original, m.drafts[id-1].Report = original, report
+	m.drafts[id-1].Original, m.drafts[id-1].Report, m.drafts[id-1].UpdatedAt = original, report, time.Now()
 	return true, nil
 }
 func (m *memoryDrafts) ClaimQQDraft(_ context.Context, id int64) (bool, error) {
@@ -4043,7 +4051,8 @@ func TestQQBotDrafts(t *testing.T) {
 	if replies := fake.replyTexts(); replies[len(replies)-2] != "先在「外观」里打开「候选窗口跟随光标」试试。" {
 		t.Fatalf("%q", replies)
 	}
-	if want := "我已经把这个问题记下来了，编号 D1，管理员确认后会转给开发者。还想知道：" + qqDefaultQuestion + "补上后 @我 发「补充 D1 Windows 11，版本 0.9.5」这样就行。"; last() != want {
+	// 说明压成一行，示例按缺的字段生成，不再写死「补充 D1 Windows 11，版本 0.9.5」。
+	if want := "已记下（D1），管理员确认后转给开发者。还差：" + qqDefaultQuestion + "比如：安卓 / Windows 11 / macOS，0.10.1（设置的「关于」页能看到），直接 @我 回一句就行。"; last() != want {
 		t.Fatalf("%q", last())
 	}
 	// 别人不能补充，本人可以。
@@ -4077,7 +4086,7 @@ func TestQQBotDrafts(t *testing.T) {
 	if last() != "没有找到草稿 D9，可能已经过期了。" {
 		t.Fatal(last())
 	}
-	// 只问用法时不起草稿；不是具体的 bug 时照旧记进汇总。
+	// 只问用法时不起草稿；模型判了 escalate、整理下来却不是具体的 bug 时也不起草稿，只回答案（见 TestQQBotDraftNotReport）。
 	fake.answer = `{"type":"answered","answer":"在设置里选五笔。"}`
 	deliver("m-howto", "MEMBER1", "五笔怎么切换")
 	if last() != "在设置里选五笔。" || len(drafts.drafts) != 1 {
@@ -4085,9 +4094,47 @@ func TestQQBotDrafts(t *testing.T) {
 	}
 	fake.answer = `{"type":"answered","answer":"先重启一下试试。","escalate":true,"topic":"输入法不好用"}`
 	fake.summary = `{"kind":"other"}`
+	before := len(fake.replyTexts())
 	deliver("m-vague", "MEMBER1", "这输入法不好用")
-	if replies := fake.replyTexts(); replies[len(replies)-2] != "先重启一下试试。" || last() != qqEscalationUnrecorded || len(drafts.drafts) != 1 {
+	if replies := fake.replyTexts(); len(replies) != before+1 || last() != "先重启一下试试。" || len(drafts.drafts) != 1 {
 		t.Fatal(replies, len(drafts.drafts))
+	}
+}
+
+// 答疑模型判了 escalate，整理反馈却判成 other（「mac怎么装啊，装完了在输入法列表里找不到」这类问用法的话）：只回一条答案，不记汇总 issue，不说「已转给管理员」，处理结果记 answered。额度用完时照旧记进汇总 issue。
+func TestQQBotDraftNotReport(t *testing.T) {
+	logs := issueCaptureLogs(t)
+	s, fake, limiter := qqServer(t)
+	drafts := &memoryDrafts{}
+	s.qqDrafts = drafts
+	s.qq.config.Admins = []string{"ADMIN1"}
+	s.qq.config.GapsRepo = "o/docs"
+	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题",` + qqAppAuthor + `}]`
+	fake.answer = `{"type":"answered","answer":"装完后到系统设置的「键盘」里把水杉加进输入法列表。","escalate":true,"topic":"macOS 装完找不到输入法"}`
+	fake.summary = `{"kind":"other"}`
+	qqPost(t, s, qqMessageFrom("m-howto", "MEMBER1", "mac怎么装啊，装完了在输入法列表里找不到"))
+	s.qqWorkers.Wait()
+	if replies := fake.replyTexts(); len(replies) != 1 || replies[0] != "装完后到系统设置的「键盘」里把水杉加进输入法列表。" {
+		t.Fatalf("%q", replies)
+	}
+	if len(fake.comments) != 0 || len(drafts.drafts) != 0 {
+		t.Fatal(fake.comments, drafts.drafts)
+	}
+	// 额度用完：分不清是不是具体的 bug，照旧记进汇总 issue。
+	limiter.counts["qq-bot-drafts|GROUP1/MEMBER2"] = qqDraftsDaily
+	qqPost(t, s, qqMessageFrom("m-limited", "MEMBER2", "候选框老是跑到屏幕左上角"))
+	s.qqWorkers.Wait()
+	if replies := fake.replyTexts(); len(replies) != 3 || replies[2] != qqEscalation || fake.comments["/repos/o/docs/issues/77/comments"] == nil {
+		t.Fatalf("%q %v", replies, fake.comments)
+	}
+	var outcomes []string
+	for _, entry := range logs() {
+		if entry["msg"] == "qq bot: handled" {
+			outcomes = append(outcomes, fmt.Sprint(entry["outcome"]))
+		}
+	}
+	if strings.Join(outcomes, ",") != "answered,answered_escalate" {
+		t.Fatal(outcomes)
 	}
 }
 
@@ -4132,7 +4179,7 @@ func TestQQBotDraftSupplementFailures(t *testing.T) {
 	// 补上了一部分，还缺：告诉群友带 @ 怎么补；模型的追问没写问号时补上。
 	drafts.updateErr = nil
 	deliver("m-s1-more", "MEMBER1", "补充 D1 在微信里")
-	if want := "已补充到 D1。还想知道：你用的是哪个系统？再 @我 发「补充 D1 …」补上就行。"; last() != want {
+	if want := "已补充到 D1。还差：你用的是哪个系统？比如：安卓 / Windows 11 / macOS，直接 @我 回一句就行。"; last() != want {
 		t.Fatalf("%q", last())
 	}
 	// 管理员提交时 Windows 还缺版本号：告诉他怎么带上缺的信息一起提交。
@@ -4182,14 +4229,14 @@ func TestQQBotDraftFollowUp(t *testing.T) {
 	}
 	report("m-f1", "MEMBER1")
 	// 草稿说明连同答案记进对话历史，下一轮的模型看得到草稿编号和追问。
-	if turns := history.turns["GROUP1/MEMBER1"]; len(turns) != 1 || turns[0].Answer != "先在「外观」里打开「候选窗口跟随光标」试试。"+last() || !strings.Contains(turns[0].Answer, "编号 D1") {
+	if turns := history.turns["GROUP1/MEMBER1"]; len(turns) != 1 || turns[0].Answer != "先在「外观」里打开「候选窗口跟随光标」试试。"+last() || !strings.Contains(turns[0].Answer, "已记下（D1）") {
 		t.Fatal(turns)
 	}
 	// 直接回答追问：补进 D1，不调答疑模型，不起新草稿；还缺信息时接着问。
 	before := answers()
 	fake.summary = `{"kind":"bug","title":"候选框停在屏幕左上角","platform":"windows","ime_version":"0.9.5","problem":"打字时候选框一直在左上角","steps":"","missing":"是在哪个软件里打字时出现的","keywords":"候选框 左上角"}`
 	deliver("m-f1-more", "MEMBER1", "Windows 11，0.9.5")
-	if want := "已补充到 D1。还想知道：是在哪个软件里打字时出现的？再 @我 发「补充 D1 …」补上就行。"; last() != want || answers() != before || len(drafts.drafts) != 1 || !strings.HasSuffix(drafts.drafts[0].Original, "\n补充：Windows 11，0.9.5") {
+	if want := "已补充到 D1。还差：是在哪个软件里打字时出现的？直接 @我 回一句就行。"; last() != want || answers() != before || len(drafts.drafts) != 1 || !strings.HasSuffix(drafts.drafts[0].Original, "\n补充：Windows 11，0.9.5") {
 		t.Fatalf("%q %d %q", last(), len(drafts.drafts), drafts.drafts[0].Original)
 	}
 	if turns := history.turns["GROUP1/MEMBER1"]; len(turns) != 2 || turns[1].Question != "Windows 11，0.9.5" || turns[1].Answer != last() {
@@ -4302,6 +4349,153 @@ func TestQQBotDraftUsesEarlierTurns(t *testing.T) {
 	deliver("m-h3", "另外切换五笔后打不出字")
 	if got := lastSummarised(); got != "另外切换五笔后打不出字" || len(drafts.drafts) != 2 || drafts.drafts[1].Original != "另外切换五笔后打不出字" {
 		t.Fatalf("%q %v", got, drafts.drafts)
+	}
+}
+
+// 草稿说明会追问缺的信息时，答案末尾同样的追问先去掉再发，版本号不会被问两遍；说明只有一行；对话历史里记的也是去掉追问后的答案。说明不追问时答案原样发。
+func TestQQBotDraftStripsDuplicateAsk(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	drafts := &memoryDrafts{}
+	s.qqDrafts = drafts
+	history := &memoryConversations{}
+	s.qqHistory = history
+	s.qq.config.Admins = []string{"ADMIN1"}
+	deliver := func(id, member, content string) []string {
+		t.Helper()
+		before := len(fake.replyTexts())
+		qqPost(t, s, qqMessageFrom(id, member, content))
+		s.qqWorkers.Wait()
+		return fake.replyTexts()[before:]
+	}
+	fake.answer = `{"type":"answered","answer":"先把输入法切到别的再切回来试试。\n你是哪个版本、是所有应用都卡还是某个软件里才卡？说一下我好接着帮你缩小范围～","escalate":true,"topic":"Windows 打字卡顿"}`
+	fake.summary = `{"kind":"bug","title":"Windows 打字卡顿","platform":"windows","problem":"打字很卡","steps":"在微信里打字","keywords":"卡顿"}`
+	replies := deliver("m-a1", "MEMBER1", "windows 版打字很卡，怎么排查")
+	want := []string{"先把输入法切到别的再切回来试试。", "已记下（D1），管理员确认后转给开发者。还差：版本号，比如：0.10.1（设置的「关于」页能看到），直接 @我 回一句就行。"}
+	if strings.Join(replies, "|") != strings.Join(want, "|") || strings.Contains(replies[1], "\n") {
+		t.Fatalf("%q", replies)
+	}
+	if turns := history.turns["GROUP1/MEMBER1"]; len(turns) != 1 || turns[0].Answer != want[0]+want[1] {
+		t.Fatal(turns)
+	}
+	// 信息齐了、说明不追问：答案末尾的问句原样保留。
+	fake.answer = `{"type":"answered","answer":"先把输入法切到别的再切回来试试。你用的是哪个版本？","escalate":true,"topic":"Windows 打字卡顿"}`
+	fake.summary = `{"kind":"bug","title":"Windows 打字卡顿","platform":"windows","ime_version":"0.9.5","problem":"打字很卡","steps":"在微信里打字","keywords":"卡顿"}`
+	if replies := deliver("m-a2", "MEMBER2", "windows 0.9.5 在微信里打字很卡"); len(replies) != 2 || replies[0] != "先把输入法切到别的再切回来试试。你用的是哪个版本？" || replies[1] != "已记下（D2），管理员确认后转给开发者。" {
+		t.Fatalf("%q", replies)
+	}
+}
+
+func TestQQStripTrailingAsk(t *testing.T) {
+	for _, c := range [][2]string{
+		{"先重启试试。你是哪个版本？", "先重启试试。"},
+		{"先重启试试。\n你是哪个版本、是所有应用都卡还是某个软件里才卡？说一下我好接着帮你缩小范围～", "先重启试试。"},
+		{"先重启试试。你用的是哪个系统?\n", "先重启试试。"},
+		{"第一步。\n第二步，你用哪个系统？还有输入法版本？", "第一步。"},
+		// 只剩追问、前面没有别的内容：保留原文。
+		{"你是哪个版本？", "你是哪个版本？"},
+		// 不是问群友要信息的问句、问句后面还有别的话、只有不带问号的索要：都不动。
+		{"先重启试试。还有别的问题吗？", "先重启试试。还有别的问题吗？"},
+		{"你是哪个版本？我好帮你查。", "你是哪个版本？我好帮你查。"},
+		{"先重启试试，还不行就告诉我。", "先重启试试，还不行就告诉我。"},
+		// 前面的索要不是跟在问句后面的，留着。
+		{"先重启，不行告诉我。你是哪个版本？", "先重启，不行告诉我。"},
+		// 只看最后一行。
+		{"你是哪个版本？\n先重启试试。", "你是哪个版本？\n先重启试试。"},
+	} {
+		if got := qqStripTrailingAsk(c[0]); got != c[1] {
+			t.Errorf("%q: %q", c[0], got)
+		}
+	}
+}
+
+// 追问的草稿编号新旧文案都认：新的「已记下（D1）…还差」「已补充到 D1。还差」，旧的「编号 D1…还想知道」和只有「还想知道…「补充 D1」」的写法；不追问的说明不算。
+func TestQQDraftFollowUpID(t *testing.T) {
+	for answer, want := range map[string]int64{
+		"先重启试试。已记下（D12），管理员确认后转给开发者。还差：版本号，比如：0.10.1（设置的「关于」页能看到），直接 @我 回一句就行。":                        12,
+		"已补充到 D3。还差：是在哪个软件里打字时出现的？直接 @我 回一句就行。":                                                        3,
+		"先重启试试。我已经把这个问题记下来了，编号 D7，管理员确认后会转给开发者。还想知道：你用的是哪个系统？补上后 @我 发「补充 D7 Windows 11，版本 0.9.5」这样就行。": 7,
+		"还想知道：你用的是哪个系统？再 @我 发「补充 D8 …」补上就行。":                                                           8,
+		"已记下（D5），管理员确认后转给开发者。":                                                                         0,
+		"已补充到 D5，信息齐了，等管理员确认提交。":                                                                       0,
+		"还差一步：在设置里打开它。": 0,
+	} {
+		id, ok := qqDraftFollowUpID(answer)
+		if ok != (want != 0) || id != want {
+			t.Errorf("%q: %d %v", answer, id, ok)
+		}
+	}
+}
+
+// 对话历史里存的是改文案之前的追问（「编号 D1…还想知道…「补充 D1 Windows 11，版本 0.9.5」」）时，群友直接回「Windows 11，0.9.5」照样补进 D1；新文案同样能补（见 TestQQBotDraftFollowUp）。
+func TestQQBotDraftFollowUpLegacyText(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	drafts := &memoryDrafts{}
+	s.qqDrafts = drafts
+	s.qq.config.Admins = []string{"ADMIN1"}
+	ctx := context.Background()
+	if _, err := drafts.CreateQQDraft(ctx, "GROUP1/MEMBER1", "候选框一直跑到左上角", `{"kind":"bug","title":"候选框停在屏幕左上角","problem":"打字时候选框一直在左上角"}`); err != nil {
+		t.Fatal(err)
+	}
+	history := &memoryConversations{turns: map[string][]account.QQTurn{"GROUP1/MEMBER1": {{Question: "候选框一直跑到左上角", Answer: "先在「外观」里打开「候选窗口跟随光标」试试。我已经把这个问题记下来了，编号 D1，管理员确认后会转给开发者。还想知道：" + qqDefaultQuestion + "补上后 @我 发「补充 D1 Windows 11，版本 0.9.5」这样就行。"}}}}
+	s.qqHistory = history
+	fake.summary = `{"kind":"bug","title":"候选框停在屏幕左上角","platform":"windows","ime_version":"0.9.5","problem":"打字时候选框一直在左上角","steps":"在微信里打字","keywords":"候选框 左上角"}`
+	qqPost(t, s, qqMessageFrom("m-legacy", "MEMBER1", "Windows 11，0.9.5"))
+	s.qqWorkers.Wait()
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "已补充到 D1，信息齐了，等管理员确认提交。" || len(drafts.drafts) != 1 || !strings.HasSuffix(drafts.drafts[0].Original, "\n补充：Windows 11，0.9.5") || slices.Contains(fake.chatCalls, "answer") {
+		t.Fatalf("%q %q %v", last, drafts.drafts[0].Original, fake.chatCalls)
+	}
+}
+
+// 群友刚起过草稿、又说了同一件事（D1 没缺信息，回复里没有追问，qqSupplementFollowUp 接不上）：模型判为同一件事时补进 D1，不新建，也不占新建草稿的额度；判为不同的事时新建。草稿已经提交、或者超过 30 分钟没更新时不判断，直接新建。
+func TestQQBotDraftMergesSameIssue(t *testing.T) {
+	s, fake, limiter := qqServer(t)
+	drafts := &memoryDrafts{}
+	s.qqDrafts = drafts
+	history := &memoryConversations{}
+	s.qqHistory = history
+	s.qq.config.Admins = []string{"ADMIN1"}
+	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
+	deliver := func(id, content string) {
+		t.Helper()
+		qqPost(t, s, qqMessageFrom(id, "MEMBER1", content))
+		s.qqWorkers.Wait()
+	}
+	judged := func() int { return strings.Count(strings.Join(fake.chatCalls, " "), "same") }
+	fake.answer = `{"type":"answered","answer":"先关掉「模糊音」试试。","escalate":true,"topic":"选字后 j 被吞掉"}`
+	fake.summary = `{"kind":"bug","title":"选择候选字后拼音里的 j 消失","platform":"windows","ime_version":"0.9.5","problem":"选「再」之后紧跟着打的 j 不见了","steps":"全拼输入 zai，选字后马上打 j","keywords":"选字 j 吞键"}`
+	deliver("m-m1", "选完「再」字后拼音里的 j 没了，windows 0.9.5")
+	if len(drafts.drafts) != 1 || last() != "已记下（D1），管理员确认后转给开发者。" || judged() != 0 {
+		t.Fatal(len(drafts.drafts), last(), judged())
+	}
+	// 判为同一件事：补进 D1，不新建 D2，退回这次新建草稿的名额。
+	fake.sameDraft = `{"same":true}`
+	fake.summary = `{"kind":"bug","title":"全拼选字后紧跟的 j 键被吞掉","platform":"windows","ime_version":"0.9.5","problem":"选字后马上按 j，j 被吞掉","steps":"全拼选字后马上按 j","keywords":"选字 j 吞键"}`
+	deliver("m-m1-more", "补充一下，是全拼选字后紧跟着按 j 就被吞掉")
+	if len(drafts.drafts) != 1 || last() != "已补充到 D1，信息齐了，等管理员确认提交。" || judged() != 1 || !strings.HasSuffix(drafts.drafts[0].Original, "\n补充：补充一下，是全拼选字后紧跟着按 j 就被吞掉") {
+		t.Fatal(len(drafts.drafts), last(), judged(), drafts.drafts[0].Original)
+	}
+	if n := limiter.counts["qq-bot-drafts|GROUP1/MEMBER1"]; n != 1 {
+		t.Fatal("draft slot not released", n)
+	}
+	// 判为不同的事：新建 D2。
+	fake.sameDraft = `{"same":false}`
+	fake.summary = `{"kind":"bug","title":"切换五笔后打不出字","platform":"windows","ime_version":"0.9.5","problem":"切换五笔后打不出字","steps":"切换到五笔","keywords":"五笔"}`
+	deliver("m-m2", "另外切换五笔后打不出字")
+	if len(drafts.drafts) != 2 || last() != "已记下（D2），管理员确认后转给开发者。" || judged() != 2 {
+		t.Fatal(len(drafts.drafts), last(), judged())
+	}
+	// D2 已经提交：不判断，新建 D3。
+	drafts.drafts[1].Filed, drafts.drafts[1].FiledAt, drafts.drafts[1].IssueRef = true, time.Now(), "win #1"
+	fake.sameDraft = `{"same":true}`
+	deliver("m-m3", "五笔还是打不出字")
+	if len(drafts.drafts) != 3 || last() != "已记下（D3），管理员确认后转给开发者。" || judged() != 2 {
+		t.Fatal(len(drafts.drafts), last(), judged())
+	}
+	// D3 超过 30 分钟没更新：不判断，新建 D4。
+	drafts.drafts[2].UpdatedAt = time.Now().Add(-31 * time.Minute)
+	deliver("m-m4", "五笔又打不出字了")
+	if len(drafts.drafts) != 4 || last() != "已记下（D4），管理员确认后转给开发者。" || judged() != 2 {
+		t.Fatal(len(drafts.drafts), last(), judged())
 	}
 }
 
@@ -4770,7 +4964,7 @@ func TestQQBotFeatureVotes(t *testing.T) {
 	// 没有同一个需求时照旧起草稿。
 	fake.duplicate = `{"duplicate":0}`
 	deliver("m-vote-new", "MEMBER2", "希望支持自定义候选框圆角")
-	if len(drafts.drafts) != 1 || !strings.Contains(last(), "记下来了，编号 D1") {
+	if len(drafts.drafts) != 1 || last() != "已记下（D1），管理员确认后转给开发者。" {
 		t.Fatal(len(drafts.drafts), last())
 	}
 }

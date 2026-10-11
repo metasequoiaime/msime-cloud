@@ -12,7 +12,7 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
 )
 
-// QQ 群里的命令和管理员提 issue 时的标签。命令不经过模型，直接查 GitHub 或给固定文字，回复快、结果稳定：帮助、版本、查 关键词、#编号、我的ID（在 handleQQFeedback 里），以及只有管理员能用的「提issue」，这是提 issue 的唯一入口。管理员提 issue 时，模型从目标仓库已有的分类标签里挑 0 到 2 个；消息里写的「优先级 高」「effort S」在仓库有对应标签时打上标签，否则写进正文的「维护者标注」，不新建标签。
+// QQ 群里的命令和管理员提 issue 时的标签。命令不经过模型，直接查 GitHub 或给固定文字，回复快、结果稳定：帮助、版本、查 关键词、#编号、提文档（见 qq_docs.go）、我的ID（在 handleQQFeedback 里），以及只有管理员能用的「提issue」，这是提 issue 的唯一入口。管理员提 issue 时，模型从目标仓库已有的分类标签里挑 0 到 2 个；消息里写的「优先级 高」「effort S」在仓库有对应标签时打上标签，否则写进正文的「维护者标注」，不新建标签。
 
 // qqHelpText 是「帮助」的回复；管理员另外看到 qqAdminHelpText。
 const (
@@ -21,11 +21,13 @@ const (
 - 版本：各平台最新版本
 - 查 关键词：搜 GitHub 上的相关 issue，例如「查 候选框 左上角」
 - #编号：查某个 issue 的状态，例如「#818」或「msime-windows #818」
+- 提文档 内容：反馈文档缺了什么或哪里写错了，维护者会据此更新
 - 我的ID：查看自己的 ID`
 	qqAdminHelpText = `
 管理员还可以：
 - 提issue 内容：把 bug 或需求整理成 GitHub issue（会先查重，图片和视频一并带上），不写「提issue」的消息只会当作提问回答
-- 在「提issue」里写「优先级 高」「effort S」：仓库有对应标签就打上，否则写进 issue 正文`
+- 在「提issue」里写「优先级 高」「effort S」：仓库有对应标签就打上，否则写进 issue 正文
+- 提文档 内容：直接在 msime-docs 开文档 issue（会先查重）`
 )
 
 var (
@@ -90,6 +92,14 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 	}
 	if ref := qqIssueRefPattern.FindStringSubmatch(strings.TrimSpace(text)); ref != nil {
 		reply(s.qqIssueStatus(ctx, ref[1], ref[2]))
+		return true
+	}
+	if content, ok := qqCommandArg(text, "提文档", "文档反馈"); ok {
+		if content == "" {
+			reply("请在「提文档」后面写文档缺了什么或哪里不对，例如「提文档 FAQ 没写鸿蒙版的发布状态」。")
+			return true
+		}
+		s.fileQQDocs(ctx, content, admin, reply)
 		return true
 	}
 	if content, ok := qqCommandArg(text, "提issue", "提 issue", "提交issue"); ok {

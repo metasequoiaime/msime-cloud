@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
 )
@@ -35,11 +36,18 @@ var (
 	// qqIssueRefPattern 匹配「#818」「msime-windows #818」这样的 issue 编号查询。
 	qqIssueRefPattern = regexp.MustCompile(`^(?:([A-Za-z0-9._-]{1,100})\s*)?#([0-9]{1,7})$`)
 	// qqPriorityPattern、qqEffortPattern 匹配管理员在反馈里写的优先级和工作量。
-	qqPriorityPattern = regexp.MustCompile(`(?i)(?:优先级|priority)\s*[:：]?\s*(紧急|高|中|低|p[0-3])`)
+	// 优先级的值后面要是空白、标点或结尾，「自定义短语的优先级高于词库」不算标注。
+	qqPriorityPattern = regexp.MustCompile(`(?i)(?:优先级|priority)\s*[:：]?\s*(紧急|高|中|低|p[0-3])(?:[\s,，.。;；、!！?？)）]|$)`)
 	qqEffortPattern   = regexp.MustCompile(`(?i)(?:effort|工作量)\s*[:：]?\s*(xl|xs|s|m|l)(?:[^A-Za-z]|$)`)
 )
 
-// qqCommandArg 判断 text 是不是以某个命令词开头、后面跟着空白或冒号，返回去掉命令词后的参数；「查不到词库怎么办」这类以同一个字开头的普通提问不算命令。
+// qqLooseCommands 是后面不跟分隔符、直接接内容也算命令的命令词：「提issue候选框不跟随」很常见，而以这几个词开头的普通提问几乎没有。以 ASCII 字母结尾的命令词（「提issue」）同样放宽；「查」「搜」这类单字命令保持要分隔符，免得「查不到词库怎么办」被当成命令。
+var qqLooseCommands = []string{"提文档", "文档反馈", "记录答案", "记答案"}
+
+// qqCommandSeparators 是命令词和参数之间可以有的分隔符。
+const qqCommandSeparators = ":： \n\t,，、"
+
+// qqCommandArg 判断 text 是不是以某个命令词开头、后面跟着分隔符（qqLooseCommands 和以 ASCII 字母结尾的命令词不要求），返回去掉命令词后的参数；「查不到词库怎么办」这类以同一个字开头的普通提问不算命令。
 func qqCommandArg(text string, words ...string) (string, bool) {
 	trimmed := strings.TrimSpace(text)
 	lower := strings.ToLower(trimmed)
@@ -51,8 +59,10 @@ func qqCommandArg(text string, words ...string) (string, bool) {
 		if rest == "" {
 			return "", true
 		}
-		if strings.HasPrefix(rest, ":") || strings.HasPrefix(rest, "：") || strings.HasPrefix(rest, " ") || strings.HasPrefix(rest, "\n") || strings.HasPrefix(rest, "\t") {
-			return strings.TrimSpace(strings.TrimLeft(rest, ":： \n\t")), true
+		last := word[len(word)-1]
+		loose := slices.Contains(qqLooseCommands, word) || last >= 'a' && last <= 'z'
+		if first, _ := utf8.DecodeRuneInString(rest); loose || strings.ContainsRune(qqCommandSeparators, first) {
+			return strings.TrimSpace(strings.TrimLeft(rest, qqCommandSeparators)), true
 		}
 	}
 	return "", false
@@ -83,10 +93,14 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 			reply("请在「查」后面写要搜的关键词，例如「查 候选框 左上角」。")
 			return true
 		}
-		found := strings.TrimSpace(s.qqSearchIssues(ctx, terms))
-		if found == "" {
+		found, failed := s.qqSearchIssues(ctx, terms)
+		found = strings.TrimSpace(found)
+		switch {
+		case found == "" && failed:
+			reply("GitHub 暂时查不了，可能是被限流了，请一分钟后再试。")
+		case found == "":
 			reply("GitHub 上没有找到相关的 issue。")
-		} else {
+		default:
 			reply("GitHub 上搜到的相关 issue：\n" + found)
 		}
 		return true
@@ -188,8 +202,8 @@ var qqPriorityNames = map[string]string{"P0": "紧急", "P1": "高", "P2": "中"
 // qqParseNotes 从反馈文字里取出优先级和工作量，返回去掉这些标注后的文字。
 func qqParseNotes(text string) (string, qqNotes) {
 	var notes qqNotes
-	if m := qqPriorityPattern.FindStringSubmatch(text); m != nil {
-		switch v := strings.ToUpper(m[1]); v {
+	if m := qqPriorityPattern.FindStringSubmatchIndex(text); m != nil {
+		switch v := strings.ToUpper(text[m[2]:m[3]]); v {
 		case "紧急":
 			notes.Priority = "P0"
 		case "高":
@@ -201,7 +215,8 @@ func qqParseNotes(text string) (string, qqNotes) {
 		default:
 			notes.Priority = v
 		}
-		text = strings.Replace(text, m[0], " ", 1)
+		// 只删到值为止，值后面的标点留在原文里。
+		text = text[:m[0]] + " " + text[m[3]:]
 	}
 	if m := qqEffortPattern.FindStringSubmatchIndex(text); m != nil {
 		notes.Effort = strings.ToUpper(text[m[2]:m[3]])

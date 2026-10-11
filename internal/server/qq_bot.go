@@ -39,10 +39,13 @@ const (
 	qqBotProcessTimeout = 4 * time.Minute
 	// qqBotMessageWindow 是消息 id 的去重期。QQ 在没有收到成功应答时会重推同一个事件，重推间隔远小于这个时长。
 	qqBotMessageWindow = 7 * 24 * time.Hour
-	// 每个群友每天、每个群每天最多处理的消息数（auth_rates，所有副本共享）。它们限制的是交给模型的次数，所以问答、闲聊和追问都计数；qq_bot.admins 里的管理员不受个人限额限制。
+	// 每个群友、每个群、每个管理员 24 小时内最多处理的消息数（auth_rates，所有副本共享，窗口从这段时间的第一条消息算起）。它们限制的是交给模型的次数，所以问答、闲聊和追问都计数。普通群友先查个人限额、通过了才计入群限额，超了个人限额的消息不占群的额度；管理员不受个人和群限额限制，只有自己的 qqBotAdminDaily 兜底，群额度用完时也能提 issue。
 	qqBotMemberDaily = 20
 	qqBotGroupDaily  = 300
-	qqBotMaxRunes    = 2000
+	qqBotAdminDaily  = 100
+	// qqBotReplyTimeout 是每次被动回复的时限。回复不跟随处理消息的 ctx：处理超时或副本关停取消了 ctx 后，「暂时处理不了」这样的兜底回复仍要发出去，消息已经认领，开放平台不会重推。
+	qqBotReplyTimeout = 10 * time.Second
+	qqBotMaxRunes     = 2000
 	// qqBotSearchResults 是去重时交给模型比对的已有 issue 数。
 	qqBotSearchResults = 5
 	// qqBotFieldRunes 是模型返回的每个文本字段的上限，标题另有 qqBotTitleRunes 的上限。
@@ -374,6 +377,8 @@ type qqGroupMessage struct {
 	GroupOpenID string `json:"group_openid"`
 	Author      struct {
 		MemberOpenID string `json:"member_openid"`
+		// MemberRole 是事件里带的群身份（owner、admin、member），可能没有；见 qqIsAdmin。
+		MemberRole string `json:"member_role"`
 	} `json:"author"`
 	// Attachments 是消息里的图片、视频等附件；只有管理员提 issue 时才用到。
 	Attachments []qqAttachment `json:"attachments"`
@@ -418,12 +423,15 @@ func (s *Server) acceptQQMessage(ctx context.Context, raw json.RawMessage) bool 
 
 // 回复给群友的固定文字。开放平台只允许消息里出现报备过的域名，所以回复只给 issue 编号，不带链接。
 const (
-	qqReplyUsage       = "有水杉输入法的使用问题可以直接 @我 问，例如：五笔怎么切换？"
-	qqReplyTooLong     = "内容太长了，请精简到 2000 字以内再 @我。"
-	qqReplyLimited     = "今天问得已经够多了，明天再来吧。"
-	qqReplyUnavailable = "我暂时处理不了，请稍后再 @我 发一次。"
-	qqReplyWorking     = "收到，正在整理成 issue。"
-	qqReplyPublic      = "内容由机器人转述后公开在 GitHub 上，不包含你的昵称和原话。"
+	qqReplyUsage        = "有水杉输入法的使用问题可以直接 @我 问，例如：五笔怎么切换？"
+	qqReplyTooLong      = "内容太长了，请精简到 2000 字以内再 @我。"
+	qqReplyLimited      = "你 24 小时内问得已经够多了，请过一阵再来。"
+	qqReplyGroupLimited = "这个群 24 小时内问得太多了，请过一阵再来。"
+	qqReplyUnavailable  = "我暂时处理不了，请稍后再 @我 发一次。"
+	// qqReplyRestarting 在副本关停取消了处理时代替 qqReplyUnavailable：机器人正在滚动更新，过一会儿重发就能由新副本处理。
+	qqReplyRestarting = "机器人正在更新，请一分钟后再 @我 发一次。"
+	qqReplyWorking    = "收到，正在整理成 issue。"
+	qqReplyPublic     = "内容由机器人转述后公开在 GitHub 上，不包含你的昵称和原话。"
 	// qqReplyNoIntent 接在管理员没有要求记录的反馈的一句话概括后面；qqReplyExisting 接在知识库说明功能已有或现象正常时的答案后面。
 	qqReplyNoIntent = "没有提 issue；需要记录的话，请 @我 发「提issue」加上这段描述。"
 	qqReplyExisting = "\n\n文档里已经有说明，所以没有提 issue。如果文档的办法不够用，请 @我 发「提issue」并说明哪里不够。"
@@ -441,14 +449,19 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 	seq := 0
 	reply := func(text string) {
 		seq++
-		if err := s.qq.reply(ctx, m.GroupOpenID, m.ID, seq, text); err != nil {
+		if text == qqReplyUnavailable && errors.Is(ctx.Err(), context.Canceled) {
+			text = qqReplyRestarting
+		}
+		sendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), qqBotReplyTimeout)
+		defer cancel()
+		if err := s.qq.reply(sendCtx, m.GroupOpenID, m.ID, seq, text); err != nil {
 			slog.Warn("qq bot: reply failed", "reason", err.Error())
 		}
 	}
 	text := qqFeedbackText(m.Content)
 	if slices.Contains(qqWhoAmI, strings.ToLower(strings.Join(strings.Fields(text), ""))) {
 		role := "普通成员"
-		if s.qqIsAdmin(ctx, m.GroupOpenID, m.Author.MemberOpenID) {
+		if s.qqIsAdmin(ctx, m.GroupOpenID, m.Author.MemberOpenID, m.Author.MemberRole) {
 			role = "管理员"
 		}
 		reply("你的 ID 是 " + m.Author.MemberOpenID + "，机器人把你当作" + role + "。")
@@ -462,21 +475,21 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		reply(qqReplyTooLong)
 		return
 	}
-	admin := s.qqIsAdmin(ctx, m.GroupOpenID, m.Author.MemberOpenID)
-	limits := []struct {
+	admin := s.qqIsAdmin(ctx, m.GroupOpenID, m.Author.MemberOpenID, m.Author.MemberRole)
+	type qqLimit struct {
 		scope, subject string
 		daily          int
-	}{{"qq-bot-group", m.GroupOpenID, qqBotGroupDaily}}
+		text           string
+	}
+	limits := []qqLimit{{"qq-bot-admin", m.Author.MemberOpenID, qqBotAdminDaily, qqReplyLimited}}
 	if !admin {
-		limits = append(limits, struct {
-			scope, subject string
-			daily          int
-		}{"qq-bot-member", m.GroupOpenID + "/" + m.Author.MemberOpenID, qqBotMemberDaily})
+		limits = []qqLimit{{"qq-bot-member", m.GroupOpenID + "/" + m.Author.MemberOpenID, qqBotMemberDaily, qqReplyLimited}, {"qq-bot-group", m.GroupOpenID, qqBotGroupDaily, qqReplyGroupLimited}}
 	}
 	for _, limit := range limits {
 		switch err := s.limits.RateLimit(ctx, limit.scope, limit.subject, limit.daily, 24*time.Hour); {
 		case errors.Is(err, account.ErrLimited):
-			reply(qqReplyLimited)
+			slog.Info("qq bot: limited", "scope", limit.scope)
+			reply(limit.text)
 			return
 		case err != nil:
 			slog.Error("qq bot: rate limit unavailable", "reason", err.Error())
@@ -531,7 +544,7 @@ func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text s
 		return
 	}
 	if !explicit && !report.Intent && !qqIssueIntent(text) {
-		reply("我理解的是：" + strings.TrimSpace(qqLinkPattern.ReplaceAllString(report.Title, "")) + "。" + qqReplyNoIntent)
+		reply("我理解的是：" + qqStripLinks(report.Title) + "。" + qqReplyNoIntent)
 		return
 	}
 	if report.Missing != "" {
@@ -558,7 +571,7 @@ func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text s
 	reply("已记录为 " + qqIssueNumberText(repo, number) + "，开发者会在那里跟进。" + qqReplyPublic)
 }
 
-// answerQQQuestion 用知识库回答一条消息；答不上时 @ 本群的管理员（qqGroupAdmins）。
+// answerQQQuestion 用知识库回答一条消息；答不上的问题和群友报告的问题记进汇总 issue（qq_gaps.go），由管理员跟进。
 func (s *Server) answerQQQuestion(ctx context.Context, group, member, question string, reply func(string)) {
 	subject := group + "/" + member
 	var history []account.QQTurn
@@ -576,13 +589,21 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 		return
 	}
 	recorded := answer.Answer
+	// 先记进汇总 issue 再回复，按有没有记下选说法，不承诺没做到的事。
 	switch {
 	case answer.Type == "unknown":
 		recorded = qqUnansweredTurn
-		reply(qqUnknownReply)
-		s.recordQQGap(ctx, "群友问：", answer.Topic)
+		if s.recordQQGap(ctx, "群友问：", answer.Topic) {
+			reply(qqUnknownReply)
+		} else {
+			reply(qqUnknownUnrecordedReply)
+		}
 	case answer.Type == "answered" && answer.Escalate:
-		reply(answer.Answer + qqEscalation)
+		if s.recordQQReport(ctx, answer.Topic) {
+			reply(answer.Answer + qqEscalation)
+		} else {
+			reply(answer.Answer + qqEscalationUnrecorded)
+		}
 	default:
 		reply(answer.Answer)
 	}
@@ -619,8 +640,11 @@ func qqQuestionWithHistory(history []account.QQTurn, question string) string {
 	return b.String()
 }
 
-// qqEscalation 接在群友报问题时的答案后面：先给文档里的排查办法，再说明管理员会跟进。不插 <qqbot-at-user> 标签，原因见 qqUnknownReply。
-const qqEscalation = "\n\n如果还不行，管理员看到后会跟进。"
+// qqEscalation 接在群友报问题时的答案后面：先给文档里的排查办法，再说明问题已经记进汇总 issue（recordQQReport）；没记下时用 qqEscalationUnrecorded，不说会跟进。不插 <qqbot-at-user> 标签，原因见 qqUnknownReply。
+const (
+	qqEscalation           = "\n\n如果还不行，这个问题已经记下来了，管理员看到后会跟进。"
+	qqEscalationUnrecorded = "\n\n如果还不行，可以等管理员看到，或者请管理员帮忙提 issue。"
+)
 
 // qqFeedbackText 去掉消息里的 @ 标记、表情等尖括号标签和首尾空白。
 func qqFeedbackText(content string) string {
@@ -771,8 +795,11 @@ type qqIssue struct {
 	PullRequest json.RawMessage `json:"pull_request"`
 }
 
-// Windows 上有两个产品：msime-windows（Metasequoia IME 水杉输入法，现在的正式版）和 msime 仓库里迁移出来的新实现（水杉输入法及水杉拼音、五笔等版本）。群友说的输入法版本不低于 qqWindowsSplitVersion 时是前者，低于它是后者。这是按 2026-10 两边的版本号（msime-windows v0.9.x，msime 的 windows-v0.2.x）定的规则，msime 的 Windows 版本号追到 0.9 之前要改掉。
-var qqWindowsSplitVersion = [3]int{0, 9, 0}
+// Windows 上有两个产品：msime-windows（Metasequoia IME 水杉输入法，现在的正式版）和 msime 仓库里迁移出来的新实现（水杉输入法及水杉拼音、五笔等版本）。群友说的输入法版本落在 [qqWindowsNewFrom, qqWindowsNewBelow) 里时是后者，其余是前者。按 2026-10 两边的发布记录定：msime 的 Windows 只发过 windows-v0.1.0 到 v0.2.1；msime-windows 发过 0.0.x 和 v0.1.2 到 v0.9.5，其中 0.0.x、0.4 到 0.8 只可能是它（曾经一律把 0.9 以下算成新实现，把老用户的反馈提错了仓库）。两边都有的 0.1 到 0.3 按新实现处理，那是现在仍在发布的版本；msime 的 Windows 版本号追到 0.4 之前要改掉。
+var (
+	qqWindowsNewFrom  = [3]int{0, 1, 0}
+	qqWindowsNewBelow = [3]int{0, 4, 0}
+)
 
 // qqWindowsLabel 是 msime 仓库里 Windows 的平台标签；admin.github.platforms 的 windows 条目指向 msime-windows，那里没有平台标签。
 const qqWindowsLabel = "platform/windows"
@@ -811,14 +838,14 @@ func qqVersionAtLeast(v, floor [3]int) bool {
 	return true
 }
 
-// qqTarget 是反馈要提交到的仓库和平台标签：与崩溃 issue 一样按 admin.github.platforms 分发，看不出平台或平台没有配置时提交到 qq_bot.repo，不加平台标签。Windows 例外：输入法版本不低于 qqWindowsSplitVersion 时按平台配置提交（msime-windows），低于它时提交到 qq_bot.repo 并加 qqWindowsLabel；没有版本号时 known 为 false，调用方先追问版本。
+// qqTarget 是反馈要提交到的仓库和平台标签：与崩溃 issue 一样按 admin.github.platforms 分发，看不出平台或平台没有配置时提交到 qq_bot.repo，不加平台标签。Windows 例外：输入法版本在 [qqWindowsNewFrom, qqWindowsNewBelow) 里时提交到 qq_bot.repo 并加 qqWindowsLabel，其余按平台配置提交（msime-windows）；没有版本号时 known 为 false，调用方先追问版本。
 func (s *Server) qqTarget(report qqReport) (repo, label string, known bool) {
 	if report.Platform == "windows" {
 		version, ok := qqParseVersion(report.IMEVersion)
 		if !ok {
 			return "", "", false
 		}
-		if !qqVersionAtLeast(version, qqWindowsSplitVersion) {
+		if qqVersionAtLeast(version, qqWindowsNewFrom) && !qqVersionAtLeast(version, qqWindowsNewBelow) {
 			return s.qq.config.Repo, qqWindowsLabel, true
 		}
 	}

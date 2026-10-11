@@ -3097,3 +3097,109 @@ func TestQQBotFeatureVotes(t *testing.T) {
 		t.Fatal(len(drafts.drafts), last())
 	}
 }
+
+// memoryFAQCandidates 是测试用的文档候选存储。
+type memoryFAQCandidates struct {
+	mu    sync.Mutex
+	items []account.QQFAQCandidate
+	state map[int64]string
+}
+
+func (m *memoryFAQCandidates) AddQQFAQCandidate(_ context.Context, question, answer string) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.items = append(m.items, account.QQFAQCandidate{ID: int64(len(m.items) + 1), Question: question, Answer: answer})
+	return int64(len(m.items)), nil
+}
+func (m *memoryFAQCandidates) QQFAQCandidate(_ context.Context, id int64) (account.QQFAQCandidate, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if id < 1 || int(id) > len(m.items) || m.state[id] != "" {
+		return account.QQFAQCandidate{}, account.ErrQQFAQCandidateNotFound
+	}
+	return m.items[id-1], nil
+}
+func (m *memoryFAQCandidates) OpenQQFAQCandidates(_ context.Context, limit int) ([]account.QQFAQCandidate, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []account.QQFAQCandidate
+	for i := len(m.items) - 1; i >= 0 && len(out) < limit; i-- {
+		if m.state[m.items[i].ID] == "" {
+			out = append(out, m.items[i])
+		}
+	}
+	return out, nil
+}
+func (m *memoryFAQCandidates) CloseQQFAQCandidate(_ context.Context, id int64, state, ref string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.state == nil {
+		m.state = map[int64]string{}
+	}
+	if m.state[id] != "" {
+		return false, nil
+	}
+	m.state[id] = state + ":" + ref
+	return true, nil
+}
+
+// 现查 GitHub 才答上的问题和答不上的问题记成文档候选；管理员「文档缺口」看列表，「写进FAQ F编号」走「记录答案」开 PR，没答案的要补上，「忽略」拿掉；普通群友不能用。
+func TestQQBotFAQCandidates(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	candidates := &memoryFAQCandidates{}
+	s.qqFAQCandidates = candidates
+	s.qq.config.Admins = []string{"ADMIN1"}
+	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
+	deliver := func(id, member, content string) {
+		t.Helper()
+		qqPost(t, s, qqMessageFrom(id, member, content))
+		s.qqWorkers.Wait()
+	}
+	// 现查后答上：记下问题和答案。
+	fake.selected = `{"sections":[],"lookup":true}`
+	fake.answer = `{"type":"unknown"}`
+	fake.researchPath = "/repos/metasequoiaime/msime/contributors?per_page=100"
+	fake.extraGitHub = map[string]string{"/repos/metasequoiaime/msime/contributors?per_page=100": `[{"login":"houko","contributions":5000}]`}
+	fake.answerAfterResearch = `{"type":"answered","answer":"主仓库有 1 位贡献者 houko。"}`
+	deliver("m-c1", "MEMBER1", "水杉有几个开发？")
+	// 答不上：只记问题。
+	fake.selected, fake.researchPath = `{"sections":[1]}`, ""
+	fake.answer = `{"type":"unknown","topic":"双拼词库怎么导入"}`
+	deliver("m-c2", "MEMBER1", "双拼词库怎么导入")
+	if len(candidates.items) != 2 || candidates.items[0].Answer != "主仓库有 1 位贡献者 houko。" || candidates.items[1].Question != "双拼词库怎么导入" || candidates.items[1].Answer != "" {
+		t.Fatal(candidates.items)
+	}
+	// 同一个问题 7 天内只记一次。
+	deliver("m-c2-again", "MEMBER2", "双拼词库怎么导入")
+	if len(candidates.items) != 2 {
+		t.Fatal(candidates.items)
+	}
+	deliver("m-c-member", "MEMBER1", "文档缺口")
+	if last() != "只有管理员能处理文档缺口。" {
+		t.Fatal(last())
+	}
+	deliver("m-c-list", "ADMIN1", "文档缺口")
+	if !strings.Contains(last(), "- F2 双拼词库怎么导入（未答）") || !strings.Contains(last(), "- F1 水杉有几个开发？ → 主仓库有 1 位贡献者 houko。") {
+		t.Fatal(last())
+	}
+	// 没答案的要补上。
+	deliver("m-c-noanswer", "ADMIN1", "写进FAQ F2")
+	if last() != "F2 还没有答案，请写成「写进FAQ F2 答：……」。" {
+		t.Fatal(last())
+	}
+	deliver("m-c-ignore", "ADMIN1", "忽略 f2")
+	if last() != "已忽略 F2。" || candidates.state[2] != "ignored:" {
+		t.Fatal(last(), candidates.state)
+	}
+	// 写进 FAQ：走「记录答案」开 PR，候选标成已处理。
+	fake.faqFiles = map[string]string{"guides/faq.md": qqTestFAQ, "guides/zh-TW/faq.md": qqTestFAQTW, "guides/zh-TW/sources.json": qqTestFAQSources(qqTestFAQ)}
+	fake.faq = `{"valid":"yes","question":"水杉输入法有几个开发者？","answer":"水杉输入法是开源项目，主仓库 metasequoiaime/msime 的贡献者列表里目前有 1 位贡献者 houko，贡献者名单可以在 GitHub 仓库的贡献者页面看到，会随着新的贡献变化。","category":"安装与启动","question_tw":"水杉輸入法有幾個開發者？","answer_tw":"水杉輸入法是開源專案，主倉庫 metasequoiaime/msime 的貢獻者列表裡目前有 1 位貢獻者 houko，貢獻者名單可以在 GitHub 倉庫的貢獻者頁面看到，會隨著新的貢獻變化。"}`
+	deliver("m-c-write", "ADMIN1", "写进FAQ F1")
+	if !strings.Contains(last(), "开了 PR：GitHub o/docs 的 #42") || candidates.state[1] != "done:o/docs #42" {
+		t.Fatal(last(), candidates.state)
+	}
+	deliver("m-c-again", "ADMIN1", "写进FAQ F1")
+	if last() != "没有找到 F1，可能已经处理过或过期了。" {
+		t.Fatal(last())
+	}
+}

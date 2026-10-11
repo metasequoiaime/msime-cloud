@@ -58,6 +58,8 @@ type Server struct {
 	qqFAQCandidates qqFAQCandidateStore
 	// qqBadAnswers 是被群友说答错的回答（account.Service，见 qq_bad_answers.go）；没有数据库时为 nil。
 	qqBadAnswers qqBadAnswerStore
+	// qqStats 是答疑每天的处理结果计数（account.Service，见 qq_digest.go）；没有数据库时为 nil。
+	qqStats qqStatsStore
 
 	adminStore  adminAuthStore
 	adminGoogle *adminGoogleAuth
@@ -155,6 +157,7 @@ func New(c Config) (*Server, error) {
 			s.qqDrafts = s.accounts
 			s.qqFAQCandidates = s.accounts
 			s.qqBadAnswers = s.accounts
+			s.qqStats = s.accounts
 			s.adminJobs.Add(1)
 			go func() {
 				defer s.adminJobs.Done()

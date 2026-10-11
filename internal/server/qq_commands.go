@@ -38,7 +38,9 @@ const (
 - 文档缺口 —— 列出文档没写到的问题
 - 写进FAQ F3 —— 把机器人当时的回答写进 FAQ；没答案的写：写进FAQ F3 答：……
 - 记录答案 问：鸿蒙版在哪下载？ 答：华为应用市场搜水杉输入法 —— 把你的回答写进 FAQ
-- 差评 —— 看最近群友说我答错的问题`
+- 差评 —— 看最近群友说我答错的问题
+- 周报 —— 最近 7 天答了多少、答上率、待处理的草稿和文档缺口
+- 自测 —— 用一组固定问题考考我，改完提示词跑一次，看有没有改坏`
 )
 
 var (
@@ -87,6 +89,17 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 	}
 	if command := s.qqFAQCandidateCommands(ctx, text, admin, reply); command != "" {
 		return command
+	}
+	if compact := strings.Join(strings.Fields(text), ""); compact == "周报" || compact == "自测" {
+		switch {
+		case !admin:
+			reply("只有管理员能用「" + compact + "」。")
+		case compact == "周报":
+			s.qqWeeklyDigest(ctx, reply)
+		default:
+			s.qqSelfTest(ctx, m.Author.MemberOpenID, reply)
+		}
+		return "cmd_" + map[string]string{"周报": "digest", "自测": "selftest"}[compact]
 	}
 	if compact := strings.Join(strings.Fields(text), ""); compact == "差评" || compact == "答错的" {
 		if !admin {

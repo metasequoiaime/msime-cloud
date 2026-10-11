@@ -1,0 +1,31 @@
+package account
+
+import (
+	"context"
+	"time"
+)
+
+// IncrQQOutcome 给 day 这天的 outcome 计数加一。
+func (a *Service) IncrQQOutcome(ctx context.Context, day time.Time, outcome string) error {
+	_, err := a.store.pool.Exec(ctx, `INSERT INTO qq_daily_stats(day,outcome,count) VALUES($1,$2,1) ON CONFLICT (day,outcome) DO UPDATE SET count=qq_daily_stats.count+1`, day.Format("2006-01-02"), outcome)
+	return err
+}
+
+// QQOutcomes 返回从 since 这天起（含）每种处理结果的条数合计。
+func (a *Service) QQOutcomes(ctx context.Context, since time.Time) (map[string]int, error) {
+	rows, err := a.store.pool.Query(ctx, `SELECT outcome,sum(count) FROM qq_daily_stats WHERE day>=$1 GROUP BY outcome`, since.Format("2006-01-02"))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var outcome string
+		var n int
+		if err := rows.Scan(&outcome, &n); err != nil {
+			return nil, err
+		}
+		out[outcome] = n
+	}
+	return out, rows.Err()
+}

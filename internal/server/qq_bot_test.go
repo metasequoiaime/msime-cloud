@@ -2662,6 +2662,18 @@ func TestQQBotResearchesGitHub(t *testing.T) {
 	if !strings.Contains(fake.answerSystem, "### 现查的 GitHub 结果\n"+`查到：[{"contributions":5000,"login":"houko","type":"User"}`) || strings.Contains(fake.answerSystem, "avatar_url") || fmt.Sprint(fake.researchTools) != "[true true]" {
 		t.Fatal(fake.answerSystem, fake.researchTools)
 	}
+	// 挑段落时标了 lookup 的问题回答前先查，只查一次；这类问题（「我是不是开发者」）常被当成闲聊，走不到答不上那一步。
+	fake.chatCalls, fake.selected = nil, `{"sections":[],"lookup":true}`
+	fake.answer = `{"type":"chat","answer":"我无法判断您的身份。"}`
+	fake.researchPath = "/search/issues?q=org:metasequoiaime+author:Xibeilius"
+	fake.extraGitHub["/search/issues?q=org%3Ametasequoiaime+author%3AXibeilius"] = `{"total_count":3,"items":[]}`
+	fake.answerAfterResearch = `{"type":"answered","answer":"按 GitHub 账号 Xibeilius 查，他在组织里提过 3 个 issue。"}`
+	qqDeliver(t, s, "m-lookup", "我，也就是Xibeilius是不是开发者？")
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "按 GitHub 账号 Xibeilius 查，他在组织里提过 3 个 issue。" || strings.Join(fake.chatCalls, ",") != "select,research,research,answer" {
+		t.Fatal(last, fake.chatCalls)
+	}
+	fake.selected = `{"sections":[1]}`
+	fake.answer = `{"type":"unknown","topic":"水杉输入法有几个开发者"}`
 	// 不需要查的问题照常按答不上处理。
 	fake.researchPath, fake.chatCalls = "", nil
 	qqDeliver(t, s, "m-research-none", "今天天气怎么样")
@@ -2684,13 +2696,14 @@ func TestQQResearchTarget(t *testing.T) {
 		"/orgs/metasequoiaime/repos?per_page=100":                              "o/r /orgs/metasequoiaime/repos?per_page=100",
 		"/search/issues?q=repo:metasequoiaime/msime+is:pr+merged:>=2026-10-11": "o/r /search/issues?q=repo%3Ametasequoiaime%2Fmsime+is%3Apr+merged%3A%3E%3D2026-10-11",
 		"/search/commits?q=org:metasequoiaime author:houko":                    "o/r /search/commits?q=org%3Ametasequoiaime+author%3Ahouko",
+		"/users/houko": "o/r /users/houko",
 	} {
 		repo, path, ok := qqResearchTarget(raw, "o/r")
 		if !ok || repo+" "+path != want {
 			t.Errorf("%q: %q %q %v", raw, repo, path, ok)
 		}
 	}
-	for _, raw := range []string{"/repos/other/x", "/repos/metasequoiaime/../other/x", "https://api.github.com/repos/metasequoiaime/msime", "/user", "/search/issues?q=is:pr", "/search/issues?q=repo:metasequoiaimex/y", "/orgs/other", "/search/code?q=org:metasequoiaime"} {
+	for _, raw := range []string{"/repos/other/x", "/repos/metasequoiaime/../other/x", "https://api.github.com/repos/metasequoiaime/msime", "/user", "/search/issues?q=is:pr", "/search/issues?q=repo:metasequoiaimex/y", "/orgs/other", "/search/code?q=org:metasequoiaime", "/users/houko/repos", "/users/houko/events", "/user/emails"} {
 		if _, _, ok := qqResearchTarget(raw, "o/r"); ok {
 			t.Errorf("%q allowed", raw)
 		}

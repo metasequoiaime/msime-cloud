@@ -2363,14 +2363,29 @@ func TestQQIssueContext(t *testing.T) {
 func TestQQBotRepoStats(t *testing.T) {
 	s, fake, _ := qqServer(t)
 	s.qq.config.Admins = nil
-	fake.searchTotals = map[string]int{"repo:o/r is:issue is:open": 120, "repo:o/r is:issue is:closed": 3400, "repo:o/r is:pr is:open": 7, "repo:o/win is:issue is:open": 50}
+	// 北京时间 10 月 11 日上午，UTC 还是 10 日：「今天」按北京时间算。
+	now := time.Date(2026, 10, 11, 1, 30, 0, 0, time.UTC)
+	s.qq.now = func() time.Time { return now }
+	fake.searchTotals = map[string]int{
+		"repo:o/r is:issue is:open": 120, "repo:o/r is:issue is:closed": 3400, "repo:o/r is:pr is:open": 7,
+		"repo:o/r is:issue created:>=2026-10-11T00:00:00+08:00": 3, "repo:o/r is:issue closed:>=2026-10-11T00:00:00+08:00": 9, "repo:o/r is:pr is:merged merged:>=2026-10-11T00:00:00+08:00": 21,
+		"repo:o/r is:issue created:>=2026-10-05T00:00:00+08:00": 30, "repo:o/r is:issue closed:>=2026-10-05T00:00:00+08:00": 60, "repo:o/r is:pr is:merged merged:>=2026-10-05T00:00:00+08:00": 400,
+		"repo:o/win is:issue is:open": 50,
+	}
 	fake.selected = `{"sections":[],"stats":true}`
 	fake.answer = `{"type":"answered","answer":"msime 现在开着 120 个 issue。"}`
 	qqDeliver(t, s, "m-stats", "msime有多少issue")
-	if !strings.Contains(fake.answerSystem, "### GitHub 仓库统计（现在的数量）\n- r：开着的 issue 120 个，已关闭的 issue 3400 个，开着的 PR 7 个\n") || strings.Contains(fake.answerSystem, "- win：") {
+	want := "### GitHub 仓库统计（现在的数量）\n- r：现在开着的 issue 120 个，建仓以来累计关闭的 issue 3400 个，开着的 PR 7 个；今天（北京时间 2026-10-11）新开 issue 3 个、关闭 issue 9 个、合并 PR 21 个；最近 7 天新开 issue 30 个、关闭 issue 60 个、合并 PR 400 个\n"
+	if !strings.Contains(fake.answerSystem, want) || strings.Contains(fake.answerSystem, "- win：") {
 		t.Fatal(fake.answerSystem)
 	}
 	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "msime 现在开着 120 个 issue。" {
 		t.Fatal(last)
+	}
+	// 5 分钟内再问用缓存，不再打搜索接口。
+	searches := len(fake.searchQueries)
+	qqDeliver(t, s, "m-stats-2", "今天处理了多少issue")
+	if len(fake.searchQueries) != searches || !strings.Contains(fake.answerSystem, want) {
+		t.Fatal(len(fake.searchQueries), searches)
 	}
 }

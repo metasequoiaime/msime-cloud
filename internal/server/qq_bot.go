@@ -220,6 +220,9 @@ type qqBot struct {
 	// gapsIssue 是答不上的问题汇总 issue 的编号和查到它的时间，见 qq_gaps.go；由 mu 保护。
 	gapsIssue   int64
 	gapsIssueAt time.Time
+	// stats 是缓存的仓库统计和统计的时间，见 qqRepoStats；由 mu 保护。
+	stats   string
+	statsAt time.Time
 }
 
 func newQQBot(c QQBotConfig) *qqBot {

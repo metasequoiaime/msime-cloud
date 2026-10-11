@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // 答疑时查 GitHub。群友常问「这个问题有人报过吗」「修好了没」「最新版本是多少」，文档答不了，所以挑段落那一步顺带让模型给出搜 issue 的关键词、判断要不要查版本，服务端用管理后台的 GitHub App 只读地查，把结果和文档段落一起交给回答的模型。查询失败只记日志，答疑照常进行。
@@ -221,18 +222,38 @@ func (s *Server) qqLatestReleases(ctx context.Context) string {
 	return b.String()
 }
 
-// qqRepoStats 列出每个答疑仓库开着和已关闭的 issue 数、开着的 PR 数，回答「msime 有多少 issue」这类问题。用搜索接口的 total_count（每个数一次请求，per_page=1）；某个数查不到时那个仓库整行不写，不写成 0。
+// qqStatsTTL 是仓库统计在本副本的缓存时间：每次统计要打十几次搜索接口，而 GitHub 的搜索接口每分钟只给 30 次。
+const qqStatsTTL = 5 * time.Minute
+
+// qqStatsZone 是统计「今天」用的时区：群友在国内，按北京时间算。
+var qqStatsZone = time.FixedZone("UTC+8", 8*3600)
+
+// qqRepoStats 列出每个答疑仓库的 issue 和 PR 数，回答「msime 有多少 issue」「今天处理了多少」这类问题：开着的 issue、累计关闭的 issue、开着的 PR，以及今天和最近 7 天（北京时间）新开和关闭的 issue、合并的 PR。用搜索接口的 total_count（每个数一次请求，per_page=1）；某个数查不到时那个仓库整行不写，不写成 0。结果缓存 qqStatsTTL。
 func (s *Server) qqRepoStats(ctx context.Context) string {
+	b := s.qq
+	b.mu.Lock()
+	if b.stats != "" && b.now().Sub(b.statsAt) < qqStatsTTL {
+		stats := b.stats
+		b.mu.Unlock()
+		return stats
+	}
+	b.mu.Unlock()
+	now := b.now().In(qqStatsZone)
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, qqStatsZone)
+	day, week := today.Format("2006-01-02T15:04:05-07:00"), today.AddDate(0, 0, -6).Format("2006-01-02T15:04:05-07:00")
+	queries := []string{"is:issue is:open", "is:issue is:closed", "is:pr is:open",
+		"is:issue created:>=" + day, "is:issue closed:>=" + day, "is:pr is:merged merged:>=" + day,
+		"is:issue created:>=" + week, "is:issue closed:>=" + week, "is:pr is:merged merged:>=" + week}
 	client := s.adminGitHub
-	var b strings.Builder
+	var out strings.Builder
 	for _, repo := range s.qqGitHubRepos() {
 		token, err := client.Token(ctx, repo, qqGitHubReadPerms)
 		if err != nil {
 			slog.Warn("qq bot: repo stats skipped", "repo", repo, "reason", err.Error())
 			continue
 		}
-		counts := make([]int, 0, 3)
-		for _, q := range []string{"is:issue is:open", "is:issue is:closed", "is:pr is:open"} {
+		counts := make([]int, 0, len(queries))
+		for _, q := range queries {
 			r, err := client.Get(ctx, token, "/search/issues?per_page=1&q="+url.QueryEscape("repo:"+repo+" "+q))
 			var found struct {
 				TotalCount *int `json:"total_count"`
@@ -243,11 +264,18 @@ func (s *Server) qqRepoStats(ctx context.Context) string {
 			}
 			counts = append(counts, *found.TotalCount)
 		}
-		if len(counts) != 3 {
+		if len(counts) != len(queries) {
 			continue
 		}
 		_, name, _ := strings.Cut(repo, "/")
-		fmt.Fprintf(&b, "- %s：开着的 issue %d 个，已关闭的 issue %d 个，开着的 PR %d 个\n", name, counts[0], counts[1], counts[2])
+		fmt.Fprintf(&out, "- %s：现在开着的 issue %d 个，建仓以来累计关闭的 issue %d 个，开着的 PR %d 个；今天（北京时间 %s）新开 issue %d 个、关闭 issue %d 个、合并 PR %d 个；最近 7 天新开 issue %d 个、关闭 issue %d 个、合并 PR %d 个\n",
+			name, counts[0], counts[1], counts[2], today.Format("2006-01-02"), counts[3], counts[4], counts[5], counts[6], counts[7], counts[8])
 	}
-	return b.String()
+	stats := out.String()
+	if stats != "" {
+		b.mu.Lock()
+		b.stats, b.statsAt = stats, b.now()
+		b.mu.Unlock()
+	}
+	return stats
 }

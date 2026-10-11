@@ -220,3 +220,34 @@ func (s *Server) qqLatestReleases(ctx context.Context) string {
 	}
 	return b.String()
 }
+
+// qqRepoStats 列出每个答疑仓库开着和已关闭的 issue 数、开着的 PR 数，回答「msime 有多少 issue」这类问题。用搜索接口的 total_count（每个数一次请求，per_page=1）；某个数查不到时那个仓库整行不写，不写成 0。
+func (s *Server) qqRepoStats(ctx context.Context) string {
+	client := s.adminGitHub
+	var b strings.Builder
+	for _, repo := range s.qqGitHubRepos() {
+		token, err := client.Token(ctx, repo, qqGitHubReadPerms)
+		if err != nil {
+			slog.Warn("qq bot: repo stats skipped", "repo", repo, "reason", err.Error())
+			continue
+		}
+		counts := make([]int, 0, 3)
+		for _, q := range []string{"is:issue is:open", "is:issue is:closed", "is:pr is:open"} {
+			r, err := client.Get(ctx, token, "/search/issues?per_page=1&q="+url.QueryEscape("repo:"+repo+" "+q))
+			var found struct {
+				TotalCount *int `json:"total_count"`
+			}
+			if err != nil || !r.OK() || r.Decode(&found) != nil || found.TotalCount == nil {
+				slog.Warn("qq bot: repo stats failed", "repo", repo, "reason", githubFailure("stats", r, err).Error())
+				break
+			}
+			counts = append(counts, *found.TotalCount)
+		}
+		if len(counts) != 3 {
+			continue
+		}
+		_, name, _ := strings.Cut(repo, "/")
+		fmt.Fprintf(&b, "- %s：开着的 issue %d 个，已关闭的 issue %d 个，开着的 PR %d 个\n", name, counts[0], counts[1], counts[2])
+	}
+	return b.String()
+}

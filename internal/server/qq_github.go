@@ -47,11 +47,11 @@ func qqIssueState(state, reason string) string {
 	}
 }
 
-// qqSearchIssues 在每个仓库里按关键词搜 issue（开着的和已关闭的都算，不含拉取请求），返回给模型看的文字；没有结果时为空。GitHub 要求每个词都匹配，模型多给一个词就可能一条都搜不到，所以搜不到时依次只用前两个、前一个词再搜。
-func (s *Server) qqSearchIssues(ctx context.Context, keywords string) string {
+// qqSearchIssues 在每个仓库里按关键词搜 issue（开着的和已关闭的都算，不含拉取请求），返回给模型看的文字；没有结果时为空。GitHub 要求每个词都匹配，模型多给一个词就可能一条都搜不到，所以搜不到时依次只用前两个、前一个词再搜。failed 表示有仓库没搜成（限流、GitHub 出错）：这时结果为空不等于没有相关 issue，也不再退词重搜，免得被限流时多打几轮请求。
+func (s *Server) qqSearchIssues(ctx context.Context, keywords string) (found string, failed bool) {
 	words := strings.Fields(qqSearchTerms(keywords))
 	if len(words) == 0 {
-		return ""
+		return "", false
 	}
 	attempts := []string{strings.Join(words, " ")}
 	for _, n := range []int{2, 1} {
@@ -60,26 +60,29 @@ func (s *Server) qqSearchIssues(ctx context.Context, keywords string) string {
 		}
 	}
 	for _, terms := range attempts {
-		if found := s.qqSearchIssuesFor(ctx, terms); found != "" {
-			return found
+		if found, failed = s.qqSearchIssuesFor(ctx, terms); found != "" || failed {
+			return found, failed
 		}
 	}
-	return ""
+	return "", false
 }
 
 // qqSearchIssuesFor 是用一组搜索词做的一轮 qqSearchIssues。
-func (s *Server) qqSearchIssuesFor(ctx context.Context, terms string) string {
+func (s *Server) qqSearchIssuesFor(ctx context.Context, terms string) (string, bool) {
 	client := s.adminGitHub
 	var b strings.Builder
+	failed := false
 	for _, repo := range s.qqGitHubRepos() {
 		token, err := client.Token(ctx, repo, qqGitHubReadPerms)
 		if err != nil {
 			slog.Warn("qq bot: issue search skipped", "repo", repo, "reason", err.Error())
+			failed = true
 			continue
 		}
 		r, err := client.Do(ctx, token, "GET", "/search/issues?per_page="+strconv.Itoa(qqIssueResults)+"&q="+url.QueryEscape("repo:"+repo+" is:issue "+terms), nil)
 		if err != nil || !r.OK() {
 			slog.Warn("qq bot: issue search failed", "repo", repo, "reason", githubFailure("search", r, err).Error())
+			failed = true
 			continue
 		}
 		var found struct {
@@ -94,6 +97,7 @@ func (s *Server) qqSearchIssuesFor(ctx context.Context, terms string) string {
 			} `json:"items"`
 		}
 		if r.Decode(&found) != nil {
+			failed = true
 			continue
 		}
 		_, name, _ := strings.Cut(repo, "/")
@@ -109,7 +113,7 @@ func (s *Server) qqSearchIssuesFor(ctx context.Context, terms string) string {
 			fmt.Fprintf(&b, "- %s #%d（%s，更新于 %s，标签：%s）%s\n", name, issue.Number, qqIssueState(issue.State, issue.StateReason), updated, strings.Join(labels, "、"), issue.Title)
 		}
 	}
-	return b.String()
+	return b.String(), failed
 }
 
 // qqRelease 是 GitHub Release 列表里用到的字段。

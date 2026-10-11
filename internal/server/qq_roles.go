@@ -13,7 +13,9 @@ import (
 	"time"
 )
 
-// 群管理员身份。开放平台的「获取群成员信息」接口（GET /v2/groups/{group_openid}/members/{member_openid}）返回 member_role：owner 群主、admin 管理员、member 普通成员。这个接口还在内邀阶段，没进白名单的机器人调用时返回错误码 11253；在那之前只认 qq_bot.admins 的名单。查到的身份在本副本缓存 qqRoleTTL；接口返回 11253 后 qqRoleUnavailableTTL 内不再调用，白名单开通后不用重新部署就会自动生效。
+// 群管理员身份。开放平台的「获取群成员信息」接口（GET /v2/groups/{group_openid}/members/{member_openid}）返回 member_role：owner 群主、admin 管理员、member 普通成员。这个接口还在内邀阶段，没进白名单的机器人调用时返回错误码 11253；在那之前只认 qq_bot.admins 的名单。查到的身份在本副本缓存 qqRoleTTL；接口返回 11253 后 qqRoleUnavailableTTL 内不再调用，白名单开通后不用重新部署就会自动生效。@ 消息事件的 author 里也可能带 member_role，有就直接用，不再调接口。
+
+// 群身份只在 qq_bot.groups 列出的群里算数：没有列出群时，任何人自己建个群、把机器人拉进去就是群主，机器人公开后就能「提issue」。没有配置 groups 时只认名单，并且每个群记一次日志（带 group_openid），方便把要信任的群填进配置。
 
 const (
 	qqRoleTTL            = 10 * time.Minute
@@ -27,6 +29,8 @@ type qqRoles struct {
 	mu               sync.Mutex
 	entries          map[string]qqRoleEntry
 	unavailableUntil time.Time
+	// unlisted 记下已经打过「群身份不算数」日志的群。
+	unlisted map[string]bool
 }
 
 type qqRoleEntry struct {
@@ -75,8 +79,8 @@ func (b *qqBot) memberRole(ctx context.Context, group, member string) (string, e
 	return result.MemberRole, nil
 }
 
-// qqIsAdmin 判断发消息的人是不是管理员：在 qq_bot.admins 里，或者群身份接口说他是群主或管理员。接口不可用或出错时按普通成员处理。
-func (s *Server) qqIsAdmin(ctx context.Context, group, member string) bool {
+// qqIsAdmin 判断发消息的人是不是管理员：在 qq_bot.admins 里，或者在 qq_bot.groups 列出的群里，事件带的 eventRole（为空时查群身份接口）说他是群主或管理员。接口不可用或出错时按普通成员处理。
+func (s *Server) qqIsAdmin(ctx context.Context, group, member, eventRole string) bool {
 	if slices.Contains(s.qq.config.Admins, member) {
 		return true
 	}
@@ -84,6 +88,26 @@ func (s *Server) qqIsAdmin(ctx context.Context, group, member string) bool {
 	now := s.qq.now()
 	key := group + "/" + member
 	r.mu.Lock()
+	if !slices.Contains(s.qq.config.Groups, group) {
+		if !r.unlisted[group] {
+			if r.unlisted == nil {
+				r.unlisted = map[string]bool{}
+			}
+			r.unlisted[group] = true
+			slog.Info("qq bot: group roles ignored, group not in qq_bot.groups", "group_openid", group)
+		}
+		r.mu.Unlock()
+		return false
+	}
+	if eventRole != "" {
+		admin := eventRole == "owner" || eventRole == "admin"
+		if r.entries == nil {
+			r.entries = map[string]qqRoleEntry{}
+		}
+		r.entries[key] = qqRoleEntry{group: group, admin: admin, at: now}
+		r.mu.Unlock()
+		return admin
+	}
 	if entry, ok := r.entries[key]; ok && now.Sub(entry.at) < qqRoleTTL {
 		r.mu.Unlock()
 		return entry.admin

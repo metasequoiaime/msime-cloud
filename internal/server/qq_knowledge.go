@@ -181,18 +181,27 @@ const qqAnswerPrompt = `你是水杉输入法 QQ 群里的答疑助手。只根�
 - unknown：资料里完全没有相关内容。answer 留空。
 - chat：问候、闲聊或与输入法无关的话。answer 用一两句话友好回应，并说明可以问水杉输入法的使用问题。
 - escalate：用户在报告 bug、描述异常现象或提功能需求时为 true，即使给出了排查办法也是 true；只是问用法时为 false。
-- topic：只在 type 是 unknown 时填写，用一句话概括用户想知道什么，供维护者补文档，例如「Windows 版能否设置候选窗透明度」；不要写人名、昵称、QQ 号、链接或其他个人信息。其他情况留空。`
+- topic：type 是 unknown 时必须填写，用一句话概括用户想知道什么，供维护者补文档，例如「Windows 版能否设置候选窗透明度」；escalate 为 true 时也必须填写，写成「平台 + 现象」，例如「macOS 输入方案自己切换成五笔」，看不出平台就只写现象。不要写人名、昵称、QQ 号、链接或其他个人信息。其他情况留空。`
 
 // qqAnswer 是一次答疑的结果：Type 是 answered、unknown 或 chat；Escalate 表示群友在报问题或提需求，答案后面要请管理员跟进。
 type qqAnswer struct {
 	Type     string `json:"type"`
 	Answer   string `json:"answer"`
 	Escalate bool   `json:"escalate"`
-	// Topic 是答不上时模型对问题的一句话概括，供汇总给维护者（见 qq_gaps.go）。
+	// Topic 是答不上时模型对问题的一句话概括，或者群友报问题时「平台 + 现象」的概括，供汇总给维护者（见 qq_gaps.go）。
 	Topic string `json:"topic"`
 }
 
-var qqLinkPattern = regexp.MustCompile(`\S*://\S*`)
+// qqLinkPattern 匹配链接：协议名加上之后连续的 ASCII 可见字符。曾经用 \S*://\S*，会把紧挨着链接的中文（中文句子里没有空格）连同整句一起删掉。
+var qqLinkPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[!-~]*`)
+
+// qqSpaceRuns 匹配删掉链接后留下的连续空格。
+var qqSpaceRuns = regexp.MustCompile(`[ \t]{2,}`)
+
+// qqStripLinks 删掉链接并合并留下的连续空格。
+func qqStripLinks(text string) string {
+	return strings.TrimSpace(qqSpaceRuns.ReplaceAllString(qqLinkPattern.ReplaceAllString(text, ""), " "))
+}
 
 // qqAnswerQuestion 用知识库回答一个问题：先按目录挑段落，再只用挑出的段落回答。
 func (s *Server) qqAnswerQuestion(ctx context.Context, history []account.QQTurn, question string) (qqAnswer, error) {
@@ -224,7 +233,7 @@ func (s *Server) qqAnswerQuestion(ctx context.Context, history []account.QQTurn,
 
 // qqCleanAnswer 去掉答案里的链接（开放平台只允许报备过的域名）和首尾空白，过长时截断到 qqAnswerRunes。
 func qqCleanAnswer(answer string) string {
-	answer = strings.TrimSpace(qqLinkPattern.ReplaceAllString(answer, ""))
+	answer = qqStripLinks(answer)
 	if runes := []rune(answer); len(runes) > qqAnswerRunes {
 		answer = string(runes[:qqAnswerRunes-1]) + "…"
 	}
@@ -298,8 +307,11 @@ func (s *Server) qqKnowledgeMaterial(ctx context.Context, question string, githu
 	if !github {
 		return material.String(), nil
 	}
-	if issues := s.qqSearchIssues(ctx, picked.IssueSearch); issues != "" {
+	switch issues, failed := s.qqSearchIssues(ctx, picked.IssueSearch); {
+	case issues != "":
 		material.WriteString("### GitHub 上搜到的相关 issue\n" + issues + "\n")
+	case failed:
+		material.WriteString("### GitHub 上的相关 issue\n暂时搜不了（GitHub 出错或限流），不能据此说没有人反馈过。\n\n")
 	}
 	if picked.Releases {
 		if releases := s.qqLatestReleases(ctx); releases != "" {
@@ -310,4 +322,7 @@ func (s *Server) qqKnowledgeMaterial(ctx context.Context, question string, githu
 }
 
 // qqUnknownReply 是知识库答不上时的回复。QQ 群文本消息里的 <qqbot-at-user id="…" /> 实测会原样显示成文字（2026-10-11），所以不 @ 人；管理员靠答不上问题的汇总（qq_gaps.go）跟进。
-const qqUnknownReply = "这个问题我还不确定，已经记下来了，管理员看到后会回复你。"
+const qqUnknownReply = "这个问题我还不确定，已经记下来了，管理员看到后会补进文档。"
+
+// qqUnknownUnrecordedReply 是答不上、又没能记进汇总 issue（汇总没配置、当天额度用完或 GitHub 出错）时的回复，不说已经记下。
+const qqUnknownUnrecordedReply = "这个问题我还不确定。可以换个说法再问一次，或者等管理员看到后回复。"

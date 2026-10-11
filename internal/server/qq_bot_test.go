@@ -669,10 +669,10 @@ func TestQQBotRepliesWithoutFiling(t *testing.T) {
 	}{
 		{"only a mention", "<@!1> ", nil, qqReplyUsage},
 		{"too long", strings.Repeat("长", qqBotMaxRunes+1), nil, qqReplyTooLong},
-		{"group limit applies to admins", "", func(_ *qqFake, l *qqLimiter) {
-			l.counts = map[string]int{"qq-bot-group|GROUP1": qqBotGroupDaily}
+		{"admins have their own limit", "", func(_ *qqFake, l *qqLimiter) {
+			l.counts = map[string]int{"qq-bot-admin|MEMBER1": qqBotAdminDaily}
 		}, qqReplyLimited},
-		{"limit unavailable", "", func(_ *qqFake, l *qqLimiter) { l.err = map[string]error{"qq-bot-group": errors.New("down")} }, qqReplyUnavailable},
+		{"limit unavailable", "", func(_ *qqFake, l *qqLimiter) { l.err = map[string]error{"qq-bot-admin": errors.New("down")} }, qqReplyUnavailable},
 		{"plain admin message goes to the knowledge base", "五笔怎么切换", func(f *qqFake, _ *qqLimiter) { f.summary = `{"kind":"other"}` }, "在设置的「输入方案」里选五笔。"},
 		{"forced report that is not a report", "", func(f *qqFake, _ *qqLimiter) { f.summary = `{"kind":"other"}` }, "没看出要提的是 bug 还是需求，请把问题或想要的功能描述具体一点。"},
 		{"needs details", "", func(f *qqFake, _ *qqLimiter) {
@@ -764,6 +764,33 @@ func TestQQBotUpstreamFailures(t *testing.T) {
 	}
 }
 
+// 处理超时或副本关停取消了处理的 ctx 后，兜底回复照样发出；关停导致的取消改说机器人正在更新。
+func TestQQBotRepliesAfterCancellation(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	m := qqGroupMessage{ID: "m-cancelled", Content: "提issue Windows 11 上候选框一直停在左上角", GroupOpenID: "GROUP1"}
+	m.Author.MemberOpenID = "MEMBER1"
+	s.handleQQFeedback(ctx, m)
+	if replies := fake.replyTexts(); len(replies) != 1 || replies[0] != qqReplyRestarting {
+		t.Fatal(replies)
+	}
+}
+
+// 链接只删掉链接本身：紧挨着链接的中文（中文句子里没有空格）要留下，删完后合并多余的空格。
+func TestQQStripLinks(t *testing.T) {
+	for text, want := range map[string]string{
+		"详见官网https://msime.app/docs。如果还不行请重启。": "详见官网。如果还不行请重启。",
+		"1. 打开设置\n2. 下载 http://x.cn/a?b=1 后安装": "1. 打开设置\n2. 下载 后安装",
+		"看 https://a.b 和 ftp://c.d/e":          "看 和",
+		"没有链接":                                 "没有链接",
+	} {
+		if got := qqStripLinks(text); got != want {
+			t.Errorf("%q: %q want %q", text, got, want)
+		}
+	}
+}
+
 func TestQQBotStopsWithServer(t *testing.T) {
 	s, fake, limiter := qqServer(t)
 	s.qq.config.Groups = []string{"OTHER"}
@@ -827,7 +854,11 @@ func TestQQBotWindowsProductsByVersion(t *testing.T) {
 		name, imeVersion, repo, labels string
 	}{
 		{"new port", "0.2.1", "o/r", "[bug platform/windows source/qq]"},
-		{"split version", "0.9.0", "o/win", "[bug source/qq]"},
+		{"new port floor", "0.1.0", "o/r", "[bug platform/windows source/qq]"},
+		{"old release only msime-windows had", "0.8.0", "o/win", "[bug source/qq]"},
+		{"new port ceiling", "0.4.0", "o/win", "[bug source/qq]"},
+		{"early msime-windows build", "0.0.9.2", "o/win", "[bug source/qq]"},
+		{"current release", "0.9.0", "o/win", "[bug source/qq]"},
 		{"double digit minor", "v0.10.3", "o/win", "[bug source/qq]"},
 		{"major release", "1.0", "o/win", "[bug source/qq]"},
 	}
@@ -860,8 +891,8 @@ func TestQQParseVersion(t *testing.T) {
 			t.Errorf("%q parsed", text)
 		}
 	}
-	if qqVersionAtLeast([3]int{0, 8, 99}, qqWindowsSplitVersion) || !qqVersionAtLeast([3]int{0, 9, 0}, qqWindowsSplitVersion) {
-		t.Fatal("split comparison")
+	if !qqVersionAtLeast([3]int{0, 9, 0}, [3]int{0, 9, 0}) || qqVersionAtLeast([3]int{0, 8, 99}, [3]int{0, 9, 0}) {
+		t.Fatal("version comparison")
 	}
 }
 
@@ -873,7 +904,7 @@ func TestQQBotAnswersMembersFromKnowledge(t *testing.T) {
 	fake.answer = `{"type":"answered","answer":"在设置的「输入方案」里选五笔，详见 https://msime.app/docs 。"}`
 	qqDeliver(t, s, "m-qa", "五笔怎么切换")
 	replies := fake.replyTexts()
-	if len(replies) != 1 || replies[0] != "在设置的「输入方案」里选五笔，详见  。" || len(fake.created) != 0 || strings.Join(fake.chatCalls, ",") != "select,answer" {
+	if len(replies) != 1 || replies[0] != "在设置的「输入方案」里选五笔，详见 。" || len(fake.created) != 0 || strings.Join(fake.chatCalls, ",") != "select,answer" {
 		t.Fatal(replies, fake.chatCalls, fake.created)
 	}
 	// 目录列出全部段落：子目录、非 Markdown 文件和没有正文的标题不收，代码块里的 # 不算标题。
@@ -898,12 +929,26 @@ func TestQQBotAnswersMembersFromKnowledge(t *testing.T) {
 	if fake.knowledgeCalls != calls {
 		t.Fatal("knowledge refetched within the TTL", calls, fake.knowledgeCalls)
 	}
-	// 答不上时 @ 名单里的全部管理员。
-	fake.answer = `{"type":"unknown","answer":"不该出现"}`
-	qqDeliver(t, s, "m-unknown", "Windows 上候选框一直停在左上角")
-	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != qqUnknownReply || len(fake.created) != 0 {
+	// 答不上时：没配置汇总 issue 就不说「已经记下来了」；配置了、记下了才这么说。
+	fake.answer = `{"type":"unknown","answer":"不该出现","topic":"候选框停在左上角怎么办"}`
+	qqDeliver(t, s, "m-unknown-off", "Windows 上候选框一直停在左上角")
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != qqUnknownUnrecordedReply || len(fake.created) != 0 {
 		t.Fatal(last)
 	}
+	s.qq.config.GapsRepo = "o/docs"
+	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题"}]`
+	qqDeliver(t, s, "m-unknown", "Windows 上候选框一直停在左上角")
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != qqUnknownReply || len(fake.created) != 0 || fake.comments["/repos/o/docs/issues/77/comments"]["body"] != "群友问：候选框停在左上角怎么办" {
+		t.Fatal(last, fake.comments)
+	}
+	// 当天的额度用完时记不下，也不占 7 天去重的名额，额度恢复后同一个问题还能记下。
+	delete(limiter.counts, "qq-bot-gap|候选框停在左上角怎么办")
+	limiter.counts["qq-bot-gaps-day|o/docs"] = qqGapsDaily
+	qqDeliver(t, s, "m-unknown-capped", "Windows 上候选框一直停在左上角")
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != qqUnknownUnrecordedReply || limiter.counts["qq-bot-gap|候选框停在左上角怎么办"] != 0 {
+		t.Fatal(last, limiter.counts)
+	}
+	s.qq.config.GapsRepo = ""
 	// 闲聊照模型的话回应；没有挑出段落时告诉模型没有资料。
 	fake.selected, fake.answer = `{"sections":[]}`, `{"type":"chat","answer":"你好！有水杉输入法的问题可以问我。"}`
 	qqDeliver(t, s, "m-chat", "在吗")
@@ -916,11 +961,25 @@ func TestQQBotAnswersMembersFromKnowledge(t *testing.T) {
 	if last := []rune(fake.replyTexts()[len(fake.replyTexts())-1]); len(last) != qqAnswerRunes || string(last[len(last)-1]) != "…" {
 		t.Fatal(len(last))
 	}
-	// 普通群友的个人限额。
+	// 普通群友的个人限额：超了个人限额的消息不再计入群的额度。
 	limiter.counts["qq-bot-member|GROUP1/MEMBER1"] = qqBotMemberDaily
+	group := limiter.counts["qq-bot-group|GROUP1"]
 	qqDeliver(t, s, "m-limited", "五笔怎么切换")
-	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != qqReplyLimited {
+	qqDeliver(t, s, "m-limited-2", "五笔怎么切换")
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != qqReplyLimited || limiter.counts["qq-bot-group|GROUP1"] != group {
+		t.Fatal(last, limiter.counts)
+	}
+	// 群的额度用完时普通群友收到群限额的说法；管理员不受群限额限制。
+	delete(limiter.counts, "qq-bot-member|GROUP1/MEMBER1")
+	limiter.counts["qq-bot-group|GROUP1"] = qqBotGroupDaily
+	qqDeliver(t, s, "m-group-limited", "五笔怎么切换")
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != qqReplyGroupLimited {
 		t.Fatal(last)
+	}
+	s.qq.config.Admins = []string{"MEMBER1"}
+	qqDeliver(t, s, "m-group-limited-admin", "提issue Windows 11 上水杉 0.9.5 候选框停在左上角")
+	if len(fake.created) != 1 {
+		t.Fatal("group limit blocked an admin", fake.replyTexts())
 	}
 }
 
@@ -1217,6 +1276,7 @@ func TestQQMediaKindAndURL(t *testing.T) {
 func TestQQBotRecognisesGroupAdmins(t *testing.T) {
 	s, fake, _ := qqServer(t)
 	s.qq.config.Admins = []string{"LISTED"}
+	s.qq.config.Groups = []string{"GROUP1"}
 	// 未开通：普通成员，「我的ID」如实报出；一小时内不再调用接口。
 	qqDeliver(t, s, "m-role-1", "我的ID")
 	qqDeliver(t, s, "m-role-2", "我的ID")
@@ -1243,19 +1303,32 @@ func TestQQBotRecognisesGroupAdmins(t *testing.T) {
 	for role, want := range map[string]bool{"owner": true, "admin": true, "member": false} {
 		s.qq.roles = qqRoles{}
 		fake.roles = map[string]string{"MEMBER1": role}
-		if got := s.qqIsAdmin(context.Background(), "GROUP1", "MEMBER1"); got != want {
+		if got := s.qqIsAdmin(context.Background(), "GROUP1", "MEMBER1", ""); got != want {
 			t.Fatal(role, got)
 		}
 	}
 	s.qq.roles = qqRoles{}
 	fake.roles = map[string]string{}
-	if s.qqIsAdmin(context.Background(), "GROUP1", "MEMBER1") {
+	if s.qqIsAdmin(context.Background(), "GROUP1", "MEMBER1", "") {
 		t.Fatal("a failed lookup must not grant admin")
 	}
 	// 名单里的人不用查。
 	calls = fake.roleCalls
-	if !s.qqIsAdmin(context.Background(), "GROUP1", "LISTED") || fake.roleCalls != calls {
+	if !s.qqIsAdmin(context.Background(), "GROUP1", "LISTED", "") || fake.roleCalls != calls {
 		t.Fatal("listed admins skip the lookup")
+	}
+	// 事件里带了 member_role 时直接用，不调接口。
+	s.qq.roles = qqRoles{}
+	calls = fake.roleCalls
+	if !s.qqIsAdmin(context.Background(), "GROUP1", "MEMBER1", "owner") || s.qqIsAdmin(context.Background(), "GROUP1", "OTHER", "member") || fake.roleCalls != calls {
+		t.Fatal("event roles", fake.roleCalls, calls)
+	}
+	// 没列在 qq_bot.groups 里的群（包括没配置 groups 时的所有群），群身份不算数：陌生人自己建群当群主也不能提 issue。
+	s.qq.config.Groups = nil
+	s.qq.roles = qqRoles{}
+	fake.roles = map[string]string{"MEMBER1": "owner"}
+	if s.qqIsAdmin(context.Background(), "GROUP1", "MEMBER1", "owner") || s.qqIsAdmin(context.Background(), "GROUP1", "MEMBER1", "") || fake.roleCalls != calls || !s.qqIsAdmin(context.Background(), "GROUP1", "LISTED", "") {
+		t.Fatal("unlisted group roles", fake.roleCalls, calls)
 	}
 	// 响应缺字段、凭证失败、地址无效。
 	if _, err := (&qqBot{config: QQBotConfig{APIURL: "https://bad host"}, token: "t", expires: time.Now().Add(time.Hour), now: time.Now, client: s.client}).memberRole(context.Background(), "G", "M"); err == nil {
@@ -1277,13 +1350,27 @@ func TestQQBotRecognisesGroupAdmins(t *testing.T) {
 	}
 }
 
-// 群友报问题时，文档里有排查办法就先给办法，再 @ 管理员跟进；只问用法时不 @。
+// 群友报问题时，文档里有排查办法就先给办法，再把问题记进汇总 issue、说明管理员会跟进；没记下（没配置汇总、没有概括）时不说会跟进。只问用法时都不加。
 func TestQQBotEscalatesProblemReports(t *testing.T) {
 	s, fake, _ := qqServer(t)
 	s.qq.config.Admins = []string{"ADMIN1"}
-	fake.answer = `{"type":"answered","answer":"在「外观」里打开「候选窗口跟随光标」。","escalate":true}`
+	fake.answer = `{"type":"answered","answer":"在「外观」里打开「候选窗口跟随光标」。","escalate":true,"topic":"Windows 候选框跑到屏幕左上角"}`
+	qqDeliver(t, s, "m-escalate-off", "候选框老是跑到屏幕左上角")
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "在「外观」里打开「候选窗口跟随光标」。"+qqEscalationUnrecorded {
+		t.Fatalf("%q", last)
+	}
+	s.qq.config.GapsRepo = "o/docs"
+	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题"}]`
 	qqDeliver(t, s, "m-escalate", "候选框老是跑到屏幕左上角")
-	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "在「外观」里打开「候选窗口跟随光标」。\n\n如果还不行，管理员看到后会跟进。" {
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "在「外观」里打开「候选窗口跟随光标」。\n\n如果还不行，这个问题已经记下来了，管理员看到后会跟进。" {
+		t.Fatalf("%q", last)
+	}
+	if c := fake.comments["/repos/o/docs/issues/77/comments"]; c == nil || c["body"] != "群友报告问题：Windows 候选框跑到屏幕左上角" {
+		t.Fatal(fake.comments)
+	}
+	fake.answer = `{"type":"answered","answer":"在「外观」里打开「候选窗口跟随光标」。","escalate":true}`
+	qqDeliver(t, s, "m-escalate-no-topic", "候选框老是跑")
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "在「外观」里打开「候选窗口跟随光标」。"+qqEscalationUnrecorded {
 		t.Fatalf("%q", last)
 	}
 	fake.answer = `{"type":"answered","answer":"在设置里选五笔。","escalate":false}`
@@ -1401,17 +1488,33 @@ func TestQQIssueSearchNarrows(t *testing.T) {
 	s.config.Admin.GitHub.Platforms = nil
 	fake.searchMaxTerms = 2
 	fake.searchItems = []map[string]any{{"number": 818, "title": "大小写倒置", "state": "open", "updated_at": "2026-10-11T00:00:00Z"}}
-	found := s.qqSearchIssues(context.Background(), "大小写 倒置 报过")
-	if !strings.Contains(found, "#818") || strings.Join(fake.searchQueries, "|") != "repo:o/r is:issue 大小写 倒置 报过|repo:o/r is:issue 大小写 倒置" {
+	found, failed := s.qqSearchIssues(context.Background(), "大小写 倒置 报过")
+	if failed || !strings.Contains(found, "#818") || strings.Join(fake.searchQueries, "|") != "repo:o/r is:issue 大小写 倒置 报过|repo:o/r is:issue 大小写 倒置" {
 		t.Fatal(found, fake.searchQueries)
 	}
 	fake.searchQueries, fake.searchMaxTerms = nil, -1
 	fake.searchItems = nil
-	if s.qqSearchIssues(context.Background(), "a b c") != "" || len(fake.searchQueries) != 3 {
+	if found, failed := s.qqSearchIssues(context.Background(), "a b c"); found != "" || failed || len(fake.searchQueries) != 3 {
 		t.Fatal(fake.searchQueries)
 	}
-	if s.qqSearchIssues(context.Background(), "  ") != "" {
+	if found, failed := s.qqSearchIssues(context.Background(), "  "); found != "" || failed {
 		t.Fatal("blank keywords must not search")
+	}
+	// 搜索失败（限流）时报告失败，不再退词重搜；「查」命令如实回复查不了，答疑资料里注明不能据此说没人反馈过。
+	fake.searchQueries, fake.searchStatus = nil, 403
+	if found, failed := s.qqSearchIssues(context.Background(), "a b c"); found != "" || !failed || len(fake.searchQueries) != 1 {
+		t.Fatal(found, failed, fake.searchQueries)
+	}
+	qqDeliver(t, s, "m-search-fail", "查 a b")
+	if texts := fake.replyTexts(); texts[len(texts)-1] != "GitHub 暂时查不了，可能是被限流了，请一分钟后再试。" {
+		t.Fatal(texts)
+	}
+	s.qq.config.Admins = nil
+	fake.selected = `{"sections":[1],"issue_search":"大小写"}`
+	fake.answer = `{"type":"answered","answer":"还不清楚有没有人报过。"}`
+	qqDeliver(t, s, "m-search-fail-qa", "大小写倒置有人报过吗")
+	if !strings.Contains(fake.answerSystem, "暂时搜不了") {
+		t.Fatal(fake.answerSystem)
 	}
 }
 
@@ -1707,10 +1810,20 @@ func TestQQParseNotesAndNoteLabels(t *testing.T) {
 		"问题 优先级中 effort m": {Priority: "P2", Effort: "M"},
 		"问题 优先级：紧急":        {Priority: "P0"},
 		"effortless 的设计":   {},
+		"自定义短语的优先级高于词库":    {},
+		"优先级低于系统词库的词":      {},
+		"问题，优先级高。":         {Priority: "P1"},
 	} {
 		if _, got := qqParseNotes(text); got != want {
 			t.Errorf("%q: %+v want %+v", text, got, want)
 		}
+	}
+	// 原文只删到标注的值，后面的标点留着；不是标注的说法原样保留。
+	if text, _ := qqParseNotes("候选框错位，优先级高。复现：打字"); text != "候选框错位， 。复现：打字" {
+		t.Fatalf("%q", text)
+	}
+	if text, _ := qqParseNotes("自定义短语的优先级高于词库"); text != "自定义短语的优先级高于词库" {
+		t.Fatalf("%q", text)
 	}
 	labels, section := qqNoteLabels([]string{"Priority/P1", "size/M"}, qqNotes{Priority: "P1", Effort: "M"})
 	if fmt.Sprint(labels) != "[Priority/P1 size/M]" || section != "" {
@@ -1788,7 +1901,7 @@ func TestQQBotSkipsFeaturesTheDocsAlreadyCover(t *testing.T) {
 	fake.triage = `{"decision":"existing","answer":"水杉会按使用频率自动把常用的词往前排，也可以长按候选选择「置顶」，详见 https://msime.app/docs 。"}`
 	for i, content := range []string{"希望常用候选词能够前置，记一下", "提issue 希望常用候选词能够前置"} {
 		qqDeliver(t, s, "m-existing-"+strconv.Itoa(i), content)
-		if len(fake.created) != 0 || len(fake.searchQueries) != 0 || last() != "水杉会按使用频率自动把常用的词往前排，也可以长按候选选择「置顶」，详见  。"+qqReplyExisting {
+		if len(fake.created) != 0 || len(fake.searchQueries) != 0 || last() != "水杉会按使用频率自动把常用的词往前排，也可以长按候选选择「置顶」，详见 。"+qqReplyExisting {
 			t.Fatalf("%q %v", last(), fake.created)
 		}
 	}
@@ -2050,6 +2163,31 @@ func TestQQInsertFAQAndSyncSources(t *testing.T) {
 	for _, sources := range []string{qqTestFAQSources("other"), "not json", `{"files":{}}`} {
 		if _, ok := qqSyncFAQSources(sources, "old", "new"); ok {
 			t.Fatal(sources)
+		}
+	}
+}
+
+// 「提issue」「提文档」后面不加空格直接接内容也是命令，开头的逗号、顿号一并去掉；「查」「搜」仍然要分隔符。
+func TestQQCommandArg(t *testing.T) {
+	for _, tc := range []struct {
+		text, want string
+		words      []string
+	}{
+		{"提issue候选框不跟随", "候选框不跟随", []string{"提issue"}},
+		{"提ISSUE，候选框不跟随", "候选框不跟随", []string{"提issue"}},
+		{"提文档FAQ 没写鸿蒙版", "FAQ 没写鸿蒙版", []string{"提文档"}},
+		{"提文档、FAQ 没写鸿蒙版", "FAQ 没写鸿蒙版", []string{"提文档"}},
+		{"查：候选框", "候选框", []string{"查"}},
+		{"查，候选框", "候选框", []string{"查"}},
+		{"查", "", []string{"查"}},
+	} {
+		if got, ok := qqCommandArg(tc.text, tc.words...); !ok || got != tc.want {
+			t.Errorf("%q: %q %v want %q", tc.text, got, ok, tc.want)
+		}
+	}
+	for _, text := range []string{"查不到词库怎么办", "搜狗词库能导入吗"} {
+		if _, ok := qqCommandArg(text, "查", "搜索", "搜"); ok {
+			t.Errorf("%q treated as a command", text)
 		}
 	}
 }

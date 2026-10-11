@@ -20,6 +20,7 @@ const (
 	qqHelpText = `@我 直接提问就行，例如「五笔怎么切换」「#818 修好了吗」。也可以发：
 - 版本：各平台最新版本
 - 查 关键词：搜 GitHub 上的 issue
+- 加词 词语 拼音：某个词打不出来时投稿到词库
 - 提文档 内容：反馈文档的问题`
 	qqAdminHelpText = `
 管理员：
@@ -39,7 +40,7 @@ var (
 )
 
 // qqLooseCommands 是后面不跟分隔符、直接接内容也算命令的命令词：「提issue候选框不跟随」很常见，而以这几个词开头的普通提问几乎没有。以 ASCII 字母结尾的命令词（「提issue」）同样放宽；「查」「搜」这类单字命令保持要分隔符，免得「查不到词库怎么办」被当成命令。
-var qqLooseCommands = []string{"提文档", "文档反馈", "记录答案", "记答案"}
+var qqLooseCommands = []string{"提文档", "文档反馈", "记录答案", "记答案", "加词", "添加词条", "加个词"}
 
 // qqCommandSeparators 是命令词和参数之间可以有的分隔符。
 const qqCommandSeparators = ":： \n\t,，、"
@@ -108,6 +109,10 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 	if ref := qqIssueRefPattern.FindStringSubmatch(strings.TrimSpace(strings.ReplaceAll(text, "＃", "#"))); ref != nil {
 		reply(s.qqIssueStatus(ctx, ref[1], ref[2], qqMaintainerShortRunes))
 		return "cmd_issue"
+	}
+	if content, ok := qqCommandArg(text, "加词", "添加词条", "加个词"); ok {
+		s.qqAddWords(ctx, m.GroupOpenID+"/"+m.Author.MemberOpenID, content, reply)
+		return "cmd_words"
 	}
 	if content, ok := qqCommandArg(text, "提文档", "文档反馈"); ok {
 		if content == "" {

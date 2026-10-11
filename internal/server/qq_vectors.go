@@ -32,7 +32,7 @@ const (
 	qqEmbedRunes = 1500
 	// qqVectorSyncInterval 是同步的间隔，qqVectorSyncPages 是每次每个仓库最多拉的页数（每页 100 条）。
 	qqVectorSyncInterval = 10 * time.Minute
-	qqVectorSyncPages    = 10
+	qqVectorSyncPages    = 20
 	// qqVectorDocHits、qqVectorHistoryHits 是每次召回的文档段落数和 issue、PR 数；相似度低于 qqVectorMinSimilarity 的不要。
 	qqVectorDocHits       = 6
 	qqVectorHistoryHits   = 5
@@ -40,6 +40,9 @@ const (
 	// qqHistorySummaryRunes 是交给模型的每条 issue、PR 摘要的正文长度上限。
 	qqHistorySummaryRunes = 300
 )
+
+// qqHistoryPerms 是同步 issue 和 PR 时的令牌权限：只有 issues 读权限的令牌调 issues 接口时，GitHub 会把 PR 滤掉（曾经因此一条 PR 都没有入库），所以要加上 pull_requests 读权限。
+var qqHistoryPerms = map[string]string{"contents": "read", "issues": "read", "pull_requests": "read", "metadata": "read"}
 
 // qqVectorStore 是 account.Service 里的向量索引，所有副本共享；没有数据库时为 nil。
 type qqVectorStore interface {
@@ -228,7 +231,7 @@ type qqHistoryIssue struct {
 // syncQQHistoryVectors 从上次同步到的时间往后拉 repo 的 issue 和 PR，返回重算的条数。
 func (s *Server) syncQQHistoryVectors(ctx context.Context, repo string) (int, error) {
 	client := s.adminGitHub
-	token, err := client.Token(ctx, repo, qqGitHubReadPerms)
+	token, err := client.Token(ctx, repo, qqHistoryPerms)
 	if err != nil {
 		return 0, err
 	}

@@ -144,6 +144,19 @@ func (l *qqLimiter) RateLimit(_ context.Context, scope, subject string, limit in
 	return nil
 }
 
+// ReleaseRateLimit 与 account.Store.ReleaseRate 一样把计数减一，最少减到 0。
+func (l *qqLimiter) ReleaseRateLimit(ctx context.Context, scope, subject string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.counts[scope+"|"+subject] > 0 {
+		l.counts[scope+"|"+subject]--
+	}
+	return nil
+}
+
 // qqIssuesPath 匹配新建 issue 的路径，第一个分组是 owner/name。
 var qqIssuesPath = regexp.MustCompile(`^/repos/([^/]+/[^/]+)/issues$`)
 
@@ -2135,7 +2148,21 @@ func TestQQBotRecordsUnansweredTopics(t *testing.T) {
 	if s.qq.gapsIssue != 0 {
 		t.Fatal("a failed comment must drop the cached issue")
 	}
+	// 没写进去的问题退回去重名额：GitHub 评论返回 500 时如实说没记下，下一次同一个问题重新写评论，而不是说「已经记下来了」。
+	if limiter.counts["qq-bot-gap|第四个问题"] != 0 || fake.replyTexts()[len(fake.replyTexts())-1] != qqUnknownUnrecordedReply {
+		t.Fatal(limiter.counts, fake.replyTexts())
+	}
+	fake.commentStatus = 500
+	qqDeliver(t, s, "m-gap-5-retry", "第四个")
+	if limiter.counts["qq-bot-gap|第四个问题"] != 0 || fake.replyTexts()[len(fake.replyTexts())-1] != qqUnknownUnrecordedReply {
+		t.Fatal(limiter.counts, fake.replyTexts())
+	}
 	fake.commentStatus = 0
+	delete(fake.comments, "/repos/o/docs/issues/77/comments")
+	qqDeliver(t, s, "m-gap-5-again", "第四个")
+	if c := fake.comments["/repos/o/docs/issues/77/comments"]; c == nil || c["body"] != "群友问：第四个问题" || fake.replyTexts()[len(fake.replyTexts())-1] != qqUnknownReply {
+		t.Fatal(fake.comments, fake.replyTexts())
+	}
 	// 每天的上限。
 	limiter.counts["qq-bot-gaps-day|o/docs"] = qqGapsDaily
 	delete(fake.comments, "/repos/o/docs/issues/77/comments")
@@ -3559,13 +3586,19 @@ func (m *memoryDrafts) QQDraft(_ context.Context, id int64) (account.QQDraft, er
 	}
 	return m.drafts[id-1], nil
 }
+
+// unclaimed 与 account 包里 qqDraftUnclaimed 的条件一样：没被认领，或者认领超时而且没记下 issue。
+func (m *memoryDrafts) unclaimed(id int64) bool {
+	d := m.drafts[id-1]
+	return !d.Filed || account.QQDraftClaimStale(d, time.Now())
+}
 func (m *memoryDrafts) UpdateQQDraft(_ context.Context, id int64, original, report string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.updateErr != nil {
 		return false, m.updateErr
 	}
-	if m.drafts[id-1].Filed {
+	if !m.unclaimed(id) {
 		return false, nil
 	}
 	m.drafts[id-1].Original, m.drafts[id-1].Report = original, report
@@ -3577,21 +3610,29 @@ func (m *memoryDrafts) ClaimQQDraft(_ context.Context, id int64) (bool, error) {
 	if m.claimErr != nil {
 		return false, m.claimErr
 	}
-	if m.drafts[id-1].Filed {
+	if !m.unclaimed(id) {
 		return false, nil
 	}
-	m.drafts[id-1].Filed = true
+	m.drafts[id-1].Filed, m.drafts[id-1].FiledAt = true, time.Now()
 	return true, nil
 }
-func (m *memoryDrafts) ReleaseQQDraft(_ context.Context, id int64) error {
+
+// ReleaseQQDraft 和 SetQQDraftIssue 像数据库那样在 ctx 失效时失败，测得出调用方是不是用了已经取消的 ctx。
+func (m *memoryDrafts) ReleaseQQDraft(ctx context.Context, id int64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.drafts[id-1].IssueRef == "" {
-		m.drafts[id-1].Filed = false
+		m.drafts[id-1].Filed, m.drafts[id-1].FiledAt = false, time.Time{}
 	}
 	return nil
 }
-func (m *memoryDrafts) SetQQDraftIssue(_ context.Context, id int64, ref string) error {
+func (m *memoryDrafts) SetQQDraftIssue(ctx context.Context, id int64, ref string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.drafts[id-1].IssueRef = ref
@@ -3602,7 +3643,7 @@ func (m *memoryDrafts) OpenQQDrafts(_ context.Context, limit int) ([]account.QQD
 	defer m.mu.Unlock()
 	var out []account.QQDraft
 	for i := len(m.drafts) - 1; i >= 0 && len(out) < limit; i-- {
-		if !m.drafts[i].Filed {
+		if m.unclaimed(m.drafts[i].ID) {
 			out = append(out, m.drafts[i])
 		}
 	}
@@ -3745,6 +3786,68 @@ func TestQQBotDraftSupplementFailures(t *testing.T) {
 	deliver("m-s1-claim-again", "ADMIN1", "提交 D1")
 	if len(fake.created) != 1 || !strings.HasPrefix(last(), "草稿 D1 已提交为") {
 		t.Fatalf("%q", last())
+	}
+}
+
+// 提交草稿被打断（处理消息的 ctx 被取消或超时，例如滚动更新）时照样放回认领，再发一次「提交」能正常提交；认领了还没记下 issue 的草稿说「正在提交」而不是「已经提交过了」，认领超过 account.QQDraftClaimTimeout 当作副本被杀掉、来不及放回，可以重新提交。
+func TestQQBotDraftFilingInterrupted(t *testing.T) {
+	if account.QQDraftClaimTimeout <= qqBotProcessTimeout {
+		t.Fatal("a claim must outlive the message that holds it, or another replica takes over a draft still being filed")
+	}
+	s, fake, _ := qqServer(t)
+	drafts := &memoryDrafts{}
+	s.qqDrafts = drafts
+	s.qq.config.Admins = []string{"ADMIN1"}
+	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
+	deliver := func(id, member, content string) {
+		t.Helper()
+		qqPost(t, s, qqMessageFrom(id, member, content))
+		s.qqWorkers.Wait()
+	}
+	report := `{"kind":"bug","title":"候选框停在屏幕左上角","platform":"android","ime_version":"0.9.5","problem":"打字时候选框一直在左上角","steps":"在微信里打字","keywords":"候选框 左上角"}`
+	for range 2 {
+		if _, err := drafts.CreateQQDraft(context.Background(), "GROUP1/MEMBER1", "候选框一直跑到左上角", report); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 处理消息的 ctx 在提交时已经被取消：提交失败，但认领照样放回。
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	draft, _ := drafts.QQDraft(context.Background(), 1)
+	var replies []string
+	if got := s.qqFileDraft(ctx, draft, "", func(text string) { replies = append(replies, text) }); got != "failed" || replies[len(replies)-1] != qqReplyUnavailable || len(fake.created) != 0 {
+		t.Fatal(got, replies, len(fake.created))
+	}
+	if drafts.drafts[0].Filed {
+		t.Fatal("an interrupted filing kept the claim, so the draft would read as filed forever")
+	}
+	deliver("m-refile", "ADMIN1", "提交 D1")
+	if len(fake.created) != 1 || !strings.HasPrefix(last(), "草稿 D1 已提交为 r #123") || drafts.drafts[0].IssueRef != "r #123" {
+		t.Fatal(len(fake.created), last(), drafts.drafts[0])
+	}
+	// 另一条消息刚认领、还没记下 issue：正在提交，不再列出，也不会提第二遍。
+	drafts.drafts[1].Filed, drafts.drafts[1].FiledAt = true, time.Now().Add(-time.Minute)
+	deliver("m-filing", "ADMIN1", "提交 D2")
+	if last() != "草稿 D2 正在提交，请稍等一两分钟再看。" || len(fake.created) != 1 {
+		t.Fatal(last(), len(fake.created))
+	}
+	deliver("m-filing-more", "MEMBER1", "补充 D2 Android 14")
+	if last() != "草稿 D2 正在提交，请稍等一两分钟再看。" {
+		t.Fatal(last())
+	}
+	deliver("m-filing-list", "ADMIN1", "草稿")
+	if last() != "现在没有待处理的草稿。" {
+		t.Fatal(last())
+	}
+	// 认领超时还没记下 issue：当作提交被打断，重新出现在列表里，可以再提交。
+	drafts.drafts[1].FiledAt = time.Now().Add(-account.QQDraftClaimTimeout - time.Minute)
+	deliver("m-stale-list", "ADMIN1", "草稿")
+	if !strings.Contains(last(), "- D2（bug，") {
+		t.Fatal(last())
+	}
+	deliver("m-stale", "ADMIN1", "提交 D2")
+	if len(fake.created) != 2 || !strings.HasPrefix(last(), "草稿 D2 已提交为 r #123") || drafts.drafts[1].IssueRef != "r #123" {
+		t.Fatal(len(fake.created), last(), drafts.drafts[1])
 	}
 }
 
@@ -3906,6 +4009,17 @@ func TestQQBotFeatureVotes(t *testing.T) {
 	fake.patched = nil
 	deliver("m-vote-again", "MEMBER1", "候选框透明度求求了")
 	if fake.patched != nil || !strings.Contains(last(), "你之前已经记过一票了") {
+		t.Fatal(fake.patched, last())
+	}
+	// 读计数评论失败、这一票没记上：退回名额，同一个人再说一次能记上，不会被告知「已经记过一票了」。
+	fake.issueComments = map[string]string{"/repos/o/r/issues/7/comments": `not json`}
+	deliver("m-vote-fail", "MEMBER3", "候选框透明度加一个")
+	if fake.patched != nil || !strings.Contains(last(), "开发者会在那里跟进") {
+		t.Fatal(fake.patched, last())
+	}
+	fake.issueComments = map[string]string{"/repos/o/r/issues/7/comments": `[{"id":55,"body":"` + strings.ReplaceAll(qqVoteBody(2), `"`, `\"`) + `"}]`}
+	deliver("m-vote-retry", "MEMBER3", "候选框透明度加一个")
+	if p := fake.patched["/repos/o/r/issues/comments/55"]; p == nil || p["body"] != qqVoteBody(3) || !strings.Contains(last(), "一共 3 人需要") {
 		t.Fatal(fake.patched, last())
 	}
 	// 没有同一个需求时照旧起草稿。

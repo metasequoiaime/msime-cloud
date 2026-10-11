@@ -402,6 +402,12 @@ func (s *Store) Rate(ctx context.Context, key string, limit int, window time.Dur
 	return nil
 }
 
+// ReleaseRate 把 key 在当前窗口里的计数减一，最少减到 0；窗口已经过期的不动，下次 Rate 会重新开窗口。
+func (s *Store) ReleaseRate(ctx context.Context, key string) error {
+	_, e := s.pool.Exec(ctx, `UPDATE auth_rates SET count=greatest(count-1,0) WHERE key=$1 AND expires_at>now()`, key)
+	return e
+}
+
 // RateUntil 与 Rate 计数方式相同，超限时额外返回当前窗口的剩余时长，供响应的 Retry-After 使用。
 func (s *Store) RateUntil(ctx context.Context, key string, limit int, window time.Duration) (time.Duration, error) {
 	var n int

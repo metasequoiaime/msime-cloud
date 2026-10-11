@@ -81,21 +81,24 @@ func (b *qqBot) memberRole(ctx context.Context, group, member string) (string, e
 
 // qqIsAdmin 判断发消息的人是不是管理员：在 qq_bot.admins 里，或者在 qq_bot.groups 列出的群里，事件带的 eventRole（为空时查群身份接口）说他是群主或管理员。接口不可用或出错时按普通成员处理。
 func (s *Server) qqIsAdmin(ctx context.Context, group, member, eventRole string) bool {
-	if slices.Contains(s.qq.config.Admins, member) {
-		return true
-	}
 	r := &s.qq.roles
 	now := s.qq.now()
 	key := group + "/" + member
 	r.mu.Lock()
-	if !slices.Contains(s.qq.config.Groups, group) {
-		if !r.unlisted[group] {
-			if r.unlisted == nil {
-				r.unlisted = map[string]bool{}
-			}
-			r.unlisted[group] = true
-			slog.Info("qq bot: group roles ignored, group not in qq_bot.groups", "group_openid", group)
+	listed := slices.Contains(s.qq.config.Groups, group)
+	// 先记日志再看名单：名单里的管理员 @ 机器人时也要把群标识记下来，否则只有普通群友发言后才拿得到。
+	if !listed && !r.unlisted[group] {
+		if r.unlisted == nil {
+			r.unlisted = map[string]bool{}
 		}
+		r.unlisted[group] = true
+		slog.Info("qq bot: group roles ignored, group not in qq_bot.groups", "group_openid", group)
+	}
+	if slices.Contains(s.qq.config.Admins, member) {
+		r.mu.Unlock()
+		return true
+	}
+	if !listed {
 		r.mu.Unlock()
 		return false
 	}

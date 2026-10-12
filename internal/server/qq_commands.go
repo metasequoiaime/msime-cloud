@@ -229,7 +229,7 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 		}
 		return "cmd_help"
 	case slices.Contains(qqReleaseAliases, compact):
-		releases := strings.TrimSpace(s.qqLatestReleases(ctx))
+		releases := strings.TrimSpace(qqReleasesForMembers(s.qqLatestReleases(ctx)))
 		if releases == "" {
 			reply("暂时查不到版本信息，请稍后再试。")
 		} else {

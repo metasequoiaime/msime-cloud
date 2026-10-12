@@ -2031,7 +2031,7 @@ func TestQQBotTimedOutReply(t *testing.T) {
 	}
 }
 
-// 答疑时按模型给的关键词在每个仓库搜 issue、按需查各平台最新版本，结果和文档段落一起交给回答的模型；查询失败不影响答疑。
+// 答疑时按模型给的关键词在每个仓库搜 issue、总是查各平台最新版本（每个平台的最新正式版附上清洗过的更新内容），结果和文档段落一起交给回答的模型；查询失败不影响答疑。
 func TestQQBotAnswersWithGitHubContext(t *testing.T) {
 	s, fake, _ := qqServer(t)
 	s.qq.config.Admins = nil
@@ -2044,8 +2044,8 @@ func TestQQBotAnswersWithGitHubContext(t *testing.T) {
 		{"number": 700, "title": "旧需求", "state": "closed", "state_reason": "not_planned", "updated_at": "2026-09-01T00:00:00Z"},
 	}
 	fake.releases = map[string]string{
-		"o/win": `[{"tag_name":"v0.9.6-beta","prerelease":true,"published_at":"2026-10-11T00:00:00Z"},{"tag_name":"v0.9.5","published_at":"2026-10-05T00:00:00Z"},{"tag_name":"v0.9.4","published_at":"2026-10-03T00:00:00Z"}]`,
-		"o/r":   `[{"tag_name":"windows-v0.2.1","prerelease":true,"published_at":"2026-10-08T00:00:00Z"},{"tag_name":"android-v0.3.1","published_at":"2026-10-08T00:00:00Z"},{"tag_name":"android-vnext","published_at":"2026-10-09T00:00:00Z"},{"tag_name":"draft-x","draft":true}]`,
+		"o/win": `[{"tag_name":"v0.9.6-beta","prerelease":true,"published_at":"2026-10-11T00:00:00Z","body":"预发布的说明"},{"tag_name":"v0.9.5","published_at":"2026-10-05T00:00:00Z","body":"### 修复\r\n- Win11 24H2 候选窗偏移。\r\n- 看 [#730](https://github.com/x/730) **加粗**\r\n\r\n` + "```" + `\ncode\n` + "```" + `\n### 新增\n* 剪贴板历史支持固定条目\n<!-- hidden -->"},{"tag_name":"v0.9.4","published_at":"2026-10-03T00:00:00Z","body":"旧版的说明"}]`,
+		"o/r":   `[{"tag_name":"windows-v0.2.1","prerelease":true,"published_at":"2026-10-08T00:00:00Z","body":"新版预览的说明"},{"tag_name":"android-v0.3.1","published_at":"2026-10-08T00:00:00Z"},{"tag_name":"android-vnext","published_at":"2026-10-09T00:00:00Z"},{"tag_name":"draft-x","draft":true}]`,
 	}
 	qqDeliver(t, s, "m-gh", "候选框跑到左上角修好了没")
 	// 两个仓库同时搜，请求的先后不固定。
@@ -2068,12 +2068,16 @@ func TestQQBotAnswersWithGitHubContext(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"- Windows（win 仓库）：正式版 v0.9.5（2026-10-05 发布）；预发布 v0.9.6-beta（2026-10-11 发布）；r 仓库的新版预览 windows-v0.2.1（2026-10-08 发布）",
-		"- Android（r 仓库）：正式版 android-v0.3.1（2026-10-08 发布）",
-		"- HarmonyOS（r 仓库）：还没有发布",
+		// 只有最新正式版附更新内容：标题后面接「：」，条目之间用「；」，链接、加粗、代码块和 HTML 注释都去掉；预发布、新版预览和没有说明的正式版不附。
+		"- Windows（win 仓库）：正式版 v0.9.5（2026-10-05 发布）；预发布 v0.9.6-beta（2026-10-11 发布）；r 仓库的新版预览 windows-v0.2.1（2026-10-08 发布）\n  更新内容：修复：Win11 24H2 候选窗偏移；看 #730 加粗；新增：剪贴板历史支持固定条目\n- Android（r 仓库）：正式版 android-v0.3.1（2026-10-08 发布）\n- HarmonyOS（r 仓库）：还没有发布\n",
 	} {
 		if !strings.Contains(fake.answerSystem, want) {
 			t.Fatalf("releases missing %q:\n%s", want, fake.answerSystem)
+		}
+	}
+	for _, unwanted := range []string{"预发布的说明", "旧版的说明", "新版预览的说明", "code", "hidden"} {
+		if strings.Contains(fake.answerSystem, unwanted) {
+			t.Fatalf("release notes must only come from the newest stable release, found %q:\n%s", unwanted, fake.answerSystem)
 		}
 	}
 	if strings.Contains(fake.answerSystem, "#9") {
@@ -2090,11 +2094,12 @@ func TestQQBotAnswersWithGitHubContext(t *testing.T) {
 	if strings.Contains(fake.answerSystem, "### GitHub 上搜到") || strings.Contains(fake.answerSystem, "Windows（") || fake.replyTexts()[len(fake.replyTexts())-1] != "在设置的「输入方案」里选五笔。" {
 		t.Fatal(fake.answerSystem)
 	}
-	// 模型没有要求时不查。
-	fake.selected, fake.searchQueries, fake.releaseCalls = `{"sections":[1]}`, nil, 0
+	// 模型没有给关键词时不搜 issue；最新版本不看 releases，照样查，文档里过时的版本号才有得对照。
+	fake.selected, fake.searchQueries, fake.releaseCalls = `{"sections":[1],"releases":false}`, nil, 0
+	fake.releases = map[string]string{"o/win": `[{"tag_name":"v0.9.5","published_at":"2026-10-05T00:00:00Z"}]`, "o/r": `[]`}
 	qqDeliver(t, s, "m-gh-none", "五笔怎么切换")
-	if len(fake.searchQueries) != 0 || fake.releaseCalls != 0 {
-		t.Fatal(fake.searchQueries, fake.releaseCalls)
+	if len(fake.searchQueries) != 0 || fake.releaseCalls != 2 || !strings.Contains(fake.answerSystem, "### 各平台最新版本（GitHub Release）\n- Windows（win 仓库）：正式版 v0.9.5（2026-10-05 发布）\n") {
+		t.Fatal(fake.searchQueries, fake.releaseCalls, fake.answerSystem)
 	}
 	for _, tc := range []struct {
 		state, reason string
@@ -2352,7 +2357,7 @@ func TestQQBotCommands(t *testing.T) {
 	// 版本。
 	fake.releases = map[string]string{"o/win": `[{"tag_name":"v0.9.5","published_at":"2026-10-05T00:00:00Z"}]`, "o/r": `[]`}
 	qqDeliver(t, s, "m-ver", "最新版本")
-	if !strings.HasPrefix(last(), "各平台最新版本（GitHub Release）：\n- Windows（win 仓库）：正式版 v0.9.5（2026-10-05 发布）") {
+	if !strings.HasPrefix(last(), "各平台最新版本（GitHub Release）：\nWindows：0.9.5（10-05）\n") || strings.Contains(last(), "仓库") {
 		t.Fatal(last())
 	}
 	fake.releases = map[string]string{}
@@ -2495,7 +2500,7 @@ func TestQQBotCommandVariants(t *testing.T) {
 		{"MEMBER1", "怎么用", qqHelpText},
 		{"MEMBER1", "？", qqHelpText},
 		{"ADMIN1", "帮助！", qqHelpText + qqAdminHelpText},
-		{"MEMBER1", "版本！", "各平台最新版本（GitHub Release）：\n- Windows（win 仓库）：正式版 v0.9.5"},
+		{"MEMBER1", "版本！", "各平台最新版本（GitHub Release）：\nWindows：0.9.5（10-05）"},
 		{"MEMBER1", "最新版本🙏", "各平台最新版本（GitHub Release）："},
 		{"MEMBER1", "我的id？", "你的 ID 是 MEMBER1"},
 		{"MEMBER1", "＃８１８", "win #818 大小写倒置：已完成"},
@@ -3742,14 +3747,122 @@ func TestQQResearchTarget(t *testing.T) {
 			t.Errorf("%q allowed", raw)
 		}
 	}
-	trimmed, _ := json.Marshal(qqResearchTrim(map[string]any{"title": "t", "html_url": "x", "node_id": "n", "body": strings.Repeat("长", qqResearchBodyRunes+10), "user": map[string]any{"login": "a", "avatar_url": "b"}, "assets": []any{map[string]any{"name": "setup.exe", "size": 1, "uploader": map[string]any{"login": "bot"}}}}))
+	trimmed, _ := json.Marshal(qqResearchTrim(map[string]any{"title": "t", "html_url": "x", "node_id": "n", "body": strings.Repeat("长", qqResearchBodyRunes+10), "user": map[string]any{"login": "a", "avatar_url": "b"}, "assets": []any{map[string]any{"name": "setup.exe", "size": 1, "uploader": map[string]any{"login": "bot"}}}}, qqResearchBodyRunes))
 	if want := `{"assets":["setup.exe"],"body":"` + strings.Repeat("长", qqResearchBodyRunes) + `…","title":"t","user":"a"}`; string(trimmed) != want {
 		t.Fatal(string(trimmed))
 	}
 	// 文件内容接口返回的 content（base64 的文件原文）和正文一样截断。
-	trimmed, _ = json.Marshal(qqResearchTrim(map[string]any{"name": "README.md", "encoding": "base64", "content": strings.Repeat("QUJD", qqResearchBodyRunes)}))
+	trimmed, _ = json.Marshal(qqResearchTrim(map[string]any{"name": "README.md", "encoding": "base64", "content": strings.Repeat("QUJD", qqResearchBodyRunes)}, qqResearchBodyRunes))
 	if want := `{"content":"` + strings.Repeat("QUJD", qqResearchBodyRunes/4) + `…","encoding":"base64","name":"README.md"}`; string(trimmed) != want {
 		t.Fatal(string(trimmed))
+	}
+}
+
+// 现查单个 Release（/releases/tags/<tag>）时发布说明留到 qqResearchReleaseBodyRunes 字，Release 列表里的每条仍按 qqResearchBodyRunes 截：曾经都截到 400 字，模型对群友说「我只看到了前半部分」。
+func TestQQResearchReleaseBody(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	long := strings.Repeat("长", qqResearchReleaseBodyRunes+500)
+	fake.extraGitHub = map[string]string{
+		"/repos/metasequoiaime/msime/releases/tags/windows-v0.2.1": `{"tag_name":"windows-v0.2.1","body":"` + long + `","assets":[{"name":"setup.exe","browser_download_url":"https://x"}]}`,
+		"/repos/metasequoiaime/msime/releases?per_page=2":          `[{"tag_name":"windows-v0.2.1","body":"` + long + `"},{"tag_name":"windows-v0.2.0","body":"` + long + `"}]`,
+	}
+	got := s.qqResearchCall(context.Background(), qqTestGitHubGet("/repos/metasequoiaime/msime/releases/tags/windows-v0.2.1"))
+	if want := `{"assets":["setup.exe"],"body":"` + strings.Repeat("长", qqResearchReleaseBodyRunes) + `…","tag_name":"windows-v0.2.1"}`; got != want {
+		t.Fatal(got)
+	}
+	got = s.qqResearchCall(context.Background(), qqTestGitHubGet("/repos/metasequoiaime/msime/releases?per_page=2"))
+	if want := strings.Repeat("长", qqResearchBodyRunes) + `…"`; strings.Count(got, want) != 2 || strings.Contains(got, strings.Repeat("长", qqResearchBodyRunes+1)) {
+		t.Fatal(got)
+	}
+	// 工具说明告诉模型问某版本更新了什么时读单个 Release。
+	if !strings.Contains(string(qqResearchTool), "问某个版本更新了什么时 GET /repos/metasequoiaime/<仓库>/releases/tags/<tag>") || !json.Valid(qqResearchTool) {
+		t.Fatal(string(qqResearchTool))
+	}
+	// 截断不说给群友听，GitHub 查到的不标「据网上资料」；回答时版本号只按查到的最新版本说，更新内容挑几条。
+	for _, rule := range []string{"只有 web_search 搜到的内容才注明「据网上资料」", "正文结尾的「…」是系统截断的，不要提截断"} {
+		if !strings.Contains(qqResearchPrompt, rule) {
+			t.Fatal(rule)
+		}
+	}
+	for _, rule := range []string{"文档里写的版本号可能已经过时：提到当前版本时只按「各平台最新版本」说", "问某版本更新了什么时，按更新内容挑 3–5 条和用户最相关的，每条一行，最后说「完整更新说明在官网下载页」；不提截断"} {
+		if !strings.Contains(qqAnswerPrompt, rule) {
+			t.Fatal(rule)
+		}
+	}
+}
+
+// 「版本」命令给群友的写法：版本号去掉 tag 前缀，日期只写月和日，不写仓库名；预发布写「预览版」，qq_bot.repo 里的新实现写「新版 平台 预览 …（…，测试中）」。
+func TestQQReleasesForMembers(t *testing.T) {
+	list := []qqPlatformRelease{
+		{ID: "windows", Name: "Windows", Repo: "o/msime-windows", Prefix: "v", Stable: &qqRelease{TagName: "v0.10.1", PublishedAt: "2026-10-11T20:39:00Z"}, NextGenRepo: "o/msime", NextGenPrefix: "windows-v", NextGen: []qqRelease{{TagName: "windows-v0.2.1", Prerelease: true, PublishedAt: "2026-10-08T00:00:00Z"}}},
+		{ID: "macos", Name: "macOS", Repo: "o/msime", Prefix: "macos-v", Stable: &qqRelease{TagName: "macos-v0.52.0", PublishedAt: "2026-10-09T00:00:00Z"}, Preview: &qqRelease{TagName: "macos-v0.53.0-beta.1", Prerelease: true, PublishedAt: "2026-10-10T00:00:00Z"}},
+		{ID: "android", Name: "Android", Repo: "o/msime", Prefix: "android-v", Preview: &qqRelease{TagName: "android-v0.3.1", Prerelease: true}},
+		{ID: "harmony", Name: "HarmonyOS", Repo: "o/msime", Prefix: "harmony-v"},
+	}
+	got := qqReleasesForMembers(list)
+	want := "Windows：0.10.1（10-11）｜新版 Windows 预览 0.2.1（10-08，测试中）\nmacOS：0.52.0（10-09）｜预览版 0.53.0-beta.1（10-10）\nAndroid：预览版 0.3.1\nHarmonyOS：还没有发布\n"
+	if got != want {
+		t.Fatalf("%q", got)
+	}
+	for _, unwanted := range []string{"仓库", "macos-v", "windows-v", "msime", "2026-"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("member release list must not contain %q: %q", unwanted, got)
+		}
+	}
+	if qqReleasesForMembers(nil) != "" {
+		t.Fatal("no platforms must give an empty list")
+	}
+}
+
+// 交给模型的版本资料：更新内容按句截到 qqReleaseNoteRunes 字；资料太长时只给用户提到的平台附更新内容（见 qqMentionsPlatform）。
+func TestQQReleasesMaterialNotes(t *testing.T) {
+	notes := qqReleaseNotes("## 新增\n" + strings.Repeat("- 一条很长的更新说明写在这里\n", 40))
+	if runes := []rune(notes); len(runes) > qqReleaseNoteRunes || !strings.HasSuffix(notes, "；…") || !strings.HasPrefix(notes, "新增：一条很长的更新说明写在这里；") {
+		t.Fatalf("%d %q", len(runes), notes)
+	}
+	if qqReleaseNotes("\n\n<!-- 空 -->\n```\nonly code\n```\n") != "" {
+		t.Fatal("a body without text must give no notes")
+	}
+	list := []qqPlatformRelease{
+		{ID: "windows", Name: "Windows", Repo: "o/win", Prefix: "v", Stable: &qqRelease{TagName: "v0.10.1", PublishedAt: "2026-10-11T00:00:00Z", Body: "- 修好候选窗"}},
+		{ID: "android", Name: "Android", Repo: "o/r", Prefix: "android-v", Stable: &qqRelease{TagName: "android-v0.3.1", PublishedAt: "2026-10-08T00:00:00Z", Body: "- 加了手写"}},
+	}
+	if got := qqReleasesMaterial(list, nil); got != "- Windows（win 仓库）：正式版 v0.10.1（2026-10-11 发布）\n  更新内容：修好候选窗\n- Android（r 仓库）：正式版 android-v0.3.1（2026-10-08 发布）\n  更新内容：加了手写\n" {
+		t.Fatalf("%q", got)
+	}
+	got := qqReleasesMaterial(list, func(p qqPlatformRelease) bool { return qqMentionsPlatform("安卓最新版更新了啥", p) })
+	if !strings.Contains(got, "加了手写") || strings.Contains(got, "修好候选窗") || !strings.Contains(got, "- Windows（win 仓库）：正式版 v0.10.1") {
+		t.Fatalf("%q", got)
+	}
+	for question, want := range map[string]string{"WIN 最新版": "windows", "Windows 11 上更新了什么": "windows", "android 版": "android", "安卓": "android", "最新版更新了啥": ""} {
+		var mentioned []string
+		for _, p := range list {
+			if qqMentionsPlatform(question, p) {
+				mentioned = append(mentioned, p.ID)
+			}
+		}
+		if strings.Join(mentioned, ",") != want {
+			t.Errorf("%q: %v", question, mentioned)
+		}
+	}
+}
+
+// 资料加上全部更新内容后超过 qqAnswerContextRunes 时，只给用户提到的平台附更新内容，版本行照样每个平台都有。
+func TestQQBotReleaseNotesWithinBudget(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.qq.config.Admins = nil
+	s.config.Admin.GitHub.Platforms = []AdminPlatformConfig{{ID: "windows", Name: "Windows", Repo: "o/win", TagPrefix: "v"}, {ID: "android", Name: "Android", Repo: "o/r", TagPrefix: "android-v"}}
+	fake.releases = map[string]string{
+		"o/win": `[{"tag_name":"v0.10.1","published_at":"2026-10-11T00:00:00Z","body":"- 修好候选窗"}]`,
+		"o/r":   `[{"tag_name":"android-v0.3.1","published_at":"2026-10-08T00:00:00Z","body":"- 加了手写"}]`,
+	}
+	fake.selected = `{"sections":[1],"issue_search":"更新"}`
+	for i := range 5 {
+		fake.searchItems = append(fake.searchItems, map[string]any{"number": 900 + i, "title": strings.Repeat("长", qqAnswerContextRunes/8), "state": "open", "updated_at": "2026-10-10T03:00:00Z"})
+	}
+	qqDeliver(t, s, "m-notes-budget", "安卓最新版更新了啥")
+	if !strings.Contains(fake.answerSystem, "- Android（r 仓库）：正式版 android-v0.3.1（2026-10-08 发布）\n  更新内容：加了手写\n") || !strings.Contains(fake.answerSystem, "- Windows（win 仓库）：正式版 v0.10.1（2026-10-11 发布）\n") || strings.Contains(fake.answerSystem, "修好候选窗") {
+		t.Fatal(fake.answerSystem)
 	}
 }
 

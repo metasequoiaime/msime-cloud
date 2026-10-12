@@ -65,6 +65,8 @@ type Server struct {
 	qqStats qqStatsStore
 	// qqImprovements 是答疑的改进依据（account.Service，见 qq_improvements.go）；没有数据库时为 nil。
 	qqImprovements qqImprovementStore
+	// qqLearnedCases 是从核对过的答案里学到的自测题（account.Service，见 qq_selftest.go）；没有数据库时为 nil。
+	qqLearnedCases qqSelfTestCaseStore
 
 	adminStore  adminAuthStore
 	adminGoogle *adminGoogleAuth
@@ -177,6 +179,7 @@ func New(c Config) (*Server, error) {
 				s.qqVectorJob(s.lifetime)
 			}()
 			s.qqImprovements = s.accounts
+			s.qqLearnedCases = s.accounts
 			s.adminJobs.Add(1)
 			go func() {
 				defer s.adminJobs.Done()

@@ -56,7 +56,7 @@ func (s *Server) qqImprovementRepo() string {
 	return s.qq.config.ImprovementRepo
 }
 
-// qqImprovementJob 每小时看一次，到了周一 9 点就开上一周的改进周报；同一周只有认领到的副本开一次。
+// qqImprovementJob 每小时看一次：每天 qqSelfTestDailyHour 点以后跑一次定时自测（qqDailySelfTest），到了周一 9 点就开上一周的改进周报；都只有认领到的副本做一次。
 func (s *Server) qqImprovementJob(ctx context.Context) {
 	ticker := time.NewTicker(qqImprovementCheck)
 	defer ticker.Stop()
@@ -72,6 +72,7 @@ func (s *Server) qqImprovementJob(ctx context.Context) {
 
 // qqImprovementTick 是 qqImprovementJob 的一次检查：周一 9 点以后、这一周还没开过就开；用 RateLimit 认领，几个副本里只有一个开。认领后开失败也不再重试，免得 GitHub 出问题时每小时开一个。
 func (s *Server) qqImprovementTick(ctx context.Context) {
+	s.qqDailySelfTest(ctx)
 	now := s.qq.now().In(qqStatsZone)
 	if now.Weekday() != qqImprovementWeekday || now.Hour() < qqImprovementHour || s.qqImprovements == nil || s.qqImprovementRepo() == "" {
 		return

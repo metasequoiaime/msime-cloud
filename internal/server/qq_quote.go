@@ -1,0 +1,66 @@
+package server
+
+import (
+	"bytes"
+	"encoding/json"
+	"strings"
+)
+
+// 引用的消息。群友常常引用（回复）一条带截图或问题的消息，再 @机器人 问「这个是什么意思」，机器人原来只收到这一句，看不到被引用的截图，只能瞎猜：曾把候选后面括号里的辅助码「(AD)」答成广告、公元、活动目录。开放平台的群 @ 事件里引用的内容放在哪个字段，文档没写清、生产上也还没见过：这里按已知的写法认 msg_elements（被引用消息的文字和附件），message_reference（对象）和 message_type=103 只说明引用了。这几个字段单独解析，类型对不上就当没有引用，不影响 qqGroupMessage 本身的解析（字段类型猜错会让整条消息被丢掉）；probeEventFields 会记下带这些字段的事件长什么样，确认之后再按实际字段调整。
+
+// qqQuoteFields 是可能带着引用信息的字段，probeEventFields 记它们下一层的字段名。
+var qqQuoteFields = []string{"message_reference", "msg_elements", "message_scene"}
+
+const (
+	// qqQuoteMessageType 是开放平台表示引用消息的 message_type。
+	qqQuoteMessageType = 103
+	// qqQuoteRunes 是接到问题后面的引用文字最多多少字。
+	qqQuoteRunes = 500
+	// qqQuoteUnseenNote 接在问题后面：知道群友引用了消息、却拿不到内容时，让回答的模型先按输入法里最可能的意思答，再请他把截图和问题放在同一条消息里。
+	qqQuoteUnseenNote = "\n（群友引用了一条消息来问，但机器人看不到引用的内容；回答时先按输入法里最可能的意思说，再请他把截图或原话和问题放在同一条消息里 @机器人）"
+)
+
+// qqQuote 是群友引用的那条消息：Text 是去掉 @ 标记的文字，Images 是其中的图片；Referenced 表示事件说明了这是一条引用消息，即使拿不到内容。
+type qqQuote struct {
+	Text       string
+	Images     []qqAttachment
+	Referenced bool
+}
+
+// qqQuoteOf 从事件 d 里取出引用的消息。msg_elements 里和这条消息自己相同的文字、附件不算引用：不确定开放平台会不会把消息本身也放进去。
+func qqQuoteOf(raw json.RawMessage, m qqGroupMessage) qqQuote {
+	var fields struct {
+		MessageType      json.RawMessage `json:"message_type"`
+		MsgElements      json.RawMessage `json:"msg_elements"`
+		MessageReference json.RawMessage `json:"message_reference"`
+	}
+	if json.Unmarshal(raw, &fields) != nil {
+		return qqQuote{}
+	}
+	var q qqQuote
+	var elements []struct {
+		Content     string         `json:"content"`
+		Attachments []qqAttachment `json:"attachments"`
+	}
+	if json.Unmarshal(fields.MsgElements, &elements) == nil {
+		own := map[string]bool{}
+		for _, a := range m.Attachments {
+			own[a.URL] = true
+		}
+		var texts []string
+		for _, e := range elements {
+			if text := qqFeedbackText(e.Content); text != "" && text != qqFeedbackText(m.Content) {
+				texts = append(texts, text)
+			}
+			for _, a := range e.Attachments {
+				if !own[a.URL] && qqHasImages([]qqAttachment{a}) {
+					q.Images = append(q.Images, a)
+				}
+			}
+		}
+		q.Text = qqTruncate(strings.Join(texts, "\n"), qqQuoteRunes)
+	}
+	var messageType int
+	q.Referenced = q.Text != "" || len(q.Images) > 0 || json.Unmarshal(fields.MessageType, &messageType) == nil && messageType == qqQuoteMessageType || bytes.HasPrefix(fields.MessageReference, []byte("{"))
+	return q
+}

@@ -2337,6 +2337,16 @@ func TestQQBotRecordsUnansweredTopics(t *testing.T) {
 	if c.QQBot.validate(&c) == nil {
 		t.Fatal("bad gaps_repo accepted")
 	}
+	c = qqValidConfig()
+	c.QQBot.ImprovementRepo = "msime-cloud"
+	if c.QQBot.validate(&c) == nil {
+		t.Fatal("bad improvement_repo accepted")
+	}
+	c = qqValidConfig()
+	c.QQBot.ImprovementRepo = "none"
+	if err := c.QQBot.validate(&c); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // 命令不经过模型：帮助、版本、查、#编号、提issue。
@@ -5953,6 +5963,8 @@ func TestQQBotSelfTest(t *testing.T) {
 	s.qq.config.Admins = []string{"ADMIN1"}
 	candidates := &memoryFAQCandidates{}
 	s.qqFAQCandidates = candidates
+	improvements := &memoryImprovements{}
+	s.qqImprovements = improvements
 	fake.judge = `{"pass":true,"reason":"满足要求"}`
 	qqPost(t, s, qqMessageFrom("m-selftest", "ADMIN1", "自测"))
 	s.qqWorkers.Wait()
@@ -5962,6 +5974,10 @@ func TestQQBotSelfTest(t *testing.T) {
 	}
 	if strings.Count(strings.Join(fake.chatCalls, ","), "judge") != len(qqSelfTestCases) || len(candidates.items) != 0 {
 		t.Fatal(fake.chatCalls, candidates.items)
+	}
+	// 改进依据只记分数；自测里答不上的题不算群友答不上。
+	if want := fmt.Sprintf("自测 %d/%d 通过。", len(qqSelfTestCases), len(qqSelfTestCases)); len(improvements.events) != 1 || improvements.events[0].Kind != "selftest" || improvements.events[0].Detail != want {
+		t.Fatal(improvements.events)
 	}
 	// 判不过、答不上的列出原因。
 	fake.judge = `{"pass":false,"reason":"只复述了资料"}`

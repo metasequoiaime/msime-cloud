@@ -95,6 +95,8 @@ type QQBotConfig struct {
 	StrongModel string `json:"strong_model"`
 	// ChatModel 是问候和闲聊用的模型，经 chat 端点调用：挑段落的模型判断是闲聊时用它回答，闲聊用不上强模型，选便宜、语气自然的国产模型。为空时用 defaultQQChatModel，写 none 时用 model。
 	ChatModel string `json:"chat_model"`
+	// ImprovementRepo 是每周开「改进依据」汇总 issue 的仓库（见 qq_improvements.go），为空时用 defaultQQImprovementRepo，写 none 关闭。管理后台的 GitHub App 要有这个仓库的 Issues 写权限。
+	ImprovementRepo string `json:"improvement_repo"`
 	// EmbeddingModel 是答疑向量检索用的 embedding 模型，经 chat 端点所在服务的 /embeddings 接口调用（密钥沿用 chat）；为空时用 defaultQQEmbeddingModel，写 none 关闭向量检索。见 qq_vectors.go。
 	EmbeddingModel string `json:"embedding_model"`
 	// APIURL 覆盖 https://api.bot.qq.com，供测试使用。
@@ -117,7 +119,7 @@ var (
 
 func (c *QQBotConfig) validate(cfg *Config) error {
 	if !c.enabled() {
-		if c.APIURL != "" || c.Repo != "" || c.Model != "" || c.FallbackModel != "" || c.KnowledgeRepo != "" || c.KnowledgeDir != "" || c.GapsRepo != "" || c.EmbeddingModel != "" || c.StrongModel != "" || c.ChatModel != "" || len(c.Labels) > 0 || len(c.Groups) > 0 || len(c.Admins) > 0 {
+		if c.APIURL != "" || c.Repo != "" || c.Model != "" || c.FallbackModel != "" || c.KnowledgeRepo != "" || c.KnowledgeDir != "" || c.GapsRepo != "" || c.EmbeddingModel != "" || c.ImprovementRepo != "" || c.StrongModel != "" || c.ChatModel != "" || len(c.Labels) > 0 || len(c.Groups) > 0 || len(c.Admins) > 0 {
 			return errors.New("qq_bot settings require app_id")
 		}
 		return nil
@@ -224,6 +226,9 @@ func (c *QQBotConfig) validate(cfg *Config) error {
 	}
 	if c.GapsRepo != "" && !githubRepositoryPattern.MatchString(c.GapsRepo) {
 		return errors.New("qq_bot gaps_repo must be owner/name")
+	}
+	if c.ImprovementRepo != "" && c.ImprovementRepo != "none" && !githubRepositoryPattern.MatchString(c.ImprovementRepo) {
+		return errors.New("qq_bot improvement_repo must be owner/name or none")
 	}
 	if c.APIURL == "" {
 		c.APIURL = defaultQQBotAPIURL
@@ -868,6 +873,12 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 			reply(qqUnknownUnrecordedReply)
 		}
 		s.recordQQFAQCandidate(ctx, cmp.Or(answer.Topic, question), "")
+		// 改进依据只记模型的概括，不记原话：现查过还答不上算机器人能力问题，没现查就答不上算文档没写（见 qq_improvements.go）。
+		category := "docs"
+		if answer.Researched {
+			category = "capability"
+		}
+		s.recordQQImprovement(ctx, "unknown", answer.Topic, category)
 	case answer.Type == "answered" && answer.Escalate && admin:
 		outcome = "answered_hint"
 		reply(answer.Answer + qqReplyAdminHint)

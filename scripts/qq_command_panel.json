@@ -1,0 +1,24 @@
+{
+  "remark": "msime QQ bot slash commands, see internal/server/qq_slash.go",
+  "items": [
+    {"type": "command", "name": "/help", "desc": "怎么用我"},
+    {"type": "command", "name": "/ver", "desc": "各平台最新版本"},
+    {"type": "command", "name": "/issues", "desc": "查 issue：后接关键词或编号"},
+    {"type": "command", "name": "/add", "desc": "词打不出来：/add 词语 拼音"},
+    {"type": "command", "name": "/doc", "desc": "文档缺了什么，可引用一条消息"},
+    {"type": "link", "name": "使用文档", "desc": "各平台指南和常见问题", "link": "https://msime.app/docs/"},
+    {"type": "link", "name": "下载", "desc": "Windows、macOS、Linux、安卓、iOS", "link": "https://msime.app/download/"},
+    {"type": "command", "name": "/drafts", "desc": "草稿列表，后接编号看详情", "only_admin": true},
+    {"type": "command", "name": "/draft", "desc": "按引用的消息建草稿", "only_admin": true},
+    {"type": "command", "name": "/submit", "desc": "提交草稿：/submit 编号", "only_admin": true},
+    {"type": "command", "name": "/undraft", "desc": "不提交草稿：/undraft 编号", "only_admin": true},
+    {"type": "command", "name": "/issue", "desc": "按引用的消息直接提 issue", "only_admin": true},
+    {"type": "command", "name": "/faqs", "desc": "文档缺口列表", "only_admin": true},
+    {"type": "command", "name": "/a", "desc": "写进 FAQ：/a 编号 答案", "only_admin": true},
+    {"type": "command", "name": "/q", "desc": "把引用的问题记成文档缺口", "only_admin": true},
+    {"type": "command", "name": "/bad", "desc": "群友说答错的回答", "only_admin": true},
+    {"type": "command", "name": "/weekly", "desc": "最近 7 天周报", "only_admin": true},
+    {"type": "command", "name": "/selftest", "desc": "用固定问题考考机器人", "only_admin": true},
+    {"type": "command", "name": "/report", "desc": "汇总改进依据开 issue", "only_admin": true}
+  ]
+}

@@ -54,11 +54,11 @@ func TestQQBotSlashCommands(t *testing.T) {
 	}
 
 	deliver("m-s-help", "MEMBER9", "/help")
-	if last() != qqHelpText || !strings.Contains(qqHelpText, "/issues win 编号") || strings.Contains(qqHelpText, "/submit") {
+	if last() != qqHelpText || !strings.Contains(qqHelpText, "/issues 818") || strings.Contains(qqHelpText, "/submit") || strings.Count(qqHelpText, "\n") > 9 {
 		t.Fatal(last())
 	}
 	deliver("m-s-help-admin", "ADMIN1", "/h")
-	if last() != qqHelpText+qqAdminHelpText || !strings.Contains(qqAdminHelpText, "/submit 编号") {
+	if last() != qqHelpText+qqAdminHelpText || !strings.Contains(qqAdminHelpText, "/submit 12") || strings.Count(qqHelpText+qqAdminHelpText, "\n") > 20 {
 		t.Fatal(last())
 	}
 	deliver("m-s-docs", "MEMBER9", "/docs")
@@ -90,6 +90,15 @@ func TestQQBotSlashCommands(t *testing.T) {
 	}
 	deliver("m-s-darfts", "ADMIN1", "/darfts 1")
 	if !strings.HasPrefix(last(), "草稿 D1（bug，") {
+		t.Fatal(last())
+	}
+	// 从指令面板点进来没带编号：列出草稿，前面一句带例子的写法。
+	deliver("m-s-submit-pick", "ADMIN1", "/submit")
+	if !strings.HasPrefix(last(), "在 /submit 后面写编号，例如 /submit 12。\n待处理的草稿共 1 份") || len(fake.created) != 0 {
+		t.Fatal(last())
+	}
+	deliver("m-s-submit-pick-member", "MEMBER9", "/submit")
+	if strings.HasPrefix(last(), "在 /submit") {
 		t.Fatal(last())
 	}
 	deliver("m-s-submit", "ADMIN1", "/submit D1")
@@ -144,12 +153,50 @@ func TestQQBotSlashCommands(t *testing.T) {
 
 	// 不认识的命令回用法；路径开头的提问照常答疑。
 	deliver("m-s-unknown", "MEMBER9", "/xyz")
-	if !strings.HasPrefix(last(), "没有 /xyz 这个命令。斜杠命令：") || strings.Contains(last(), "/submit") {
+	if last() != "没有 /xyz 这个命令。\n"+qqHelpText {
 		t.Fatal(last())
 	}
 	fake.answer = `{"type":"answered","answer":"那个目录是系统的输入法目录。"}`
 	deliver("m-s-path", "MEMBER9", "/Library/Input Methods 里没有水杉")
 	if last() != "那个目录是系统的输入法目录。" {
+		t.Fatal(last())
+	}
+}
+
+// /add 是加词；/bad、/selftest、/report 对应差评、自测、改进依据，群友不能用；/a 没带编号时列出文档缺口。
+func TestQQBotSlashAliases(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.qq.config.Admins = []string{"ADMIN1"}
+	s.qqBadAnswers = &memoryBadAnswers{}
+	s.qqFAQCandidates = &memoryFAQCandidates{}
+	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
+	deliver := func(id, member, content string) {
+		t.Helper()
+		qqPost(t, s, qqMessageFrom(id, member, content))
+		s.qqWorkers.Wait()
+	}
+	deliver("m-al-add-empty", "MEMBER9", "/add")
+	if !strings.HasPrefix(last(), "写成 /add 词语 拼音") {
+		t.Fatal(last())
+	}
+	deliver("m-al-bad", "ADMIN1", "/bad")
+	if last() != "最近两周没有待处理的差评。" {
+		t.Fatal(last())
+	}
+	deliver("m-al-bad-member", "MEMBER9", "/bad")
+	if !strings.HasPrefix(last(), "只有管理员能看差评") {
+		t.Fatal(last())
+	}
+	deliver("m-al-report-member", "MEMBER9", "/report")
+	if last() != "只有管理员能用「改进依据」。" {
+		t.Fatal(last())
+	}
+	deliver("m-al-a", "ADMIN1", "/a")
+	if !strings.HasPrefix(last(), "在 /a 后面写编号，例如 /a 3 在设置的词库页点导入。\n") {
+		t.Fatal(last())
+	}
+	deliver("m-al-docs", "MEMBER9", "/docs")
+	if !strings.Contains(last(), "下载：https://msime.app/download/") {
 		t.Fatal(last())
 	}
 }

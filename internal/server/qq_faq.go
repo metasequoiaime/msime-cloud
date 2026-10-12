@@ -179,6 +179,11 @@ func (s *Server) qqRepoFile(ctx context.Context, token, repo, path, ref string) 
 
 // recordQQAnswer 处理「记录答案」：整理成 FAQ 条目，在知识库仓库新分支上一次提交简体、繁体和核对哈希，开 PR。
 func (s *Server) recordQQAnswer(ctx context.Context, text string, reply func(string)) int64 {
+	return s.writeQQFAQ(ctx, text, "", reply)
+}
+
+// writeQQFAQ 是 recordQQAnswer 的实现。drafted 不为空时答案是机器人自己现查起草的（见 qqDraftDocsForGaps），drafted 是写进 PR 正文的来由：PR 正文和提交说明写明没有经过人工核对，也不记成自测题（自测题要的是维护者核对过的答案）。
+func (s *Server) writeQQFAQ(ctx context.Context, text, drafted string, reply func(string)) int64 {
 	// 读文件、整理、翻译再开 PR 要半分钟左右，先回一句，管理员不会以为没收到又发一遍（重发就是重复的 PR）。
 	reply("收到，正在整理成 FAQ 并开 PR，大约半分钟～")
 	client, repo, dir := s.adminGitHub, s.qq.config.KnowledgeRepo, s.qq.config.KnowledgeDir
@@ -288,6 +293,9 @@ func (s *Server) recordQQAnswer(ctx context.Context, text string, reply func(str
 		return 0
 	}
 	message := "docs(faq): add " + entry.Question + "\n\nRecorded from a QQ group admin's answer by the QQ bot."
+	if drafted != "" {
+		message = "docs(faq): add " + entry.Question + "\n\nDrafted by the QQ bot from the docs and GitHub for a question it could not answer; not reviewed by a person."
+	}
 	r, err = client.Do(ctx, token, "POST", "/repos/"+repo+"/git/commits", map[string]any{"message": message, "tree": tree.SHA, "parents": []string{head}})
 	var commit struct {
 		SHA string `json:"sha"`
@@ -302,7 +310,11 @@ func (s *Server) recordQQAnswer(ctx context.Context, text string, reply func(str
 		fail("branch", githubFailure("branch", r, err))
 		return 0
 	}
-	body := "QQ 群管理员在群里回答了一个机器人答不上的问题，机器人把它整理成 FAQ 的一条，归入「" + entry.Category + "」。\n\n请核对问题标题和答案是否准确、措辞是否合适，再合并；合并后机器人最多 10 分钟就能回答这个问题。官网 msime-web 下次更新文档子模块时，`scripts/seo-output.test.mjs` 里简体和繁体的 FAQ 条数要各加一。"
+	body := "QQ 群管理员在群里回答了一个机器人答不上的问题，机器人把它整理成 FAQ 的一条，归入「" + entry.Category + "」。\n\n请核对问题标题和答案是否准确、措辞是否合适，再合并；"
+	if drafted != "" {
+		body = drafted + "机器人现查文档和 GitHub 起草了答案，整理成 FAQ 的一条，归入「" + entry.Category + "」。\n\n**答案没有经过人工核对**，请先核对事实（功能是否真有、入口和步骤是否对、适用哪些平台）再合并；不对就改了再合并，或者直接关掉。"
+	}
+	body += "合并后机器人最多 10 分钟就能回答这个问题。官网 msime-web 下次更新文档子模块时，`scripts/seo-output.test.mjs` 里简体和繁体的 FAQ 条数要各加一。"
 	if translated {
 		body += "\n\n繁体译文（`" + twPath + "`）由模型翻译，已同步插入并更新 `" + sourcesPath + "` 的核对哈希，请一并核对。"
 	} else {
@@ -317,7 +329,9 @@ func (s *Server) recordQQAnswer(ctx context.Context, text string, reply func(str
 		return 0
 	}
 	// 写进 FAQ 的问题和答案记成一道自测题，之后改提示词、换模型时同一个问题答错了自测能发现。
-	s.learnQQSelfTestCase(ctx, entry.Question, entry.Answer)
+	if drafted == "" {
+		s.learnQQSelfTestCase(ctx, entry.Question, entry.Answer)
+	}
 	// 回复里带上写进去的答案（截到 150 字）：答案是模型改写过的，原来管理员要去 GitHub 打开 PR 才知道写成了什么。
 	reply("已整理成 FAQ「" + entry.Question + "」，开了 PR：" + qqIssueNumberText(repo, pull.Number) + "，维护者核对合并后，机器人就能回答这个问题。\n写进去的答案：" + qqTruncate(entry.Answer, qqFAQReplyRunes))
 	return pull.Number

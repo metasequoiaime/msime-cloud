@@ -284,7 +284,7 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 			reply("请在「提issue」后面写要反馈的问题或需求。")
 			return "cmd_report"
 		}
-		return "cmd_report_" + s.fileAdminFeedback(ctx, m, content, true, reply, progress)
+		return "cmd_report_" + s.fileAdminFeedback(ctx, m, content, true, reply, progress, nil)
 	}
 	if content, ok := qqCommandArg(text, "记录答案", "记答案"); ok {
 		if !admin {

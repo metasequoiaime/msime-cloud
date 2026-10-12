@@ -432,6 +432,8 @@ type qqAsk struct {
 	known      string
 	// releases 由 qqKnowledgeMaterial 填上挑段落时的 releases 判断，qqAnswerQuestion 带到 qqAnswer.Releases。
 	releases bool
+	// onChat 由 qqKnowledgeMaterial 在挑段落判成闲聊、马上要用聊天模型作答时调用一次（不现查、不是难题，见 qqAnswerModel），handleQQFeedback 用它停掉「收到，我想一下～」的计时器；可以为空。
+	onChat func()
 }
 
 func (s *Server) qqAnswerQuestion(ctx context.Context, history []account.QQTurn, question string, ask qqAsk) (qqAnswer, error) {
@@ -446,7 +448,10 @@ func (s *Server) qqAnswerQuestion(ctx context.Context, history []account.QQTurn,
 		material = "（没有找到相关资料）\n"
 	}
 	var answer qqAnswer
-	if err := s.qqChatModel(ctx, model, qqAnswerPrompt+"\n\n资料：\n"+material, question, &answer); err != nil {
+	began := time.Now()
+	err = s.qqChatModel(ctx, model, qqAnswerPrompt+"\n\n资料：\n"+material, question, &answer)
+	qqTimingFrom(ctx).answerMs.Add(time.Since(began).Milliseconds())
+	if err != nil {
 		return qqAnswer{}, err
 	}
 	// 文档和预先查好的资料答不上时，让模型带着只读的 GitHub 工具现查一次，查到了再重答（见 qq_research.go）。回答前已经现查过的不再查；剩下的时间不够现查（qqResearchMinRemaining）或重答（qqReanswerMinRemaining）时跳过，用第一次的答案按答不上处理，不把 4 分钟耗光后只回一句「暂时处理不了」。
@@ -469,7 +474,10 @@ func (s *Server) qqAnswerQuestion(ctx context.Context, history []account.QQTurn,
 				if !strings.Contains(material, qqThirdPartyHeading) {
 					extra = qqThirdPartyHeading + extra
 				}
-				if err := s.qqChatModel(ctx, s.qqStrongModel(), qqAnswerPrompt+"\n\n资料：\n"+material+extra, question, &retry); err == nil && retry.Type != "" {
+				began := time.Now()
+				err := s.qqChatModel(ctx, s.qqStrongModel(), qqAnswerPrompt+"\n\n资料：\n"+material+extra, question, &retry)
+				qqTimingFrom(ctx).answerMs.Add(time.Since(began).Milliseconds())
+				if err == nil && retry.Type != "" {
 					retry.Topic = cmp.Or(retry.Topic, answer.Topic)
 					answer = retry
 					answer.Researched = true
@@ -694,7 +702,10 @@ func (s *Server) qqKnowledgeMaterial(ctx context.Context, question string, ask *
 	// 向量召回和模型挑段落同时进行，不拖慢回答（见 qq_vectors.go）。
 	recalled := make(chan qqVectorRecall, 1)
 	go func() { recalled <- s.qqRecall(ctx, question, sections, github) }()
-	if err := s.qqChat(ctx, qqSelectPrompt+"\n\n目录：\n"+toc.String(), question, &picked); err != nil {
+	began := time.Now()
+	err = s.qqChat(ctx, qqSelectPrompt+"\n\n目录：\n"+toc.String(), question, &picked)
+	qqTimingFrom(ctx).selectMs.Add(time.Since(began).Milliseconds())
+	if err != nil {
 		if !github || ctx.Err() != nil || qqOutOfTime(ctx) {
 			<-recalled
 			return "", "", err
@@ -710,6 +721,10 @@ func (s *Server) qqKnowledgeMaterial(ctx context.Context, question string, ask *
 	if degraded {
 		material.WriteString(qqKnowledgeDown)
 		picked.Strong = true
+	}
+	// 闲聊、不现查、不是难题时回答用聊天模型（见 qqAnswerModel），几秒就答完，挑完段落就告诉调用方不用再发过渡语（见 qqAsk.onChat），不等后面查 issue 和版本。要现查的（挑段落标了 lookup 或者强制现查）和挑段落失败的（上面已经置上 picked.Strong）不算。
+	if github && picked.Chat && !picked.Strong && !picked.Lookup && !ask.force && ask.onChat != nil {
+		ask.onChat()
 	}
 	var valid []int
 	for _, n := range picked.Sections {

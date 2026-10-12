@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	msimebackend "github.com/metasequoiaime/MSIME-Backend"
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
@@ -158,6 +159,8 @@ func New(c Config) (*Server, error) {
 			defer s.adminJobs.Done()
 			s.warmQQKnowledge(s.lifetime)
 			s.warmQQAppLogin(s.lifetime)
+			// 知识库预热完再跑发版后的自测，同一版本只有一个副本跑一次（见 qqDeploySelfTest）。
+			s.qqDeploySelfTest(s.lifetime, msimebackend.Version())
 		}()
 		if s.accounts != nil {
 			s.media = s.accounts

@@ -5,8 +5,11 @@ import (
 	"time"
 )
 
-// QQConversationWindow 是 QQ 群答疑接上追问的时间范围：更早的问答不再读取，并由 Store.Prune 删除。
+// QQConversationWindow 是 QQ 群答疑接上追问的时间范围：更早的问答不再读取。
 const QQConversationWindow = 30 * time.Minute
+
+// QQConversationRetention 是问答在表里留多久，更早的由 Store.Prune 删除。比接上追问的范围长得多，是为了群里说机器人答得差时维护者能回头看它到底答了什么：曾经 30 分钟就删，群友嘲讽之后连原话都找不到。群和成员标识照样只存摘要。
+const QQConversationRetention = 7 * 24 * time.Hour
 
 // QQTurn 是 QQ 群答疑的一轮问答。
 type QQTurn struct {

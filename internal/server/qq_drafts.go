@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -639,3 +640,56 @@ func (s *Server) qqDraftDetail(ctx context.Context, draft account.QQDraft, admin
 	}
 	return b.String()
 }
+
+// qqOwnCodePattern 匹配问题里提到的草稿编号「D3」「d 12」：前后不能紧挨着字母和数字，免得把「3D」「AD3」「D3D11」当成编号。
+var qqOwnCodePattern = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])D\s?([0-9]{1,6})(?:[^A-Za-z0-9]|$)`)
+
+// qqOwnCodes 是答疑资料里「机器人自己的编号」一节：问题里提到 D编号时，说明这是机器人给群友报的问题记下的编号，并写上报的是什么、现在的状态。群友收到「已记下（D3）」后来问「D3 是什么」「D3 怎么样了」，机器人曾经不认得自己的编号，去 GitHub 搜了一圈说「D3 不像水杉里的功能名」。只写模型整理的标题和状态，不写原话；最多 3 个；没有提到、没有草稿存储时返回空字符串。
+func (s *Server) qqOwnCodes(ctx context.Context, question string) string {
+	if s.qqDrafts == nil {
+		return ""
+	}
+	var b strings.Builder
+	var seen []int64
+	for _, match := range qqOwnCodePattern.FindAllStringSubmatch(question, -1) {
+		id, err := strconv.ParseInt(match[1], 10, 64)
+		if err != nil || id <= 0 || slices.Contains(seen, id) || len(seen) == 3 {
+			continue
+		}
+		seen = append(seen, id)
+		code := qqDraftCode(id)
+		draft, err := s.qqDrafts.QQDraft(ctx, id)
+		switch {
+		case errors.Is(err, account.ErrQQDraftNotFound):
+			fmt.Fprintf(&b, "- %s：没有这份记录，可能编号写错了，或者已经超过 30 天被清掉了。\n", code)
+			continue
+		case err != nil:
+			slog.Warn("qq bot: draft lookup for answer failed", "reason", err.Error())
+			fmt.Fprintf(&b, "- %s：暂时查不到状态。\n", code)
+			continue
+		}
+		var report qqReport
+		_ = json.Unmarshal([]byte(draft.Report), &report)
+		status := "已经记下，等管理员确认后转给开发者"
+		switch {
+		case draft.Filed && draft.IssueRef == account.QQDraftIgnored:
+			status = "管理员看过了，没有转成 issue（多半是重复或者已经有办法解决）"
+		case draft.Filed && draft.IssueRef != "":
+			status = "管理员已经确认，提交成了 GitHub 上的 " + draft.IssueRef
+		case draft.Filed && !account.QQDraftClaimStale(draft, s.qq.now()):
+			status = "管理员正在提交"
+		}
+		title := strings.TrimSpace(report.Title)
+		if title == "" {
+			title = "（没有标题）"
+		}
+		fmt.Fprintf(&b, "- %s：%s 记下的，报的是「%s」，%s。\n", code, draft.CreatedAt.In(qqStatsZone).Format("01-02"), qqTruncate(title, 80), status)
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return qqOwnCodesHeading + "D 加数字是机器人给群友报的问题（bug 或建议）记下的编号，不是 issue、PR 或功能名：\n" + b.String() + "\n"
+}
+
+// qqOwnCodesHeading 是答疑资料里机器人自己编号那一节的标题。
+const qqOwnCodesHeading = "### 机器人自己的编号\n"

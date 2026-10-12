@@ -11,11 +11,27 @@ import json
 import os
 from pathlib import Path
 import sys
+import unicodedata
 import urllib.error
 import urllib.request
 
 API = "https://api.sgroup.qq.com"
 CONFIG = Path(__file__).with_name("qq_command_panel.json")
+# The API counts a CJK character as two: name at most 14, desc at most 30 ("about 7 / 15 Chinese characters"); one over makes the whole update fail with 40030013.
+LIMITS = {"name": 14, "desc": 30}
+
+
+def width(text):
+    return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in text)
+
+
+def check(panel):
+    if len(panel["items"]) > 20:
+        sys.exit(f"{len(panel['items'])} items, the panel allows 20")
+    for item in panel["items"]:
+        for field, limit in LIMITS.items():
+            if width(item.get(field, "")) > limit:
+                sys.exit(f"{field} of {item['name']} is {width(item[field])} wide, the limit is {limit}: {item[field]}")
 
 
 def call(method, url, body=None, token=None):
@@ -36,6 +52,7 @@ def main():
     secret = os.environ.get("QQ_BOT_SECRET") or sys.exit("QQ_BOT_SECRET is not set")
     token = call("POST", "https://bots.qq.com/app/getAppAccessToken", {"appId": os.environ.get("QQ_BOT_APPID", "1903463797"), "clientSecret": secret})["access_token"]
     panel = json.loads(CONFIG.read_text())
+    check(panel)
     records = call("GET", API + "/v2/panels?scope=group&limit=50", token=token).get("records", [])
     ours = [r for r in records if r.get("target_type") == "all"]
     if args.dry_run:

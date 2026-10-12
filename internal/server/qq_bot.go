@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"math"
 	"net/http"
 	"net/url"
@@ -263,6 +264,8 @@ type qqBot struct {
 	gapsIssueAt time.Time
 	// probeOnce 让 probeMemberRole 只记一次。
 	probeOnce sync.Once
+	// fieldsProbeOnce 让 probeEventFields 只记一次。
+	fieldsProbeOnce sync.Once
 	// stats 是缓存的仓库统计和统计的时间，见 qqRepoStats；由 mu 保护。
 	stats   string
 	statsAt time.Time
@@ -277,6 +280,29 @@ func (b *qqBot) probeMemberRole(role string) {
 	b.probeOnce.Do(func() {
 		slog.Info("qq bot: event member_role probe", "present", role != "", "role", role)
 	})
+}
+
+// probeEventFields 在每个副本第一次收到 @ 消息时记一行日志，列出事件 d 排好序的顶层字段名，和 message_type 这类值是数字的字段：开放平台的群 @ 事件里有没有带被引用的消息（message_reference、msg_elements 之类）、字段叫什么，生产上没确认过，确认之后才能把引用的文字和图片交给模型。只记字段名和数字，不记消息内容、群和成员的标识。
+func (b *qqBot) probeEventFields(raw json.RawMessage) {
+	b.fieldsProbeOnce.Do(func() {
+		keys, numbers := qqEventFields(raw)
+		slog.Info("qq bot: event fields probe", "keys", keys, "numbers", numbers)
+	})
+}
+
+// qqEventFields 返回事件 d 排好序的顶层字段名，以及值是数字的顶层字段，写成「字段名=值」；字符串、对象、数组、布尔和 null 的值一律不带出来。d 不是对象时都返回空。
+func qqEventFields(raw json.RawMessage) (keys, numbers []string) {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return nil, nil
+	}
+	keys = slices.Sorted(maps.Keys(fields))
+	for _, k := range keys {
+		if v := fields[k]; len(v) > 0 && (v[0] == '-' || v[0] >= '0' && v[0] <= '9') {
+			numbers = append(numbers, k+"="+string(v))
+		}
+	}
+	return keys, numbers
 }
 
 func newQQBot(c QQBotConfig) *qqBot {
@@ -448,6 +474,7 @@ func (s *Server) acceptQQMessage(ctx context.Context, raw json.RawMessage) bool 
 		return true
 	}
 	s.qq.probeMemberRole(m.Author.MemberRole)
+	s.qq.probeEventFields(raw)
 	if groups := s.qq.config.Groups; len(groups) > 0 && !slices.Contains(groups, m.GroupOpenID) {
 		// 开放平台只给 group_openid，不给群号；记下被拦下的群标识，方便把要接受的群填进 qq_bot.groups。
 		slog.Info("qq bot: message from unlisted group", "group_openid", m.GroupOpenID)

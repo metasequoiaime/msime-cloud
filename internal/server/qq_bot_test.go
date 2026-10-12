@@ -1845,6 +1845,54 @@ func TestQQBotRecognisesGroupAdmins(t *testing.T) {
 }
 
 // 群友报问题时，文档里有排查办法就先给办法，再把问题记进汇总 issue、单独回一句说明已经转给管理员；没记下（没配置汇总、没有概括）时不说会跟进。只问用法时都不加。
+// 第一次收到 @ 消息时记一行事件字段的探测日志：只有排好序的顶层字段名和数字字段，不带消息内容、引用的内容和各种标识；之后的消息不再记。
+func TestQQBotProbesEventFields(t *testing.T) {
+	logs := issueCaptureLogs(t)
+	s, _, _ := qqServer(t)
+	event, _ := json.Marshal(map[string]any{"op": 0, "t": "GROUP_AT_MESSAGE_CREATE", "d": map[string]any{
+		"id": "m-probe-1", "content": "我的ID SECRET-CONTENT", "group_openid": "GROUP1", "author": map[string]string{"member_openid": "MEMBER1", "member_role": "member"},
+		"message_type": 103, "offset": -2.5, "message_reference": map[string]string{"message_id": "SECRET-REF", "content": "SECRET-QUOTED"}, "msg_elements": []map[string]string{{"content": "SECRET-ELEMENT"}},
+		"seq": "77", "is_bot": false, "extra": nil, "timestamp": "2026-10-12T10:00:00+08:00",
+	}})
+	if w := qqPost(t, s, string(event)); w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	s.qqWorkers.Wait()
+	// 第二条消息带了别的字段，也不再记。
+	second, _ := json.Marshal(map[string]any{"op": 0, "t": "GROUP_AT_MESSAGE_CREATE", "d": map[string]any{"id": "m-probe-2", "content": "我的ID", "group_openid": "GROUP1", "author": map[string]string{"member_openid": "MEMBER1"}, "other_field": 1}})
+	qqPost(t, s, string(second))
+	s.qqWorkers.Wait()
+
+	var probes []map[string]any
+	for _, entry := range logs() {
+		if entry["msg"] == "qq bot: event fields probe" {
+			probes = append(probes, entry)
+		}
+	}
+	if len(probes) != 1 {
+		t.Fatal("probe lines", probes)
+	}
+	// 日志自己的时间字段不算在内，免得和事件里的时间戳撞上。
+	delete(probes[0], "time")
+	line, _ := json.Marshal(probes[0])
+	if got := fmt.Sprint(probes[0]["keys"]); got != "[author content extra group_openid id is_bot message_reference message_type msg_elements offset seq timestamp]" {
+		t.Fatal("keys", got)
+	}
+	if got := fmt.Sprint(probes[0]["numbers"]); got != "[message_type=103 offset=-2.5]" {
+		t.Fatal("numbers", got)
+	}
+	for _, leak := range []string{"SECRET", "MEMBER1", "GROUP1", "m-probe-1", "77", "2026-10-12", "other_field"} {
+		if strings.Contains(string(line), leak) {
+			t.Fatalf("probe line carries %q: %s", leak, line)
+		}
+	}
+
+	// d 不是对象时什么都不带。
+	if keys, numbers := qqEventFields(json.RawMessage(`[1,2]`)); keys != nil || numbers != nil {
+		t.Fatal(keys, numbers)
+	}
+}
+
 func TestQQBotEscalatesProblemReports(t *testing.T) {
 	s, fake, _ := qqServer(t)
 	s.qq.config.Admins = []string{"ADMIN1"}

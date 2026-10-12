@@ -19,11 +19,18 @@ func TestQQDrafts(t *testing.T) {
 		t.Fatal(id, err)
 	}
 	d, err := a.QQDraft(ctx, id)
-	if err != nil || d.Original != "候选框跑了" || d.Report != `{"kind":"bug"}` || d.Filed || !QQDraftOwnedBy(d, "G/M1") || QQDraftOwnedBy(d, "G/M2") {
+	if err != nil || d.Original != "候选框跑了" || d.Report != `{"kind":"bug"}` || d.Filed || !QQDraftOwnedBy(d, "G/M1") || QQDraftOwnedBy(d, "G/M2") || d.UpdatedAt.IsZero() {
 		t.Fatal(d, err)
+	}
+	// 补充后 updated_at 往后走：机器人只把 30 分钟内更新过的草稿当作「刚起的」，同一件事并进去（qqMergeDraft）。
+	if _, err := db.pool.Exec(ctx, `UPDATE qq_drafts SET updated_at=now()-interval '1 hour' WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
 	}
 	if ok, err := a.UpdateQQDraft(ctx, id, "候选框跑了\n补充：Windows 11", `{"kind":"bug","platform":"windows"}`); err != nil || !ok {
 		t.Fatal(ok, err)
+	}
+	if updated, _ := a.QQDraft(ctx, id); time.Since(updated.UpdatedAt) > time.Minute {
+		t.Fatal("updated_at not refreshed", updated.UpdatedAt)
 	}
 	if drafts, total, err := a.OpenQQDrafts(ctx, 10); err != nil || len(drafts) != 1 || drafts[0].ID != id || total != 1 {
 		t.Fatal(drafts, total, err)

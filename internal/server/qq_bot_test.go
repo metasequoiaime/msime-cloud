@@ -170,6 +170,8 @@ type qqFake struct {
 	duplicate string
 	selected  string
 	answer    string
+	// sameDraft 是判断新反馈和刚起的草稿是不是同一件事的模型输出，为空时不是。
+	sameDraft string
 	// triage 是提交前对照知识库的模型输出，为空时是 needs_issue；triageSystem 记下最近一次交给它的说明和资料。
 	triage       string
 	triageSystem string
@@ -385,6 +387,12 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case system == qqDuplicatePrompt:
 			content = f.duplicate
 			f.chatCalls = append(f.chatCalls, "duplicate")
+		case system == qqSameDraftPrompt:
+			content = f.sameDraft
+			if content == "" {
+				content = `{"same":false}`
+			}
+			f.chatCalls = append(f.chatCalls, "same")
 		case strings.HasPrefix(system, qqSelectPrompt):
 			content, f.selectSystem = f.selected, system
 			f.chatCalls = append(f.chatCalls, "select")
@@ -1199,7 +1207,7 @@ func TestQQBotAnswersMembersFromKnowledge(t *testing.T) {
 	}
 	// 目录列出全部段落：子目录、非 Markdown 文件和没有正文的标题不收，代码块里的 # 不算标题。
 	// 文档名前面标出适用平台，标题后面附上正文摘要。
-	for _, want := range []string{"1. [FAQ · 常见问题] 输入 > 五笔怎么切换：在设置的「输入方案」里选五笔。\n", "2. [FAQ · 常见问题] 数据：", "3. [Windows 正式版 · windows] 安装：双击安装包。\n"} {
+	for _, want := range []string{"1. [FAQ · 以 Windows 正式版为主 · 常见问题] 输入 > 五笔怎么切换：在设置的「输入方案」里选五笔。\n", "2. [FAQ · 以 Windows 正式版为主 · 常见问题] 数据：", "3. [Windows 正式版 · windows] 安装：双击安装包。\n"} {
 		if !strings.Contains(fake.selectSystem, want) {
 			t.Fatalf("toc missing %q:\n%s", want, fake.selectSystem)
 		}
@@ -1208,11 +1216,11 @@ func TestQQBotAnswersMembersFromKnowledge(t *testing.T) {
 		t.Fatal("toc", fake.selectSystem)
 	}
 	// 回答只拿到挑出的段落，重复和越界的编号被忽略。
-	if !strings.Contains(fake.answerSystem, "### [FAQ · 常见问题] 输入 > 五笔怎么切换\n在设置的「输入方案」里选五笔。") || !strings.Contains(fake.answerSystem, "### [Windows 正式版 · windows] 安装\n双击安装包。") || strings.Contains(fake.answerSystem, "同步需要登录") || strings.Count(fake.answerSystem, "五笔怎么切换") != 1 {
+	if !strings.Contains(fake.answerSystem, "### [FAQ · 以 Windows 正式版为主 · 常见问题] 输入 > 五笔怎么切换\n在设置的「输入方案」里选五笔。") || !strings.Contains(fake.answerSystem, "### [Windows 正式版 · windows] 安装\n双击安装包。") || strings.Contains(fake.answerSystem, "同步需要登录") || strings.Count(fake.answerSystem, "五笔怎么切换") != 1 {
 		t.Fatal(fake.answerSystem)
 	}
 	// 回答的系统说明列出 qqDocPlatforms 里的平台（不含 FAQ、通用、各平台这类标签），资料只有部分平台时不会说成其他平台没有。
-	if qqPlatformList != "Android、Linux、macOS、Windows 正式版" || !strings.Contains(fake.answerSystem, "水杉有 Android、Linux、macOS、Windows 正式版 等版本；资料里只有部分平台的说明时，不要说其他平台没有这个功能或没有这个版本。") {
+	if qqPlatformList != "Android、iOS、Linux、macOS、Windows 正式版" || !strings.Contains(fake.answerSystem, "水杉有 Android、iOS、Linux、macOS、Windows 正式版 等版本；资料里只有部分平台的说明时，不要说其他平台没有这个功能或没有这个版本。") {
 		t.Fatal(qqPlatformList, fake.answerSystem)
 	}
 	if limiter.counts["qq-bot-member|GROUP1/MEMBER1"] != 1 {
@@ -1349,10 +1357,64 @@ func TestQQSnippet(t *testing.T) {
 		"先看 **渲染方式**，再看 **字体** 和 **渲染方式**。":   "渲染方式、字体",
 		"打开 [设置](https://x.y/a) 里的 `外观` 页。":   "打开 设置 里的 外观 页。",
 		strings.Repeat("长", qqSnippetRunes+5): strings.Repeat("长", qqSnippetRunes) + "…",
+		// 没有加粗词时列出「- 标签：说明」列表项的标签，去重；冒号太靠后的、冒号后面是链接的、不是列表项的行不算。
+		"- 删除：按住删除键。\n* `撤销`: 摇一摇。\n- 删除：再说一遍。\n- 这一行的冒号离开头太远了超过十二个字：不算\n- 见 https://x.y\n正文：不是列表": "删除、撤销",
+		// 只有一个标签时退回正文开头。
+		"- 删除：按住删除键。": "- 删除：按住删除键。",
 	} {
 		if got := qqSnippet(text); got != want {
 			t.Errorf("%q: %q want %q", text, got, want)
 		}
+	}
+	// 安卓指南「常用操作」的原文（列表项没有加粗）：摘要列出各项操作，问「安卓版能换皮肤吗」时目录里看得到「换皮肤」。原来只取正文前 50 字，目录里只露出「选择候选：点候选栏里的词上屏…」。
+	android := "- 选择候选：点候选栏里的词上屏；候选多于一行时，点右端的箭头展开整页。\n- 删除：按住删除键会逐渐加速连删；按住后往上滑，键上方会出现「快速删除」框，滑进框里松手会删掉光标前的全部文字，滑回框外再松手则什么也不删。\n- 换皮肤：点键盘工具栏上的衣架图标，或在「设置 → 皮肤」里选择。\n- 隐私：键盘默认离线，只有使用云候选、AI、语音、账号同步等功能时才联网，详见 [PRIVACY.md](https://github.com/metasequoiaime/msime/blob/develop/PRIVACY.md)。\n"
+	if got := qqSnippet(android); got != "选择候选、删除、换皮肤、隐私" {
+		t.Fatal(got)
+	}
+}
+
+// FAQ 按每一问的标题打平台标签：适用于所有平台的三问标「各平台」，标题里写了平台的标这个平台，其余标「FAQ · 以 Windows 正式版为主」，这个标签不进版本清单。
+func TestQQFAQPlatform(t *testing.T) {
+	for title, want := range map[string]string{
+		"安装与启动 > 水杉输入法支持哪些系统，去哪里下载？":                 "各平台",
+		"安装与启动 > GitHub 下载太慢或打不开，还有别的下载渠道吗？":         "各平台",
+		"安装与启动 > 有鸿蒙（HarmonyOS）版吗？":                  "各平台",
+		"字体与显示 > Windows 10 悬浮工具栏图标变成方框或空白，但按钮仍能点击？": "Windows",
+		"输入与快捷键 > macOS 上输入方案自己变成笔画、五笔或双拼，怎么改回全拼？":   "macOS",
+		"字体与显示 > Linux 版打开了悬浮工具栏，为什么桌面上看不到？":         "Linux",
+		"安装与启动 > iOS 版为什么不在 App Store？":              "iOS",
+		"安装与启动 > iPad 上切换到水杉后，马上又跳回原来的键盘？":           "iOS",
+		"安装与启动 > 鸿蒙版怎么装？":                            "鸿蒙",
+		"字体与显示 > 打字时汉字显示成方框，应该安装什么字体？":               "FAQ · 以 Windows 正式版为主",
+		"安装与启动 > 安装后切换不了输入法，Server 反复退出，或设置窗口一闪即关？":  "FAQ · 以 Windows 正式版为主",
+		"概述": "FAQ · 以 Windows 正式版为主",
+	} {
+		if got := qqFAQPlatform(title); got != want {
+			t.Errorf("%q: %q want %q", title, got, want)
+		}
+	}
+	if strings.Contains(qqPlatformList, "FAQ") || !strings.Contains(qqPlatformList, "iOS") {
+		t.Fatal(qqPlatformList)
+	}
+	// 拉知识库时 faq.md 的段落按标题打标签，其他文档照旧按文件名打。
+	sections := qqSplitMarkdown("faq", "# 常见问题\n\n## 安装与启动\n\n### iOS 版为什么不在 App Store？\n\n在测试。\n\n### 装不上？\n\n先装运行库。\n")
+	if len(sections) != 2 || qqFAQPlatform(sections[0].Title) != "iOS" || qqFAQPlatform(sections[1].Title) != qqFAQDefaultPlatform {
+		t.Fatal(sections)
+	}
+}
+
+// 「提文档」整理反馈时可选的页面取自 qqDocPlatforms，新增的指南（android、ios）自动出现。
+func TestQQDocsPromptPages(t *testing.T) {
+	for name := range qqDocPlatforms {
+		if !strings.Contains(qqDocsPrompt, name) {
+			t.Errorf("qqDocsPrompt missing page %q", name)
+		}
+	}
+	if !strings.Contains(qqDocsPrompt, "page：涉及的文档，accessibility、android、faq、ios、linux、macos、macos-voice、migration、windows 之一") {
+		t.Fatal(qqDocsPrompt)
+	}
+	if qqDocPlatforms["migration"] != "Windows 正式版" || qqDocPlatforms["ios"] != "iOS" {
+		t.Fatal(qqDocPlatforms)
 	}
 }
 
@@ -1969,7 +2031,7 @@ func TestQQBotTimedOutReply(t *testing.T) {
 	}
 }
 
-// 答疑时按模型给的关键词在每个仓库搜 issue、按需查各平台最新版本，结果和文档段落一起交给回答的模型；查询失败不影响答疑。
+// 答疑时按模型给的关键词在每个仓库搜 issue、总是查各平台最新版本（每个平台的最新正式版附上清洗过的更新内容），结果和文档段落一起交给回答的模型；查询失败不影响答疑。
 func TestQQBotAnswersWithGitHubContext(t *testing.T) {
 	s, fake, _ := qqServer(t)
 	s.qq.config.Admins = nil
@@ -1982,8 +2044,8 @@ func TestQQBotAnswersWithGitHubContext(t *testing.T) {
 		{"number": 700, "title": "旧需求", "state": "closed", "state_reason": "not_planned", "updated_at": "2026-09-01T00:00:00Z"},
 	}
 	fake.releases = map[string]string{
-		"o/win": `[{"tag_name":"v0.9.6-beta","prerelease":true,"published_at":"2026-10-11T00:00:00Z"},{"tag_name":"v0.9.5","published_at":"2026-10-05T00:00:00Z"},{"tag_name":"v0.9.4","published_at":"2026-10-03T00:00:00Z"}]`,
-		"o/r":   `[{"tag_name":"windows-v0.2.1","prerelease":true,"published_at":"2026-10-08T00:00:00Z"},{"tag_name":"android-v0.3.1","published_at":"2026-10-08T00:00:00Z"},{"tag_name":"android-vnext","published_at":"2026-10-09T00:00:00Z"},{"tag_name":"draft-x","draft":true}]`,
+		"o/win": `[{"tag_name":"v0.9.6-beta","prerelease":true,"published_at":"2026-10-11T00:00:00Z","body":"预发布的说明"},{"tag_name":"v0.9.5","published_at":"2026-10-05T00:00:00Z","body":"### 修复\r\n- Win11 24H2 候选窗偏移。\r\n- 看 [#730](https://github.com/x/730) **加粗**\r\n\r\n` + "```" + `\ncode\n` + "```" + `\n### 新增\n* 剪贴板历史支持固定条目\n<!-- hidden -->"},{"tag_name":"v0.9.4","published_at":"2026-10-03T00:00:00Z","body":"旧版的说明"}]`,
+		"o/r":   `[{"tag_name":"windows-v0.2.1","prerelease":true,"published_at":"2026-10-08T00:00:00Z","body":"新版预览的说明"},{"tag_name":"android-v0.3.1","published_at":"2026-10-08T00:00:00Z"},{"tag_name":"android-vnext","published_at":"2026-10-09T00:00:00Z"},{"tag_name":"draft-x","draft":true}]`,
 	}
 	qqDeliver(t, s, "m-gh", "候选框跑到左上角修好了没")
 	// 两个仓库同时搜，请求的先后不固定。
@@ -2006,12 +2068,16 @@ func TestQQBotAnswersWithGitHubContext(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"- Windows（win 仓库）：正式版 v0.9.5（2026-10-05 发布）；预发布 v0.9.6-beta（2026-10-11 发布）；r 仓库的新版预览 windows-v0.2.1（2026-10-08 发布）",
-		"- Android（r 仓库）：正式版 android-v0.3.1（2026-10-08 发布）",
-		"- HarmonyOS（r 仓库）：还没有发布",
+		// 只有最新正式版附更新内容：标题后面接「：」，条目之间用「；」，链接、加粗、代码块和 HTML 注释都去掉；预发布、新版预览和没有说明的正式版不附。
+		"- Windows（win 仓库）：正式版 v0.9.5（2026-10-05 发布）；预发布 v0.9.6-beta（2026-10-11 发布）；r 仓库的新版预览 windows-v0.2.1（2026-10-08 发布）\n  更新内容：修复：Win11 24H2 候选窗偏移；看 #730 加粗；新增：剪贴板历史支持固定条目\n- Android（r 仓库）：正式版 android-v0.3.1（2026-10-08 发布）\n- HarmonyOS（r 仓库）：还没有发布\n",
 	} {
 		if !strings.Contains(fake.answerSystem, want) {
 			t.Fatalf("releases missing %q:\n%s", want, fake.answerSystem)
+		}
+	}
+	for _, unwanted := range []string{"预发布的说明", "旧版的说明", "新版预览的说明", "code", "hidden"} {
+		if strings.Contains(fake.answerSystem, unwanted) {
+			t.Fatalf("release notes must only come from the newest stable release, found %q:\n%s", unwanted, fake.answerSystem)
 		}
 	}
 	if strings.Contains(fake.answerSystem, "#9") {
@@ -2028,11 +2094,12 @@ func TestQQBotAnswersWithGitHubContext(t *testing.T) {
 	if strings.Contains(fake.answerSystem, "### GitHub 上搜到") || strings.Contains(fake.answerSystem, "Windows（") || fake.replyTexts()[len(fake.replyTexts())-1] != "在设置的「输入方案」里选五笔。" {
 		t.Fatal(fake.answerSystem)
 	}
-	// 模型没有要求时不查。
-	fake.selected, fake.searchQueries, fake.releaseCalls = `{"sections":[1]}`, nil, 0
+	// 模型没有给关键词时不搜 issue；最新版本不看 releases，照样查，文档里过时的版本号才有得对照。
+	fake.selected, fake.searchQueries, fake.releaseCalls = `{"sections":[1],"releases":false}`, nil, 0
+	fake.releases = map[string]string{"o/win": `[{"tag_name":"v0.9.5","published_at":"2026-10-05T00:00:00Z"}]`, "o/r": `[]`}
 	qqDeliver(t, s, "m-gh-none", "五笔怎么切换")
-	if len(fake.searchQueries) != 0 || fake.releaseCalls != 0 {
-		t.Fatal(fake.searchQueries, fake.releaseCalls)
+	if len(fake.searchQueries) != 0 || fake.releaseCalls != 2 || !strings.Contains(fake.answerSystem, "### 各平台最新版本（GitHub Release）\n- Windows（win 仓库）：正式版 v0.9.5（2026-10-05 发布）\n") {
+		t.Fatal(fake.searchQueries, fake.releaseCalls, fake.answerSystem)
 	}
 	for _, tc := range []struct {
 		state, reason string
@@ -2290,7 +2357,7 @@ func TestQQBotCommands(t *testing.T) {
 	// 版本。
 	fake.releases = map[string]string{"o/win": `[{"tag_name":"v0.9.5","published_at":"2026-10-05T00:00:00Z"}]`, "o/r": `[]`}
 	qqDeliver(t, s, "m-ver", "最新版本")
-	if !strings.HasPrefix(last(), "各平台最新版本（GitHub Release）：\n- Windows（win 仓库）：正式版 v0.9.5（2026-10-05 发布）") {
+	if !strings.HasPrefix(last(), "各平台最新版本（GitHub Release）：\nWindows：0.9.5（10-05）\n") || strings.Contains(last(), "仓库") {
 		t.Fatal(last())
 	}
 	fake.releases = map[string]string{}
@@ -2433,7 +2500,7 @@ func TestQQBotCommandVariants(t *testing.T) {
 		{"MEMBER1", "怎么用", qqHelpText},
 		{"MEMBER1", "？", qqHelpText},
 		{"ADMIN1", "帮助！", qqHelpText + qqAdminHelpText},
-		{"MEMBER1", "版本！", "各平台最新版本（GitHub Release）：\n- Windows（win 仓库）：正式版 v0.9.5"},
+		{"MEMBER1", "版本！", "各平台最新版本（GitHub Release）：\nWindows：0.9.5（10-05）"},
 		{"MEMBER1", "最新版本🙏", "各平台最新版本（GitHub Release）："},
 		{"MEMBER1", "我的id？", "你的 ID 是 MEMBER1"},
 		{"MEMBER1", "＃８１８", "win #818 大小写倒置：已完成"},
@@ -2675,7 +2742,7 @@ func TestQQBotSkipsFeaturesTheDocsAlreadyCover(t *testing.T) {
 		t.Fatalf("%q %v", last(), fake.created)
 	}
 	// 对照只用文档段落，不查 GitHub；交给模型的是去掉维护者标注后的反馈。
-	if !strings.Contains(fake.triageSystem, "### [FAQ · 常见问题] 输入 > 五笔怎么切换\n") || strings.Contains(fake.triageSystem, "GitHub 上搜到") || strings.Contains(fake.triageSystem, "最新版本") || fake.chatBodies[len(fake.chatBodies)-1] != "希望常用候选词能够前置" {
+	if !strings.Contains(fake.triageSystem, "### [FAQ · 以 Windows 正式版为主 · 常见问题] 输入 > 五笔怎么切换\n") || strings.Contains(fake.triageSystem, "GitHub 上搜到") || strings.Contains(fake.triageSystem, "最新版本") || fake.chatBodies[len(fake.chatBodies)-1] != "希望常用候选词能够前置" {
 		t.Fatalf("%q %q", fake.triageSystem, fake.chatBodies[len(fake.chatBodies)-1])
 	}
 	// 「提issue」即使知识库判成已有也照常提交，不调用对照的模型。
@@ -3517,7 +3584,7 @@ func TestQQVectorRecall(t *testing.T) {
 	fake.selected = `{"sections":[]}`
 	fake.answer = `{"type":"answered","answer":"在设置的「输入方案」里选五笔。"}`
 	qqDeliver(t, s, "m-vec", "五笔怎么切换，是在设置的输入方案里选五笔吗")
-	if !strings.Contains(fake.answerSystem, "### [FAQ · 常见问题] 输入 > 五笔怎么切换\n") {
+	if !strings.Contains(fake.answerSystem, "### [FAQ · 以 Windows 正式版为主 · 常见问题] 输入 > 五笔怎么切换\n") {
 		t.Fatal(fake.answerSystem)
 	}
 	qqDeliver(t, s, "m-vec-history", "候选框停在屏幕左上角怎么办")
@@ -3680,14 +3747,122 @@ func TestQQResearchTarget(t *testing.T) {
 			t.Errorf("%q allowed", raw)
 		}
 	}
-	trimmed, _ := json.Marshal(qqResearchTrim(map[string]any{"title": "t", "html_url": "x", "node_id": "n", "body": strings.Repeat("长", qqResearchBodyRunes+10), "user": map[string]any{"login": "a", "avatar_url": "b"}, "assets": []any{map[string]any{"name": "setup.exe", "size": 1, "uploader": map[string]any{"login": "bot"}}}}))
+	trimmed, _ := json.Marshal(qqResearchTrim(map[string]any{"title": "t", "html_url": "x", "node_id": "n", "body": strings.Repeat("长", qqResearchBodyRunes+10), "user": map[string]any{"login": "a", "avatar_url": "b"}, "assets": []any{map[string]any{"name": "setup.exe", "size": 1, "uploader": map[string]any{"login": "bot"}}}}, qqResearchBodyRunes))
 	if want := `{"assets":["setup.exe"],"body":"` + strings.Repeat("长", qqResearchBodyRunes) + `…","title":"t","user":"a"}`; string(trimmed) != want {
 		t.Fatal(string(trimmed))
 	}
 	// 文件内容接口返回的 content（base64 的文件原文）和正文一样截断。
-	trimmed, _ = json.Marshal(qqResearchTrim(map[string]any{"name": "README.md", "encoding": "base64", "content": strings.Repeat("QUJD", qqResearchBodyRunes)}))
+	trimmed, _ = json.Marshal(qqResearchTrim(map[string]any{"name": "README.md", "encoding": "base64", "content": strings.Repeat("QUJD", qqResearchBodyRunes)}, qqResearchBodyRunes))
 	if want := `{"content":"` + strings.Repeat("QUJD", qqResearchBodyRunes/4) + `…","encoding":"base64","name":"README.md"}`; string(trimmed) != want {
 		t.Fatal(string(trimmed))
+	}
+}
+
+// 现查单个 Release（/releases/tags/<tag>）时发布说明留到 qqResearchReleaseBodyRunes 字，Release 列表里的每条仍按 qqResearchBodyRunes 截：曾经都截到 400 字，模型对群友说「我只看到了前半部分」。
+func TestQQResearchReleaseBody(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	long := strings.Repeat("长", qqResearchReleaseBodyRunes+500)
+	fake.extraGitHub = map[string]string{
+		"/repos/metasequoiaime/msime/releases/tags/windows-v0.2.1": `{"tag_name":"windows-v0.2.1","body":"` + long + `","assets":[{"name":"setup.exe","browser_download_url":"https://x"}]}`,
+		"/repos/metasequoiaime/msime/releases?per_page=2":          `[{"tag_name":"windows-v0.2.1","body":"` + long + `"},{"tag_name":"windows-v0.2.0","body":"` + long + `"}]`,
+	}
+	got := s.qqResearchCall(context.Background(), qqTestGitHubGet("/repos/metasequoiaime/msime/releases/tags/windows-v0.2.1"))
+	if want := `{"assets":["setup.exe"],"body":"` + strings.Repeat("长", qqResearchReleaseBodyRunes) + `…","tag_name":"windows-v0.2.1"}`; got != want {
+		t.Fatal(got)
+	}
+	got = s.qqResearchCall(context.Background(), qqTestGitHubGet("/repos/metasequoiaime/msime/releases?per_page=2"))
+	if want := strings.Repeat("长", qqResearchBodyRunes) + `…"`; strings.Count(got, want) != 2 || strings.Contains(got, strings.Repeat("长", qqResearchBodyRunes+1)) {
+		t.Fatal(got)
+	}
+	// 工具说明告诉模型问某版本更新了什么时读单个 Release。
+	if !strings.Contains(string(qqResearchTool), "问某个版本更新了什么时 GET /repos/metasequoiaime/<仓库>/releases/tags/<tag>") || !json.Valid(qqResearchTool) {
+		t.Fatal(string(qqResearchTool))
+	}
+	// 截断不说给群友听，GitHub 查到的不标「据网上资料」；回答时版本号只按查到的最新版本说，更新内容挑几条。
+	for _, rule := range []string{"只有 web_search 搜到的内容才注明「据网上资料」", "正文结尾的「…」是系统截断的，不要提截断"} {
+		if !strings.Contains(qqResearchPrompt, rule) {
+			t.Fatal(rule)
+		}
+	}
+	for _, rule := range []string{"文档里写的版本号可能已经过时：提到当前版本时只按「各平台最新版本」说", "问某版本更新了什么时，按更新内容挑 3–5 条和用户最相关的，每条一行，最后说「完整更新说明在官网下载页」；不提截断"} {
+		if !strings.Contains(qqAnswerPrompt, rule) {
+			t.Fatal(rule)
+		}
+	}
+}
+
+// 「版本」命令给群友的写法：版本号去掉 tag 前缀，日期只写月和日，不写仓库名；预发布写「预览版」，qq_bot.repo 里的新实现写「新版 平台 预览 …（…，测试中）」。
+func TestQQReleasesForMembers(t *testing.T) {
+	list := []qqPlatformRelease{
+		{ID: "windows", Name: "Windows", Repo: "o/msime-windows", Prefix: "v", Stable: &qqRelease{TagName: "v0.10.1", PublishedAt: "2026-10-11T20:39:00Z"}, NextGenRepo: "o/msime", NextGenPrefix: "windows-v", NextGen: []qqRelease{{TagName: "windows-v0.2.1", Prerelease: true, PublishedAt: "2026-10-08T00:00:00Z"}}},
+		{ID: "macos", Name: "macOS", Repo: "o/msime", Prefix: "macos-v", Stable: &qqRelease{TagName: "macos-v0.52.0", PublishedAt: "2026-10-09T00:00:00Z"}, Preview: &qqRelease{TagName: "macos-v0.53.0-beta.1", Prerelease: true, PublishedAt: "2026-10-10T00:00:00Z"}},
+		{ID: "android", Name: "Android", Repo: "o/msime", Prefix: "android-v", Preview: &qqRelease{TagName: "android-v0.3.1", Prerelease: true}},
+		{ID: "harmony", Name: "HarmonyOS", Repo: "o/msime", Prefix: "harmony-v"},
+	}
+	got := qqReleasesForMembers(list)
+	want := "Windows：0.10.1（10-11）｜新版 Windows 预览 0.2.1（10-08，测试中）\nmacOS：0.52.0（10-09）｜预览版 0.53.0-beta.1（10-10）\nAndroid：预览版 0.3.1\nHarmonyOS：还没有发布\n"
+	if got != want {
+		t.Fatalf("%q", got)
+	}
+	for _, unwanted := range []string{"仓库", "macos-v", "windows-v", "msime", "2026-"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("member release list must not contain %q: %q", unwanted, got)
+		}
+	}
+	if qqReleasesForMembers(nil) != "" {
+		t.Fatal("no platforms must give an empty list")
+	}
+}
+
+// 交给模型的版本资料：更新内容按句截到 qqReleaseNoteRunes 字；资料太长时只给用户提到的平台附更新内容（见 qqMentionsPlatform）。
+func TestQQReleasesMaterialNotes(t *testing.T) {
+	notes := qqReleaseNotes("## 新增\n" + strings.Repeat("- 一条很长的更新说明写在这里\n", 40))
+	if runes := []rune(notes); len(runes) > qqReleaseNoteRunes || !strings.HasSuffix(notes, "；…") || !strings.HasPrefix(notes, "新增：一条很长的更新说明写在这里；") {
+		t.Fatalf("%d %q", len(runes), notes)
+	}
+	if qqReleaseNotes("\n\n<!-- 空 -->\n```\nonly code\n```\n") != "" {
+		t.Fatal("a body without text must give no notes")
+	}
+	list := []qqPlatformRelease{
+		{ID: "windows", Name: "Windows", Repo: "o/win", Prefix: "v", Stable: &qqRelease{TagName: "v0.10.1", PublishedAt: "2026-10-11T00:00:00Z", Body: "- 修好候选窗"}},
+		{ID: "android", Name: "Android", Repo: "o/r", Prefix: "android-v", Stable: &qqRelease{TagName: "android-v0.3.1", PublishedAt: "2026-10-08T00:00:00Z", Body: "- 加了手写"}},
+	}
+	if got := qqReleasesMaterial(list, nil); got != "- Windows（win 仓库）：正式版 v0.10.1（2026-10-11 发布）\n  更新内容：修好候选窗\n- Android（r 仓库）：正式版 android-v0.3.1（2026-10-08 发布）\n  更新内容：加了手写\n" {
+		t.Fatalf("%q", got)
+	}
+	got := qqReleasesMaterial(list, func(p qqPlatformRelease) bool { return qqMentionsPlatform("安卓最新版更新了啥", p) })
+	if !strings.Contains(got, "加了手写") || strings.Contains(got, "修好候选窗") || !strings.Contains(got, "- Windows（win 仓库）：正式版 v0.10.1") {
+		t.Fatalf("%q", got)
+	}
+	for question, want := range map[string]string{"WIN 最新版": "windows", "Windows 11 上更新了什么": "windows", "android 版": "android", "安卓": "android", "最新版更新了啥": ""} {
+		var mentioned []string
+		for _, p := range list {
+			if qqMentionsPlatform(question, p) {
+				mentioned = append(mentioned, p.ID)
+			}
+		}
+		if strings.Join(mentioned, ",") != want {
+			t.Errorf("%q: %v", question, mentioned)
+		}
+	}
+}
+
+// 资料加上全部更新内容后超过 qqAnswerContextRunes 时，只给用户提到的平台附更新内容，版本行照样每个平台都有。
+func TestQQBotReleaseNotesWithinBudget(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.qq.config.Admins = nil
+	s.config.Admin.GitHub.Platforms = []AdminPlatformConfig{{ID: "windows", Name: "Windows", Repo: "o/win", TagPrefix: "v"}, {ID: "android", Name: "Android", Repo: "o/r", TagPrefix: "android-v"}}
+	fake.releases = map[string]string{
+		"o/win": `[{"tag_name":"v0.10.1","published_at":"2026-10-11T00:00:00Z","body":"- 修好候选窗"}]`,
+		"o/r":   `[{"tag_name":"android-v0.3.1","published_at":"2026-10-08T00:00:00Z","body":"- 加了手写"}]`,
+	}
+	fake.selected = `{"sections":[1],"issue_search":"更新"}`
+	for i := range 5 {
+		fake.searchItems = append(fake.searchItems, map[string]any{"number": 900 + i, "title": strings.Repeat("长", qqAnswerContextRunes/8), "state": "open", "updated_at": "2026-10-10T03:00:00Z"})
+	}
+	qqDeliver(t, s, "m-notes-budget", "安卓最新版更新了啥")
+	if !strings.Contains(fake.answerSystem, "- Android（r 仓库）：正式版 android-v0.3.1（2026-10-08 发布）\n  更新内容：加了手写\n") || !strings.Contains(fake.answerSystem, "- Windows（win 仓库）：正式版 v0.10.1（2026-10-11 发布）\n") || strings.Contains(fake.answerSystem, "修好候选窗") {
+		t.Fatal(fake.answerSystem)
 	}
 }
 
@@ -3928,7 +4103,7 @@ type memoryDrafts struct {
 func (m *memoryDrafts) CreateQQDraft(_ context.Context, subject, original, report string) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.drafts = append(m.drafts, account.QQDraft{ID: int64(len(m.drafts) + 1), Subject: account.QQDraftSubject(subject), Original: original, Report: report, CreatedAt: time.Date(2026, 10, 12, 1, 0, 0, 0, time.UTC)})
+	m.drafts = append(m.drafts, account.QQDraft{ID: int64(len(m.drafts) + 1), Subject: account.QQDraftSubject(subject), Original: original, Report: report, CreatedAt: time.Date(2026, 10, 12, 1, 0, 0, 0, time.UTC), UpdatedAt: time.Now()})
 	return int64(len(m.drafts)), nil
 }
 func (m *memoryDrafts) QQDraft(_ context.Context, id int64) (account.QQDraft, error) {
@@ -3954,7 +4129,7 @@ func (m *memoryDrafts) UpdateQQDraft(_ context.Context, id int64, original, repo
 	if !m.unclaimed(id) {
 		return false, nil
 	}
-	m.drafts[id-1].Original, m.drafts[id-1].Report = original, report
+	m.drafts[id-1].Original, m.drafts[id-1].Report, m.drafts[id-1].UpdatedAt = original, report, time.Now()
 	return true, nil
 }
 func (m *memoryDrafts) ClaimQQDraft(_ context.Context, id int64) (bool, error) {
@@ -4043,7 +4218,8 @@ func TestQQBotDrafts(t *testing.T) {
 	if replies := fake.replyTexts(); replies[len(replies)-2] != "先在「外观」里打开「候选窗口跟随光标」试试。" {
 		t.Fatalf("%q", replies)
 	}
-	if want := "我已经把这个问题记下来了，编号 D1，管理员确认后会转给开发者。还想知道：" + qqDefaultQuestion + "补上后 @我 发「补充 D1 Windows 11，版本 0.9.5」这样就行。"; last() != want {
+	// 说明压成一行，示例按缺的字段生成，不再写死「补充 D1 Windows 11，版本 0.9.5」。
+	if want := "已记下（D1），管理员确认后转给开发者。还差：" + qqDefaultQuestion + "比如：安卓 / Windows 11 / macOS，0.10.1（设置的「关于」页能看到），直接 @我 回一句就行。"; last() != want {
 		t.Fatalf("%q", last())
 	}
 	// 别人不能补充，本人可以。
@@ -4077,7 +4253,7 @@ func TestQQBotDrafts(t *testing.T) {
 	if last() != "没有找到草稿 D9，可能已经过期了。" {
 		t.Fatal(last())
 	}
-	// 只问用法时不起草稿；不是具体的 bug 时照旧记进汇总。
+	// 只问用法时不起草稿；模型判了 escalate、整理下来却不是具体的 bug 时也不起草稿，只回答案（见 TestQQBotDraftNotReport）。
 	fake.answer = `{"type":"answered","answer":"在设置里选五笔。"}`
 	deliver("m-howto", "MEMBER1", "五笔怎么切换")
 	if last() != "在设置里选五笔。" || len(drafts.drafts) != 1 {
@@ -4085,9 +4261,47 @@ func TestQQBotDrafts(t *testing.T) {
 	}
 	fake.answer = `{"type":"answered","answer":"先重启一下试试。","escalate":true,"topic":"输入法不好用"}`
 	fake.summary = `{"kind":"other"}`
+	before := len(fake.replyTexts())
 	deliver("m-vague", "MEMBER1", "这输入法不好用")
-	if replies := fake.replyTexts(); replies[len(replies)-2] != "先重启一下试试。" || last() != qqEscalationUnrecorded || len(drafts.drafts) != 1 {
+	if replies := fake.replyTexts(); len(replies) != before+1 || last() != "先重启一下试试。" || len(drafts.drafts) != 1 {
 		t.Fatal(replies, len(drafts.drafts))
+	}
+}
+
+// 答疑模型判了 escalate，整理反馈却判成 other（「mac怎么装啊，装完了在输入法列表里找不到」这类问用法的话）：只回一条答案，不记汇总 issue，不说「已转给管理员」，处理结果记 answered。额度用完时照旧记进汇总 issue。
+func TestQQBotDraftNotReport(t *testing.T) {
+	logs := issueCaptureLogs(t)
+	s, fake, limiter := qqServer(t)
+	drafts := &memoryDrafts{}
+	s.qqDrafts = drafts
+	s.qq.config.Admins = []string{"ADMIN1"}
+	s.qq.config.GapsRepo = "o/docs"
+	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题",` + qqAppAuthor + `}]`
+	fake.answer = `{"type":"answered","answer":"装完后到系统设置的「键盘」里把水杉加进输入法列表。","escalate":true,"topic":"macOS 装完找不到输入法"}`
+	fake.summary = `{"kind":"other"}`
+	qqPost(t, s, qqMessageFrom("m-howto", "MEMBER1", "mac怎么装啊，装完了在输入法列表里找不到"))
+	s.qqWorkers.Wait()
+	if replies := fake.replyTexts(); len(replies) != 1 || replies[0] != "装完后到系统设置的「键盘」里把水杉加进输入法列表。" {
+		t.Fatalf("%q", replies)
+	}
+	if len(fake.comments) != 0 || len(drafts.drafts) != 0 {
+		t.Fatal(fake.comments, drafts.drafts)
+	}
+	// 额度用完：分不清是不是具体的 bug，照旧记进汇总 issue。
+	limiter.counts["qq-bot-drafts|GROUP1/MEMBER2"] = qqDraftsDaily
+	qqPost(t, s, qqMessageFrom("m-limited", "MEMBER2", "候选框老是跑到屏幕左上角"))
+	s.qqWorkers.Wait()
+	if replies := fake.replyTexts(); len(replies) != 3 || replies[2] != qqEscalation || fake.comments["/repos/o/docs/issues/77/comments"] == nil {
+		t.Fatalf("%q %v", replies, fake.comments)
+	}
+	var outcomes []string
+	for _, entry := range logs() {
+		if entry["msg"] == "qq bot: handled" {
+			outcomes = append(outcomes, fmt.Sprint(entry["outcome"]))
+		}
+	}
+	if strings.Join(outcomes, ",") != "answered,answered_escalate" {
+		t.Fatal(outcomes)
 	}
 }
 
@@ -4132,7 +4346,7 @@ func TestQQBotDraftSupplementFailures(t *testing.T) {
 	// 补上了一部分，还缺：告诉群友带 @ 怎么补；模型的追问没写问号时补上。
 	drafts.updateErr = nil
 	deliver("m-s1-more", "MEMBER1", "补充 D1 在微信里")
-	if want := "已补充到 D1。还想知道：你用的是哪个系统？再 @我 发「补充 D1 …」补上就行。"; last() != want {
+	if want := "已补充到 D1。还差：你用的是哪个系统？比如：安卓 / Windows 11 / macOS，直接 @我 回一句就行。"; last() != want {
 		t.Fatalf("%q", last())
 	}
 	// 管理员提交时 Windows 还缺版本号：告诉他怎么带上缺的信息一起提交。
@@ -4182,14 +4396,14 @@ func TestQQBotDraftFollowUp(t *testing.T) {
 	}
 	report("m-f1", "MEMBER1")
 	// 草稿说明连同答案记进对话历史，下一轮的模型看得到草稿编号和追问。
-	if turns := history.turns["GROUP1/MEMBER1"]; len(turns) != 1 || turns[0].Answer != "先在「外观」里打开「候选窗口跟随光标」试试。"+last() || !strings.Contains(turns[0].Answer, "编号 D1") {
+	if turns := history.turns["GROUP1/MEMBER1"]; len(turns) != 1 || turns[0].Answer != "先在「外观」里打开「候选窗口跟随光标」试试。"+last() || !strings.Contains(turns[0].Answer, "已记下（D1）") {
 		t.Fatal(turns)
 	}
 	// 直接回答追问：补进 D1，不调答疑模型，不起新草稿；还缺信息时接着问。
 	before := answers()
 	fake.summary = `{"kind":"bug","title":"候选框停在屏幕左上角","platform":"windows","ime_version":"0.9.5","problem":"打字时候选框一直在左上角","steps":"","missing":"是在哪个软件里打字时出现的","keywords":"候选框 左上角"}`
 	deliver("m-f1-more", "MEMBER1", "Windows 11，0.9.5")
-	if want := "已补充到 D1。还想知道：是在哪个软件里打字时出现的？再 @我 发「补充 D1 …」补上就行。"; last() != want || answers() != before || len(drafts.drafts) != 1 || !strings.HasSuffix(drafts.drafts[0].Original, "\n补充：Windows 11，0.9.5") {
+	if want := "已补充到 D1。还差：是在哪个软件里打字时出现的？直接 @我 回一句就行。"; last() != want || answers() != before || len(drafts.drafts) != 1 || !strings.HasSuffix(drafts.drafts[0].Original, "\n补充：Windows 11，0.9.5") {
 		t.Fatalf("%q %d %q", last(), len(drafts.drafts), drafts.drafts[0].Original)
 	}
 	if turns := history.turns["GROUP1/MEMBER1"]; len(turns) != 2 || turns[1].Question != "Windows 11，0.9.5" || turns[1].Answer != last() {
@@ -4302,6 +4516,153 @@ func TestQQBotDraftUsesEarlierTurns(t *testing.T) {
 	deliver("m-h3", "另外切换五笔后打不出字")
 	if got := lastSummarised(); got != "另外切换五笔后打不出字" || len(drafts.drafts) != 2 || drafts.drafts[1].Original != "另外切换五笔后打不出字" {
 		t.Fatalf("%q %v", got, drafts.drafts)
+	}
+}
+
+// 草稿说明会追问缺的信息时，答案末尾同样的追问先去掉再发，版本号不会被问两遍；说明只有一行；对话历史里记的也是去掉追问后的答案。说明不追问时答案原样发。
+func TestQQBotDraftStripsDuplicateAsk(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	drafts := &memoryDrafts{}
+	s.qqDrafts = drafts
+	history := &memoryConversations{}
+	s.qqHistory = history
+	s.qq.config.Admins = []string{"ADMIN1"}
+	deliver := func(id, member, content string) []string {
+		t.Helper()
+		before := len(fake.replyTexts())
+		qqPost(t, s, qqMessageFrom(id, member, content))
+		s.qqWorkers.Wait()
+		return fake.replyTexts()[before:]
+	}
+	fake.answer = `{"type":"answered","answer":"先把输入法切到别的再切回来试试。\n你是哪个版本、是所有应用都卡还是某个软件里才卡？说一下我好接着帮你缩小范围～","escalate":true,"topic":"Windows 打字卡顿"}`
+	fake.summary = `{"kind":"bug","title":"Windows 打字卡顿","platform":"windows","problem":"打字很卡","steps":"在微信里打字","keywords":"卡顿"}`
+	replies := deliver("m-a1", "MEMBER1", "windows 版打字很卡，怎么排查")
+	want := []string{"先把输入法切到别的再切回来试试。", "已记下（D1），管理员确认后转给开发者。还差：版本号，比如：0.10.1（设置的「关于」页能看到），直接 @我 回一句就行。"}
+	if strings.Join(replies, "|") != strings.Join(want, "|") || strings.Contains(replies[1], "\n") {
+		t.Fatalf("%q", replies)
+	}
+	if turns := history.turns["GROUP1/MEMBER1"]; len(turns) != 1 || turns[0].Answer != want[0]+want[1] {
+		t.Fatal(turns)
+	}
+	// 信息齐了、说明不追问：答案末尾的问句原样保留。
+	fake.answer = `{"type":"answered","answer":"先把输入法切到别的再切回来试试。你用的是哪个版本？","escalate":true,"topic":"Windows 打字卡顿"}`
+	fake.summary = `{"kind":"bug","title":"Windows 打字卡顿","platform":"windows","ime_version":"0.9.5","problem":"打字很卡","steps":"在微信里打字","keywords":"卡顿"}`
+	if replies := deliver("m-a2", "MEMBER2", "windows 0.9.5 在微信里打字很卡"); len(replies) != 2 || replies[0] != "先把输入法切到别的再切回来试试。你用的是哪个版本？" || replies[1] != "已记下（D2），管理员确认后转给开发者。" {
+		t.Fatalf("%q", replies)
+	}
+}
+
+func TestQQStripTrailingAsk(t *testing.T) {
+	for _, c := range [][2]string{
+		{"先重启试试。你是哪个版本？", "先重启试试。"},
+		{"先重启试试。\n你是哪个版本、是所有应用都卡还是某个软件里才卡？说一下我好接着帮你缩小范围～", "先重启试试。"},
+		{"先重启试试。你用的是哪个系统?\n", "先重启试试。"},
+		{"第一步。\n第二步，你用哪个系统？还有输入法版本？", "第一步。"},
+		// 只剩追问、前面没有别的内容：保留原文。
+		{"你是哪个版本？", "你是哪个版本？"},
+		// 不是问群友要信息的问句、问句后面还有别的话、只有不带问号的索要：都不动。
+		{"先重启试试。还有别的问题吗？", "先重启试试。还有别的问题吗？"},
+		{"你是哪个版本？我好帮你查。", "你是哪个版本？我好帮你查。"},
+		{"先重启试试，还不行就告诉我。", "先重启试试，还不行就告诉我。"},
+		// 前面的索要不是跟在问句后面的，留着。
+		{"先重启，不行告诉我。你是哪个版本？", "先重启，不行告诉我。"},
+		// 只看最后一行。
+		{"你是哪个版本？\n先重启试试。", "你是哪个版本？\n先重启试试。"},
+	} {
+		if got := qqStripTrailingAsk(c[0]); got != c[1] {
+			t.Errorf("%q: %q", c[0], got)
+		}
+	}
+}
+
+// 追问的草稿编号新旧文案都认：新的「已记下（D1）…还差」「已补充到 D1。还差」，旧的「编号 D1…还想知道」和只有「还想知道…「补充 D1」」的写法；不追问的说明不算。
+func TestQQDraftFollowUpID(t *testing.T) {
+	for answer, want := range map[string]int64{
+		"先重启试试。已记下（D12），管理员确认后转给开发者。还差：版本号，比如：0.10.1（设置的「关于」页能看到），直接 @我 回一句就行。":                        12,
+		"已补充到 D3。还差：是在哪个软件里打字时出现的？直接 @我 回一句就行。":                                                        3,
+		"先重启试试。我已经把这个问题记下来了，编号 D7，管理员确认后会转给开发者。还想知道：你用的是哪个系统？补上后 @我 发「补充 D7 Windows 11，版本 0.9.5」这样就行。": 7,
+		"还想知道：你用的是哪个系统？再 @我 发「补充 D8 …」补上就行。":                                                           8,
+		"已记下（D5），管理员确认后转给开发者。":                                                                         0,
+		"已补充到 D5，信息齐了，等管理员确认提交。":                                                                       0,
+		"还差一步：在设置里打开它。": 0,
+	} {
+		id, ok := qqDraftFollowUpID(answer)
+		if ok != (want != 0) || id != want {
+			t.Errorf("%q: %d %v", answer, id, ok)
+		}
+	}
+}
+
+// 对话历史里存的是改文案之前的追问（「编号 D1…还想知道…「补充 D1 Windows 11，版本 0.9.5」」）时，群友直接回「Windows 11，0.9.5」照样补进 D1；新文案同样能补（见 TestQQBotDraftFollowUp）。
+func TestQQBotDraftFollowUpLegacyText(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	drafts := &memoryDrafts{}
+	s.qqDrafts = drafts
+	s.qq.config.Admins = []string{"ADMIN1"}
+	ctx := context.Background()
+	if _, err := drafts.CreateQQDraft(ctx, "GROUP1/MEMBER1", "候选框一直跑到左上角", `{"kind":"bug","title":"候选框停在屏幕左上角","problem":"打字时候选框一直在左上角"}`); err != nil {
+		t.Fatal(err)
+	}
+	history := &memoryConversations{turns: map[string][]account.QQTurn{"GROUP1/MEMBER1": {{Question: "候选框一直跑到左上角", Answer: "先在「外观」里打开「候选窗口跟随光标」试试。我已经把这个问题记下来了，编号 D1，管理员确认后会转给开发者。还想知道：" + qqDefaultQuestion + "补上后 @我 发「补充 D1 Windows 11，版本 0.9.5」这样就行。"}}}}
+	s.qqHistory = history
+	fake.summary = `{"kind":"bug","title":"候选框停在屏幕左上角","platform":"windows","ime_version":"0.9.5","problem":"打字时候选框一直在左上角","steps":"在微信里打字","keywords":"候选框 左上角"}`
+	qqPost(t, s, qqMessageFrom("m-legacy", "MEMBER1", "Windows 11，0.9.5"))
+	s.qqWorkers.Wait()
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "已补充到 D1，信息齐了，等管理员确认提交。" || len(drafts.drafts) != 1 || !strings.HasSuffix(drafts.drafts[0].Original, "\n补充：Windows 11，0.9.5") || slices.Contains(fake.chatCalls, "answer") {
+		t.Fatalf("%q %q %v", last, drafts.drafts[0].Original, fake.chatCalls)
+	}
+}
+
+// 群友刚起过草稿、又说了同一件事（D1 没缺信息，回复里没有追问，qqSupplementFollowUp 接不上）：模型判为同一件事时补进 D1，不新建，也不占新建草稿的额度；判为不同的事时新建。草稿已经提交、或者超过 30 分钟没更新时不判断，直接新建。
+func TestQQBotDraftMergesSameIssue(t *testing.T) {
+	s, fake, limiter := qqServer(t)
+	drafts := &memoryDrafts{}
+	s.qqDrafts = drafts
+	history := &memoryConversations{}
+	s.qqHistory = history
+	s.qq.config.Admins = []string{"ADMIN1"}
+	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
+	deliver := func(id, content string) {
+		t.Helper()
+		qqPost(t, s, qqMessageFrom(id, "MEMBER1", content))
+		s.qqWorkers.Wait()
+	}
+	judged := func() int { return strings.Count(strings.Join(fake.chatCalls, " "), "same") }
+	fake.answer = `{"type":"answered","answer":"先关掉「模糊音」试试。","escalate":true,"topic":"选字后 j 被吞掉"}`
+	fake.summary = `{"kind":"bug","title":"选择候选字后拼音里的 j 消失","platform":"windows","ime_version":"0.9.5","problem":"选「再」之后紧跟着打的 j 不见了","steps":"全拼输入 zai，选字后马上打 j","keywords":"选字 j 吞键"}`
+	deliver("m-m1", "选完「再」字后拼音里的 j 没了，windows 0.9.5")
+	if len(drafts.drafts) != 1 || last() != "已记下（D1），管理员确认后转给开发者。" || judged() != 0 {
+		t.Fatal(len(drafts.drafts), last(), judged())
+	}
+	// 判为同一件事：补进 D1，不新建 D2，退回这次新建草稿的名额。
+	fake.sameDraft = `{"same":true}`
+	fake.summary = `{"kind":"bug","title":"全拼选字后紧跟的 j 键被吞掉","platform":"windows","ime_version":"0.9.5","problem":"选字后马上按 j，j 被吞掉","steps":"全拼选字后马上按 j","keywords":"选字 j 吞键"}`
+	deliver("m-m1-more", "补充一下，是全拼选字后紧跟着按 j 就被吞掉")
+	if len(drafts.drafts) != 1 || last() != "已补充到 D1，信息齐了，等管理员确认提交。" || judged() != 1 || !strings.HasSuffix(drafts.drafts[0].Original, "\n补充：补充一下，是全拼选字后紧跟着按 j 就被吞掉") {
+		t.Fatal(len(drafts.drafts), last(), judged(), drafts.drafts[0].Original)
+	}
+	if n := limiter.counts["qq-bot-drafts|GROUP1/MEMBER1"]; n != 1 {
+		t.Fatal("draft slot not released", n)
+	}
+	// 判为不同的事：新建 D2。
+	fake.sameDraft = `{"same":false}`
+	fake.summary = `{"kind":"bug","title":"切换五笔后打不出字","platform":"windows","ime_version":"0.9.5","problem":"切换五笔后打不出字","steps":"切换到五笔","keywords":"五笔"}`
+	deliver("m-m2", "另外切换五笔后打不出字")
+	if len(drafts.drafts) != 2 || last() != "已记下（D2），管理员确认后转给开发者。" || judged() != 2 {
+		t.Fatal(len(drafts.drafts), last(), judged())
+	}
+	// D2 已经提交：不判断，新建 D3。
+	drafts.drafts[1].Filed, drafts.drafts[1].FiledAt, drafts.drafts[1].IssueRef = true, time.Now(), "win #1"
+	fake.sameDraft = `{"same":true}`
+	deliver("m-m3", "五笔还是打不出字")
+	if len(drafts.drafts) != 3 || last() != "已记下（D3），管理员确认后转给开发者。" || judged() != 2 {
+		t.Fatal(len(drafts.drafts), last(), judged())
+	}
+	// D3 超过 30 分钟没更新：不判断，新建 D4。
+	drafts.drafts[2].UpdatedAt = time.Now().Add(-31 * time.Minute)
+	deliver("m-m4", "五笔又打不出字了")
+	if len(drafts.drafts) != 4 || last() != "已记下（D4），管理员确认后转给开发者。" || judged() != 2 {
+		t.Fatal(len(drafts.drafts), last(), judged())
 	}
 }
 
@@ -4559,7 +4920,10 @@ func TestQQBotAddWords(t *testing.T) {
 	// 校验不过时用 QQ 的写法报错，词语只出现一次，也不扣当天提交的额度。
 	used := limiter.counts["qq-bot-words|GROUP1/MEMBER1"]
 	for _, tc := range []struct{ id, text, want string }{
-		{"m-words-bad", "加词 打call da call", "「打」的拼音里「call」不是有效的拼音（ü 写作 v，如 lv）。"},
+		{"m-words-bad", "加词 扛把子 kang ba zii", "「扛把子」的拼音里「zii」不是有效的拼音（ü 写作 v，如 lv）。"},
+		// 词语里夹着字母（网络梗）时直接说词库只收纯汉字、可以加成快捷短语，不再把词语截成一个字、报看不懂的拼音错误。
+		{"m-words-letters", "加词 栓Q shuan q", qqReplyWordLetters},
+		{"m-words-letters-2", "加词 打call da call", qqReplyWordLetters},
 		{"m-words-count", "加词 扛把子 kang ba", "「扛把子」是 3 个字，拼音却是 2 个音节，对一下再发。"},
 		{"m-words-digits", "加词 扛把子 kang4 ba3 zi3", "「扛把子」的拼音只能写字母，音节之间空一格，比如 @我 发「加词 扛把子 kang ba zi」。"},
 		{"m-words-twice", "加词 扛把子 kang ba zi，扛把子 kang ba zi", "「扛把子」重复填写了。"},
@@ -4579,6 +4943,11 @@ func TestQQBotAddWords(t *testing.T) {
 	}
 	qqDeliver(t, s, "m-words-empty", "加词")
 	if !strings.HasPrefix(last(), "请在「加词」后面写词语和拼音") {
+		t.Fatal(last())
+	}
+	// 纯汉字的词照常加，拼音连着词语写也认得。
+	qqDeliver(t, s, "m-words-plain", "加词 你好 ni hao，秋天qiutian")
+	if !strings.HasPrefix(last(), "已经帮你投稿：你好（ni'hao）、秋天（qiu'tian）") {
 		t.Fatal(last())
 	}
 	// 前面带一层客气话也认得出。
@@ -4682,11 +5051,28 @@ func TestQQParseWords(t *testing.T) {
 		"「」":                 "",
 	} {
 		var got []string
-		for _, e := range qqParseWords(content) {
+		entries, lettered := qqParseWords(content)
+		for _, e := range entries {
 			got = append(got, e.Word+"="+e.Pinyin)
 		}
-		if strings.Join(got, ";") != want {
-			t.Errorf("%q: %q want %q", content, strings.Join(got, ";"), want)
+		if strings.Join(got, ";") != want || lettered {
+			t.Errorf("%q: %q want %q (lettered %v)", content, strings.Join(got, ";"), want, lettered)
+		}
+	}
+	// 开头的汉字后面紧跟字母、拆出来的拼音又对不上时，字母是词语的一部分；拼音连着词语写、对得上的照常当拼音。
+	for content, want := range map[string]bool{
+		"栓Q shuan q":      true,
+		"栓Q":              true,
+		"打call da call":   true,
+		"你好 ni hao，牛B":    true,
+		"你好 ni hao":       false,
+		"水杉shuishan":      false,
+		"你好nihao":         false,
+		"扛把子（kang ba zi）": false,
+		"yyds":            false,
+	} {
+		if _, lettered := qqParseWords(content); lettered != want {
+			t.Errorf("%q: lettered %v want %v", content, lettered, want)
 		}
 	}
 }
@@ -4770,7 +5156,7 @@ func TestQQBotFeatureVotes(t *testing.T) {
 	// 没有同一个需求时照旧起草稿。
 	fake.duplicate = `{"duplicate":0}`
 	deliver("m-vote-new", "MEMBER2", "希望支持自定义候选框圆角")
-	if len(drafts.drafts) != 1 || !strings.Contains(last(), "记下来了，编号 D1") {
+	if len(drafts.drafts) != 1 || last() != "已记下（D1），管理员确认后转给开发者。" {
 		t.Fatal(len(drafts.drafts), last())
 	}
 }
@@ -5482,6 +5868,82 @@ func TestQQSelfTestSummary(t *testing.T) {
 	}
 	if r := qqSelfTestFailed(context.Background(), qqSelfTestResult{}, "判分", errors.New("chat: status 502")); r.TimedOut || r.Reason != "判分出错" {
 		t.Fatal(r)
+	}
+}
+
+// 挑段落的提示词说「标成『各平台』的段落适用于所有平台」，不再引用 faq.md 里并不存在的「平台与下载」小节。
+func TestQQSelectPromptPlatformLabels(t *testing.T) {
+	if !strings.Contains(qqSelectPrompt, "标成「各平台」的段落适用于所有平台") || strings.Contains(qqSelectPrompt, "FAQ 里「平台与下载」") || strings.Contains(qqSelectPrompt, "（FAQ「平台与下载」") {
+		t.Fatal(qqSelectPrompt)
+	}
+}
+
+// 答题提示词：对比类按水杉自己的文档答、不现查；没说平台时只有一条规则（都能一行说清就每平台一行，否则只追问系统），原来互相冲突的两条不再同时出现；不写「没查到」；夹字母的词不建议加词。
+func TestQQAnswerPromptRules(t *testing.T) {
+	for _, want := range []string{
+		"和其他输入法对比、问值不值得换时，挑水杉的功能、隐私、平台与下载段落（标成「各平台」的 FAQ 段落、各平台的功能总览、隐私段落）",
+		"只有问到对方产品的具体事实（价格、某项功能有没有）时才为 true；笼统对比、问值不值得换为 false",
+	} {
+		if !strings.Contains(qqSelectPrompt, want) {
+			t.Errorf("qqSelectPrompt missing %q", want)
+		}
+	}
+	for _, want := range []string{
+		"水杉自己的功能和隐私只按文档段落说，不用网上查到的内容或 issue 介绍水杉；不根据 issue 说水杉现在没有某功能；不把开着的 issue 数量或 0.x 版本号当成缺点。",
+		"用户没说平台时：各平台做法都能用一行（不超过 40 字）说清的，每个平台一行，只写入口；有任何一个平台要多步操作的，answer 只写一句追问「你用的是哪个系统？」",
+		"资料没写到的平台或细节，能用常识就用常识说一句",
+		"不写「没查到」「没看到说明」「不确定具体入口」这类话",
+		"词里有字母、数字或符号（如栓Q、yyds）时不要建议加词",
+	} {
+		if !strings.Contains(qqAnswerPrompt, want) {
+			t.Errorf("qqAnswerPrompt missing %q", want)
+		}
+	}
+	for _, gone := range []string{"各平台的入口各用一行写", "不列各平台的清单", "我这边没有…说明"} {
+		if strings.Contains(qqAnswerPrompt, gone) {
+			t.Errorf("qqAnswerPrompt still has %q", gone)
+		}
+	}
+	if strings.Count(qqAnswerPrompt, "用户没说平台时") != 1 {
+		t.Error("qqAnswerPrompt has more than one rule for questions without a platform")
+	}
+	if !strings.Contains(qqResearchPrompt, "web_search 只用来查水杉以外的东西，不要搜水杉自身") {
+		t.Error(qqResearchPrompt)
+	}
+}
+
+// 「怎么卸载」先按字数和行数硬性检查，超了直接判不过、不再调判分模型；行数上限是平台数加 1。
+func TestQQSelfTestLimits(t *testing.T) {
+	for question := range qqSelfTestLimits {
+		if !slices.ContainsFunc(qqSelfTestCases, func(c qqSelfTestCase) bool { return c.Question == question }) {
+			t.Errorf("limit for a question not in qqSelfTestCases: %q", question)
+		}
+	}
+	limit := qqSelfTestLimits["怎么卸载"]
+	if qqPlatformCount() != 5 {
+		t.Fatal(qqPlatformCount())
+	}
+	for answer, want := range map[string]string{
+		"你用的是哪个系统？": "",
+		"Windows 正式版：设置→应用里卸载\nmacOS：把它拖进废纸篓\nLinux：用包管理器卸载\nAndroid：长按图标卸载\niOS：长按图标删除 App\n\n你用的是哪个？": "",
+		strings.Repeat("长", 201):  "回答 201 字，超过 200 字",
+		strings.Repeat("一行\n", 7): "回答 7 行，超过 6 行",
+	} {
+		if got := limit(answer); got != want {
+			t.Errorf("%q: %q want %q", answer, got, want)
+		}
+	}
+	s, fake, _ := qqServer(t)
+	s.qq.config.Admins = []string{"ADMIN1"}
+	fake.answer = `{"type":"answered","answer":"` + strings.Repeat("长", 250) + `"}`
+	qqPost(t, s, qqMessageFrom("m-selftest-limit", "ADMIN1", "自测"))
+	s.qqWorkers.Wait()
+	last := fake.replyTexts()[len(fake.replyTexts())-1]
+	if want := fmt.Sprintf("自测 %d/%d 通过。没通过的：\n- 「怎么卸载」回答 250 字，超过 200 字（回答：%s…）", len(qqSelfTestCases)-1, len(qqSelfTestCases), strings.Repeat("长", qqSelfTestAnswerRunes)); last != want {
+		t.Fatalf("%q", last)
+	}
+	if got := strings.Count(strings.Join(fake.chatCalls, ","), "judge"); got != len(qqSelfTestCases)-1 {
+		t.Fatal(got, fake.chatCalls)
 	}
 }
 

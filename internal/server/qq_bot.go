@@ -873,16 +873,32 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 		reply(answer.Answer + qqReplyAdminHint)
 	case answer.Type == "answered" && answer.Escalate:
 		outcome = "answered_escalate"
-		// 群友在报 bug 或提需求：整理成草稿等管理员一句话提交（见 qq_drafts.go）；整理不成时照旧记进汇总 issue。先把能先试的办法发出去，再整理草稿或记汇总，记下了什么单独回一句：整理草稿要再调一次模型、查重、建草稿，曾经等这些做完才连同答案一起发，群友要多等好几秒才看到排查办法。一条消息最多被动回复 qqBotMaxReplies（5）次，这条路径最多用满：过渡语 1 + 答案 1 + 这句说明 1 + 带链接被拒收时去掉链接重发 1 + 被拒收时的补发 1，以后不能再在这里加回复。
-		reply(answer.Answer)
-		// 整理草稿用群友这几轮说的话（qqDraftText），不只这一句：先问「候选框跑到左上角怎么办」、再说「试了还是不行，win11 0.9.3」时，只看第二句整理不出现象。草稿说明也记进对话历史，下一轮的模型看得到草稿编号和追问，群友直接回答追问时也靠它找到草稿（qqSupplementFollowUp）。
-		if note := s.qqDraftReport(ctx, subject, qqDraftText(history, question)); note != "" {
+		// 群友在报 bug 或提需求：整理成草稿等管理员一句话提交（见 qq_drafts.go）；整理不成时照旧记进汇总 issue。先把能先试的办法发出去，再整理草稿或记汇总，记下了什么单独回一句：整理草稿要再调一次模型、查重、建草稿，曾经等这些做完才连同答案一起发，群友要多等好几秒才看到排查办法。现在答案只等整理这一次模型调用：整理完才知道说明里会不会追问缺的信息，会追问时先去掉答案末尾同样的追问（qqStripTrailingAsk），版本号不会被问两遍；查重和建草稿仍在答案发出之后。一条消息最多被动回复 qqBotMaxReplies（5）次，这条路径最多用满：过渡语 1 + 答案 1 + 这句说明 1 + 带链接被拒收时去掉链接重发 1 + 被拒收时的补发 1，以后不能再在这里加回复。
+		sent := false
+		sendAnswer := func(asked bool) {
+			if sent {
+				return
+			}
+			sent = true
+			if asked {
+				recorded = qqStripTrailingAsk(answer.Answer)
+			}
+			reply(recorded)
+		}
+		// 整理草稿用群友这几轮说的话（qqDraftText），不只这一句：先问「候选框跑到左上角怎么办」、再说「试了还是不行，win11 0.9.3」时，只看第二句整理不出现象。草稿说明也记进对话历史，下一轮的模型看得到草稿编号和追问，群友直接回答追问时也靠它找到草稿（qqSupplementFollowUp），刚起过草稿又补充同一件事时也靠它并进那份草稿（qqMergeDraft）。
+		draft := s.qqDraftReport(ctx, subject, qqDraftText(history, question), history, sendAnswer)
+		sendAnswer(false)
+		switch {
+		case draft.NotReport:
+			// 整理下来不是具体的 bug 或需求（多半是在问用法）：答案已经发了，不记汇总 issue，也不说已经转给管理员。
+			outcome = "answered"
+		case draft.Note != "":
 			outcome = "answered_draft"
-			recorded = answer.Answer + note
-			reply(note)
-		} else if s.recordQQReport(ctx, answer.Topic) {
+			recorded += draft.Note
+			reply(draft.Note)
+		case s.recordQQReport(ctx, answer.Topic):
 			reply(qqEscalation)
-		} else {
+		default:
 			reply(qqEscalationUnrecorded)
 		}
 	default:
@@ -1018,7 +1034,7 @@ const qqSummarisePrompt = `你在为开源输入法「水杉输入法」整理 Q
 - expected：bug 的期望结果；没有就留空。
 - scenario：feature 在什么情况下用到；没有就留空。
 - proposal：feature 希望怎样改进；bug 留空。
-- missing：只有 kind 是 bug、并且既看不出平台、也看不出是在什么操作下出现时，写一句向用户追问的话，不超过 40 个汉字；其他情况都留空。
+- missing：只有 kind 是 bug、并且既看不出平台、也看不出是在什么操作下出现时，写一句向用户追问的话，不超过 40 个汉字，用「你」，不用「您」，口语化；其他情况都留空。
 - keywords：3 到 6 个用来在 GitHub 上搜索同类 issue 的关键词，用空格分隔。
 
 要求：用你自己的话转述，写成简体中文，不要照抄原话；不要写入任何人名、昵称、QQ 号、手机号、邮箱、链接或其他个人信息；不要编造用户没有说的内容。kind 是 other 时其他字段都留空。` + "\n\n" + qqJSONOnlyRule

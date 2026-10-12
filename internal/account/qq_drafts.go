@@ -23,13 +23,14 @@ var ErrQQDraftNotFound = errors.New("qq draft not found")
 // QQDraftIgnored 是管理员「忽略 D编号」后草稿的 issue_ref：被忽略的草稿和提交过的一样 filed_at 非空，不再列出、不能补充和提交，只是没有对应的 issue。
 const QQDraftIgnored = "ignored"
 
-// QQDraft 是一份 issue 草稿。Subject 是群和成员标识的摘要。Filed 表示已经被认领提交（或者被忽略），FiledAt 是认领的时间（没认领时为零值）；IssueRef 为空时还在提交，或者提交被打断了，见 QQDraftClaimStale；为 QQDraftIgnored 时是被管理员忽略了。
+// QQDraft 是一份 issue 草稿。Subject 是群和成员标识的摘要。UpdatedAt 是新建或最后一次补充的时间（QQDraft 读出，OpenQQDrafts 不读）。Filed 表示已经被认领提交（或者被忽略），FiledAt 是认领的时间（没认领时为零值）；IssueRef 为空时还在提交，或者提交被打断了，见 QQDraftClaimStale；为 QQDraftIgnored 时是被管理员忽略了。
 type QQDraft struct {
 	ID        int64
 	Subject   string
 	Original  string
 	Report    string
 	CreatedAt time.Time
+	UpdatedAt time.Time
 	Filed     bool
 	FiledAt   time.Time
 	IssueRef  string
@@ -46,7 +47,7 @@ func (a *Service) CreateQQDraft(ctx context.Context, subject, original, report s
 func (a *Service) QQDraft(ctx context.Context, id int64) (QQDraft, error) {
 	var d QQDraft
 	var filedAt *time.Time
-	err := a.store.pool.QueryRow(ctx, `SELECT id,subject,original,report,created_at,filed_at,issue_ref FROM qq_drafts WHERE id=$1 AND created_at>now()-$2::interval`, id, QQDraftWindow.String()).Scan(&d.ID, &d.Subject, &d.Original, &d.Report, &d.CreatedAt, &filedAt, &d.IssueRef)
+	err := a.store.pool.QueryRow(ctx, `SELECT id,subject,original,report,created_at,updated_at,filed_at,issue_ref FROM qq_drafts WHERE id=$1 AND created_at>now()-$2::interval`, id, QQDraftWindow.String()).Scan(&d.ID, &d.Subject, &d.Original, &d.Report, &d.CreatedAt, &d.UpdatedAt, &filedAt, &d.IssueRef)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return d, ErrQQDraftNotFound
 	}

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
@@ -15,7 +16,7 @@ import (
 // 自测。每次改提示词都可能把别的问题改坏（例如「对这个 issue 提改进意见」被改成只会复述），所以内置一组固定的问题，覆盖使用问题、问人、提建议、外部软件、统计、闲聊、版本和各平台指南。管理员发「自测」，机器人用生产环境真实的知识库、GitHub 和模型逐个回答（不记差评、不记文档候选、不回到群里），再让强模型按每题的要求判对错，回复通过数、超时的题数和没通过的原因（附上机器人回答的开头）。
 
 const (
-	// qqSelfTestParallel 是同时跑的题数：每题最多几十秒，十二题分两批在被动回复的 5 分钟里跑得完。
+	// qqSelfTestParallel 是同时跑的题数：每题最多几十秒，十三题分三批在被动回复的 5 分钟里跑得完。
 	qqSelfTestParallel = 6
 	qqSelfTestDaily    = 3
 	qqSelfTestTimeout  = 3 * time.Minute
@@ -40,6 +41,32 @@ var qqSelfTestCases = []qqSelfTestCase{
 	{"安卓版怎么切换中英文", "按安卓版的说明回答切换中英文的方法，不套用 Windows 的做法"},
 	{"五笔怎么用？", "说清楚怎么用五笔；没说平台时不能说只有 Windows 有五笔，也不能说水杉只有 Windows 版"},
 	{"装不上", "先追问用的什么系统、卡在哪一步或有什么提示，不一次列出各平台的排查清单，不叫用户自己去 GitHub 提 issue"},
+	{"怎么卸载", "没说平台：每个平台只用一行写入口，或者只追问一句用的是哪个系统；不展开某个平台的多步操作，不写「没查到」「没看到说明」"},
+}
+
+// qqSelfTestLimits 是判分之前先按字数和行数硬性检查的题，键是 qqSelfTestCases 里的问题，值返回没通过的原因（通过时返回空串）。长度靠判分模型看不准，曾经「怎么卸载」答了四个平台、三四百字照样判过。
+var qqSelfTestLimits = map[string]func(answer string) string{
+	"怎么卸载": func(answer string) string { return qqSelfTestBrief(answer, 200, qqPlatformCount()+1) },
+}
+
+// qqPlatformCount 是 qqPlatformList 里的平台数。
+func qqPlatformCount() int { return len(strings.Split(qqPlatformList, "、")) }
+
+// qqSelfTestBrief 检查回答不超过 runes 字、lines 行（不算空行），超了返回原因。
+func qqSelfTestBrief(answer string, runes, lines int) string {
+	count := 0
+	for _, line := range strings.Split(answer, "\n") {
+		if strings.TrimSpace(line) != "" {
+			count++
+		}
+	}
+	switch length := utf8.RuneCountInString(answer); {
+	case length > runes:
+		return fmt.Sprintf("回答 %d 字，超过 %d 字", length, runes)
+	case count > lines:
+		return fmt.Sprintf("回答 %d 行，超过 %d 行", count, lines)
+	}
+	return ""
 }
 
 const qqSelfTestJudgePrompt = `你在检查开源输入法「水杉输入法」QQ 群答疑机器人的回答。给你问题、对回答的要求和机器人的回答，判断回答是否满足要求。推托、答非所问、只复述不回答、明显编造都算不满足。只输出一个 JSON 对象：{"pass": true 或 false, "reason": "一句话说明"}。`
@@ -96,6 +123,12 @@ func (s *Server) qqSelfTestOne(ctx context.Context, c qqSelfTestCase) qqSelfTest
 		return result
 	}
 	result.Answer = answer.Answer
+	if limit := qqSelfTestLimits[c.Question]; limit != nil {
+		if reason := limit(answer.Answer); reason != "" {
+			result.Reason = reason
+			return result
+		}
+	}
 	var verdict struct {
 		Pass   bool   `json:"pass"`
 		Reason string `json:"reason"`

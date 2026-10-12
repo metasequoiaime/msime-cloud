@@ -201,16 +201,26 @@ func qqIssueListForMembers(hits []qqIssueHit) string {
 	return b.String()
 }
 
-// qqRelease 是 GitHub Release 列表里用到的字段。
+// qqRelease 是 GitHub Release 列表里用到的字段。Body 是发布说明，最新正式版的交给模型回答「更新了什么」（见 qqReleaseNotes）。
 type qqRelease struct {
 	TagName     string `json:"tag_name"`
 	Draft       bool   `json:"draft"`
 	Prerelease  bool   `json:"prerelease"`
 	PublishedAt string `json:"published_at"`
+	Body        string `json:"body"`
 }
 
-// qqLatestReleases 列出各平台的最新版本：按 admin.github.platforms 的仓库和 tag_prefix 找最新的正式版，以及比它更新的预发布版；平台仓库不是 qq_bot.repo 时，再到 qq_bot.repo 里找以「平台 id-v」开头的预览版（例如 msime 里的 windows-v）。
-func (s *Server) qqLatestReleases(ctx context.Context) string {
+// qqPlatformRelease 是一个平台的最新版本：Stable 是 Repo 里前缀为 Prefix 的最新正式版，Preview 是比它更晚发布的预发布版；NextGen 是平台仓库不是 qq_bot.repo 时，在 qq_bot.repo（NextGenRepo）里按 NextGenPrefix（「平台 id-v」）找到的新实现，依次是它的最新正式版和更晚的预发布版。三样都可能为空。
+type qqPlatformRelease struct {
+	ID, Name, Repo, Prefix string
+	Stable, Preview        *qqRelease
+	NextGenRepo            string
+	NextGenPrefix          string
+	NextGen                []qqRelease
+}
+
+// qqLatestReleases 查各平台的最新版本：按 admin.github.platforms 的仓库和 tag_prefix 找最新的正式版，以及比它更新的预发布版；平台仓库不是 qq_bot.repo 时，再到 qq_bot.repo 里找以「平台 id-v」开头的预览版（例如 msime 里的 windows-v）。平台仓库查询失败时不返回这个平台：查不到不等于没发布。交给模型的写法见 qqReleasesMaterial，发给群友的见 qqReleasesForMembers。
+func (s *Server) qqLatestReleases(ctx context.Context) []qqPlatformRelease {
 	client := s.adminGitHub
 	cache := map[string][]qqRelease{}
 	// failed 记下查询失败的仓库：查不到不等于没发布，这些仓库的平台不写进结果。
@@ -257,42 +267,142 @@ func (s *Server) qqLatestReleases(ctx context.Context) string {
 		}
 		return stable, preview
 	}
+	var out []qqPlatformRelease
+	for _, p := range s.config.Admin.GitHub.Platforms {
+		if p.TagPrefix == "" {
+			continue
+		}
+		stable, preview := latest(p.Repo, p.TagPrefix)
+		if failed[p.Repo] {
+			continue
+		}
+		platform := qqPlatformRelease{ID: p.ID, Name: p.Name, Repo: p.Repo, Prefix: p.TagPrefix, Stable: stable, Preview: preview}
+		if !strings.EqualFold(p.Repo, s.qq.config.Repo) {
+			platform.NextGenRepo, platform.NextGenPrefix = s.qq.config.Repo, p.ID+"-v"
+			stable, preview := latest(s.qq.config.Repo, platform.NextGenPrefix)
+			for _, r := range []*qqRelease{stable, preview} {
+				if r != nil {
+					platform.NextGen = append(platform.NextGen, *r)
+				}
+			}
+		}
+		out = append(out, platform)
+	}
+	return out
+}
+
+// qqReleaseNoteRunes 是资料里每条「更新内容」的长度上限，留够挑三五条要点的内容，七个平台都附上也只占两千来字。
+const qqReleaseNoteRunes = 300
+
+// qqReleaseNotes 把发布说明变成一行纯文本交给模型：去掉图片、HTML 标签和代码块，每行过 qqPlainText（链接只留文字，去掉 Markdown 符号），丢掉空行，条目之间用「；」隔开，小标题后面接「：」，再按句截到 qqReleaseNoteRunes 字。曾经资料里只有 tag 和日期，问「windows 最新版更新了啥」只能叫群友自己去 GitHub 看。
+func qqReleaseNotes(body string) string {
+	var b strings.Builder
+	fenced, heading := false, false
+	for line := range strings.SplitSeq(qqImagePattern.ReplaceAllString(body, " "), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") {
+			fenced = !fenced
+			continue
+		}
+		text := strings.TrimRight(qqPlainText(trimmed), "。；;：: ")
+		if fenced || text == "" {
+			continue
+		}
+		if b.Len() > 0 && !heading {
+			b.WriteString("；")
+		}
+		b.WriteString(text)
+		heading = strings.HasPrefix(trimmed, "#")
+		if heading {
+			b.WriteString("：")
+		}
+	}
+	return qqTruncateSentence(strings.TrimSuffix(b.String(), "："), qqReleaseNoteRunes)
+}
+
+// qqReleasesMaterial 是交给回答的模型的各平台最新版本，每个平台一行，写出仓库名和完整 tag，方便模型对照 issue；notes 为 nil 或对这个平台返回 true 时，在最新正式版下面加一行「更新内容：…」（见 qqReleaseNotes），预发布版和新版预览不附。
+func qqReleasesMaterial(list []qqPlatformRelease, notes func(qqPlatformRelease) bool) string {
 	date := func(r *qqRelease) string {
 		d, _, _ := strings.Cut(r.PublishedAt, "T")
 		return d
 	}
 	var b strings.Builder
-	for _, p := range s.config.Admin.GitHub.Platforms {
-		if p.TagPrefix == "" {
-			continue
-		}
+	for _, p := range list {
 		_, name, _ := strings.Cut(p.Repo, "/")
-		stable, preview := latest(p.Repo, p.TagPrefix)
-		if failed[p.Repo] {
-			continue
-		}
+		_, home, _ := strings.Cut(p.NextGenRepo, "/")
 		parts := []string{}
-		if stable != nil {
-			parts = append(parts, fmt.Sprintf("正式版 %s（%s 发布）", stable.TagName, date(stable)))
+		if p.Stable != nil {
+			parts = append(parts, fmt.Sprintf("正式版 %s（%s 发布）", p.Stable.TagName, date(p.Stable)))
 		}
-		if preview != nil {
-			parts = append(parts, fmt.Sprintf("预发布 %s（%s 发布）", preview.TagName, date(preview)))
+		if p.Preview != nil {
+			parts = append(parts, fmt.Sprintf("预发布 %s（%s 发布）", p.Preview.TagName, date(p.Preview)))
 		}
-		if !strings.EqualFold(p.Repo, s.qq.config.Repo) {
-			stable, preview := latest(s.qq.config.Repo, p.ID+"-v")
-			_, home, _ := strings.Cut(s.qq.config.Repo, "/")
-			for _, r := range []*qqRelease{stable, preview} {
-				if r != nil {
-					parts = append(parts, fmt.Sprintf("%s 仓库的新版预览 %s（%s 发布）", home, r.TagName, date(r)))
-				}
-			}
+		for _, r := range p.NextGen {
+			parts = append(parts, fmt.Sprintf("%s 仓库的新版预览 %s（%s 发布）", home, r.TagName, date(&r)))
 		}
 		if len(parts) == 0 {
 			parts = append(parts, "还没有发布")
 		}
 		fmt.Fprintf(&b, "- %s（%s 仓库）：%s\n", p.Name, name, strings.Join(parts, "；"))
+		if p.Stable != nil && (notes == nil || notes(p)) {
+			if text := qqReleaseNotes(p.Stable.Body); text != "" {
+				b.WriteString("  更新内容：" + text + "\n")
+			}
+		}
 	}
 	return b.String()
+}
+
+// qqPlatformWords 是各平台在群友问题里的其他说法，按 admin.github.platforms 的 id；平台名和 id 本身不用列。
+var qqPlatformWords = map[string][]string{"windows": {"win", "微软"}, "macos": {"mac", "苹果电脑"}, "android": {"安卓"}, "ios": {"iphone", "ipad", "苹果手机"}, "harmony": {"鸿蒙"}}
+
+// qqMentionsPlatform 判断问题里有没有提到平台 p：不分大小写地找平台名、id 和 qqPlatformWords 里的说法。
+func qqMentionsPlatform(question string, p qqPlatformRelease) bool {
+	question = strings.ToLower(question)
+	for _, word := range append([]string{p.Name, p.ID}, qqPlatformWords[p.ID]...) {
+		if word != "" && strings.Contains(question, strings.ToLower(word)) {
+			return true
+		}
+	}
+	return false
+}
+
+// qqReleasesForMembers 是「版本」命令发到群里的各平台最新版本，每个平台一行「Windows：0.10.1（10-11）｜新版 Windows 预览 0.2.1（10-08，测试中）」：版本号去掉 tag 前缀，日期只写月和日，不写仓库名。曾经直接发交给模型的那份，每行都带「（msime 仓库）」和 macos-v0.52.0 这类原始 tag，Windows 新实现的版本号比正式版小，群友以为是旧版。
+func qqReleasesForMembers(list []qqPlatformRelease) string {
+	var b strings.Builder
+	for _, p := range list {
+		parts := []string{}
+		if p.Stable != nil {
+			parts = append(parts, qqReleaseLabel(p.Stable, p.Prefix, ""))
+		}
+		if p.Preview != nil {
+			parts = append(parts, "预览版 "+qqReleaseLabel(p.Preview, p.Prefix, ""))
+		}
+		for _, r := range p.NextGen {
+			parts = append(parts, "新版 "+p.Name+" 预览 "+qqReleaseLabel(&r, p.NextGenPrefix, "测试中"))
+		}
+		if len(parts) == 0 {
+			parts = append(parts, "还没有发布")
+		}
+		fmt.Fprintf(&b, "%s：%s\n", p.Name, strings.Join(parts, "｜"))
+	}
+	return b.String()
+}
+
+// qqReleaseLabel 是群友看的一个版本「0.10.1（10-11）」：tag 去掉 prefix，括号里是发布的月和日（PublishedAt 的第 6 到 10 个字符），note 不为空时接在日期后面；没有发布时间时括号里只写 note，两样都没有就不加括号。
+func qqReleaseLabel(r *qqRelease, prefix, note string) string {
+	var inside []string
+	if len(r.PublishedAt) >= 10 {
+		inside = append(inside, r.PublishedAt[5:10])
+	}
+	if note != "" {
+		inside = append(inside, note)
+	}
+	label := strings.TrimPrefix(r.TagName, prefix)
+	if len(inside) > 0 {
+		label += "（" + strings.Join(inside, "，") + "）"
+	}
+	return label
 }
 
 // qqStatsTTL 是仓库统计在本副本的缓存时间：每次统计要打十几次搜索接口，而 GitHub 的搜索接口每分钟只给 30 次。qqStatsParallel 是统计时每个仓库同时发的搜索请求数，不再加大，免得撞上 GitHub 对并发请求的次级限流。

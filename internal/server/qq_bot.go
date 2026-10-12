@@ -478,16 +478,90 @@ func (s *Server) acceptQQMessage(ctx context.Context, raw json.RawMessage) bool 
 	return true
 }
 
+// 同一个群友（群 + member_openid）的消息按到达顺序处理，见 qqLockSubject。原来每条消息各起一个 goroutine 并行处理，答疑在开头读对话历史、到最后才记下这一轮：「候选框跑到左上角了」隔几秒再 @ 一句「win11 0.9.5」，后一句读不到前一句，被当成没头没尾的新问题，两条各答各的，都判成报问题时还会起两份草稿。
+const (
+	// qqBusyLease 是跨副本租约（auth_rates 的 qq-bot-busy）的窗口，兜住副本崩溃、租约没退回的情况：最多这么久之后其他副本照常处理。
+	qqBusyLease = 90 * time.Second
+)
+
+var (
+	// qqBusyWait 是一条消息最多排多久的队，等满了照常处理，不能因为前一条卡住就一直不回；qqBusyRetry 是跨副本租约被占时重试的间隔。测试里改短。
+	qqBusyWait  = 30 * time.Second
+	qqBusyRetry = 500 * time.Millisecond
+)
+
+// qqLockSubject 拿到 subject 的处理权，返回释放它的函数，调用方处理完 defer 调用。先在副本内排队（Server.qqBusy，每个 subject 一个 channel，处理完时关掉），再拿跨副本租约：同一个群友的两条消息可能被推到两个副本。跨副本用 auth_rates 计数当租约（RateLimit 限 1 次、窗口 qqBusyLease，用完 ReleaseRateLimit），不用 account.WaitLock：持锁的整个处理过程 6–70 秒会一直占着一个池连接，而连接池只有 8 个。auth_rates 超限时计数也会加到上限加一，被占时要把这次多计的退回，不然前一条退回租约后计数还是 1，后一条要白等到超时；副本内已经排过队，每个副本同一个群友最多一条消息在抢租约，两个副本时这样退回是准的。两步合计最多等 qqBusyWait，等满了、ctx 结束了或者数据库不可用时不拿锁照常处理，退化成原来的并行处理，不会卡住。
+func (s *Server) qqLockSubject(ctx context.Context, subject string) func() {
+	deadline := time.NewTimer(qqBusyWait)
+	defer deadline.Stop()
+	unlock := func() {}
+	for acquired := false; !acquired; {
+		s.mu.Lock()
+		busy, ok := s.qqBusy[subject]
+		if !ok {
+			if s.qqBusy == nil {
+				s.qqBusy = map[string]chan struct{}{}
+			}
+			done := make(chan struct{})
+			s.qqBusy[subject] = done
+			s.mu.Unlock()
+			unlock = func() {
+				s.mu.Lock()
+				delete(s.qqBusy, subject)
+				s.mu.Unlock()
+				close(done)
+			}
+			acquired = true
+			continue
+		}
+		s.mu.Unlock()
+		select {
+		case <-busy:
+		case <-deadline.C:
+			slog.Warn("qq bot: previous message still running, handling in parallel", "stage", "replica")
+			return unlock
+		case <-ctx.Done():
+			return unlock
+		}
+	}
+	releaseLease := func() {
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		defer cancel()
+		if err := s.limits.ReleaseRateLimit(rctx, "qq-bot-busy", subject); err != nil {
+			slog.Warn("qq bot: busy lease not released", "reason", err.Error())
+		}
+	}
+	for {
+		switch err := s.limits.RateLimit(ctx, "qq-bot-busy", subject, 1, qqBusyLease); {
+		case err == nil:
+			// 先退回租约再放开副本内的队，排在后面的那条一拿到队就能拿到租约。
+			return func() {
+				releaseLease()
+				unlock()
+			}
+		case !errors.Is(err, account.ErrLimited):
+			slog.Warn("qq bot: busy lease unavailable", "reason", err.Error())
+			return unlock
+		}
+		releaseLease()
+		select {
+		case <-time.After(qqBusyRetry):
+		case <-deadline.C:
+			slog.Warn("qq bot: previous message still running, handling in parallel", "stage", "lease")
+			return unlock
+		case <-ctx.Done():
+			return unlock
+		}
+	}
+}
+
 // 回复给群友的固定文字。提到 issue 和 PR 时附上 GitHub 链接（qqIssueNumberText）；开放平台只允许报备过的域名，拒收时去掉链接重发。
 const (
 	qqReplyUsage   = "有水杉输入法的使用问题可以直接 @我 问，例如：五笔怎么切换？发「帮助」看我还能做什么。"
 	qqReplyTooLong = "内容太长了，请精简到 2000 字以内再 @我。"
 	// qqReplyScreenshot 是只发了截图、截图又没能看成（下载失败、格式不支持、模型出错）时的回复。
-	qqReplyScreenshot = "这张截图我没看清，可以把报错文字、系统和输入法版本打出来再 @我。"
-	// qqReplyLimited 和 qqReplyGroupLimited 是额度用完时的回复。额度是从第一条消息算起的 24 小时滚动窗口，所以不说「今天」；不提「限流」这类说法，并给一个马上能走的路。
-	qqReplyLimited      = "你最近问得有点多，到我的上限了，过几个小时再来吧～急的话可以直接在群里问问大家。"
-	qqReplyGroupLimited = "这会儿大家问得太多，我的额度用完了，晚点再来吧～急的话可以先在群里问问管理员。"
-	qqReplyUnavailable  = "我暂时处理不了，请稍后再 @我 发一次。"
+	qqReplyScreenshot  = "这张截图我没看清，可以把报错文字、系统和输入法版本打出来再 @我。"
+	qqReplyUnavailable = "我暂时处理不了，请稍后再 @我 发一次。"
 	// qqReplyRestarting 在副本关停取消了处理时代替 qqReplyUnavailable：机器人正在滚动更新，过一会儿重发就能由新副本处理。
 	qqReplyRestarting = "机器人正在更新，请一分钟后再 @我 发一次。"
 	// qqReplyUndelivered 是回答被开放平台拒收（不是因为链接，例如内容审核）时补发的一句，见 handleQQFeedback：曾经拒收后什么都不发，群友只看到「我查一下，稍等～」就没了下文。
@@ -517,6 +591,23 @@ const (
 	qqDefaultQuestion = "你用的是哪个系统（Windows、macOS、安卓等）和输入法版本？是在什么操作下出现的？"
 )
 
+// qqLimitedReply 和 qqGroupLimitedReply 是额度用完时的回复，wait 是窗口还剩多久（RateLimitUntil）。额度是从第一条消息算起的 24 小时滚动窗口，所以不说「今天」；不提「限流」这类说法，并给一个马上能走的路。等多久按剩余时长说（qqLimitWait）：曾经一律说「过几个小时再来吧」「晚点再来吧」，窗口剩余可能接近 24 小时，群友过几个小时来试还是被拦。
+func qqLimitedReply(wait time.Duration) string {
+	return "你最近问得有点多，到我的上限了，" + qqLimitWait(wait) + "可以再问～急的话可以直接在群里问问大家。"
+}
+
+func qqGroupLimitedReply(wait time.Duration) string {
+	return "这会儿大家问得太多，我的额度用完了，" + qqLimitWait(wait) + "可以再问～急的话可以先在群里问问管理员。"
+}
+
+// qqLimitWait 把额度窗口的剩余时长说成「大约一小时内」（不到 1 小时）或「大约 N 小时后」（N 向上取整，剩 19.2 小时说 20 小时）。
+func qqLimitWait(wait time.Duration) string {
+	if wait < time.Hour {
+		return "大约一小时内"
+	}
+	return fmt.Sprintf("大约 %d 小时后", (wait+time.Hour-1)/time.Hour)
+}
+
 // qqWhoAmI 是查询自己 member_openid 的命令，和 qqCompact 后的消息比较（忽略空白、大小写和句末标点）。
 var qqWhoAmI = []string{"我的id", "myid"}
 
@@ -524,10 +615,29 @@ var qqWhoAmI = []string{"我的id", "myid"}
 func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 	// 每条消息记一行处理结果（不含内容和 openid），答上率、闲聊、命令、限流各占多少才能量化：Loki 里按 outcome 汇总。
 	started, outcome, admin := s.qq.now(), "failed", false
+	// charged 是这条消息已经计上的额度（下面的限额循环里计数成功一个记一个），机器人自己出错时退回。
+	type qqLimit struct {
+		scope, subject string
+		daily          int
+		text           func(wait time.Duration) string
+	}
+	var charged []qqLimit
 	defer func() {
+		// 机器人自己出错（failed、timeout、reply_failed，管理员的 admin_failed 也算，见 qqOutcomeKind）或者被副本关停打断时，退回这条消息计过的额度：回复会请群友再发一次，不退的话每重发一次就再扣一次个人和群的额度，上游一抖或赶上发布时群额度白白耗掉。超限（limited_*）的那一项没计上，不在 charged 里。这个 defer 最先登记、最后执行，outcome 已经按 reply_failed、timeout 改写过。ctx 这时可能已经取消，退额度用单独的时限，写法照 qq_words.go 退加词名额。
+		if kind := qqOutcomeKind(outcome); kind == "failed" || kind == "reply_failed" || errors.Is(ctx.Err(), context.Canceled) {
+			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+			for _, limit := range charged {
+				if err := s.limits.ReleaseRateLimit(rctx, limit.scope, limit.subject); err != nil {
+					slog.Warn("qq bot: message slot not released", "scope", limit.scope, "reason", err.Error())
+				}
+			}
+			cancel()
+		}
 		slog.Info("qq bot: handled", "outcome", outcome, "admin", admin, "ms", s.qq.now().Sub(started).Milliseconds())
 		s.recordQQOutcome(ctx, outcome)
 	}()
+	// 同一个群友的消息按到达顺序一条一条处理（见 qqLockSubject），排在命令和额度之前：连发两条时第二条要等第一条答完、记进对话历史，才接得上前文。等的时间算在处理用时里；「我想一下」的计时器在拿到锁之后才起，不会因为排队先冒出一句。
+	defer s.qqLockSubject(ctx, m.GroupOpenID+"/"+m.Author.MemberOpenID)()
 	// 回复可能来自两个 goroutine（主流程和「我想一下」的计时器），seq、progressed 和计时器都由 mu 保护，发送也在锁里做，msg_seq 和群里看到的顺序一致。progressed 表示这条消息已经发过一句过渡语（「我看一下截图～」「我查一下，稍等～」「收到，我想一下～」、「提issue」的「收到」），一条消息最多一句：开放平台每条消息最多被动回复 5 次，过渡语只能占其中一次。replyFailed 表示有一条不是过渡语的回复最终没发出去。
 	var (
 		mu          sync.Mutex
@@ -632,9 +742,9 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 	admin = s.qqIsAdmin(ctx, m.GroupOpenID, m.Author.MemberOpenID, m.Author.MemberRole)
 	// 不调模型的命令排在额度之前，只计宽松的 qqBotFreeDaily：群额度用完后帮助和查编号照样能用。加词、提文档、查、提issue 仍然要过下面的额度。
 	if qqFreeCommand(text) {
-		switch err := s.limits.RateLimit(ctx, "qq-bot-free", m.GroupOpenID+"/"+m.Author.MemberOpenID, qqBotFreeDaily, 24*time.Hour); {
+		switch wait, err := s.limits.RateLimitUntil(ctx, "qq-bot-free", m.GroupOpenID+"/"+m.Author.MemberOpenID, qqBotFreeDaily, 24*time.Hour); {
 		case errors.Is(err, account.ErrLimited):
-			reply(qqReplyLimited)
+			reply(qqLimitedReply(wait))
 			outcome = "limited_free"
 			return
 		case err != nil:
@@ -645,19 +755,14 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		outcome = s.qqCommand(ctx, m, text, admin, reply, progress)
 		return
 	}
-	type qqLimit struct {
-		scope, subject string
-		daily          int
-		text           string
-	}
-	limits := []qqLimit{{"qq-bot-admin", m.Author.MemberOpenID, qqBotAdminDaily, qqReplyLimited}}
+	limits := []qqLimit{{"qq-bot-admin", m.Author.MemberOpenID, qqBotAdminDaily, qqLimitedReply}}
 	if !admin {
-		limits = []qqLimit{{"qq-bot-member", m.GroupOpenID + "/" + m.Author.MemberOpenID, qqBotMemberDaily, qqReplyLimited}, {"qq-bot-group", m.GroupOpenID, qqBotGroupDaily, qqReplyGroupLimited}}
+		limits = []qqLimit{{"qq-bot-member", m.GroupOpenID + "/" + m.Author.MemberOpenID, qqBotMemberDaily, qqLimitedReply}, {"qq-bot-group", m.GroupOpenID, qqBotGroupDaily, qqGroupLimitedReply}}
 	}
 	for _, limit := range limits {
-		switch err := s.limits.RateLimit(ctx, limit.scope, limit.subject, limit.daily, 24*time.Hour); {
+		switch wait, err := s.limits.RateLimitUntil(ctx, limit.scope, limit.subject, limit.daily, 24*time.Hour); {
 		case errors.Is(err, account.ErrLimited):
-			reply(limit.text)
+			reply(limit.text(wait))
 			outcome = "limited_" + strings.TrimPrefix(limit.scope, "qq-bot-")
 			return
 		case err != nil:
@@ -665,6 +770,7 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 			reply(qqReplyUnavailable)
 			return
 		}
+		charged = append(charged, limit)
 	}
 	if imageOnly {
 		progress(qqReplyShot)
@@ -920,15 +1026,25 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 		}
 	}
 	if s.qqHistory != nil {
-		if err := s.qqHistory.RecordQQTurn(ctx, subject, question, recorded); err != nil {
-			slog.Warn("qq bot: conversation not recorded", "reason", err.Error())
-		}
+		s.recordQQTurn(ctx, subject, question, recorded)
 	}
 	return outcome
 }
 
+// recordQQTurn 把一轮问答记进对话历史，出错只记日志。不跟随处理消息的 ctx：回复已经发出去了，滚动发布时 Close 等满 qqCloseGrace 取消了 ctx 也要记下，不然下一句「还是不行」接不上前文（线上出现过答案发出去、同一秒记下 conversation not recorded reason="context canceled"）；另限 3 秒，数据库卡住时不拖住关停。写法照 recordQQOutcome。
+func (s *Server) recordQQTurn(ctx context.Context, subject, question, answer string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	if err := s.qqHistory.RecordQQTurn(ctx, subject, question, answer); err != nil {
+		slog.Warn("qq bot: conversation not recorded", "reason", err.Error())
+	}
+}
+
 // qqThinkingDelay 是常规答疑还没回复时先回「收到，我想一下～」的等待时间，见 handleQQFeedback；测试里改短。
 var qqThinkingDelay = 8 * time.Second
+
+// qqCloseGrace 是副本关停时 Close 等进行中的 QQ 消息处理完的上限，等满了才取消 lifetime，见 Close；测试里改短。常规答疑 6–40 秒、管理员提 issue 最长 70 秒左右答完，取 75 秒。部署的 terminationGracePeriodSeconds 要盖住 preStop、HTTP 关停（10 秒）、它和最后的指标刷写，配的是 100 秒。
+var qqCloseGrace = 75 * time.Second
 
 // qqPrimaryModelTimeout 和 qqStrongModelTimeout 是配置了备用模型时主模型每次调用的时限，见 qqChatModel；测试里改短。qqPrimaryModelTimeout 给 qq_bot.model（claude-haiku-5-5，挑段落、整理反馈、查重、选标签这类结构化的活，实测一般 1–4 秒），qqStrongModelTimeout 给 strong_model 和 chat_model：Sonnet 写一段长答案要 15 秒左右，不能再压。曾经一律 50 秒，是实测中位数的十倍以上，主模型挂起时白等 50 秒才换备用，生产上出现过一条消息 70 秒才回。
 var (

@@ -99,8 +99,11 @@ func (s *Server) qqDraftReport(ctx context.Context, subject, text string, histor
 		cancel()
 		return qqDraftResult{Note: note, Asked: asked}
 	}
+	// 整理、记票、并入都做完了，最后这一步写库不跟随处理消息的 ctx（写法照 recordQQTurn）：答案可能已经按「说明里会追问」去掉了末尾的追问发出去，这时滚动发布取消了 ctx、草稿没建成，追问就落空了。
 	raw, _ := json.Marshal(report)
-	id, err := s.qqDrafts.CreateQQDraft(ctx, subject, qqTruncate(text, qqDraftOriginalRunes), string(raw))
+	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	id, err := s.qqDrafts.CreateQQDraft(sctx, subject, qqTruncate(text, qqDraftOriginalRunes), string(raw))
+	cancel()
 	if err != nil {
 		slog.Warn("qq bot: draft not stored", "reason", err.Error())
 		return qqDraftResult{}
@@ -449,9 +452,7 @@ func (s *Server) qqSupplementFollowUp(ctx context.Context, subject string, histo
 	}
 	note, _ := s.qqSupplementedNote(ctx, draft, report, text)
 	reply(note)
-	if err := s.qqHistory.RecordQQTurn(ctx, subject, text, note); err != nil {
-		slog.Warn("qq bot: conversation not recorded", "reason", err.Error())
-	}
+	s.recordQQTurn(ctx, subject, text, note)
 	return "cmd_draft_supplement_followup"
 }
 

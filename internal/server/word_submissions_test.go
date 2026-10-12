@@ -230,6 +230,13 @@ func (l *fakeLimiter) RateLimit(_ context.Context, scope, subject string, limit 
 	return l.err
 }
 
+func (l *fakeLimiter) RateLimitUntil(ctx context.Context, scope, subject string, limit int, window time.Duration) (time.Duration, error) {
+	if err := l.RateLimit(ctx, scope, subject, limit, window); err != nil {
+		return time.Minute, err
+	}
+	return 0, nil
+}
+
 func (l *fakeLimiter) ReleaseRateLimit(_ context.Context, scope, subject string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()

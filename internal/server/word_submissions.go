@@ -203,6 +203,8 @@ type rateLimiter interface {
 	RateLimit(ctx context.Context, scope, subject string, limit int, window time.Duration) error
 	// ReleaseRateLimit 退回 RateLimit 计过的一次，占了名额但事情没做成时用。
 	ReleaseRateLimit(ctx context.Context, scope, subject string) error
+	// RateLimitUntil 与 RateLimit 计数相同，超限时另外返回窗口还剩多久，回复里要说清等多久时用。
+	RateLimitUntil(ctx context.Context, scope, subject string, limit int, window time.Duration) (time.Duration, error)
 }
 
 // sharedLocker is account.Service.WaitLock: a lock held across replicas until release, or account.ErrLockBusy after wait.

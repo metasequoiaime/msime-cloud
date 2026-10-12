@@ -121,11 +121,13 @@ func TestQQBotConfigValidation(t *testing.T) {
 	}
 }
 
-// qqLimiter 按 scope|subject 计数，模拟 auth_rates 在去重期和每日窗口内的行为。
+// qqLimiter 按 scope|subject 计数，模拟 auth_rates 在去重期和每日窗口内的行为。wait 是超限时 RateLimitUntil 报的窗口剩余时长，为 0 时当作刚开的 24 小时窗口；released 按顺序记下每次退回的 scope|subject。
 type qqLimiter struct {
-	mu     sync.Mutex
-	counts map[string]int
-	err    map[string]error
+	mu       sync.Mutex
+	counts   map[string]int
+	err      map[string]error
+	wait     time.Duration
+	released []string
 }
 
 func (l *qqLimiter) RateLimit(_ context.Context, scope, subject string, limit int, _ time.Duration) error {
@@ -144,6 +146,16 @@ func (l *qqLimiter) RateLimit(_ context.Context, scope, subject string, limit in
 	return nil
 }
 
+func (l *qqLimiter) RateLimitUntil(ctx context.Context, scope, subject string, limit int, window time.Duration) (time.Duration, error) {
+	err := l.RateLimit(ctx, scope, subject, limit, window)
+	if !errors.Is(err, account.ErrLimited) {
+		return 0, err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return cmp.Or(l.wait, 24*time.Hour), err
+}
+
 // ReleaseRateLimit 与 account.Store.ReleaseRate 一样把计数减一，最少减到 0。
 func (l *qqLimiter) ReleaseRateLimit(ctx context.Context, scope, subject string) error {
 	if err := ctx.Err(); err != nil {
@@ -151,6 +163,7 @@ func (l *qqLimiter) ReleaseRateLimit(ctx context.Context, scope, subject string)
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.released = append(l.released, scope+"|"+subject)
 	if l.counts[scope+"|"+subject] > 0 {
 		l.counts[scope+"|"+subject]--
 	}
@@ -939,7 +952,7 @@ func TestQQBotRepliesWithoutFiling(t *testing.T) {
 		{"too long", strings.Repeat("长", qqBotMaxRunes+1), nil, qqReplyTooLong},
 		{"admins have their own limit", "", func(_ *qqFake, l *qqLimiter) {
 			l.counts = map[string]int{"qq-bot-admin|MEMBER1": qqBotAdminDaily}
-		}, qqReplyLimited},
+		}, qqLimitedReply(24 * time.Hour)},
 		{"limit unavailable", "", func(_ *qqFake, l *qqLimiter) { l.err = map[string]error{"qq-bot-admin": errors.New("down")} }, qqReplyUnavailable},
 		{"plain admin message goes to the knowledge base", "五笔怎么切换", func(f *qqFake, _ *qqLimiter) { f.summary = `{"kind":"other"}` }, "在设置的「输入方案」里选五笔。"},
 		{"forced report that is not a report", "", func(f *qqFake, _ *qqLimiter) { f.summary = `{"kind":"other"}` }, "没看出要提的是 bug 还是需求，请把问题或想要的功能描述具体一点。"},
@@ -1275,14 +1288,14 @@ func TestQQBotAnswersMembersFromKnowledge(t *testing.T) {
 	group := limiter.counts["qq-bot-group|GROUP1"]
 	qqDeliver(t, s, "m-limited", "五笔怎么切换")
 	qqDeliver(t, s, "m-limited-2", "五笔怎么切换")
-	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != qqReplyLimited || limiter.counts["qq-bot-group|GROUP1"] != group {
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != qqLimitedReply(24*time.Hour) || limiter.counts["qq-bot-group|GROUP1"] != group {
 		t.Fatal(last, limiter.counts)
 	}
 	// 群的额度用完时普通群友收到群限额的说法；管理员不受群限额限制。
 	delete(limiter.counts, "qq-bot-member|GROUP1/MEMBER1")
 	limiter.counts["qq-bot-group|GROUP1"] = qqBotGroupDaily
 	qqDeliver(t, s, "m-group-limited", "五笔怎么切换")
-	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != qqReplyGroupLimited {
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != qqGroupLimitedReply(24*time.Hour) {
 		t.Fatal(last)
 	}
 	s.qq.config.Admins = []string{"MEMBER1"}
@@ -2155,15 +2168,21 @@ func TestQQIssueSearchNarrows(t *testing.T) {
 	}
 }
 
-// memoryConversations 是测试用的对话存储。
+// memoryConversations 是测试用的对话存储。像数据库一样，ctx 已经取消时读写都失败；同一个群友的消息会并发处理，读写由 mu 保护。
 type memoryConversations struct {
+	mu    sync.Mutex
 	turns map[string][]account.QQTurn
 	err   error
 }
 
-func (m *memoryConversations) QQConversation(_ context.Context, subject string, limit int) ([]account.QQTurn, error) {
+func (m *memoryConversations) QQConversation(ctx context.Context, subject string, limit int) ([]account.QQTurn, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.err != nil {
 		return nil, m.err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	turns := m.turns[subject]
 	if len(turns) > limit {
@@ -2172,9 +2191,14 @@ func (m *memoryConversations) QQConversation(_ context.Context, subject string, 
 	return turns, nil
 }
 
-func (m *memoryConversations) RecordQQTurn(_ context.Context, subject, question, answer string) error {
+func (m *memoryConversations) RecordQQTurn(ctx context.Context, subject, question, answer string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.err != nil {
 		return m.err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if m.turns == nil {
 		m.turns = map[string][]account.QQTurn{}
@@ -2582,13 +2606,13 @@ func TestQQBotFreeCommandsSkipModelQuota(t *testing.T) {
 		t.Fatal(limiter.counts)
 	}
 	deliver("m-free-search", "MEMBER1", "查 候选框")
-	if last() != qqReplyGroupLimited {
+	if last() != qqGroupLimitedReply(24*time.Hour) {
 		t.Fatal(last())
 	}
 	// qq-bot-free 用完时照常回个人额度的说法。
 	limiter.counts["qq-bot-free|GROUP1/MEMBER1"] = qqBotFreeDaily
 	deliver("m-free-limited", "MEMBER1", "帮助")
-	if last() != qqReplyLimited || stats.counts["limited_free"] != 1 || stats.counts["cmd_help"] != 2 {
+	if last() != qqLimitedReply(24*time.Hour) || stats.counts["limited_free"] != 1 || stats.counts["cmd_help"] != 2 {
 		t.Fatal(last(), stats.counts)
 	}
 }
@@ -5991,5 +6015,197 @@ func TestQQBotSelfTest(t *testing.T) {
 	s.qqWorkers.Wait()
 	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "今天自测的次数用完了，明天再来。" {
 		t.Fatal(last)
+	}
+}
+
+// 答案已经发出去之后 ctx 被取消（滚动发布时 Close 等满 qqCloseGrace 取消了 lifetime），这一轮照样记进对话历史，下一句「还是不行」接得上。
+func TestQQBotRecordsTurnAfterCancellation(t *testing.T) {
+	s, _, _ := qqServer(t)
+	history := &memoryConversations{}
+	s.qqHistory = history
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var replies []string
+	reply := func(text string) {
+		replies = append(replies, text)
+		cancel()
+	}
+	outcome := s.answerQQQuestion(ctx, "GROUP1", "MEMBER1", "五笔怎么切换", false, reply, func(string) {})
+	if turns := history.turns["GROUP1/MEMBER1"]; outcome != "answered" || len(replies) != 1 || len(turns) != 1 || turns[0].Question != "五笔怎么切换" || turns[0].Answer != "在设置的「输入方案」里选五笔。" {
+		t.Fatal(outcome, replies, turns)
+	}
+}
+
+// 机器人自己出错（failed、reply_failed，管理员的 admin_failed）时退回这条消息计过的每一项额度；答上了不退；超限的那一项本来就没计上，不退。
+func TestQQBotReleasesLimitsWhenItFails(t *testing.T) {
+	s, fake, limiter := qqServer(t)
+	s.qq.config.Admins = []string{"ADMIN1"}
+	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
+	deliver := func(id, member, content string) {
+		t.Helper()
+		qqPost(t, s, qqMessageFrom(id, member, content))
+		s.qqWorkers.Wait()
+	}
+	released := func(key string) int {
+		limiter.mu.Lock()
+		defer limiter.mu.Unlock()
+		n := 0
+		for _, k := range limiter.released {
+			if k == key {
+				n++
+			}
+		}
+		return n
+	}
+	// 上游出错：个人和群的额度都退回。
+	fake.chatStatus = 502
+	deliver("m-release-failed", "MEMBER1", "五笔怎么切换")
+	if last() != qqReplyUnavailable || limiter.counts["qq-bot-member|GROUP1/MEMBER1"] != 0 || limiter.counts["qq-bot-group|GROUP1"] != 0 || released("qq-bot-member|GROUP1/MEMBER1") != 1 || released("qq-bot-group|GROUP1") != 1 {
+		t.Fatal(last(), limiter.counts, limiter.released)
+	}
+	// 答上了：照常计数，不退。
+	fake.chatStatus = 0
+	deliver("m-release-answered", "MEMBER1", "五笔怎么切换")
+	if last() != "在设置的「输入方案」里选五笔。" || limiter.counts["qq-bot-member|GROUP1/MEMBER1"] != 1 || limiter.counts["qq-bot-group|GROUP1"] != 1 || released("qq-bot-member|GROUP1/MEMBER1") != 1 {
+		t.Fatal(last(), limiter.counts, limiter.released)
+	}
+	// 回答被平台拒收（reply_failed）：群友没看到回答，退回。
+	fake.rejectText = "输入方案"
+	deliver("m-release-rejected", "MEMBER1", "五笔怎么切换")
+	if last() != qqReplyUndelivered || limiter.counts["qq-bot-member|GROUP1/MEMBER1"] != 1 || limiter.counts["qq-bot-group|GROUP1"] != 1 || released("qq-bot-group|GROUP1") != 2 {
+		t.Fatal(last(), limiter.counts, limiter.released)
+	}
+	fake.rejectText = ""
+	// 群额度用完（limited_group）：个人额度已经计上、群额度没计上，都不退。
+	limiter.counts["qq-bot-group|GROUP1"] = qqBotGroupDaily
+	deliver("m-release-limited", "MEMBER1", "五笔怎么切换")
+	if last() != qqGroupLimitedReply(24*time.Hour) || limiter.counts["qq-bot-member|GROUP1/MEMBER1"] != 2 || limiter.counts["qq-bot-group|GROUP1"] != qqBotGroupDaily+1 || released("qq-bot-member|GROUP1/MEMBER1") != 2 || released("qq-bot-group|GROUP1") != 2 {
+		t.Fatal(last(), limiter.counts, limiter.released)
+	}
+	// 管理员的消息处理失败（admin_failed）：退回管理员自己的额度。
+	fake.chatStatus = 502
+	deliver("m-release-admin", "ADMIN1", "五笔怎么切换")
+	if limiter.counts["qq-bot-admin|ADMIN1"] != 0 || released("qq-bot-admin|ADMIN1") != 1 {
+		t.Fatal(last(), limiter.counts, limiter.released)
+	}
+}
+
+// 超限时按窗口剩余时长说等多久：不到 1 小时说「一小时内」，否则向上取整说几小时后；个人和群额度都一样。
+func TestQQBotLimitedReplySaysHowLong(t *testing.T) {
+	for wait, want := range map[time.Duration]string{
+		30 * time.Minute:                  "大约一小时内",
+		time.Hour:                         "大约 1 小时后",
+		19*time.Hour + 12*time.Minute:     "大约 20 小时后",
+		23*time.Hour + 59*time.Minute:     "大约 24 小时后",
+		time.Second:                       "大约一小时内",
+		time.Hour + time.Nanosecond:       "大约 2 小时后",
+		59*time.Minute + 59*time.Second:   "大约一小时内",
+		20*time.Hour - time.Nanosecond:    "大约 20 小时后",
+		20 * time.Hour:                    "大约 20 小时后",
+		20*time.Hour + 1*time.Millisecond: "大约 21 小时后",
+	} {
+		if got := qqLimitWait(wait); got != want {
+			t.Errorf("%v: %q want %q", wait, got, want)
+		}
+	}
+	s, fake, limiter := qqServer(t)
+	s.qq.config.Admins = nil
+	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
+	limiter.counts = map[string]int{"qq-bot-member|GROUP1/MEMBER1": qqBotMemberDaily}
+	limiter.wait = 30 * time.Minute
+	qqDeliver(t, s, "m-wait-member", "五笔怎么切换")
+	if last() != "你最近问得有点多，到我的上限了，大约一小时内可以再问～急的话可以直接在群里问问大家。" {
+		t.Fatal(last())
+	}
+	limiter.counts = map[string]int{"qq-bot-group|GROUP1": qqBotGroupDaily}
+	limiter.wait = 19*time.Hour + 12*time.Minute
+	qqDeliver(t, s, "m-wait-group", "五笔怎么切换")
+	if last() != "这会儿大家问得太多，我的额度用完了，大约 20 小时后可以再问～急的话可以先在群里问问管理员。" {
+		t.Fatal(last())
+	}
+}
+
+// 同一个群友连发两条：第二条等第一条答完、记进对话历史才开始，读得到第一条的问答。
+func TestQQBotSerialisesMessagesFromOneMember(t *testing.T) {
+	s, fake, limiter := qqServer(t)
+	s.qq.config.Admins = nil
+	history := &memoryConversations{}
+	s.qqHistory = history
+	fake.slowCall, fake.slowDelay = "answer", 300*time.Millisecond
+	qqPost(t, s, qqMessage("m-serial-1", "五笔怎么切换"))
+	qqPost(t, s, qqMessage("m-serial-2", "切换后还是打不出字"))
+	s.qqWorkers.Wait()
+	turns := history.turns["GROUP1/MEMBER1"]
+	if len(turns) != 2 {
+		t.Fatal(turns)
+	}
+	want := "之前的对话（较早的在前）：\n问：" + turns[0].Question + "\n答：在设置的「输入方案」里选五笔。\n\n现在的问题：" + turns[1].Question
+	if !slices.Contains(fake.chatBodies, want) {
+		t.Fatalf("the second message did not see the first: %q", fake.chatBodies)
+	}
+	// 处理完以后副本内的队和跨副本租约都放开了。
+	if len(s.qqBusy) != 0 || limiter.counts["qq-bot-busy|GROUP1/MEMBER1"] != 0 {
+		t.Fatal(s.qqBusy, limiter.counts)
+	}
+}
+
+// 跨副本租约：另一个副本正在处理这位群友的消息时等它退回租约再处理，被占时多计的那一次要退回，不然对方退回后还要白等到 qqBusyWait；一直不退回（例如对方崩溃）时等满 qqBusyWait 照常处理。
+func TestQQBotWaitsForBusyLease(t *testing.T) {
+	defer func(wait, retry time.Duration) { qqBusyWait, qqBusyRetry = wait, retry }(qqBusyWait, qqBusyRetry)
+	qqBusyWait, qqBusyRetry = 5*time.Second, 10*time.Millisecond
+	s, fake, limiter := qqServer(t)
+	s.qq.config.Admins = nil
+	limiter.counts = map[string]int{"qq-bot-busy|GROUP1/MEMBER1": 1}
+	started := time.Now()
+	qqPost(t, s, qqMessage("m-lease", "五笔怎么切换"))
+	time.Sleep(200 * time.Millisecond)
+	if n := len(fake.replyTexts()); n != 0 {
+		t.Fatal("handled while another replica held the lease", fake.replyTexts())
+	}
+	if err := limiter.ReleaseRateLimit(context.Background(), "qq-bot-busy", "GROUP1/MEMBER1"); err != nil {
+		t.Fatal(err)
+	}
+	s.qqWorkers.Wait()
+	if elapsed := time.Since(started); elapsed > 2*time.Second || fake.replyTexts()[0] != "在设置的「输入方案」里选五笔。" || limiter.counts["qq-bot-busy|GROUP1/MEMBER1"] != 0 {
+		t.Fatal(elapsed, fake.replyTexts(), limiter.counts)
+	}
+	qqBusyWait = 100 * time.Millisecond
+	limiter.counts["qq-bot-busy|GROUP1/MEMBER1"] = 1
+	qqDeliver(t, s, "m-lease-stuck", "五笔怎么切换")
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "在设置的「输入方案」里选五笔。" {
+		t.Fatal(last)
+	}
+}
+
+// Close 先等进行中的 QQ 消息处理完再取消 lifetime；等满 qqCloseGrace 还没完的才取消。
+func TestQQBotCloseWaitsForWorkers(t *testing.T) {
+	s, _, _ := qqServer(t)
+	finished := make(chan bool, 1)
+	s.qqWorkers.Add(1)
+	go func() {
+		defer s.qqWorkers.Done()
+		select {
+		case <-time.After(200 * time.Millisecond):
+			finished <- true
+		case <-s.lifetime.Done():
+			finished <- false
+		}
+	}()
+	s.Close()
+	if !<-finished || s.lifetime.Err() == nil {
+		t.Fatal("Close cancelled a running worker, or never cancelled lifetime")
+	}
+	defer func(grace time.Duration) { qqCloseGrace = grace }(qqCloseGrace)
+	qqCloseGrace = 50 * time.Millisecond
+	s, _, _ = qqServer(t)
+	s.qqWorkers.Add(1)
+	go func() {
+		defer s.qqWorkers.Done()
+		<-s.lifetime.Done()
+	}()
+	started := time.Now()
+	s.Close()
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatal("Close waited past qqCloseGrace", elapsed)
 	}
 }

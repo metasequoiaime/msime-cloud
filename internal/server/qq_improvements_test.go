@@ -48,7 +48,7 @@ func TestQQImprovementReport(t *testing.T) {
 	s.recordQQImprovement(ctx, "selftest", "", "自测 9/10 通过。")
 	fake.summary = `{"items":["问五笔怎么切换，原回答说在设置里，实际要用快捷键；重答已解决。"]}`
 	from := time.Date(2026, 10, 5, 0, 0, 0, 0, qqStatsZone)
-	title, body, actionable, err := s.qqImprovementReport(ctx, from, from.AddDate(0, 0, 7))
+	title, body, actionable, err := s.qqImprovementReport(ctx, from, from.AddDate(0, 0, 7), nil)
 	if err != nil || !actionable {
 		t.Fatal(err, actionable)
 	}
@@ -74,18 +74,18 @@ func TestQQImprovementReport(t *testing.T) {
 	}
 	// 概括失败时只写条数，不贴原话。
 	fake.summary = `{"items":[]}`
-	_, body, _, err = s.qqImprovementReport(ctx, from, from.AddDate(0, 0, 7))
+	_, body, _, err = s.qqImprovementReport(ctx, from, from.AddDate(0, 0, 7), nil)
 	if err != nil || !strings.Contains(body, "有 1 条被说答错，没能自动概括") || strings.Contains(body, "五笔") {
 		t.Fatal(err, body)
 	}
 	// 没有答不上、答错、出错时不用开 issue；只有出错也要开。
 	s.qqImprovements = &memoryImprovements{}
 	s.qqStats = &memoryStats{counts: map[string]int{"answered": 5, "chat": 2}}
-	if _, _, actionable, err := s.qqImprovementReport(ctx, from, from.AddDate(0, 0, 7)); err != nil || actionable {
+	if _, _, actionable, err := s.qqImprovementReport(ctx, from, from.AddDate(0, 0, 7), nil); err != nil || actionable {
 		t.Fatal(err, actionable)
 	}
 	s.qqStats = &memoryStats{counts: map[string]int{"answered": 5, "reply_failed": 1}}
-	if _, _, actionable, err := s.qqImprovementReport(ctx, from, from.AddDate(0, 0, 7)); err != nil || !actionable {
+	if _, _, actionable, err := s.qqImprovementReport(ctx, from, from.AddDate(0, 0, 7), nil); err != nil || !actionable {
 		t.Fatal(err, actionable)
 	}
 }

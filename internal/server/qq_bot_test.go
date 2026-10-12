@@ -6666,3 +6666,10 @@ func TestQQBotBacklogHint(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// 现查结果的来源要分清：只有注明「据网上资料」的才说网上查到的，从 GitHub 查到的提交数曾被说成「据网上查到的信息」。
+func TestQQResearchSourceLabels(t *testing.T) {
+	if !strings.Contains(qqResearchHeading, "没有注明的是 GitHub 上直接查到的") || !strings.Contains(qqResearchPrompt, "只有 web_search 搜到的内容才注明「据网上资料」") || !strings.Contains(qqAnswerPrompt, "其余是从 GitHub 直接查到的，照实说") {
+		t.Fatal("research results must say which facts came from the web")
+	}
+}

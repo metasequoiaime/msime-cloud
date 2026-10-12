@@ -146,7 +146,12 @@ func TestQQBotImprovementCommand(t *testing.T) {
 
 // 每周一 9 点以后开一次上一周（周一到周日）的周报，同一周不重开；别的时间不开；那一周没有要处理的就不开。
 func TestQQImprovementTick(t *testing.T) {
-	s, fake, _ := qqServer(t)
+	s, fake, limiter := qqServer(t)
+	// 每天的定时自测由 TestQQDailySelfTest 测，这里先占掉，免得它开出自测掉分的 issue。
+	limiter.counts = map[string]int{}
+	for _, day := range []string{"2026-10-05", "2026-10-11", "2026-10-12", "2026-10-19"} {
+		limiter.counts["qq-bot-selftest-daily|"+day] = 1
+	}
 	store := &memoryImprovements{}
 	s.qqImprovements = store
 	s.qq.config.ImprovementRepo = "o/cloud"

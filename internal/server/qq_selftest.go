@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -17,10 +18,14 @@ import (
 // 自测。每次改提示词都可能把别的问题改坏（例如「对这个 issue 提改进意见」被改成只会复述），所以内置一组固定的问题，覆盖使用问题、问人、提建议、外部软件、统计、闲聊、版本和各平台指南。管理员发「自测」，机器人用生产环境真实的知识库、GitHub 和模型逐个回答（不记差评、不记文档候选、不回到群里），再让强模型按每题的要求判对错，回复通过数、超时的题数和没通过的原因（附上机器人回答的开头）。
 
 const (
-	// qqSelfTestParallel 是同时跑的题数：每题最多几十秒，十三题分三批在被动回复的 5 分钟里跑得完。
-	qqSelfTestParallel = 6
-	qqSelfTestDaily    = 3
-	qqSelfTestTimeout  = 3 * time.Minute
+	// qqSelfTestParallel 是同时跑的题数：每题最多几十秒，固定的十三题加上至多 qqSelfTestLearned 道学到的题分三批，在被动回复的 5 分钟里跑得完。
+	qqSelfTestParallel = 8
+	// qqSelfTestLearned 是每次自测最多跑几道从核对过的答案里学到的题（最新的那几道），见 qqSelfTestCaseStore。
+	qqSelfTestLearned = 8
+	// qqSelfTestDailyHour 是每天定时自测的时间（北京时间，几点以后），见 qqDailySelfTest。
+	qqSelfTestDailyHour = 8
+	qqSelfTestDaily     = 3
+	qqSelfTestTimeout   = 3 * time.Minute
 	// qqSelfTestDeployWindow 是发版后自测按版本号认领的有效期，见 qqDeploySelfTest：同一版本在这段时间里只跑一次，一个版本很少在线超过一个月。
 	qqSelfTestDeployWindow = 30 * 24 * time.Hour
 	// 发版后的自测通过的比例低于 qqSelfTestAlertPassed / qqSelfTestAlertOf（10/12）时汇总行打 Error，Loki 按它告警，见 qqLogSelfTest。按比例算，题数增减时不用跟着改。
@@ -32,22 +37,65 @@ const (
 type qqSelfTestCase struct {
 	Question string
 	Expect   string
+	// Learned 表示这道题是从核对过的答案里学到的（见 qqSelfTestCaseStore），不是 qqSelfTestCases 里固定的题。告警线只看固定的题：学到的题在 FAQ PR 合并前常常答不上，算进去会误报。
+	Learned bool
+}
+
+// qqSelfTestCaseStore 是 account.Service 里从核对过的答案学到的自测题；没有数据库时为 nil。管理员每把一个答案写进 FAQ（记录答案、写进FAQ F编号、写进FAQ B编号，都走 recordQQAnswer），问题和答案就记成一道题，之后的自测都会跑：曾经自测只有固定的十几道题，群里真实答错、修好过的问题改了提示词又会答错，没人发现。
+type qqSelfTestCaseStore interface {
+	AddQQSelfTestCase(ctx context.Context, question, answer string) error
+	QQSelfTestCases(ctx context.Context, limit int) ([]account.QQSelfTestCase, error)
+}
+
+// qqLearnedExpectRunes 是学到的题交给判分模型的参考答案最多多少字。
+const qqLearnedExpectRunes = 300
+
+// learnQQSelfTestCase 把写进 FAQ 的问题和答案记成一道自测题，出错只记日志。question 和 answer 是整理成 FAQ 之后的（和 PR 里的一样），不是群友原话。
+func (s *Server) learnQQSelfTestCase(ctx context.Context, question, answer string) {
+	if s.qqLearnedCases == nil || strings.TrimSpace(question) == "" || strings.TrimSpace(answer) == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	if err := s.qqLearnedCases.AddQQSelfTestCase(ctx, strings.TrimSpace(question), qqTruncate(strings.TrimSpace(answer), qqLearnedExpectRunes)); err != nil {
+		slog.Warn("qq bot: selftest case not learned", "reason", err.Error())
+	}
+}
+
+// qqAllSelfTestCases 是这次要跑的题：固定的题，加上最新的至多 qqSelfTestLearned 道学到的题（和固定的题重复的跳过）；读不出学到的题时只跑固定的。
+func (s *Server) qqAllSelfTestCases(ctx context.Context) []qqSelfTestCase {
+	cases := slices.Clone(qqSelfTestCases)
+	if s.qqLearnedCases == nil {
+		return cases
+	}
+	learned, err := s.qqLearnedCases.QQSelfTestCases(ctx, qqSelfTestLearned)
+	if err != nil {
+		slog.Warn("qq bot: learned selftest cases unavailable", "reason", err.Error())
+		return cases
+	}
+	for _, c := range learned {
+		if slices.ContainsFunc(cases, func(f qqSelfTestCase) bool { return f.Question == c.Question }) {
+			continue
+		}
+		cases = append(cases, qqSelfTestCase{Question: c.Question, Expect: "要点和下面这个维护者核对过、写进 FAQ 的答案一致，说法可以不同、可以更简短，不能和它矛盾：" + c.Answer, Learned: true})
+	}
+	return cases
 }
 
 var qqSelfTestCases = []qqSelfTestCase{
-	{"五笔怎么切换", "说清楚在哪里切换到五笔方案，给出具体操作"},
-	{"houko 是谁", "说出 houko 是水杉输入法项目的主要贡献者或维护者，不推托、不说没法提供身份信息"},
-	{"水杉输入法现在有几个开发者", "给出贡献者或开发者的具体数量，说明是按 GitHub 数据查的"},
-	{"评价一下 Photon Studio 和 Photoshop", "说出 Photon Studio 是什么（图像编辑软件）并和 Photoshop 做比较，不只是请用户补充信息"},
-	{"msime 仓库有多少 issue", "给出具体的 issue 数量"},
-	{"在吗", "自然地回应，一两句话，不推销功能"},
-	{"最近发布了哪些版本", "列出具体的版本号"},
-	{"对 msime-windows #785 提点改进意见", "针对这个 issue 给出具体的改进建议，不只是复述 issue，不叫人去 GitHub 留言，不说已经记下来了"},
-	{"Linux 上怎么安装水杉输入法", "给出 Linux 上的安装方法"},
-	{"安卓版怎么切换中英文", "按安卓版的说明回答切换中英文的方法，不套用 Windows 的做法"},
-	{"五笔怎么用？", "说清楚怎么用五笔；没说平台时不能说只有 Windows 有五笔，也不能说水杉只有 Windows 版"},
-	{"装不上", "先追问用的什么系统、卡在哪一步或有什么提示，不一次列出各平台的排查清单，不叫用户自己去 GitHub 提 issue"},
-	{"怎么卸载", "没说平台：每个平台只用一行写入口，或者只追问一句用的是哪个系统；不展开某个平台的多步操作，不写「没查到」「没看到说明」"},
+	{"五笔怎么切换", "说清楚在哪里切换到五笔方案，给出具体操作", false},
+	{"houko 是谁", "说出 houko 是水杉输入法项目的主要贡献者或维护者，不推托、不说没法提供身份信息", false},
+	{"水杉输入法现在有几个开发者", "给出贡献者或开发者的具体数量，说明是按 GitHub 数据查的", false},
+	{"评价一下 Photon Studio 和 Photoshop", "说出 Photon Studio 是什么（图像编辑软件）并和 Photoshop 做比较，不只是请用户补充信息", false},
+	{"msime 仓库有多少 issue", "给出具体的 issue 数量", false},
+	{"在吗", "自然地回应，一两句话，不推销功能", false},
+	{"最近发布了哪些版本", "列出具体的版本号", false},
+	{"对 msime-windows #785 提点改进意见", "针对这个 issue 给出具体的改进建议，不只是复述 issue，不叫人去 GitHub 留言，不说已经记下来了", false},
+	{"Linux 上怎么安装水杉输入法", "给出 Linux 上的安装方法", false},
+	{"安卓版怎么切换中英文", "按安卓版的说明回答切换中英文的方法，不套用 Windows 的做法", false},
+	{"五笔怎么用？", "说清楚怎么用五笔；没说平台时不能说只有 Windows 有五笔，也不能说水杉只有 Windows 版", false},
+	{"装不上", "先追问用的什么系统、卡在哪一步或有什么提示，不一次列出各平台的排查清单，不叫用户自己去 GitHub 提 issue", false},
+	{"怎么卸载", "没说平台：每个平台只用一行写入口，或者只追问一句用的是哪个系统；不展开某个平台的多步操作，不写「没查到」「没看到说明」", false},
 }
 
 // qqSelfTestLimits 是判分之前先按字数和行数硬性检查的题，键是 qqSelfTestCases 里的问题，值返回没通过的原因（通过时返回空串）。长度靠判分模型看不准，曾经「怎么卸载」答了四个平台、三四百字照样判过。
@@ -91,10 +139,11 @@ const qqSelfTestAnswerRunes = 60
 
 // runQQSelfTest 跑全部自测题。
 func (s *Server) runQQSelfTest(ctx context.Context) []qqSelfTestResult {
-	results := make([]qqSelfTestResult, len(qqSelfTestCases))
+	cases := s.qqAllSelfTestCases(ctx)
+	results := make([]qqSelfTestResult, len(cases))
 	slots := make(chan struct{}, qqSelfTestParallel)
 	var wg sync.WaitGroup
-	for i, c := range qqSelfTestCases {
+	for i, c := range cases {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -157,11 +206,11 @@ func (s *Server) qqSelfTest(ctx context.Context, member string, reply func(strin
 		reply(qqReplyUnavailable)
 		return
 	}
-	reply(fmt.Sprintf("开始自测 %d 道题，大约要两三分钟～", len(qqSelfTestCases)))
+	reply("开始自测，大约要两三分钟～")
 	ctx, cancel := context.WithTimeout(ctx, qqSelfTestTimeout)
 	defer cancel()
 	results := s.runQQSelfTest(ctx)
-	qqLogSelfTest(results, msimebackend.Version(), false)
+	qqLogSelfTest(results, msimebackend.Version(), "admin")
 	summary := qqSelfTestSummary(results)
 	// 改进周报只写第一句的分数（「自测 8/10 通过，1 题超时。」），不写机器人的回答。
 	score, _, _ := strings.Cut(summary, "。")
@@ -178,19 +227,94 @@ func (s *Server) qqDeploySelfTest(ctx context.Context, version string) {
 		slog.Warn("qq bot: deploy selftest skipped", "version", version, "reason", err.Error())
 		return
 	}
+	s.qqScheduledSelfTest(ctx, version, "deploy")
+}
+
+// qqDailySelfTest 是每天的定时自测：北京时间 qqSelfTestDailyHour 点以后按日期认领（qq-bot-selftest-daily），几个副本里只有一个跑一次。好几天没发版时，模型或上游的变化也能在一天内发现，不用等群友骂。由 qqImprovementJob 每小时调用。
+func (s *Server) qqDailySelfTest(ctx context.Context) {
+	now := s.qq.now().In(qqStatsZone)
+	if now.Hour() < qqSelfTestDailyHour {
+		return
+	}
+	switch err := s.limits.RateLimit(ctx, "qq-bot-selftest-daily", now.Format("2006-01-02"), 1, 48*time.Hour); {
+	case errors.Is(err, account.ErrLimited):
+		return
+	case err != nil:
+		slog.Warn("qq bot: daily selftest skipped", "reason", err.Error())
+		return
+	}
+	s.qqScheduledSelfTest(ctx, msimebackend.Version(), "daily")
+}
+
+// qqScheduledSelfTest 跑一次没人看回复的自测（发版后或每天定时）：结果写日志，分数记进改进依据，掉到告警线以下时在改进仓库开 issue（qqSelfTestAlert）。副本关停打断了自测时什么都不记。
+func (s *Server) qqScheduledSelfTest(ctx context.Context, version, trigger string) {
 	ctx, cancel := context.WithTimeout(ctx, qqSelfTestTimeout)
 	defer cancel()
 	results := s.runQQSelfTest(ctx)
 	if errors.Is(ctx.Err(), context.Canceled) {
-		slog.Info("qq bot: deploy selftest interrupted", "version", version)
+		slog.Info("qq bot: scheduled selftest interrupted", "version", version, "trigger", trigger)
 		return
 	}
-	qqLogSelfTest(results, version, true)
+	alert := qqLogSelfTest(results, version, trigger)
+	score, _, _ := strings.Cut(qqSelfTestSummary(results), "。")
+	s.recordQQImprovement(ctx, "selftest", "", score+"。")
+	if alert {
+		s.qqSelfTestAlert(ctx, results, version, trigger)
+	}
+}
+
+// qqSelfTestAlert 在改进仓库（qqImprovementRepo）开一个「QQ 机器人自测掉分」的 issue，列出没通过的题、原因和机器人回答的开头，每天最多一个（qq-bot-selftest-alert）。原来掉分只打一条 Error 日志，要有人在 Loki 里配告警才看得到，一直没人配。题目是固定的题和写进 FAQ 的问题，回答是机器人自己写的，不含群友原话。
+func (s *Server) qqSelfTestAlert(ctx context.Context, results []qqSelfTestResult, version, trigger string) {
+	repo := s.qqImprovementRepo()
+	if repo == "" || s.adminGitHub == nil {
+		return
+	}
+	if err := s.limits.RateLimit(ctx, "qq-bot-selftest-alert", s.qq.now().In(qqStatsZone).Format("2006-01-02"), 1, 48*time.Hour); err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+	defer cancel()
+	score, _, _ := strings.Cut(qqSelfTestSummary(results), "。")
+	when := map[string]string{"deploy": "发版后", "daily": "每天定时"}[trigger]
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s的自测（版本 %s）掉到告警线以下：%s。告警线是固定的题通过 %d/%d，从 FAQ 学到的题不算在内。\n\n没通过的题：\n\n", when, version, score, qqSelfTestAlertPassed, qqSelfTestAlertOf)
+	for _, r := range results {
+		if r.Pass {
+			continue
+		}
+		source := ""
+		if r.Case.Learned {
+			source = "（从 FAQ 学到的题）"
+		}
+		fmt.Fprintf(&b, "- [ ] 「%s」%s：%s", githubReferenceBreaker.Replace(r.Case.Question), source, githubReferenceBreaker.Replace(r.Reason))
+		if r.Answer != "" {
+			fmt.Fprintf(&b, "（回答：%s）", githubReferenceBreaker.Replace(qqStripLinks(qqTruncate(strings.Join(strings.Fields(r.Answer), " "), 200))))
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("\n先看最近改过的提示词、模型配置和知识库；管理员可以在群里 @机器人 发「自测」复查。")
+	client := s.adminGitHub
+	token, err := client.Token(ctx, repo, issueTokenPerms)
+	if err != nil {
+		slog.Warn("qq bot: selftest alert not filed", "reason", err.Error())
+		return
+	}
+	var labels []string
+	if slices.Contains(s.qqRepoLabels(ctx, client, token, repo), qqImprovementLabel) {
+		labels = []string{qqImprovementLabel}
+	}
+	r, err := client.Do(ctx, token, "POST", "/repos/"+repo+"/issues", map[string]any{"title": "QQ 机器人自测掉分：" + version + "，" + strings.TrimPrefix(score, "自测 "), "body": b.String(), "labels": labels})
+	if err != nil || !r.OK() {
+		slog.Warn("qq bot: selftest alert not filed", "reason", githubFailure("selftest alert", r, err).Error())
+		return
+	}
+	slog.Info("qq bot: selftest alert filed", "repo", repo, "version", version)
 }
 
 // qqLogSelfTest 记自测的汇总行「qq bot: selftest」：通过数、超时数、总题数、版本号和触发方式（管理员发「自测」是 admin，发版后是 deploy）。发版后的自测没有人看回复，没通过的题各记一条 Warn（问题和原因，不记回答），通过的比例低于 qqSelfTestAlertPassed / qqSelfTestAlertOf 时汇总行打 Error 供 Loki 告警；管理员自己跑的在群里看得到结果，改提示词时常常故意跑不过，只打 Info。
-func qqLogSelfTest(results []qqSelfTestResult, version string, deploy bool) {
-	passed, timedOut := 0, 0
+func qqLogSelfTest(results []qqSelfTestResult, version, trigger string) (alert bool) {
+	scheduled := trigger != "admin"
+	passed, timedOut, fixed, fixedPassed := 0, 0, 0, 0
 	for _, r := range results {
 		switch {
 		case r.Pass:
@@ -198,20 +322,23 @@ func qqLogSelfTest(results []qqSelfTestResult, version string, deploy bool) {
 		case r.TimedOut:
 			timedOut++
 		}
-		if deploy && !r.Pass {
-			slog.Warn("qq bot: selftest case not passed", "version", version, "question", r.Case.Question, "reason", r.Reason)
+		if !r.Case.Learned {
+			fixed++
+			if r.Pass {
+				fixedPassed++
+			}
+		}
+		if scheduled && !r.Pass {
+			slog.Warn("qq bot: selftest case not passed", "version", version, "question", r.Case.Question, "learned", r.Case.Learned, "reason", r.Reason)
 		}
 	}
-	trigger := "admin"
-	if deploy {
-		trigger = "deploy"
-	}
-	attrs := []any{"passed", passed, "timed_out", timedOut, "total", len(results), "version", version, "trigger", trigger}
-	if deploy && passed*qqSelfTestAlertOf < len(results)*qqSelfTestAlertPassed {
+	attrs := []any{"passed", passed, "timed_out", timedOut, "total", len(results), "fixed_passed", fixedPassed, "fixed_total", fixed, "version", version, "trigger", trigger}
+	if scheduled && fixedPassed*qqSelfTestAlertOf < fixed*qqSelfTestAlertPassed {
 		slog.Error("qq bot: selftest", attrs...)
-		return
+		return true
 	}
 	slog.Info("qq bot: selftest", attrs...)
+	return false
 }
 
 // qqSelfTestSummary 是自测的回复：通过数，有超时的单独写几题超时（「自测 8/10 通过，1 题超时。」）；没通过的列出原因，判分没过的附上机器人回答的前 qqSelfTestAnswerRunes 字，不用再去群里问一遍看它答了什么；超时的只列问题。

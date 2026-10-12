@@ -5914,6 +5914,8 @@ func TestQQBotBadAnswerActions(t *testing.T) {
 	s.qq.config.Admins = []string{"ADMIN1"}
 	bad := &memoryBadAnswers{}
 	s.qqBadAnswers = bad
+	learned := &memoryLearnedCases{}
+	s.qqLearnedCases = learned
 	ctx := context.Background()
 	for _, item := range [][4]string{
 		{"五笔怎么切换", "在设置里选五笔。", "不对啊", "按 Ctrl+` 打开方案菜单选五笔。"},
@@ -5951,6 +5953,10 @@ func TestQQBotBadAnswerActions(t *testing.T) {
 	deliver("m-ba-write", "写进FAQ B1")
 	if !strings.Contains(last(), "开了 PR：docs #42") || bad.state[1] != "done" || fake.chatBodies[len(fake.chatBodies)-1] != "问：五笔怎么切换\n答：按 Ctrl+` 打开方案菜单选五笔。" {
 		t.Fatal(last(), bad.state, fake.chatBodies[len(fake.chatBodies)-1])
+	}
+	// 写进 FAQ 的问题和答案（整理过的）记成一道自测题。
+	if len(learned.cases) != 1 || learned.cases[0].Question != "五笔怎么切换？" || !strings.HasPrefix(learned.cases[0].Answer, "在 Windows 上按 Ctrl 加反引号打开方案菜单") {
+		t.Fatal(learned.cases)
 	}
 	fake.faq = strings.ReplaceAll(strings.ReplaceAll(fake.faq, "五笔怎么切换", "双拼怎么设置"), "五筆怎麼切換", "雙拼怎麼設定")
 	deliver("m-ba-write-answer", "写入FAQ：b2 答：在设置的输入方案里选双拼")
@@ -6318,14 +6324,21 @@ func TestQQLogSelfTestThreshold(t *testing.T) {
 		t.Fatal("update the boundary below", len(qqSelfTestCases))
 	}
 	for _, tc := range []struct {
-		passed int
-		deploy bool
-		want   string
-	}{{11, true, "INFO"}, {10, true, "ERROR"}, {0, false, "INFO"}} {
-		qqLogSelfTest(results(tc.passed), "0.78.0", tc.deploy)
+		passed  int
+		trigger string
+		want    string
+	}{{11, "deploy", "INFO"}, {10, "daily", "ERROR"}, {0, "admin", "INFO"}} {
+		if alert := qqLogSelfTest(results(tc.passed), "0.78.0", tc.trigger); alert != (tc.want == "ERROR") {
+			t.Fatal(tc, alert)
+		}
 		if got := level(); got != tc.want {
 			t.Fatal(tc, got)
 		}
+	}
+	// 学到的题不算进告警线：固定的题全过、学到的题全没过也不告警。
+	learned := append(results(len(qqSelfTestCases)), qqSelfTestResult{Case: qqSelfTestCase{Question: "鸿蒙版在哪下载？", Learned: true}}, qqSelfTestResult{Case: qqSelfTestCase{Question: "搜狗词库怎么导入？", Learned: true}})
+	if qqLogSelfTest(learned, "0.78.0", "daily") {
+		t.Fatal("learned cases must not trigger the alert")
 	}
 }
 

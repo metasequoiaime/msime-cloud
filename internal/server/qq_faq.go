@@ -316,6 +316,8 @@ func (s *Server) recordQQAnswer(ctx context.Context, text string, reply func(str
 		fail("pull", githubFailure("pull", r, err))
 		return 0
 	}
+	// 写进 FAQ 的问题和答案记成一道自测题，之后改提示词、换模型时同一个问题答错了自测能发现。
+	s.learnQQSelfTestCase(ctx, entry.Question, entry.Answer)
 	// 回复里带上写进去的答案（截到 150 字）：答案是模型改写过的，原来管理员要去 GitHub 打开 PR 才知道写成了什么。
 	reply("已整理成 FAQ「" + entry.Question + "」，开了 PR：" + qqIssueNumberText(repo, pull.Number) + "，维护者核对合并后，机器人就能回答这个问题。\n写进去的答案：" + qqTruncate(entry.Answer, qqFAQReplyRunes))
 	return pull.Number

@@ -60,6 +60,8 @@ type Server struct {
 	qqBadAnswers qqBadAnswerStore
 	// qqStats 是答疑每天的处理结果计数（account.Service，见 qq_digest.go）；没有数据库时为 nil。
 	qqStats qqStatsStore
+	// qqImprovements 是答疑的改进依据（account.Service，见 qq_improvements.go）；没有数据库时为 nil。
+	qqImprovements qqImprovementStore
 
 	adminStore  adminAuthStore
 	adminGoogle *adminGoogleAuth
@@ -168,6 +170,12 @@ func New(c Config) (*Server, error) {
 			go func() {
 				defer s.adminJobs.Done()
 				s.qqVectorJob(s.lifetime)
+			}()
+			s.qqImprovements = s.accounts
+			s.adminJobs.Add(1)
+			go func() {
+				defer s.adminJobs.Done()
+				s.qqImprovementJob(s.lifetime)
 			}()
 		}
 	}

@@ -66,7 +66,9 @@ const (
 【看最近 7 天的数据】
 @水杉助手 周报
 【用固定问题考考我，改完提示词跑一次】
-@水杉助手 自测`
+@水杉助手 自测
+【把最近 7 天答不上、答错、出错的问题汇总成 msime-cloud 的 issue】（每周一早上自动开一份）
+@水杉助手 改进依据`
 )
 
 var (
@@ -200,16 +202,18 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 	if command := s.qqFAQCandidateCommands(ctx, text, admin, reply); command != "" {
 		return command
 	}
-	if compact := qqCompact(text); compact == "周报" || compact == "自测" {
+	if compact := qqCompact(text); compact == "周报" || compact == "自测" || compact == "改进依据" {
 		switch {
 		case !admin:
 			reply("只有管理员能用「" + compact + "」。")
 		case compact == "周报":
 			s.qqWeeklyDigest(ctx, reply)
+		case compact == "改进依据":
+			s.qqImprovementCommand(ctx, m.Author.MemberOpenID, reply)
 		default:
 			s.qqSelfTest(ctx, m.Author.MemberOpenID, reply)
 		}
-		return "cmd_" + map[string]string{"周报": "digest", "自测": "selftest"}[compact]
+		return "cmd_" + map[string]string{"周报": "digest", "自测": "selftest", "改进依据": "improvement"}[compact]
 	}
 	if compact := qqCompact(text); compact == "差评" || compact == "答错的" {
 		if !admin {

@@ -154,7 +154,11 @@ func (s *Server) qqSelfTest(ctx context.Context, member string, reply func(strin
 	reply(fmt.Sprintf("开始自测 %d 道题，大约要两三分钟～", len(qqSelfTestCases)))
 	ctx, cancel := context.WithTimeout(ctx, qqSelfTestTimeout)
 	defer cancel()
-	reply(qqSelfTestSummary(s.runQQSelfTest(ctx)))
+	summary := qqSelfTestSummary(s.runQQSelfTest(ctx))
+	// 改进周报只写第一句的分数（「自测 8/10 通过，1 题超时。」），不写机器人的回答。
+	score, _, _ := strings.Cut(summary, "。")
+	s.recordQQImprovement(ctx, "selftest", "", score+"。")
+	reply(summary)
 }
 
 // qqSelfTestSummary 是自测的回复：通过数，有超时的单独写几题超时（「自测 8/10 通过，1 题超时。」）；没通过的列出原因，判分没过的附上机器人回答的前 qqSelfTestAnswerRunes 字，不用再去群里问一遍看它答了什么；超时的只列问题。

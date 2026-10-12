@@ -83,6 +83,11 @@ func (s *Server) qqSearchIssues(ctx context.Context, keywords string) (found str
 
 // qqSearchIssueHits 是 qqSearchIssues 的结构化结果，「查」命令用它给群友另写一份短列表（见 qqIssueListForMembers），和给模型的资料不共用文字。extras 为 true 时给前 qqIssueContextResults 个 issue 补上下文。GitHub 要求每个词都匹配，模型多给一个词就可能一条都搜不到，所以搜不到时依次只用前两个、前一个词再搜。failed 表示有仓库没搜成（限流、GitHub 出错）：这时结果为空不等于没有相关 issue，也不再退词重搜，免得被限流时多打几轮请求。
 func (s *Server) qqSearchIssueHits(ctx context.Context, keywords string, extras bool) (hits []qqIssueHit, failed bool) {
+	return s.qqSearchIssueHitsIn(ctx, s.qqGitHubRepos(), keywords, extras)
+}
+
+// qqSearchIssueHitsIn 和 qqSearchIssueHits 一样，只是只在 repos 里搜（斜杠命令「/issues win 关键词」只搜 Windows 仓库）。
+func (s *Server) qqSearchIssueHitsIn(ctx context.Context, repos []string, keywords string, extras bool) (hits []qqIssueHit, failed bool) {
 	words := strings.Fields(qqSearchTerms(keywords))
 	if len(words) == 0 {
 		return nil, false
@@ -94,22 +99,21 @@ func (s *Server) qqSearchIssueHits(ctx context.Context, keywords string, extras 
 		}
 	}
 	for _, terms := range attempts {
-		if hits, failed = s.qqSearchIssuesFor(ctx, terms, extras); len(hits) > 0 || failed {
+		if hits, failed = s.qqSearchIssuesFor(ctx, repos, terms, "", extras); len(hits) > 0 || failed {
 			return hits, failed
 		}
 	}
 	return nil, false
 }
 
-// qqSearchIssuesFor 是用一组搜索词做的一轮 qqSearchIssueHits。各仓库同时搜，都搜完后（extras 为 true 时）同时给前 qqIssueContextResults 个 issue（按仓库顺序数，见 qq_issue_context.go）补上下文，最后按仓库顺序排好：结果和逐个仓库查时一样，只是不再一个仓库搜完、补完上下文再搜下一个。
-func (s *Server) qqSearchIssuesFor(ctx context.Context, terms string, extras bool) ([]qqIssueHit, bool) {
+// qqSearchIssuesFor 是用一组搜索词做的一轮 qqSearchIssueHits。各仓库同时搜，都搜完后（extras 为 true 时）同时给前 qqIssueContextResults 个 issue（按仓库顺序数，见 qq_issue_context.go）补上下文，最后按仓库顺序排好：结果和逐个仓库查时一样，只是不再一个仓库搜完、补完上下文再搜下一个。sort 不为空时附在搜索请求后面（例如 "&sort=created&order=desc"，列最新的 issue 时用），为空时按相关度。
+func (s *Server) qqSearchIssuesFor(ctx context.Context, repos []string, terms, sort string, extras bool) ([]qqIssueHit, bool) {
 	client := s.adminGitHub
 	type hit struct {
 		qqIssue
 		qqIssueDetail
 		UpdatedAt string `json:"updated_at"`
 	}
-	repos := s.qqGitHubRepos()
 	hits := make([][]hit, len(repos))
 	failed := make([]bool, len(repos))
 	var search errgroup.Group
@@ -121,7 +125,7 @@ func (s *Server) qqSearchIssuesFor(ctx context.Context, terms string, extras boo
 				failed[i] = true
 				return nil
 			}
-			r, err := client.Do(ctx, token, "GET", "/search/issues?per_page="+strconv.Itoa(qqIssueResults)+"&q="+url.QueryEscape("repo:"+repo+" is:issue "+terms), nil)
+			r, err := client.Do(ctx, token, "GET", "/search/issues?per_page="+strconv.Itoa(qqIssueResults)+sort+"&q="+url.QueryEscape("repo:"+repo+" is:issue "+terms), nil)
 			if err != nil || !r.OK() {
 				slog.Warn("qq bot: issue search failed", "repo", repo, "reason", githubFailure("search", r, err).Error())
 				failed[i] = true

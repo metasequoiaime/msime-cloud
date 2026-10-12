@@ -1858,7 +1858,14 @@ func TestQQBotProbesEventFields(t *testing.T) {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	s.qqWorkers.Wait()
-	// 第二条消息带了别的字段，也不再记。
+	// 同样字段的消息不再记；字段组合不同的再记一行。
+	again, _ := json.Marshal(map[string]any{"op": 0, "t": "GROUP_AT_MESSAGE_CREATE", "d": map[string]any{
+		"id": "m-probe-3", "content": "我的ID", "group_openid": "GROUP1", "author": map[string]string{"member_openid": "MEMBER1", "member_role": "member"},
+		"message_type": 0, "offset": 1, "message_reference": map[string]string{"message_id": "x", "content": "y"}, "msg_elements": []map[string]string{{"content": "z"}},
+		"seq": "1", "is_bot": true, "extra": nil, "timestamp": "t",
+	}})
+	qqPost(t, s, string(again))
+	s.qqWorkers.Wait()
 	second, _ := json.Marshal(map[string]any{"op": 0, "t": "GROUP_AT_MESSAGE_CREATE", "d": map[string]any{"id": "m-probe-2", "content": "我的ID", "group_openid": "GROUP1", "author": map[string]string{"member_openid": "MEMBER1"}, "other_field": 1}})
 	qqPost(t, s, string(second))
 	s.qqWorkers.Wait()
@@ -1869,8 +1876,11 @@ func TestQQBotProbesEventFields(t *testing.T) {
 			probes = append(probes, entry)
 		}
 	}
-	if len(probes) != 1 {
+	if len(probes) != 2 || fmt.Sprint(probes[1]["keys"]) != "[author content group_openid id other_field]" {
 		t.Fatal("probe lines", probes)
+	}
+	if got := fmt.Sprint(probes[0]["nested"]); got != "[message_reference.content message_reference.message_id msg_elements[].content]" {
+		t.Fatal("nested", got)
 	}
 	// 日志自己的时间字段不算在内，免得和事件里的时间戳撞上。
 	delete(probes[0], "time")
@@ -1881,7 +1891,7 @@ func TestQQBotProbesEventFields(t *testing.T) {
 	if got := fmt.Sprint(probes[0]["numbers"]); got != "[message_type=103 offset=-2.5]" {
 		t.Fatal("numbers", got)
 	}
-	for _, leak := range []string{"SECRET", "MEMBER1", "GROUP1", "m-probe-1", "77", "2026-10-12", "other_field"} {
+	for _, leak := range []string{"SECRET", "MEMBER1", "GROUP1", "m-probe-1", "77", "2026-10-12"} {
 		if strings.Contains(string(line), leak) {
 			t.Fatalf("probe line carries %q: %s", leak, line)
 		}

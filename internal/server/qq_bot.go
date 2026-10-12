@@ -264,8 +264,8 @@ type qqBot struct {
 	gapsIssueAt time.Time
 	// probeOnce 让 probeMemberRole 只记一次。
 	probeOnce sync.Once
-	// fieldsProbeOnce 让 probeEventFields 只记一次。
-	fieldsProbeOnce sync.Once
+	// fieldsSeen 是 probeEventFields 已经记过的字段组合，由 mu 保护。
+	fieldsSeen map[string]bool
 	// stats 是缓存的仓库统计和统计的时间，见 qqRepoStats；由 mu 保护。
 	stats   string
 	statsAt time.Time
@@ -282,12 +282,56 @@ func (b *qqBot) probeMemberRole(role string) {
 	})
 }
 
-// probeEventFields 在每个副本第一次收到 @ 消息时记一行日志，列出事件 d 排好序的顶层字段名，和 message_type 这类值是数字的字段：开放平台的群 @ 事件里有没有带被引用的消息（message_reference、msg_elements 之类）、字段叫什么，生产上没确认过，确认之后才能把引用的文字和图片交给模型。只记字段名和数字，不记消息内容、群和成员的标识。
+// qqFieldsProbeMax 是每个副本最多记多少种字段组合，免得字段名里带了变化的东西时刷日志。
+const qqFieldsProbeMax = 32
+
+// probeEventFields 每遇到一种新的字段组合就记一行日志，列出事件 d 排好序的顶层字段名、message_type 这类值是数字的字段，以及 qqQuoteFields 里那几个对象下一层的字段名：开放平台的群 @ 事件里引用的消息放在哪个字段、长什么样，生产上没确认过（见 qq_quote.go）。曾经只记每个副本收到的第一条，可第一条多半是普通消息，引用消息的字段永远记不到。只记字段名和数字，不记消息内容、群和成员的标识。
 func (b *qqBot) probeEventFields(raw json.RawMessage) {
-	b.fieldsProbeOnce.Do(func() {
-		keys, numbers := qqEventFields(raw)
-		slog.Info("qq bot: event fields probe", "keys", keys, "numbers", numbers)
-	})
+	keys, numbers := qqEventFields(raw)
+	nested := qqNestedFields(raw)
+	signature := strings.Join(keys, ",") + "|" + strings.Join(nested, ",")
+	b.mu.Lock()
+	if b.fieldsSeen == nil {
+		b.fieldsSeen = map[string]bool{}
+	}
+	fresh := !b.fieldsSeen[signature] && len(b.fieldsSeen) < qqFieldsProbeMax
+	if fresh {
+		b.fieldsSeen[signature] = true
+	}
+	b.mu.Unlock()
+	if fresh {
+		slog.Info("qq bot: event fields probe", "keys", keys, "numbers", numbers, "nested", nested)
+	}
+}
+
+// qqNestedFields 返回 qqQuoteFields 里每个字段下一层的字段名，写成「message_reference.message_id」「msg_elements[].content」；值不带出来。
+func qqNestedFields(raw json.RawMessage) []string {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return nil
+	}
+	var out []string
+	for _, name := range qqQuoteFields {
+		var object map[string]json.RawMessage
+		var array []map[string]json.RawMessage
+		switch {
+		case json.Unmarshal(fields[name], &object) == nil:
+			for _, k := range slices.Sorted(maps.Keys(object)) {
+				out = append(out, name+"."+k)
+			}
+		case json.Unmarshal(fields[name], &array) == nil:
+			seen := map[string]bool{}
+			for _, item := range array {
+				for k := range item {
+					seen[k] = true
+				}
+			}
+			for _, k := range slices.Sorted(maps.Keys(seen)) {
+				out = append(out, name+"[]."+k)
+			}
+		}
+	}
+	return out
 }
 
 // qqEventFields 返回事件 d 排好序的顶层字段名，以及值是数字的顶层字段，写成「字段名=值」；字符串、对象、数组、布尔和 null 的值一律不带出来。d 不是对象时都返回空。
@@ -463,8 +507,10 @@ type qqGroupMessage struct {
 		// MemberRole 是事件里带的群身份（owner、admin、member），可能没有；见 qqIsAdmin。
 		MemberRole string `json:"member_role"`
 	} `json:"author"`
-	// Attachments 是消息里的图片、视频等附件；只有管理员提 issue 时才用到。
+	// Attachments 是消息里的图片、视频等附件：答疑时看截图，管理员提 issue 时附上。引用的消息里的截图也会并进来（见 qq_quote.go）。
 	Attachments []qqAttachment `json:"attachments"`
+	// Quote 是群友引用的那条消息，由 acceptQQMessage 另外解析（见 qqQuoteOf），不参与这个结构的解析。
+	Quote qqQuote `json:"-"`
 }
 
 // acceptQQMessage 认领一条 @ 消息并交给后台处理，返回是否应答成功。消息 id 在 auth_rates 里只能认领一次，重推的同一事件直接应答成功；数据库不可用时应答失败，让开放平台稍后重推。格式不对或来自未配置的群的消息直接丢弃，重推也不会变好。
@@ -475,6 +521,7 @@ func (s *Server) acceptQQMessage(ctx context.Context, raw json.RawMessage) bool 
 	}
 	s.qq.probeMemberRole(m.Author.MemberRole)
 	s.qq.probeEventFields(raw)
+	m.Quote = qqQuoteOf(raw, m)
 	if groups := s.qq.config.Groups; len(groups) > 0 && !slices.Contains(groups, m.GroupOpenID) {
 		// 开放平台只给 group_openid，不给群号；记下被拦下的群标识，方便把要接受的群填进 qq_bot.groups。
 		slog.Info("qq bot: message from unlisted group", "group_openid", m.GroupOpenID)
@@ -771,6 +818,14 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		}
 	}()
 	text := qqFeedbackText(m.Content)
+	// 引用的消息：截图并进附件（自己没带截图时），这样看图、提 issue 都用得上；只 @ 了机器人、没写话时，把引用的那句话当成问题。引用的文字在命令之后才接到问题后面（见下面），免得「加词」这类命令的参数被带上。
+	quoteAsked := false
+	if len(m.Quote.Images) > 0 && !qqHasImages(m.Attachments) {
+		m.Attachments = append(m.Attachments, m.Quote.Images...)
+	}
+	if text == "" && m.Quote.Text != "" {
+		text, quoteAsked = m.Quote.Text, true
+	}
 	if slices.Contains(qqWhoAmI, qqCompact(text)) {
 		role := "普通成员"
 		if s.qqIsAdmin(ctx, m.GroupOpenID, m.Author.MemberOpenID, m.Author.MemberRole) {
@@ -858,6 +913,12 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		defer mu.Unlock()
 		chatting = true
 		thinking.Stop()
+	}
+	switch {
+	case m.Quote.Text != "" && !quoteAsked:
+		text += "\n（群友引用的消息：「" + m.Quote.Text + "」）"
+	case m.Quote.Referenced && m.Quote.Text == "" && len(m.Quote.Images) == 0:
+		text += qqQuoteUnseenNote
 	}
 	// 文字带截图时把截图描述接在问题后面再答。命令不带截图描述：「查」「#编号」用不上，「提issue」在 fileAdminFeedback 里自己看图。
 	if !imageOnly && qqHasImages(m.Attachments) {

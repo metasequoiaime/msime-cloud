@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	msimebackend "github.com/metasequoiaime/MSIME-Backend"
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
@@ -44,6 +45,8 @@ type Server struct {
 	// qq 是 QQ 群反馈机器人，未配置或没有数据库时为 nil；qqWorkers 跟踪它在后台处理的消息，Close 等它们结束。
 	qq        *qqBot
 	qqWorkers sync.WaitGroup
+	// qqBusy 是本副本里正在处理的群友（群 + member_openid）和处理完时关掉的 channel，由 mu 保护，见 qqLockSubject。
+	qqBusy map[string]chan struct{}
 	// media 把 QQ 管理员附带的图片和视频写进公开 bucket（account.Service.PublishMedia）；没有数据库时为 nil。
 	media mediaPublisher
 	// qqHistory 是 QQ 群答疑接上追问用的最近问答（account.Service）；没有数据库时为 nil。
@@ -156,6 +159,8 @@ func New(c Config) (*Server, error) {
 			defer s.adminJobs.Done()
 			s.warmQQKnowledge(s.lifetime)
 			s.warmQQAppLogin(s.lifetime)
+			// 知识库预热完再跑发版后的自测，同一版本只有一个副本跑一次（见 qqDeploySelfTest）。
+			s.qqDeploySelfTest(s.lifetime, msimebackend.Version())
 		}()
 		if s.accounts != nil {
 			s.media = s.accounts

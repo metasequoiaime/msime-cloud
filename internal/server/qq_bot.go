@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"math"
 	"net/http"
 	"net/url"
@@ -21,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -262,6 +264,8 @@ type qqBot struct {
 	gapsIssueAt time.Time
 	// probeOnce 让 probeMemberRole 只记一次。
 	probeOnce sync.Once
+	// fieldsProbeOnce 让 probeEventFields 只记一次。
+	fieldsProbeOnce sync.Once
 	// stats 是缓存的仓库统计和统计的时间，见 qqRepoStats；由 mu 保护。
 	stats   string
 	statsAt time.Time
@@ -276,6 +280,29 @@ func (b *qqBot) probeMemberRole(role string) {
 	b.probeOnce.Do(func() {
 		slog.Info("qq bot: event member_role probe", "present", role != "", "role", role)
 	})
+}
+
+// probeEventFields 在每个副本第一次收到 @ 消息时记一行日志，列出事件 d 排好序的顶层字段名，和 message_type 这类值是数字的字段：开放平台的群 @ 事件里有没有带被引用的消息（message_reference、msg_elements 之类）、字段叫什么，生产上没确认过，确认之后才能把引用的文字和图片交给模型。只记字段名和数字，不记消息内容、群和成员的标识。
+func (b *qqBot) probeEventFields(raw json.RawMessage) {
+	b.fieldsProbeOnce.Do(func() {
+		keys, numbers := qqEventFields(raw)
+		slog.Info("qq bot: event fields probe", "keys", keys, "numbers", numbers)
+	})
+}
+
+// qqEventFields 返回事件 d 排好序的顶层字段名，以及值是数字的顶层字段，写成「字段名=值」；字符串、对象、数组、布尔和 null 的值一律不带出来。d 不是对象时都返回空。
+func qqEventFields(raw json.RawMessage) (keys, numbers []string) {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return nil, nil
+	}
+	keys = slices.Sorted(maps.Keys(fields))
+	for _, k := range keys {
+		if v := fields[k]; len(v) > 0 && (v[0] == '-' || v[0] >= '0' && v[0] <= '9') {
+			numbers = append(numbers, k+"="+string(v))
+		}
+	}
+	return keys, numbers
 }
 
 func newQQBot(c QQBotConfig) *qqBot {
@@ -447,6 +474,7 @@ func (s *Server) acceptQQMessage(ctx context.Context, raw json.RawMessage) bool 
 		return true
 	}
 	s.qq.probeMemberRole(m.Author.MemberRole)
+	s.qq.probeEventFields(raw)
 	if groups := s.qq.config.Groups; len(groups) > 0 && !slices.Contains(groups, m.GroupOpenID) {
 		// 开放平台只给 group_openid，不给群号；记下被拦下的群标识，方便把要接受的群填进 qq_bot.groups。
 		slog.Info("qq bot: message from unlisted group", "group_openid", m.GroupOpenID)
@@ -478,16 +506,90 @@ func (s *Server) acceptQQMessage(ctx context.Context, raw json.RawMessage) bool 
 	return true
 }
 
+// 同一个群友（群 + member_openid）的消息按到达顺序处理，见 qqLockSubject。原来每条消息各起一个 goroutine 并行处理，答疑在开头读对话历史、到最后才记下这一轮：「候选框跑到左上角了」隔几秒再 @ 一句「win11 0.9.5」，后一句读不到前一句，被当成没头没尾的新问题，两条各答各的，都判成报问题时还会起两份草稿。
+const (
+	// qqBusyLease 是跨副本租约（auth_rates 的 qq-bot-busy）的窗口，兜住副本崩溃、租约没退回的情况：最多这么久之后其他副本照常处理。
+	qqBusyLease = 90 * time.Second
+)
+
+var (
+	// qqBusyWait 是一条消息最多排多久的队，等满了照常处理，不能因为前一条卡住就一直不回；qqBusyRetry 是跨副本租约被占时重试的间隔。测试里改短。
+	qqBusyWait  = 30 * time.Second
+	qqBusyRetry = 500 * time.Millisecond
+)
+
+// qqLockSubject 拿到 subject 的处理权，返回释放它的函数，调用方处理完 defer 调用。先在副本内排队（Server.qqBusy，每个 subject 一个 channel，处理完时关掉），再拿跨副本租约：同一个群友的两条消息可能被推到两个副本。跨副本用 auth_rates 计数当租约（RateLimit 限 1 次、窗口 qqBusyLease，用完 ReleaseRateLimit），不用 account.WaitLock：持锁的整个处理过程 6–70 秒会一直占着一个池连接，而连接池只有 8 个。auth_rates 超限时计数也会加到上限加一，被占时要把这次多计的退回，不然前一条退回租约后计数还是 1，后一条要白等到超时；副本内已经排过队，每个副本同一个群友最多一条消息在抢租约，两个副本时这样退回是准的。两步合计最多等 qqBusyWait，等满了、ctx 结束了或者数据库不可用时不拿锁照常处理，退化成原来的并行处理，不会卡住。
+func (s *Server) qqLockSubject(ctx context.Context, subject string) func() {
+	deadline := time.NewTimer(qqBusyWait)
+	defer deadline.Stop()
+	unlock := func() {}
+	for acquired := false; !acquired; {
+		s.mu.Lock()
+		busy, ok := s.qqBusy[subject]
+		if !ok {
+			if s.qqBusy == nil {
+				s.qqBusy = map[string]chan struct{}{}
+			}
+			done := make(chan struct{})
+			s.qqBusy[subject] = done
+			s.mu.Unlock()
+			unlock = func() {
+				s.mu.Lock()
+				delete(s.qqBusy, subject)
+				s.mu.Unlock()
+				close(done)
+			}
+			acquired = true
+			continue
+		}
+		s.mu.Unlock()
+		select {
+		case <-busy:
+		case <-deadline.C:
+			slog.Warn("qq bot: previous message still running, handling in parallel", "stage", "replica")
+			return unlock
+		case <-ctx.Done():
+			return unlock
+		}
+	}
+	releaseLease := func() {
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		defer cancel()
+		if err := s.limits.ReleaseRateLimit(rctx, "qq-bot-busy", subject); err != nil {
+			slog.Warn("qq bot: busy lease not released", "reason", err.Error())
+		}
+	}
+	for {
+		switch err := s.limits.RateLimit(ctx, "qq-bot-busy", subject, 1, qqBusyLease); {
+		case err == nil:
+			// 先退回租约再放开副本内的队，排在后面的那条一拿到队就能拿到租约。
+			return func() {
+				releaseLease()
+				unlock()
+			}
+		case !errors.Is(err, account.ErrLimited):
+			slog.Warn("qq bot: busy lease unavailable", "reason", err.Error())
+			return unlock
+		}
+		releaseLease()
+		select {
+		case <-time.After(qqBusyRetry):
+		case <-deadline.C:
+			slog.Warn("qq bot: previous message still running, handling in parallel", "stage", "lease")
+			return unlock
+		case <-ctx.Done():
+			return unlock
+		}
+	}
+}
+
 // 回复给群友的固定文字。提到 issue 和 PR 时附上 GitHub 链接（qqIssueNumberText）；开放平台只允许报备过的域名，拒收时去掉链接重发。
 const (
 	qqReplyUsage   = "有水杉输入法的使用问题可以直接 @我 问，例如：五笔怎么切换？发「帮助」看我还能做什么。"
 	qqReplyTooLong = "内容太长了，请精简到 2000 字以内再 @我。"
 	// qqReplyScreenshot 是只发了截图、截图又没能看成（下载失败、格式不支持、模型出错）时的回复。
-	qqReplyScreenshot = "这张截图我没看清，可以把报错文字、系统和输入法版本打出来再 @我。"
-	// qqReplyLimited 和 qqReplyGroupLimited 是额度用完时的回复。额度是从第一条消息算起的 24 小时滚动窗口，所以不说「今天」；不提「限流」这类说法，并给一个马上能走的路。
-	qqReplyLimited      = "你最近问得有点多，到我的上限了，过几个小时再来吧～急的话可以直接在群里问问大家。"
-	qqReplyGroupLimited = "这会儿大家问得太多，我的额度用完了，晚点再来吧～急的话可以先在群里问问管理员。"
-	qqReplyUnavailable  = "我暂时处理不了，请稍后再 @我 发一次。"
+	qqReplyScreenshot  = "这张截图我没看清，可以把报错文字、系统和输入法版本打出来再 @我。"
+	qqReplyUnavailable = "我暂时处理不了，请稍后再 @我 发一次。"
 	// qqReplyRestarting 在副本关停取消了处理时代替 qqReplyUnavailable：机器人正在滚动更新，过一会儿重发就能由新副本处理。
 	qqReplyRestarting = "机器人正在更新，请一分钟后再 @我 发一次。"
 	// qqReplyUndelivered 是回答被开放平台拒收（不是因为链接，例如内容审核）时补发的一句，见 handleQQFeedback：曾经拒收后什么都不发，群友只看到「我查一下，稍等～」就没了下文。
@@ -517,17 +619,72 @@ const (
 	qqDefaultQuestion = "你用的是哪个系统（Windows、macOS、安卓等）和输入法版本？是在什么操作下出现的？"
 )
 
+// qqLimitedReply 和 qqGroupLimitedReply 是额度用完时的回复，wait 是窗口还剩多久（RateLimitUntil）。额度是从第一条消息算起的 24 小时滚动窗口，所以不说「今天」；不提「限流」这类说法，并给一个马上能走的路。等多久按剩余时长说（qqLimitWait）：曾经一律说「过几个小时再来吧」「晚点再来吧」，窗口剩余可能接近 24 小时，群友过几个小时来试还是被拦。
+func qqLimitedReply(wait time.Duration) string {
+	return "你最近问得有点多，到我的上限了，" + qqLimitWait(wait) + "可以再问～急的话可以直接在群里问问大家。"
+}
+
+func qqGroupLimitedReply(wait time.Duration) string {
+	return "这会儿大家问得太多，我的额度用完了，" + qqLimitWait(wait) + "可以再问～急的话可以先在群里问问管理员。"
+}
+
+// qqLimitWait 把额度窗口的剩余时长说成「大约一小时内」（不到 1 小时）或「大约 N 小时后」（N 向上取整，剩 19.2 小时说 20 小时）。
+func qqLimitWait(wait time.Duration) string {
+	if wait < time.Hour {
+		return "大约一小时内"
+	}
+	return fmt.Sprintf("大约 %d 小时后", (wait+time.Hour-1)/time.Hour)
+}
+
 // qqWhoAmI 是查询自己 member_openid 的命令，和 qqCompact 后的消息比较（忽略空白、大小写和句末标点）。
 var qqWhoAmI = []string{"我的id", "myid"}
 
+// qqTiming 是一条消息各阶段的耗时，由 handleQQFeedback 创建、经 ctx 往下传（qqTimingFrom），最后打进「qq bot: handled」那一行。handled 曾经只有总耗时，没现查、没重答的消息中位 10.5 秒，比实测各步加起来多出几秒，从日志里分不出花在哪一步，现查并发这类优化做完也量不出效果。selectMs 是挑段落，answerMs 是回答（含现查后的重答），researchMs、researchCalls 是现查的总耗时和工具调用次数，fallbacks 是主模型失败、换备用模型的次数（不分阶段，备用模型的耗时算在它所在的那一步里），firstReplyMs 是从开始处理到第一条不是过渡语的回复，interim 表示发过「收到，我想一下～」。几步可能在不同的 goroutine 里，都用 atomic。不改表，周报不改：Loki 已经够用。
+type qqTiming struct {
+	selectMs, answerMs, researchMs, researchCalls, fallbacks, firstReplyMs atomic.Int64
+	interim                                                                atomic.Bool
+}
+
+// qqTimingKey 是 ctx 里 *qqTiming 的键。
+type qqTimingKey struct{}
+
+// qqTimingFrom 取出 ctx 里这条消息的 *qqTiming。不是从 handleQQFeedback 来的调用（自测、测试）返回一个用完即弃的空 qqTiming，调用方不用判断有没有。
+func qqTimingFrom(ctx context.Context) *qqTiming {
+	if timing, ok := ctx.Value(qqTimingKey{}).(*qqTiming); ok {
+		return timing
+	}
+	return &qqTiming{}
+}
+
 // handleQQFeedback 在后台处理一条已认领的 @ 消息，所有结果都以被动回复告诉群友：先处理命令；管理员明确要求记录的具体 bug 或需求提 issue（见 fileAdminFeedback），其他消息（包括普通群友的所有消息）按知识库答疑。不记录消息内容，日志里只有失败原因。
 func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
-	// 每条消息记一行处理结果（不含内容和 openid），答上率、闲聊、命令、限流各占多少才能量化：Loki 里按 outcome 汇总。
+	// 每条消息记一行处理结果（不含内容和 openid），答上率、闲聊、命令、限流各占多少才能量化：Loki 里按 outcome 汇总。各阶段的耗时也在这一行（见 qqTiming）。
 	started, outcome, admin := s.qq.now(), "failed", false
+	timing := &qqTiming{}
+	ctx = context.WithValue(ctx, qqTimingKey{}, timing)
+	// charged 是这条消息已经计上的额度（下面的限额循环里计数成功一个记一个），机器人自己出错时退回。
+	type qqLimit struct {
+		scope, subject string
+		daily          int
+		text           func(wait time.Duration) string
+	}
+	var charged []qqLimit
 	defer func() {
-		slog.Info("qq bot: handled", "outcome", outcome, "admin", admin, "ms", s.qq.now().Sub(started).Milliseconds())
+		// 机器人自己出错（failed、timeout、reply_failed，管理员的 admin_failed 也算，见 qqOutcomeKind）或者被副本关停打断时，退回这条消息计过的额度：回复会请群友再发一次，不退的话每重发一次就再扣一次个人和群的额度，上游一抖或赶上发布时群额度白白耗掉。超限（limited_*）的那一项没计上，不在 charged 里。这个 defer 最先登记、最后执行，outcome 已经按 reply_failed、timeout 改写过。ctx 这时可能已经取消，退额度用单独的时限，写法照 qq_words.go 退加词名额。
+		if kind := qqOutcomeKind(outcome); kind == "failed" || kind == "reply_failed" || errors.Is(ctx.Err(), context.Canceled) {
+			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+			for _, limit := range charged {
+				if err := s.limits.ReleaseRateLimit(rctx, limit.scope, limit.subject); err != nil {
+					slog.Warn("qq bot: message slot not released", "scope", limit.scope, "reason", err.Error())
+				}
+			}
+			cancel()
+		}
+		slog.Info("qq bot: handled", "outcome", outcome, "admin", admin, "ms", s.qq.now().Sub(started).Milliseconds(), "select_ms", timing.selectMs.Load(), "answer_ms", timing.answerMs.Load(), "research_ms", timing.researchMs.Load(), "research_calls", timing.researchCalls.Load(), "fallbacks", timing.fallbacks.Load(), "first_reply_ms", timing.firstReplyMs.Load(), "interim", timing.interim.Load())
 		s.recordQQOutcome(ctx, outcome)
 	}()
+	// 同一个群友的消息按到达顺序一条一条处理（见 qqLockSubject），排在命令和额度之前：连发两条时第二条要等第一条答完、记进对话历史，才接得上前文。等的时间算在处理用时里；「我想一下」的计时器在拿到锁之后才起，不会因为排队先冒出一句。
+	defer s.qqLockSubject(ctx, m.GroupOpenID+"/"+m.Author.MemberOpenID)()
 	// 回复可能来自两个 goroutine（主流程和「我想一下」的计时器），seq、progressed 和计时器都由 mu 保护，发送也在锁里做，msg_seq 和群里看到的顺序一致。progressed 表示这条消息已经发过一句过渡语（「我看一下截图～」「我查一下，稍等～」「收到，我想一下～」、「提issue」的「收到」），一条消息最多一句：开放平台每条消息最多被动回复 5 次，过渡语只能占其中一次。replyFailed 表示有一条不是过渡语的回复最终没发出去。
 	var (
 		mu          sync.Mutex
@@ -537,11 +694,19 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		finished    bool
 		timedOut    bool
 		replyFailed bool
+		chatting    bool
 	)
 	// interim 表示 text 是过渡语。
 	send := func(text string, interim bool) {
 		if thinking != nil {
 			thinking.Stop()
+		}
+		// 第一条不是过渡语的回复记下用时；「收到，我想一下～」记下发过（见 qqTiming）。
+		switch {
+		case !interim && timing.firstReplyMs.Load() == 0:
+			timing.firstReplyMs.Store(max(s.qq.now().Sub(started).Milliseconds(), 1))
+		case text == qqReplyThinking:
+			timing.interim.Store(true)
 		}
 		seq++
 		// 「暂时处理不了」按失败的原因换说法：副本关停取消了处理时说正在更新；4 分钟用完时请群友说具体些，处理结果记为 timeout。
@@ -632,9 +797,9 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 	admin = s.qqIsAdmin(ctx, m.GroupOpenID, m.Author.MemberOpenID, m.Author.MemberRole)
 	// 不调模型的命令排在额度之前，只计宽松的 qqBotFreeDaily：群额度用完后帮助和查编号照样能用。加词、提文档、查、提issue 仍然要过下面的额度。
 	if qqFreeCommand(text) {
-		switch err := s.limits.RateLimit(ctx, "qq-bot-free", m.GroupOpenID+"/"+m.Author.MemberOpenID, qqBotFreeDaily, 24*time.Hour); {
+		switch wait, err := s.limits.RateLimitUntil(ctx, "qq-bot-free", m.GroupOpenID+"/"+m.Author.MemberOpenID, qqBotFreeDaily, 24*time.Hour); {
 		case errors.Is(err, account.ErrLimited):
-			reply(qqReplyLimited)
+			reply(qqLimitedReply(wait))
 			outcome = "limited_free"
 			return
 		case err != nil:
@@ -645,19 +810,14 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		outcome = s.qqCommand(ctx, m, text, admin, reply, progress)
 		return
 	}
-	type qqLimit struct {
-		scope, subject string
-		daily          int
-		text           string
-	}
-	limits := []qqLimit{{"qq-bot-admin", m.Author.MemberOpenID, qqBotAdminDaily, qqReplyLimited}}
+	limits := []qqLimit{{"qq-bot-admin", m.Author.MemberOpenID, qqBotAdminDaily, qqLimitedReply}}
 	if !admin {
-		limits = []qqLimit{{"qq-bot-member", m.GroupOpenID + "/" + m.Author.MemberOpenID, qqBotMemberDaily, qqReplyLimited}, {"qq-bot-group", m.GroupOpenID, qqBotGroupDaily, qqReplyGroupLimited}}
+		limits = []qqLimit{{"qq-bot-member", m.GroupOpenID + "/" + m.Author.MemberOpenID, qqBotMemberDaily, qqLimitedReply}, {"qq-bot-group", m.GroupOpenID, qqBotGroupDaily, qqGroupLimitedReply}}
 	}
 	for _, limit := range limits {
-		switch err := s.limits.RateLimit(ctx, limit.scope, limit.subject, limit.daily, 24*time.Hour); {
+		switch wait, err := s.limits.RateLimitUntil(ctx, limit.scope, limit.subject, limit.daily, 24*time.Hour); {
 		case errors.Is(err, account.ErrLimited):
-			reply(limit.text)
+			reply(limit.text(wait))
 			outcome = "limited_" + strings.TrimPrefix(limit.scope, "qq-bot-")
 			return
 		case err != nil:
@@ -665,6 +825,7 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 			reply(qqReplyUnavailable)
 			return
 		}
+		charged = append(charged, limit)
 	}
 	if imageOnly {
 		progress(qqReplyShot)
@@ -685,12 +846,19 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 	thinking = time.AfterFunc(qqThinkingDelay, func() {
 		mu.Lock()
 		defer mu.Unlock()
-		if !finished && seq == 0 && !progressed {
+		if !finished && seq == 0 && !progressed && !chatting {
 			progressed = true
 			send(qqReplyThinking, true)
 		}
 	})
 	mu.Unlock()
+	// 挑段落判成闲聊、马上要用聊天模型作答时（见 qqAsk.onChat）停掉计时器：闲聊几秒就答完，曾经挑段落加 glm 常常过了 8 秒，「在吗」先收到一句「收到，我想一下～」再收到「在的」，两个气泡里一个没有信息量。只停计时器、不占过渡语：聊天模型答不上、转去现查时照样说「我查一下」。chatting 防的是计时器已经到点、回调正在等锁的情况。
+	chat := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		chatting = true
+		thinking.Stop()
+	}
 	// 文字带截图时把截图描述接在问题后面再答。命令不带截图描述：「查」「#编号」用不上，「提issue」在 fileAdminFeedback 里自己看图。
 	if !imageOnly && qqHasImages(m.Attachments) {
 		progress(qqReplyShot)
@@ -703,10 +871,55 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 	}
 	// 普通群友的消息都按问题回答。管理员的消息先整理一遍：只有明确要求记录（qqIssueIntent 或模型给出的 intent）的具体反馈才提交，其余的照常答疑，报问题时在答案后提示用「提issue」。曾经管理员的每条消息都先自动判断、像反馈就提交，群里讨论和吐槽也被提成了 issue；后来没要求记录的具体反馈只回一句复述，管理员问「候选框老跑到左上角怎么回事」拿不到回答。
 	if admin {
-		outcome = "admin_" + s.fileAdminFeedback(ctx, m, text, false, reply, progress)
+		outcome = "admin_" + s.fileAdminFeedback(ctx, m, text, false, s.qqBacklogReply(ctx, m.Author.MemberOpenID, reply), progress, chat)
 		return
 	}
-	outcome = s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, text, false, reply, progress)
+	outcome = s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, text, false, reply, progress, chat)
+}
+
+// qqBacklogAge 是积压提醒只数创建了多久以上的草稿和文档候选，见 qqBacklogHint：刚起的草稿还轮不到催。
+const qqBacklogAge = time.Hour
+
+// qqBacklogHint 是给管理员的积压提醒：还没提交的草稿或还没处理的文档候选里有创建超过 qqBacklogAge 的时，返回「（还有 N 份草稿、M 条文档缺口待处理，发「草稿」「文档缺口」看）」，N、M 是各自的总数，只写有超时条目的那一样；都没有或查询出错时返回空字符串。草稿和文档候选曾经只有管理员发「草稿」「文档缺口」「周报」时才看得到，没人主动去查，群友收到的「管理员确认后会转给开发者」就落空了。
+func (s *Server) qqBacklogHint(ctx context.Context) string {
+	cutoff := s.qq.now().Add(-qqBacklogAge)
+	var parts, commands []string
+	if s.qqDrafts != nil {
+		// 列表按创建时间最早的在前，只取一条就知道有没有超时的。
+		if drafts, total, err := s.qqDrafts.OpenQQDrafts(ctx, 1); err == nil && len(drafts) > 0 && drafts[0].CreatedAt.Before(cutoff) {
+			parts, commands = append(parts, fmt.Sprintf("%d 份草稿", total)), append(commands, "「草稿」")
+		}
+	}
+	if s.qqFAQCandidates != nil {
+		if candidates, total, err := s.qqFAQCandidates.OpenQQFAQCandidates(ctx, 1); err == nil && len(candidates) > 0 && candidates[0].CreatedAt.Before(cutoff) {
+			parts, commands = append(parts, fmt.Sprintf("%d 条文档缺口", total)), append(commands, "「文档缺口」")
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "\n\n（还有 " + strings.Join(parts, "、") + "待处理，发" + strings.Join(commands, "") + "看）"
+}
+
+// qqBacklogReply 包一层管理员这条消息的 reply：有积压（qqBacklogHint）时把提醒接在第一条回复后面，同一个管理员 12 小时内只接一次。接在已有的回复里，不额外占被动回复次数；过渡语走 progress，不经过这里。「暂时处理不了」不接：send 要按原文把它换成「正在更新」「说具体些」，接上提醒就认不出了，提醒留给后面的回复。12 小时的额度在真要接上时才扣，这条消息没有回复（或只有「暂时处理不了」）时不占。只用在命令之后的答疑和提 issue（见 handleQQFeedback），管理员发「草稿」「文档缺口」这些命令时本来就看得到积压，不接。积压在回复前查好：两张表都只有几条到几十条未处理的行，各查一条就够，不拖慢回复。
+func (s *Server) qqBacklogReply(ctx context.Context, admin string, reply func(string)) func(string) {
+	hint := s.qqBacklogHint(ctx)
+	if hint == "" {
+		return reply
+	}
+	var once sync.Once
+	return func(text string) {
+		if text != qqReplyUnavailable {
+			once.Do(func() {
+				if err := s.limits.RateLimit(ctx, "qq-bot-backlog-hint", admin, 1, 12*time.Hour); err == nil {
+					text += hint
+				} else if !errors.Is(err, account.ErrLimited) {
+					slog.Warn("qq bot: backlog hint limit unavailable", "reason", err.Error())
+				}
+			})
+		}
+		reply(text)
+	}
 }
 
 // qqIssueIntentWords 是表示「请把这条记成 issue」的说法，与去掉空白、转成小写后的消息比较。只收祈使的说法：单独的「记录」会误中「历史记录丢了」这类 bug 描述。
@@ -718,8 +931,8 @@ func qqIssueIntent(text string) bool {
 	return slices.ContainsFunc(qqIssueIntentWords, func(word string) bool { return strings.Contains(compact, word) })
 }
 
-// fileAdminFeedback 处理管理员的一条消息。explicit 表示来自「提issue」命令。先整理成 bug 或需求：不是具体反馈、或者没有明确要求记录时转去答疑（命令不是具体反馈时请管理员写具体些）；用「记一下」这类说法要求记录的先对照知识库，文档说明功能已经有了或现象是正常的就回复文档的说法、不提交；「提issue」命令是管理员已经判断过要提，不对照知识库；其余的按平台选仓库、查重、带上附件和标签提交。
-func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text string, explicit bool, reply, progress func(string)) string {
+// fileAdminFeedback 处理管理员的一条消息。explicit 表示来自「提issue」命令。先整理成 bug 或需求：不是具体反馈、或者没有明确要求记录时转去答疑（命令不是具体反馈时请管理员写具体些）；用「记一下」这类说法要求记录的先对照知识库，文档说明功能已经有了或现象是正常的就回复文档的说法、不提交；「提issue」命令是管理员已经判断过要提，不对照知识库；其余的按平台选仓库、查重、带上附件和标签提交。转去答疑时 chat 原样交给 answerQQQuestion，「提issue」命令不答疑，传 nil。
+func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text string, explicit bool, reply, progress func(string), chat func()) string {
 	// 「提issue」一进来就回「收到」：后面看图、整理、选仓库加起来常常十几秒到几十秒，曾经要做完这些才回 qqReplyWorking，带截图时全程没有一句话，管理员以为没收到又发一遍。不是命令的消息由 handleQQFeedback 的计时器和截图提示负责。「提issue」带了截图时把截图描述并进反馈，整理出的 issue 才写得清现象；截图本身照旧存进公开 bucket。不是命令的消息在 handleQQFeedback 里已经看过图（看不成时也不再看第二遍）。
 	switch {
 	case explicit && qqHasImages(m.Attachments) && !strings.Contains(text, qqShotMarker):
@@ -735,7 +948,7 @@ func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text s
 		// 没要求记录的消息整理失败时退回去直接答疑：同一个问题普通群友问能答上，管理员问不该只得到「暂时处理不了」。明确要求记录时不能悄悄改成答疑，如实说没整理成；副本关停时仍回 qqReplyUnavailable，由 reply 换成「正在更新」。
 		if !explicit && !qqIssueIntent(text) {
 			slog.Warn("qq bot: summarise failed, answering instead", "reason", err.Error())
-			return s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, original, true, reply, progress)
+			return s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, original, true, reply, progress, chat)
 		}
 		slog.Warn("qq bot: summarise failed", "reason", err.Error())
 		if ctx.Err() != nil {
@@ -750,11 +963,11 @@ func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text s
 			reply("没看出要提的是 bug 还是需求，请把问题或想要的功能描述具体一点。")
 			return "not_report"
 		}
-		return s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, original, true, reply, progress)
+		return s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, original, true, reply, progress, chat)
 	}
 	// 没要求记录的具体反馈直接答疑，不为了查重先跑一次知识库对照。
 	if !explicit && !report.Intent && !qqIssueIntent(text) {
-		return s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, original, true, reply, progress)
+		return s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, original, true, reply, progress, chat)
 	}
 	// 只有用「记一下」这类说法要求记录时才对照知识库；「提issue」命令照常提交，曾经被知识库判一句「文档里有」就不提，管理员只能和模型辩论。
 	if !explicit {
@@ -816,8 +1029,8 @@ func (s *Server) fileAdminFeedback(ctx context.Context, m qqGroupMessage, text s
 	return "filed"
 }
 
-// answerQQQuestion 用知识库回答一条消息；答不上的问题和群友报告的问题记进汇总 issue（qq_gaps.go），由管理员跟进。admin 表示提问的是管理员：他报问题时不起草稿、不记汇总 issue（那是给群友等管理员处理的），只在答案后提示用「提issue」。
-func (s *Server) answerQQQuestion(ctx context.Context, group, member, question string, admin bool, reply, progress func(string)) string {
+// answerQQQuestion 用知识库回答一条消息；答不上的问题和群友报告的问题记进汇总 issue（qq_gaps.go），由管理员跟进。admin 表示提问的是管理员：他报问题时不起草稿、不记汇总 issue（那是给群友等管理员处理的），只在答案后提示用「提issue」。chat 在挑段落判成闲聊、马上要用聊天模型作答前调用（见 qqAsk.onChat），可以为 nil。
+func (s *Server) answerQQQuestion(ctx context.Context, group, member, question string, admin bool, reply, progress func(string), chat func()) string {
 	subject := group + "/" + member
 	var history []account.QQTurn
 	if s.qqHistory != nil {
@@ -828,7 +1041,7 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 		history = turns
 	}
 	// 要现查或者重答时先回一句，查一次要几十秒，免得群友以为机器人没反应。和截图提示、「我想一下」共用一个标志，已经回过过渡语时不再说。
-	ask := qqAsk{progress: func() { progress(qqReplyLookingUp) }}
+	ask := qqAsk{progress: func() { progress(qqReplyLookingUp) }, onChat: chat}
 	// 机器人上一轮追问了草稿缺的信息、群友直接回「Windows 11，0.9.5」时补进那份草稿，不当成新问题去答，也不再起一份新草稿（见 qqSupplementFollowUp）。排在差评之前：追问之后的短句多半是在回答追问；只有一句否定的消息（「不对」「还是不行」）不算补充，照旧走差评重答。
 	if outcome := s.qqSupplementFollowUp(ctx, subject, history, question, reply); outcome != "" {
 		return outcome
@@ -838,6 +1051,15 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 	var last account.QQTurn
 	if retrying {
 		last = history[len(history)-1]
+		// 上一轮已经是重答（强制现查过）时不再现查重答：再查一遍要几十秒，答出来的多半和上次差不多，曾经每说一次「不对」就跑一次最慢的那条路，差评也一次记一行。这次只把这句并进那条差评，告诉群友已经转给管理员。不记进对话历史：最后一轮仍是那次重答，再说「不对」也走到这里。
+		if strings.HasPrefix(last.Answer, qqRetryPrefix) {
+			if s.recordQQBadAnswerAgain(ctx, last, feedback) {
+				reply(qqRetryExhausted)
+				return "retry_exhausted"
+			}
+			reply(qqRetryExhaustedUnrecorded)
+			return "retry_exhausted_unrecorded"
+		}
 		question, history, ask.force = qqRetryQuestion(last, feedback), history[:len(history)-1], true
 	}
 	answer, err := s.qqAnswerQuestion(ctx, history, question, ask)
@@ -866,13 +1088,16 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 	case answer.Type == "unknown":
 		recorded = qqUnansweredTurn
 		outcome = "unknown_unrecorded"
-		if s.recordQQGap(ctx, "群友问：", answer.Topic) {
+		if s.recordQQGap(ctx, qqGapPrefix(admin, ""), answer.Topic) {
 			reply(qqUnknownReply)
 			outcome = "unknown"
 		} else {
 			reply(qqUnknownUnrecordedReply)
 		}
-		s.recordQQFAQCandidate(ctx, cmp.Or(answer.Topic, question), "")
+		// 问最新版本、更新了什么的问题有时效性，不记成文档候选（下同）。
+		if !answer.Releases {
+			s.recordQQFAQCandidate(ctx, cmp.Or(answer.Topic, question), "")
+		}
 		// 改进依据只记模型的概括，不记原话：现查过还答不上算机器人能力问题，没现查就答不上算文档没写（见 qq_improvements.go）。
 		category := "docs"
 		if answer.Researched {
@@ -914,21 +1139,43 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 		}
 	default:
 		reply(answer.Answer)
-		// 靠现查 GitHub 才答上的问题，说明文档里缺这块。
-		if answer.Type == "answered" && answer.Researched {
-			s.recordQQFAQCandidate(ctx, question, answer.Answer)
+		// 靠现查 GitHub 才答上的问题，说明文档里缺这块。记模型的概括（提示词要求现查答上时也填 topic），没有概括时才记原话：原话常常离开上一轮就看不懂（「安卓呢？可以关闭辅助码吗？」），同一件事换个说法也去不了重。
+		if answer.Type == "answered" && answer.Researched && !answer.Releases {
+			s.recordQQFAQCandidate(ctx, cmp.Or(answer.Topic, question), answer.Answer)
+		}
+		// 答上了、但模型说有一部分资料里没有（gap）的问题也记进汇总 issue：回答提示要求不确定的地方半句话带过，unknown 只用于完全没有资料，答得含糊的问题曾经哪里都不记，文档缺口被低估。现查过的不记，它已经记成了文档候选。记没记下不影响回复，也不占被动回复次数。
+		if answer.Type == "answered" && answer.Gap != "" && !answer.Researched {
+			s.recordQQGap(ctx, qqGapPrefix(admin, "（答得不全）"), answer.Gap)
 		}
 	}
 	if s.qqHistory != nil {
-		if err := s.qqHistory.RecordQQTurn(ctx, subject, question, recorded); err != nil {
-			slog.Warn("qq bot: conversation not recorded", "reason", err.Error())
-		}
+		s.recordQQTurn(ctx, subject, question, recorded)
 	}
 	return outcome
 }
 
+// qqGapPrefix 是记进汇总 issue 的评论开头：管理员的提问写「管理员问」，其余写「群友问」，note 接在后面（例如「（答得不全）」）。管理员自己试机器人的问题曾经也写成「群友问」，维护者分不清哪些是群友真的问过的。
+func qqGapPrefix(admin bool, note string) string {
+	if admin {
+		return "管理员问" + note + "："
+	}
+	return "群友问" + note + "："
+}
+
+// recordQQTurn 把一轮问答记进对话历史，出错只记日志。不跟随处理消息的 ctx：回复已经发出去了，滚动发布时 Close 等满 qqCloseGrace 取消了 ctx 也要记下，不然下一句「还是不行」接不上前文（线上出现过答案发出去、同一秒记下 conversation not recorded reason="context canceled"）；另限 3 秒，数据库卡住时不拖住关停。写法照 recordQQOutcome。
+func (s *Server) recordQQTurn(ctx context.Context, subject, question, answer string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	if err := s.qqHistory.RecordQQTurn(ctx, subject, question, answer); err != nil {
+		slog.Warn("qq bot: conversation not recorded", "reason", err.Error())
+	}
+}
+
 // qqThinkingDelay 是常规答疑还没回复时先回「收到，我想一下～」的等待时间，见 handleQQFeedback；测试里改短。
 var qqThinkingDelay = 8 * time.Second
+
+// qqCloseGrace 是副本关停时 Close 等进行中的 QQ 消息处理完的上限，等满了才取消 lifetime，见 Close；测试里改短。常规答疑 6–40 秒、管理员提 issue 最长 70 秒左右答完，取 75 秒。部署的 terminationGracePeriodSeconds 要盖住 preStop、HTTP 关停（10 秒）、它和最后的指标刷写，配的是 100 秒。
+var qqCloseGrace = 75 * time.Second
 
 // qqPrimaryModelTimeout 和 qqStrongModelTimeout 是配置了备用模型时主模型每次调用的时限，见 qqChatModel；测试里改短。qqPrimaryModelTimeout 给 qq_bot.model（claude-haiku-5-5，挑段落、整理反馈、查重、选标签这类结构化的活，实测一般 1–4 秒），qqStrongModelTimeout 给 strong_model 和 chat_model：Sonnet 写一段长答案要 15 秒左右，不能再压。曾经一律 50 秒，是实测中位数的十倍以上，主模型挂起时白等 50 秒才换备用，生产上出现过一条消息 70 秒才回。
 var (
@@ -1142,6 +1389,7 @@ func (s *Server) qqChatModel(ctx context.Context, model, system, user string, ou
 	}
 	// 主模型失败（上游拒绝、超时或输出不合格式）时用备用模型重答一次；先清掉上一次可能解码了一半的结果。
 	slog.Warn("qq bot: model failed, trying the fallback model", "model", model, "reason", err.Error())
+	qqTimingFrom(ctx).fallbacks.Add(1)
 	v := reflect.ValueOf(out).Elem()
 	v.Set(reflect.Zero(v.Type()))
 	return s.qqChatWith(ctx, s.qq.config.FallbackModel, system, user, out)

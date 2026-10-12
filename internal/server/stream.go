@@ -13,13 +13,25 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
 )
 
-// Close 取消并等待所有已升级的 WebSocket 处理协程，补足 http.Server.Shutdown 的管理范围。
-// 互斥锁防止 Wait 与新处理协程的 Add 发生竞争。
+// Close 取消并等待所有已升级的 WebSocket 处理协程，补足 http.Server.Shutdown 的管理范围。互斥锁防止 Wait 与新处理协程的 Add 发生竞争。
+// 取消 lifetime 之前先等进行中的 QQ 消息处理完，最多 qqCloseGrace：曾经一进来就取消，每次滚动发布都把正在答的消息砍掉，群友收到「机器人正在更新」要重问，答案已经发出去的那一轮也没记进对话历史。closed 已经置上，这段时间里不再接新消息（acceptQQMessage 应答失败，开放平台重推给其他副本）。lifetime 已经取消（重复调用 Close）时不等。
 func (s *Server) Close() {
 	s.mu.Lock()
 	s.closed = true
-	s.stop()
 	s.mu.Unlock()
+	if s.lifetime.Err() == nil {
+		drained := make(chan struct{})
+		go func() {
+			s.qqWorkers.Wait()
+			close(drained)
+		}()
+		select {
+		case <-drained:
+		case <-time.After(qqCloseGrace):
+			slog.Warn("qq bot: workers still running at shutdown, cancelling them")
+		}
+	}
+	s.stop()
 	s.streams.Wait()
 	s.skinWorkers.Wait()
 	s.qqWorkers.Wait()

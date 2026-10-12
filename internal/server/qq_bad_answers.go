@@ -27,6 +27,11 @@ const (
 	qqRetryPrefix = "我重新查了一下："
 	// qqRetryFailed 是重答失败时记进差评的重答内容。
 	qqRetryFailed = "（重答失败）"
+	// qqRetryExhausted 是重答过一次、群友还说不对时的回复，见 answerQQQuestion；qqRetryExhaustedUnrecorded 是差评没能记下时的回复，不说已经转给管理员。
+	qqRetryExhausted           = "我也没查到更好的答案，已经转给管理员看了～"
+	qqRetryExhaustedUnrecorded = "我也没查到更好的答案，可以换个说法再 @我 问一次，或者直接在群里问问大家。"
+	// qqBadAnswerMergeWindow 是同一个问题的差评合并成一条的时间范围，见 recordQQBadAnswerAgain。
+	qqBadAnswerMergeWindow = 30 * time.Minute
 	// qqBadAnswerStoreTimeout 是记一条差评的时限。
 	qqBadAnswerStoreTimeout = 3 * time.Second
 )
@@ -48,6 +53,7 @@ var (
 // qqBadAnswerStore 是 account.Service 里被说答错的回答；没有数据库时为 nil。
 type qqBadAnswerStore interface {
 	AddQQBadAnswer(ctx context.Context, question, answer, feedback, retry string) error
+	UpdateQQBadAnswerFeedback(ctx context.Context, question, feedback string, within time.Duration) (bool, error)
 	RecentQQBadAnswers(ctx context.Context, since time.Duration, limit int) ([]account.QQBadAnswer, error)
 	OpenQQBadAnswers(ctx context.Context, since time.Duration, limit int) ([]account.QQBadAnswer, int, error)
 	QQBadAnswer(ctx context.Context, id int64) (account.QQBadAnswer, error)
@@ -81,6 +87,29 @@ func (s *Server) recordQQBadAnswer(ctx context.Context, last account.QQTurn, fee
 	if err := s.qqBadAnswers.AddQQBadAnswer(ctx, qqTruncate(last.Question, 1000), qqTruncate(last.Answer, 2000), qqTruncate(feedback, 200), qqTruncate(retry, 2000)); err != nil {
 		slog.Warn("qq bot: bad answer not stored", "reason", err.Error())
 	}
+}
+
+// recordQQBadAnswerAgain 记下群友对已经重答过的一轮又说的「不对」：qqBadAnswerMergeWindow 内同一个问题已经有还没处理的差评时把这句并进去，没有时（隔得久了、上一条已经处理过或没记下）照 recordQQBadAnswer 新记一条，重答一栏留空。返回是否记下了，回复按它选说法。超时和出错的处理照 recordQQBadAnswer。
+func (s *Server) recordQQBadAnswerAgain(ctx context.Context, last account.QQTurn, feedback string) bool {
+	if s.qqBadAnswers == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), qqBadAnswerStoreTimeout)
+	defer cancel()
+	question, feedback := qqTruncate(last.Question, 1000), qqTruncate(feedback, 200)
+	merged, err := s.qqBadAnswers.UpdateQQBadAnswerFeedback(ctx, question, feedback, qqBadAnswerMergeWindow)
+	if err != nil {
+		slog.Warn("qq bot: bad answer not stored", "reason", err.Error())
+		return false
+	}
+	if merged {
+		return true
+	}
+	if err := s.qqBadAnswers.AddQQBadAnswer(ctx, question, qqTruncate(last.Answer, 2000), feedback, ""); err != nil {
+		slog.Warn("qq bot: bad answer not stored", "reason", err.Error())
+		return false
+	}
+	return true
 }
 
 // qqBadAnswerRetry 是差评里能写进 FAQ 的重答：没重答或者重答失败时为空。

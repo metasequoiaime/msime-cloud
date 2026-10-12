@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	msimebackend "github.com/metasequoiaime/MSIME-Backend"
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
 
@@ -20,6 +21,11 @@ const (
 	qqSelfTestParallel = 6
 	qqSelfTestDaily    = 3
 	qqSelfTestTimeout  = 3 * time.Minute
+	// qqSelfTestDeployWindow 是发版后自测按版本号认领的有效期，见 qqDeploySelfTest：同一版本在这段时间里只跑一次，一个版本很少在线超过一个月。
+	qqSelfTestDeployWindow = 30 * 24 * time.Hour
+	// 发版后的自测通过的比例低于 qqSelfTestAlertPassed / qqSelfTestAlertOf（10/12）时汇总行打 Error，Loki 按它告警，见 qqLogSelfTest。按比例算，题数增减时不用跟着改。
+	qqSelfTestAlertPassed = 10
+	qqSelfTestAlertOf     = 12
 )
 
 // qqSelfTestCase 是一道自测题：问题和对回答的要求。
@@ -154,11 +160,58 @@ func (s *Server) qqSelfTest(ctx context.Context, member string, reply func(strin
 	reply(fmt.Sprintf("开始自测 %d 道题，大约要两三分钟～", len(qqSelfTestCases)))
 	ctx, cancel := context.WithTimeout(ctx, qqSelfTestTimeout)
 	defer cancel()
-	summary := qqSelfTestSummary(s.runQQSelfTest(ctx))
+	results := s.runQQSelfTest(ctx)
+	qqLogSelfTest(results, msimebackend.Version(), false)
+	summary := qqSelfTestSummary(results)
 	// 改进周报只写第一句的分数（「自测 8/10 通过，1 题超时。」），不写机器人的回答。
 	score, _, _ := strings.Cut(summary, "。")
 	s.recordQQImprovement(ctx, "selftest", "", score+"。")
 	reply(summary)
+}
+
+// qqDeploySelfTest 是发版后的自测：副本启动、知识库预热完后跑一遍全部自测题，结果只写日志（qqLogSelfTest），不发回群里。按版本号认领（qq-bot-selftest-deploy，有效期 qqSelfTestDeployWindow），两个副本、同一版本重启几次都只跑一次；认领不到（已经跑过）或额度表出错时跳过。曾经自测只有管理员发「自测」才跑，发版后第一批群友就是实际的验证者，提示词或模型退化了要等差评才知道。副本关停打断了自测时不记汇总，免得一批超时被当成退化去告警。不加看图题：自测要一张固定的截图资源，维护成本高，看图的回归由单测覆盖。
+func (s *Server) qqDeploySelfTest(ctx context.Context, version string) {
+	switch err := s.limits.RateLimit(ctx, "qq-bot-selftest-deploy", version, 1, qqSelfTestDeployWindow); {
+	case errors.Is(err, account.ErrLimited):
+		return
+	case err != nil:
+		slog.Warn("qq bot: deploy selftest skipped", "version", version, "reason", err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, qqSelfTestTimeout)
+	defer cancel()
+	results := s.runQQSelfTest(ctx)
+	if errors.Is(ctx.Err(), context.Canceled) {
+		slog.Info("qq bot: deploy selftest interrupted", "version", version)
+		return
+	}
+	qqLogSelfTest(results, version, true)
+}
+
+// qqLogSelfTest 记自测的汇总行「qq bot: selftest」：通过数、超时数、总题数、版本号和触发方式（管理员发「自测」是 admin，发版后是 deploy）。发版后的自测没有人看回复，没通过的题各记一条 Warn（问题和原因，不记回答），通过的比例低于 qqSelfTestAlertPassed / qqSelfTestAlertOf 时汇总行打 Error 供 Loki 告警；管理员自己跑的在群里看得到结果，改提示词时常常故意跑不过，只打 Info。
+func qqLogSelfTest(results []qqSelfTestResult, version string, deploy bool) {
+	passed, timedOut := 0, 0
+	for _, r := range results {
+		switch {
+		case r.Pass:
+			passed++
+		case r.TimedOut:
+			timedOut++
+		}
+		if deploy && !r.Pass {
+			slog.Warn("qq bot: selftest case not passed", "version", version, "question", r.Case.Question, "reason", r.Reason)
+		}
+	}
+	trigger := "admin"
+	if deploy {
+		trigger = "deploy"
+	}
+	attrs := []any{"passed", passed, "timed_out", timedOut, "total", len(results), "version", version, "trigger", trigger}
+	if deploy && passed*qqSelfTestAlertOf < len(results)*qqSelfTestAlertPassed {
+		slog.Error("qq bot: selftest", attrs...)
+		return
+	}
+	slog.Info("qq bot: selftest", attrs...)
 }
 
 // qqSelfTestSummary 是自测的回复：通过数，有超时的单独写几题超时（「自测 8/10 通过，1 题超时。」）；没通过的列出原因，判分没过的附上机器人回答的前 qqSelfTestAnswerRunes 字，不用再去群里问一遍看它答了什么；超时的只列问题。
@@ -179,7 +232,6 @@ func qqSelfTestSummary(results []qqSelfTestResult) string {
 			failed = append(failed, item)
 		}
 	}
-	slog.Info("qq bot: selftest", "passed", passed, "timed_out", len(timedOut), "total", len(results))
 	message := fmt.Sprintf("自测 %d/%d 通过", passed, len(results))
 	if len(timedOut) > 0 {
 		message += fmt.Sprintf("，%d 题超时", len(timedOut))

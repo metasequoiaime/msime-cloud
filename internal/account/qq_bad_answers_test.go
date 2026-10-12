@@ -66,3 +66,36 @@ func TestQQBadAnswerStates(t *testing.T) {
 		t.Fatal(recent)
 	}
 }
+
+// 同一个问题又被说「不对」时并进 30 分钟内最新的那条还没处理的差评，不新增一行；隔得久了、问题不同或者已经处理过的不并。
+func TestQQBadAnswerUpdateFeedback(t *testing.T) {
+	db := testStore(t)
+	a := &Service{store: db}
+	ctx := context.Background()
+	if _, err := db.pool.Exec(ctx, `TRUNCATE qq_bad_answers`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.pool.Exec(ctx, `INSERT INTO qq_bad_answers(question,answer,feedback,created_at) VALUES('五笔怎么切换','a','旧的',now()-interval '2 hours')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.AddQQBadAnswer(ctx, "五笔怎么切换", "在设置里", "不对", "按 Ctrl+` 切换"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := a.UpdateQQBadAnswerFeedback(ctx, "五笔怎么切换", "还是不对", 30*time.Minute); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if ok, err := a.UpdateQQBadAnswerFeedback(ctx, "双拼怎么设置", "不对", 30*time.Minute); err != nil || ok {
+		t.Fatal(ok, err)
+	}
+	list, total, err := a.OpenQQBadAnswers(ctx, 14*24*time.Hour, 10)
+	if err != nil || total != 2 || list[0].Feedback != "不对；还是不对" || list[0].Retry != "按 Ctrl+` 切换" || list[1].Feedback != "旧的" {
+		t.Fatal(list, total, err)
+	}
+	if ok, _ := a.CloseQQBadAnswer(ctx, list[0].ID, "ignored"); !ok {
+		t.Fatal("close failed")
+	}
+	// 30 分钟内的已经处理过，更早的那条超出范围：都不并。
+	if ok, err := a.UpdateQQBadAnswerFeedback(ctx, "五笔怎么切换", "不对", 30*time.Minute); err != nil || ok {
+		t.Fatal(ok, err)
+	}
+}

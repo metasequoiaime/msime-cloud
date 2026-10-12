@@ -23,6 +23,8 @@ const (
 	qqGapRunes = 200
 	// qqGapsIssueTTL 是汇总 issue 编号的缓存时间：维护者关闭它后，最多这么久之后新的问题会记到新开的 issue 上，不会一直评论在已关闭的 issue 下。
 	qqGapsIssueTTL = time.Hour
+	// qqGapRecordTimeout 是记一条汇总的时限（见 recordQQGapIn）。要拿令牌、查汇总 issue、可能新建、再评论，几次 GitHub 调用，3 秒不够；也不能长：副本关停时 Close 等满 qqCloseGrace 取消 lifetime 之后还要等它，preStop、HTTP 关停、qqCloseGrace 加上它要落在部署的 terminationGracePeriodSeconds（100 秒）以内。
+	qqGapRecordTimeout = 10 * time.Second
 )
 
 // qqContactPatterns 是写进汇总 issue 前要删掉的联系方式：手机号（可带 +86）、邮箱，以及「QQ / 群 / 微信」后面跟着的号码。概括是模型对群友原话的转述，提示词要求不写个人信息，但代码以前不检查：群友不小心带上的手机号会被照抄出去，「提文档 FAQ 应写上官方售后 QQ 12345678」这类话也会把联系方式发到公开仓库。微信号可以是字母开头的串，只在写明「微信号」或带冒号时才删，免得把「微信 windows版」这类正常说法删掉。
@@ -161,8 +163,10 @@ func (s *Server) recordQQReport(ctx context.Context, topic string) bool {
 	return s.recordQQGapIn(ctx, "qq-bot-reports-day", qqReportsDaily, "群友报告问题：", topic)
 }
 
-// recordQQGapIn 是 recordQQGap 和 recordQQReport 的实现，dailyScope、daily 是每天的额度。
+// recordQQGapIn 是 recordQQGap 和 recordQQReport 的实现，dailyScope、daily 是每天的额度。它是答疑和「提文档」的收尾，不跟随处理消息的 ctx（写法照 recordQQTurn）：答案已经拿到，滚动发布取消了 ctx 也要记下，回复才能照实说「已经记下来了」；另限 qqGapRecordTimeout。
 func (s *Server) recordQQGapIn(ctx context.Context, dailyScope string, daily int, prefix, topic string) bool {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), qqGapRecordTimeout)
+	defer cancel()
 	// 联系方式在去重和截断之前删掉：7 天去重的键和写进 issue 的是同一段文字。
 	topic = qqRedactContacts(strings.Join(strings.Fields(topic), " "))
 	switch {

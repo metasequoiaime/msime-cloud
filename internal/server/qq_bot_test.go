@@ -121,11 +121,13 @@ func TestQQBotConfigValidation(t *testing.T) {
 	}
 }
 
-// qqLimiter 按 scope|subject 计数，模拟 auth_rates 在去重期和每日窗口内的行为。
+// qqLimiter 按 scope|subject 计数，模拟 auth_rates 在去重期和每日窗口内的行为。wait 是超限时 RateLimitUntil 报的窗口剩余时长，为 0 时当作刚开的 24 小时窗口；released 按顺序记下每次退回的 scope|subject。
 type qqLimiter struct {
-	mu     sync.Mutex
-	counts map[string]int
-	err    map[string]error
+	mu       sync.Mutex
+	counts   map[string]int
+	err      map[string]error
+	wait     time.Duration
+	released []string
 }
 
 func (l *qqLimiter) RateLimit(_ context.Context, scope, subject string, limit int, _ time.Duration) error {
@@ -144,6 +146,16 @@ func (l *qqLimiter) RateLimit(_ context.Context, scope, subject string, limit in
 	return nil
 }
 
+func (l *qqLimiter) RateLimitUntil(ctx context.Context, scope, subject string, limit int, window time.Duration) (time.Duration, error) {
+	err := l.RateLimit(ctx, scope, subject, limit, window)
+	if !errors.Is(err, account.ErrLimited) {
+		return 0, err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return cmp.Or(l.wait, 24*time.Hour), err
+}
+
 // ReleaseRateLimit 与 account.Store.ReleaseRate 一样把计数减一，最少减到 0。
 func (l *qqLimiter) ReleaseRateLimit(ctx context.Context, scope, subject string) error {
 	if err := ctx.Err(); err != nil {
@@ -151,6 +163,7 @@ func (l *qqLimiter) ReleaseRateLimit(ctx context.Context, scope, subject string)
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.released = append(l.released, scope+"|"+subject)
 	if l.counts[scope+"|"+subject] > 0 {
 		l.counts[scope+"|"+subject]--
 	}
@@ -266,6 +279,13 @@ type qqFake struct {
 	repoChecks     []string
 	// researchHang 为 true 时，调研里已经调用过工具、又给了工具的那一轮一直不返回，直到客户端放弃，用来模拟调研卡在中途。
 	researchHang bool
+	// researchBatch 不为空时，每一轮给了工具的调研都按它的路径一次发出多个 github_get，tool_call_id 是「call-轮次-序号」；researchToolMessages 记下最近一轮调研请求里全部 tool 消息（「tool_call_id=内容」，按顺序）。
+	researchBatch        []string
+	researchToolMessages []string
+	// githubDelay 是 extraGitHub 里的路径要慢多久才返回（等待时不占着 mu），githubInflight、githubMaxInflight 是同时在等的请求数和它的最大值，用来确认请求确实是并发发出的。
+	githubDelay       map[string]time.Duration
+	githubInflight    int
+	githubMaxInflight int
 	// 「记录答案」：faq 是整理 FAQ 的模型输出；faqFiles 不为 nil 时知识库仓库按它返回文件（要求按 qqFAQHead 读），faqWrites 按顺序记下建树、建提交、建分支、开 PR 的请求，faqFailPath 是会返回 422 的写接口路径。
 	faq         string
 	faqFiles    map[string]string
@@ -327,9 +347,15 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			f.chatCalls = append(f.chatCalls, "research")
 			f.researchUsers = append(f.researchUsers, fmt.Sprint(messages[1].(map[string]any)["content"]))
 			var tool string
+			round := 1
+			f.researchToolMessages = nil
 			for _, m := range messages {
-				if m.(map[string]any)["role"] == "tool" {
+				switch m.(map[string]any)["role"] {
+				case "tool":
 					tool = m.(map[string]any)["content"].(string)
+					f.researchToolMessages = append(f.researchToolMessages, fmt.Sprint(m.(map[string]any)["tool_call_id"], "=", tool))
+				case "assistant":
+					round++
 				}
 			}
 			if f.researchHang && tool != "" && body["tools"] != nil {
@@ -341,6 +367,13 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			reply := map[string]any{"role": "assistant", "content": "查到：" + tool}
 			finish := "stop"
 			switch {
+			case len(f.researchBatch) > 0 && body["tools"] != nil:
+				var calls []any
+				for i, path := range f.researchBatch {
+					calls = append(calls, map[string]any{"id": fmt.Sprintf("call-%d-%d", round, i+1), "type": "function", "function": map[string]any{"name": "github_get", "arguments": `{"path":"` + path + `"}`}})
+				}
+				reply = map[string]any{"role": "assistant", "content": "", "tool_calls": calls}
+				finish = "tool_calls"
 			case f.researchPath == "":
 				reply["content"] = "不需要查"
 			case body["tools"] == nil:
@@ -509,6 +542,14 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		_, _ = w.Write(body)
 	case f.extraGitHub[r.URL.RequestURI()] != "":
+		if delay := f.githubDelay[r.URL.RequestURI()]; delay > 0 {
+			f.githubInflight++
+			f.githubMaxInflight = max(f.githubMaxInflight, f.githubInflight)
+			f.mu.Unlock()
+			time.Sleep(delay)
+			f.mu.Lock()
+			f.githubInflight--
+		}
 		_, _ = io.WriteString(w, f.extraGitHub[r.URL.RequestURI()])
 	case r.URL.Path == "/app" && r.Method == "GET":
 		f.appCalls++
@@ -939,7 +980,7 @@ func TestQQBotRepliesWithoutFiling(t *testing.T) {
 		{"too long", strings.Repeat("长", qqBotMaxRunes+1), nil, qqReplyTooLong},
 		{"admins have their own limit", "", func(_ *qqFake, l *qqLimiter) {
 			l.counts = map[string]int{"qq-bot-admin|MEMBER1": qqBotAdminDaily}
-		}, qqReplyLimited},
+		}, qqLimitedReply(24 * time.Hour)},
 		{"limit unavailable", "", func(_ *qqFake, l *qqLimiter) { l.err = map[string]error{"qq-bot-admin": errors.New("down")} }, qqReplyUnavailable},
 		{"plain admin message goes to the knowledge base", "五笔怎么切换", func(f *qqFake, _ *qqLimiter) { f.summary = `{"kind":"other"}` }, "在设置的「输入方案」里选五笔。"},
 		{"forced report that is not a report", "", func(f *qqFake, _ *qqLimiter) { f.summary = `{"kind":"other"}` }, "没看出要提的是 bug 还是需求，请把问题或想要的功能描述具体一点。"},
@@ -1275,14 +1316,14 @@ func TestQQBotAnswersMembersFromKnowledge(t *testing.T) {
 	group := limiter.counts["qq-bot-group|GROUP1"]
 	qqDeliver(t, s, "m-limited", "五笔怎么切换")
 	qqDeliver(t, s, "m-limited-2", "五笔怎么切换")
-	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != qqReplyLimited || limiter.counts["qq-bot-group|GROUP1"] != group {
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != qqLimitedReply(24*time.Hour) || limiter.counts["qq-bot-group|GROUP1"] != group {
 		t.Fatal(last, limiter.counts)
 	}
 	// 群的额度用完时普通群友收到群限额的说法；管理员不受群限额限制。
 	delete(limiter.counts, "qq-bot-member|GROUP1/MEMBER1")
 	limiter.counts["qq-bot-group|GROUP1"] = qqBotGroupDaily
 	qqDeliver(t, s, "m-group-limited", "五笔怎么切换")
-	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != qqReplyGroupLimited {
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != qqGroupLimitedReply(24*time.Hour) {
 		t.Fatal(last)
 	}
 	s.qq.config.Admins = []string{"MEMBER1"}
@@ -1804,6 +1845,54 @@ func TestQQBotRecognisesGroupAdmins(t *testing.T) {
 }
 
 // 群友报问题时，文档里有排查办法就先给办法，再把问题记进汇总 issue、单独回一句说明已经转给管理员；没记下（没配置汇总、没有概括）时不说会跟进。只问用法时都不加。
+// 第一次收到 @ 消息时记一行事件字段的探测日志：只有排好序的顶层字段名和数字字段，不带消息内容、引用的内容和各种标识；之后的消息不再记。
+func TestQQBotProbesEventFields(t *testing.T) {
+	logs := issueCaptureLogs(t)
+	s, _, _ := qqServer(t)
+	event, _ := json.Marshal(map[string]any{"op": 0, "t": "GROUP_AT_MESSAGE_CREATE", "d": map[string]any{
+		"id": "m-probe-1", "content": "我的ID SECRET-CONTENT", "group_openid": "GROUP1", "author": map[string]string{"member_openid": "MEMBER1", "member_role": "member"},
+		"message_type": 103, "offset": -2.5, "message_reference": map[string]string{"message_id": "SECRET-REF", "content": "SECRET-QUOTED"}, "msg_elements": []map[string]string{{"content": "SECRET-ELEMENT"}},
+		"seq": "77", "is_bot": false, "extra": nil, "timestamp": "2026-10-12T10:00:00+08:00",
+	}})
+	if w := qqPost(t, s, string(event)); w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	s.qqWorkers.Wait()
+	// 第二条消息带了别的字段，也不再记。
+	second, _ := json.Marshal(map[string]any{"op": 0, "t": "GROUP_AT_MESSAGE_CREATE", "d": map[string]any{"id": "m-probe-2", "content": "我的ID", "group_openid": "GROUP1", "author": map[string]string{"member_openid": "MEMBER1"}, "other_field": 1}})
+	qqPost(t, s, string(second))
+	s.qqWorkers.Wait()
+
+	var probes []map[string]any
+	for _, entry := range logs() {
+		if entry["msg"] == "qq bot: event fields probe" {
+			probes = append(probes, entry)
+		}
+	}
+	if len(probes) != 1 {
+		t.Fatal("probe lines", probes)
+	}
+	// 日志自己的时间字段不算在内，免得和事件里的时间戳撞上。
+	delete(probes[0], "time")
+	line, _ := json.Marshal(probes[0])
+	if got := fmt.Sprint(probes[0]["keys"]); got != "[author content extra group_openid id is_bot message_reference message_type msg_elements offset seq timestamp]" {
+		t.Fatal("keys", got)
+	}
+	if got := fmt.Sprint(probes[0]["numbers"]); got != "[message_type=103 offset=-2.5]" {
+		t.Fatal("numbers", got)
+	}
+	for _, leak := range []string{"SECRET", "MEMBER1", "GROUP1", "m-probe-1", "77", "2026-10-12", "other_field"} {
+		if strings.Contains(string(line), leak) {
+			t.Fatalf("probe line carries %q: %s", leak, line)
+		}
+	}
+
+	// d 不是对象时什么都不带。
+	if keys, numbers := qqEventFields(json.RawMessage(`[1,2]`)); keys != nil || numbers != nil {
+		t.Fatal(keys, numbers)
+	}
+}
+
 func TestQQBotEscalatesProblemReports(t *testing.T) {
 	s, fake, _ := qqServer(t)
 	s.qq.config.Admins = []string{"ADMIN1"}
@@ -1995,6 +2084,30 @@ func TestQQBotResearchBudget(t *testing.T) {
 	}
 }
 
+// 同一轮的几个工具调用同时跑：先按顺序分剩下的名额，超出名额的写「用完」；结果按原顺序、带原来的 tool_call_id 接回去，先查完的不会排到前面。工具调用次数和现查耗时记进这条消息的 qqTiming。
+func TestQQResearchParallelToolCalls(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	paths := []string{"/repos/metasequoiaime/msime/contributors?per_page=1", "/repos/metasequoiaime/msime/contributors?per_page=2", "/repos/metasequoiaime/msime/contributors?per_page=3"}
+	fake.researchPath, fake.researchBatch = paths[0], paths
+	fake.extraGitHub = map[string]string{paths[0]: `[{"login":"a"}]`, paths[1]: `[{"login":"b"}]`, paths[2]: `[{"login":"c"}]`}
+	// 第一个最慢：结果要是按完成顺序接回去，它会排到最后。
+	fake.githubDelay = map[string]time.Duration{paths[0]: 300 * time.Millisecond, paths[1]: 150 * time.Millisecond, paths[2]: 50 * time.Millisecond}
+	timing := &qqTiming{}
+	ctx := context.WithValue(context.Background(), qqTimingKey{}, timing)
+	findings := s.qqResearch(ctx, "水杉输入法现在有几个开发？", "")
+	// 第一轮 3 个都有名额；第二轮还剩 2 个名额，第 3 个写「用完」；第三轮名额用完，不再给工具。
+	want := []string{`call-1-1=[{"login":"a"}]`, `call-1-2=[{"login":"b"}]`, `call-1-3=[{"login":"c"}]`, `call-2-1=[{"login":"a"}]`, `call-2-2=[{"login":"b"}]`, "call-2-3=调用次数已经用完，请根据已经查到的内容作答。"}
+	if !slices.Equal(fake.researchToolMessages, want) || fmt.Sprint(fake.researchTools) != "[true true false]" || findings == "" {
+		t.Fatal(fake.researchToolMessages, fake.researchTools, findings)
+	}
+	if fake.githubMaxInflight < 2 {
+		t.Fatal("tool calls of one round must run concurrently", fake.githubMaxInflight)
+	}
+	if timing.researchCalls.Load() != qqResearchCalls || timing.researchMs.Load() < 300 {
+		t.Fatal(timing.researchCalls.Load(), timing.researchMs.Load())
+	}
+}
+
 // 4 分钟的处理时间用完时回「查了太久没查完」并请群友说具体些，处理结果记为 timeout；剩余时间不够、不再试备用模型时也一样。时间充裕时的上游失败照旧回「暂时处理不了」。
 func TestQQBotTimedOutReply(t *testing.T) {
 	s, fake, _ := qqServer(t)
@@ -2155,15 +2268,21 @@ func TestQQIssueSearchNarrows(t *testing.T) {
 	}
 }
 
-// memoryConversations 是测试用的对话存储。
+// memoryConversations 是测试用的对话存储。像数据库一样，ctx 已经取消时读写都失败；同一个群友的消息会并发处理，读写由 mu 保护。
 type memoryConversations struct {
+	mu    sync.Mutex
 	turns map[string][]account.QQTurn
 	err   error
 }
 
-func (m *memoryConversations) QQConversation(_ context.Context, subject string, limit int) ([]account.QQTurn, error) {
+func (m *memoryConversations) QQConversation(ctx context.Context, subject string, limit int) ([]account.QQTurn, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.err != nil {
 		return nil, m.err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	turns := m.turns[subject]
 	if len(turns) > limit {
@@ -2172,9 +2291,14 @@ func (m *memoryConversations) QQConversation(_ context.Context, subject string, 
 	return turns, nil
 }
 
-func (m *memoryConversations) RecordQQTurn(_ context.Context, subject, question, answer string) error {
+func (m *memoryConversations) RecordQQTurn(ctx context.Context, subject, question, answer string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.err != nil {
 		return m.err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if m.turns == nil {
 		m.turns = map[string][]account.QQTurn{}
@@ -2582,13 +2706,13 @@ func TestQQBotFreeCommandsSkipModelQuota(t *testing.T) {
 		t.Fatal(limiter.counts)
 	}
 	deliver("m-free-search", "MEMBER1", "查 候选框")
-	if last() != qqReplyGroupLimited {
+	if last() != qqGroupLimitedReply(24*time.Hour) {
 		t.Fatal(last())
 	}
 	// qq-bot-free 用完时照常回个人额度的说法。
 	limiter.counts["qq-bot-free|GROUP1/MEMBER1"] = qqBotFreeDaily
 	deliver("m-free-limited", "MEMBER1", "帮助")
-	if last() != qqReplyLimited || stats.counts["limited_free"] != 1 || stats.counts["cmd_help"] != 2 {
+	if last() != qqLimitedReply(24*time.Hour) || stats.counts["limited_free"] != 1 || stats.counts["cmd_help"] != 2 {
 		t.Fatal(last(), stats.counts)
 	}
 }
@@ -4102,6 +4226,78 @@ func TestQQBotInterimReplies(t *testing.T) {
 	}
 }
 
+// 挑段落判成闲聊时停掉「收到，我想一下～」的计时器，聊天模型答得再慢也只有答案一条；要现查的闲聊照旧会发过渡语。每条消息的 handled 日志带上各阶段耗时：挑段落、回答、现查（次数）、换备用模型的次数、第一条回复的用时和有没有发过「我想一下」。
+func TestQQBotChatSkipsThinkingAndLogsTiming(t *testing.T) {
+	defer func(delay time.Duration) { qqThinkingDelay = delay }(qqThinkingDelay)
+	logs := issueCaptureLogs(t)
+	s, fake, _ := qqServer(t)
+	s.qq.config.Admins = nil
+	qqThinkingDelay = 20 * time.Millisecond
+	fake.slowCall, fake.slowDelay = "answer", 300*time.Millisecond
+	// handled 返回最近一条消息的 handled 日志。
+	handled := func() map[string]any {
+		t.Helper()
+		var last map[string]any
+		for _, entry := range logs() {
+			if entry["msg"] == "qq bot: handled" {
+				last = entry
+			}
+		}
+		if last == nil {
+			t.Fatal("no handled line")
+		}
+		return last
+	}
+
+	// 普通答疑答得慢：先发「我想一下」，日志里 interim 为真，回答的耗时算在 answer_ms 里，第一条回复晚于回答。
+	qqDeliver(t, s, "m-timing-slow", "五笔怎么切换")
+	if replies := fake.replyTexts(); len(replies) != 2 || replies[0] != qqReplyThinking {
+		t.Fatal(replies)
+	}
+	entry := handled()
+	if entry["interim"] != true || entry["answer_ms"].(float64) < 300 || entry["first_reply_ms"].(float64) < entry["answer_ms"].(float64) || entry["select_ms"] == nil || entry["research_calls"] != float64(0) || entry["fallbacks"] != float64(0) {
+		t.Fatal(entry)
+	}
+
+	// 闲聊：挑段落判成 chat，计时器停掉，只有答案一条。
+	fake.selected, fake.answer = `{"sections":[],"chat":true}`, `{"type":"chat","answer":"在的在的，怎么了？"}`
+	before := len(fake.replyTexts())
+	qqDeliver(t, s, "m-timing-chat", "在吗")
+	time.Sleep(50 * time.Millisecond)
+	if replies := fake.replyTexts()[before:]; len(replies) != 1 || replies[0] != "在的在的，怎么了？" {
+		t.Fatal(replies)
+	}
+	if entry = handled(); entry["interim"] != false || entry["first_reply_ms"].(float64) <= 0 {
+		t.Fatal(entry)
+	}
+
+	// 标了 chat 又要现查（或者同时标了难题）的不算闲聊，照旧发过渡语。
+	fake.selected = `{"sections":[],"chat":true,"lookup":true}`
+	before = len(fake.replyTexts())
+	qqDeliver(t, s, "m-timing-chat-lookup", "我是不是开发者")
+	if replies := fake.replyTexts()[before:]; len(replies) != 2 || replies[0] != qqReplyLookingUp {
+		t.Fatal(replies)
+	}
+	if entry = handled(); entry["research_ms"] == nil {
+		t.Fatal(entry)
+	}
+	fake.selected = `{"sections":[],"chat":true,"strong":true}`
+	before = len(fake.replyTexts())
+	qqDeliver(t, s, "m-timing-chat-strong", "帮我想想这个怎么办")
+	if replies := fake.replyTexts()[before:]; len(replies) != 2 || replies[0] != qqReplyThinking {
+		t.Fatal(replies)
+	}
+
+	// 主模型失败、换备用模型：挑段落和回答各换一次，记 2 次。
+	fake.slowCall, fake.selected = "", `{"sections":[1]}`
+	fake.answer = `{"type":"answered","answer":"在设置的「输入方案」里选五笔。"}`
+	s.qq.config.FallbackModel, fake.failModel = "fallback-model", "claude-haiku-5-5"
+	qqDeliver(t, s, "m-timing-fallback", "五笔怎么切换")
+	if entry = handled(); entry["fallbacks"] != float64(2) || entry["outcome"] != "answered" {
+		t.Fatal(entry)
+	}
+}
+
 // memoryDrafts 是测试用的草稿存储；updateErr、claimErr 不为空时对应的操作像数据库出错那样失败。
 type memoryDrafts struct {
 	mu        sync.Mutex
@@ -5566,6 +5762,22 @@ func (m *memoryBadAnswers) AddQQBadAnswer(ctx context.Context, question, answer,
 	m.items = append([]account.QQBadAnswer{{ID: int64(len(m.items) + 1), Question: question, Answer: answer, Feedback: feedback, Retry: retry, CreatedAt: time.Date(2026, 10, 12, 1, 0, 0, 0, time.UTC)}}, m.items...)
 	return nil
 }
+
+// UpdateQQBadAnswerFeedback 和 account 包一样把这句接在同一个问题最新的、还没处理的差评后面；测试里的差评都是刚记的，不看时间范围。
+func (m *memoryBadAnswers) UpdateQQBadAnswerFeedback(ctx context.Context, question, feedback string, _ time.Duration) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, b := range m.items {
+		if b.Question == question && m.state[b.ID] == "" {
+			m.items[i].Feedback = qqTruncate(b.Feedback+"；"+feedback, 200)
+			return true, nil
+		}
+	}
+	return false, nil
+}
 func (m *memoryBadAnswers) RecentQQBadAnswers(_ context.Context, _ time.Duration, limit int) ([]account.QQBadAnswer, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -5646,6 +5858,28 @@ func TestQQBotBadAnswerRetry(t *testing.T) {
 	if turns := history.turns["GROUP1/MEMBER1"]; turns[len(turns)-1].Question != "五笔怎么切换" || !strings.HasPrefix(turns[len(turns)-1].Answer, qqRetryPrefix) {
 		t.Fatal(turns)
 	}
+	// 重答过以后再说「不对」：不再现查重答（不调模型、不回「我查一下」），这句并进同一条差评，差评表还是一行；对话历史不变，第三次说也一样。
+	calls, turnCount := len(fake.chatCalls), len(history.turns["GROUP1/MEMBER1"])
+	for i, again := range []string{"还是不对", "不对"} {
+		before = len(fake.replyTexts())
+		deliver("m-b2-again-"+strconv.Itoa(i), "MEMBER1", again)
+		if replies := fake.replyTexts()[before:]; len(replies) != 1 || replies[0] != qqRetryExhausted {
+			t.Fatal(replies)
+		}
+	}
+	if len(fake.chatCalls) != calls || len(history.turns["GROUP1/MEMBER1"]) != turnCount {
+		t.Fatal(fake.chatCalls[calls:], history.turns["GROUP1/MEMBER1"])
+	}
+	if len(bad.items) != 1 || bad.items[0].Feedback != "不对啊；还是不对；不对" || bad.items[0].Retry != "按 Ctrl+` 打开方案菜单选五笔。" {
+		t.Fatal(bad.items)
+	}
+	// 差评记不下时不说已经转给管理员。
+	s.qqBadAnswers = nil
+	deliver("m-b2-unrecorded", "MEMBER1", "不对")
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != qqRetryExhaustedUnrecorded || len(fake.chatCalls) != calls {
+		t.Fatal(last, fake.chatCalls[calls:])
+	}
+	s.qqBadAnswers = bad
 	// 长消息不算差评。
 	fake.answer = `{"type":"answered","answer":"可以。"}`
 	deliver("m-b3", "MEMBER1", "不对，我想问的是另外一件事：能不能在 Linux 上用五笔打繁体字并且同步词库到手机")
@@ -5657,7 +5891,7 @@ func TestQQBotBadAnswerRetry(t *testing.T) {
 		t.Fatal(fake.replyTexts())
 	}
 	deliver("m-b-list", "ADMIN1", "差评")
-	if last := fake.replyTexts()[len(fake.replyTexts())-1]; !strings.HasSuffix(last, "\n- B1 10-12 09:00 问：五笔怎么切换（群友：不对啊）\n  重答：按 Ctrl+` 打开方案菜单选五笔。") {
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; !strings.HasSuffix(last, "\n- B1 10-12 09:00 问：五笔怎么切换（群友：不对啊；还是不对；不对）\n  重答：按 Ctrl+` 打开方案菜单选五笔。") {
 		t.Fatal(last)
 	}
 }
@@ -5830,10 +6064,15 @@ func TestQQBotWeeklyDigest(t *testing.T) {
 	if fake.replyTexts()[len(fake.replyTexts())-1] != "只有管理员能用「周报」。" {
 		t.Fatal(fake.replyTexts())
 	}
+	// 管理员发的命令（cmd_*）不带 admin_ 前缀，算在群友那一行的「命令」里；管理员的答疑和超过自己额度的（limited_admin）算在管理员那一行。
+	deliver("m-d-admin-cmd", "ADMIN1", "版本")
+	stats.mu.Lock()
+	stats.counts["admin_answered"], stats.counts["admin_answered_hint"], stats.counts["admin_unknown"], stats.counts["admin_chat"], stats.counts["admin_filed"], stats.counts["limited_admin"] = 1, 1, 1, 2, 1, 1
+	stats.mu.Unlock()
 	fake.searchTotals = map[string]int{`repo:o/r is:issue label:"source/qq" created:>=2026-10-06T00:00:00+08:00`: 2, `repo:o/win is:issue label:"source/qq" created:>=2026-10-06T00:00:00+08:00`: 1}
 	deliver("m-d-digest", "ADMIN1", "周报")
 	last := fake.replyTexts()[len(fake.replyTexts())-1]
-	for _, want := range []string{"最近 7 天（10-06 到 10-12）：", "收到 4 条 @：答上 1、答不上 1（答上率 50%）、闲聊 0、命令 2", "群友说答错 0 次", "待提交的草稿 0 份", "文档缺口 1 条", "这周从 QQ 提的 issue 3 个"} {
+	for _, want := range []string{"最近 7 天（10-06 到 10-12）：", "\n- 群友 @ 5 条：答上 1、答不上 1（答上率 50%）、闲聊 0、命令 3、限流 0、出错 0、回复没发出去 0\n", "\n- 管理员 @ 7 条：答上 2、答不上 1（答上率 66%）、闲聊 2、限流 1、出错 0\n", "群友说答错 0 次", "待提交的草稿 0 份", "文档缺口 1 条", "这周从 QQ 提的 issue 3 个"} {
 		if !strings.Contains(last, want) {
 			t.Fatalf("missing %q in %q", want, last)
 		}
@@ -5991,5 +6230,427 @@ func TestQQBotSelfTest(t *testing.T) {
 	s.qqWorkers.Wait()
 	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "今天自测的次数用完了，明天再来。" {
 		t.Fatal(last)
+	}
+}
+
+// 发版后的自测按版本号认领，同一版本两次启动（或两个副本）只跑一次；结果只写日志、不回群里，汇总行带版本号，通过的比例低于 10/12 时打 Error，没通过的题各记一条 Warn。认领出错或副本关停打断时不跑、不记汇总。
+func TestQQDeploySelfTest(t *testing.T) {
+	logs := issueCaptureLogs(t)
+	s, fake, limiter := qqServer(t)
+	judges := func() int { return strings.Count(strings.Join(fake.chatCalls, ","), "judge") }
+	// summary 返回这段日志里的自测汇总行和没通过的题数。
+	summary := func() (map[string]any, int) {
+		t.Helper()
+		var line map[string]any
+		failed := 0
+		for _, entry := range logs() {
+			switch entry["msg"] {
+			case "qq bot: selftest":
+				line = entry
+			case "qq bot: selftest case not passed":
+				failed++
+			}
+		}
+		return line, failed
+	}
+	s.qqDeploySelfTest(context.Background(), "0.78.0")
+	s.qqDeploySelfTest(context.Background(), "0.78.0")
+	if judges() != len(qqSelfTestCases) || len(fake.replyTexts()) != 0 {
+		t.Fatal("one version must run the selftest once", judges(), fake.replyTexts())
+	}
+	if line, failed := summary(); line == nil || line["level"] != "INFO" || line["version"] != "0.78.0" || line["trigger"] != "deploy" || line["passed"] != float64(len(qqSelfTestCases)) || failed != 0 {
+		t.Fatal(line, failed)
+	}
+	// 新版本判不过：汇总行打 Error，每道题各一条 Warn。
+	fake.judge = `{"pass":false,"reason":"只复述了资料"}`
+	s.qqDeploySelfTest(context.Background(), "0.78.1")
+	if line, failed := summary(); line == nil || line["level"] != "ERROR" || line["version"] != "0.78.1" || line["passed"] != float64(0) || failed != len(qqSelfTestCases) {
+		t.Fatal(line, failed)
+	}
+	// 认领出错时跳过，不调模型。
+	limiter.err = map[string]error{"qq-bot-selftest-deploy": errors.New("database down")}
+	calls := len(fake.chatCalls)
+	s.qqDeploySelfTest(context.Background(), "0.78.2")
+	if len(fake.chatCalls) != calls {
+		t.Fatal(fake.chatCalls[calls:])
+	}
+	// 副本关停打断：不记汇总，免得一批超时被当成退化去告警。
+	limiter.err = nil
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s.qqDeploySelfTest(ctx, "0.78.3")
+	if line, _ := summary(); line != nil {
+		t.Fatal(line)
+	}
+}
+
+// 告警线按比例算：13 题过 11 题不告警，过 10 题告警；管理员自己跑的不告警。
+func TestQQLogSelfTestThreshold(t *testing.T) {
+	logs := issueCaptureLogs(t)
+	results := func(passed int) []qqSelfTestResult {
+		out := make([]qqSelfTestResult, len(qqSelfTestCases))
+		for i := range out {
+			out[i] = qqSelfTestResult{Case: qqSelfTestCases[i], Pass: i < passed}
+		}
+		return out
+	}
+	level := func() string {
+		for _, entry := range logs() {
+			if entry["msg"] == "qq bot: selftest" {
+				return fmt.Sprint(entry["level"])
+			}
+		}
+		return ""
+	}
+	if len(qqSelfTestCases) != 13 {
+		t.Fatal("update the boundary below", len(qqSelfTestCases))
+	}
+	for _, tc := range []struct {
+		passed int
+		deploy bool
+		want   string
+	}{{11, true, "INFO"}, {10, true, "ERROR"}, {0, false, "INFO"}} {
+		qqLogSelfTest(results(tc.passed), "0.78.0", tc.deploy)
+		if got := level(); got != tc.want {
+			t.Fatal(tc, got)
+		}
+	}
+}
+
+// 答案已经发出去之后 ctx 被取消（滚动发布时 Close 等满 qqCloseGrace 取消了 lifetime），这一轮照样记进对话历史，下一句「还是不行」接得上。
+func TestQQBotRecordsTurnAfterCancellation(t *testing.T) {
+	s, _, _ := qqServer(t)
+	history := &memoryConversations{}
+	s.qqHistory = history
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var replies []string
+	reply := func(text string) {
+		replies = append(replies, text)
+		cancel()
+	}
+	outcome := s.answerQQQuestion(ctx, "GROUP1", "MEMBER1", "五笔怎么切换", false, reply, func(string) {}, nil)
+	if turns := history.turns["GROUP1/MEMBER1"]; outcome != "answered" || len(replies) != 1 || len(turns) != 1 || turns[0].Question != "五笔怎么切换" || turns[0].Answer != "在设置的「输入方案」里选五笔。" {
+		t.Fatal(outcome, replies, turns)
+	}
+}
+
+// 机器人自己出错（failed、reply_failed，管理员的 admin_failed）时退回这条消息计过的每一项额度；答上了不退；超限的那一项本来就没计上，不退。
+func TestQQBotReleasesLimitsWhenItFails(t *testing.T) {
+	s, fake, limiter := qqServer(t)
+	s.qq.config.Admins = []string{"ADMIN1"}
+	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
+	deliver := func(id, member, content string) {
+		t.Helper()
+		qqPost(t, s, qqMessageFrom(id, member, content))
+		s.qqWorkers.Wait()
+	}
+	released := func(key string) int {
+		limiter.mu.Lock()
+		defer limiter.mu.Unlock()
+		n := 0
+		for _, k := range limiter.released {
+			if k == key {
+				n++
+			}
+		}
+		return n
+	}
+	// 上游出错：个人和群的额度都退回。
+	fake.chatStatus = 502
+	deliver("m-release-failed", "MEMBER1", "五笔怎么切换")
+	if last() != qqReplyUnavailable || limiter.counts["qq-bot-member|GROUP1/MEMBER1"] != 0 || limiter.counts["qq-bot-group|GROUP1"] != 0 || released("qq-bot-member|GROUP1/MEMBER1") != 1 || released("qq-bot-group|GROUP1") != 1 {
+		t.Fatal(last(), limiter.counts, limiter.released)
+	}
+	// 答上了：照常计数，不退。
+	fake.chatStatus = 0
+	deliver("m-release-answered", "MEMBER1", "五笔怎么切换")
+	if last() != "在设置的「输入方案」里选五笔。" || limiter.counts["qq-bot-member|GROUP1/MEMBER1"] != 1 || limiter.counts["qq-bot-group|GROUP1"] != 1 || released("qq-bot-member|GROUP1/MEMBER1") != 1 {
+		t.Fatal(last(), limiter.counts, limiter.released)
+	}
+	// 回答被平台拒收（reply_failed）：群友没看到回答，退回。
+	fake.rejectText = "输入方案"
+	deliver("m-release-rejected", "MEMBER1", "五笔怎么切换")
+	if last() != qqReplyUndelivered || limiter.counts["qq-bot-member|GROUP1/MEMBER1"] != 1 || limiter.counts["qq-bot-group|GROUP1"] != 1 || released("qq-bot-group|GROUP1") != 2 {
+		t.Fatal(last(), limiter.counts, limiter.released)
+	}
+	fake.rejectText = ""
+	// 群额度用完（limited_group）：个人额度已经计上、群额度没计上，都不退。
+	limiter.counts["qq-bot-group|GROUP1"] = qqBotGroupDaily
+	deliver("m-release-limited", "MEMBER1", "五笔怎么切换")
+	if last() != qqGroupLimitedReply(24*time.Hour) || limiter.counts["qq-bot-member|GROUP1/MEMBER1"] != 2 || limiter.counts["qq-bot-group|GROUP1"] != qqBotGroupDaily+1 || released("qq-bot-member|GROUP1/MEMBER1") != 2 || released("qq-bot-group|GROUP1") != 2 {
+		t.Fatal(last(), limiter.counts, limiter.released)
+	}
+	// 管理员的消息处理失败（admin_failed）：退回管理员自己的额度。
+	fake.chatStatus = 502
+	deliver("m-release-admin", "ADMIN1", "五笔怎么切换")
+	if limiter.counts["qq-bot-admin|ADMIN1"] != 0 || released("qq-bot-admin|ADMIN1") != 1 {
+		t.Fatal(last(), limiter.counts, limiter.released)
+	}
+}
+
+// 超限时按窗口剩余时长说等多久：不到 1 小时说「一小时内」，否则向上取整说几小时后；个人和群额度都一样。
+func TestQQBotLimitedReplySaysHowLong(t *testing.T) {
+	for wait, want := range map[time.Duration]string{
+		30 * time.Minute:                  "大约一小时内",
+		time.Hour:                         "大约 1 小时后",
+		19*time.Hour + 12*time.Minute:     "大约 20 小时后",
+		23*time.Hour + 59*time.Minute:     "大约 24 小时后",
+		time.Second:                       "大约一小时内",
+		time.Hour + time.Nanosecond:       "大约 2 小时后",
+		59*time.Minute + 59*time.Second:   "大约一小时内",
+		20*time.Hour - time.Nanosecond:    "大约 20 小时后",
+		20 * time.Hour:                    "大约 20 小时后",
+		20*time.Hour + 1*time.Millisecond: "大约 21 小时后",
+	} {
+		if got := qqLimitWait(wait); got != want {
+			t.Errorf("%v: %q want %q", wait, got, want)
+		}
+	}
+	s, fake, limiter := qqServer(t)
+	s.qq.config.Admins = nil
+	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
+	limiter.counts = map[string]int{"qq-bot-member|GROUP1/MEMBER1": qqBotMemberDaily}
+	limiter.wait = 30 * time.Minute
+	qqDeliver(t, s, "m-wait-member", "五笔怎么切换")
+	if last() != "你最近问得有点多，到我的上限了，大约一小时内可以再问～急的话可以直接在群里问问大家。" {
+		t.Fatal(last())
+	}
+	limiter.counts = map[string]int{"qq-bot-group|GROUP1": qqBotGroupDaily}
+	limiter.wait = 19*time.Hour + 12*time.Minute
+	qqDeliver(t, s, "m-wait-group", "五笔怎么切换")
+	if last() != "这会儿大家问得太多，我的额度用完了，大约 20 小时后可以再问～急的话可以先在群里问问管理员。" {
+		t.Fatal(last())
+	}
+}
+
+// 同一个群友连发两条：第二条等第一条答完、记进对话历史才开始，读得到第一条的问答。
+func TestQQBotSerialisesMessagesFromOneMember(t *testing.T) {
+	s, fake, limiter := qqServer(t)
+	s.qq.config.Admins = nil
+	history := &memoryConversations{}
+	s.qqHistory = history
+	fake.slowCall, fake.slowDelay = "answer", 300*time.Millisecond
+	qqPost(t, s, qqMessage("m-serial-1", "五笔怎么切换"))
+	qqPost(t, s, qqMessage("m-serial-2", "切换后还是打不出字"))
+	s.qqWorkers.Wait()
+	turns := history.turns["GROUP1/MEMBER1"]
+	if len(turns) != 2 {
+		t.Fatal(turns)
+	}
+	want := "之前的对话（较早的在前）：\n问：" + turns[0].Question + "\n答：在设置的「输入方案」里选五笔。\n\n现在的问题：" + turns[1].Question
+	if !slices.Contains(fake.chatBodies, want) {
+		t.Fatalf("the second message did not see the first: %q", fake.chatBodies)
+	}
+	// 处理完以后副本内的队和跨副本租约都放开了。
+	if len(s.qqBusy) != 0 || limiter.counts["qq-bot-busy|GROUP1/MEMBER1"] != 0 {
+		t.Fatal(s.qqBusy, limiter.counts)
+	}
+}
+
+// 跨副本租约：另一个副本正在处理这位群友的消息时等它退回租约再处理，被占时多计的那一次要退回，不然对方退回后还要白等到 qqBusyWait；一直不退回（例如对方崩溃）时等满 qqBusyWait 照常处理。
+func TestQQBotWaitsForBusyLease(t *testing.T) {
+	defer func(wait, retry time.Duration) { qqBusyWait, qqBusyRetry = wait, retry }(qqBusyWait, qqBusyRetry)
+	qqBusyWait, qqBusyRetry = 5*time.Second, 10*time.Millisecond
+	s, fake, limiter := qqServer(t)
+	s.qq.config.Admins = nil
+	limiter.counts = map[string]int{"qq-bot-busy|GROUP1/MEMBER1": 1}
+	started := time.Now()
+	qqPost(t, s, qqMessage("m-lease", "五笔怎么切换"))
+	time.Sleep(200 * time.Millisecond)
+	if n := len(fake.replyTexts()); n != 0 {
+		t.Fatal("handled while another replica held the lease", fake.replyTexts())
+	}
+	if err := limiter.ReleaseRateLimit(context.Background(), "qq-bot-busy", "GROUP1/MEMBER1"); err != nil {
+		t.Fatal(err)
+	}
+	s.qqWorkers.Wait()
+	if elapsed := time.Since(started); elapsed > 2*time.Second || fake.replyTexts()[0] != "在设置的「输入方案」里选五笔。" || limiter.counts["qq-bot-busy|GROUP1/MEMBER1"] != 0 {
+		t.Fatal(elapsed, fake.replyTexts(), limiter.counts)
+	}
+	qqBusyWait = 100 * time.Millisecond
+	limiter.counts["qq-bot-busy|GROUP1/MEMBER1"] = 1
+	qqDeliver(t, s, "m-lease-stuck", "五笔怎么切换")
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "在设置的「输入方案」里选五笔。" {
+		t.Fatal(last)
+	}
+}
+
+// Close 先等进行中的 QQ 消息处理完再取消 lifetime；等满 qqCloseGrace 还没完的才取消。
+func TestQQBotCloseWaitsForWorkers(t *testing.T) {
+	s, _, _ := qqServer(t)
+	finished := make(chan bool, 1)
+	s.qqWorkers.Add(1)
+	go func() {
+		defer s.qqWorkers.Done()
+		select {
+		case <-time.After(200 * time.Millisecond):
+			finished <- true
+		case <-s.lifetime.Done():
+			finished <- false
+		}
+	}()
+	s.Close()
+	if !<-finished || s.lifetime.Err() == nil {
+		t.Fatal("Close cancelled a running worker, or never cancelled lifetime")
+	}
+	defer func(grace time.Duration) { qqCloseGrace = grace }(qqCloseGrace)
+	qqCloseGrace = 50 * time.Millisecond
+	s, _, _ = qqServer(t)
+	s.qqWorkers.Add(1)
+	go func() {
+		defer s.qqWorkers.Done()
+		<-s.lifetime.Done()
+	}()
+	started := time.Now()
+	s.Close()
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatal("Close waited past qqCloseGrace", elapsed)
+	}
+}
+
+// 记进汇总 issue 的评论按提问的人分开写「管理员问」「群友问」；答上了、但模型说有一部分资料里没有（gap）的也记进去，开头写「（答得不全）」，gap 为空的不记，回复只有答案本身。
+func TestQQBotGapPrefixAndVagueAnswers(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.qq.config.Admins = []string{"ADMIN1"}
+	s.qq.config.GapsRepo = "o/docs"
+	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题",` + qqAppAuthor + `}]`
+	fake.summary = `{"kind":"other"}`
+	const path = "/repos/o/docs/issues/77/comments"
+	comment := func() string {
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		body, _ := fake.comments[path]["body"].(string)
+		delete(fake.comments, path)
+		return body
+	}
+	deliver := func(id, member, content string) {
+		t.Helper()
+		qqPost(t, s, qqMessageFrom(id, member, content))
+		s.qqWorkers.Wait()
+	}
+	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
+	fake.answer = `{"type":"unknown","topic":"Windows 版能否设置候选窗透明度"}`
+	deliver("m-gp-admin", "ADMIN1", "候选窗能调透明度吗")
+	if got := comment(); got != "管理员问：Windows 版能否设置候选窗透明度" {
+		t.Fatal(got)
+	}
+	fake.answer = `{"type":"unknown","topic":"macOS 版能否设置候选窗透明度"}`
+	deliver("m-gp-member", "MEMBER9", "mac 候选窗能调透明度吗")
+	if got := comment(); got != "群友问：macOS 版能否设置候选窗透明度" {
+		t.Fatal(got)
+	}
+	fake.answer = `{"type":"answered","answer":"Windows 上在设置的「词库」里导入就行，Linux 版能不能这样导入不太确定。","gap":"Linux 版能否导入本地词库"}`
+	deliver("m-gp-vague", "MEMBER9", "能导入自己的词库吗")
+	if got := comment(); got != "群友问（答得不全）：Linux 版能否导入本地词库" || last() != "Windows 上在设置的「词库」里导入就行，Linux 版能不能这样导入不太确定。" {
+		t.Fatal(got, last())
+	}
+	fake.answer = `{"type":"answered","answer":"自动同步的细节我不太确定，可以先手动导出再导入。","gap":"词库能否自动同步到另一台电脑"}`
+	deliver("m-gp-vague-admin", "ADMIN1", "词库怎么同步到另一台电脑")
+	if got := comment(); got != "管理员问（答得不全）：词库能否自动同步到另一台电脑" {
+		t.Fatal(got)
+	}
+	fake.answer = `{"type":"answered","answer":"在设置的「输入方案」里选五笔。","gap":""}`
+	deliver("m-gp-full", "MEMBER9", "五笔怎么切换")
+	if got := comment(); got != "" || last() != "在设置的「输入方案」里选五笔。" {
+		t.Fatal(got, last())
+	}
+}
+
+// 现查后答上的问题记成文档候选时用模型的概括，不用离开上一轮就看不懂的原话；问最新版本、更新了什么的（挑段落标了 releases）有时效性，答上答不上都不记。
+func TestQQBotFAQCandidateTopicAndReleases(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	candidates := &memoryFAQCandidates{}
+	s.qqFAQCandidates = candidates
+	deliver := func(id, content string) {
+		t.Helper()
+		qqPost(t, s, qqMessageFrom(id, "MEMBER9", content))
+		s.qqWorkers.Wait()
+	}
+	fake.selected = `{"sections":[],"lookup":true}`
+	fake.answer = `{"type":"unknown"}`
+	fake.researchPath = "/repos/metasequoiaime/msime/contributors?per_page=100"
+	fake.extraGitHub = map[string]string{"/repos/metasequoiaime/msime/contributors?per_page=100": `[]`}
+	fake.answerAfterResearch = `{"type":"answered","answer":"安卓版在设置的「键盘」里关掉「显示辅助码」就行。","topic":"安卓版能否关闭辅助码提示"}`
+	deliver("m-ft-1", "安卓呢？可以关闭辅助码吗？")
+	if len(candidates.items) != 1 || candidates.items[0].Question != "安卓版能否关闭辅助码提示" || candidates.items[0].Answer != "安卓版在设置的「键盘」里关掉「显示辅助码」就行。" {
+		t.Fatal(candidates.items)
+	}
+	// 模型没给概括时照旧记原话。
+	fake.answerAfterResearch = `{"type":"answered","answer":"主仓库目前没有列出贡献者。"}`
+	deliver("m-ft-2", "水杉有几个开发？")
+	if len(candidates.items) != 2 || candidates.items[1].Question != "水杉有几个开发？" {
+		t.Fatal(candidates.items)
+	}
+	fake.selected = `{"sections":[],"lookup":true,"releases":true}`
+	fake.answerAfterResearch = `{"type":"answered","answer":"Windows 0.10.1 修了候选框闪烁。","topic":"Windows 0.10.1 更新了什么"}`
+	deliver("m-ft-3", "win 0.10.1 更新了啥")
+	fake.selected, fake.researchPath = `{"sections":[1],"releases":true}`, ""
+	fake.answer = `{"type":"unknown","topic":"macOS 最新版更新了什么"}`
+	deliver("m-ft-4", "mac 最新版更新了啥")
+	if len(candidates.items) != 2 {
+		t.Fatal(candidates.items)
+	}
+}
+
+// 有创建超过一小时的草稿或文档候选时，管理员的答疑回复后面接一句积压提醒：接在第一条回复里，不多占一次回复；同一个管理员 12 小时内只接一次，额度在真接上时才扣；发命令时不接；只有刚起的条目时不提醒；「暂时处理不了」不接。
+func TestQQBotBacklogHint(t *testing.T) {
+	s, fake, limiter := qqServer(t)
+	s.qq.config.Admins = []string{"ADMIN1", "ADMIN2", "ADMIN3"}
+	s.qq.now = func() time.Time { return time.Date(2026, 10, 12, 4, 0, 0, 0, time.UTC) }
+	drafts := &memoryDrafts{}
+	s.qqDrafts = drafts
+	if _, err := drafts.CreateQQDraft(context.Background(), "GROUP1/MEMBER9", "候选框跑到左上角", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	candidates := &memoryFAQCandidates{items: []account.QQFAQCandidate{{ID: 1, Question: "双拼怎么设置", CreatedAt: time.Date(2026, 10, 12, 2, 0, 0, 0, time.UTC)}, {ID: 2, Question: "五笔怎么切换", CreatedAt: time.Date(2026, 10, 12, 3, 50, 0, 0, time.UTC)}}}
+	s.qqFAQCandidates = candidates
+	fake.summary = `{"kind":"other"}`
+	const hint = "\n\n（还有 1 份草稿、2 条文档缺口待处理，发「草稿」「文档缺口」看）"
+	ask := func(id, member, content string) []string {
+		t.Helper()
+		before := len(fake.replyTexts())
+		qqPost(t, s, qqMessageFrom(id, member, content))
+		s.qqWorkers.Wait()
+		return fake.replyTexts()[before:]
+	}
+	if replies := ask("m-bl-1", "ADMIN1", "五笔怎么切换"); len(replies) != 1 || replies[0] != "在设置的「输入方案」里选五笔。"+hint {
+		t.Fatal(replies)
+	}
+	if replies := ask("m-bl-2", "ADMIN1", "双拼怎么设置"); len(replies) != 1 || replies[0] != "在设置的「输入方案」里选五笔。" {
+		t.Fatal(replies)
+	}
+	// 群友的回复不接。
+	if replies := ask("m-bl-member", "MEMBER9", "五笔怎么切换"); len(replies) != 1 || strings.Contains(replies[0], "待处理") {
+		t.Fatal(replies)
+	}
+	// 命令不接，也不占 12 小时的额度：之后的答疑照样接上。
+	if replies := ask("m-bl-cmd", "ADMIN2", "文档缺口"); len(replies) != 1 || strings.Contains(replies[0], "待处理，发") || limiter.counts["qq-bot-backlog-hint|ADMIN2"] != 0 {
+		t.Fatal(replies, limiter.counts)
+	}
+	if replies := ask("m-bl-3", "ADMIN2", "五笔怎么切换"); len(replies) != 1 || !strings.HasSuffix(replies[0], hint) {
+		t.Fatal(replies)
+	}
+	// 只有刚起不到一小时的条目时不提醒；只有一样超时的只写那一样。
+	candidates.items = candidates.items[1:]
+	if got := s.qqBacklogHint(context.Background()); got != "\n\n（还有 1 份草稿待处理，发「草稿」看）" {
+		t.Fatalf("%q", got)
+	}
+	drafts.drafts[0].CreatedAt = time.Date(2026, 10, 12, 3, 30, 0, 0, time.UTC)
+	if got := s.qqBacklogHint(context.Background()); got != "" {
+		t.Fatalf("%q", got)
+	}
+	if replies := ask("m-bl-fresh", "ADMIN3", "五笔怎么切换"); len(replies) != 1 || replies[0] != "在设置的「输入方案」里选五笔。" || limiter.counts["qq-bot-backlog-hint|ADMIN3"] != 0 {
+		t.Fatal(replies, limiter.counts)
+	}
+	// 「暂时处理不了」不接，提醒留给后面的回复。
+	drafts.drafts[0].CreatedAt = time.Date(2026, 10, 12, 1, 0, 0, 0, time.UTC)
+	var got []string
+	reply := s.qqBacklogReply(context.Background(), "ADMIN3", func(text string) { got = append(got, text) })
+	reply(qqReplyUnavailable)
+	reply("好的")
+	reply("再一句")
+	if want := []string{qqReplyUnavailable, "好的\n\n（还有 1 份草稿待处理，发「草稿」看）", "再一句"}; !slices.Equal(got, want) {
+		t.Fatalf("%q", got)
 	}
 }

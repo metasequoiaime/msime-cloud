@@ -43,11 +43,13 @@ var (
 // qqAnswerPrefix 是「写进FAQ F12 答：……」里答案的开头。
 var qqAnswerPrefix = regexp.MustCompile(`^答[:：]\s*`)
 
-// recordQQFAQCandidate 记下一条文档候选；同一个问题 7 天内只记一次，出错只记日志。
+// recordQQFAQCandidate 记下一条文档候选；同一个问题 7 天内只记一次，出错只记日志。在回复之后调用，不跟随处理消息的 ctx、另限 3 秒（写法照 recordQQTurn）：滚动发布取消了 ctx 也要记下。
 func (s *Server) recordQQFAQCandidate(ctx context.Context, question, answer string) {
 	if s.qqFAQCandidates == nil {
 		return
 	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
 	question = qqTruncate(strings.TrimSpace(question), qqFAQCandidateRunes)
 	if question == "" {
 		return

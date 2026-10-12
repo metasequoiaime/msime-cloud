@@ -809,10 +809,55 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 	}
 	// 普通群友的消息都按问题回答。管理员的消息先整理一遍：只有明确要求记录（qqIssueIntent 或模型给出的 intent）的具体反馈才提交，其余的照常答疑，报问题时在答案后提示用「提issue」。曾经管理员的每条消息都先自动判断、像反馈就提交，群里讨论和吐槽也被提成了 issue；后来没要求记录的具体反馈只回一句复述，管理员问「候选框老跑到左上角怎么回事」拿不到回答。
 	if admin {
-		outcome = "admin_" + s.fileAdminFeedback(ctx, m, text, false, reply, progress)
+		outcome = "admin_" + s.fileAdminFeedback(ctx, m, text, false, s.qqBacklogReply(ctx, m.Author.MemberOpenID, reply), progress)
 		return
 	}
 	outcome = s.answerQQQuestion(ctx, m.GroupOpenID, m.Author.MemberOpenID, text, false, reply, progress)
+}
+
+// qqBacklogAge 是积压提醒只数创建了多久以上的草稿和文档候选，见 qqBacklogHint：刚起的草稿还轮不到催。
+const qqBacklogAge = time.Hour
+
+// qqBacklogHint 是给管理员的积压提醒：还没提交的草稿或还没处理的文档候选里有创建超过 qqBacklogAge 的时，返回「（还有 N 份草稿、M 条文档缺口待处理，发「草稿」「文档缺口」看）」，N、M 是各自的总数，只写有超时条目的那一样；都没有或查询出错时返回空字符串。草稿和文档候选曾经只有管理员发「草稿」「文档缺口」「周报」时才看得到，没人主动去查，群友收到的「管理员确认后会转给开发者」就落空了。
+func (s *Server) qqBacklogHint(ctx context.Context) string {
+	cutoff := s.qq.now().Add(-qqBacklogAge)
+	var parts, commands []string
+	if s.qqDrafts != nil {
+		// 列表按创建时间最早的在前，只取一条就知道有没有超时的。
+		if drafts, total, err := s.qqDrafts.OpenQQDrafts(ctx, 1); err == nil && len(drafts) > 0 && drafts[0].CreatedAt.Before(cutoff) {
+			parts, commands = append(parts, fmt.Sprintf("%d 份草稿", total)), append(commands, "「草稿」")
+		}
+	}
+	if s.qqFAQCandidates != nil {
+		if candidates, total, err := s.qqFAQCandidates.OpenQQFAQCandidates(ctx, 1); err == nil && len(candidates) > 0 && candidates[0].CreatedAt.Before(cutoff) {
+			parts, commands = append(parts, fmt.Sprintf("%d 条文档缺口", total)), append(commands, "「文档缺口」")
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "\n\n（还有 " + strings.Join(parts, "、") + "待处理，发" + strings.Join(commands, "") + "看）"
+}
+
+// qqBacklogReply 包一层管理员这条消息的 reply：有积压（qqBacklogHint）时把提醒接在第一条回复后面，同一个管理员 12 小时内只接一次。接在已有的回复里，不额外占被动回复次数；过渡语走 progress，不经过这里。「暂时处理不了」不接：send 要按原文把它换成「正在更新」「说具体些」，接上提醒就认不出了，提醒留给后面的回复。12 小时的额度在真要接上时才扣，这条消息没有回复（或只有「暂时处理不了」）时不占。只用在命令之后的答疑和提 issue（见 handleQQFeedback），管理员发「草稿」「文档缺口」这些命令时本来就看得到积压，不接。积压在回复前查好：两张表都只有几条到几十条未处理的行，各查一条就够，不拖慢回复。
+func (s *Server) qqBacklogReply(ctx context.Context, admin string, reply func(string)) func(string) {
+	hint := s.qqBacklogHint(ctx)
+	if hint == "" {
+		return reply
+	}
+	var once sync.Once
+	return func(text string) {
+		if text != qqReplyUnavailable {
+			once.Do(func() {
+				if err := s.limits.RateLimit(ctx, "qq-bot-backlog-hint", admin, 1, 12*time.Hour); err == nil {
+					text += hint
+				} else if !errors.Is(err, account.ErrLimited) {
+					slog.Warn("qq bot: backlog hint limit unavailable", "reason", err.Error())
+				}
+			})
+		}
+		reply(text)
+	}
 }
 
 // qqIssueIntentWords 是表示「请把这条记成 issue」的说法，与去掉空白、转成小写后的消息比较。只收祈使的说法：单独的「记录」会误中「历史记录丢了」这类 bug 描述。
@@ -944,6 +989,15 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 	var last account.QQTurn
 	if retrying {
 		last = history[len(history)-1]
+		// 上一轮已经是重答（强制现查过）时不再现查重答：再查一遍要几十秒，答出来的多半和上次差不多，曾经每说一次「不对」就跑一次最慢的那条路，差评也一次记一行。这次只把这句并进那条差评，告诉群友已经转给管理员。不记进对话历史：最后一轮仍是那次重答，再说「不对」也走到这里。
+		if strings.HasPrefix(last.Answer, qqRetryPrefix) {
+			if s.recordQQBadAnswerAgain(ctx, last, feedback) {
+				reply(qqRetryExhausted)
+				return "retry_exhausted"
+			}
+			reply(qqRetryExhaustedUnrecorded)
+			return "retry_exhausted_unrecorded"
+		}
 		question, history, ask.force = qqRetryQuestion(last, feedback), history[:len(history)-1], true
 	}
 	answer, err := s.qqAnswerQuestion(ctx, history, question, ask)
@@ -972,13 +1026,16 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 	case answer.Type == "unknown":
 		recorded = qqUnansweredTurn
 		outcome = "unknown_unrecorded"
-		if s.recordQQGap(ctx, "群友问：", answer.Topic) {
+		if s.recordQQGap(ctx, qqGapPrefix(admin, ""), answer.Topic) {
 			reply(qqUnknownReply)
 			outcome = "unknown"
 		} else {
 			reply(qqUnknownUnrecordedReply)
 		}
-		s.recordQQFAQCandidate(ctx, cmp.Or(answer.Topic, question), "")
+		// 问最新版本、更新了什么的问题有时效性，不记成文档候选（下同）。
+		if !answer.Releases {
+			s.recordQQFAQCandidate(ctx, cmp.Or(answer.Topic, question), "")
+		}
 		// 改进依据只记模型的概括，不记原话：现查过还答不上算机器人能力问题，没现查就答不上算文档没写（见 qq_improvements.go）。
 		category := "docs"
 		if answer.Researched {
@@ -1020,15 +1077,27 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 		}
 	default:
 		reply(answer.Answer)
-		// 靠现查 GitHub 才答上的问题，说明文档里缺这块。
-		if answer.Type == "answered" && answer.Researched {
-			s.recordQQFAQCandidate(ctx, question, answer.Answer)
+		// 靠现查 GitHub 才答上的问题，说明文档里缺这块。记模型的概括（提示词要求现查答上时也填 topic），没有概括时才记原话：原话常常离开上一轮就看不懂（「安卓呢？可以关闭辅助码吗？」），同一件事换个说法也去不了重。
+		if answer.Type == "answered" && answer.Researched && !answer.Releases {
+			s.recordQQFAQCandidate(ctx, cmp.Or(answer.Topic, question), answer.Answer)
+		}
+		// 答上了、但模型说有一部分资料里没有（gap）的问题也记进汇总 issue：回答提示要求不确定的地方半句话带过，unknown 只用于完全没有资料，答得含糊的问题曾经哪里都不记，文档缺口被低估。现查过的不记，它已经记成了文档候选。记没记下不影响回复，也不占被动回复次数。
+		if answer.Type == "answered" && answer.Gap != "" && !answer.Researched {
+			s.recordQQGap(ctx, qqGapPrefix(admin, "（答得不全）"), answer.Gap)
 		}
 	}
 	if s.qqHistory != nil {
 		s.recordQQTurn(ctx, subject, question, recorded)
 	}
 	return outcome
+}
+
+// qqGapPrefix 是记进汇总 issue 的评论开头：管理员的提问写「管理员问」，其余写「群友问」，note 接在后面（例如「（答得不全）」）。管理员自己试机器人的问题曾经也写成「群友问」，维护者分不清哪些是群友真的问过的。
+func qqGapPrefix(admin bool, note string) string {
+	if admin {
+		return "管理员问" + note + "："
+	}
+	return "群友问" + note + "："
 }
 
 // recordQQTurn 把一轮问答记进对话历史，出错只记日志。不跟随处理消息的 ctx：回复已经发出去了，滚动发布时 Close 等满 qqCloseGrace 取消了 ctx 也要记下，不然下一句「还是不行」接不上前文（线上出现过答案发出去、同一秒记下 conversation not recorded reason="context canceled"）；另限 3 秒，数据库卡住时不拖住关停。写法照 recordQQOutcome。

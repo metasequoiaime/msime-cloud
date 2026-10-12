@@ -5590,6 +5590,22 @@ func (m *memoryBadAnswers) AddQQBadAnswer(ctx context.Context, question, answer,
 	m.items = append([]account.QQBadAnswer{{ID: int64(len(m.items) + 1), Question: question, Answer: answer, Feedback: feedback, Retry: retry, CreatedAt: time.Date(2026, 10, 12, 1, 0, 0, 0, time.UTC)}}, m.items...)
 	return nil
 }
+
+// UpdateQQBadAnswerFeedback 和 account 包一样把这句接在同一个问题最新的、还没处理的差评后面；测试里的差评都是刚记的，不看时间范围。
+func (m *memoryBadAnswers) UpdateQQBadAnswerFeedback(ctx context.Context, question, feedback string, _ time.Duration) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, b := range m.items {
+		if b.Question == question && m.state[b.ID] == "" {
+			m.items[i].Feedback = qqTruncate(b.Feedback+"；"+feedback, 200)
+			return true, nil
+		}
+	}
+	return false, nil
+}
 func (m *memoryBadAnswers) RecentQQBadAnswers(_ context.Context, _ time.Duration, limit int) ([]account.QQBadAnswer, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -5670,6 +5686,28 @@ func TestQQBotBadAnswerRetry(t *testing.T) {
 	if turns := history.turns["GROUP1/MEMBER1"]; turns[len(turns)-1].Question != "五笔怎么切换" || !strings.HasPrefix(turns[len(turns)-1].Answer, qqRetryPrefix) {
 		t.Fatal(turns)
 	}
+	// 重答过以后再说「不对」：不再现查重答（不调模型、不回「我查一下」），这句并进同一条差评，差评表还是一行；对话历史不变，第三次说也一样。
+	calls, turnCount := len(fake.chatCalls), len(history.turns["GROUP1/MEMBER1"])
+	for i, again := range []string{"还是不对", "不对"} {
+		before = len(fake.replyTexts())
+		deliver("m-b2-again-"+strconv.Itoa(i), "MEMBER1", again)
+		if replies := fake.replyTexts()[before:]; len(replies) != 1 || replies[0] != qqRetryExhausted {
+			t.Fatal(replies)
+		}
+	}
+	if len(fake.chatCalls) != calls || len(history.turns["GROUP1/MEMBER1"]) != turnCount {
+		t.Fatal(fake.chatCalls[calls:], history.turns["GROUP1/MEMBER1"])
+	}
+	if len(bad.items) != 1 || bad.items[0].Feedback != "不对啊；还是不对；不对" || bad.items[0].Retry != "按 Ctrl+` 打开方案菜单选五笔。" {
+		t.Fatal(bad.items)
+	}
+	// 差评记不下时不说已经转给管理员。
+	s.qqBadAnswers = nil
+	deliver("m-b2-unrecorded", "MEMBER1", "不对")
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != qqRetryExhaustedUnrecorded || len(fake.chatCalls) != calls {
+		t.Fatal(last, fake.chatCalls[calls:])
+	}
+	s.qqBadAnswers = bad
 	// 长消息不算差评。
 	fake.answer = `{"type":"answered","answer":"可以。"}`
 	deliver("m-b3", "MEMBER1", "不对，我想问的是另外一件事：能不能在 Linux 上用五笔打繁体字并且同步词库到手机")
@@ -5681,7 +5719,7 @@ func TestQQBotBadAnswerRetry(t *testing.T) {
 		t.Fatal(fake.replyTexts())
 	}
 	deliver("m-b-list", "ADMIN1", "差评")
-	if last := fake.replyTexts()[len(fake.replyTexts())-1]; !strings.HasSuffix(last, "\n- B1 10-12 09:00 问：五笔怎么切换（群友：不对啊）\n  重答：按 Ctrl+` 打开方案菜单选五笔。") {
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; !strings.HasSuffix(last, "\n- B1 10-12 09:00 问：五笔怎么切换（群友：不对啊；还是不对；不对）\n  重答：按 Ctrl+` 打开方案菜单选五笔。") {
 		t.Fatal(last)
 	}
 }
@@ -5854,10 +5892,15 @@ func TestQQBotWeeklyDigest(t *testing.T) {
 	if fake.replyTexts()[len(fake.replyTexts())-1] != "只有管理员能用「周报」。" {
 		t.Fatal(fake.replyTexts())
 	}
+	// 管理员发的命令（cmd_*）不带 admin_ 前缀，算在群友那一行的「命令」里；管理员的答疑和超过自己额度的（limited_admin）算在管理员那一行。
+	deliver("m-d-admin-cmd", "ADMIN1", "版本")
+	stats.mu.Lock()
+	stats.counts["admin_answered"], stats.counts["admin_answered_hint"], stats.counts["admin_unknown"], stats.counts["admin_chat"], stats.counts["admin_filed"], stats.counts["limited_admin"] = 1, 1, 1, 2, 1, 1
+	stats.mu.Unlock()
 	fake.searchTotals = map[string]int{`repo:o/r is:issue label:"source/qq" created:>=2026-10-06T00:00:00+08:00`: 2, `repo:o/win is:issue label:"source/qq" created:>=2026-10-06T00:00:00+08:00`: 1}
 	deliver("m-d-digest", "ADMIN1", "周报")
 	last := fake.replyTexts()[len(fake.replyTexts())-1]
-	for _, want := range []string{"最近 7 天（10-06 到 10-12）：", "收到 4 条 @：答上 1、答不上 1（答上率 50%）、闲聊 0、命令 2", "群友说答错 0 次", "待提交的草稿 0 份", "文档缺口 1 条", "这周从 QQ 提的 issue 3 个"} {
+	for _, want := range []string{"最近 7 天（10-06 到 10-12）：", "\n- 群友 @ 5 条：答上 1、答不上 1（答上率 50%）、闲聊 0、命令 3、限流 0、出错 0、回复没发出去 0\n", "\n- 管理员 @ 7 条：答上 2、答不上 1（答上率 66%）、闲聊 2、限流 1、出错 0\n", "群友说答错 0 次", "待提交的草稿 0 份", "文档缺口 1 条", "这周从 QQ 提的 issue 3 个"} {
 		if !strings.Contains(last, want) {
 			t.Fatalf("missing %q in %q", want, last)
 		}
@@ -6207,5 +6250,151 @@ func TestQQBotCloseWaitsForWorkers(t *testing.T) {
 	s.Close()
 	if elapsed := time.Since(started); elapsed > 5*time.Second {
 		t.Fatal("Close waited past qqCloseGrace", elapsed)
+	}
+}
+
+// 记进汇总 issue 的评论按提问的人分开写「管理员问」「群友问」；答上了、但模型说有一部分资料里没有（gap）的也记进去，开头写「（答得不全）」，gap 为空的不记，回复只有答案本身。
+func TestQQBotGapPrefixAndVagueAnswers(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.qq.config.Admins = []string{"ADMIN1"}
+	s.qq.config.GapsRepo = "o/docs"
+	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题",` + qqAppAuthor + `}]`
+	fake.summary = `{"kind":"other"}`
+	const path = "/repos/o/docs/issues/77/comments"
+	comment := func() string {
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		body, _ := fake.comments[path]["body"].(string)
+		delete(fake.comments, path)
+		return body
+	}
+	deliver := func(id, member, content string) {
+		t.Helper()
+		qqPost(t, s, qqMessageFrom(id, member, content))
+		s.qqWorkers.Wait()
+	}
+	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
+	fake.answer = `{"type":"unknown","topic":"Windows 版能否设置候选窗透明度"}`
+	deliver("m-gp-admin", "ADMIN1", "候选窗能调透明度吗")
+	if got := comment(); got != "管理员问：Windows 版能否设置候选窗透明度" {
+		t.Fatal(got)
+	}
+	fake.answer = `{"type":"unknown","topic":"macOS 版能否设置候选窗透明度"}`
+	deliver("m-gp-member", "MEMBER9", "mac 候选窗能调透明度吗")
+	if got := comment(); got != "群友问：macOS 版能否设置候选窗透明度" {
+		t.Fatal(got)
+	}
+	fake.answer = `{"type":"answered","answer":"Windows 上在设置的「词库」里导入就行，Linux 版能不能这样导入不太确定。","gap":"Linux 版能否导入本地词库"}`
+	deliver("m-gp-vague", "MEMBER9", "能导入自己的词库吗")
+	if got := comment(); got != "群友问（答得不全）：Linux 版能否导入本地词库" || last() != "Windows 上在设置的「词库」里导入就行，Linux 版能不能这样导入不太确定。" {
+		t.Fatal(got, last())
+	}
+	fake.answer = `{"type":"answered","answer":"自动同步的细节我不太确定，可以先手动导出再导入。","gap":"词库能否自动同步到另一台电脑"}`
+	deliver("m-gp-vague-admin", "ADMIN1", "词库怎么同步到另一台电脑")
+	if got := comment(); got != "管理员问（答得不全）：词库能否自动同步到另一台电脑" {
+		t.Fatal(got)
+	}
+	fake.answer = `{"type":"answered","answer":"在设置的「输入方案」里选五笔。","gap":""}`
+	deliver("m-gp-full", "MEMBER9", "五笔怎么切换")
+	if got := comment(); got != "" || last() != "在设置的「输入方案」里选五笔。" {
+		t.Fatal(got, last())
+	}
+}
+
+// 现查后答上的问题记成文档候选时用模型的概括，不用离开上一轮就看不懂的原话；问最新版本、更新了什么的（挑段落标了 releases）有时效性，答上答不上都不记。
+func TestQQBotFAQCandidateTopicAndReleases(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	candidates := &memoryFAQCandidates{}
+	s.qqFAQCandidates = candidates
+	deliver := func(id, content string) {
+		t.Helper()
+		qqPost(t, s, qqMessageFrom(id, "MEMBER9", content))
+		s.qqWorkers.Wait()
+	}
+	fake.selected = `{"sections":[],"lookup":true}`
+	fake.answer = `{"type":"unknown"}`
+	fake.researchPath = "/repos/metasequoiaime/msime/contributors?per_page=100"
+	fake.extraGitHub = map[string]string{"/repos/metasequoiaime/msime/contributors?per_page=100": `[]`}
+	fake.answerAfterResearch = `{"type":"answered","answer":"安卓版在设置的「键盘」里关掉「显示辅助码」就行。","topic":"安卓版能否关闭辅助码提示"}`
+	deliver("m-ft-1", "安卓呢？可以关闭辅助码吗？")
+	if len(candidates.items) != 1 || candidates.items[0].Question != "安卓版能否关闭辅助码提示" || candidates.items[0].Answer != "安卓版在设置的「键盘」里关掉「显示辅助码」就行。" {
+		t.Fatal(candidates.items)
+	}
+	// 模型没给概括时照旧记原话。
+	fake.answerAfterResearch = `{"type":"answered","answer":"主仓库目前没有列出贡献者。"}`
+	deliver("m-ft-2", "水杉有几个开发？")
+	if len(candidates.items) != 2 || candidates.items[1].Question != "水杉有几个开发？" {
+		t.Fatal(candidates.items)
+	}
+	fake.selected = `{"sections":[],"lookup":true,"releases":true}`
+	fake.answerAfterResearch = `{"type":"answered","answer":"Windows 0.10.1 修了候选框闪烁。","topic":"Windows 0.10.1 更新了什么"}`
+	deliver("m-ft-3", "win 0.10.1 更新了啥")
+	fake.selected, fake.researchPath = `{"sections":[1],"releases":true}`, ""
+	fake.answer = `{"type":"unknown","topic":"macOS 最新版更新了什么"}`
+	deliver("m-ft-4", "mac 最新版更新了啥")
+	if len(candidates.items) != 2 {
+		t.Fatal(candidates.items)
+	}
+}
+
+// 有创建超过一小时的草稿或文档候选时，管理员的答疑回复后面接一句积压提醒：接在第一条回复里，不多占一次回复；同一个管理员 12 小时内只接一次，额度在真接上时才扣；发命令时不接；只有刚起的条目时不提醒；「暂时处理不了」不接。
+func TestQQBotBacklogHint(t *testing.T) {
+	s, fake, limiter := qqServer(t)
+	s.qq.config.Admins = []string{"ADMIN1", "ADMIN2", "ADMIN3"}
+	s.qq.now = func() time.Time { return time.Date(2026, 10, 12, 4, 0, 0, 0, time.UTC) }
+	drafts := &memoryDrafts{}
+	s.qqDrafts = drafts
+	if _, err := drafts.CreateQQDraft(context.Background(), "GROUP1/MEMBER9", "候选框跑到左上角", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	candidates := &memoryFAQCandidates{items: []account.QQFAQCandidate{{ID: 1, Question: "双拼怎么设置", CreatedAt: time.Date(2026, 10, 12, 2, 0, 0, 0, time.UTC)}, {ID: 2, Question: "五笔怎么切换", CreatedAt: time.Date(2026, 10, 12, 3, 50, 0, 0, time.UTC)}}}
+	s.qqFAQCandidates = candidates
+	fake.summary = `{"kind":"other"}`
+	const hint = "\n\n（还有 1 份草稿、2 条文档缺口待处理，发「草稿」「文档缺口」看）"
+	ask := func(id, member, content string) []string {
+		t.Helper()
+		before := len(fake.replyTexts())
+		qqPost(t, s, qqMessageFrom(id, member, content))
+		s.qqWorkers.Wait()
+		return fake.replyTexts()[before:]
+	}
+	if replies := ask("m-bl-1", "ADMIN1", "五笔怎么切换"); len(replies) != 1 || replies[0] != "在设置的「输入方案」里选五笔。"+hint {
+		t.Fatal(replies)
+	}
+	if replies := ask("m-bl-2", "ADMIN1", "双拼怎么设置"); len(replies) != 1 || replies[0] != "在设置的「输入方案」里选五笔。" {
+		t.Fatal(replies)
+	}
+	// 群友的回复不接。
+	if replies := ask("m-bl-member", "MEMBER9", "五笔怎么切换"); len(replies) != 1 || strings.Contains(replies[0], "待处理") {
+		t.Fatal(replies)
+	}
+	// 命令不接，也不占 12 小时的额度：之后的答疑照样接上。
+	if replies := ask("m-bl-cmd", "ADMIN2", "文档缺口"); len(replies) != 1 || strings.Contains(replies[0], "待处理，发") || limiter.counts["qq-bot-backlog-hint|ADMIN2"] != 0 {
+		t.Fatal(replies, limiter.counts)
+	}
+	if replies := ask("m-bl-3", "ADMIN2", "五笔怎么切换"); len(replies) != 1 || !strings.HasSuffix(replies[0], hint) {
+		t.Fatal(replies)
+	}
+	// 只有刚起不到一小时的条目时不提醒；只有一样超时的只写那一样。
+	candidates.items = candidates.items[1:]
+	if got := s.qqBacklogHint(context.Background()); got != "\n\n（还有 1 份草稿待处理，发「草稿」看）" {
+		t.Fatalf("%q", got)
+	}
+	drafts.drafts[0].CreatedAt = time.Date(2026, 10, 12, 3, 30, 0, 0, time.UTC)
+	if got := s.qqBacklogHint(context.Background()); got != "" {
+		t.Fatalf("%q", got)
+	}
+	if replies := ask("m-bl-fresh", "ADMIN3", "五笔怎么切换"); len(replies) != 1 || replies[0] != "在设置的「输入方案」里选五笔。" || limiter.counts["qq-bot-backlog-hint|ADMIN3"] != 0 {
+		t.Fatal(replies, limiter.counts)
+	}
+	// 「暂时处理不了」不接，提醒留给后面的回复。
+	drafts.drafts[0].CreatedAt = time.Date(2026, 10, 12, 1, 0, 0, 0, time.UTC)
+	var got []string
+	reply := s.qqBacklogReply(context.Background(), "ADMIN3", func(text string) { got = append(got, text) })
+	reply(qqReplyUnavailable)
+	reply("好的")
+	reply("再一句")
+	if want := []string{qqReplyUnavailable, "好的\n\n（还有 1 份草稿待处理，发「草稿」看）", "再一句"}; !slices.Equal(got, want) {
+		t.Fatalf("%q", got)
 	}
 }

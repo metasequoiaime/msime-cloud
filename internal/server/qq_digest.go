@@ -54,6 +54,20 @@ func qqOutcomeKind(outcome string) string {
 	}
 }
 
+// qqAdminOutcome 判断处理结果是不是管理员的消息：答疑和提 issue 的结果带 admin_ 前缀（见 handleQQFeedback），管理员超过自己每天额度的是 limited_admin。命令的结果（cmd_*）不带前缀，管理员发的命令也算在群友那一行的「命令」里；回复没发出去（reply_failed）和超时（timeout）改写时去掉了前缀，同样算在群友那一行。
+func qqAdminOutcome(outcome string) bool {
+	return strings.HasPrefix(outcome, "admin_") || outcome == "limited_admin"
+}
+
+// qqAnswerRate 是周报里一组结果的答上率：答上的占答上和答不上之和的百分比，两样都没有时写「—」。
+func qqAnswerRate(kinds map[string]int) string {
+	asked := kinds["answered"] + kinds["unknown"]
+	if asked == 0 {
+		return "—"
+	}
+	return fmt.Sprintf("%d%%", kinds["answered"]*100/asked)
+}
+
 // qqWeeklyDigest 回复最近 7 天的周报。
 func (s *Server) qqWeeklyDigest(ctx context.Context, reply func(string)) {
 	now := s.qq.now().In(qqStatsZone)
@@ -65,17 +79,20 @@ func (s *Server) qqWeeklyDigest(ctx context.Context, reply func(string)) {
 		if err != nil {
 			slog.Warn("qq bot: outcomes unavailable", "reason", err.Error())
 		} else {
-			kinds := map[string]int{}
-			total := 0
+			// 群友和管理员分两行：管理员自己试机器人的消息曾经占了一大半，混在一起算出的答上率看不出群友的情况。
+			members, admins := map[string]int{}, map[string]int{}
+			memberTotal, adminTotal := 0, 0
 			for outcome, n := range outcomes {
-				kinds[qqOutcomeKind(outcome)] += n
-				total += n
+				if qqAdminOutcome(outcome) {
+					admins[qqOutcomeKind(outcome)] += n
+					adminTotal += n
+					continue
+				}
+				members[qqOutcomeKind(outcome)] += n
+				memberTotal += n
 			}
-			rate := "—"
-			if asked := kinds["answered"] + kinds["unknown"]; asked > 0 {
-				rate = fmt.Sprintf("%d%%", kinds["answered"]*100/asked)
-			}
-			fmt.Fprintf(&b, "\n- 收到 %d 条 @：答上 %d、答不上 %d（答上率 %s）、闲聊 %d、命令 %d、限流 %d、出错 %d、回复没发出去 %d", total, kinds["answered"], kinds["unknown"], rate, kinds["chat"], kinds["command"], kinds["limited"], kinds["failed"], kinds["reply_failed"])
+			fmt.Fprintf(&b, "\n- 群友 @ %d 条：答上 %d、答不上 %d（答上率 %s）、闲聊 %d、命令 %d、限流 %d、出错 %d、回复没发出去 %d", memberTotal, members["answered"], members["unknown"], qqAnswerRate(members), members["chat"], members["command"], members["limited"], members["failed"], members["reply_failed"])
+			fmt.Fprintf(&b, "\n- 管理员 @ %d 条：答上 %d、答不上 %d（答上率 %s）、闲聊 %d、限流 %d、出错 %d", adminTotal, admins["answered"], admins["unknown"], qqAnswerRate(admins), admins["chat"], admins["limited"], admins["failed"])
 		}
 	}
 	if s.qqBadAnswers != nil {

@@ -6040,7 +6040,7 @@ func (m *memoryStats) IncrQQOutcome(_ context.Context, _ time.Time, outcome stri
 	m.counts[outcome]++
 	return nil
 }
-func (m *memoryStats) QQOutcomes(context.Context, time.Time) (map[string]int, error) {
+func (m *memoryStats) QQOutcomes(context.Context, time.Time, time.Time) (map[string]int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := map[string]int{}

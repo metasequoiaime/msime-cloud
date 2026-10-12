@@ -40,7 +40,7 @@ func TestQQImprovementReport(t *testing.T) {
 	s, fake, _ := qqServer(t)
 	store := &memoryImprovements{bad: []account.QQBadAnswer{{Question: "五笔怎么切换 我的QQ是12345", Answer: "在设置里选五笔。", Feedback: "不对啊", Retry: "按 Ctrl+` 打开方案菜单。"}}}
 	s.qqImprovements = store
-	s.qqStats = &memoryStats{counts: map[string]int{"answered": 6, "answered_github": 2, "unknown": 2, "timeout": 1, "failed": 1, "reply_failed": 1, "chat": 3}}
+	s.qqStats = &memoryStats{counts: map[string]int{"answered": 6, "answered_github": 2, "unknown": 2, "timeout": 1, "failed": 1, "reply_failed": 1, "chat": 3, "admin_answered": 4, "admin_unknown": 1, "admin_timeout": 1}}
 	ctx := context.Background()
 	s.recordQQImprovement(ctx, "unknown", "鸿蒙版怎么下载", "docs")
 	s.recordQQImprovement(ctx, "unknown", "鸿蒙版 怎么下载", "docs")
@@ -48,16 +48,15 @@ func TestQQImprovementReport(t *testing.T) {
 	s.recordQQImprovement(ctx, "selftest", "", "自测 9/10 通过。")
 	fake.summary = `{"items":["问五笔怎么切换，原回答说在设置里，实际要用快捷键；重答已解决。"]}`
 	from := time.Date(2026, 10, 5, 0, 0, 0, 0, qqStatsZone)
-	title, body, err := s.qqImprovementReport(ctx, from, from.AddDate(0, 0, 7))
-	if err != nil {
-		t.Fatal(err)
+	title, body, actionable, err := s.qqImprovementReport(ctx, from, from.AddDate(0, 0, 7))
+	if err != nil || !actionable {
+		t.Fatal(err, actionable)
 	}
 	if title != "QQ 机器人改进依据：10-05 ~ 10-11" {
 		t.Fatal(title)
 	}
 	for _, want := range []string{
-		"- 10-05 起收到 16 条 @：答上 8、答不上 2（答上率 80%）、闲聊 3、命令 0\n- 出错 2（其中超时 1）、回复没发出去 1、限流 0\n",
-		"- 答不上 3 次（机器人能力问题 1、文档没写 2），被说答错 1 次\n",
+		"- 群友 @ 16 条：答上 8、答不上 2（答上率 80%）、闲聊 3、命令 0\n- 管理员 @ 6 条：答上 4、答不上 1（答上率 80%）\n- 出错 3（其中超时 2）、回复没发出去 1、限流 0\n- 被说答错 1 次\n",
 		"- 最近一次自测（10-08 10:00）：自测 9/10 通过。\n",
 		"## 机器人能力问题（现查过还答不上）\n\n文档或 GitHub 里可能有答案，但检索、工具或提示词没用上。\n\n- [ ] 仓库有多少 star #\u200b12（1 次）\n",
 		"## 文档没写（没现查就答不上）\n\n多半是文档缺这块；也可能是问题需要现查而挑段落时没标出来。\n\n- [ ] 鸿蒙版怎么下载（2 次）\n",
@@ -75,15 +74,19 @@ func TestQQImprovementReport(t *testing.T) {
 	}
 	// 概括失败时只写条数，不贴原话。
 	fake.summary = `{"items":[]}`
-	_, body, err = s.qqImprovementReport(ctx, from, from.AddDate(0, 0, 7))
-	if err != nil || !strings.Contains(body, "这周有 1 条被说答错，没能自动概括") || strings.Contains(body, "五笔") {
+	_, body, _, err = s.qqImprovementReport(ctx, from, from.AddDate(0, 0, 7))
+	if err != nil || !strings.Contains(body, "有 1 条被说答错，没能自动概括") || strings.Contains(body, "五笔") {
 		t.Fatal(err, body)
 	}
-	// 什么都没有时每节写「没有」，提醒跑自测。
+	// 没有答不上、答错、出错时不用开 issue；只有出错也要开。
 	s.qqImprovements = &memoryImprovements{}
-	_, body, err = s.qqImprovementReport(ctx, from, from.AddDate(0, 0, 7))
-	if err != nil || strings.Count(body, "\n没有。\n") != 3 || !strings.Contains(body, "这周没有跑自测") {
-		t.Fatal(err, body)
+	s.qqStats = &memoryStats{counts: map[string]int{"answered": 5, "chat": 2}}
+	if _, _, actionable, err := s.qqImprovementReport(ctx, from, from.AddDate(0, 0, 7)); err != nil || actionable {
+		t.Fatal(err, actionable)
+	}
+	s.qqStats = &memoryStats{counts: map[string]int{"answered": 5, "reply_failed": 1}}
+	if _, _, actionable, err := s.qqImprovementReport(ctx, from, from.AddDate(0, 0, 7)); err != nil || !actionable {
+		t.Fatal(err, actionable)
 	}
 }
 
@@ -100,11 +103,12 @@ func TestQQBotRecordsImprovements(t *testing.T) {
 	}
 }
 
-// 管理员「改进依据」马上在 msime-cloud 开 issue（仓库有 qq-bot 标签才加），一天两次；普通群友不能用；配置 none 时关闭。
+// 管理员「改进依据」马上汇总最近 7 天（含今天）在 msime-cloud 开 issue（仓库有 qq-bot 标签才加），一天两次；没有要处理的不开；普通群友不能用；配置 none 时关闭。
 func TestQQBotImprovementCommand(t *testing.T) {
 	s, fake, _ := qqServer(t)
 	s.qq.config.Admins = []string{"ADMIN1"}
-	s.qqImprovements = &memoryImprovements{}
+	store := &memoryImprovements{}
+	s.qqImprovements = store
 	s.qq.now = func() time.Time { return time.Date(2026, 10, 12, 4, 0, 0, 0, time.UTC) }
 	fake.repoLabels = map[string]string{defaultQQImprovementRepo: `[{"name":"qq-bot"},{"name":"bug"}]`}
 	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
@@ -117,35 +121,42 @@ func TestQQBotImprovementCommand(t *testing.T) {
 	if last() != "只有管理员能用「改进依据」。" || len(fake.created) != 0 {
 		t.Fatal(last(), fake.created)
 	}
+	deliver("m-ic-empty", "ADMIN1")
+	if last() != "最近 7 天没有答不上、被说答错或出错的记录，没开 issue。" || len(fake.created) != 0 {
+		t.Fatal(last(), fake.created)
+	}
+	store.events = append(store.events, account.QQImprovementEvent{Kind: "unknown", Topic: "鸿蒙版怎么下载", Detail: "docs"})
 	deliver("m-ic-1", "ADMIN1")
-	if len(fake.created) != 1 || fake.created[0]["_repo"] != defaultQQImprovementRepo || fake.created[0]["title"] != "QQ 机器人改进依据：10-05 ~ 10-11" || !strings.Contains(last(), "#123") {
+	if len(fake.created) != 1 || fake.created[0]["_repo"] != defaultQQImprovementRepo || fake.created[0]["title"] != "QQ 机器人改进依据：10-06 ~ 10-12" || !strings.Contains(last(), "#123") {
 		t.Fatal(last(), fake.created)
 	}
 	if labels, _ := fake.created[0]["labels"].([]any); len(labels) != 1 || labels[0] != "qq-bot" {
 		t.Fatal(fake.created[0]["labels"])
 	}
 	deliver("m-ic-2", "ADMIN1")
-	deliver("m-ic-3", "ADMIN1")
-	if len(fake.created) != 2 || !strings.HasPrefix(last(), "今天已经生成过两次了") {
+	if len(fake.created) != 1 || !strings.HasPrefix(last(), "今天已经生成过两次了") {
 		t.Fatal(last(), len(fake.created))
 	}
 	s.qq.config.ImprovementRepo = "none"
 	deliver("m-ic-off", "ADMIN1")
-	if last() != "改进依据暂时用不了。" || len(fake.created) != 2 {
+	if last() != "改进依据暂时用不了。" || len(fake.created) != 1 {
 		t.Fatal(last())
 	}
 }
 
-// 每周一 9 点以后开一次上一周的周报，同一周不重开；别的时间不开。
+// 每周一 9 点以后开一次上一周（周一到周日）的周报，同一周不重开；别的时间不开；那一周没有要处理的就不开。
 func TestQQImprovementTick(t *testing.T) {
 	s, fake, _ := qqServer(t)
-	s.qqImprovements = &memoryImprovements{}
+	store := &memoryImprovements{}
+	s.qqImprovements = store
 	s.qq.config.ImprovementRepo = "o/cloud"
 	ctx := context.Background()
 	at := func(day, hour int) {
 		s.qq.now = func() time.Time { return time.Date(2026, 10, day, hour, 30, 0, 0, qqStatsZone) }
 		s.qqImprovementTick(ctx)
 	}
+	at(5, 9) // 周一，但没有要处理的
+	store.events = append(store.events, account.QQImprovementEvent{Kind: "unknown", Topic: "鸿蒙版怎么下载", Detail: "docs"})
 	at(11, 10) // 周日
 	at(12, 8)  // 周一 9 点前
 	if len(fake.created) != 0 {
@@ -153,7 +164,7 @@ func TestQQImprovementTick(t *testing.T) {
 	}
 	at(12, 9)
 	at(12, 10)
-	if len(fake.created) != 1 || fake.created[0]["_repo"] != "o/cloud" || fake.created[0]["labels"] != nil && len(fake.created[0]["labels"].([]any)) != 0 {
+	if len(fake.created) != 1 || fake.created[0]["_repo"] != "o/cloud" || fake.created[0]["title"] != "QQ 机器人改进依据：10-05 ~ 10-11" || fake.created[0]["labels"] != nil && len(fake.created[0]["labels"].([]any)) != 0 {
 		t.Fatal(fake.created)
 	}
 	at(19, 9)

@@ -7,7 +7,7 @@
     {"type": "command", "name": "/add", "desc": "词打不出来：/add 词语 拼音"},
     {"type": "command", "name": "/doc", "desc": "文档缺了什么，可引用一条消息"},
     {"type": "link", "name": "使用文档", "desc": "各平台指南和常见问题", "link": "https://msime.app/docs/"},
-    {"type": "link", "name": "下载", "desc": "Windows、macOS、Linux、安卓、iOS", "link": "https://msime.app/download/"},
+    {"type": "link", "name": "下载", "desc": "Windows、Mac、Linux、安卓、iOS", "link": "https://msime.app/download/"},
     {"type": "command", "name": "/drafts", "desc": "草稿列表，后接编号看详情", "only_admin": true},
     {"type": "command", "name": "/draft", "desc": "按引用的消息建草稿", "only_admin": true},
     {"type": "command", "name": "/submit", "desc": "提交草稿：/submit 编号", "only_admin": true},

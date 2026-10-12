@@ -14,7 +14,7 @@ import (
 // qqStatsStore 是 account.Service 里的处理结果计数；没有数据库时为 nil。
 type qqStatsStore interface {
 	IncrQQOutcome(ctx context.Context, day time.Time, outcome string) error
-	QQOutcomes(ctx context.Context, since time.Time) (map[string]int, error)
+	QQOutcomes(ctx context.Context, from, to time.Time) (map[string]int, error)
 }
 
 // recordQQOutcome 给今天（北京时间）的处理结果计数，出错只记日志。
@@ -75,7 +75,7 @@ func (s *Server) qqWeeklyDigest(ctx context.Context, reply func(string)) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "最近 7 天（%s 到 %s）：", since.Format("01-02"), now.Format("01-02"))
 	if s.qqStats != nil {
-		outcomes, err := s.qqStats.QQOutcomes(ctx, since)
+		outcomes, err := s.qqStats.QQOutcomes(ctx, since, since.AddDate(0, 0, 7))
 		if err != nil {
 			slog.Warn("qq bot: outcomes unavailable", "reason", err.Error())
 		} else {

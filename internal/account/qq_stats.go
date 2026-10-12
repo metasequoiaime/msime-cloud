@@ -11,9 +11,9 @@ func (a *Service) IncrQQOutcome(ctx context.Context, day time.Time, outcome stri
 	return err
 }
 
-// QQOutcomes 返回从 since 这天起（含）每种处理结果的条数合计。
-func (a *Service) QQOutcomes(ctx context.Context, since time.Time) (map[string]int, error) {
-	rows, err := a.store.pool.Query(ctx, `SELECT outcome,sum(count) FROM qq_daily_stats WHERE day>=$1 GROUP BY outcome`, since.Format("2006-01-02"))
+// QQOutcomes 返回 from 这天（含）到 to 这天（不含）每种处理结果的条数合计；按日期算，from、to 是统计时区（北京时间）里的日期。
+func (a *Service) QQOutcomes(ctx context.Context, from, to time.Time) (map[string]int, error) {
+	rows, err := a.store.pool.Query(ctx, `SELECT outcome,sum(count) FROM qq_daily_stats WHERE day>=$1 AND day<$2 GROUP BY outcome`, from.Format("2006-01-02"), to.Format("2006-01-02"))
 	if err != nil {
 		return nil, err
 	}

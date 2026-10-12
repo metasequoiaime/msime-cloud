@@ -22,7 +22,11 @@ func TestQQDailyStats(t *testing.T) {
 	if err := a.IncrQQOutcome(ctx, today.AddDate(0, 0, -10), "answered"); err != nil {
 		t.Fatal(err)
 	}
-	got, err := a.QQOutcomes(ctx, today.AddDate(0, 0, -6))
+	// to 那天不算。
+	if err := a.IncrQQOutcome(ctx, today.AddDate(0, 0, 1), "failed"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := a.QQOutcomes(ctx, today.AddDate(0, 0, -6), today.AddDate(0, 0, 1))
 	if err != nil || got["answered"] != 2 || got["unknown"] != 1 || len(got) != 2 {
 		t.Fatal(got, err)
 	}

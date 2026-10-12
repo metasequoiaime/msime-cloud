@@ -702,7 +702,7 @@ func (s *Store) Prune(ctx context.Context) {
 		// 反馈只保留 feedbackRetentionDays 天，截图随外键一起删除。
 		"DELETE FROM feedback WHERE created_at<now()-interval '" + strconv.Itoa(feedbackRetentionDays) + " days'",
 		// QQ 群答疑的问答只用来接上 30 分钟内的追问，过期即删。
-		"DELETE FROM qq_conversations WHERE created_at<now()-interval '30 minutes'",
+		"DELETE FROM qq_conversations WHERE created_at<now()-interval '" + QQConversationRetention.String() + "'::interval",
 		"DELETE FROM qq_drafts WHERE created_at<now()-interval '30 days'",
 		"DELETE FROM qq_faq_candidates WHERE created_at<now()-interval '30 days'",
 		"DELETE FROM qq_bad_answers WHERE created_at<now()-interval '30 days'",

@@ -2793,6 +2793,8 @@ func TestQQBotAdminMessagesNeedExplicitIntent(t *testing.T) {
 	s, fake, _ := qqServer(t)
 	drafts := &memoryDrafts{}
 	s.qqDrafts = drafts
+	// memoryDrafts 的创建时间固定是 2026-10-12 01:00 UTC：时钟也固定在它之后不久，草稿还不到 qqBacklogAge，回复里不接积压提醒。曾经用真实时钟，当天 02:00 UTC 以后这个测试就失败。
+	s.qq.now = func() time.Time { return time.Date(2026, 10, 12, 1, 10, 0, 0, time.UTC) }
 	s.qq.config.GapsRepo = "o/docs"
 	fake.openIssues = `[{"number":77,"title":"QQ 机器人答不上的问题",` + qqAppAuthor + `}]`
 	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }

@@ -33,10 +33,14 @@ func TestQQConversationWindowAndIsolation(t *testing.T) {
 	if err := db.pool.QueryRow(ctx, `SELECT count(*) FROM qq_conversations WHERE subject LIKE 'G/%'`).Scan(&raw); err != nil || raw != 0 {
 		t.Fatal(raw, err)
 	}
+	// 过了接上追问的范围还留着，过了 QQConversationRetention 才删。
+	if _, err := db.pool.Exec(ctx, `INSERT INTO qq_conversations(id,subject,question,answer,created_at) VALUES('ancient',$1,'上周以前','答',now()-interval '8 days')`, hash("G/M1")); err != nil {
+		t.Fatal(err)
+	}
 	db.Prune(ctx)
-	var left int
-	if err := db.pool.QueryRow(ctx, `SELECT count(*) FROM qq_conversations WHERE id='old'`).Scan(&left); err != nil || left != 0 {
-		t.Fatal("prune must delete expired turns", left, err)
+	var old, ancient int
+	if err := db.pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE id='old'), count(*) FILTER (WHERE id='ancient') FROM qq_conversations`).Scan(&old, &ancient); err != nil || old != 1 || ancient != 0 {
+		t.Fatal("prune must keep turns for the retention period and delete older ones", old, ancient, err)
 	}
 	// 数据库不可用时报错。
 	db.pool.Close()

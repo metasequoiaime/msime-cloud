@@ -116,3 +116,26 @@ func TestDictionarySearchBoundsBatchBytes(t *testing.T) {
 		}
 	}
 }
+
+func TestDictionarySearchNeverReadsDocumentationOrEngineTables(t *testing.T) {
+	f := &dictionaryMock{blobs: map[string]string{}}
+	paths := []string{"packs/README.md", "packs/demo/README.md", "sources/japanese/README.txt", "sources/japanese/LICENSE", "sources/japanese/connection_single_column.txt", "sources/japanese/id.def", "sources/japanese/dictionary_filter.tsv", "sources/pinyin/config.json", "sources/japanese/dictionary00.txt"}
+	for i, name := range paths {
+		sha := fmt.Sprintf("%040x", i+1)
+		f.tree = append(f.tree, dictionaryTreeItem{Path: name, Type: "blob", SHA: sha, Size: 20})
+		if i == len(paths)-1 {
+			f.blobs[sha] = "れい\t1\t2\t300\t例\n"
+		}
+	}
+	s := &Server{adminGitHub: dictionaryMockClient(t, f), config: Config{Admin: AdminConfig{GitHub: AdminGitHubConfig{DictionaryRepo: dictTestRepo}}}}
+	w := dictionaryDirect(s, "GET", "/api/dictionary/search?q=例", "", false)
+	result := decodeDict[dictionarySearchResponse](t, w)
+	if w.Code != 200 || result.TotalFiles != 1 || len(result.Files) != 1 || result.Files[0].Path != paths[len(paths)-1] || result.Files[0].Rows[0].Columns[4] != "例" {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	for _, request := range f.requests {
+		if strings.Contains(request.path, "/git/blobs/") && !strings.HasSuffix(request.path, f.tree[len(paths)-1].SHA) {
+			t.Fatalf("不应读取非词条文件: %s", request.path)
+		}
+	}
+}

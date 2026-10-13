@@ -56,6 +56,12 @@ func (f *dictionaryMock) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				{"path": "custom/words.txt", "sha": sha, "size": len(f.text), "type": "blob"},
 				{"path": "packs/demo/quanpin.txt", "sha": sha, "size": len(f.text), "type": "blob"},
 				{"path": "sources/example/data.txt", "sha": sha, "size": len(f.text), "type": "blob"},
+				{"path": "packs/README.md", "sha": sha, "size": 20, "type": "blob"},
+				{"path": "packs/demo/README.md", "sha": sha, "size": 20, "type": "blob"},
+				{"path": "sources/japanese/README.txt", "sha": sha, "size": 20, "type": "blob"},
+				{"path": "sources/japanese/LICENSE", "sha": sha, "size": 20, "type": "blob"},
+				{"path": "sources/japanese/connection_single_column.txt", "sha": sha, "size": 20, "type": "blob"},
+				{"path": "sources/japanese/id.def", "sha": sha, "size": 20, "type": "blob"},
 				{"path": ".github/workflows/check.yml", "sha": sha, "size": 20, "type": "blob"},
 				{"path": "custom", "sha": sha, "type": "tree"},
 			}
@@ -147,13 +153,13 @@ func TestDictionaryManagementHTTP(t *testing.T) {
 	if w.Code != 200 || file.Total != 1 || !file.Editable || file.Rows[0].Columns[0] != "甲" {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	for _, bad := range []string{"/api/dictionary/file?path=../custom/words.txt", "/api/dictionary/file?path=custom/words.txt&page=0", "/api/dictionary/file?path=custom/words.txt&q=%0A"} {
+	for _, bad := range []string{"/api/dictionary/file?path=../custom/words.txt", "/api/dictionary/file?path=custom/words.txt&page=0", "/api/dictionary/file?path=custom/words.txt&q=%0A", "/api/dictionary/file?path=packs/README.md", "/api/dictionary/file?path=packs/demo/README.md", "/api/dictionary/file?path=sources/japanese/README.txt", "/api/dictionary/file?path=sources/japanese/LICENSE", "/api/dictionary/file?path=sources/japanese/connection_single_column.txt"} {
 		w = dictionaryDirect(s, "GET", bad, "", false)
 		if w.Code != 400 {
 			t.Errorf("path=%s status=%d", bad, w.Code)
 		}
 	}
-	w = dictionaryDirect(s, "GET", "/api/dictionary/file?path=custom/missing.txt", "", false)
+	w = dictionaryDirect(s, "GET", "/api/dictionary/file?path=packs/missing/quanpin.txt", "", false)
 	if w.Code != 404 {
 		t.Fatal(w.Code)
 	}

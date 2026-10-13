@@ -9,6 +9,20 @@ func TestDictionaryTextPathAndRows(t *testing.T) {
 	tests := map[string]bool{
 		"custom/words.txt": true, "packs/programming/quanpin.txt": true, "sources/pinyin/rime-ice.txt": true,
 		"../custom/words.txt": false, "custom/words.txt/next": false, "README.md": false, "custom/words.exe": false,
+		"custom/names.txt": true, "custom/README.txt": false, "custom/settings.json": false,
+		"packs/README.md": false, "packs/programming/README.md": false, "packs/programming/LICENSE": false,
+		"packs/programming/metadata.json": false, "packs/programming/notes.txt": false,
+		"packs/programming/english.txt": true, "packs/programming/translations.txt": true,
+		"sources/japanese/README.txt": false, "sources/japanese/LICENSE": false,
+		"sources/japanese/connection_single_column.txt": false, "sources/japanese/id.def": false,
+		"sources/japanese/dictionary_filter.tsv": false, "sources/japanese/dictionaryab.txt": false,
+		"sources/japanese/dictionary00.txt": true, "sources/japanese/dictionary09.txt": true,
+		"sources/japanese/aux_dictionary.tsv": true, "sources/japanese/places.tsv": true, "sources/japanese/words.tsv": true,
+		"sources/pinyin/README.TXT": false, "sources/pinyin/LICENSE.txt": false,
+		"sources/pinyin/NOTICE.md": false, "sources/pinyin/AGENTS.md": false,
+		"sources/pinyin/config.yaml": false, "sources/pinyin/upstream.lock.json": false,
+		"sources/cantonese/jyut6ping3.words.dict.yaml": true, "sources/stroke/stroke.dict.yaml": true,
+		"sources/zhuyin/word.csv": true, "sources/zhuyin/phrase.occ": true, "sources/korean/hanja.txt": true,
 	}
 	for name, want := range tests {
 		if got := dictionaryTextPath(name); got != want {

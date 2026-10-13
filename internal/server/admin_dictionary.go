@@ -214,12 +214,31 @@ func dictionaryTextPath(name string) bool {
 	if name == "" || path.IsAbs(name) || path.Clean(name) != name || strings.ContainsAny(name, "\\\r\n\t") {
 		return false
 	}
-	prefix := strings.SplitN(name, "/", 2)[0]
-	if prefix != "custom" && prefix != "packs" && prefix != "sources" {
+	parts := strings.Split(name, "/")
+	if parts[0] == "custom" {
+		return slices.Contains([]string{"custom/words.txt", "custom/english.txt", "custom/translations.txt", "custom/names.txt"}, name)
+	}
+	if parts[0] == "packs" {
+		return dictionaryEditablePath(name)
+	}
+	if parts[0] != "sources" || len(parts) != 3 {
 		return false
 	}
+	base := strings.ToLower(parts[2])
+	stem := strings.SplitN(base, ".", 2)[0]
+	if slices.Contains([]string{"readme", "license", "licence", "notice", "changelog", "agents"}, stem) {
+		return false
+	}
+	// 日文目录同时包含连接代价矩阵、词性编号和过滤规则，仅展示实际词条表。
+	if parts[1] == "japanese" {
+		if slices.Contains([]string{"aux_dictionary.tsv", "places.tsv", "words.tsv"}, parts[2]) {
+			return true
+		}
+		return len(parts[2]) == len("dictionary00.txt") && strings.HasPrefix(parts[2], "dictionary") &&
+			parts[2][10] >= '0' && parts[2][10] <= '9' && parts[2][11] >= '0' && parts[2][11] <= '9' && strings.HasSuffix(parts[2], ".txt")
+	}
 	ext := strings.ToLower(path.Ext(name))
-	return ext == ".txt" || ext == ".tsv" || ext == ".csv" || ext == ".yaml" || ext == ".yml" || ext == ".json" || ext == ".occ" || ext == ".def" || ext == ".md" || path.Base(name) == "LICENSE"
+	return ext == ".txt" || ext == ".tsv" || ext == ".csv" || ext == ".occ" || strings.HasSuffix(base, ".dict.yaml")
 }
 
 // 原始数据保留字节；解码只用于预览，不把 UTF-16 或换行转换后的内容写回仓库。

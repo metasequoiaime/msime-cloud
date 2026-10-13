@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { applyCells, canEditCell, cellAddress, clipboardText, draftError, emptyHistory, makeSheetRows, parseClipboard, redoHistory, undoHistory, updateHistory } from '../src/pages/dictionary/sheet-model.ts';
+import { applyCells, canEditCell, cellAddress, cellError, clipboardText, draftError, emptyHistory, fitClipboard, makeSheetRows, parseClipboard, redoHistory, undoHistory, updateHistory } from '../src/pages/dictionary/sheet-model.ts';
 
 const path = 'packs/programming/quanpin.txt';
 const defaults = ['', '', '100'];
@@ -78,4 +78,25 @@ test('Excel TSV 双引号、CRLF 和多列复制可往返', () => {
   assert.throws(() => parseClipboard('"未闭合'));
   assert.throws(() => parseClipboard('"闭合"非法'));
   assert.equal(cellAddress({ row: 99, col: 26 }), 'AA100');
+});
+
+
+test('选区按完整矩形重复粘贴，大小不匹配时不截断内容', () => {
+  assert.deepEqual(fitClipboard([['100']], 3, 2), [['100', '100'], ['100', '100'], ['100', '100']]);
+  assert.deepEqual(fitClipboard([['a', 'b']], 2, 4), [['a', 'b', 'a', 'b'], ['a', 'b', 'a', 'b']]);
+  assert.deepEqual(fitClipboard([['a'], ['b', 'c']], 1, 1), [['a', ''], ['b', 'c']]);
+  assert.deepEqual(fitClipboard([['a', 'b'], ['c', 'd']], 1, 1), [['a', 'b'], ['c', 'd']]);
+  assert.throws(() => fitClipboard([['a', 'b']], 2, 3));
+  assert.throws(() => fitClipboard([['a'], ['b']], 3, 1));
+  assert.throws(() => fitClipboard([], 1, 1));
+});
+
+test('校验只标记错误字段，缺少读音不标记合法权重', () => {
+  const incomplete = { id: 'new', operation: 'add', line: 0, columns: ['新词', '', '100'] };
+  assert.equal(cellError(path, incomplete, 0), undefined);
+  assert.equal(cellError(path, incomplete, 1), '此字段尚未填写');
+  assert.equal(cellError(path, incomplete, 2), undefined);
+  assert.match(cellError(path, { ...incomplete, columns: ['新词', 'code', '0'] }, 2), /权重/);
+  assert.match(cellError(path, { ...incomplete, columns: ['词'.repeat(334), 'code', '100'] }, 0), /1000 字节/);
+  assert.equal(cellError(path, { ...incomplete, operation: 'delete' }, 1), undefined);
 });

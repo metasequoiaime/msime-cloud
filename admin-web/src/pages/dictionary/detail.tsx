@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useBlocker } from "@tanstack/react-router";
-import { ExternalLink, RefreshCw, Search, X } from "lucide-react";
+import { ExternalLink, Maximize2, Minimize2, RefreshCw, Search, X } from "lucide-react";
 import { APIError, useAPI } from "../../api/client";
 import { columnLabels, dictionaryChangeSchema, dictionaryContentSchema } from "../../api/dictionary";
 import { keys } from "../../api/keys";
@@ -16,7 +16,7 @@ import type { Draft } from "./sheet-model";
 
 const changeLabels = { add: "新增", replace: "修改", delete: "删除" } as const;
 
-export function FileDetail({ path, initialQuery = "", onDirty }: { path: string; initialQuery?: string; onDirty: (dirty: boolean) => void }) {
+export function FileDetail({ path, initialQuery = "", onDirty, focused, onToggleFocus }: { path: string; initialQuery?: string; onDirty: (dirty: boolean) => void; focused: boolean; onToggleFocus: () => void }) {
   const api = useAPI();
   const { can } = usePermissions();
   const permitted = can("review_dict_pr");
@@ -64,10 +64,11 @@ export function FileDetail({ path, initialQuery = "", onDirty }: { path: string;
   const discard = () => { setHistory(emptyHistory); setSHA(""); setUncertain(false); setSaveError(""); mutation.reset(); };
   const pullURL = mutation.data?.url ?? (mutation.error instanceof APIError && typeof mutation.error.details.pull_url === "string" ? mutation.error.details.pull_url : undefined);
   return <Card>
-    <CardHeader title={path.split("/").pop()} sub={<span className="break-all font-mono">{path}</span>} actions={<>
+    <CardHeader className="sticky top-0 z-30 -mx-2 bg-panel px-2 py-2" title={path.split("/").pop()} sub={<span className="break-all font-mono">{path}</span>} actions={<>
+      <Button size="sm" variant="outline" aria-pressed={focused} onClick={onToggleFocus}>{focused ? <Minimize2 size={14} aria-hidden="true" /> : <Maximize2 size={14} aria-hidden="true" />}{focused ? "退出专注" : "专注编辑"}</Button>
       <Button size="sm" variant="outline" disabled={mutation.isPending || content.isFetching || editing} onClick={() => void content.refetch()}><RefreshCw size={14} aria-hidden="true" />刷新</Button>
       {data?.url && <a href={data.url} target="_blank" rel="noreferrer" className={buttonVariants({ size: "sm", variant: "outline" })}><ExternalLink size={14} aria-hidden="true" />源文件</a>}
-      {editable && <Button size="sm" variant="primary" disabled={locked || (!drafts.length && !editing) || Boolean(invalid.length)} onClick={() => save(drafts)}>{mutation.isPending ? "正在保存…" : `保存变更${drafts.length ? `（${drafts.length}）` : ""}`}</Button>}
+      {editable && <Button size="sm" variant="primary" disabled={locked || (!drafts.length && !editing) || (Boolean(invalid.length) && !editing)} onClick={() => save(drafts)}>{mutation.isPending ? "正在保存…" : `保存变更${drafts.length ? `（${drafts.length}）` : ""}`}</Button>}
     </>} />
     <form aria-label="当前词库词条搜索" onSubmit={event => { event.preventDefault(); setQuery(search.trim()); setPage(1); }} className="mb-3 flex flex-wrap items-center gap-2 rounded-xl bg-panel-2 p-2 text-muted">
       <Search size={16} aria-hidden="true" /><input value={search} maxLength={100} onChange={event => setSearch(event.target.value)} placeholder="搜索当前词库中的词条、编码或译文" aria-label="搜索当前文件词条" className="h-9 min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-muted" />
@@ -82,7 +83,7 @@ export function FileDetail({ path, initialQuery = "", onDirty }: { path: string;
     {content.isPending ? <SkeletonRows rows={8} /> : content.isError ? <ErrorState error={content.error} onRetry={() => void content.refetch()} /> : data ? <>
       <div className="mb-3 flex flex-wrap justify-between gap-2 text-[12px] text-muted"><span aria-live="polite">{content.isFetching ? "正在搜索…" : query ? `找到 ${data.total.toLocaleString("zh-CN")} 条「${query}」的匹配` : `共 ${data.total.toLocaleString("zh-CN")} 条词条`} · {data.encoding}</span><span>{data.editable ? custom ? "只追加" : "可编辑" : "只读"} · <span className="font-mono">{data.sha.slice(0, 8)}</span></span></div>
       {query && data.total === 0 && <p className="mb-3 text-[13px] text-muted">未找到「{query}」</p>}
-      <DictionarySheet key={`${page}:${query}`} path={path} originals={data.rows} labels={labels} defaults={defaults} drafts={drafts} editable={editable} locked={locked} hasMore={data.has_more}
+      <DictionarySheet key={`${page}:${query}`} path={path} originals={data.rows} labels={labels} defaults={defaults} drafts={drafts} editable={editable} locked={locked} hasMore={data.has_more} focused={focused}
         canUndo={Boolean(history.past.length)} canRedo={Boolean(history.future.length)} onChange={change} onEditing={setEditing}
         onUndo={() => { setHistory(undoHistory); mutation.reset(); }} onRedo={() => { setHistory(redoHistory); mutation.reset(); }} onSave={save} />
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[12px] text-muted"><span>第 {page} / {Math.max(1, Math.ceil(data.total / 100))} 页 · 每页 100 条</span><div className="flex gap-2"><Button size="sm" variant="outline" disabled={page <= 1 || mutation.isPending} onClick={() => setPage(value => value - 1)}>上一页</Button><Button size="sm" variant="outline" disabled={!data.has_more || mutation.isPending} onClick={() => setPage(value => value + 1)}>下一页</Button></div></div>

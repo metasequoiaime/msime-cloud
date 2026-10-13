@@ -204,13 +204,14 @@ def production_csp() -> str:
 DICTIONARY_FILES = {
     "custom/english.txt": [["example", "Example", "1"]],
     "custom/words.txt": [["水杉", "shui'shan", "5000"]],
-    "packs/programming/quanpin.txt": [["示例", "shi'li", "100"]],
+    "custom/translations.txt": [["水杉", "old translation"]],
+    "packs/programming/quanpin.txt": [["示例", "shi'li", "100"]] + [[f"测试{i}", "ce'shi", "100"] for i in range(104)],
     "sources/japanese/dictionary00.txt": [["れい", "1", "2", "300", "例"]],
 }
 FIXTURES["/api/dictionary"] = {
     "repo": "metasequoiaime/msime-dictionary", "branch": "main", "url": "https://github.com/metasequoiaime/msime-dictionary", "description": "词库源数据", "pushed_at": "2026-10-01T00:00:00Z",
     "files": [{"path": name, "sha": "a" * 40, "type": "blob", "size": 120} for name in DICTIONARY_FILES], "truncated": False,
-    "counts": {"custom": 2, "packs": 1, "sources": 1}, "bytes": 480,
+    "counts": {"custom": 3, "packs": 1, "sources": 1}, "bytes": 600,
 }
 FIXTURES["/api/dictionary/changes"] = {"number": 42, "url": "https://github.com/metasequoiaime/msime-dictionary/pull/42", "branch": "dictionary-admin/synthetic"}
 
@@ -225,6 +226,22 @@ def dictionary_fixture(query):
     page = int(params.get("page", ["1"])[0])
     return {"repo": "metasequoiaime/msime-dictionary", "name": name.split("/")[-1], "path": name, "sha": "a" * 40, "size": 120, "url": "https://github.com/metasequoiaime/msime-dictionary/blob/main/" + name,
             "rows": filtered[(page - 1) * 100:page * 100], "total": len(filtered), "page": page, "has_more": len(filtered) > page * 100, "encoding": "UTF-8", "editable": not name.startswith("sources/")}
+
+def dictionary_search_fixture(query):
+    from urllib.parse import parse_qs
+    params = parse_qs(query)
+    q = params.get("q", [""])[0].lower()
+    scope = params.get("scope", ["all"])[0]
+    files = sorted(name for name in DICTIONARY_FILES if scope == "all" or name.startswith(scope + "/"))
+    cursor = int(params.get("cursor", ["0"])[0])
+    end = min(cursor + 4, len(files))
+    results = []
+    for name in files[cursor:end]:
+        rows = [{"line": index + 1, "columns": row} for index, row in enumerate(DICTIONARY_FILES[name]) if q in "\t".join(row).lower()]
+        if rows:
+            results.append({"path": name, "rows": rows[:100], "total": len(rows), "editable": not name.startswith("sources/")})
+    return {"files": results, "skipped": [], "next_cursor": end, "has_more": end < len(files), "total_files": len(files), "revision": "c" * 40, "truncated": False}
+
 
 class Handler(BaseHTTPRequestHandler):
     csp = ""
@@ -252,7 +269,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, log_stream(query), "text/event-stream; charset=utf-8")
         if path == "/api/auth/logout":
             Handler.logged_out = True
-        body = dictionary_fixture(query) if path == "/api/dictionary/file" else FIXTURES.get(path)
+        body = dictionary_fixture(query) if path == "/api/dictionary/file" else dictionary_search_fixture(query) if path == "/api/dictionary/search" else FIXTURES.get(path)
         if path == "/api/me" and self.command == "POST":
             body = {"ok": True}
         if path == "/api/auth/session" and Handler.logged_out:
@@ -328,33 +345,96 @@ def main() -> int:
                     violations(path)
 
                 page.goto(base + "/dictionary")
-                expect(page.get_by_role("cell", name="Example", exact=True)).to_be_visible()
+                expect(page.get_by_role("cell", name="水杉", exact=True)).to_be_visible()
+                page.get_by_role("textbox", name="搜索当前文件词条").fill("missing")
+                expect(page.get_by_text("未找到「missing」", exact=True)).to_be_visible()
+                page.get_by_role("button", name="清空词条搜索").click()
+                expect(page.get_by_role("cell", name="水杉", exact=True)).to_be_visible()
                 page.get_by_role("button", name="新增词条").click()
-                drawer = page.get_by_role("dialog", name="新增词条")
-                drawer.get_by_role("textbox", name="编码", exact=True).fill("testing")
-                drawer.get_by_role("textbox", name="显示词", exact=True).fill("Testing")
-                drawer.get_by_role("textbox", name="权重", exact=True).fill("1")
-                drawer.get_by_role("button", name="加入待提交变更").click()
-                expect(drawer).to_be_hidden()
-                expect(page.get_by_text("待提交变更 · 1 项")).to_be_visible()
-                page.get_by_role("button", name="创建 Pull Request", exact=True).click()
+                table = page.get_by_role("table", name="词条编辑表格")
+                table.get_by_role("textbox", name="词语", exact=True).fill("测试词")
+                table.get_by_role("textbox", name="全拼", exact=True).fill("ce'shi'ci")
+                table.get_by_role("textbox", name="权重", exact=True).dispatch_event("keydown", {"key": "Enter", "isComposing": True})
+                expect(table.get_by_role("textbox", name="词语", exact=True)).to_be_visible()
+                table.get_by_role("textbox", name="权重", exact=True).press("Enter")
+                expect(page.get_by_text("待保存变更 · 1 项")).to_be_visible()
+                expect(table.get_by_role("cell", name="测试词", exact=True)).to_be_visible()
+                page.get_by_text("查看全部 1 项变更", exact=True).click()
+                expect(page.get_by_text("测试词 · ce'shi'ci · 5000", exact=True)).to_be_visible()
+                with page.expect_request(lambda request: request.url.endswith("/api/dictionary/changes") and request.method == "POST") as saved:
+                    page.get_by_role("button", name="保存变更（1）", exact=True).click()
+                assert saved.value.post_data_json["changes"] == [{"operation": "add", "line": 0, "columns": ["测试词", "ce'shi'ci", "5000"]}]
                 expect(page.get_by_text("已创建 PR #42。", exact=False)).to_be_visible()
                 page.get_by_role("radio", name=re.compile("专题词包")).click()
                 expect(page.get_by_role("cell", name="示例", exact=True)).to_be_visible()
+                page.get_by_role("button", name="下一页", exact=True).click()
+                expect(page.get_by_text("第 2 / 2 页", exact=False)).to_be_visible()
+                table.get_by_role("row").nth(1).get_by_role("button", name="编辑", exact=True).click()
+                table.get_by_role("textbox", name="权重", exact=True).fill("123")
+                page.get_by_role("button", name="确认词条", exact=True).click()
+                expect(page.get_by_text("第 2 / 2 页", exact=False)).to_be_visible()
+                page.get_by_role("button", name="撤销", exact=True).click()
+                page.get_by_role("textbox", name="搜索当前文件词条").fill("示例")
+                expect(page.get_by_text("第 1 / 1 页", exact=False)).to_be_visible()
+                table.get_by_role("cell", name="100", exact=True).dblclick()
+                table.get_by_role("textbox", name="权重", exact=True).fill("200")
+                table.get_by_role("textbox", name="权重", exact=True).press("Escape")
+                expect(table.get_by_role("cell", name="100", exact=True)).to_be_visible()
                 page.get_by_role("button", name="编辑", exact=True).click()
-                drawer = page.get_by_role("dialog", name="编辑词条")
-                drawer.get_by_role("textbox", name="权重", exact=True).fill("200")
-                drawer.get_by_role("button", name="加入待提交变更").click()
+                table.get_by_role("textbox", name="权重", exact=True).fill("200")
+                table.get_by_role("textbox", name="权重", exact=True).press("Enter")
+                expect(table.get_by_role("cell", name="200", exact=True)).to_be_visible()
+                with page.expect_request(lambda request: request.url.endswith("/api/dictionary/changes") and request.method == "POST") as saved:
+                    page.get_by_role("button", name="保存变更（1）", exact=True).click()
+                assert saved.value.post_data_json["changes"] == [{"operation": "replace", "line": 1, "columns": ["示例", "shi'li", "200"]}]
+                expect(page.get_by_text("已创建 PR #42。", exact=False)).to_be_visible()
+                page.get_by_role("button", name="删除", exact=True).click()
+                expect(table.locator("del")).to_have_count(3)
+                page.get_by_role("button", name="撤销", exact=True).click()
+                expect(table.locator("del")).to_have_count(0)
+                page.get_by_role("button", name="编辑", exact=True).click()
+                table.get_by_role("textbox", name="权重", exact=True).fill("201")
+                expect(page.get_by_role("textbox", name="搜索当前文件词条")).to_be_disabled()
+                table.get_by_role("textbox", name="权重", exact=True).press("Enter")
                 page.get_by_role("link", name="投稿审核", exact=True).click()
                 expect(page.get_by_text("离开页面会放弃未提交的词条变更。")).to_be_visible()
                 page.get_by_role("button", name="留在此页", exact=True).click()
-                page.get_by_role("radio", name=re.compile("原始来源")).click()
+                failed_batch = [False]
+                def fail_search_batch_once(route):
+                    if "cursor=4" in route.request.url and not failed_batch[0]:
+                        failed_batch[0] = True
+                        route.fulfill(status=503, content_type="application/json", body=json.dumps({"error": {"code": "github_unavailable"}}))
+                    else:
+                        route.continue_()
+                page.route("**/api/dictionary/search*", fail_search_batch_once)
+                page.get_by_role("textbox", name="搜索所有词库词条").fill("れい")
+                page.get_by_role("button", name="搜索", exact=True).click()
+                expect(page.get_by_text("搜索中断", exact=False)).to_be_visible()
+                expect(page.get_by_text("4 / 5 个文件", exact=False)).to_be_visible()
+                page.get_by_role("button", name="重试", exact=True).click()
+                expect(page.get_by_text("搜索完成", exact=False)).to_be_visible()
+                expect(page.get_by_text("5 / 5 个文件", exact=False)).to_be_visible()
+                page.unroute("**/api/dictionary/search*", fail_search_batch_once)
+                page.get_by_role("button", name="打开查看", exact=True).click()
                 expect(page.get_by_text("当前文件有待提交变更", exact=False)).to_be_visible()
                 page.get_by_role("button", name="放弃并切换").click()
-                expect(page.get_by_role("cell", name="例", exact=True)).to_be_visible()
+                expect(table.get_by_role("cell", name="例", exact=True)).to_be_visible()
                 expect(page.get_by_role("columnheader", name="词语", exact=True)).to_be_visible()
                 expect(page.get_by_role("button", name="新增词条")).to_have_count(0)
-                violations("dictionary editing")
+                expect(page.get_by_role("textbox", name="搜索当前文件词条")).to_have_value("れい")
+                page.get_by_role("button", name="关闭跨词库搜索").click()
+                page.get_by_role("radio", name=re.compile("自定义词库")).click()
+                page.get_by_role("button", name=re.compile("^translations.txt")).click()
+                table.get_by_role("button", name="old translation", exact=True).click()
+                table.get_by_role("textbox", name="译文", exact=True).fill("new translation")
+                table.get_by_role("textbox", name="译文", exact=True).press("Enter")
+                with page.expect_request(lambda request: request.url.endswith("/api/dictionary/changes") and request.method == "POST") as saved:
+                    page.get_by_role("button", name="保存变更（1）", exact=True).click()
+                assert saved.value.post_data_json["changes"] == [{"operation": "add", "line": 0, "columns": ["水杉", "new translation"]}]
+                page.get_by_role("textbox", name="搜索所有词库词条").fill("missing")
+                page.get_by_role("button", name="搜索", exact=True).click()
+                expect(page.get_by_text("未找到「missing」", exact=True)).to_be_visible()
+                violations("dictionary editing and search")
 
                 page.goto(base + "/downloads")
                 expect(page.get_by_role("table", name="下载记录")).to_contain_text("官网镜像（国内）")

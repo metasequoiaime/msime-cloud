@@ -44,6 +44,10 @@ func (s *Server) adminDictionary(w http.ResponseWriter, r *http.Request) {
 		s.dictionaryFile(w, r, gh)
 		return
 	}
+	if r.URL.Path == "/api/dictionary/search" {
+		s.dictionarySearch(w, r, gh)
+		return
+	}
 	if r.URL.Path != "/api/dictionary" {
 		fail(w, http.StatusNotFound, "not_found")
 		return

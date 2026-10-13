@@ -64,10 +64,30 @@ export function draftError(path: string, draft: Draft): string | undefined {
   const translation = path.endsWith("translations.txt");
   if (draft.columns.length !== (translation ? 2 : 3) || draft.columns.some(value => !value.trim() || /[\t\r\n]/.test(value))) return "请填写全部字段";
   if (!translation) {
-    const weight = draft.columns[2];
-    const maximum = path.startsWith("packs/") && path.endsWith("english.txt") ? 10 : 10000;
-    if (!/^\d+$/.test(weight) || Number(weight) < 1 || Number(weight) > maximum) return `权重应为 1–${maximum} 的整数`;
+    return cellError(path, draft, 2);
   }
+}
+
+export function cellError(path: string, draft: Draft, col: number): string | undefined {
+  if (draft.operation === "delete") return;
+  const value = draft.columns[col] ?? "";
+  if (!value.trim()) return "此字段尚未填写";
+  if (/[\t\r\n]/.test(value) || new TextEncoder().encode(value).length > 1000) return "字段不能包含换行或制表符，最多 1000 字节";
+  if (col === 2 && !path.endsWith("translations.txt")) {
+    const maximum = path.startsWith("packs/") && path.endsWith("english.txt") ? 10 : 10000;
+    if (!/^\d+$/.test(value) || Number(value) < 1 || Number(value) > maximum) return `权重应为 1–${maximum} 的整数`;
+  }
+}
+
+// 单个单元格向外粘贴；选区大于数据时按完整矩形重复填充，避免只覆盖一部分。
+export function fitClipboard(matrix: string[][], height: number, width: number): string[][] {
+  const columns = Math.max(0, ...matrix.map(row => row.length));
+  if (!matrix.length || !columns) throw new Error("剪贴板没有可粘贴的词条。");
+  const rectangle = matrix.map(row => Array.from({ length: columns }, (_, col) => row[col] ?? ""));
+  if (height === 1 && width === 1) return rectangle;
+  if (height <= matrix.length && width <= columns) return rectangle;
+  if (height % matrix.length || width % columns) throw new Error("粘贴内容与选区大小不匹配，请选择一个起始单元格，或选择行列数为粘贴内容整数倍的区域。");
+  return Array.from({ length: height }, (_, row) => Array.from({ length: width }, (_, col) => rectangle[row % matrix.length][col % columns]));
 }
 
 export function cellAddress(cell: Cell): string {

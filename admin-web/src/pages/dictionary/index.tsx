@@ -42,6 +42,7 @@ export default function DictionaryPage() {
   const [fileSearch, setFileSearch] = useState("");
   const [selected, setSelected] = useState<Selection>();
   const [dirty, setDirty] = useState(false);
+  const [focused, setFocused] = useState(false);
   const [pendingPath, setPendingPath] = useState<Selection>();
   const tree = useQuery({ queryKey: keys.page("dictionary", "tree"), queryFn: ({ signal }) => api.get("dictionary", dictionarySchema, { signal }) });
   const files = tree.data?.files;
@@ -60,17 +61,17 @@ export default function DictionaryPage() {
       {tree.data?.url && <a href={tree.data.url} target="_blank" rel="noreferrer" className={buttonVariants({ size: "sm", variant: "outline" })}><ExternalLink size={14} aria-hidden="true" />词库仓库</a>}
     </PageIntro>
     {tree.isError ? <ErrorState error={tree.error} onRetry={() => void tree.refetch()} /> : <>
-      <DictionarySearch onOpen={(path, query) => navigate(fileSection({ path }), path, query)} />
+      <div hidden={focused}><DictionarySearch onOpen={(path, query) => navigate(fileSection({ path }), path, query)} /></div>
       {tree.data?.truncated && <Banner tone="warn" className="mb-3.5">GitHub 返回的目录超过单次读取上限，当前目录不完整。</Banner>}
       {pendingPath && <Banner tone="warn" className="mb-3.5"><div className="flex flex-wrap items-center justify-between gap-2"><span>当前文件有待提交变更，切换文件会放弃这些变更。</span><div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => setPendingPath(undefined)}>继续编辑</Button><Button size="sm" variant="danger-outline" onClick={() => { setDirty(false); setSection(pendingPath.section); setSelected(pendingPath); setPendingPath(undefined); }}>放弃并切换</Button></div></div></Banner>}
-      <div className="grid min-w-0 items-start gap-3.5 lg:grid-cols-[300px_minmax(0,1fr)]">
-        <Card>
+      <div className={cn("grid min-w-0 items-start gap-3.5", !focused && "lg:grid-cols-[300px_minmax(0,1fr)]")}>
+        <Card hidden={focused}>
           <CardHeader title={<span className="flex items-center gap-2"><BookOpen size={16} className="text-accent" aria-hidden="true" />词库目录</span>} sub={tree.data ? `${tree.data.files.length} 个文件 · ${formatBytes(tree.data.bytes)}` : "正在读取…"} actions={<Button size="icon" variant="ghost" title="刷新目录" aria-label="刷新词库目录" onClick={() => void tree.refetch()}><RefreshCw size={15} aria-hidden="true" /></Button>} />
           <FilterChips label="词库分类" value={section} onChange={key => navigate(key)} options={sectionOrder.map(key => ({ key, label: sectionLabels[key], count: tree.data?.counts[key] ?? 0 }))} className="mb-3" />
           <label className="mb-3 flex h-9 items-center gap-2 rounded-[10px] bg-panel-2 px-3 text-muted"><Search size={15} aria-hidden="true" /><input value={fileSearch} onChange={event => setFileSearch(event.target.value)} placeholder="搜索文件名或方案" aria-label="筛选词库文件" className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ink outline-none placeholder:text-muted" /></label>
           {tree.isPending ? <SkeletonRows rows={7} /> : <FileList files={sectionFiles} selected={active} onSelect={path => navigate(section, path)} />}
         </Card>
-        <div id="dictionary-file-editor" className="min-w-0 scroll-mt-4">{active ? <FileDetail key={`${active}:${selected?.version ?? ""}`} path={active} initialQuery={selected?.query} onDirty={setDirty} /> : <Card><Empty title="没有可显示的文件">请选择分类或调整文件筛选条件。</Empty></Card>}</div>
+        <div id="dictionary-file-editor" className="min-w-0 scroll-mt-4">{active ? <FileDetail key={`${active}:${selected?.version ?? ""}`} path={active} initialQuery={selected?.query} onDirty={setDirty} focused={focused} onToggleFocus={() => setFocused(value => !value)} /> : <Card><Empty title="没有可显示的文件">请选择分类或调整文件筛选条件。</Empty></Card>}</div>
       </div>
       <p className="mt-3 text-[12.5px] text-muted">自定义词库只追加新词条；专题词包可增删改词条。所有变更提交为 Pull Request，合入后生效。上游来源保持原始数据。</p>
     </>}

@@ -6,6 +6,7 @@
 pnpm install --frozen-lockfile
 pnpm check   # tsc --noEmit
 pnpm lint    # biome lint
+pnpm test    # 词库表格模型测试（Node 24）
 pnpm build   # tsc && vite build，输出 dist/
 pnpm dev
 ```

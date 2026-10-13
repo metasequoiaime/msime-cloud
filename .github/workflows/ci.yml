@@ -23,6 +23,7 @@ jobs:
       - run: npm install --global pnpm@10.15.0
       - run: pnpm --dir admin-web install --frozen-lockfile
       - run: pnpm --dir admin-web lint
+      - run: pnpm --dir admin-web test
       - run: pnpm --dir admin-web build
       - run: git diff --exit-code -- admin-web/dist
 

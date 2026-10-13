@@ -1,6 +1,6 @@
 import type { Permission, Shell } from "./api/shell";
 
-export type PageKey = "overview" | "dictpr" | "community" | "issues" | "feedback" | "words" | "users" | "downloads" | "notice" | "release" | "cloud" | "crash" | "status" | "logs" | "perm" | "me";
+export type PageKey = "overview" | "dictionary" | "dictpr" | "community" | "issues" | "feedback" | "words" | "users" | "downloads" | "notice" | "release" | "cloud" | "crash" | "status" | "logs" | "perm" | "me";
 
 export type NavItem = {
   key: PageKey;
@@ -21,6 +21,7 @@ export const navGroups: readonly { title: string; items: readonly NavItem[] }[] 
     { key: "overview", label: "数据概览", path: "/", description: "装机、活跃、崩溃与待办的整体情况。", icon: "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z" },
   ] },
   { title: "审核", items: [
+    { key: "dictionary", label: "词库管理", path: "/dictionary", description: "浏览词库、维护词条，并将变更提交到 msime-dictionary。", icon: "M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5zM4 5.5v15M8 7h8M8 11h8M8 15h5" },
     { key: "dictpr", label: "词库审核", path: "/dictpr", description: "审核官网词库投稿生成的 GitHub PR。", icon: "M5 19.5V4.5A1.5 1.5 0 0 1 6.5 3H19v15H6.5A1.5 1.5 0 0 0 5 19.5A1.5 1.5 0 0 0 6.5 21H19v-3M9 10l2 2 4-4", badge: "dict_prs" },
     { key: "community", label: "社区审核", path: "/community", description: "复核社区皮肤、候选皮肤、插件、词库、回复模板和短语包。", icon: "M8 3 4 6l2 4 2-1v12h8V9l2 1 2-4-4-3c-.5 1.5-2 2.5-4 2.5S8.5 4.5 8 3z", badge: "community" },
     { key: "issues", label: "问题分诊", path: "/issues", description: "分类、指派和回复 GitHub Issue。", icon: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 8v5M12 16.5v.01", badge: "issues" },

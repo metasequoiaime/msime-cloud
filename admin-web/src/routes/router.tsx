@@ -22,6 +22,7 @@ const page = <P extends string>(path: P, load: () => Promise<{ default: () => Re
   createRoute({ getParentRoute: () => rootRoute, path, validateSearch: validatePageSearch, component: lazyRouteComponent(load) });
 
 const overviewRoute = page("/", () => import("../pages/overview"));
+const dictionaryRoute = page("/dictionary", () => import("../pages/dictionary"));
 const dictprRoute = page("/dictpr", () => import("../pages/dictpr"));
 const communityRoute = page("/community", () => import("../pages/community"));
 const issuesRoute = page("/issues", () => import("../pages/issues"));
@@ -45,7 +46,7 @@ const moved = <P extends string>(path: P, to: "/perm" | "/status" | "/crash" | "
   } });
 
 const routeTree = rootRoute.addChildren([
-  overviewRoute, dictprRoute, communityRoute, issuesRoute, feedbackRoute, wordsRoute, usersRoute, downloadsRoute, noticeRoute, releaseRoute, cloudRoute, crashRoute, statusRoute, logsRoute, permRoute, meRoute,
+  overviewRoute, dictionaryRoute, dictprRoute, communityRoute, issuesRoute, feedbackRoute, wordsRoute, usersRoute, downloadsRoute, noticeRoute, releaseRoute, cloudRoute, crashRoute, statusRoute, logsRoute, permRoute, meRoute,
   moved("/admins", "/perm"), moved("/audit", "/perm"), moved("/system", "/status"), moved("/crashes", "/crash"), moved("/skins", "/community", "skins"), moved("/dictionaries", "/community", "dictionaries"), moved("/replies", "/community", "replies"), moved("/site-settings", "/downloads"),
 ]);
 

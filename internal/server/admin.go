@@ -79,6 +79,10 @@ var adminServerRoutes = []struct {
 	// U1 dictionary pull requests: admin_dict_prs.go
 	{"/api/dict-prs", (*Server).adminDictPRs},
 	{"/api/dict-prs/", (*Server).adminDictPRs},
+	// 词库管理：admin_dictionary.go、admin_dictionary_changes.go
+	{"/api/dictionary", (*Server).adminDictionary},
+	{"/api/dictionary/file", (*Server).adminDictionary},
+	{"/api/dictionary/changes", (*Server).adminDictionary},
 	// U3 issues: admin_issues.go
 	{"/api/issues", (*Server).adminIssues},
 	{"/api/issues/", (*Server).adminIssues},

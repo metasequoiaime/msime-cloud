@@ -5,7 +5,7 @@ import { roleLabel } from "./shell";
 
 // Matrix row labels, in AllAdminPermissions order.
 export const permissionLabels: Record<Permission, string> = {
-  review_dict_pr: "审核词库 PR",
+  review_dict_pr: "维护词库与审核 PR",
   review_community: "审核社区内容",
   triage_issues: "Issue 分诊",
   ban_users: "封禁账号",
@@ -95,6 +95,7 @@ export function describeAudit(entry: AuditEntry): string {
   const section = sectionLabels[text(d.section)] ?? "社区内容";
   const item = target ? `「${target}」` : count ? ` ${count} 项` : "";
   switch (entry.action) {
+    case "dictionary_change": return `为 ${target} 提交了词条变更 PR #${text(d.pull)}（${count} 项）`;
     case "dict_pr_approve": return `通过了词库 PR #${target}${count ? `（${count} 条）` : ""}`;
     case "dict_pr_reject": return `驳回了词库 PR #${target}${suffix}`;
     case "dict_pr_trim": return `精简了词库 PR #${target}${count ? `（保留 ${count} 条）` : ""}`;

@@ -224,6 +224,18 @@ func (c Client) Do(ctx context.Context, token, method, path string, body any) (R
 }
 
 func (c Client) do(ctx context.Context, token, method, path string, body any, etag string) (Response, error) {
+	return c.doFormat(ctx, token, method, path, body, etag, "application/vnd.github+json", MaxResponseBytes)
+}
+
+// Raw 读取有明确大小上限的原始文件，不把大型词库放进通用响应缓存。
+func (c Client) Raw(ctx context.Context, token, path string, limit int64) (Response, error) {
+	if limit <= 0 || limit > 64<<20 {
+		return Response{}, errors.New("invalid GitHub raw response limit")
+	}
+	return c.doFormat(ctx, token, "GET", path, nil, "", "application/vnd.github.raw+json", limit)
+}
+
+func (c Client) doFormat(ctx context.Context, token, method, path string, body any, etag, accept string, limit int64) (Response, error) {
 	var reader io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
@@ -240,7 +252,7 @@ func (c Client) do(ctx context.Context, token, method, path string, body any, et
 	if agent == "" {
 		agent = "MSIME-Backend"
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Accept", accept)
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", agent)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -259,11 +271,11 @@ func (c Client) do(ctx context.Context, token, method, path string, body any, et
 		return Response{}, err
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, MaxResponseBytes+1))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		return Response{Status: resp.StatusCode, Header: resp.Header}, err
 	}
-	if len(raw) > MaxResponseBytes {
+	if int64(len(raw)) > limit {
 		return Response{Status: resp.StatusCode, Header: resp.Header}, errors.New("GitHub response too large")
 	}
 	return Response{resp.StatusCode, raw, resp.Header}, nil

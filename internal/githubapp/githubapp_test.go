@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -275,5 +276,36 @@ func TestTokenMintIsShared(t *testing.T) {
 	defer mu.Unlock()
 	if mints != 1 {
 		t.Fatal("token requests", mints)
+	}
+}
+
+func TestRawFileSizeAndMediaType(t *testing.T) {
+	var calls atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.Header.Get("Accept") != "application/vnd.github.raw+json" || r.Header.Get("Authorization") != "Bearer synthetic-token" {
+			w.WriteHeader(400)
+			return
+		}
+		_, _ = w.Write([]byte("a\tb\tc\n"))
+	}))
+	defer upstream.Close()
+	c := Client{APIURL: upstream.URL, HTTP: upstream.Client(), Cache: &Cache{}}
+	for range 2 {
+		r, err := c.Raw(context.Background(), "synthetic-token", "/repos/example/dictionary/git/blobs/blob", 64)
+		if err != nil || !r.OK() || string(r.Body) != "a\tb\tc\n" {
+			t.Fatal(r.Status, err)
+		}
+	}
+	if calls.Load() != 2 {
+		t.Fatal("raw contents unexpectedly cached")
+	}
+	if _, err := c.Raw(context.Background(), "synthetic-token", "/blob", 3); err == nil {
+		t.Fatal("oversized body accepted")
+	}
+	for _, limit := range []int64{0, 65 << 20} {
+		if _, err := c.Raw(context.Background(), "synthetic-token", "/blob", limit); err == nil {
+			t.Fatal("invalid limit accepted")
+		}
 	}
 }

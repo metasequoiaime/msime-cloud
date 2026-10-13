@@ -17,7 +17,7 @@ var assets embed.FS
 var pagePaths = map[string]bool{
 	"/": true, "/dictpr": true, "/community": true, "/issues": true, "/feedback": true, "/words": true,
 	"/users": true, "/downloads": true, "/notice": true, "/release": true, "/cloud": true,
-	"/crash": true, "/status": true, "/logs": true, "/perm": true, "/me": true,
+	"/crash": true, "/status": true, "/logs": true, "/perm": true, "/me": true, "/dictionary": true,
 	// Pre-console paths that the client router redirects to their replacements.
 	"/admins": true, "/audit": true, "/system": true, "/crashes": true,
 	"/skins": true, "/dictionaries": true, "/replies": true, "/site-settings": true,

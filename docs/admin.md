@@ -182,7 +182,7 @@ Google 登录时，后端校验 ID Token 的签名、issuer、audience、有效�
 | 页面 | 路径 | 数据来源 | 写操作所需权限 |
 | --- | --- | --- | --- |
 | 数据概览 | `/` | `GET /api/overview` | — |
-| 词库管理 | `/dictionary` | `GET /api/dictionary`、`GET /api/dictionary/file`、`POST /api/dictionary/changes`（GitHub） | 读取需 GitHub App；提交变更需 `review_dict_pr` |
+| 词库管理 | `/dictionary` | `GET /api/dictionary`、`GET /api/dictionary/file`、`GET /api/dictionary/search`、`POST /api/dictionary/changes`（GitHub） | 读取需 GitHub App；提交变更需 `review_dict_pr` |
 | 词库审核 | `/dictpr` | `GET /api/dict-prs`、`/api/dict-prs/{n}`（GitHub） | `review_dict_pr` |
 | 社区审核 | `/community` | `GET /api/{skins,candidate-skins,plugins,dictionaries,replies,phrases}`、`/api/community/counts` | `review_community` |
 | 问题分诊 | `/issues` | `GET /api/issues`、`/api/issues/{owner}/{repo}/{n}`（GitHub） | `triage_issues` |
@@ -201,6 +201,10 @@ Google 登录时，后端校验 ID Token 的签名、issuer、audience、有效�
 
 - **数据概览**：累计下载、注册用户、近 30 天新增、活跃设备（按天分 Windows、Mac/Linux、移动端）、近 7 天各平台活跃、无崩溃会话率及拖累最大的平台版本、最新出现的崩溃分组、待处理事项和服务状态。活跃与会话指标依赖客户端上报 `active`、`session`、`session_crash`，近 60 天没有任何上报时显示「客户端未上报」而不是 0。「累计下载」来自下载事件，不是安装数。
 - **词库管理**：读取 `admin.github.dictionary_repo` 的默认分支，按 `custom/`、`packs/`、`sources/` 分类显示目录。`GET /api/dictionary` 返回仓库信息、文件列表、各目录的文件数和总字节数；`GET /api/dictionary/file?path=…&page=1&q=…` 返回 `rows:[{"line","columns"}]`、匹配总数 `total`、`page`、`has_more`、文件 `sha`、`encoding` 和 `editable`，每页 100 行，`line` 是原文件行号，搜索不区分大小写，`q` 最多 200 字节且不能含控制字符。预览支持 UTF-8、UTF-16、CSV、Rime YAML 和制表符词表，单个文件最多 64 MiB；上游文件只在预览时解码，不写回转换后的字节。GitHub 目录元数据最多缓存 60 秒，大型原始词表不进通用响应缓存。
+
+  页面顶部的词条搜索默认覆盖全部目录，包括上游来源，支持按目录缩小范围。`GET /api/dictionary/search?q=…&scope=all&cursor=0` 每次搜索最多四个文件，批次按文件大小合计 8 MiB 控制，更大的文件单独处理，返回 `files:[{"path","rows","total","editable"}]`、`skipped:[{"path","reason"}]`、`next_cursor`、`total_files`、`has_more`、`revision`、`truncated`；`q` 不能为空，其余限制与文件搜索相同，`scope` 可为 `all`、`custom`、`packs`、`sources`。有下一批时带同一 `q`、`scope` 和返回的 `revision`、`next_cursor` 继续请求，不可变树与 blob SHA 保证各批次来自同一版本。每个匹配文件最多返回前 100 行，`total` 是该文件的完整匹配数，页面预览前五行并提供打开文件查看全部结果的入口。超出 64 MiB 或编码不可识别的文件列入 `skipped`，目录不完整时显示提示；上游读取失败中断搜索，保留已完成批次供重试。页面显示逐批进度，支持暂停和继续。
+
+  词包词条在表格中直接编辑，双击字段或点击「编辑」进入输入状态，Enter 确认、Esc 取消；确认后的新增、修改、删除显示在表格中并可撤销。「保存变更」创建 PR。自定义翻译可点击译文直接修改，提交时追加新译文保留原始记录；自定义中文和英文词条可新增或复制补词。输入状态下暂时禁用文件内搜索和翻页，避免未确认的输入消失，切换文件或离开页面时保护草稿。
 
   `custom/{words,english,translations}.txt` 只允许追加；`packs/<name>/{quanpin,english,translations}.txt` 支持逐行增删改；`sources/` 及其他文件只读。`POST /api/dictionary/changes` 需要 `review_dict_pr`，请求例如 `{"path":"custom/words.txt","sha":"<原文件 blob SHA>","changes":[{"operation":"add","line":0,"columns":["水杉","shui'shan","1"]}]}`。`changes` 为 1–100 项，请求体最多 128 KiB；`replace` 和 `delete` 的 `line` 为原文件行号，`delete` 的 `columns` 必须为空数组。服务端核对默认分支上最新文件的 SHA、词条格式、重复项和权重范围，在随机的 `dictionary-admin/` 分支创建 PR，写入 `dictionary_change` 审计。成功返回 `{"number","url","branch"}`，维护者在 GitHub 中检查仓库 CI 和翻译覆盖后合入；这类 PR 不混入只审核官网投稿的 `/dictpr` 页面。每次请求使用独立分支，无跨副本的可变草稿或进程锁。文件已更新返回 409 `dictionary_changed`；写入结果不确定返回 `dictionary_uncertain`，前端停止再次提交，先检查仓库分支和 PR。PR 已创建但审计写入失败返回 503 `dictionary_not_recorded` 并附 `pull_url`，前端保留链接且停止再次提交。仓库的上游字节锁定和发布约束以 `msime-dictionary/AGENTS.md` 为准。
 - **词库审核**：只列词库仓库自身 `community-words/` 分支上的 PR（忽略 fork），读最近 100 个。详情比较 PR 基准提交与头部提交的 `custom/{words,english,translations}.txt`，逐条标记：`ad` 命中敏感词，`bad` 不符合官网校验规则，`dup` 已在基准文件或内置词库中、或在 PR 内重复，`new` 可收录。可以只保留勾选项（逐个文件以 blob SHA 做比较交换后重写分支，并改写 PR 标题），可以通过（先精简，再以头部 SHA 为条件 squash 合并），也可以驳回（先评论「审核未通过：原因」再关闭）。三种操作都带上审核时看到的头部 SHA，PR 此后有了新提交（例如官网又追加了投稿）就返回 409 `pr_changed`，不会对没人看过的词条生效；精简时每个新提交的父提交也必须是上一个头部，否则说明分支在精简途中被追加了投稿，立即停止，不再继续写入或合并。精简和通过前会读取 PR 的改动文件列表，只要改动了这三个文件之外的任何文件就返回 409 `unexpected_files`，以免审核只看到词条而合并带进别的改动。页面显示每次投稿的补充说明和时间，来自 `word_submissions` 表。PR 作者是提交用的 GitHub App 时显示为「官网机器人」。

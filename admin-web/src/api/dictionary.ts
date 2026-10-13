@@ -14,6 +14,11 @@ export const dictionaryContentSchema = z.object({
   rows: z.array(dictionaryRowSchema), total: z.number().int().nonnegative(), page: z.number().int().positive(), has_more: z.boolean(), encoding: z.string(), editable: z.boolean(),
 });
 export type DictionaryContent = z.infer<typeof dictionaryContentSchema>;
+export const dictionarySearchSchema = z.object({
+  files: z.array(z.object({ path: z.string(), rows: z.array(dictionaryRowSchema), total: z.number().int().nonnegative(), editable: z.boolean() })),
+  skipped: z.array(z.object({ path: z.string(), reason: z.string() })), next_cursor: z.number().int().nonnegative(),
+  total_files: z.number().int().nonnegative(), has_more: z.boolean(), revision: z.string(), truncated: z.boolean(),
+});
 export const dictionaryChangeSchema = z.object({ number: z.number().int().positive(), url: z.string(), branch: z.string() });
 export type DictionaryEdit = { operation: "add" | "replace" | "delete"; line: number; columns: string[] };
 export const sectionLabels = { custom: "自定义词库", packs: "专题词包", sources: "原始来源" } as const;

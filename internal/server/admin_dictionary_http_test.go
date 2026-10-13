@@ -24,6 +24,9 @@ type dictionaryMock struct {
 	failMethod, failPath string
 	failStatus           int
 	text                 string
+	tree                 []dictionaryTreeItem
+	blobs                map[string]string
+	truncated            bool
 }
 
 func (f *dictionaryMock) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -46,14 +49,25 @@ func (f *dictionaryMock) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"token": "synthetic-token", "expires_at": time.Now().Add(time.Hour)})
 	case r.Method == "GET" && r.URL.Path == root:
 		_ = json.NewEncoder(w).Encode(map[string]any{"default_branch": "main", "html_url": "https://github.com/" + dictTestRepo, "description": "合成词库", "pushed_at": "2026-10-01T00:00:00Z"})
-	case r.Method == "GET" && r.URL.Path == root+"/git/trees/main":
-		_ = json.NewEncoder(w).Encode(map[string]any{"tree": []map[string]any{
-			{"path": "custom/words.txt", "sha": sha, "size": len(f.text), "type": "blob"},
-			{"path": "packs/demo/quanpin.txt", "sha": sha, "size": len(f.text), "type": "blob"},
-			{"path": "sources/example/data.txt", "sha": sha, "size": len(f.text), "type": "blob"},
-			{"path": ".github/workflows/check.yml", "sha": sha, "size": 20, "type": "blob"},
-			{"path": "custom", "sha": sha, "type": "tree"},
-		}, "truncated": false})
+	case r.Method == "GET" && (r.URL.Path == root+"/git/trees/main" || r.URL.Path == root+"/git/trees/"+strings.Repeat("c", 40)):
+		tree := any(f.tree)
+		if f.tree == nil {
+			tree = []map[string]any{
+				{"path": "custom/words.txt", "sha": sha, "size": len(f.text), "type": "blob"},
+				{"path": "packs/demo/quanpin.txt", "sha": sha, "size": len(f.text), "type": "blob"},
+				{"path": "sources/example/data.txt", "sha": sha, "size": len(f.text), "type": "blob"},
+				{"path": ".github/workflows/check.yml", "sha": sha, "size": 20, "type": "blob"},
+				{"path": "custom", "sha": sha, "type": "tree"},
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"sha": strings.Repeat("c", 40), "tree": tree, "truncated": f.truncated})
+	case r.Method == "GET" && strings.HasPrefix(r.URL.Path, root+"/git/blobs/") && f.blobs != nil:
+		body, ok := f.blobs[strings.TrimPrefix(r.URL.Path, root+"/git/blobs/")]
+		if !ok {
+			w.WriteHeader(404)
+			return
+		}
+		_, _ = w.Write([]byte(body))
 	case r.Method == "GET" && r.URL.Path == root+"/git/blobs/"+sha:
 		if r.Header.Get("Accept") != "application/vnd.github.raw+json" {
 			w.WriteHeader(400)

@@ -420,10 +420,28 @@ func (a *Service) NotifyCrashSpikes(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	for _, spike := range spikes {
-		if err = a.Notify(ctx, tx, spike.notification()); err != nil {
+	if len(spikes) == 0 {
+		if err = tx.Commit(ctx); err != nil {
 			return 0, err
 		}
+		return 0, nil
+	}
+	kinds := make([]string, len(spikes))
+	titles := make([]string, len(spikes))
+	pages := make([]string, len(spikes))
+	targets := make([]string, len(spikes))
+	for i, spike := range spikes {
+		n, normalizeErr := normalizeNotification(spike.notification())
+		if normalizeErr != nil {
+			return 0, normalizeErr
+		}
+		kinds[i], titles[i], pages[i], targets[i] = n.Kind, n.Title, n.TargetPage, n.TargetID
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO admin_notifications(kind,title,target_page,target_id,created_at)
+SELECT kind,title,target_page,target_id,clock_timestamp()
+FROM unnest($1::text[],$2::text[],$3::text[],$4::text[]) AS n(kind,title,target_page,target_id)`, kinds, titles, pages, targets)
+	if err != nil {
+		return 0, err
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return 0, err

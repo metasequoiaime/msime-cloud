@@ -66,6 +66,7 @@ func (a *Service) adminOverview(w http.ResponseWriter, r *http.Request, _ string
 		providers = append(providers, service.Provider)
 	}
 	var result json.RawMessage
+	// 每日用户、下载和崩溃序列先按 UTC 日期各聚合一次，再与完整日期序列连接，避免每一天重复扫描三张范围。
 	err = a.store.pool.QueryRow(r.Context(), `SELECT json_build_object(
    'users',(SELECT count(*) FROM auth_users),
    'new_users_30d',(SELECT count(*) FROM auth_users WHERE created_at>=now()-interval '30 days'),
@@ -80,13 +81,23 @@ func (a *Service) adminOverview(w http.ResponseWriter, r *http.Request, _ string
    'dictionaries',resource_counts.dictionaries,
    'replies',resource_counts.replies,
    'resource_saves',(SELECT count(*) FROM community_resource_saves),
-   'daily',(SELECT json_agg(x ORDER BY day) FROM (
-     SELECT to_char(d AT TIME ZONE 'UTC','YYYY-MM-DD') AS day,
-     (SELECT count(*) FROM auth_users WHERE created_at>=d AND created_at<d+interval '1 day') AS users,
-     (SELECT count(*) FROM admin_events WHERE kind='download' AND created_at>=d AND created_at<d+interval '1 day') AS downloads,
-     (SELECT count(*) FROM admin_events WHERE kind='crash' AND created_at>=d AND created_at<d+interval '1 day') AS crashes
-     FROM generate_series(date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' - ($1::int - 1) * interval '1 day',date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC',interval '1 day') d
-   ) x), 'range_days',$1,
+   'daily',(WITH overview_days AS (
+     SELECT d FROM generate_series(date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' - ($1::int - 1) * interval '1 day',date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC',interval '1 day') d
+   ), user_daily AS (
+     SELECT date_trunc('day',created_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS d,count(*) AS users
+     FROM auth_users
+     WHERE created_at>= (SELECT min(d) FROM overview_days) AND created_at < (SELECT max(d) FROM overview_days)+interval '1 day'
+     GROUP BY 1
+   ), event_daily AS (
+     SELECT date_trunc('day',created_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS d,
+       count(*) FILTER (WHERE kind='download') AS downloads,
+       count(*) FILTER (WHERE kind='crash') AS crashes
+     FROM admin_events
+     WHERE created_at>= (SELECT min(d) FROM overview_days) AND created_at < (SELECT max(d) FROM overview_days)+interval '1 day'
+       AND kind IN ('download','crash')
+     GROUP BY 1
+   ) SELECT json_agg(json_build_object('day',to_char(overview_days.d AT TIME ZONE 'UTC','YYYY-MM-DD'),'users',COALESCE(user_daily.users,0),'downloads',COALESCE(event_daily.downloads,0),'crashes',COALESCE(event_daily.crashes,0)) ORDER BY overview_days.d)
+   FROM overview_days LEFT JOIN user_daily USING(d) LEFT JOIN event_daily USING(d)), 'range_days',$1,
    'downloads_30d',(SELECT count(*) FROM admin_events WHERE kind='download' AND created_at>=now()-interval '30 days'),
    'downloads_prev_30d',(SELECT count(*) FROM admin_events WHERE kind='download' AND created_at>=now()-interval '60 days' AND created_at<now()-interval '30 days'),
    'telemetry',json_build_object(

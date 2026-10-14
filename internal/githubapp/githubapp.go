@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -310,7 +312,8 @@ func (c Client) Get(ctx context.Context, token, path string) (Response, error) {
 	if c.Cache == nil {
 		return c.Do(ctx, token, "GET", path, nil)
 	}
-	key := c.apiURL() + path
+	// 同一路径可能使用不同权限的安装令牌；缓存和并发请求必须按令牌隔离，令牌本身不能进入缓存键。
+	key := c.apiURL() + path + "|token=" + tokenDigest(token)
 	c.Cache.mu.Lock()
 	cached, ok := c.Cache.reads[key]
 	if ok && c.now().Sub(cached.fetched) < ReadTTL {
@@ -335,6 +338,11 @@ func (c Client) Get(ctx context.Context, token, path string) (Response, error) {
 	case <-ctx.Done():
 		return Response{}, ctx.Err()
 	}
+}
+
+func tokenDigest(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }
 
 func (c Client) getRead(ctx context.Context, token, path, key string, generation uint64) (Response, error) {

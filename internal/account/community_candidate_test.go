@@ -728,7 +728,7 @@ func TestCommunityCandidateSkinBoundaries(t *testing.T) {
 	}()
 	for deadline := time.Now().Add(10 * time.Second); ; {
 		var waiting bool
-		if err = db.pool.QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'INSERT INTO community_candidate_skins(%')`).Scan(&waiting); err != nil {
+		if err = db.pool.QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%INSERT INTO community_candidate_skins(%')`).Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
 		if waiting {

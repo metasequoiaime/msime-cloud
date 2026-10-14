@@ -42,17 +42,33 @@ type adminTokenInfo struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
-// issueAdminToken replaces every token of email with a new one inside tx and returns the full token, which is never stored or shown again.
+// issueAdminToken 在事务中重新验证来源会话，替换该邮箱的全部令牌，并返回仅显示一次的明文令牌。
 func issueAdminToken(ctx context.Context, tx pgx.Tx, email string) (string, adminTokenInfo, error) {
 	token := AdminTokenPrefix + randomToken()
 	info := adminTokenInfo{Last4: token[len(token)-4:]}
+	sessionHash, _ := ctx.Value(adminSessionKey{}).(string)
+	if sessionHash == "" {
+		return "", info, ErrInvalid
+	}
 	// Without this lock two concurrent regenerations each delete only committed rows and both insert, leaving an older token valid but hidden from the personal page. Owners have no admin_members row to lock, so the lock is keyed by email.
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('admin_tokens:'||$1,0))`, email); err != nil {
+		return "", info, err
+	}
+	// 先锁住来源会话，再用数据库实时时钟检查有效期，保证等待期间的撤销或过期不能被旧鉴权结果绕过。
+	var valid bool
+	err := tx.QueryRow(ctx, `WITH source AS MATERIALIZED (
+ SELECT expires_at FROM admin_sessions WHERE token_hash=$1 AND email=$2 AND ('google:'||subject||':'||email)=$3 FOR UPDATE
+)
+SELECT expires_at>clock_timestamp() FROM source`, sessionHash, email, adminActor(ctx)).Scan(&valid)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !valid) {
+		return "", info, ErrInvalid
+	}
+	if err != nil {
 		return "", info, err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM admin_tokens WHERE email=$1`, email); err != nil {
 		return "", info, err
 	}
-	err := tx.QueryRow(ctx, `INSERT INTO admin_tokens(hash,email,last4,expires_at) VALUES($1,$2,$3,now()+make_interval(secs=>$4)) RETURNING created_at,expires_at`, hash(token), email, info.Last4, adminTokenLifetime.Seconds()).Scan(&info.CreatedAt, &info.ExpiresAt)
+	err = tx.QueryRow(ctx, `INSERT INTO admin_tokens(hash,email,last4,expires_at) VALUES($1,$2,$3,now()+make_interval(secs=>$4)) RETURNING created_at,expires_at`, hash(token), email, info.Last4, adminTokenLifetime.Seconds()).Scan(&info.CreatedAt, &info.ExpiresAt)
 	return token, info, err
 }

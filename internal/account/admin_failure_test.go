@@ -11,9 +11,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// consoleFailureFixture is the state every console failure case starts from; it is rebuilt before each attempt so a write that succeeded once runs against the same rows again.
+// 每个数据库失败用例都重新建立这些状态，保证逐条语句取消时使用相同的数据和有效的来源会话。
 type consoleFailureFixture struct {
-	user, token string
+	user, token, adminSession string
 }
 
 func seedConsoleFailureFixture(t *testing.T, db *Store) consoleFailureFixture {
@@ -59,7 +59,11 @@ func seedConsoleFailureFixture(t *testing.T, db *Store) consoleFailureFixture {
 		}
 	}
 	insertCandidateSkin(t, db, "fa334455-1234-4234-8234-123456789abc", uid, "Candidate")
-	return consoleFailureFixture{user: uid, token: user.AccessToken}
+	session, err := (&Service{store: db}).CreateAdminSession(ctx, AdminIdentity{Subject: "o", Email: "owner@example.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return consoleFailureFixture{user: uid, token: user.AccessToken, adminSession: session}
 }
 
 // Every console endpoint answers a failed database statement with 503, or, where a statement only feeds optional context (hit counts written back, notes), with the answer it gives without it. Each statement of each request is cancelled in turn at the driver, against freshly seeded rows.
@@ -159,6 +163,7 @@ func TestConsoleEndpointsAnswerEveryDatabaseFailure(t *testing.T) {
 					body = tc.body(f)
 				}
 				r := jsonRequest(tc.method, strings.ReplaceAll(tc.path, "{user}", f.user), body, "")
+				r = r.WithContext(WithAdminSession(r.Context(), f.adminSession))
 				r = r.WithContext(WithAdminAccess(r.Context(), owner))
 				w := httptest.NewRecorder()
 				a.AdminHTTP(w, r)

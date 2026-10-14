@@ -82,6 +82,8 @@ func TestAdminPersonalTokenEndToEnd(t *testing.T) {
 	if w = call("POST", "/api/me", `{"action":"regenerate_token"}`, "", ownerToken); w.Code != 403 {
 		t.Fatal("token renewed itself", w.Code)
 	}
+	// 命令行的有效 Bearer 会话也能签发，来源验证必须沿用其鉴权优先级，不能误用附带的无效 Cookie。
+	ownerToken = decode(call("POST", "/api/me", `{"action":"regenerate_token"}`, strings.Repeat("0", 64), owner), 200)["token"].(string)
 
 	// An owner adds a read-only member, who mints a token that carries the readonly role.
 	decode(call("POST", "/api/admins", `{"action":"add","email":"helper@example.com","role":"readonly"}`, "", ownerToken), 200)

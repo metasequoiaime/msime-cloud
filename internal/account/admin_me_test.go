@@ -19,11 +19,12 @@ func truncateAdminPersonal(t *testing.T, db *Store) {
 	}
 }
 
-// meRequest calls /api/me as the member email signed in with a Google session (cookie set) or a personal access token.
+// meRequest 用已认证的会话或个人令牌身份访问个人中心；Cookie 会话同时绑定来源凭据。
 func meRequest(a *Service, access AdminAccess, method, body, cookie string) *httptest.ResponseRecorder {
 	r := jsonRequest(method, "/api/me", body, "")
 	if cookie != "" {
 		r.AddCookie(&http.Cookie{Name: "__Host-msime_admin", Value: cookie})
+		r = r.WithContext(WithAdminSession(r.Context(), cookie))
 	}
 	r = r.WithContext(WithAdminAccess(r.Context(), access))
 	w := httptest.NewRecorder()
@@ -205,9 +206,14 @@ func TestAdminPersonalAccessTokens(t *testing.T) {
 	truncateAdminPersonal(t, db)
 	email := "owner@example.test"
 	session := AdminAccess{Actor: "google:g:" + email, Email: email, Role: RoleMaintainer, Permissions: AllAdminPermissions(), Owner: true}
+	ownerCookie, err := a.CreateAdminSession(ctx, AdminIdentity{Subject: "g", Email: email})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookies := map[string]string{email: ownerCookie}
 	regenerate := func(access AdminAccess) (int, map[string]any) {
 		t.Helper()
-		w := meRequest(a, access, "POST", `{"action":"regenerate_token"}`, "")
+		w := meRequest(a, access, "POST", `{"action":"regenerate_token"}`, cookies[access.Email])
 		var v map[string]any
 		_ = json.Unmarshal(w.Body.Bytes(), &v)
 		return w.Code, v
@@ -267,6 +273,11 @@ func TestAdminPersonalAccessTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	member := AdminAccess{Actor: "google:m:member@example.test", Email: "member@example.test", Role: RoleMaintainer, Permissions: AllAdminPermissions()}
+	memberCookie, err := a.CreateAdminSession(ctx, AdminIdentity{Subject: "m", Email: member.Email})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookies[member.Email] = memberCookie
 	_, issued := regenerate(member)
 	memberToken := issued["token"].(string)
 	body := `{"action":"disable","email":"member@example.test"}`
@@ -336,13 +347,17 @@ func TestAdminTokenRegenerateConcurrent(t *testing.T) {
 	truncateAdminPersonal(t, db)
 	email := "owner@example.test"
 	session := AdminAccess{Actor: "google:g:" + email, Email: email, Role: RoleMaintainer, Permissions: AllAdminPermissions(), Owner: true}
+	cookie, err := a.CreateAdminSession(ctx, AdminIdentity{Subject: "g", Email: email})
+	if err != nil {
+		t.Fatal(err)
+	}
 	const workers = 8
 	codes := make(chan int, workers)
 	start := make(chan struct{})
 	for range workers {
 		go func() {
 			<-start
-			codes <- meRequest(a, session, "POST", `{"action":"regenerate_token"}`, "").Code
+			codes <- meRequest(a, session, "POST", `{"action":"regenerate_token"}`, cookie).Code
 		}()
 	}
 	close(start)

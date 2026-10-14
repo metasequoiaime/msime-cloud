@@ -149,6 +149,10 @@ func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) bool {
 			s.adminAuthError(w, err)
 			return true
 		}
+		if strings.HasPrefix(actor, "google:") {
+			token, _ := s.adminSessionToken(r)
+			ctx = account.WithAdminSession(ctx, token)
+		}
 		if r.URL.Path == adminLogsStreamPath {
 			// 日志流是长连接，不受 15 秒请求超时限制；鉴权、来源检查和限流已在超时内完成。
 			s.adminLogsStream(w, r.WithContext(account.WithAdminAccess(base, access)))

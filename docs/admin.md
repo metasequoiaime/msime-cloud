@@ -227,7 +227,7 @@ Google 登录时，后端校验 ID Token 的签名、issuer、audience、有效�
 
   两个接口的错误：功能未配置时 404 `logs_disabled`，没有 `view_logs` 时 403 `permission_denied`，参数无效时 400 `invalid_since`、`invalid_limit`、`invalid_pod`、`invalid_level`、`invalid_query`、`invalid_backfill` 或 `invalid_cursor`，Loki 不可达或返回错误时 502 `logs_unavailable`（Loki 的响应正文不透传）。用户输入只以转义后的字符串字面量进入 LogQL（`strconv.Quote`，与 Loki 解析字符串用的 `strconv.Unquote` 互逆），不能改变查询结构。
 - **权限日志**：角色与权限矩阵、成员列表（所有者排在最前，显示会话数和最近活动），以及操作日志（`/api/audit`，可按 `action` 精确筛选、按 `actor` 模糊筛选，文案由 `action` 和 `detail` 生成）。
-- **个人中心**：资料、本月处理量（词库 PR、社区审核、Issue）、社区审核的平均处理时长、通知偏好、最近 6 条本人操作、登录会话（可吊销其他会话）和个人访问令牌。「每周摘要」邮件尚未接入，开关置灰。
+- **个人中心**：资料、本月处理量（词库 PR、社区审核、Issue）、社区审核的平均处理时长、通知偏好、最近 6 条本人操作、登录会话（可吊销其他会话）和个人访问令牌。`POST /api/me {"action":"regenerate_token"}` 在签发事务中重新验证并锁定本次请求的来源会话；等待期间会话已被撤销、退出或过期时返回 `401 unauthorized`，不生成令牌，也不清除原有个人访问令牌。浏览器 Cookie 会话和命令行 Bearer 会话均可签发，个人访问令牌不能为自己续期。「每周摘要」邮件尚未接入，开关置灰。
 
 旧接口仍保留：`/api/overview?days=7|30`、`/api/users`、`/api/downloads`、`/api/crashes` 及 `resolve_crash` / `reopen_crash`、各社区列表与详情、`/api/audit`、`/api/admins`（仅所有者），以及只读的 `/api/system`（版本和各能力是否已配置，不返回上游 URL、模型名或密钥）。所有列表每页 50 条，支持 `q` 和 `page`，返回 `total` 和 `has_more`；`q` 只匹配字段的值（不匹配字段名），皮肤的设计 JSON 不参与搜索。
 

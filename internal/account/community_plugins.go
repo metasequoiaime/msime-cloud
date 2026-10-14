@@ -561,12 +561,12 @@ func (a *Service) communityPluginDelete(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	result, e := a.store.pool.Exec(r.Context(), `DELETE FROM community_plugins WHERE id=$1 AND owner_id=$2`, r.PathValue("id"), p.UserID)
+	rows, e := a.deleteOwnedCommunity(r.Context(), "community_plugins", r.PathValue("id"), p.UserID)
 	if e != nil {
 		a.error(w, e)
 		return
 	}
-	if result.RowsAffected() == 0 {
+	if rows == 0 {
 		writeError(w, 404, "plugin_not_found")
 		return
 	}

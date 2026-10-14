@@ -354,12 +354,12 @@ func (a *Service) resourceDelete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	result, err := a.store.pool.Exec(r.Context(), `DELETE FROM community_resources WHERE id=$1 AND owner_id=$2`, r.PathValue("id"), p.UserID)
+	rows, err := a.deleteOwnedCommunity(r.Context(), "community_resources", r.PathValue("id"), p.UserID)
 	if err != nil {
 		a.error(w, err)
 		return
 	}
-	if result.RowsAffected() == 0 {
+	if rows == 0 {
 		writeError(w, 404, "resource_not_found")
 		return
 	}

@@ -370,22 +370,23 @@ func (a *Service) resourceSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if input.Saved {
-		result, err := a.store.pool.Exec(r.Context(), `INSERT INTO community_resource_saves(resource_id,user_id) SELECT id,$2 FROM community_resources WHERE id=$1 AND (moderation<>'removed' OR owner_id=$2) ON CONFLICT DO NOTHING`, r.PathValue("id"), p.UserID)
+		var available bool
+		err := a.store.pool.QueryRow(r.Context(), `WITH eligible AS MATERIALIZED (
+ SELECT id FROM community_resources WHERE id=$1 AND (moderation<>'removed' OR owner_id=$2)
+), inserted AS (
+ INSERT INTO community_resource_saves(resource_id,user_id)
+ SELECT id,$2 FROM eligible
+ ON CONFLICT DO NOTHING
+ RETURNING resource_id
+)
+SELECT EXISTS(SELECT 1 FROM eligible)`, r.PathValue("id"), p.UserID).Scan(&available)
 		if err != nil {
 			a.error(w, err)
 			return
 		}
-		if result.RowsAffected() == 0 {
-			var exists bool
-			err = a.store.pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM community_resources WHERE id=$1 AND (moderation<>'removed' OR owner_id=$2))`, r.PathValue("id"), p.UserID).Scan(&exists)
-			if err != nil {
-				a.error(w, err)
-				return
-			}
-			if !exists {
-				writeError(w, 404, "resource_not_found")
-				return
-			}
+		if !available {
+			writeError(w, 404, "resource_not_found")
+			return
 		}
 	} else {
 		if _, err := a.store.pool.Exec(r.Context(), `DELETE FROM community_resource_saves WHERE resource_id=$1 AND user_id=$2`, r.PathValue("id"), p.UserID); err != nil {

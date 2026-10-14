@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/gofrs/flock"
 )
 
 // session is what a sign-in leaves behind for one server.
@@ -33,8 +36,6 @@ const (
 	// A refresh this close to expiry happens before the call rather than after a 401.
 	refreshMargin = 30 * time.Second
 	lockWait      = 15 * time.Second
-	// A lock older than this was left by a process that died holding it.
-	lockStale = time.Minute
 )
 
 // store keeps sessions in one 0600 file, keyed by server URL so a local server and production never share tokens.
@@ -56,7 +57,10 @@ func (s store) load() (map[string]session, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = json.Unmarshal(data, &sessions); err != nil {
+	if err = json.Unmarshal(data, &sessions); err == nil && sessions == nil {
+		err = errors.New("expected a session map")
+	}
+	if err != nil {
 		return nil, fmt.Errorf("%s is unreadable; delete it and sign in again: %w", s.path(), err)
 	}
 	return sessions, nil
@@ -71,8 +75,32 @@ func (s store) get(server string) (session, bool, error) {
 	return value, ok, nil
 }
 
-// put saves or, given nil, forgets the session for server. The file is replaced whole, so a reader never sees half of it.
+// put 在进程间锁下保存或删除会话，防止不同服务的并发登录互相覆盖。
 func (s store) put(server string, value *session) error {
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return s.putLocked(server, value)
+}
+
+// forget 只删除请求使用的那条会话，避免迟到的 401 或退出响应删除新登录。
+func (s store) forget(server, accessToken string) error {
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	current, ok, err := s.get(server)
+	if err != nil || !ok || current.AccessToken != accessToken {
+		return err
+	}
+	return s.putLocked(server, nil)
+}
+
+// putLocked 由已经持锁的调用方使用；原子替换文件，读者不会看到半份凭据。
+func (s store) putLocked(server string, value *session) error {
 	sessions, err := s.load()
 	if err != nil {
 		return err
@@ -106,7 +134,7 @@ func (s store) put(server string, value *session) error {
 	return os.Rename(file.Name(), s.path())
 }
 
-// lock serializes refreshes across processes: the server revokes a session whose old refresh token is replayed, so two commands refreshing at once would sign the user out.
+// lock 串行化所有凭据修改；操作系统在进程退出时释放锁，活跃锁不按文件年龄抢占。
 func (s store) lock() (func(), error) {
 	if s.dir == "" {
 		return nil, errNoConfigDir
@@ -115,23 +143,14 @@ func (s store) lock() (func(), error) {
 		return nil, err
 	}
 	path := filepath.Join(s.dir, "credentials.lock")
-	deadline := time.Now().Add(lockWait)
-	for {
-		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err == nil {
-			file.Close()
-			return func() { os.Remove(path) }, nil
-		}
-		if !errors.Is(err, os.ErrExist) {
-			return nil, err
-		}
-		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > lockStale {
-			os.Remove(path)
-			continue
-		}
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("another msime-cloud is refreshing the session; if none is running, delete %s", path)
-		}
-		time.Sleep(100 * time.Millisecond)
+	file := flock.New(path)
+	ctx, cancel := context.WithTimeout(context.Background(), lockWait)
+	defer cancel()
+	locked, err := file.TryLockContext(ctx, 100*time.Millisecond)
+	if !locked || err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("cannot lock the session store; another msime-cloud may still be changing it: %w", err)
 	}
+	// 保留锁文件，让所有进程始终锁住同一个 inode。
+	return func() { _ = file.Unlock() }, nil
 }

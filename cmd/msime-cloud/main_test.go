@@ -382,15 +382,15 @@ func TestAWrongCodeKeepsNoSession(t *testing.T) {
 	}
 }
 
-func TestAStaleLockIsTakenOverAndALiveOneWaitedFor(t *testing.T) {
+func TestAnUnlockedFileIsReusableAndALiveLockWaitedFor(t *testing.T) {
 	s := store{dir: t.TempDir()}
 	lock := filepath.Join(s.dir, "credentials.lock")
 	os.WriteFile(lock, nil, 0o600)
-	old := time.Now().Add(-2 * lockStale)
+	old := time.Now().Add(-time.Hour)
 	os.Chtimes(lock, old, old)
 	unlock, err := s.lock()
 	if err != nil {
-		t.Fatalf("a stale lock should be taken over: %v", err)
+		t.Fatalf("an unlocked file should be reusable: %v", err)
 	}
 	released := make(chan struct{})
 	go func() {
@@ -404,8 +404,8 @@ func TestAStaleLockIsTakenOverAndALiveOneWaitedFor(t *testing.T) {
 	}
 	<-released
 	second()
-	if _, err := os.Stat(lock); !os.IsNotExist(err) {
-		t.Fatal("the lock file was left behind")
+	if _, err := os.Stat(lock); err != nil {
+		t.Fatal("锁文件应保留，所有进程才能锁住同一个文件", err)
 	}
 }
 

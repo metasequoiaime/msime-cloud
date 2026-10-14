@@ -445,6 +445,13 @@ SELECT word_id,day,count FROM admin_sensitive_hits WHERE false`); e != nil {
 	if !current {
 		return errors.New("notification target index missing")
 	}
+	// 审计列表的选页依赖时间和 ID 索引，按实际业务表探测缺失以触发旧库迁移。
+	if e := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass('admin_audit') AND c.relname='admin_audit_time')`).Scan(&current); e != nil {
+		return e
+	}
+	if !current {
+		return errors.New("audit time index missing")
+	}
 	return nil
 }
 func (s *Store) Rate(ctx context.Context, key string, limit int, window time.Duration) error {

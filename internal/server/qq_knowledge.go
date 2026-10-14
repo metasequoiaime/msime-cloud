@@ -32,7 +32,9 @@ const (
 	// qqKnowledgeWarmTimeout 是启动时预热知识库的时限（见 warmQQKnowledge）。
 	qqKnowledgeWarmTimeout = 2 * time.Minute
 	// qqKnowledgeFiles 和 qqSectionRunes 限制拉取的文件数和每段的长度，qqAnswerContextRunes 限制一次交给模型的资料总长。
-	qqKnowledgeFiles     = 50
+	qqKnowledgeFiles = 50
+	// qqKnowledgeParallel 是每次知识库加载同时等待文件读取的上限，各副本分别计算。
+	qqKnowledgeParallel  = 4
 	qqSectionRunes       = 4000
 	qqAnswerContextRunes = 16000
 	// qqSelectedSections 是一次最多挑出的段落数。最长的几段合计也远低于 qqAnswerContextRunes，4 段时答案常常落在第 5、6 段。
@@ -106,43 +108,67 @@ func (s *Server) loadQQKnowledge(ctx context.Context) ([]qqSection, error) {
 	if r.Decode(&entries) != nil {
 		return nil, errors.New("knowledge list: invalid response")
 	}
-	var sections []qqSection
+
+	// 先固定前 50 份文档和结果槽位，避免并发完成顺序改变段落编号。
 	files := 0
 	for _, entry := range entries {
 		if entry.Type != "file" || !strings.HasSuffix(strings.ToLower(entry.Name), ".md") {
 			continue
 		}
-		if files++; files > qqKnowledgeFiles {
+		entries[files] = entry
+		files++
+		if files == qqKnowledgeFiles {
 			break
 		}
-		r, err := client.Get(ctx, token, "/repos/"+repo+"/contents/"+(&url.URL{Path: entry.Path}).EscapedPath())
-		if err != nil || !r.OK() {
-			return nil, githubFailure("knowledge file", r, err)
-		}
-		var file struct {
-			Content  string `json:"content"`
-			Encoding string `json:"encoding"`
-		}
-		if r.Decode(&file) != nil || file.Encoding != "base64" {
-			return nil, errors.New("knowledge file: invalid response")
-		}
-		raw, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(file.Content, "\n", ""))
-		if err != nil || !utf8.Valid(raw) {
-			return nil, errors.New("knowledge file: invalid content")
-		}
-		name := strings.TrimSuffix(entry.Name, ".md")
-		split := qqSplitMarkdown(name, string(raw))
-		if platform := qqDocPlatforms[name]; platform != "" {
-			for i := range split {
-				label := platform
-				if name == "faq" {
-					label = qqFAQPlatform(split[i].Title)
-				}
-				split[i].Doc = label + " · " + split[i].Doc
-			}
-		}
-		sections = append(sections, split...)
 	}
+	entries = entries[:files]
+	documents := make([][]qqSection, files)
+	group, qctx := errgroup.WithContext(ctx)
+	group.SetLimit(qqKnowledgeParallel)
+	for index, entry := range entries {
+		group.Go(func() error {
+			if err := qctx.Err(); err != nil {
+				return err
+			}
+			r, err := client.Get(qctx, token, "/repos/"+repo+"/contents/"+(&url.URL{Path: entry.Path}).EscapedPath())
+			if err != nil || !r.OK() {
+				return githubFailure("knowledge file", r, err)
+			}
+			var file struct {
+				Content  string `json:"content"`
+				Encoding string `json:"encoding"`
+			}
+			if r.Decode(&file) != nil || file.Encoding != "base64" {
+				return errors.New("knowledge file: invalid response")
+			}
+			raw, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(file.Content, "\n", ""))
+			if err != nil || !utf8.Valid(raw) {
+				return errors.New("knowledge file: invalid content")
+			}
+			name := strings.TrimSuffix(entry.Name, ".md")
+			split := qqSplitMarkdown(name, string(raw))
+			if platform := qqDocPlatforms[name]; platform != "" {
+				for i := range split {
+					label := platform
+					if name == "faq" {
+						label = qqFAQPlatform(split[i].Title)
+					}
+					split[i].Doc = label + " · " + split[i].Doc
+				}
+			}
+
+			documents[index] = split
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return nil, err
+	}
+	var sections []qqSection
+	for _, document := range documents {
+		sections = append(sections, document...)
+	}
+
 	if len(sections) == 0 {
 		return nil, errors.New("knowledge is empty")
 	}

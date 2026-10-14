@@ -239,7 +239,9 @@ func ownerModeration(fields map[string]bool, state string) string {
 }
 
 const communitySkinSelectBase = `SELECT s.id,s.name,s.description,
- COALESCE(NULLIF(btrim(u.display_name),''),'水杉小鹿·'||upper(left(u.id,6))),s.design-'photo',
+ COALESCE(NULLIF(btrim(u.display_name),''),'水杉小鹿·'||upper(left(u.id,6))),`
+
+const communitySkinSelectStats = `,
  (SELECT count(*) FROM community_skin_downloads WHERE skin_id=s.id),
  rating_stats.count,rating_stats.average,s.owner_id=$1,rating_stats.mine,
  CASE WHEN s.owner_id=$1 THEN s.moderation ELSE '' END,s.category,`
@@ -252,7 +254,10 @@ func communitySkinSelect(saved bool) string {
 func communitySkinSelectQuery(saved, page bool) string {
 	from := ` FROM community_skins s JOIN auth_users u ON u.id=s.owner_id `
 	ratingID := "s.id"
+	design := "s.design"
 	if page {
+		// 目录省略图片，详情在同一次查询中读取完整设计。
+		design = "s.design-'photo'"
 		from += `JOIN skin_page p ON p.id=s.id `
 		// 评分依赖本页 ID，避免优化器将聚合排到分页关联之前。
 		ratingID = "p.id"
@@ -260,10 +265,11 @@ func communitySkinSelectQuery(saved, page bool) string {
 	// 人数、平均分和个人评分共用一次聚合；主键保证每个用户每款皮肤只有一条评分。
 	from += `CROSS JOIN LATERAL (SELECT count(*) AS count,COALESCE(avg(stars),0) AS average,
  COALESCE(max(stars) FILTER (WHERE user_id=$1),0) AS mine FROM community_skin_ratings WHERE skin_id=` + ratingID + `) rating_stats `
+	selection := communitySkinSelectBase + design + communitySkinSelectStats
 	if saved {
-		return communitySkinSelectBase + `(SELECT count(*) FROM community_skin_saves WHERE skin_id=s.id),EXISTS(SELECT 1 FROM community_skin_saves WHERE skin_id=s.id AND user_id=$1)` + from
+		return selection + `(SELECT count(*) FROM community_skin_saves WHERE skin_id=s.id),EXISTS(SELECT 1 FROM community_skin_saves WHERE skin_id=s.id AND user_id=$1)` + from
 	}
-	return communitySkinSelectBase + `0,false` + from
+	return selection + `0,false` + from
 }
 
 func scanSkin(row interface{ Scan(...any) error }) (CommunitySkin, error) {
@@ -373,11 +379,6 @@ func (a *Service) writeCommunitySkin(w http.ResponseWriter, r *http.Request, vie
 		return
 	}
 	if e != nil {
-		a.error(w, e)
-		return
-	}
-	// Full wallpaper only travels with the detail/download response, never the catalog.
-	if e = a.store.pool.QueryRow(r.Context(), `SELECT design FROM community_skins WHERE id=$1`, v.ID).Scan(&v.Design); e != nil {
 		a.error(w, e)
 		return
 	}

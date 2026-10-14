@@ -379,7 +379,8 @@ SELECT id,snapshot_id,tool,arguments,result_count,bytes,at FROM diagnostic_acces
   ('community_plugin_downloads','community_plugin_downloads_user'),
   ('community_plugin_ratings','community_plugin_ratings_user'),
   ('community_resource_ratings','community_resource_ratings_user'),
-  ('community_reports','community_reports_reporter')
+  ('community_reports','community_reports_reporter'),
+  ('community_reports','community_reports_item_newest')
  ) required(tbl,name)
  WHERE NOT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass(required.tbl) AND c.relname=required.name)
 ) AND NOT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass('community_skins') AND c.relname='community_skins_owner')`).Scan(&communityIndexes); e != nil {

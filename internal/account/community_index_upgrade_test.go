@@ -94,7 +94,7 @@ func TestCommunityIndexUpgrade(t *testing.T) {
 		"community_skin_downloads_user", "community_skin_ratings_user",
 		"community_candidate_skin_downloads_user", "community_candidate_skin_ratings_user",
 		"community_plugin_downloads_user", "community_plugin_ratings_user",
-		"community_resource_ratings_user", "community_reports_reporter",
+		"community_resource_ratings_user", "community_reports_reporter", "community_reports_item_newest",
 	}
 	if err := db.Ready(t.Context()); err != nil {
 		t.Fatal(err)
@@ -102,7 +102,7 @@ func TestCommunityIndexUpgrade(t *testing.T) {
 	// 逐个模拟已部署的旧库，确认任一索引缺失都会触发启动迁移。
 	for _, name := range indexes {
 		t.Run(name, func(t *testing.T) {
-			if _, err := db.pool.Exec(t.Context(), `DROP INDEX `+name); err != nil {
+			if _, err := db.pool.Exec(t.Context(), `DROP INDEX IF EXISTS `+name); err != nil {
 				t.Fatal(err)
 			}
 			if err := db.Ready(t.Context()); err == nil || !strings.Contains(err.Error(), "community indexes") {

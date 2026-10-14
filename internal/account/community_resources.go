@@ -317,16 +317,23 @@ func (a *Service) resourcePublish(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 409, "revision_conflict")
 			return
 		}
-		var count int
-		if err = tx.QueryRow(r.Context(), `SELECT count(*) FROM community_resources WHERE owner_id=$1`, p.UserID).Scan(&count); err != nil {
+		var inserted bool
+		if err = tx.QueryRow(r.Context(), `WITH owned AS (
+ SELECT count(*) AS n FROM community_resources WHERE owner_id=$2
+), inserted AS (
+ INSERT INTO community_resources(id,owner_id,kind,name,description,content,moderation,moderation_reason)
+ SELECT $1,$2,$3,$4,$5,$6,'pending',$7
+ WHERE (SELECT n FROM owned) < 50
+ RETURNING id
+)
+SELECT EXISTS(SELECT 1 FROM inserted)`, input.ID, p.UserID, input.Kind, input.Name, input.Description, raw, flag).Scan(&inserted); err != nil {
 			a.error(w, err)
 			return
 		}
-		if count >= 50 {
+		if !inserted {
 			writeError(w, 409, "resource_publish_limit")
 			return
 		}
-		_, err = tx.Exec(r.Context(), `INSERT INTO community_resources(id,owner_id,kind,name,description,content,moderation,moderation_reason) VALUES($1,$2,$3,$4,$5,$6,'pending',$7)`, input.ID, p.UserID, input.Kind, input.Name, input.Description, raw, flag)
 		revision = 1
 	}
 	if err == nil {

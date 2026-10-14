@@ -209,8 +209,10 @@ type qqFake struct {
 	tokenCalls  int
 	tokenStatus int
 	replies     []map[string]any
-	replyAuth   []string
-	replyStatus int
+	// replyCallCounts 记录每次回复发出时已收到的模型请求数，用于核对回复发生在哪个阶段。
+	replyCallCounts []int
+	replyAuth       []string
+	replyStatus     int
 	// rejectLinks 为 true 时像开放平台拒收未报备的域名那样，拒收带链接的回复。
 	rejectLinks bool
 	// rejectText 不为空时像内容审核那样拒收含这段文字的回复，rejected 记下被拒收的回复。
@@ -523,6 +525,7 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.replies = append(f.replies, body)
+		f.replyCallCounts = append(f.replyCallCounts, len(f.chatCalls))
 		f.replyAuth = append(f.replyAuth, r.Header.Get("Authorization"))
 		_, _ = w.Write([]byte(`{"id":"reply"}`))
 	case strings.HasPrefix(r.URL.Path, "/media/"):
@@ -4238,7 +4241,7 @@ func TestQQBotInterimReplies(t *testing.T) {
 	}
 }
 
-// 挑段落判成闲聊时停掉「收到，我想一下～」的计时器，聊天模型答得再慢也只有答案一条；要现查的闲聊照旧会发过渡语。每条消息的 handled 日志带上各阶段耗时：挑段落、回答、现查（次数）、换备用模型的次数、第一条回复的用时和有没有发过「我想一下」。
+// 挑段落判成闲聊后停掉「收到，我想一下～」的计时器，聊天模型答得再慢也不再发提示；判定前已发出的提示保留，要现查的闲聊照旧会发过渡语。每条消息的 handled 日志带上各阶段耗时：挑段落、回答、现查（次数）、换备用模型的次数、第一条回复的用时和有没有发过「我想一下」。
 func TestQQBotChatSkipsThinkingAndLogsTiming(t *testing.T) {
 	defer func(delay time.Duration) { qqThinkingDelay = delay }(qqThinkingDelay)
 	logs := issueCaptureLogs(t)
@@ -4271,24 +4274,36 @@ func TestQQBotChatSkipsThinkingAndLogsTiming(t *testing.T) {
 		t.Fatal(entry)
 	}
 
-	// 闲聊：挑段落判成 chat，计时器停掉，只有答案一条。
+	// 闲聊：分别放慢回答和分类，核对提示只能发生在闲聊判定前，不假设分类一定能在阈值内完成。
 	fake.selected, fake.answer = `{"sections":[],"chat":true}`, `{"type":"chat","answer":"在的在的，怎么了？"}`
-	before := len(fake.replyTexts())
-	qqDeliver(t, s, "m-timing-chat", "在吗")
-	time.Sleep(50 * time.Millisecond)
-	if replies := fake.replyTexts()[before:]; len(replies) != 1 || replies[0] != "在的在的，怎么了？" {
-		t.Fatal(replies)
-	}
-	if entry = handled(); entry["interim"] != false || entry["first_reply_ms"].(float64) <= 0 {
-		t.Fatal(entry)
+	for _, slow := range []string{"answer", "select"} {
+		fake.slowCall = slow
+		before := len(fake.replyTexts())
+		callsBefore := len(fake.chatCalls)
+		qqDeliver(t, s, "m-timing-chat-"+slow, "在吗")
+		replies := fake.replyTexts()[before:]
+		interim := len(replies) == 2
+		if len(replies) < 1 || len(replies) > 2 || replies[len(replies)-1] != "在的在的，怎么了？" {
+			t.Fatal(replies)
+		}
+		if interim && (replies[0] != qqReplyThinking || fake.replyCallCounts[before] > callsBefore+1) {
+			t.Fatal("闲聊回答阶段仍发送了等待提示", replies)
+		}
+		if entry = handled(); entry["interim"] != interim || entry["first_reply_ms"].(float64) <= 0 {
+			t.Fatal(entry)
+		}
 	}
 
 	// 标了 chat 又要现查（或者同时标了难题）的不算闲聊，照旧发过渡语。
 	fake.selected = `{"sections":[],"chat":true,"lookup":true}`
-	before = len(fake.replyTexts())
+	fake.slowCall = "answer"
+	before := len(fake.replyTexts())
+	callsBefore := len(fake.chatCalls)
 	qqDeliver(t, s, "m-timing-chat-lookup", "我是不是开发者")
-	if replies := fake.replyTexts()[before:]; len(replies) != 2 || replies[0] != qqReplyLookingUp {
+	if replies := fake.replyTexts()[before:]; len(replies) != 2 {
 		t.Fatal(replies)
+	} else if replies[0] != qqReplyLookingUp && (replies[0] != qqReplyThinking || fake.replyCallCounts[before] > callsBefore+1) {
+		t.Fatal("现查前没有正确发送过渡语", replies)
 	}
 	if entry = handled(); entry["research_ms"] == nil {
 		t.Fatal(entry)

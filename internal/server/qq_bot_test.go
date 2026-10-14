@@ -246,7 +246,11 @@ type qqFake struct {
 	comments     map[string]map[string]any
 	// issueComments 是按路径列出 issue 评论的响应（GET），缺省为空列表；patched 记下修改评论（PATCH）的请求。
 	issueComments map[string]string
-	patched       map[string]map[string]any
+	// issueCommentLinks 是按请求路径返回的评论分页 Link 响应头。
+	issueCommentLinks map[string]string
+	// issueCommentStatus 是按请求路径返回的评论 HTTP 状态码，0 表示正常响应。
+	issueCommentStatus map[string]int
+	patched            map[string]map[string]any
 	// history 是向量同步读的 issue 和 PR 列表（issues 接口带 state=all），按仓库和页码；historySince 记下每次请求的 since。embedCalls 是 embedding 接口收到的文本数。
 	history      map[string][]string
 	historySince []string
@@ -683,9 +687,20 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.patched[r.URL.Path] = body
 		_, _ = io.WriteString(w, `{"id":1}`)
 	case strings.HasPrefix(r.URL.Path, "/repos/") && strings.HasSuffix(r.URL.Path, "/comments") && r.Method == "GET":
-		body := f.issueComments[r.URL.Path]
+		requestPath := r.URL.RequestURI()
+		if status := f.issueCommentStatus[requestPath]; status != 0 {
+			w.WriteHeader(status)
+			return
+		}
+		body := f.issueComments[requestPath]
+		if body == "" {
+			body = f.issueComments[r.URL.Path]
+		}
 		if body == "" {
 			body = "[]"
+		}
+		if link := f.issueCommentLinks[requestPath]; link != "" {
+			w.Header().Set("Link", link)
 		}
 		_, _ = io.WriteString(w, body)
 	case strings.HasPrefix(r.URL.Path, "/repos/") && strings.HasSuffix(r.URL.Path, "/comments") && f.commentStatus != 0:
@@ -5361,12 +5376,26 @@ func TestQQBotFeatureVotes(t *testing.T) {
 	if got := limiter.counts["qq-bot-drafts|GROUP1/MEMBER1"]; got != 0 {
 		t.Fatalf("需求已记入已有 issue 时不应占用草稿额度，实际剩余计数 %d", got)
 	}
-	// 第二个人：改同一条计数评论。
-	fake.issueComments = map[string]string{"/repos/o/r/issues/7/comments": `[{"id":55,"body":"` + strings.ReplaceAll(qqVoteBody(1), `"`, `\"`) + `",` + qqAppAuthor + `}]`}
+	// 第二个人：计数评论在第二页时也要改原评论，不能另起一条。
+	fake.issueComments = map[string]string{
+		"/repos/o/r/issues/7/comments?per_page=100&page=1": `[{"id":54,"body":"普通评论","user":{"login":"mallory"}}]`,
+		"/repos/o/r/issues/7/comments?per_page=100&page=2": `[{"id":55,"body":"` + strings.ReplaceAll(qqVoteBody(1), `"`, `\"`) + `",` + qqAppAuthor + `}]`,
+	}
+	fake.issueCommentLinks = map[string]string{
+		"/repos/o/r/issues/7/comments?per_page=100&page=1": `</repos/o/r/issues/7/comments?per_page=100&page=2>; rel="last"`,
+	}
 	deliver("m-vote-2", "MEMBER2", "候选框透明度什么时候能有")
 	if p := fake.patched["/repos/o/r/issues/comments/55"]; p == nil || p["body"] != qqVoteBody(2) || !strings.Contains(last(), "一共 2 人需要") {
 		t.Fatal(fake.patched, last())
 	}
+	// 后续页请求失败时不应新建第二条计数评论。
+	fake.patched, fake.comments = nil, nil
+	fake.issueCommentStatus = map[string]int{"/repos/o/r/issues/7/comments?per_page=100&page=2": 502}
+	deliver("m-vote-page-fail", "MEMBER7", "候选框透明度再加一")
+	if fake.patched != nil || fake.comments != nil || !strings.Contains(last(), "开发者会在那里跟进") {
+		t.Fatal(fake.patched, fake.comments, last())
+	}
+	fake.issueCommentStatus = nil
 	// 同一个人再说一次不重复计数。
 	fake.patched = nil
 	deliver("m-vote-again", "MEMBER1", "候选框透明度求求了")

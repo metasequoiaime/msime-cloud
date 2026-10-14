@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
+	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
 )
 
 // 功能需求自动聚合。群友提的需求多半已经有人提过；原来每次都整理成新草稿，管理员还得一个个判断是不是重复。现在群友提需求时，先按提 issue 时的查重（qqDuplicate：关键词搜开着的 issue，再由模型判断是不是同一件事）在对应仓库里找；找到了就不起草稿，在那个 issue 下维护一条计数评论「QQ 群里有 N 位群友需要这个功能」（只改这一条，不刷屏），并告诉群友已经有人提过、现在什么状态。同一个群友对同一个需求只算一次（auth_rates，30 天），这一票没记上时退回名额；改计数时持跨副本锁。找不到时照旧起草稿。
@@ -22,6 +23,12 @@ const (
 )
 
 var qqVotePattern = regexp.MustCompile(`<!-- qq-votes:([0-9]{1,7}) -->`)
+
+type qqVoteComment struct {
+	ID   int64  `json:"id"`
+	Body string `json:"body"`
+	qqGitHubAuthor
+}
 
 // qqVoteBody 是有 n 位群友需要时的计数评论。
 func qqVoteBody(n int) string {
@@ -81,14 +88,26 @@ func (s *Server) qqAddVote(ctx context.Context, token, repo string, number int64
 	}
 	client := s.adminGitHub
 	issuePath := "/repos/" + repo + "/issues/" + strconv.FormatInt(number, 10)
-	r, err := client.Do(ctx, token, "GET", issuePath+"/comments?per_page=100", nil)
-	var comments []struct {
-		ID   int64  `json:"id"`
-		Body string `json:"body"`
-		qqGitHubAuthor
+	var comments []qqVoteComment
+	readComments := func(path string) (githubComments []qqVoteComment, response githubapp.Response, err error) {
+		response, err = client.Do(ctx, token, "GET", path, nil)
+		if err != nil || !response.OK() || response.Decode(&githubComments) != nil {
+			return nil, response, githubFailure("vote comments", response, err)
+		}
+		return githubComments, response, nil
 	}
-	if err != nil || !r.OK() || r.Decode(&comments) != nil {
-		return 0, githubFailure("vote comments", r, err)
+	comments, r, err := readComments(issuePath + "/comments?per_page=100&page=1")
+	if err != nil {
+		return 0, err
+	}
+	if last := issueLastPage(r.Header); last > 1 {
+		for page := 2; page <= last; page++ {
+			batch, _, err := readComments(issuePath + "/comments?per_page=100&page=" + strconv.Itoa(page))
+			if err != nil {
+				return 0, err
+			}
+			comments = append(comments, batch...)
+		}
 	}
 	unknown := false
 	for _, c := range comments {

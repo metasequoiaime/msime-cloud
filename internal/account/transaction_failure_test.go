@@ -148,6 +148,10 @@ func testUserDataTransactions(t *testing.T, native bool) {
 		return all.String()
 	}
 	operations := map[string]func(*Store, fixture) error{
+		"avatar replace": func(s *Store, f fixture) error {
+			_, err := s.SetAvatarKey(t.Context(), f.user.User.ID, "avatars/transaction.jpg")
+			return err
+		},
 		"resource dictionary merge": func(s *Store, f fixture) error {
 			tx, err := s.userDataTransaction(t.Context(), f.user.User.ID)
 			if err != nil {

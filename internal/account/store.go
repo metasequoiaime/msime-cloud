@@ -697,14 +697,24 @@ func profileDisplayName(name string) string {
 	return name
 }
 
-// SetAvatarKey points the user at a new uploaded avatar, or at none for "", and returns the key it replaced so the caller can delete that object.
+// SetAvatarKey 在用户行锁内重新检查封禁，再替换或清空头像登记，返回旧键供调用方删除对象；封禁或失败时保持原登记。
 func (s *Store) SetAvatarKey(ctx context.Context, uid, key string) (string, error) {
-	var previous string
-	e := s.pool.QueryRow(ctx, "UPDATE auth_users u SET avatar_key=$2 FROM (SELECT avatar_key FROM auth_users WHERE id=$1 FOR UPDATE) old WHERE u.id=$1 RETURNING old.avatar_key", uid, key).Scan(&previous)
+	tx, e := s.userDataTransaction(ctx, uid)
 	if errors.Is(e, pgx.ErrNoRows) {
 		return "", ErrInvalid
 	}
-	return previous, e
+	if e != nil {
+		return "", e
+	}
+	defer tx.Rollback(ctx)
+	var previous string
+	if e = tx.QueryRow(ctx, "SELECT avatar_key FROM auth_users WHERE id=$1", uid).Scan(&previous); e != nil {
+		return "", e
+	}
+	if _, e = tx.Exec(ctx, "UPDATE auth_users SET avatar_key=$2 WHERE id=$1", uid, key); e != nil {
+		return "", e
+	}
+	return previous, tx.Commit(ctx)
 }
 
 // AvatarKey returns the user's uploaded avatar key, or "" when they have none.
@@ -719,12 +729,24 @@ func (s *Store) AvatarKey(ctx context.Context, uid string) (string, error) {
 func defaultUserName(uid string) string {
 	return "水杉小鹿·" + strings.ToUpper(uid[:min(6, len(uid))])
 }
+
+// UpdateName 与头像更新共用用户行锁和封禁检查，禁止已经通过鉴权的迟到请求在封禁后修改昵称。
 func (s *Store) UpdateName(ctx context.Context, uid, name string) error {
 	if strings.TrimSpace(name) == "" {
 		name = defaultUserName(uid)
 	}
-	_, e := s.pool.Exec(ctx, "UPDATE auth_users SET display_name=$1 WHERE id=$2", name, uid)
-	return e
+	tx, e := s.userDataTransaction(ctx, uid)
+	if errors.Is(e, pgx.ErrNoRows) {
+		return ErrInvalid
+	}
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback(ctx)
+	if _, e = tx.Exec(ctx, "UPDATE auth_users SET display_name=$1 WHERE id=$2", name, uid); e != nil {
+		return e
+	}
+	return tx.Commit(ctx)
 }
 func (s *Store) DeleteUser(ctx context.Context, uid string) error {
 	_, e := s.pool.Exec(ctx, "DELETE FROM auth_users WHERE id=$1", uid)

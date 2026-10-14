@@ -286,6 +286,12 @@ func (c cli) sendKeptSession(r request) (*http.Response, error) {
 		}
 		return response, err
 	}
+	return c.sendSession(server, r, current)
+}
+
+// sendSession 固定请求选中的登录；刷新只能沿用同一次登录的凭据。
+func (c cli) sendSession(server string, r request, current session) (*http.Response, error) {
+	var err error
 	refreshed := false
 	if c.now().Add(refreshMargin).After(current.ExpiresAt) {
 		if current, err = c.refresh(server, current); err != nil {
@@ -334,7 +340,7 @@ func (c cli) sendAdmin(r request) (*http.Response, error) {
 	return response, err
 }
 
-// refresh trades used's refresh token for a new pair, unless another process already did while this one waited for the lock.
+// refresh 在文件锁下轮换令牌，或复用其他进程对同一次登录的刷新结果。
 func (c cli) refresh(server string, used session) (session, error) {
 	sessions := c.store()
 	unlock, err := sessions.lock()
@@ -348,6 +354,9 @@ func (c cli) refresh(server string, used session) (session, error) {
 	}
 	if !ok {
 		return session{}, errors.New("signed out by another command; sign in again")
+	}
+	if latest.loginID() != used.loginID() {
+		return session{}, errors.New("another command signed in again; retry this command with the current login")
 	}
 	if latest.RefreshToken != used.RefreshToken {
 		return latest, nil
@@ -376,6 +385,7 @@ func (c cli) refresh(server string, used session) (session, error) {
 		return session{}, errors.New("the refresh response carries no token")
 	}
 	next := tokens.session(c.now())
+	next.LoginID = latest.loginID()
 	if len(next.User) == 0 {
 		next.User = latest.User
 	}
@@ -577,14 +587,15 @@ func (c cli) logout(args []string) error {
 	}
 	server := c.server()
 	sessions := c.store()
-	if _, ok, err := sessions.get(server); err != nil || !ok {
+	current, ok, err := sessions.get(server)
+	if err != nil || !ok {
 		if err == nil {
 			err = errors.New("not signed in to " + server)
 		}
 		return err
 	}
 	body, _ := json.Marshal(map[string]bool{"all": all})
-	response, err := c.sendKeptSession(request{method: "POST", path: "/v1/auth/logout", body: body, contentType: "application/json"})
+	response, err := c.sendSession(server, request{method: "POST", path: "/v1/auth/logout", body: body, contentType: "application/json"}, current)
 	if err != nil {
 		return err
 	}

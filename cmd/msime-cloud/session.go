@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,8 +13,9 @@ import (
 	"github.com/gofrs/flock"
 )
 
-// session is what a sign-in leaves behind for one server.
+// session 保存某个服务的一次登录；`LoginID` 在刷新时保持不变。
 type session struct {
+	LoginID      string          `json:"login_id,omitempty"`
 	AccessToken  string          `json:"access_token"`
 	RefreshToken string          `json:"refresh_token"`
 	ExpiresAt    time.Time       `json:"expires_at"`
@@ -29,7 +31,17 @@ type tokenResponse struct {
 }
 
 func (t tokenResponse) session(now time.Time) session {
-	return session{AccessToken: t.AccessToken, RefreshToken: t.RefreshToken, ExpiresAt: now.Add(time.Duration(t.ExpiresIn) * time.Second), User: t.User}
+	s := session{AccessToken: t.AccessToken, RefreshToken: t.RefreshToken, ExpiresAt: now.Add(time.Duration(t.ExpiresIn) * time.Second), User: t.User}
+	s.LoginID = s.loginID()
+	return s
+}
+
+// loginID 用初始刷新令牌的摘要识别登录，也兼容没有标识的旧格式凭据。
+func (s session) loginID() string {
+	if s.LoginID != "" {
+		return s.LoginID
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(s.RefreshToken)))
 }
 
 const (

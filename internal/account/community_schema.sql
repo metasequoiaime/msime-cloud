@@ -76,6 +76,8 @@ CREATE TABLE IF NOT EXISTS community_resource_saves (
  user_id text NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
  PRIMARY KEY(resource_id,user_id)
 );
+-- 资源收藏列表按用户筛选；主键的 resource_id 前缀无法支持 scope=saved。
+CREATE INDEX IF NOT EXISTS community_resource_saves_user ON community_resource_saves(user_id,resource_id);
 CREATE TABLE IF NOT EXISTS community_resource_ratings (
  resource_id text NOT NULL REFERENCES community_resources(id) ON DELETE CASCADE,
  user_id text NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,

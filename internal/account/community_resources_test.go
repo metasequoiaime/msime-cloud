@@ -30,6 +30,18 @@ func TestResourceValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestCommunityResourceSaveScopeIndex(t *testing.T) {
+	db := testStore(t)
+	var indexDef string
+	if err := db.pool.QueryRow(t.Context(), `SELECT indexdef FROM pg_indexes WHERE schemaname=current_schema() AND indexname='community_resource_saves_user'`).Scan(&indexDef); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(indexDef, "(user_id, resource_id)") {
+		t.Fatalf("收藏范围索引未按用户和资源排序：%s", indexDef)
+	}
+}
+
 func TestResourcePublishVersionSaveRatingIsolation(t *testing.T) {
 	store := testStore(t)
 	owner := complete(t, store, Identity{"apple", "resource-owner"})

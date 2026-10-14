@@ -53,6 +53,37 @@ func TestCommunityOwnerIndexes(t *testing.T) {
 	}
 }
 
+func TestCommunityUserCascadeIndexes(t *testing.T) {
+	db := testStore(t)
+	want := []string{
+		"community_skin_downloads_user", "community_skin_ratings_user",
+		"community_candidate_skin_downloads_user", "community_candidate_skin_ratings_user",
+		"community_plugin_downloads_user", "community_plugin_ratings_user",
+		"community_resource_ratings_user", "community_reports_reporter",
+	}
+	rows, err := db.pool.Query(t.Context(), `SELECT indexname FROM pg_indexes WHERE schemaname=current_schema() AND indexname=ANY($1)`, want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	got := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		got[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range want {
+		if !got[name] {
+			t.Errorf("账号级联索引缺失：%s", name)
+		}
+	}
+}
+
 func TestResourcePublishVersionSaveRatingIsolation(t *testing.T) {
 	store := testStore(t)
 	owner := complete(t, store, Identity{"apple", "resource-owner"})

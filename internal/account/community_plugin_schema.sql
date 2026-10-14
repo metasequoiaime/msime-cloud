@@ -34,12 +34,15 @@ CREATE TABLE IF NOT EXISTS community_plugin_downloads (
  user_id text NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
  PRIMARY KEY(pack_id,user_id)
 );
+-- 账号注销按 user_id 触发外键级联；主键以 pack_id 开头，不能避免扫描整张互动表。
+CREATE INDEX IF NOT EXISTS community_plugin_downloads_user ON community_plugin_downloads(user_id);
 CREATE TABLE IF NOT EXISTS community_plugin_ratings (
  pack_id text NOT NULL REFERENCES community_plugins(id) ON DELETE CASCADE,
  user_id text NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
  stars integer NOT NULL CHECK(stars BETWEEN 1 AND 5),
  PRIMARY KEY(pack_id,user_id)
 );
+CREATE INDEX IF NOT EXISTS community_plugin_ratings_user ON community_plugin_ratings(user_id);
 -- 插件的收藏，与 community_skin_saves 相同：created_at 是收藏时间，`scope=saved` 按它倒序列出。
 CREATE TABLE IF NOT EXISTS community_plugin_saves (
  pack_id text NOT NULL REFERENCES community_plugins(id) ON DELETE CASCADE,

@@ -34,12 +34,15 @@ CREATE TABLE IF NOT EXISTS community_skin_downloads (
  user_id text NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
  PRIMARY KEY(skin_id,user_id)
 );
+-- 账号注销按 user_id 触发外键级联；主键以 skin_id 开头，不能避免扫描整张互动表。
+CREATE INDEX IF NOT EXISTS community_skin_downloads_user ON community_skin_downloads(user_id);
 CREATE TABLE IF NOT EXISTS community_skin_ratings (
  skin_id text NOT NULL REFERENCES community_skins(id) ON DELETE CASCADE,
  user_id text NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
  stars integer NOT NULL CHECK(stars BETWEEN 1 AND 5),
  PRIMARY KEY(skin_id,user_id)
 );
+CREATE INDEX IF NOT EXISTS community_skin_ratings_user ON community_skin_ratings(user_id);
 -- 键盘皮肤的收藏，每个账号每款最多一条。created_at 是收藏时间，`scope=saved` 按它倒序列出，所以按 (user_id,created_at) 建索引。
 CREATE TABLE IF NOT EXISTS community_skin_saves (
  skin_id text NOT NULL REFERENCES community_skins(id) ON DELETE CASCADE,
@@ -88,3 +91,4 @@ CREATE TABLE IF NOT EXISTS community_resource_ratings (
  stars integer NOT NULL CHECK(stars BETWEEN 1 AND 5),
  PRIMARY KEY(resource_id,user_id)
 );
+CREATE INDEX IF NOT EXISTS community_resource_ratings_user ON community_resource_ratings(user_id);

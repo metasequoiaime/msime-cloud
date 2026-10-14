@@ -3,6 +3,9 @@ package account
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -92,5 +95,52 @@ func TestCommunityCategoryUpdateWaitsForConcurrentBan(t *testing.T) {
 	}
 	if category != "other" {
 		t.Fatalf("封禁后的作品分类被迟到请求修改为 %q", category)
+	}
+}
+
+// 收藏写入也必须等待用户行锁；鉴权早于封禁完成的迟到请求不能在封禁提交后留下收藏记录。
+func TestCommunitySaveWaitsForConcurrentBan(t *testing.T) {
+	db := testStore(t)
+	ctx := t.Context()
+	a := &Service{store: db}
+	mux := http.NewServeMux()
+	Mount(mux, a)
+	user := complete(t, db, Identity{"email", "community-save-ban@example.test"})
+	owner := complete(t, db, Identity{"email", "community-save-target@example.test"})
+	const id = "ab334455-1234-1234-1234-000000000005"
+	if _, err := db.pool.Exec(ctx, `INSERT INTO community_skins(id,owner_id,name,design) VALUES($1,$2,'皮肤','{}')`, id, owner.User.ID); err != nil {
+		t.Fatal(err)
+	}
+	ban, err := db.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ban.Rollback(context.Background())
+	if _, err := actionBanUser(a, ctx, ban, actionRequest{ID: user.User.ID, Reason: "合成封禁原因"}); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		r := httptest.NewRequest(http.MethodPut, "/v1/community/skins/"+id+"/save", strings.NewReader(`{"saved":true}`))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Authorization", "Bearer "+user.AccessToken)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		done <- w
+	}()
+	waitForAdminDatabaseLock(t, db, ban.Conn().PgConn().PID())
+	if err := ban.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	w := <-done
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), `"code":"account_banned"`) {
+		t.Fatalf("封禁后的迟到收藏未被拒绝：%d %s", w.Code, w.Body.String())
+	}
+	var saved bool
+	if err := db.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM community_skin_saves WHERE skin_id=$1 AND user_id=$2)`, id, user.User.ID).Scan(&saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved {
+		t.Fatal("封禁后的迟到请求留下了收藏记录")
 	}
 }

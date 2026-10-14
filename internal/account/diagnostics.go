@@ -330,13 +330,23 @@ func (a *Service) diagnosticsToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token, digest := newDiagnosticToken()
-	tag, err := a.store.pool.Exec(r.Context(), `UPDATE diagnostic_snapshots SET token_hash=$2,token_hint=$3 WHERE user_id=$1 AND expires_at>now()`, p.UserID, digest, diagnosticTokenHint(token))
+	tx, err := a.store.userDataTransaction(r.Context(), p.UserID)
+	if err != nil {
+		a.error(w, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	tag, err := tx.Exec(r.Context(), `UPDATE diagnostic_snapshots SET token_hash=$2,token_hint=$3 WHERE user_id=$1 AND expires_at>now()`, p.UserID, digest, diagnosticTokenHint(token))
 	if err != nil {
 		a.error(w, err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
 		writeError(w, 404, "diagnostics_not_found")
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		a.error(w, err)
 		return
 	}
 	write(w, 200, map[string]string{"token": token})
@@ -348,7 +358,17 @@ func (a *Service) diagnosticsDelete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, err := a.store.pool.Exec(r.Context(), `DELETE FROM diagnostic_snapshots WHERE user_id=$1`, p.UserID); err != nil {
+	tx, err := a.store.userDataTransaction(r.Context(), p.UserID)
+	if err != nil {
+		a.error(w, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	if _, err = tx.Exec(r.Context(), `DELETE FROM diagnostic_snapshots WHERE user_id=$1`, p.UserID); err != nil {
+		a.error(w, err)
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
 		a.error(w, err)
 		return
 	}

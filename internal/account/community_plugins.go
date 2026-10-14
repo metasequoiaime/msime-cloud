@@ -454,7 +454,7 @@ func (a *Service) communityPluginDownload(w http.ResponseWriter, r *http.Request
 		return
 	}
 	defer releaseSlot()
-	tx, e := a.store.pool.Begin(r.Context())
+	tx, e := a.store.userDataTransaction(r.Context(), p.UserID)
 	if e != nil {
 		a.error(w, e)
 		return
@@ -533,7 +533,13 @@ func (a *Service) communityPluginRate(w http.ResponseWriter, r *http.Request) {
 	}
 	// 登录即可评分，不再要求先下载；仍然不能给自己的作品评分。
 	var written, exists bool
-	e := a.store.pool.QueryRow(r.Context(), `WITH eligible AS MATERIALIZED (
+	tx, e := a.store.userDataTransaction(r.Context(), p.UserID)
+	if e != nil {
+		a.error(w, e)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	e = tx.QueryRow(r.Context(), `WITH eligible AS MATERIALIZED (
  SELECT id FROM community_plugins WHERE id=$1 AND owner_id<>$2 AND moderation<>'removed'
 ), written AS (
  INSERT INTO community_plugin_ratings(pack_id,user_id,stars)
@@ -553,6 +559,10 @@ SELECT EXISTS(SELECT 1 FROM written),EXISTS(SELECT 1 FROM community_plugins WHER
 			return
 		}
 		writeError(w, 403, "download_before_rating_or_own_plugin")
+		return
+	}
+	if e = tx.Commit(r.Context()); e != nil {
+		a.error(w, e)
 		return
 	}
 	write(w, 200, map[string]int{"stars": input.Stars})

@@ -376,9 +376,15 @@ func (a *Service) resourceSave(w http.ResponseWriter, r *http.Request) {
 	if !read(w, r, &input) {
 		return
 	}
+	tx, err := a.store.userDataTransaction(r.Context(), p.UserID)
+	if err != nil {
+		a.error(w, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
 	if input.Saved {
 		var available bool
-		err := a.store.pool.QueryRow(r.Context(), `WITH eligible AS MATERIALIZED (
+		err = tx.QueryRow(r.Context(), `WITH eligible AS MATERIALIZED (
  SELECT id FROM community_resources WHERE id=$1 AND (moderation<>'removed' OR owner_id=$2)
 ), inserted AS (
  INSERT INTO community_resource_saves(resource_id,user_id)
@@ -396,10 +402,14 @@ SELECT EXISTS(SELECT 1 FROM eligible)`, r.PathValue("id"), p.UserID).Scan(&avail
 			return
 		}
 	} else {
-		if _, err := a.store.pool.Exec(r.Context(), `DELETE FROM community_resource_saves WHERE resource_id=$1 AND user_id=$2`, r.PathValue("id"), p.UserID); err != nil {
+		if _, err := tx.Exec(r.Context(), `DELETE FROM community_resource_saves WHERE resource_id=$1 AND user_id=$2`, r.PathValue("id"), p.UserID); err != nil {
 			a.error(w, err)
 			return
 		}
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		a.error(w, err)
+		return
 	}
 	write(w, 200, map[string]bool{"saved": input.Saved})
 }
@@ -420,7 +430,13 @@ func (a *Service) resourceRate(w http.ResponseWriter, r *http.Request) {
 	}
 	// 登录即可评分，不再要求先收藏；仍然不能给自己的作品评分，已下架的作品不能评。
 	var written, own bool
-	err := a.store.pool.QueryRow(r.Context(), `WITH eligible AS MATERIALIZED (
+	tx, err := a.store.userDataTransaction(r.Context(), p.UserID)
+	if err != nil {
+		a.error(w, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	err = tx.QueryRow(r.Context(), `WITH eligible AS MATERIALIZED (
  SELECT id FROM community_resources WHERE id=$1 AND owner_id<>$2 AND moderation<>'removed'
 ), written AS (
  INSERT INTO community_resource_ratings(resource_id,user_id,stars)
@@ -440,6 +456,10 @@ SELECT EXISTS(SELECT 1 FROM written),EXISTS(SELECT 1 FROM community_resources WH
 			return
 		}
 		writeError(w, 403, "save_before_rating_or_own_resource")
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		a.error(w, err)
 		return
 	}
 	write(w, 200, map[string]int{"stars": input.Stars})

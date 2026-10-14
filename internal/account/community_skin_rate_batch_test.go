@@ -50,7 +50,7 @@ func TestCommunitySkinRateUsesOneWriteQueryOnOwnSkin(t *testing.T) {
 	trace.mu.Lock()
 	queries := trace.queries
 	trace.mu.Unlock()
-	if queries != 3 {
-		t.Fatalf("给自己的皮肤评分使用了 %d 条数据库语句，期望路由限流、鉴权和写入各 1 条", queries)
+	if queries != 6 {
+		t.Fatalf("给自己的皮肤评分使用了 %d 条数据库语句，期望包含用户行锁事务的固定查询数", queries)
 	}
 }

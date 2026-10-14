@@ -42,8 +42,8 @@ const userContactSQL = `LEFT JOIN LATERAL (SELECT CASE WHEN c.kind='phone' THEN 
  CASE i.provider WHEN 'email' THEN 0 WHEN 'phone' THEN 2 ELSE 1 END AS rank,i.created_at
  FROM auth_identities i WHERE i.user_id=u.id AND (i.provider IN ('email','phone') OR i.email LIKE '_%@_%')) c ORDER BY c.rank,c.created_at LIMIT 1) contact ON true`
 
-// userActivitySQL counts the user's active sessions and estimates the last activity: a session's access token is reissued on every refresh with a 15 minute lifetime, so access_expires minus 15 minutes is when the session was last refreshed.
-const userActivitySQL = `LEFT JOIN LATERAL (SELECT count(*) FILTER (WHERE NOT s.revoked AND s.expires_at>now()) AS devices,
+// userActivitySQL 在一次聚合里统计用户的总会话数、活跃会话数和最近活动：每次刷新都会签发有效期 15 分钟的访问令牌，因此 access_expires 减去 15 分钟就是最近刷新时间。
+const userActivitySQL = `LEFT JOIN LATERAL (SELECT count(*) AS total_sessions,count(*) FILTER (WHERE NOT s.revoked AND s.expires_at>now()) AS devices,
  max(greatest(s.created_at,s.access_expires-interval '15 minutes')) AS last_active FROM auth_sessions s WHERE s.user_id=u.id) activity ON true`
 
 // usersList serves GET /api/users. sessions is kept next to devices for older consoles; contact is already masked, so the page search never matches a full address either. $4 is the configured owners.

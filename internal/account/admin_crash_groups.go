@@ -247,20 +247,28 @@ func (a *Service) crashGroup(ctx context.Context, signature string, samples int)
 		return crashGroupRow{}, nil, err
 	}
 	defer tx.Rollback(ctx)
-	group, err := scanCrashGroup(tx.QueryRow(ctx, `WITH c AS (`+crashGroupCounts+`)
-SELECT `+crashGroupColumns+` FROM admin_crash_groups g LEFT JOIN c USING(signature) WHERE g.signature=$1`, signature))
-	if err != nil {
-		return crashGroupRow{}, nil, err
-	}
-	rows, err := tx.Query(ctx, `SELECT id,platform,version,message,stack,resolved,created_at FROM admin_events WHERE kind='crash' AND signature=$1 ORDER BY created_at DESC,id DESC LIMIT $2`, signature, samples)
-	if err != nil {
-		return crashGroupRow{}, nil, err
-	}
-	items, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (crashSample, error) {
-		var s crashSample
-		return s, row.Scan(&s.ID, &s.Platform, &s.Version, &s.Message, &s.Stack, &s.Resolved, &s.CreatedAt)
+	var group crashGroupRow
+	var items []crashSample
+	batch := &pgx.Batch{}
+	batch.Queue(`WITH c AS (`+crashGroupCounts+`)
+	SELECT `+crashGroupColumns+` FROM admin_crash_groups g LEFT JOIN c USING(signature) WHERE g.signature=$1`, signature).QueryRow(func(row pgx.Row) error {
+		var err error
+		group, err = scanCrashGroup(row)
+		return err
 	})
-	return group, items, err
+	batch.Queue(`SELECT id,platform,version,message,stack,resolved,created_at FROM admin_events WHERE kind='crash' AND signature=$1 ORDER BY created_at DESC,id DESC LIMIT $2`, signature, samples).Query(func(rows pgx.Rows) error {
+		defer rows.Close()
+		var err error
+		items, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (crashSample, error) {
+			var s crashSample
+			return s, row.Scan(&s.ID, &s.Platform, &s.Version, &s.Message, &s.Stack, &s.Resolved, &s.CreatedAt)
+		})
+		return err
+	})
+	if err := tx.SendBatch(ctx, batch).Close(); err != nil {
+		return crashGroupRow{}, nil, err
+	}
+	return group, items, nil
 }
 
 // adminCrashGroup serves GET /api/crash-groups/{signature}.

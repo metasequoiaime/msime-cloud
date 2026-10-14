@@ -44,21 +44,26 @@ func (a *Service) adminPermissions(w http.ResponseWriter, r *http.Request, _ str
 	// A nil slice would be sent as NULL, and email=ANY(NULL) filters out every member.
 	owners := append([]string{}, a.admin.Owners...)
 	var rolesRaw, matrixRaw, membersRaw json.RawMessage
-	// 成员的有效会话数和最近活动共用一次聚合，最近活动仍包含过期会话。
+	// 配置所有者和普通成员共用一次查询，每人的有效会话数和最近活动共用一次聚合；最近活动仍包含过期会话。
 	err := a.store.pool.QueryRow(ctx, `SELECT
  (SELECT COALESCE(json_agg(json_build_object('key',key,'name',name,'builtin',builtin) ORDER BY NOT builtin,array_position(ARRAY['maintainer','reviewer','operator','readonly'],key),key),'[]'::json) FROM admin_roles),
  (SELECT COALESCE(json_object_agg(r.key,COALESCE((SELECT json_agg(p.permission ORDER BY p.permission) FROM admin_role_permissions p WHERE p.role=r.key),'[]'::json)),'{}'::json) FROM admin_roles r),
- (SELECT COALESCE(json_agg(json_build_object('email',m.email,'role',m.role,'enabled',m.enabled,'created_at',m.created_at,
-   'sessions',activity.sessions,'last_seen_at',activity.last_seen_at) ORDER BY m.email),'[]'::json) FROM admin_members m LEFT JOIN LATERAL (SELECT count(*) FILTER (WHERE s.expires_at>now()) AS sessions,max(s.last_seen_at) AS last_seen_at FROM admin_sessions s WHERE s.email=m.email) activity ON true
-   WHERE NOT (m.email=ANY($1)))`, owners).Scan(&rolesRaw, &matrixRaw, &membersRaw)
+ (SELECT COALESCE(json_agg(json_build_object('email',m.email,'role',m.role,'enabled',m.enabled,'created_at',m.created_at,'owner',m.owner,
+   'sessions',activity.sessions,'last_seen_at',activity.last_seen_at) ORDER BY m.owner DESC,m.ord,m.email),'[]'::json)
+ FROM (
+   SELECT o.email,'maintainer' AS role,true AS enabled,NULL::timestamptz AS created_at,true AS owner,o.ord
+   FROM unnest($1::text[]) WITH ORDINALITY AS o(email,ord)
+   UNION ALL
+   SELECT m.email,m.role,m.enabled,m.created_at,false,NULL::bigint FROM admin_members m WHERE NOT (m.email=ANY($1))
+ ) m LEFT JOIN LATERAL (SELECT count(*) FILTER (WHERE s.expires_at>now()) AS sessions,max(s.last_seen_at) AS last_seen_at FROM admin_sessions s WHERE s.email=m.email) activity ON true)`, owners).Scan(&rolesRaw, &matrixRaw, &membersRaw)
 	if err != nil {
 		a.error(w, err)
 		return
 	}
 	var roles []adminRole
 	var matrix map[string][]string
-	var listed []adminPermissionMember
-	if err = errors.Join(json.Unmarshal(rolesRaw, &roles), json.Unmarshal(matrixRaw, &matrix), json.Unmarshal(membersRaw, &listed)); err != nil {
+	var members []adminPermissionMember
+	if err = errors.Join(json.Unmarshal(rolesRaw, &roles), json.Unmarshal(matrixRaw, &matrix), json.Unmarshal(membersRaw, &members)); err != nil {
 		a.error(w, err)
 		return
 	}
@@ -72,16 +77,6 @@ func (a *Service) adminPermissions(w http.ResponseWriter, r *http.Request, _ str
 		}
 		matrix[role] = ordered
 	}
-	members := make([]adminPermissionMember, 0, len(owners)+len(listed))
-	for _, owner := range owners {
-		m := adminPermissionMember{Email: owner, Role: RoleMaintainer, Enabled: true, Owner: true}
-		if err = a.store.pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE expires_at>now()),max(last_seen_at) FROM admin_sessions WHERE email=$1`, owner).Scan(&m.Sessions, &m.LastSeenAt); err != nil {
-			a.error(w, err)
-			return
-		}
-		members = append(members, m)
-	}
-	members = append(members, listed...)
 	write(w, 200, map[string]any{"roles": roles, "permissions": AllAdminPermissions(), "matrix": matrix, "members": members})
 }
 

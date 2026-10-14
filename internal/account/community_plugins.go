@@ -108,19 +108,29 @@ type CommunityPlugin struct {
 const pluginSelectBase = `SELECT p.id,p.kind,p.plugin_id,p.name,p.description,
  COALESCE(NULLIF(btrim(u.display_name),''),'水杉小鹿·'||upper(left(u.id,6))),p.version,p.license,p.size,p.sha256,
  (SELECT count(*) FROM community_plugin_downloads WHERE pack_id=p.id),
- (SELECT count(*) FROM community_plugin_ratings WHERE pack_id=p.id),
- COALESCE((SELECT avg(stars) FROM community_plugin_ratings WHERE pack_id=p.id),0),
- p.owner_id=$1,COALESCE((SELECT stars FROM community_plugin_ratings WHERE pack_id=p.id AND user_id=$1),0),p.created_at,
+ rating_stats.count,rating_stats.average,p.owner_id=$1,rating_stats.mine,p.created_at,
  CASE WHEN p.owner_id=$1 THEN p.moderation ELSE '' END,`
 
 // communityPluginSelect 只有客户端声明 fields=saved 时才计算收藏总数和当前用户的收藏状态；默认目录不需要这两个逐行子查询。
 func communityPluginSelect(saved bool) string {
-	if saved {
-		return pluginSelectBase + `(SELECT count(*) FROM community_plugin_saves WHERE pack_id=p.id),EXISTS(SELECT 1 FROM community_plugin_saves WHERE pack_id=p.id AND user_id=$1)
- FROM community_plugins p JOIN auth_users u ON u.id=p.owner_id `
+	return communityPluginSelectQuery(saved, false)
+}
+
+func communityPluginSelectQuery(saved, page bool) string {
+	from := ` FROM community_plugins p JOIN auth_users u ON u.id=p.owner_id `
+	ratingID := "p.id"
+	if page {
+		from += `JOIN plugin_page q ON q.id=p.id `
+		// 评分依赖本页 ID，避免优化器将聚合排到分页关联之前。
+		ratingID = "q.id"
 	}
-	return pluginSelectBase + `0,false
- FROM community_plugins p JOIN auth_users u ON u.id=p.owner_id `
+	// 人数、平均分和个人评分共用一次聚合；主键保证每个用户每个插件只有一条评分。
+	from += `CROSS JOIN LATERAL (SELECT count(*) AS count,COALESCE(avg(stars),0) AS average,
+ COALESCE(max(stars) FILTER (WHERE user_id=$1),0) AS mine FROM community_plugin_ratings WHERE pack_id=` + ratingID + `) rating_stats `
+	if saved {
+		return pluginSelectBase + `(SELECT count(*) FROM community_plugin_saves WHERE pack_id=p.id),EXISTS(SELECT 1 FROM community_plugin_saves WHERE pack_id=p.id AND user_id=$1)` + from
+	}
+	return pluginSelectBase + `0,false` + from
 }
 
 func scanCommunityPlugin(row interface{ Scan(...any) error }) (CommunityPlugin, error) {
@@ -235,7 +245,7 @@ func (a *Service) communityPluginList(w http.ResponseWriter, r *http.Request) {
  SELECT p.id FROM community_plugins p JOIN auth_users u ON u.id=p.owner_id `+join+`
  WHERE strpos(lower(p.name),lower($2))>0 AND ($3='' OR p.kind=$3) AND ($5<>'mine' OR p.owner_id=$1) AND (p.moderation<>'removed' OR p.owner_id=$1) AND p.kind=ANY($6)
  ORDER BY `+order+` LIMIT 21 OFFSET $4
-) `+communityPluginSelect(fields["saved"])+join+`JOIN plugin_page q ON q.id=p.id ORDER BY `+order, viewer, search, kind, offset, scope, pluginVisibleKinds(r, kind))
+) `+communityPluginSelectQuery(fields["saved"], true)+join+`ORDER BY `+order, viewer, search, kind, offset, scope, pluginVisibleKinds(r, kind))
 	if e != nil {
 		a.error(w, e)
 		return

@@ -18,7 +18,6 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from playwright.sync_api import TimeoutError as PlaywrightTimeout
 from playwright.sync_api import expect, sync_playwright
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -314,7 +313,10 @@ class Server(ThreadingHTTPServer):
             super().handle_error(request, client_address)
 
 
-def check_debounce(context, base: str, problems: list[str]):
+def check_debounce(browser, base: str, problems: list[str]):
+    # Playwright 时钟作用于整个上下文；独立上下文避免暂停后影响其他页面的 Query 通知。
+    context = browser.new_context(viewport={"width": 1280, "height": 860})
+    context.add_init_script("window.__csp = []; document.addEventListener('securitypolicyviolation', e => window.__csp.push(e.violatedDirective + ' ' + (e.blockedURI || 'inline') + ' ' + (e.sourceFile || '') + ':' + e.lineNumber));")
     page = context.new_page()
     page.on("pageerror", lambda error: problems.append(f"debounce page error: {error}"))
     try:
@@ -343,7 +345,7 @@ def check_debounce(context, base: str, problems: list[str]):
         expect(value).to_have_text("调整延迟")
         problems.extend(f"CSP violation on debounce harness: {item}" for item in page.evaluate("window.__csp.splice(0)"))
     finally:
-        page.close()
+        context.close()
 
 
 def check_auth_generation(context, base: str, problems: list[str]):
@@ -454,6 +456,72 @@ def check_auth_logout_flush(context, base: str, problems: list[str]):
         problems.extend(f"退出等待提交测试 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
     finally:
         page.close()
+
+
+def wait_for_no_overflow(page, timeout_ms: int = 3000) -> bool:
+    # 直接执行函数并逐帧检查布局，避免 wait_for_function 的轮询 eval 触发生产 CSP。
+    return page.evaluate("""timeout => new Promise(resolve => {
+        const deadline = performance.now() + timeout;
+        const check = () => {
+            const fits = document.documentElement.scrollWidth <= window.innerWidth;
+            if (fits || performance.now() >= deadline) resolve(fits);
+            else requestAnimationFrame(check);
+        };
+        check();
+    })""", timeout_ms)
+
+
+def check_profile_rollback(context, base: str, problems: list[str]):
+    # 旧身份的失败 mutation 不应恢复到新身份的缓存；当前身份仍要正常撤销乐观更新。
+    for change_identity, response_status in ((True, 401), (True, 500), (False, 500)):
+        page = context.new_page()
+        page.on("pageerror", lambda error: problems.append(f"个人资料回滚测试页面异常：{error}"))
+        pending = []
+        refresh = []
+        hold_refresh = False
+        session = {**FIXTURES["/api/auth/session"], "google_enabled": False, "token_enabled": True}
+        old_profile = {**FIXTURES["/api/me"], "email": "old@example.test", "name": "旧管理员"}
+        new_profile = {**FIXTURES["/api/me"], "email": "new@example.test", "name": "新管理员", "via": "token", "owner": False, "sessions": [], "token": None}
+        page.route("**/api/auth/session", lambda route: route.fulfill(json=session))
+
+        def me(route):
+            if route.request.method == "POST":
+                pending.append(route)
+            elif hold_refresh:
+                refresh.append(route)
+            else:
+                route.fulfill(json=new_profile if "authorization" in route.request.headers else old_profile)
+
+        page.route("**/api/me", me)
+        try:
+            page.goto(base + "/me")
+            expect(page.get_by_text("旧管理员", exact=True)).to_be_visible()
+            preference = page.get_by_role("switch", name="词库 PR 提醒", exact=True)
+            expect(preference).to_be_checked()
+            with page.expect_request(lambda request: request.url.endswith("/api/me") and request.method == "POST"):
+                preference.click()
+            expect(preference).not_to_be_checked()
+            if change_identity:
+                page.get_by_role("button", name="退出登录", exact=True).click()
+                page.get_by_role("dialog").get_by_role("button", name="退出", exact=True).click()
+                page.get_by_label("管理员密钥", exact=True).fill("test-new-admin-token")
+                page.get_by_role("button", name="进入控制台", exact=True).click()
+                expect(page.get_by_text("新管理员", exact=True)).to_be_visible()
+            hold_refresh = True
+            pending.pop().fulfill(status=response_status, json={"error": "unauthorized" if response_status == 401 else "admin_auth_unavailable"})
+            expect(page.get_by_text(re.compile(r"^操作失败："))).to_be_visible()
+            if change_identity:
+                expect(page.get_by_text("新管理员", exact=True)).to_be_visible()
+                expect(page.get_by_text("旧管理员", exact=True)).to_have_count(0)
+            else:
+                expect(preference).to_be_checked()
+                expect(page.get_by_text("旧管理员", exact=True)).to_be_visible()
+            problems.extend(f"个人资料回滚测试 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+        finally:
+            for route in refresh:
+                route.fulfill(json=new_profile if change_identity else old_profile)
+            page.unroute_all(behavior="ignoreErrors")
+            page.close()
 
 
 def main() -> int:
@@ -829,10 +897,8 @@ def main() -> int:
                 expect(main.locator(".recharts-surface").first).to_be_visible()
                 page.set_viewport_size({"width": 390, "height": 800})
                 expect(main.get_by_text("各平台活跃", exact=True)).to_be_visible()
-                # The chart resizes on its ResizeObserver tick, so give the layout a moment to settle before judging overflow.
-                try:
-                    page.wait_for_function("document.documentElement.scrollWidth <= window.innerWidth", timeout=3000)
-                except PlaywrightTimeout:
+                # 等待图表的 ResizeObserver 完成尺寸调整，再检查是否存在横向溢出。
+                if not wait_for_no_overflow(page):
                     problems.append("overview scrolls horizontally at 390px")
                 page.set_viewport_size({"width": 1280, "height": 860})
                 main.get_by_role("link", name=re.compile("新增崩溃分组")).click()
@@ -1047,10 +1113,11 @@ def main() -> int:
                 expect(dialog).to_be_hidden()
                 page.get_by_role("button", name="取消选择").click()
                 violations("ui harness")
-                check_debounce(context, base, problems)
+                check_debounce(browser, base, problems)
                 check_auth_generation(context, base, problems)
                 check_auth_logout(context, base, problems)
                 check_auth_logout_flush(context, base, problems)
+                check_profile_rollback(context, base, problems)
             finally:
                 browser.close()
     finally:

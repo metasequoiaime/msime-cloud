@@ -100,13 +100,16 @@ function Preferences({ me }: { me: Me }) {
   const save = useMutation({
     mutationFn: (v: { key: string; value: boolean }) => run({ action: "set_pref", ...v }),
     onMutate: async v => {
+      const query = client.getQueryCache().find({ queryKey: meKey, exact: true });
       await client.cancelQueries({ queryKey: meKey });
+      if (!query || client.getQueryCache().find({ queryKey: meKey, exact: true }) !== query) return;
       const previous = client.getQueryData<Me>(meKey);
       client.setQueryData<Me>(meKey, old => old && { ...old, prefs: { ...old.prefs, [v.key]: v.value } });
-      return { previous };
+      return { previous, query };
     },
     onError: (error, _v, context) => {
-      if (context?.previous) client.setQueryData(meKey, context.previous);
+      // 登录切换会替换查询对象；旧 mutation 只能回滚自己所属的缓存，不能恢复旧身份资料。
+      if (context?.previous && client.getQueryCache().find({ queryKey: meKey, exact: true }) === context.query) client.setQueryData(meKey, context.previous);
       toast(`操作失败：${errorMessage(error)}`);
     },
     // The notify_* preferences filter the bell's list and unread count on the server, so both refresh with the profile.

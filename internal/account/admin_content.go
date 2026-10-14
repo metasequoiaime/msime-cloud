@@ -104,51 +104,46 @@ func (a *Service) contentModeration(ctx context.Context, section, id string, raw
 	for k, v := range base {
 		detail[k] = v
 	}
-	reports := []contentReport{}
-	rows, err := a.store.pool.Query(ctx, `SELECT r.id,r.reason,r.detail,COALESCE(NULLIF(btrim(u.display_name),''),'水杉小鹿·'||upper(left(u.id,6))),r.created_at FROM community_reports r JOIN auth_users u ON u.id=r.reporter_id WHERE r.kind=$1 AND r.item_id=$2 ORDER BY r.created_at DESC,r.id DESC LIMIT 100`, section, id)
-	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		var v contentReport
-		if err = rows.Scan(&v.ID, &v.Reason, &v.Detail, &v.Reporter, &v.CreatedAt); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		reports = append(reports, v)
-	}
-	rows.Close()
-	if err = rows.Err(); err != nil {
-		return nil, err
-	}
-	var reportCount int
-	if err = a.store.pool.QueryRow(ctx, `SELECT count(*) FROM community_reports WHERE kind=$1 AND item_id=$2`, section, id).Scan(&reportCount); err != nil {
-		return nil, err
-	}
 	var owner string
-	if err = json.Unmarshal(base["owner_id"], &owner); err != nil {
+	if err := json.Unmarshal(base["owner_id"], &owner); err != nil {
 		return nil, err
 	}
+	reports := []contentReport{}
+	var reportCount int
 	items := []ownerItem{}
-	rows, err = a.store.pool.Query(ctx, `SELECT section,id,name,moderation,created_at FROM (
+	batch := &pgx.Batch{}
+	batch.Queue(`SELECT r.id,r.reason,r.detail,COALESCE(NULLIF(btrim(u.display_name),''),'水杉小鹿·'||upper(left(u.id,6))),r.created_at FROM community_reports r JOIN auth_users u ON u.id=r.reporter_id WHERE r.kind=$1 AND r.item_id=$2 ORDER BY r.created_at DESC,r.id DESC LIMIT 100`, section, id).Query(func(rows pgx.Rows) error {
+		defer rows.Close()
+		for rows.Next() {
+			var v contentReport
+			if err := rows.Scan(&v.ID, &v.Reason, &v.Detail, &v.Reporter, &v.CreatedAt); err != nil {
+				return err
+			}
+			reports = append(reports, v)
+		}
+		return rows.Err()
+	})
+	batch.Queue(`SELECT count(*) FROM community_reports WHERE kind=$1 AND item_id=$2`, section, id).QueryRow(func(row pgx.Row) error {
+		return row.Scan(&reportCount)
+	})
+	batch.Queue(`SELECT section,id,name,moderation,created_at FROM (
  SELECT 'skins' AS section,id,name,moderation,created_at FROM community_skins WHERE owner_id=$1
  UNION ALL SELECT 'candidate-skins',id,name,moderation,created_at FROM community_candidate_skins WHERE owner_id=$1
  UNION ALL SELECT 'plugins',id,name,moderation,created_at FROM community_plugins WHERE owner_id=$1
  UNION ALL SELECT `+resourceSectionSQL("")+`,id,name,moderation,created_at FROM community_resources WHERE owner_id=$1
-) x WHERE NOT (section=$2 AND id=$3) ORDER BY created_at DESC,id DESC LIMIT 20`, owner, section, id)
-	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		var v ownerItem
-		if err = rows.Scan(&v.Section, &v.ID, &v.Name, &v.Moderation, &v.CreatedAt); err != nil {
-			rows.Close()
-			return nil, err
+) x WHERE NOT (section=$2 AND id=$3) ORDER BY created_at DESC,id DESC LIMIT 20`, owner, section, id).Query(func(rows pgx.Rows) error {
+		defer rows.Close()
+		for rows.Next() {
+			var v ownerItem
+			if err := rows.Scan(&v.Section, &v.ID, &v.Name, &v.Moderation, &v.CreatedAt); err != nil {
+				return err
+			}
+			items = append(items, v)
 		}
-		items = append(items, v)
-	}
-	rows.Close()
-	if err = rows.Err(); err != nil {
+		return rows.Err()
+	})
+	// 三条互不依赖的审核详情查询一起发送，减少打开内容详情时的数据库往返。
+	if err := a.store.pool.SendBatch(ctx, batch).Close(); err != nil {
 		return nil, err
 	}
 	// Opening the drawer is a read; only the upload screening counts hits.

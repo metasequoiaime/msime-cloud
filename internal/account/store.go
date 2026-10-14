@@ -783,6 +783,52 @@ SELECT avatar_key FROM old`, uid, key).Scan(&previous); e != nil {
 	return previous, tx.Commit(ctx)
 }
 
+// SetAvatarKeyAndMe 在用户行锁内替换头像登记，并在同一个批次读取头像上传响应所需的资料，返回旧键供调用方删除对象。
+func (s *Store) SetAvatarKeyAndMe(ctx context.Context, uid, key string) (string, User, []Identity, error) {
+	tx, e := s.userDataTransaction(ctx, uid)
+	if errors.Is(e, pgx.ErrNoRows) {
+		return "", User{}, nil, ErrInvalid
+	}
+	if e != nil {
+		return "", User{}, nil, e
+	}
+	defer tx.Rollback(ctx)
+	var previous string
+	var u User
+	ids := []Identity{}
+	batch := &pgx.Batch{}
+	batch.Queue(`WITH old AS MATERIALIZED (
+ SELECT avatar_key FROM auth_users WHERE id=$1
+), updated AS (
+ UPDATE auth_users SET avatar_key=$2 WHERE id=$1
+ RETURNING 1
+)
+SELECT avatar_key FROM old`, uid, key).QueryRow(func(row pgx.Row) error {
+		return row.Scan(&previous)
+	})
+	batch.Queue(userQuery, uid).QueryRow(func(row pgx.Row) error {
+		return scanUser(row, &u)
+	})
+	batch.Queue("SELECT provider,subject FROM auth_identities WHERE user_id=$1 ORDER BY provider,subject", uid).Query(func(rows pgx.Rows) error {
+		var err error
+		ids, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (Identity, error) {
+			var i Identity
+			return i, row.Scan(&i.Provider, &i.Subject)
+		})
+		if ids == nil {
+			ids = []Identity{}
+		}
+		return err
+	})
+	if e = tx.SendBatch(ctx, batch).Close(); e != nil {
+		return "", User{}, nil, e
+	}
+	if e = tx.Commit(ctx); e != nil {
+		return "", User{}, nil, e
+	}
+	return previous, u, ids, nil
+}
+
 // AvatarKey returns the user's uploaded avatar key, or "" when they have none.
 func (s *Store) AvatarKey(ctx context.Context, uid string) (string, error) {
 	var key string

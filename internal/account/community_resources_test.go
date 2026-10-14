@@ -45,7 +45,7 @@ func TestCommunityResourceSaveScopeIndex(t *testing.T) {
 func TestCommunityOwnerIndexes(t *testing.T) {
 	db := testStore(t)
 	var skins, resources int
-	if err := db.pool.QueryRow(t.Context(), `SELECT (SELECT count(*) FROM pg_indexes WHERE schemaname=current_schema() AND indexname='community_skins_owner'),(SELECT count(*) FROM pg_indexes WHERE schemaname=current_schema() AND indexname='community_resources_owner')`).Scan(&skins, &resources); err != nil {
+	if err := db.pool.QueryRow(t.Context(), `SELECT (SELECT count(*) FROM pg_constraint WHERE conrelid='community_skins'::regclass AND contype='u' AND pg_get_constraintdef(oid)='UNIQUE (owner_id, id)'),(SELECT count(*) FROM pg_indexes WHERE schemaname=current_schema() AND indexname='community_resources_owner')`).Scan(&skins, &resources); err != nil {
 		t.Fatal(err)
 	}
 	if skins != 1 || resources != 1 {

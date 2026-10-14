@@ -9,8 +9,15 @@ CREATE TABLE IF NOT EXISTS community_skins (
  UNIQUE(owner_id,id)
 );
 CREATE INDEX IF NOT EXISTS community_skins_newest ON community_skins(created_at DESC,id);
--- 我的作品、发布上限和后台作者作品查询都按 owner_id 筛选。
-CREATE INDEX IF NOT EXISTS community_skins_owner ON community_skins(owner_id,created_at DESC);
+-- UNIQUE(owner_id,id) 已覆盖作者筛选；删除旧版本曾经加上的重复索引。
+DO $$
+DECLARE idx record;
+BEGIN
+ FOR idx IN SELECT n.nspname,c.relname FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+  WHERE i.indrelid='community_skins'::regclass AND c.relname='community_skins_owner' LOOP
+  EXECUTE format('DROP INDEX %I.%I',idx.nspname,idx.relname);
+ END LOOP;
+END $$;
 -- 社区键盘皮肤的图库分类，只是发布元数据，不属于 design。已有行迁移后为 other。取值与 Go 中的 candidateSkinCategories 一致（与候选窗皮肤共用同一组分类）。约束在下面的循环里以命名约束单独添加，因为 PostgreSQL 12 每次重跑 ADD COLUMN IF NOT EXISTS 都会再加一份行内 CHECK；之前重跑留下的副本（name1、name2……）会被删掉。
 ALTER TABLE community_skins ADD COLUMN IF NOT EXISTS category text NOT NULL DEFAULT 'other';
 DO $$

@@ -753,12 +753,8 @@ func (a *Service) delete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	avatar, e := a.store.AvatarKey(r.Context(), p.UserID)
+	avatar, e := a.store.DeleteUserWithAvatarKey(r.Context(), p.UserID)
 	if e != nil {
-		a.error(w, e)
-		return
-	}
-	if e = a.store.DeleteUser(r.Context(), p.UserID); e != nil {
 		a.error(w, e)
 		return
 	}

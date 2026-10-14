@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS admin_audit (
  target text NOT NULL,
  created_at timestamptz NOT NULL DEFAULT now()
 );
+-- 审计列表按时间和 ID 倒序分页，避免每次选页都扫描并排序全部历史。
+CREATE INDEX IF NOT EXISTS admin_audit_time ON admin_audit(created_at DESC,id DESC);
 
 CREATE INDEX IF NOT EXISTS auth_users_created ON auth_users(created_at);
 

@@ -140,3 +140,53 @@ func TestSkinJobStoreDeadWorkersReleaseSlots(t *testing.T) {
 		t.Fatal("live jobs must still fill the caps", err)
 	}
 }
+
+// 任务已经过期时，即使最后一次心跳仍然新鲜，也不能接受迟到的成功或失败结果。
+func TestSkinJobStoreRejectsExpiredResults(t *testing.T) {
+	db := testStore(t)
+	a := &Service{store: db}
+	ctx := t.Context()
+	if _, err := db.pool.Exec(ctx, `TRUNCATE skin_jobs`); err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range []string{"succeeded", "failed"} {
+		t.Run(state, func(t *testing.T) {
+			id := skinJobID('a')
+			if _, err := a.CreateSkinJob(ctx, id, "owner", 1, 1, time.Minute); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.pool.Exec(ctx, `UPDATE skin_jobs SET expires_at=now()-interval '1 second',heartbeat_at=now() WHERE id=$1`, id); err != nil {
+				t.Fatal(err)
+			}
+			if alive, err := a.SkinJobHeartbeat(ctx, id); err != nil || alive {
+				t.Fatal("过期任务仍允许继续执行", alive, err)
+			}
+			var artwork []byte
+			reason := "upstream_failure"
+			if state == "succeeded" {
+				artwork = []byte(`{"width":1}`)
+				reason = ""
+			}
+			if recorded, err := a.FinishSkinJob(ctx, id, state, reason, artwork); err != nil || recorded {
+				t.Error("过期任务仍接受结果", recorded, err)
+			}
+			var storedState, storedReason string
+			var storedArtwork []byte
+			if err := db.pool.QueryRow(ctx, `SELECT state,reason,artwork FROM skin_jobs WHERE id=$1`, id).Scan(&storedState, &storedReason, &storedArtwork); err != nil {
+				t.Fatal(err)
+			}
+			if storedState != "running" || storedReason != "" || storedArtwork != nil {
+				t.Errorf("迟到结果改变了过期记录：状态=%q，原因=%q，插画=%s", storedState, storedReason, storedArtwork)
+			}
+			if _, err := a.GetSkinJob(ctx, id, "owner"); !errors.Is(err, ErrSkinJobNotFound) {
+				t.Fatal("过期任务仍可读取", err)
+			}
+			if _, err := a.CreateSkinJob(ctx, skinJobID('b'), "owner", 1, 1, time.Minute); err != nil {
+				t.Fatal("过期任务未释放容量", err)
+			}
+			if err := a.DropSkinJob(ctx, skinJobID('b')); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

@@ -196,6 +196,7 @@ func (s *Server) deleteSkinArtworkJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
+	s.expireSkinJobs(time.Now())
 	job := s.skinJobs[r.PathValue("job")]
 	if job == nil || owner == "" || job.owner != owner {
 		s.mu.Unlock()

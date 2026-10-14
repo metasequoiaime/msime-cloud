@@ -111,9 +111,9 @@ func (a *Service) SkinJobHeartbeat(ctx context.Context, id string) (bool, error)
 	return tag.RowsAffected() == 1, nil
 }
 
-// FinishSkinJob records a worker's outcome: state is "succeeded" with artwork, or "failed" with reason. It returns false when nothing was recorded because the job had been cancelled (its row is deleted here), had gone stale or had expired.
+// FinishSkinJob 记录执行者的成功插画或失败原因；任务已取消（此处删除记录）、心跳失效或过期时不写入结果并返回 false。
 func (a *Service) FinishSkinJob(ctx context.Context, id, state, reason string, artwork []byte) (bool, error) {
-	tag, err := a.store.pool.Exec(ctx, `UPDATE skin_jobs SET state=$2,reason=$3,artwork=$4,heartbeat_at=now() WHERE id=$1 AND NOT cancelled AND `+skinJobLive, id, state, reason, artwork)
+	tag, err := a.store.pool.Exec(ctx, `UPDATE skin_jobs SET state=$2,reason=$3,artwork=$4,heartbeat_at=now() WHERE id=$1 AND NOT cancelled AND expires_at>now() AND `+skinJobLive, id, state, reason, artwork)
 	if err != nil {
 		return false, err
 	}

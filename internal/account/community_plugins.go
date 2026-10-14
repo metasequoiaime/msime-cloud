@@ -458,16 +458,16 @@ func (a *Service) communityPluginDownload(w http.ResponseWriter, r *http.Request
 	defer tx.Rollback(r.Context())
 	var kind, pluginID, version, sum string
 	var archive []byte
-	e = tx.QueryRow(r.Context(), `SELECT kind,plugin_id,version,sha256,archive FROM community_plugins WHERE id=$1 AND (moderation<>'removed' OR owner_id=$2) FOR SHARE`, r.PathValue("id"), p.UserID).Scan(&kind, &pluginID, &version, &sum, &archive)
+	batch := &pgx.Batch{}
+	batch.Queue(`SELECT kind,plugin_id,version,sha256,archive FROM community_plugins WHERE id=$1 AND (moderation<>'removed' OR owner_id=$2) FOR SHARE`, r.PathValue("id"), p.UserID).QueryRow(func(row pgx.Row) error {
+		return row.Scan(&kind, &pluginID, &version, &sum, &archive)
+	})
+	batch.Queue(`INSERT INTO community_plugin_downloads(pack_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, r.PathValue("id"), p.UserID)
+	e = tx.SendBatch(r.Context(), batch).Close()
 	if errors.Is(e, pgx.ErrNoRows) {
 		writeError(w, 404, "plugin_not_found")
 		return
 	}
-	if e != nil {
-		a.error(w, e)
-		return
-	}
-	_, e = tx.Exec(r.Context(), `INSERT INTO community_plugin_downloads(pack_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, r.PathValue("id"), p.UserID)
 	if e == nil {
 		e = tx.Commit(r.Context())
 	}

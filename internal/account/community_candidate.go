@@ -710,37 +710,29 @@ func (a *Service) communityCandidateDownload(w http.ResponseWriter, r *http.Requ
 	defer tx.Rollback(r.Context())
 	var packageID string
 	var manifest []byte
-	e = tx.QueryRow(r.Context(), `SELECT package_id,manifest FROM community_candidate_skins WHERE id=$1 AND ((visibility='public' AND moderation<>'removed') OR owner_id=$2) FOR SHARE`, r.PathValue("id"), p.UserID).Scan(&packageID, &manifest)
+	files := map[string][]byte{}
+	batch := &pgx.Batch{}
+	batch.Queue(`SELECT package_id,manifest FROM community_candidate_skins WHERE id=$1 AND ((visibility='public' AND moderation<>'removed') OR owner_id=$2) FOR SHARE`, r.PathValue("id"), p.UserID).QueryRow(func(row pgx.Row) error {
+		return row.Scan(&packageID, &manifest)
+	})
+	batch.Queue(`SELECT path,bytes FROM community_candidate_skin_files WHERE skin_id=$1 ORDER BY path`, r.PathValue("id")).Query(func(rows pgx.Rows) error {
+		defer rows.Close()
+		for rows.Next() {
+			var path string
+			var data []byte
+			if e := rows.Scan(&path, &data); e != nil {
+				return e
+			}
+			files[path] = data
+		}
+		return rows.Err()
+	})
+	batch.Queue(`INSERT INTO community_candidate_skin_downloads(skin_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, r.PathValue("id"), p.UserID)
+	e = tx.SendBatch(r.Context(), batch).Close()
 	if errors.Is(e, pgx.ErrNoRows) {
 		writeError(w, 404, "skin_not_found")
 		return
 	}
-	if e != nil {
-		a.error(w, e)
-		return
-	}
-	rows, e := tx.Query(r.Context(), `SELECT path,bytes FROM community_candidate_skin_files WHERE skin_id=$1 ORDER BY path`, r.PathValue("id"))
-	if e != nil {
-		a.error(w, e)
-		return
-	}
-	files := map[string][]byte{}
-	for rows.Next() {
-		var path string
-		var data []byte
-		if e = rows.Scan(&path, &data); e != nil {
-			rows.Close()
-			a.error(w, e)
-			return
-		}
-		files[path] = data
-	}
-	rows.Close()
-	if e = rows.Err(); e != nil {
-		a.error(w, e)
-		return
-	}
-	_, e = tx.Exec(r.Context(), `INSERT INTO community_candidate_skin_downloads(skin_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, r.PathValue("id"), p.UserID)
 	if e == nil {
 		e = tx.Commit(r.Context())
 	}

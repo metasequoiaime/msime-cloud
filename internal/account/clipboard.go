@@ -153,19 +153,18 @@ func (s *Store) AddClipboard(ctx context.Context, user, device string, v Clipboa
 		return ClipboardItem{}, errClipboardKeyConflict
 	}
 	// 滚动升级期间旧版本副本写入的明文条目，以及不属于当前密钥的条目，都不会再出现在列表里；趁持有用户行锁时删掉，免得它们占用五十条的名额。
-	if _, e = tx.Exec(ctx, "DELETE FROM user_clipboard WHERE user_id=$1 AND (ciphertext='' OR key_id<>$2)", user, v.KeyID); e != nil {
-		return ClipboardItem{}, e
-	}
+	batch := &pgx.Batch{}
+	batch.Queue("DELETE FROM user_clipboard WHERE user_id=$1 AND (ciphertext='' OR key_id<>$2)", user, v.KeyID)
 	var item ClipboardItem
-	e = tx.QueryRow(ctx, `INSERT INTO user_clipboard(id,user_id,text,text_hash,ciphertext,key_id,sequence,device) VALUES($1,$2,'',$3,$4,$5,(SELECT COALESCE(max(sequence),0)+1 FROM user_clipboard WHERE user_id=$2),$6)
+	batch.Queue(`INSERT INTO user_clipboard(id,user_id,text,text_hash,ciphertext,key_id,sequence,device) VALUES($1,$2,'',$3,$4,$5,(SELECT COALESCE(max(sequence),0)+1 FROM user_clipboard WHERE user_id=$2),$6)
  ON CONFLICT(user_id,text_hash) DO UPDATE SET sequence=excluded.sequence,updated_at=now(),device=excluded.device,ciphertext=excluded.ciphertext,key_id=excluded.key_id
- RETURNING id,ciphertext,key_id,updated_at,pinned,device`, randomToken(), user, v.Dedup, v.Ciphertext, v.KeyID, device).Scan(&item.ID, &item.Ciphertext, &item.KeyID, &item.UpdatedAt, &item.Pinned, &item.Device)
-	if e != nil {
-		return item, e
-	}
-	_, e = tx.Exec(ctx, `DELETE FROM user_clipboard WHERE user_id=$1 AND id NOT IN
+ RETURNING id,ciphertext,key_id,updated_at,pinned,device`, randomToken(), user, v.Dedup, v.Ciphertext, v.KeyID, device).QueryRow(func(row pgx.Row) error {
+		return row.Scan(&item.ID, &item.Ciphertext, &item.KeyID, &item.UpdatedAt, &item.Pinned, &item.Device)
+	})
+	batch.Queue(`DELETE FROM user_clipboard WHERE user_id=$1 AND id NOT IN
  (SELECT id FROM user_clipboard WHERE user_id=$1 ORDER BY pinned DESC,sequence DESC LIMIT 50)`, user)
-	if e != nil {
+	// 批量发送保持先清旧密钥、再写入、最后裁剪容量的顺序，各条语句可见前面语句的结果。
+	if e = tx.SendBatch(ctx, batch).Close(); e != nil {
 		return item, e
 	}
 	return item, tx.Commit(ctx)

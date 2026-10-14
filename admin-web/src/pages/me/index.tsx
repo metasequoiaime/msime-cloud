@@ -19,7 +19,7 @@ import { StatGrid, StatTile } from "../../ui/stat-tile";
 import { Empty, ErrorState, Skeleton, SkeletonRows } from "../../ui/states";
 import { Switch } from "../../ui/switch";
 import { useToast } from "../../ui/toast";
-import { relativeTime } from "../../shell/notifications";
+import { relativeTime } from "../../utils/time";
 import { Avatar, SectionCard, SectionRow } from "./section";
 
 const meKey = keys.page("me");

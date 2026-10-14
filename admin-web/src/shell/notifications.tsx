@@ -2,8 +2,7 @@ import { useState } from "react";
 import { Popover } from "radix-ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { formatDistanceToNow } from "date-fns";
-import { zhCN } from "date-fns/locale";
+import { relativeTime } from "../utils/time";
 import { Bell } from "lucide-react";
 import { errorMessage, useAPI } from "../api/client";
 import { keys } from "../api/keys";
@@ -14,11 +13,6 @@ import { Button } from "../ui/button";
 import { cn } from "../ui/cn";
 import { SkeletonRows } from "../ui/states";
 import { useToast } from "../ui/toast";
-
-export function relativeTime(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : formatDistanceToNow(date, { locale: zhCN, addSuffix: true });
-}
 
 // NotificationBell shows the unread count from /api/shell and loads the latest 20 notifications when opened.
 export function NotificationBell({ unread }: { unread: number }) {

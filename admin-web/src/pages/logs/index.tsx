@@ -1,5 +1,5 @@
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { format } from "date-fns";
+import { formatDateTime } from "../../utils/time";
 import { Pause, Play, Search } from "lucide-react";
 import { ToggleGroup } from "radix-ui";
 import { APICredentialsContext, APIError, errorMessage } from "../../api/client";
@@ -108,10 +108,8 @@ function LogRow({ row, tone }: { row: Row; tone: (pod: string) => PodTone }) {
     return <div className="my-1 px-3 py-1 text-center text-[12px] text-warn" role="note">日志产生的速度超过单个连接的上限，已跳到最新位置，中间一段没有显示</div>;
   }
   const { line } = row;
-  const time = new Date(line.time);
-  const valid = !Number.isNaN(time.getTime());
   return <div className={cn("flex items-start gap-2 px-3 py-[3px] hover:bg-panel-2", line.level === "ERROR" && "bg-bad-soft")}>
-    <time dateTime={line.time} title={`${line.time}${line.stream ? ` · ${line.stream}` : ""}`} className="shrink-0 text-muted tabular-nums">{valid ? format(time, "HH:mm:ss.SSS") : line.time}</time>
+    <time dateTime={line.time} title={`${line.time}${line.stream ? ` · ${line.stream}` : ""}`} className="shrink-0 text-muted tabular-nums">{formatDateTime(line.time, "HH:mm:ss.SSS")}</time>
     <span title={line.pod} className={cn("inline-flex h-[18px] shrink-0 items-center rounded-[5px] px-1.5 text-[11px]", tone(line.pod).badge)}>{shortPod(line.pod) || "?"}</span>
     <span className={cn("w-[44px] shrink-0 font-semibold", levelText[line.level] ?? "text-muted")}>{line.level || "—"}</span>
     <span className="min-w-0 flex-1 break-all whitespace-pre-wrap text-body">{line.message}</span>

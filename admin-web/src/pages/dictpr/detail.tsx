@@ -5,7 +5,7 @@ import type { Entry, PRState, PRSummary } from "../../api/dictpr";
 import { approveSchema, authorLabel, flagLabels, flagTones, kindLabels, prDetailSchema, rejectSchema, stateLabels, stateTones, trimSchema } from "../../api/dictpr";
 import { keys } from "../../api/keys";
 import { usePageHotkeys } from "../../shell/hotkeys";
-import { relativeTime } from "../../shell/notifications";
+import { relativeTime } from "../../utils/time";
 import { noPermissionHint, usePermissions } from "../../shell/permissions";
 import { Button, buttonVariants } from "../../ui/button";
 import { Banner, Card } from "../../ui/card";

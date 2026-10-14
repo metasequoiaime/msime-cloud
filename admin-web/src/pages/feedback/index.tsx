@@ -5,7 +5,7 @@ import { platformName } from "../../api/crash";
 import { feedbackListSchema, feedbackPlatforms, feedbackStatusLabels, feedbackStatusTones, feedbackStatuses, feedbackTypeLabels, feedbackTypes } from "../../api/feedback";
 import type { FeedbackRow } from "../../api/feedback";
 import { keys } from "../../api/keys";
-import { relativeTime } from "../../shell/notifications";
+import { relativeTime } from "../../utils/time";
 import { PageIntro } from "../../shell/page-intro";
 import { usePageSearch, useSetPageSearch } from "../../shell/page-search";
 import { noPermissionHint, usePermissions } from "../../shell/permissions";

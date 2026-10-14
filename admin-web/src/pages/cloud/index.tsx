@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useAPI } from "../../api/client";
 import type { CloudService } from "../../api/cloud";
 import { cloudSchema, formatLatency, formatRate, stateTone } from "../../api/cloud";
-import { relativeTime } from "../../shell/notifications";
+import { relativeTime } from "../../utils/time";
 import { keys } from "../../api/keys";
 import { PageIntro } from "../../shell/page-intro";
 import { Banner } from "../../ui/card";

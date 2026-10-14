@@ -5,7 +5,7 @@ import { platformName } from "../../api/crash";
 import { diagnosticLabels, feedbackStatusLabels, feedbackStatusTones, feedbackTypeLabels } from "../../api/feedback";
 import type { FeedbackRow } from "../../api/feedback";
 import { keys } from "../../api/keys";
-import { relativeTime } from "../../shell/notifications";
+import { relativeTime } from "../../utils/time";
 import { DetailDrawer } from "../../ui/drawer";
 import type { DrawerAction, DrawerField, DrawerSection } from "../../ui/drawer";
 import { Skeleton, SkeletonRows } from "../../ui/states";

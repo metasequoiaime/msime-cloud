@@ -1,6 +1,5 @@
-import { format } from "date-fns";
 import type { Tone } from "../../ui/pill";
-import { relativeTime } from "../../shell/notifications";
+import { relativeTime } from "../../utils/time";
 import type { UserHistory, UserRow, UserWork } from "../../api/users";
 
 // Role pills follow the design: maintainers in the accent tone, reviewers in info, everyone else muted.
@@ -34,11 +33,6 @@ export function providersText(providers: readonly string[]): string {
 
 export function activeText(value: string | null): string {
   return value ? relativeTime(value) : "从未登录";
-}
-
-export function dateText(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : format(date, "yyyy-MM-dd");
 }
 
 // devicePlatform reads the platform out of the User-Agent recorded at login; the clients may only identify their platform.

@@ -50,9 +50,10 @@ func (a *Service) adminContent(w http.ResponseWriter, r *http.Request, section, 
 		query = `SELECT json_build_object('id',s.id,'name',s.name,'description',s.description,'owner_id',s.owner_id,'author',u.display_name,'created_at',s.created_at,'updated_at',s.updated_at,'revision',s.revision,'content',s.content,
  'moderation',s.moderation,'previous_moderation',s.previous_moderation,'moderation_reason',s.moderation_reason,'moderated_by',s.moderated_by,'moderated_at',s.moderated_at,'owner_banned',u.banned_at IS NOT NULL,
  'saves',(SELECT count(*) FROM community_resource_saves WHERE resource_id=s.id),
- 'rating_count',(SELECT count(*) FROM community_resource_ratings WHERE resource_id=s.id),
- 'rating_average',(SELECT COALESCE(avg(stars),0) FROM community_resource_ratings WHERE resource_id=s.id))
- FROM community_resources s JOIN auth_users u ON u.id=s.owner_id WHERE s.id=$1 AND s.kind=$2`
+ 'rating_count',rating_stats.count,'rating_average',rating_stats.average)
+ FROM community_resources s JOIN auth_users u ON u.id=s.owner_id
+ CROSS JOIN LATERAL (SELECT count(*) AS count,COALESCE(avg(stars),0) AS average FROM community_resource_ratings WHERE resource_id=s.id) rating_stats
+ WHERE s.id=$1 AND s.kind=$2`
 	}
 	var result json.RawMessage
 	err := a.store.pool.QueryRow(r.Context(), query, args...).Scan(&result)

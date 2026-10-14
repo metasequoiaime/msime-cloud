@@ -92,16 +92,28 @@ func (a *Service) downloadsSummary(ctx context.Context, now time.Time) (download
 	defer tx.Rollback(ctx)
 
 	// 平台别名（win、darwin、harmonyos 等）归到规范 ID 下，所以同一平台在每个版本、安装包和渠道下只占一行。
-	rows, err := tx.Query(ctx, `SELECT `+canonicalPlatformSQL("platform")+` AS p,version,artifact,channel,count(*) FILTER (WHERE created_at>=$1),count(*)
+	rows, err := tx.Query(ctx, `WITH grouped AS (
+ SELECT `+canonicalPlatformSQL("platform")+` AS p,version,artifact,channel,
+   count(*) FILTER (WHERE created_at>=$1) AS today,
+   count(*) AS week,
+   count(*) FILTER (WHERE channel=$4) AS mirror,
+   bool_or(channel IS NOT NULL) AS channel_reported
  FROM admin_events WHERE kind='download' AND created_at>=$2 AND created_at<$3
  GROUP BY p,version,artifact,channel
- ORDER BY count(*) DESC,p,version,artifact NULLS LAST,channel NULLS LAST LIMIT $4`, today, weekStart, today.AddDate(0, 0, 1), downloadsRowLimit+1)
+)
+SELECT p,version,artifact,channel,today,week,
+ sum(today) OVER ()::bigint,sum(week) OVER ()::bigint,sum(mirror) OVER ()::bigint,
+ bool_or(channel_reported) OVER ()
+ FROM grouped
+ ORDER BY week DESC,p,version,artifact NULLS LAST,channel NULLS LAST LIMIT $5`, today, weekStart, today.AddDate(0, 0, 1), downloadsMirrorChannel, downloadsRowLimit+1)
 	if err != nil {
 		return summary, err
 	}
+	var telemetryToday, telemetryWeek, telemetryMirrorWeek int64
+	var telemetryChannelReported bool
 	for rows.Next() {
 		row := downloadsRow{Source: downloadsSourceTelemetry}
-		if err = rows.Scan(&row.Platform, &row.Version, &row.Artifact, &row.Channel, &row.Today, &row.Week); err != nil {
+		if err = rows.Scan(&row.Platform, &row.Version, &row.Artifact, &row.Channel, &row.Today, &row.Week, &telemetryToday, &telemetryWeek, &telemetryMirrorWeek, &telemetryChannelReported); err != nil {
 			rows.Close()
 			return summary, err
 		}
@@ -114,12 +126,9 @@ func (a *Service) downloadsSummary(ctx context.Context, now time.Time) (download
 	if len(summary.Rows) > downloadsRowLimit {
 		summary.Rows, summary.Truncated = summary.Rows[:downloadsRowLimit], true
 	}
-	// Totals and the channel flag aggregate every event of the week, not only the capped groups.
-	var telemetryToday, telemetryWeek int64
-	if err = tx.QueryRow(ctx, `SELECT count(*) FILTER (WHERE created_at>=$1),count(*),count(*) FILTER (WHERE channel=$4),COALESCE(bool_or(channel IS NOT NULL),false)
- FROM admin_events WHERE kind='download' AND created_at>=$2 AND created_at<$3`, today, weekStart, today.AddDate(0, 0, 1), downloadsMirrorChannel).Scan(&telemetryToday, &telemetryWeek, &summary.Totals.MirrorWeek, &summary.ChannelReported); err != nil {
-		return summary, err
-	}
+	// 窗口汇总在截断前计算，确保返回行上限不会漏掉总数和渠道标记。
+	summary.Totals.MirrorWeek = telemetryMirrorWeek
+	summary.ChannelReported = telemetryChannelReported
 
 	github, err := githubReleaseDownloads(ctx, tx, weekStart, today, &summary)
 	if err != nil {

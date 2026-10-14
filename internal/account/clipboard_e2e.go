@@ -237,24 +237,25 @@ func (s *Store) DeleteClipboardDevice(ctx context.Context, user, device string) 
 		return e
 	}
 	defer tx.Rollback(ctx)
-	var approved bool
-	e = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM user_clipboard_wraps w WHERE w.user_id=d.user_id AND w.device_id=d.device_id AND w.key_id=cs.key_id)
+	var approved, deleted bool
+	// 在同一语句内检查当前密钥的封装并删除待批准设备，用户行锁仍覆盖并发批准和换钥。
+	e = tx.QueryRow(ctx, `WITH device_state AS (
+ SELECT EXISTS(SELECT 1 FROM user_clipboard_wraps w WHERE w.user_id=d.user_id AND w.device_id=d.device_id AND w.key_id=cs.key_id) AS approved
  FROM user_clipboard_devices d LEFT JOIN user_clipboard_settings cs ON cs.user_id=d.user_id
- WHERE d.user_id=$1 AND d.device_id=$2`, user, device).Scan(&approved)
-	if errors.Is(e, pgx.ErrNoRows) {
-		return errDataNotFound
-	}
+ WHERE d.user_id=$1 AND d.device_id=$2
+), deleted AS (
+ DELETE FROM user_clipboard_devices WHERE user_id=$1 AND device_id=$2
+ AND EXISTS(SELECT 1 FROM device_state WHERE NOT approved)
+ RETURNING 1
+)
+SELECT EXISTS(SELECT 1 FROM device_state WHERE approved),EXISTS(SELECT 1 FROM deleted)`, user, device).Scan(&approved, &deleted)
 	if e != nil {
 		return e
 	}
 	if approved {
 		return errClipboardKeyRotationRequired
 	}
-	result, e := tx.Exec(ctx, "DELETE FROM user_clipboard_devices WHERE user_id=$1 AND device_id=$2", user, device)
-	if e != nil {
-		return e
-	}
-	if result.RowsAffected() == 0 {
+	if !deleted {
 		return errDataNotFound
 	}
 	return tx.Commit(ctx)

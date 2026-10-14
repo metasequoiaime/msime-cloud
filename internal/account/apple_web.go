@@ -117,6 +117,11 @@ func (s *Store) pendingAppleWebChallenge(ctx context.Context, idHash string) (ap
 	return c, err
 }
 
+// dropPendingAppleWebChallenge 只作废尚未签发授权码的挑战；并发回调已经签发的授权码仍由兑换接口消费。
+func (s *Store) dropPendingAppleWebChallenge(ctx context.Context, idHash string) {
+	s.pool.Exec(ctx, `DELETE FROM auth_challenges WHERE id_hash=$1 AND provider='apple_web' AND granted_at IS NULL`, idHash)
+}
+
 // grantAppleWeb 把回调校验过的身份写到挑战行上并签发授权码：库里只存授权码的 SHA-256，挑战的有效期改成签发后 appleWebGrantTTL。一条挑战只能签发一次。
 func (s *Store) grantAppleWeb(ctx context.Context, idHash string, c appleWebChallenge, grantHash string) error {
 	tag, err := s.pool.Exec(ctx, `UPDATE auth_challenges SET verified_subject=$2,verified_email=$3,verified_email_verified=$4,verified_name=$5,grant_hash=$6,granted_at=now(),expires_at=now()+$7::interval
@@ -262,7 +267,7 @@ func (a *Service) appleWebCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	back := c.App + "://auth/apple"
 	fail := func(code string) {
-		a.store.DropChallenge(r.Context(), c.IDHash)
+		a.store.dropPendingAppleWebChallenge(r.Context(), c.IDHash)
 		appleWebPage(w, back+"?error="+code, "没有完成 Apple 登录，请回到水杉输入法重试。")
 	}
 	if r.PostForm.Get("error") != "" {

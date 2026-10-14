@@ -198,19 +198,16 @@ func (s *Store) PutClipboardDevice(ctx context.Context, user, device, publicKey,
 		return e
 	}
 	defer tx.Rollback(ctx)
-	result, e := tx.Exec(ctx, "UPDATE user_clipboard_devices SET name=$3,last_seen=now() WHERE user_id=$1 AND device_id=$2", user, device, name)
-	if e != nil {
-		return e
-	}
-	if result.RowsAffected() == 1 {
-		return tx.Commit(ctx)
-	}
-	var inserted bool
-	if e = tx.QueryRow(ctx, `WITH device_count AS (
+	var written bool
+	// 已有设备只改名；更新成功时跳过淘汰和新增，避免同一语句重复修改同一设备行。
+	if e = tx.QueryRow(ctx, `WITH updated AS (
+ UPDATE user_clipboard_devices SET name=$4,last_seen=now() WHERE user_id=$1 AND device_id=$2
+ RETURNING 1
+), device_count AS (
  SELECT count(*) AS n FROM user_clipboard_devices WHERE user_id=$1
 ), evicted AS (
  DELETE FROM user_clipboard_devices d
- WHERE d.user_id=$1 AND (SELECT n FROM device_count) >= $5 AND d.device_id=(
+ WHERE d.user_id=$1 AND NOT EXISTS(SELECT 1 FROM updated) AND (SELECT n FROM device_count) >= $5 AND d.device_id=(
   SELECT d2.device_id FROM user_clipboard_devices d2 LEFT JOIN user_clipboard_settings cs ON cs.user_id=d2.user_id
   WHERE d2.user_id=$1 AND NOT EXISTS(SELECT 1 FROM user_clipboard_wraps w WHERE w.user_id=d2.user_id AND w.device_id=d2.device_id AND w.key_id=cs.key_id)
   ORDER BY d2.created_at,d2.device_id LIMIT 1)
@@ -218,13 +215,13 @@ func (s *Store) PutClipboardDevice(ctx context.Context, user, device, publicKey,
 ), inserted AS (
  INSERT INTO user_clipboard_devices(user_id,device_id,public_key,name)
  SELECT $1,$2,$3,$4
- WHERE (SELECT n FROM device_count) < $5 OR EXISTS(SELECT 1 FROM evicted)
+ WHERE NOT EXISTS(SELECT 1 FROM updated) AND ((SELECT n FROM device_count) < $5 OR EXISTS(SELECT 1 FROM evicted))
  RETURNING 1
 )
-SELECT EXISTS(SELECT 1 FROM inserted)`, user, device, publicKey, name, clipboardDeviceLimit).Scan(&inserted); e != nil {
+SELECT EXISTS(SELECT 1 FROM updated) OR EXISTS(SELECT 1 FROM inserted)`, user, device, publicKey, name, clipboardDeviceLimit).Scan(&written); e != nil {
 		return e
 	}
-	if !inserted {
+	if !written {
 		return errClipboardDeviceLimit
 	}
 	return tx.Commit(ctx)

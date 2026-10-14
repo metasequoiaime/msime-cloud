@@ -555,8 +555,8 @@ func (s *Server) acceptQQMessage(ctx context.Context, raw json.RawMessage) bool 
 
 // 同一个群友（群 + member_openid）的消息按到达顺序处理，见 qqLockSubject。原来每条消息各起一个 goroutine 并行处理，答疑在开头读对话历史、到最后才记下这一轮：「候选框跑到左上角了」隔几秒再 @ 一句「win11 0.9.5」，后一句读不到前一句，被当成没头没尾的新问题，两条各答各的，都判成报问题时还会起两份草稿。
 const (
-	// qqBusyLease 是跨副本租约（auth_rates 的 qq-bot-busy）的窗口，兜住副本崩溃、租约没退回的情况：最多这么久之后其他副本照常处理。
-	qqBusyLease = 90 * time.Second
+	// qqBusyLease 覆盖整条消息的处理预算并留出释放余量；只有超过它仍未释放时，其他副本才会接手崩溃或失联副本的任务。
+	qqBusyLease = qqBotProcessTimeout + 30*time.Second
 )
 
 var (
@@ -565,7 +565,7 @@ var (
 	qqBusyRetry = 500 * time.Millisecond
 )
 
-// qqLockSubject 拿到 subject 的处理权，返回释放它的函数，调用方处理完 defer 调用。先在副本内排队（Server.qqBusy，每个 subject 一个 channel，处理完时关掉），再拿跨副本租约：同一个群友的两条消息可能被推到两个副本。跨副本用 auth_rates 计数当租约（RateLimit 限 1 次、窗口 qqBusyLease，用完 ReleaseRateLimit），不用 account.WaitLock：持锁的整个处理过程 6–70 秒会一直占着一个池连接，而连接池只有 8 个。auth_rates 超限时计数也会加到上限加一，被占时要把这次多计的退回，不然前一条退回租约后计数还是 1，后一条要白等到超时；副本内已经排过队，每个副本同一个群友最多一条消息在抢租约，两个副本时这样退回是准的。两步合计最多等 qqBusyWait，等满了、ctx 结束了或者数据库不可用时不拿锁照常处理，退化成原来的并行处理，不会卡住。
+// qqLockSubject 拿到 subject 的处理权，返回释放它的函数，调用方处理完 defer 调用。先在副本内排队（Server.qqBusy，每个 subject 一个 channel，处理完时关掉），再拿跨副本租约：同一个群友的两条消息可能被推到两个副本。跨副本用 auth_rates 计数当租约（RateLimit 限 1 次、窗口 qqBusyLease，用完 ReleaseRateLimit），不用 account.WaitLock：持锁的整个处理预算 4 分钟会一直占着一个池连接，而连接池只有 8 个。auth_rates 超限时计数也会加到上限加一，被占时要把这次多计的退回，不然前一条退回租约后计数还是 1，后一条要白等到超时；副本内已经排过队，每个副本同一个群友最多一条消息在抢租约，两个副本时这样退回是准的。两步合计最多等 qqBusyWait，等满了、ctx 结束了或者数据库不可用时不拿锁照常处理，退化成原来的并行处理，不会卡住。
 func (s *Server) qqLockSubject(ctx context.Context, subject string) func() {
 	deadline := time.NewTimer(qqBusyWait)
 	defer deadline.Stop()

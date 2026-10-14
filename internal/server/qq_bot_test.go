@@ -6488,6 +6488,12 @@ func TestQQBotSerialisesMessagesFromOneMember(t *testing.T) {
 	}
 }
 
+func TestQQBusyLeaseCoversProcessingBudget(t *testing.T) {
+	if qqBusyLease != qqBotProcessTimeout+30*time.Second {
+		t.Fatalf("QQ 跨副本租约 %s 未覆盖处理预算 %s 并留出 30 秒余量", qqBusyLease, qqBotProcessTimeout)
+	}
+}
+
 // 跨副本租约：另一个副本正在处理这位群友的消息时等它退回租约再处理，被占时多计的那一次要退回，不然对方退回后还要白等到 qqBusyWait；一直不退回（例如对方崩溃）时等满 qqBusyWait 照常处理。
 func TestQQBotWaitsForBusyLease(t *testing.T) {
 	defer func(wait, retry time.Duration) { qqBusyWait, qqBusyRetry = wait, retry }(qqBusyWait, qqBusyRetry)

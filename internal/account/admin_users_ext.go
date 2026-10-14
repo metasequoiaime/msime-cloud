@@ -170,20 +170,41 @@ func actionUnbanUser(a *Service, ctx context.Context, tx pgx.Tx, v actionRequest
 	}
 	var restored int64
 	restoredIDs := map[string][]string{}
-	for _, table := range communityModeratedTables {
-		// The ban left moderated_by and moderated_at alone, so a restored row gets back its state before the ban, reviewer included.
-		rows, err := tx.Query(ctx, `UPDATE `+table+` SET moderation=COALESCE(previous_moderation,'approved'),previous_moderation=NULL,moderation_reason=NULL
- WHERE owner_id=$1 AND moderation='removed' AND moderation_reason=$2 RETURNING id`, v.ID, banModerationReason)
-		if err != nil {
-			return actionResult{}, err
-		}
-		ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
-		if err != nil {
-			return actionResult{}, err
-		}
-		restored += int64(len(ids))
-		restoredIDs[table] = ids
+	// 四张表的解封更新一起返回表名和 ID，减少固定的四次数据库往返；后续重筛查仍按表分别处理这些 ID。
+	rows, err := tx.Query(ctx, `WITH skins AS (
+ UPDATE community_skins SET moderation=COALESCE(previous_moderation,'approved'),previous_moderation=NULL,moderation_reason=NULL
+ WHERE owner_id=$1 AND moderation='removed' AND moderation_reason=$2 RETURNING id
+), resources AS (
+ UPDATE community_resources SET moderation=COALESCE(previous_moderation,'approved'),previous_moderation=NULL,moderation_reason=NULL
+ WHERE owner_id=$1 AND moderation='removed' AND moderation_reason=$2 RETURNING id
+), candidate_skins AS (
+ UPDATE community_candidate_skins SET moderation=COALESCE(previous_moderation,'approved'),previous_moderation=NULL,moderation_reason=NULL
+ WHERE owner_id=$1 AND moderation='removed' AND moderation_reason=$2 RETURNING id
+), plugins AS (
+ UPDATE community_plugins SET moderation=COALESCE(previous_moderation,'approved'),previous_moderation=NULL,moderation_reason=NULL
+ WHERE owner_id=$1 AND moderation='removed' AND moderation_reason=$2 RETURNING id
+)
+SELECT 'community_skins',id FROM skins
+UNION ALL SELECT 'community_resources',id FROM resources
+UNION ALL SELECT 'community_candidate_skins',id FROM candidate_skins
+UNION ALL SELECT 'community_plugins',id FROM plugins`, v.ID, banModerationReason)
+	if err != nil {
+		return actionResult{}, err
 	}
+	for rows.Next() {
+		var table, id string
+		if err = rows.Scan(&table, &id); err != nil {
+			rows.Close()
+			return actionResult{}, err
+		}
+		restoredIDs[table] = append(restoredIDs[table], id)
+		restored++
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return actionResult{}, err
+	}
+	rows.Close()
 	// The ban overwrote each removed row's automatic flag; rows back in review get it again. The resources table holds two sections, and each section only touches its own kind.
 	for section, table := range moderationSections {
 		if ids := restoredIDs[table.table]; len(ids) > 0 {

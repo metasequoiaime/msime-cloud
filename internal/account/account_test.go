@@ -246,6 +246,71 @@ func TestChallengeSingleUseAttemptsExpiryAndLinkConflict(t *testing.T) {
 		t.Fatal("显式绑定失败", e)
 	}
 }
+
+func TestCompleteRejectsChallengeThatExpiresWhileWaitingForLock(t *testing.T) {
+	s := testStore(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	id := randomToken()
+	c := Challenge{IDHash: hash(id), Provider: "email", Subject: "challenge-expiry@example.test"}
+	if err := s.PutChallenge(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE auth_challenges SET expires_at=clock_timestamp()+interval '1 second' WHERE id_hash=$1`, c.IDHash); err != nil {
+		t.Fatal(err)
+	}
+	blocker, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Rollback(context.Background())
+	if _, err := blocker.Exec(ctx, `SELECT id_hash FROM auth_challenges WHERE id_hash=$1 FOR UPDATE`, c.IDHash); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := s.Complete(ctx, c, Identity{"email", c.Subject})
+		result <- err
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var waiting bool
+		if err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid)))`, int32(blocker.Conn().PgConn().PID())).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("登录完成没有进入挑战行锁等待")
+		}
+		select {
+		case err := <-result:
+			t.Fatal("登录完成在锁释放前结束", err)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	for {
+		var expired bool
+		if err := s.pool.QueryRow(ctx, `SELECT expires_at<=clock_timestamp() FROM auth_challenges WHERE id_hash=$1`, c.IDHash).Scan(&expired); err != nil {
+			t.Fatal(err)
+		}
+		if expired {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("挑战没有按数据库时钟过期")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if err := blocker.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-result; !errors.Is(err, ErrInvalid) {
+		t.Fatalf("锁等待期间过期的挑战不应签发会话，返回 %v", err)
+	}
+}
 func TestRateIsSharedAndBounded(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()

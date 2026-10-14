@@ -495,12 +495,31 @@ func (s *Store) PutChallenge(ctx context.Context, c Challenge) error {
 }
 func (s *Store) Attempt(ctx context.Context, id string) (Challenge, error) {
 	var c Challenge
-	e := s.pool.QueryRow(ctx, `UPDATE auth_challenges SET attempts=attempts+1 WHERE id_hash=$1 AND expires_at>now() AND attempts<5
- RETURNING id_hash,provider,subject,nonce,code_hash,COALESCE(link_user,''),code_verifier,redirect_uri,attempts`, hash(id)).Scan(&c.IDHash, &c.Provider, &c.Subject, &c.Nonce, &c.CodeHash, &c.LinkUser, &c.CodeVerifier, &c.RedirectURI, &c.Attempts)
+	tx, e := s.pool.Begin(ctx)
+	if e != nil {
+		return c, e
+	}
+	defer tx.Rollback(ctx)
+	var attempts int
+	if e = tx.QueryRow(ctx, `SELECT attempts FROM auth_challenges WHERE id_hash=$1 FOR UPDATE`, hash(id)).Scan(&attempts); e == nil {
+		// 先拿行锁再按数据库实时时钟复查，避免等待锁期间过期的挑战继续消耗尝试次数。
+		var valid bool
+		e = tx.QueryRow(ctx, `SELECT expires_at>clock_timestamp() FROM auth_challenges WHERE id_hash=$1`, hash(id)).Scan(&valid)
+		if e == nil && (attempts >= 5 || !valid) {
+			e = pgx.ErrNoRows
+		}
+	}
+	if e == nil {
+		e = tx.QueryRow(ctx, `UPDATE auth_challenges SET attempts=attempts+1 WHERE id_hash=$1
+	 RETURNING id_hash,provider,subject,nonce,code_hash,COALESCE(link_user,''),code_verifier,redirect_uri,attempts`, hash(id)).Scan(&c.IDHash, &c.Provider, &c.Subject, &c.Nonce, &c.CodeHash, &c.LinkUser, &c.CodeVerifier, &c.RedirectURI, &c.Attempts)
+	}
 	if errors.Is(e, pgx.ErrNoRows) {
 		e = ErrInvalid
 	}
-	return c, e
+	if e != nil {
+		return c, e
+	}
+	return c, tx.Commit(ctx)
 }
 func (s *Store) DropChallenge(ctx context.Context, idHash string) {
 	s.pool.Exec(ctx, "DELETE FROM auth_challenges WHERE id_hash=$1", idHash)
@@ -517,11 +536,22 @@ func (s *Store) completeWith(ctx context.Context, c Challenge, identity Identity
 	}
 	defer tx.Rollback(ctx)
 	var id string
-	e = tx.QueryRow(ctx, `DELETE FROM auth_challenges WHERE id_hash=$1 AND expires_at>now() RETURNING id_hash`, c.IDHash).Scan(&id)
+	e = tx.QueryRow(ctx, `SELECT id_hash FROM auth_challenges WHERE id_hash=$1 FOR UPDATE`, c.IDHash).Scan(&id)
 	if errors.Is(e, pgx.ErrNoRows) {
 		return Tokens{}, ErrInvalid
 	}
 	if e != nil {
+		return Tokens{}, e
+	}
+	// 行锁可能等待到挑战过期；锁定后再用数据库实时时钟检查，不能把事务开始时的 now() 当成有效期。
+	var valid bool
+	if e = tx.QueryRow(ctx, `SELECT expires_at>clock_timestamp() FROM auth_challenges WHERE id_hash=$1`, c.IDHash).Scan(&valid); e != nil {
+		return Tokens{}, e
+	}
+	if !valid {
+		return Tokens{}, ErrInvalid
+	}
+	if _, e = tx.Exec(ctx, `DELETE FROM auth_challenges WHERE id_hash=$1`, c.IDHash); e != nil {
 		return Tokens{}, e
 	}
 	// 同一身份的首次注册与绑定串行化，避免创建重复用户。

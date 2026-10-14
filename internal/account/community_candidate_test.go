@@ -1071,7 +1071,8 @@ func TestCommunityCandidateSkinSchemaUpgrade(t *testing.T) {
 	// 已有行的分类迁移为 other；命名约束和按分类排序的索引各只有一份，Ready 探测随之通过。
 	var category string
 	var categoryChecks, categoryIndexes int
-	if err = db.pool.QueryRow(t.Context(), `SELECT category,(SELECT count(*) FROM pg_constraint WHERE conrelid='community_candidate_skins'::regclass AND contype='c' AND conname LIKE 'community_candidate_skins_category%'),(SELECT count(*) FROM pg_indexes WHERE tablename='community_candidate_skins' AND indexname='community_candidate_skins_category_newest') FROM community_candidate_skins WHERE id=$1`, id).Scan(&category, &categoryChecks, &categoryIndexes); err != nil || category != "other" || categoryChecks != 1 || categoryIndexes != 1 {
+	// 其他包会并行创建测试 schema，索引计数只检查当前 schema。
+	if err = db.pool.QueryRow(t.Context(), `SELECT category,(SELECT count(*) FROM pg_constraint WHERE conrelid='community_candidate_skins'::regclass AND contype='c' AND conname LIKE 'community_candidate_skins_category%'),(SELECT count(*) FROM pg_indexes WHERE schemaname=current_schema() AND tablename='community_candidate_skins' AND indexname='community_candidate_skins_category_newest') FROM community_candidate_skins WHERE id=$1`, id).Scan(&category, &categoryChecks, &categoryIndexes); err != nil || category != "other" || categoryChecks != 1 || categoryIndexes != 1 {
 		t.Fatal("category upgrade", category, categoryChecks, categoryIndexes, err)
 	}
 	if err = db.Ready(t.Context()); err != nil {

@@ -543,6 +543,30 @@ func (a *Service) updateOwnedCommunitySkinCategory(ctx context.Context, id, owne
 	return result.RowsAffected(), nil
 }
 
+// updateOwnedCommunitySkinCategoryAndRead 在同一个用户锁事务中合并分类写入和详情读取，避免 PATCH 为了返回详情再开启一次查询。
+func (a *Service) updateOwnedCommunitySkinCategoryAndRead(ctx context.Context, id, owner, category string, saved bool) (CommunitySkin, error) {
+	tx, err := a.store.userDataTransaction(ctx, owner)
+	if err != nil {
+		return CommunitySkin{}, err
+	}
+	defer tx.Rollback(ctx)
+	var skin CommunitySkin
+	batch := &pgx.Batch{}
+	batch.Queue(`UPDATE community_skins SET category=$3 WHERE id=$1 AND owner_id=$2`, id, owner, category)
+	batch.Queue(communitySkinSelect(saved)+`WHERE s.id=$2 AND s.owner_id=$1`, owner, id).QueryRow(func(row pgx.Row) error {
+		var err error
+		skin, err = scanSkin(row)
+		return err
+	})
+	if err = tx.SendBatch(ctx, batch).Close(); err != nil {
+		return CommunitySkin{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return CommunitySkin{}, err
+	}
+	return skin, nil
+}
+
 func (a *Service) communityDelete(w http.ResponseWriter, r *http.Request) {
 	p, ok := a.principal(w, r, false)
 	if !ok {
@@ -586,16 +610,16 @@ func (a *Service) communityUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_category")
 		return
 	}
-	rows, e := a.updateOwnedCommunitySkinCategory(r.Context(), r.PathValue("id"), p.UserID, *input.Category)
+	v, e := a.updateOwnedCommunitySkinCategoryAndRead(r.Context(), r.PathValue("id"), p.UserID, *input.Category, fields["saved"])
+	if errors.Is(e, pgx.ErrNoRows) {
+		writeError(w, 404, "skin_not_found")
+		return
+	}
 	if e != nil {
 		a.error(w, e)
 		return
 	}
-	if rows == 0 {
-		writeError(w, 404, "skin_not_found")
-		return
-	}
-	a.writeCommunitySkin(w, r, p.UserID, fields, withCategory)
+	write(w, 200, communitySkinItem(v, fields, withCategory))
 }
 func (a *Service) communityDownload(w http.ResponseWriter, r *http.Request) {
 	p, ok := a.principal(w, r, false)

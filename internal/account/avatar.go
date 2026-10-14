@@ -118,14 +118,14 @@ func (a *Service) putAvatar(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 502, "avatar_storage_unavailable")
 		return
 	}
-	previous, e := a.store.SetAvatarKey(r.Context(), p.UserID, key)
+	previous, u, ids, e := a.store.SetAvatarKeyAndMe(r.Context(), p.UserID, key)
 	if e != nil {
 		a.deleteAvatarObject(key)
 		a.error(w, e)
 		return
 	}
 	a.deleteAvatarObject(previous)
-	a.writeMe(w, r, p.UserID)
+	write(w, 200, map[string]any{"user": a.present(u), "identities": ids})
 }
 
 // deleteAvatar removes the user's custom avatar; the Google picture, if any, shows again.

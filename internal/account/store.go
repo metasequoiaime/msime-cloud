@@ -431,6 +431,13 @@ SELECT word_id,day,count FROM admin_sensitive_hits WHERE false`); e != nil {
 	if !current {
 		return errors.New("community_plugins kind constraint predates the helpcode, symbol_set, phrase_table and wordbook kinds")
 	}
+	// 下载快照的日期索引单独加入，需按实际表探测，避免旧库仅因表和列齐全而跳过迁移。
+	if e := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass('release_asset_snapshots') AND c.relname='release_asset_snapshots_day')`).Scan(&current); e != nil {
+		return e
+	}
+	if !current {
+		return errors.New("release snapshot day index missing")
+	}
 	return nil
 }
 func (s *Store) Rate(ctx context.Context, key string, limit int, window time.Duration) error {

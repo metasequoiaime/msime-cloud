@@ -358,6 +358,28 @@ SELECT id,snapshot_id,tool,arguments,result_count,bytes,at FROM diagnostic_acces
 	if !wubi98Kind {
 		return errors.New("user_dictionary_entries kind constraint predates wubi98")
 	}
+	// 索引单独加入时，表和列探测不会发现旧库；按 search_path 解析实际表，缺索引或保留重复皮肤索引时启动走迁移。
+	var communityIndexes bool
+	if e := s.pool.QueryRow(ctx, `SELECT NOT EXISTS(
+ SELECT 1 FROM (VALUES
+  ('community_resource_saves','community_resource_saves_user'),
+  ('community_resources','community_resources_owner'),
+  ('community_skin_downloads','community_skin_downloads_user'),
+  ('community_skin_ratings','community_skin_ratings_user'),
+  ('community_candidate_skin_downloads','community_candidate_skin_downloads_user'),
+  ('community_candidate_skin_ratings','community_candidate_skin_ratings_user'),
+  ('community_plugin_downloads','community_plugin_downloads_user'),
+  ('community_plugin_ratings','community_plugin_ratings_user'),
+  ('community_resource_ratings','community_resource_ratings_user'),
+  ('community_reports','community_reports_reporter')
+ ) required(tbl,name)
+ WHERE NOT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass(required.tbl) AND c.relname=required.name)
+) AND NOT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass('community_skins') AND c.relname='community_skins_owner')`).Scan(&communityIndexes); e != nil {
+		return e
+	}
+	if !communityIndexes {
+		return errors.New("community indexes missing")
+	}
 	return s.consoleReady(ctx)
 }
 

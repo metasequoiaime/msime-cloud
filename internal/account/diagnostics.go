@@ -257,11 +257,12 @@ func (a *Service) diagnosticsUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
-	if _, err = tx.Exec(r.Context(), `DELETE FROM diagnostic_snapshots WHERE user_id=$1`, p.UserID); err != nil {
-		a.error(w, err)
-		return
-	}
-	if _, err = tx.Exec(r.Context(), `INSERT INTO diagnostic_snapshots(id,user_id,token_hash,token_hint,platform,app_version,sections,content,bytes,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, id, p.UserID, digest, diagnosticTokenHint(token), v.Platform, v.AppVersion, v.Sections.Names(), content, len(content), expires); err != nil {
+	// 让插入依赖删除 CTE 的结果，确保旧快照及其访问记录先级联删除，再写入新快照。
+	if _, err = tx.Exec(r.Context(), `WITH removed AS (
+		DELETE FROM diagnostic_snapshots WHERE user_id=$2 RETURNING id
+	)
+	INSERT INTO diagnostic_snapshots(id,user_id,token_hash,token_hint,platform,app_version,sections,content,bytes,expires_at)
+	SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9+0*(SELECT count(*)::integer FROM removed),$10`, id, p.UserID, digest, diagnosticTokenHint(token), v.Platform, v.AppVersion, v.Sections.Names(), content, len(content), expires); err != nil {
 		a.error(w, err)
 		return
 	}

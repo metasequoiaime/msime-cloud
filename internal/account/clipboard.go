@@ -127,12 +127,15 @@ func (s *Store) PinClipboard(ctx context.Context, user, id string, pinned bool) 
 	return tx.Commit(ctx)
 }
 
-// sessionDevice 返回会话登录时记录的设备名，认不出时为空字符串。
-func (s *Store) sessionDevice(ctx context.Context, session string) (string, error) {
+// clipboardStateWithSessionDevice 在用户行锁内同时读取剪贴板状态和会话设备名，供 HTTP 上传路径减少一次数据库往返。
+func clipboardStateWithSessionDevice(ctx context.Context, tx pgx.Tx, user, session string) (bool, *string, string, error) {
+	var enabled bool
+	var key *string
 	var agent string
-	e := s.pool.QueryRow(ctx, "SELECT COALESCE((SELECT user_agent FROM auth_sessions WHERE id=$1),'')", session).Scan(&agent)
-	_, name, _ := describeSessionAgent(agent)
-	return name, e
+	err := tx.QueryRow(ctx, `SELECT COALESCE(bool_or(cs.enabled),false),max(cs.key_id),COALESCE((SELECT user_agent FROM auth_sessions WHERE id=$2 AND user_id=$1),'')
+FROM user_clipboard_settings cs WHERE cs.user_id=$1`, user, session).Scan(&enabled, &key, &agent)
+	_, device, _ := describeSessionAgent(agent)
+	return enabled, key, device, err
 }
 
 // AddClipboard 写入一条密文条目并记下写入设备（会话的设备名）。云剪贴板关闭时返回 errClipboardDisabled，`KeyID` 不是当前密钥（包括还没有密钥）时返回 errClipboardKeyConflict。`Dedup` 相同的条目只保留一条，移到最前并换成新的密文和设备名。
@@ -146,6 +149,30 @@ func (s *Store) AddClipboard(ctx context.Context, user, device string, v Clipboa
 	if e != nil {
 		return ClipboardItem{}, e
 	}
+	return s.addClipboardTx(ctx, tx, user, device, v, enabled, key)
+}
+
+// AddClipboardSession 在同一用户事务内读取会话设备名和剪贴板状态，再写入密文条目。
+func (s *Store) AddClipboardSession(ctx context.Context, user, session string, v ClipboardUpload) (ClipboardItem, error) {
+	tx, e := s.userDataTransaction(ctx, user)
+	if e != nil {
+		return ClipboardItem{}, e
+	}
+	defer tx.Rollback(ctx)
+	enabled, key, device, e := clipboardStateWithSessionDevice(ctx, tx, user, session)
+	if e != nil {
+		return ClipboardItem{}, e
+	}
+	if !enabled {
+		return ClipboardItem{}, errClipboardDisabled
+	}
+	if key == nil || *key != v.KeyID {
+		return ClipboardItem{}, errClipboardKeyConflict
+	}
+	return s.addClipboardTx(ctx, tx, user, device, v, enabled, key)
+}
+
+func (s *Store) addClipboardTx(ctx context.Context, tx pgx.Tx, user, device string, v ClipboardUpload, enabled bool, key *string) (ClipboardItem, error) {
 	if !enabled {
 		return ClipboardItem{}, errClipboardDisabled
 	}
@@ -164,8 +191,8 @@ func (s *Store) AddClipboard(ctx context.Context, user, device string, v Clipboa
 	batch.Queue(`DELETE FROM user_clipboard WHERE user_id=$1 AND id NOT IN
  (SELECT id FROM user_clipboard WHERE user_id=$1 ORDER BY pinned DESC,sequence DESC LIMIT 50)`, user)
 	// 批量发送保持先清旧密钥、再写入、最后裁剪容量的顺序，各条语句可见前面语句的结果。
-	if e = tx.SendBatch(ctx, batch).Close(); e != nil {
-		return item, e
+	if err := tx.SendBatch(ctx, batch).Close(); err != nil {
+		return item, err
 	}
 	return item, tx.Commit(ctx)
 }
@@ -262,12 +289,7 @@ func (a *Service) clipboard(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, "invalid_clipboard_ciphertext")
 			return
 		}
-		device, e := a.store.sessionDevice(r.Context(), p.SessionID)
-		if e != nil {
-			a.error(w, e)
-			return
-		}
-		item, e := a.store.AddClipboard(r.Context(), p.UserID, device, v.ClipboardUpload)
+		item, e := a.store.AddClipboardSession(r.Context(), p.UserID, p.SessionID, v.ClipboardUpload)
 		if a.clipboardError(w, e) {
 			return
 		}

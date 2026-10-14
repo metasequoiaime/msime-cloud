@@ -311,7 +311,7 @@ func (c cli) sendAdmin(r request) (*http.Response, error) {
 	}
 	if !ok || !c.now().Before(kept.ExpiresAt) {
 		if ok {
-			if err = sessions.put(adminKey(admin), nil); err != nil {
+			if err = sessions.forget(adminKey(admin), kept.AccessToken); err != nil {
 				return nil, err
 			}
 		}
@@ -319,7 +319,7 @@ func (c cli) sendAdmin(r request) (*http.Response, error) {
 	}
 	response, err := c.do(admin, r, kept.AccessToken)
 	if err == nil && response.StatusCode == http.StatusUnauthorized {
-		if err = sessions.put(adminKey(admin), nil); err != nil {
+		if err = sessions.forget(adminKey(admin), kept.AccessToken); err != nil {
 			response.Body.Close()
 			return nil, err
 		}
@@ -357,7 +357,7 @@ func (c cli) refresh(server string, used session) (session, error) {
 		return session{}, err
 	}
 	if response.StatusCode == http.StatusUnauthorized {
-		if err = sessions.put(server, nil); err != nil {
+		if err = sessions.putLocked(server, nil); err != nil {
 			return session{}, err
 		}
 		return session{}, errors.New("the session has ended; sign in again with `msime-cloud login start`")
@@ -373,7 +373,7 @@ func (c cli) refresh(server string, used session) (session, error) {
 	if len(next.User) == 0 {
 		next.User = latest.User
 	}
-	return next, sessions.put(server, &next)
+	return next, sessions.putLocked(server, &next)
 }
 
 // do sends r, and once more after the wait a 429 asks for when that is at most maxRetryWait: the body is in memory, so the retry is the same request.
@@ -575,7 +575,7 @@ func (c cli) logout(args []string) error {
 	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusNoContent && response.StatusCode != http.StatusUnauthorized {
 		return statusError{response.Status}
 	}
-	if err = sessions.put(server, nil); err != nil {
+	if err = sessions.forget(server, strings.TrimPrefix(response.Request.Header.Get("Authorization"), "Bearer ")); err != nil {
 		return err
 	}
 	fmt.Fprintln(c.stderr, "msime-cloud: signed out of "+server)
@@ -601,7 +601,7 @@ func (c cli) adminLogout() error {
 	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusUnauthorized {
 		return statusError{response.Status}
 	}
-	if err = sessions.put(adminKey(admin), nil); err != nil {
+	if err = sessions.forget(adminKey(admin), kept.AccessToken); err != nil {
 		return err
 	}
 	fmt.Fprintln(c.stderr, "msime-cloud: signed out of "+admin)

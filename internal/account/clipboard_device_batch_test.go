@@ -69,8 +69,8 @@ func TestPutClipboardDeviceEvictionUsesOneWriteRoundTrip(t *testing.T) {
 	trace.mu.Lock()
 	queries := trace.queries
 	trace.mu.Unlock()
-	if queries != 5 {
-		t.Fatalf("满额登记设备应使用事务、用户锁、更新和合并写入共 5 条语句，实际为 %d", queries)
+	if queries != 4 {
+		t.Fatalf("满额登记设备应使用事务、用户锁、条件写入、提交共 4 次调用，实际为 %d", queries)
 	}
 	var count int
 	if err = db.pool.QueryRow(ctx, "SELECT count(*) FROM user_clipboard_devices WHERE user_id=$1", user).Scan(&count); err != nil {

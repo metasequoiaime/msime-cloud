@@ -424,20 +424,31 @@ func (c cli) doOnce(server string, r request, token string) (*http.Response, err
 	return c.client.Do(req)
 }
 
-// print writes the body to output, or to stdout when it is JSON (indented) or text; a body of any other type needs a file.
+// print 把响应写入文件或标准输出；文件下载完整接收并关闭成功后才替换目标。
 func (c cli) print(response *http.Response, output string) error {
 	defer response.Body.Close()
 	failed := response.StatusCode < 200 || response.StatusCode > 299
 	if output != "" && !failed {
-		file, err := os.Create(output)
+		if info, err := os.Lstat(output); err == nil {
+			if !info.Mode().IsRegular() {
+				return errors.New("output must be a regular file")
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		file, err := os.CreateTemp(filepath.Dir(output), ".msime-cloud-download-*")
 		if err != nil {
 			return err
 		}
+		defer os.Remove(file.Name())
 		n, err := io.Copy(file, response.Body)
 		if closeErr := file.Close(); err == nil {
 			err = closeErr
 		}
 		if err != nil {
+			return err
+		}
+		if err = os.Rename(file.Name(), output); err != nil {
 			return err
 		}
 		saved, _ := json.Marshal(map[string]any{"saved": output, "bytes": n, "content_type": response.Header.Get("Content-Type")})

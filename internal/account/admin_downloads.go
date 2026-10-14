@@ -155,10 +155,18 @@ SELECT p,version,artifact,channel,today,week,
 
 // githubReleaseDownloads turns the asset snapshots into per-asset downloads: each snapshot day counts the difference to the asset's previous snapshot, which may be older than the window, and an asset's first snapshot counts nothing because its downloads cannot be dated. Assets without downloads in the window and release metadata files are left out. It adds every asset to the summary's GitHub totals, including assets beyond the row cap, which set Truncated.
 func githubReleaseDownloads(ctx context.Context, tx pgx.Tx, weekStart, today time.Time, summary *downloadsSummary) ([]downloadsRow, error) {
-	rows, err := tx.Query(ctx, `WITH base AS (
- SELECT DISTINCT ON (repo,tag,asset) repo,tag,asset,day,download_count FROM release_asset_snapshots WHERE day<$1 ORDER BY repo,tag,asset,day DESC
+	// 只为本周出现的资产读取最近一条历史基线，避免遍历所有历史快照；本周快照供基线选择和差分共用。
+	rows, err := tx.Query(ctx, `WITH recent AS MATERIALIZED (
+ SELECT repo,tag,asset,day,download_count FROM release_asset_snapshots WHERE day>=$1 AND day<=$2
+), base AS (
+ SELECT a.repo,a.tag,a.asset,p.day,p.download_count
+ FROM (SELECT DISTINCT repo,tag,asset FROM recent) a
+ CROSS JOIN LATERAL (
+   SELECT day,download_count FROM release_asset_snapshots s
+   WHERE s.repo=a.repo AND s.tag=a.tag AND s.asset=a.asset AND s.day<$1 ORDER BY day DESC LIMIT 1
+ ) p
 ), joined AS (
- SELECT * FROM base UNION ALL SELECT repo,tag,asset,day,download_count FROM release_asset_snapshots WHERE day>=$1 AND day<=$2
+ SELECT * FROM base UNION ALL SELECT * FROM recent
 ), deltas AS (
  SELECT repo,tag,asset,day,GREATEST(download_count-lag(download_count) OVER (PARTITION BY repo,tag,asset ORDER BY day),0) AS delta FROM joined
 )

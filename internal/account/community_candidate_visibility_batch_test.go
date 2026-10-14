@@ -24,7 +24,7 @@ func (t *candidateVisibilityTrace) TraceQueryStart(ctx context.Context, _ *pgx.C
 
 func (*candidateVisibilityTrace) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
-func TestCommunityCandidateVisibilityUsesOneQuotaQuery(t *testing.T) {
+func TestCommunityCandidateVisibilityUsesOneUpdateForVisibilityAndCategory(t *testing.T) {
 	db := testStore(t)
 	owner := complete(t, db, Identity{"anonymous", "candidate-visibility-batch"})
 	id := "01234567-1234-4234-8234-012345678901"
@@ -47,11 +47,11 @@ func TestCommunityCandidateVisibilityUsesOneQuotaQuery(t *testing.T) {
 	trace.mu.Lock()
 	trace.queries = 0
 	trace.mu.Unlock()
-	apiRequest(t, mux, "PATCH", "/v1/community/candidate-skins/"+id, `{"visibility":"public"}`, owner.AccessToken, 200)
+	apiRequest(t, mux, "PATCH", "/v1/community/candidate-skins/"+id, `{"visibility":"public","category":"tech"}`, owner.AccessToken, 200)
 	trace.mu.Lock()
 	queries := trace.queries
 	trace.mu.Unlock()
-	if queries != 9 {
-		t.Fatalf("候选皮肤公开名额检查使用了 %d 条数据库语句，期望减少一次配额查询", queries)
+	if queries != 10 {
+		t.Fatalf("候选皮肤同时更新可见性和分类使用了 %d 条数据库语句，期望合并为一次更新", queries)
 	}
 }

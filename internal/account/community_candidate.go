@@ -1024,7 +1024,9 @@ FROM community_candidate_skins s WHERE s.id=$1 AND s.owner_id=$2 FOR UPDATE`, id
 		a.error(w, e)
 		return
 	}
-	if input.Visibility != nil && visibility != *input.Visibility {
+	visibilityChanged := input.Visibility != nil && visibility != *input.Visibility
+	categoryChanged := input.Category != nil && category != *input.Category
+	if visibilityChanged {
 		if *input.Visibility == "public" {
 			if strings.TrimSpace(assets) == "" {
 				writeError(w, 400, "candidate_skin_license_required")
@@ -1039,17 +1041,22 @@ FROM community_candidate_skins s WHERE s.id=$1 AND s.owner_id=$2 FOR UPDATE`, id
 				return
 			}
 		}
-		if _, e = tx.Exec(r.Context(), `UPDATE community_candidate_skins SET visibility=$2,updated_at=now(),moderation=CASE WHEN $2='public' AND moderation='approved' THEN 'pending' ELSE moderation END WHERE id=$1`, id, *input.Visibility); e != nil {
-			a.error(w, e)
-			return
-		}
 	}
-	if input.Category != nil && category != *input.Category {
+	if categoryChanged {
 		if e = a.candidateWriteRate(r.Context(), p.UserID, "private"); e != nil {
 			a.error(w, e)
 			return
 		}
-		if _, e = tx.Exec(r.Context(), `UPDATE community_candidate_skins SET category=$2 WHERE id=$1`, id, *input.Category); e != nil {
+	}
+	if visibilityChanged || categoryChanged {
+		var nextVisibility, nextCategory any
+		if visibilityChanged {
+			nextVisibility = *input.Visibility
+		}
+		if categoryChanged {
+			nextCategory = *input.Category
+		}
+		if _, e = tx.Exec(r.Context(), `UPDATE community_candidate_skins SET visibility=COALESCE($2::text,visibility),category=COALESCE($3::text,category),updated_at=CASE WHEN $2::text IS NOT NULL AND visibility<>$2::text THEN now() ELSE updated_at END,moderation=CASE WHEN $2::text='public' AND visibility<>'public' AND moderation='approved' THEN 'pending' ELSE moderation END WHERE id=$1`, id, nextVisibility, nextCategory); e != nil {
 			a.error(w, e)
 			return
 		}

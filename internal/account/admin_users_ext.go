@@ -194,7 +194,21 @@ func actionUnbanUser(a *Service, ctx context.Context, tx pgx.Tx, v actionRequest
 	return actionResult{Affected: 1, Detail: detail, Extra: map[string]any{"restored": restored}}, nil
 }
 
-// adminUserStats serves GET /api/users/stats: account totals for the stat tiles and the per-role counts for the role filter chips, computed with the same role rule as the list.
+// userRoleCountsQuery 批量关联已验证邮箱和启用的管理员，为每个用户按与 userRoleSQL 相同的优先级选一个角色，避免逐用户扫描身份和管理员表。
+const userRoleCountsQuery = `WITH verified AS (
+ SELECT user_id,lower(CASE WHEN provider='email' THEN subject ELSE email END) AS email
+ FROM auth_identities WHERE provider='email' OR (email_verified AND email<>'')
+), candidates AS (
+ SELECT v.user_id,CASE WHEN v.email=ANY($1::text[]) THEN 'maintainer' ELSE m.role END AS role
+ FROM verified v LEFT JOIN admin_members m ON m.enabled AND m.email=v.email
+ WHERE v.email=ANY($1::text[]) OR m.email IS NOT NULL
+), user_roles AS (
+ SELECT DISTINCT ON (user_id) user_id,role FROM candidates
+ ORDER BY user_id,CASE role WHEN 'maintainer' THEN 0 WHEN 'operator' THEN 1 WHEN 'reviewer' THEN 2 WHEN 'readonly' THEN 3 ELSE 4 END,role
+)
+SELECT COALESCE(r.role,'user') AS role,count(*) FROM auth_users u LEFT JOIN user_roles r ON r.user_id=u.id GROUP BY 1`
+
+// adminUserStats 提供 GET /api/users/stats 的统计卡片和角色筛选计数，角色规则与用户列表一致。
 func (a *Service) adminUserStats(w http.ResponseWriter, r *http.Request, _ string) {
 	var total, new7d, banned, synced int64
 	err := a.store.pool.QueryRow(r.Context(), `SELECT count(*),count(*) FILTER (WHERE created_at>now()-interval '7 days'),count(*) FILTER (WHERE banned_at IS NOT NULL),
@@ -203,7 +217,7 @@ func (a *Service) adminUserStats(w http.ResponseWriter, r *http.Request, _ strin
 		a.error(w, err)
 		return
 	}
-	rows, err := a.store.pool.Query(r.Context(), `SELECT role,count(*) FROM (SELECT `+userRoleSQL("$1")+` AS role FROM auth_users u) x GROUP BY role`, a.adminOwnersArg())
+	rows, err := a.store.pool.Query(r.Context(), userRoleCountsQuery, a.adminOwnersArg())
 	if err != nil {
 		a.error(w, err)
 		return

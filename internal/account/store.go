@@ -262,6 +262,14 @@ func (s *Store) Ready(ctx context.Context) error {
  LEFT JOIN auth_provider_tokens pt ON false WHERE false`).Scan(&n); e != nil {
 		return e
 	}
+	// 单独补加的索引不会被表和列探测发现；按实际表检查，确保旧库启动时补齐。
+	var refreshSessionIndex bool
+	if e := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid='auth_used_refresh'::regclass AND c.relname='auth_used_refresh_session')`).Scan(&refreshSessionIndex); e != nil {
+		return e
+	}
+	if !refreshSessionIndex {
+		return errors.New("refresh session index missing")
+	}
 	// App 内反馈与它的截图；缺表时启动走迁移。
 	if _, e := s.pool.Exec(ctx, `SELECT id,user_id,type,text,platform,app_version,edition,diagnostics,status,created_at FROM feedback WHERE false;
 SELECT feedback_id,position,mime,bytes FROM feedback_screenshots WHERE false`); e != nil {

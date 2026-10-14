@@ -184,13 +184,15 @@ func (a *Service) userDataExport(w http.ResponseWriter, r *http.Request) {
 		a.error(w, err)
 		return
 	}
-	// 先读出所有小文件，失败时还能返回一个正常的错误响应；词库最大，最后流式写入。
+	// 小文件一次批量发送，读完并释放连接后再写响应；失败时仍可返回正常错误，词库最后流式写入。
 	docs := make([][]byte, len(userDataExportFiles))
+	batch := &pgx.Batch{}
 	for i, f := range userDataExportFiles {
-		if err := a.store.pool.QueryRow(r.Context(), f.query, p.UserID).Scan(&docs[i]); err != nil {
-			a.error(w, err)
-			return
-		}
+		batch.Queue(f.query, p.UserID).QueryRow(func(row pgx.Row) error { return row.Scan(&docs[i]) })
+	}
+	if err := a.store.pool.SendBatch(r.Context(), batch).Close(); err != nil {
+		a.error(w, err)
+		return
 	}
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", `attachment; filename="msime-data-`+time.Now().UTC().Format("2006-01-02")+`.zip"`)

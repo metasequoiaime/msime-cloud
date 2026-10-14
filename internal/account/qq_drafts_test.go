@@ -104,6 +104,40 @@ func TestQQDrafts(t *testing.T) {
 	}
 }
 
+func TestQQDraftClaimLeaseCannotOverwriteNewClaim(t *testing.T) {
+	db := testStore(t)
+	a := &Service{store: db}
+	ctx := context.Background()
+	if _, err := db.pool.Exec(ctx, `TRUNCATE qq_drafts`); err != nil {
+		t.Fatal(err)
+	}
+	id, err := a.CreateQQDraft(ctx, "G/M1", "原话", `{"kind":"bug"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, ok, err := a.ClaimQQDraftLease(ctx, id)
+	if err != nil || !ok {
+		t.Fatal(first, ok, err)
+	}
+	if _, err := db.pool.Exec(ctx, `UPDATE qq_drafts SET filed_at=now()-interval '6 minutes' WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	second, ok, err := a.ClaimQQDraftLease(ctx, id)
+	if err != nil || !ok || !second.After(first) {
+		t.Fatal(first, second, ok, err)
+	}
+	if set, err := a.SetQQDraftIssueLease(ctx, id, first, "old #1"); err != nil || set {
+		t.Fatal("stale claim overwrote newer claim", set, err)
+	}
+	if set, err := a.SetQQDraftIssueLease(ctx, id, second, "new #2"); err != nil || !set {
+		t.Fatal("current claim was not recorded", set, err)
+	}
+	var ref string
+	if err := db.pool.QueryRow(ctx, `SELECT issue_ref FROM qq_drafts WHERE id=$1`, id).Scan(&ref); err != nil || ref != "new #2" {
+		t.Fatal(ref, err)
+	}
+}
+
 // 列表最早的在前，总数不受 limit 影响；忽略只对还没提交的草稿生效，忽略后不再列出、不能补充和认领，认领中的不能忽略，认领超时的可以。
 func TestQQDraftsOrderAndDismiss(t *testing.T) {
 	db := testStore(t)

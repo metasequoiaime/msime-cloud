@@ -35,9 +35,9 @@ type qqDraftStore interface {
 	CreateQQDraft(ctx context.Context, subject, original, report string) (int64, error)
 	QQDraft(ctx context.Context, id int64) (account.QQDraft, error)
 	UpdateQQDraft(ctx context.Context, id int64, original, report string) (bool, error)
-	ClaimQQDraft(ctx context.Context, id int64) (bool, error)
-	ReleaseQQDraft(ctx context.Context, id int64) error
-	SetQQDraftIssue(ctx context.Context, id int64, ref string) error
+	ClaimQQDraftLease(ctx context.Context, id int64) (time.Time, bool, error)
+	ReleaseQQDraftLease(ctx context.Context, id int64, claimedAt time.Time) (bool, error)
+	SetQQDraftIssueLease(ctx context.Context, id int64, claimedAt time.Time, ref string) (bool, error)
 	DismissQQDraft(ctx context.Context, id int64) (bool, error)
 	OpenQQDrafts(ctx context.Context, limit int) ([]account.QQDraft, int, error)
 }
@@ -518,7 +518,7 @@ func (s *Server) qqFileDraft(ctx context.Context, draft account.QQDraft, extra s
 		reply(message)
 		return "needs_info"
 	}
-	claimed, err := s.qqDrafts.ClaimQQDraft(ctx, draft.ID)
+	claimedAt, claimed, err := s.qqDrafts.ClaimQQDraftLease(ctx, draft.ID)
 	switch {
 	case err != nil:
 		slog.Warn("qq bot: draft not claimed", "reason", err.Error())
@@ -533,7 +533,7 @@ func (s *Server) qqFileDraft(ctx context.Context, draft account.QQDraft, extra s
 	if err != nil {
 		slog.Warn("qq bot: draft not filed", "repo", repo, "reason", err.Error())
 		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), qqDraftStoreTimeout)
-		if err := s.qqDrafts.ReleaseQQDraft(rctx, draft.ID); err != nil {
+		if _, err := s.qqDrafts.ReleaseQQDraftLease(rctx, draft.ID, claimedAt); err != nil {
 			slog.Warn("qq bot: draft not released", "reason", err.Error())
 		}
 		cancel()
@@ -542,8 +542,10 @@ func (s *Server) qqFileDraft(ctx context.Context, draft account.QQDraft, extra s
 	}
 	_, short, _ := strings.Cut(repo, "/")
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), qqDraftStoreTimeout)
-	if err := s.qqDrafts.SetQQDraftIssue(rctx, draft.ID, short+" #"+strconv.FormatInt(number, 10)); err != nil {
+	if recorded, err := s.qqDrafts.SetQQDraftIssueLease(rctx, draft.ID, claimedAt, short+" #"+strconv.FormatInt(number, 10)); err != nil {
 		slog.Warn("qq bot: draft issue not recorded", "reason", err.Error())
+	} else if !recorded {
+		slog.Warn("qq bot: draft issue claim is stale")
 	}
 	cancel()
 	if duplicate {

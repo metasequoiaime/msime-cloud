@@ -4397,6 +4397,20 @@ func (m *memoryDrafts) ClaimQQDraft(_ context.Context, id int64) (bool, error) {
 	return true, nil
 }
 
+func (m *memoryDrafts) ClaimQQDraftLease(_ context.Context, id int64) (time.Time, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.claimErr != nil {
+		return time.Time{}, false, m.claimErr
+	}
+	if !m.unclaimed(id) {
+		return time.Time{}, false, nil
+	}
+	claimedAt := time.Now()
+	m.drafts[id-1].Filed, m.drafts[id-1].FiledAt = true, claimedAt
+	return claimedAt, true, nil
+}
+
 // ReleaseQQDraft 和 SetQQDraftIssue 像数据库那样在 ctx 失效时失败，测得出调用方是不是用了已经取消的 ctx。
 func (m *memoryDrafts) ReleaseQQDraft(ctx context.Context, id int64) error {
 	if err := ctx.Err(); err != nil {
@@ -4417,6 +4431,34 @@ func (m *memoryDrafts) SetQQDraftIssue(ctx context.Context, id int64, ref string
 	defer m.mu.Unlock()
 	m.drafts[id-1].IssueRef = ref
 	return nil
+}
+
+func (m *memoryDrafts) SetQQDraftIssueLease(ctx context.Context, id int64, claimedAt time.Time, ref string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d := &m.drafts[id-1]
+	if d.IssueRef != "" || !d.Filed || !d.FiledAt.Equal(claimedAt) {
+		return false, nil
+	}
+	d.IssueRef = ref
+	return true, nil
+}
+
+func (m *memoryDrafts) ReleaseQQDraftLease(ctx context.Context, id int64, claimedAt time.Time) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d := &m.drafts[id-1]
+	if d.IssueRef != "" || !d.Filed || !d.FiledAt.Equal(claimedAt) {
+		return false, nil
+	}
+	d.Filed, d.FiledAt = false, time.Time{}
+	return true, nil
 }
 func (m *memoryDrafts) DismissQQDraft(_ context.Context, id int64) (bool, error) {
 	m.mu.Lock()
@@ -5449,10 +5491,11 @@ func TestQQBotFeatureVotes(t *testing.T) {
 
 // memoryFAQCandidates 是测试用的文档候选存储。state 为空是还没处理，"writing" 是认领了正在写进 FAQ，处理过的是「状态:PR」。
 type memoryFAQCandidates struct {
-	mu     sync.Mutex
-	items  []account.QQFAQCandidate
-	state  map[int64]string
-	addErr error
+	mu       sync.Mutex
+	items    []account.QQFAQCandidate
+	state    map[int64]string
+	claimsAt map[int64]time.Time
+	addErr   error
 	// claims 是认领成功的次数。
 	claims int
 }
@@ -5505,8 +5548,30 @@ func (m *memoryFAQCandidates) ClaimQQFAQCandidate(_ context.Context, id int64) (
 		return false, nil
 	}
 	m.state[id] = "writing"
+	if m.claimsAt == nil {
+		m.claimsAt = map[int64]time.Time{}
+	}
+	m.claimsAt[id] = time.Now()
 	m.claims++
 	return true, nil
+}
+
+func (m *memoryFAQCandidates) ClaimQQFAQCandidateLease(_ context.Context, id int64) (time.Time, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.state == nil {
+		m.state = map[int64]string{}
+	}
+	if id < 1 || int(id) > len(m.items) || m.state[id] != "" {
+		return time.Time{}, false, nil
+	}
+	if m.claimsAt == nil {
+		m.claimsAt = map[int64]time.Time{}
+	}
+	claimedAt := time.Now()
+	m.state[id], m.claimsAt[id] = "writing", claimedAt
+	m.claims++
+	return claimedAt, true, nil
 }
 
 // ReleaseQQFAQCandidate 和数据库一样，ctx 已经到期时写不进去。
@@ -5518,8 +5583,23 @@ func (m *memoryFAQCandidates) ReleaseQQFAQCandidate(ctx context.Context, id int6
 	defer m.mu.Unlock()
 	if m.state[id] == "writing" {
 		delete(m.state, id)
+		delete(m.claimsAt, id)
 	}
 	return nil
+}
+
+func (m *memoryFAQCandidates) ReleaseQQFAQCandidateLease(ctx context.Context, id int64, claimedAt time.Time) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.state[id] != "writing" || !m.claimsAt[id].Equal(claimedAt) {
+		return false, nil
+	}
+	delete(m.state, id)
+	delete(m.claimsAt, id)
+	return true, nil
 }
 
 // CloseQQFAQCandidate 和 account 包一样：done 可以从 writing 改，ignored 只改还没处理的。
@@ -5536,6 +5616,20 @@ func (m *memoryFAQCandidates) CloseQQFAQCandidate(ctx context.Context, id int64,
 		return false, nil
 	}
 	m.state[id] = state + ":" + ref
+	return true, nil
+}
+
+func (m *memoryFAQCandidates) CloseQQFAQCandidateLease(ctx context.Context, id int64, claimedAt time.Time, state, ref string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if state != "done" && state != "ignored" || m.state[id] != "writing" || !m.claimsAt[id].Equal(claimedAt) {
+		return false, nil
+	}
+	m.state[id] = state + ":" + ref
+	delete(m.claimsAt, id)
 	return true, nil
 }
 

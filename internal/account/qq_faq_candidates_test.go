@@ -122,6 +122,41 @@ func TestQQFAQCandidateClaim(t *testing.T) {
 	}
 }
 
+func TestQQFAQCandidateClaimLeaseCannotCloseNewClaim(t *testing.T) {
+	db := testStore(t)
+	a := &Service{store: db}
+	ctx := context.Background()
+	if _, err := db.pool.Exec(ctx, `TRUNCATE qq_faq_candidates`); err != nil {
+		t.Fatal(err)
+	}
+	id, err := a.AddQQFAQCandidate(ctx, "问题", "答案")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, ok, err := a.ClaimQQFAQCandidateLease(ctx, id)
+	if err != nil || !ok {
+		t.Fatal(first, ok, err)
+	}
+	if _, err := db.pool.Exec(ctx, `UPDATE qq_faq_candidates SET claimed_at=now()-interval '6 minutes' WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	second, ok, err := a.ClaimQQFAQCandidateLease(ctx, id)
+	if err != nil || !ok || !second.After(first) {
+		t.Fatal(first, second, ok, err)
+	}
+	if closed, err := a.CloseQQFAQCandidateLease(ctx, id, second, "done", "new #2"); err != nil || !closed {
+		t.Fatal("current claim was not closed", closed, err)
+	}
+	// The old worker must not be able to change the row after a newer claim has completed.
+	if closed, err := a.CloseQQFAQCandidateLease(ctx, id, first, "done", "old #1"); err != nil || closed {
+		t.Fatal("stale claim closed newer result", closed, err)
+	}
+	var ref string
+	if err := db.pool.QueryRow(ctx, `SELECT ref FROM qq_faq_candidates WHERE id=$1`, id).Scan(&ref); err != nil || ref != "new #2" {
+		t.Fatal(ref, err)
+	}
+}
+
 // 加 writing 状态和差评 state 列之前的表迁移后：已有的候选和差评仍是 open，state 的 CHECK 各只有一份并且认 writing，重复迁移不再改变，Ready 探测随之通过。
 func TestQQFAQCandidateAndBadAnswerSchemaUpgrade(t *testing.T) {
 	db := testStore(t)

@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -475,17 +476,38 @@ func (s *Server) sendUpstream(req *http.Request) ([]byte, error) {
 // 隧道、网关、上游、令牌和额度 —— 服务端明明握着原因(是传输错误,还是响应通过了但没过校验),
 // 却一个字都没留下。cause 为空恰恰是最需要说明的那一种:请求成功了,是我们自己拒绝了响应。
 func upstreamError(w http.ResponseWriter, r *http.Request, cause error) {
-	reason := "response rejected by validation"
-	if cause != nil {
-		reason = cause.Error()
-	}
+	reason := upstreamLogReason(cause)
 	if upstreamTimedOut(r, cause) {
-		slog.Warn("upstream timed out", "path", r.URL.Path, "reason", reason)
+		slog.Warn("upstream timed out", "path", upstreamLogPath(r), "reason", reason)
 		fail(w, 504, "upstream_timeout")
 	} else {
-		slog.Error("upstream failed", "path", r.URL.Path, "reason", reason)
+		slog.Error("upstream failed", "path", upstreamLogPath(r), "reason", reason)
 		fail(w, 502, "upstream_failure")
 	}
+}
+
+// upstreamLogReason 不记录 url.Error 的原文：其中的 URL 可能含凭据、签名和用户参数。
+func upstreamLogReason(cause error) string {
+	if cause == nil {
+		return "response rejected by validation"
+	}
+	var urlError *url.Error
+	if errors.As(cause, &urlError) {
+		return "upstream transport failed"
+	}
+	return cause.Error()
+}
+
+// upstreamLogPath 只记匹配到的路由模式，避免文件编号等路径参数进入错误日志。
+func upstreamLogPath(r *http.Request) string {
+	if r.Pattern == "" {
+		return "unmatched"
+	}
+	_, path, found := strings.Cut(r.Pattern, " ")
+	if found {
+		return path
+	}
+	return r.Pattern
 }
 
 // upstreamTimedOut 判断一次上游失败该按超时（504）还是上游失败（502）回答：请求已被取消或到了截止时间，或者失败原因本身是超时。

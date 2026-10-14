@@ -144,7 +144,8 @@ func (a *Service) adminList(w http.ResponseWriter, r *http.Request, list adminLi
 		// f.field 是 adminLists 中的固定字段名，不来自请求；无搜索时只读取筛选字段，让其他列的统计可被裁剪。
 		filterValue := "to_jsonb(x)->>'" + f.field + "'"
 		if search == "" {
-			filterValue = "(to_jsonb(x." + f.field + ") #>> '{}')"
+			// 筛选字段均为文本或布尔值，直接转文本保留原有比较语义，并让文本条件使用已有索引。
+			filterValue = "x." + f.field + "::text"
 		}
 		if f.contains {
 			conditions += "\n AND (" + n + "='' OR " + filterValue + " ILIKE '%'||" + n + "||'%')"

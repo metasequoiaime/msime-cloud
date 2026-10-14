@@ -133,11 +133,7 @@ func (s *Server) chatStreamOnce(w http.ResponseWriter, r *http.Request, v chatRe
 	// failBefore 处理第一个字节之前的失败：会回答 502 且允许重试时什么都不写，交给备用模型；否则沿用非流式的 JSON 错误。cause 为空表示上游回答了但没有可用正文。
 	failBefore := func(cause error) bool {
 		if retry && !upstreamTimedOut(mr, cause) {
-			reason := "response rejected by validation"
-			if cause != nil {
-				reason = cause.Error()
-			}
-			slog.Warn("chat: model failed before streaming, trying the fallback model", "path", r.URL.Path, "model", v.Model, "fallback_model", s.config.Chat.FallbackModel, "reason", reason)
+			slog.Warn("chat: model failed before streaming, trying the fallback model", "path", upstreamLogPath(r), "model", v.Model, "fallback_model", s.config.Chat.FallbackModel, "reason", upstreamLogReason(cause))
 			return true
 		}
 		upstreamError(w, mr, cause)
@@ -276,9 +272,9 @@ func (s *Server) chatStreamOnce(w http.ResponseWriter, r *http.Request, v chatRe
 	finish(err, false)
 	// 与 upstreamError 一致：超时记 Warn，其余失败记 Error；只记原因，不记上游正文。
 	if errors.Is(err, context.DeadlineExceeded) {
-		slog.Warn("upstream stream timed out", "path", r.URL.Path, "reason", err.Error())
+		slog.Warn("upstream stream timed out", "path", upstreamLogPath(r), "reason", upstreamLogReason(err))
 	} else {
-		slog.Error("upstream stream failed", "path", r.URL.Path, "reason", err.Error())
+		slog.Error("upstream stream failed", "path", upstreamLogPath(r), "reason", upstreamLogReason(err))
 	}
 	_, _ = io.WriteString(w, chatStreamError)
 	_ = rc.Flush()

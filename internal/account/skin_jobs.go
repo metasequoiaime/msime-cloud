@@ -22,7 +22,7 @@ const SkinJobStaleAfter = 30 * time.Second
 const skinJobsLock = `SELECT pg_advisory_xact_lock(hashtextextended('skin_jobs',0))`
 
 // skinJobLive is true for a running job whose worker is still heartbeating.
-var skinJobLive = `state='running' AND heartbeat_at>=now()-make_interval(secs=>` + strconv.Itoa(int(SkinJobStaleAfter/time.Second)) + `)`
+var skinJobLive = `state='running' AND heartbeat_at>=clock_timestamp()-make_interval(secs=>` + strconv.Itoa(int(SkinJobStaleAfter/time.Second)) + `)`
 
 // SkinJob is what GET /v1/skins/jobs/{job} reports. A running job whose worker stopped heartbeating is reported as failed with reason "cancelled", the same terminal state a job interrupted by a graceful shutdown ends in.
 type SkinJob struct {
@@ -47,7 +47,7 @@ func (a *Service) CreateSkinJob(ctx context.Context, id, owner string, perOwner,
 		return expires, err
 	}
 	// Expired drafts can hold up to ~12 MB each; dropping them here keeps the table small between the hourly prunes. A cancelled job whose worker went stale is dropped too: it is invisible to GET and DELETE and the worker that would have deleted it is gone, so nothing else ever would before it expires.
-	if _, err = tx.Exec(ctx, `DELETE FROM skin_jobs WHERE expires_at<=now() OR (cancelled AND NOT (`+skinJobLive+`))`); err != nil {
+	if _, err = tx.Exec(ctx, `DELETE FROM skin_jobs WHERE expires_at<=clock_timestamp() OR (cancelled AND NOT (`+skinJobLive+`))`); err != nil {
 		return expires, err
 	}
 	var all, own int
@@ -57,7 +57,7 @@ func (a *Service) CreateSkinJob(ctx context.Context, id, owner string, perOwner,
 	if all >= total || own >= perOwner {
 		return expires, ErrSkinJobsBusy
 	}
-	if err = tx.QueryRow(ctx, `INSERT INTO skin_jobs(id,owner,expires_at) VALUES($1,$2,now()+make_interval(secs=>$3)) RETURNING expires_at`, id, owner, ttl.Seconds()).Scan(&expires); err != nil {
+	if err = tx.QueryRow(ctx, `INSERT INTO skin_jobs(id,owner,expires_at) VALUES($1,$2,clock_timestamp()+make_interval(secs=>$3)) RETURNING expires_at`, id, owner, ttl.Seconds()).Scan(&expires); err != nil {
 		return expires, err
 	}
 	return expires, tx.Commit(ctx)
@@ -68,7 +68,7 @@ func (a *Service) GetSkinJob(ctx context.Context, id, owner string) (SkinJob, er
 	var job SkinJob
 	err := a.store.pool.QueryRow(ctx, `SELECT CASE WHEN state='running' AND NOT (`+skinJobLive+`) THEN 'failed' ELSE state END,
  CASE WHEN state='running' AND NOT (`+skinJobLive+`) THEN 'cancelled' ELSE reason END,artwork
- FROM skin_jobs WHERE id=$1 AND owner=$2 AND NOT cancelled AND expires_at>now()`, id, owner).Scan(&job.State, &job.Reason, &job.Artwork)
+ FROM skin_jobs WHERE id=$1 AND owner=$2 AND NOT cancelled AND expires_at>clock_timestamp()`, id, owner).Scan(&job.State, &job.Reason, &job.Artwork)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return job, ErrSkinJobNotFound
 	}
@@ -83,8 +83,17 @@ func (a *Service) DeleteSkinJob(ctx context.Context, id, owner string) error {
 	}
 	defer tx.Rollback(ctx)
 	// FOR UPDATE orders this against the worker's final write: either the worker recorded its result first and the row is deleted here, or the flag is set first and the worker's write finds it and deletes the row instead.
-	var live bool
-	err = tx.QueryRow(ctx, `SELECT `+skinJobLive+` FROM skin_jobs WHERE id=$1 AND owner=$2 AND NOT cancelled AND expires_at>now() FOR UPDATE`, id, owner).Scan(&live)
+	var live, valid bool
+	err = tx.QueryRow(ctx, `SELECT `+skinJobLive+` FROM skin_jobs WHERE id=$1 AND owner=$2 AND NOT cancelled FOR UPDATE`, id, owner).Scan(&live)
+	if err == nil {
+		// WHERE 中的时间条件不能在拿到行锁后自动重算；锁等待可能已经跨过任务 TTL。
+		if err = tx.QueryRow(ctx, `SELECT expires_at>clock_timestamp(), (`+skinJobLive+`) FROM skin_jobs WHERE id=$1`, id).Scan(&valid, &live); err != nil {
+			return err
+		}
+		if !valid {
+			return ErrSkinJobNotFound
+		}
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrSkinJobNotFound
 	}
@@ -104,24 +113,61 @@ func (a *Service) DeleteSkinJob(ctx context.Context, id, owner string) error {
 
 // SkinJobHeartbeat refreshes a running job's heartbeat and reports whether its worker should keep going. It returns false once the job was cancelled by a DELETE on any replica, has expired, or already went stale (other replicas report it failed, so a late result must not revive it).
 func (a *Service) SkinJobHeartbeat(ctx context.Context, id string) (bool, error) {
-	tag, err := a.store.pool.Exec(ctx, `UPDATE skin_jobs SET heartbeat_at=now() WHERE id=$1 AND NOT cancelled AND expires_at>now() AND `+skinJobLive, id)
+	tx, err := a.store.pool.Begin(ctx)
 	if err != nil {
 		return false, err
 	}
-	return tag.RowsAffected() == 1, nil
+	defer tx.Rollback(ctx)
+	var live bool
+	err = tx.QueryRow(ctx, `SELECT NOT cancelled FROM skin_jobs WHERE id=$1 FOR UPDATE`, id).Scan(&live)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, tx.Commit(ctx)
+	}
+	if err != nil {
+		return false, err
+	}
+	if err = tx.QueryRow(ctx, `SELECT NOT cancelled AND expires_at>clock_timestamp() AND (`+skinJobLive+`) FROM skin_jobs WHERE id=$1`, id).Scan(&live); err != nil {
+		return false, err
+	}
+	if live {
+		if _, err = tx.Exec(ctx, `UPDATE skin_jobs SET heartbeat_at=clock_timestamp() WHERE id=$1`, id); err != nil {
+			return false, err
+		}
+	}
+	return live, tx.Commit(ctx)
 }
 
 // FinishSkinJob 记录执行者的成功插画或失败原因；任务已取消（此处删除记录）、心跳失效或过期时不写入结果并返回 false。
 func (a *Service) FinishSkinJob(ctx context.Context, id, state, reason string, artwork []byte) (bool, error) {
-	tag, err := a.store.pool.Exec(ctx, `UPDATE skin_jobs SET state=$2,reason=$3,artwork=$4,heartbeat_at=now() WHERE id=$1 AND NOT cancelled AND expires_at>now() AND `+skinJobLive, id, state, reason, artwork)
+	tx, err := a.store.pool.Begin(ctx)
 	if err != nil {
 		return false, err
 	}
-	if tag.RowsAffected() == 1 {
-		return true, nil
+	defer tx.Rollback(ctx)
+	var cancelled bool
+	err = tx.QueryRow(ctx, `SELECT cancelled FROM skin_jobs WHERE id=$1 FOR UPDATE`, id).Scan(&cancelled)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, tx.Commit(ctx)
 	}
-	_, err = a.store.pool.Exec(ctx, `DELETE FROM skin_jobs WHERE id=$1 AND cancelled`, id)
-	return false, err
+	if err != nil {
+		return false, err
+	}
+	var live bool
+	if err = tx.QueryRow(ctx, `SELECT NOT cancelled AND expires_at>clock_timestamp() AND (`+skinJobLive+`) FROM skin_jobs WHERE id=$1`, id).Scan(&live); err != nil {
+		return false, err
+	}
+	if live {
+		if _, err = tx.Exec(ctx, `UPDATE skin_jobs SET state=$2,reason=$3,artwork=$4,heartbeat_at=clock_timestamp() WHERE id=$1`, id, state, reason, artwork); err != nil {
+			return false, err
+		}
+		return true, tx.Commit(ctx)
+	}
+	if cancelled {
+		if _, err = tx.Exec(ctx, `DELETE FROM skin_jobs WHERE id=$1`, id); err != nil {
+			return false, err
+		}
+	}
+	return false, tx.Commit(ctx)
 }
 
 // DropSkinJob deletes a job that was recorded but never started, for a replica that began shutting down between the insert and starting its worker.

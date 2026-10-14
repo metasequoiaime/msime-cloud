@@ -151,13 +151,9 @@ func (s *Store) ImportDictionary(ctx context.Context, user, kind string, entries
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
-	var revision int64
-	for i := range entries {
-		change, err := s.dictionaryEdit(ctx, tx, user, kind, "", 0, &entries[i])
-		if err != nil {
-			return 0, err
-		}
-		revision = change.Revision
+	revision, err := importDictionaryBatch(ctx, tx, user, kind, entries)
+	if err != nil {
+		return 0, err
 	}
 	return revision, tx.Commit(ctx)
 }

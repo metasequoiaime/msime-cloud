@@ -2,7 +2,6 @@ package account
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"math"
 	"time"
@@ -74,30 +73,8 @@ WHERE e.user_id=$1`, user, kinds, codes, words)
 	for i := range changes {
 		changes[i].Replacement.UpdatedAt = updatedAt
 	}
-	raw, err := json.Marshal(changes)
-	if err != nil {
+	if err = writeDictionaryChanges(ctx, tx, user, changes); err != nil {
 		return 0, 0, err
-	}
-	// 每条变化保留独立版本和完整前后状态；四次批量写入与单条编辑生成相同的同步记录。
-	queries := []string{
-		`INSERT INTO user_dictionary_entries(id,user_id,kind,code,word,weight,revision,updated_at)
-SELECT e->>'id',$1,e->>'kind',e->>'code',e->>'word',(e->>'weight')::bigint,(e->>'revision')::bigint,(e->>'updated_at')::timestamptz
-FROM jsonb_array_elements($2::jsonb) c CROSS JOIN LATERAL (SELECT c->'replacement' AS e) r
-ON CONFLICT(id) DO UPDATE SET weight=excluded.weight,revision=excluded.revision,updated_at=excluded.updated_at`,
-		`INSERT INTO user_dictionary_overlay(user_id,kind,code,word,entry,deleted)
-SELECT $1,e->>'kind',e->>'code',e->>'word',e,false
-FROM jsonb_array_elements($2::jsonb) c CROSS JOIN LATERAL (SELECT c->'replacement' AS e) r
-ON CONFLICT(user_id,kind,code,word) DO UPDATE SET entry=excluded.entry,deleted=false`,
-		`INSERT INTO user_dictionary_changes(user_id,revision,change)
-SELECT $1,(c->>'revision')::bigint,c FROM jsonb_array_elements($2::jsonb) c`,
-		`INSERT INTO user_dictionary_state(user_id,revision)
-SELECT $1,max((c->>'revision')::bigint) FROM jsonb_array_elements($2::jsonb) c
-ON CONFLICT(user_id) DO UPDATE SET revision=excluded.revision`,
-	}
-	for _, query := range queries {
-		if _, err = tx.Exec(ctx, query, user, raw); err != nil {
-			return 0, 0, err
-		}
 	}
 	return revision + int64(len(changes)), len(changes), nil
 }

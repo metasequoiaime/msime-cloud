@@ -9,6 +9,10 @@ func TestQQConversationWindowAndIsolation(t *testing.T) {
 	db := testStore(t)
 	a := &Service{store: db}
 	ctx := context.Background()
+	// 会话不关联 auth_users，testStore 的级联清理不会删除它们；每次运行先清空。
+	if _, err := db.pool.Exec(ctx, `TRUNCATE qq_conversations`); err != nil {
+		t.Fatal(err)
+	}
 	for _, q := range []string{"一", "二", "三"} {
 		if err := a.RecordQQTurn(ctx, "G/M1", q, "答"+q); err != nil {
 			t.Fatal(err)

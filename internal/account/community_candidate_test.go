@@ -223,7 +223,7 @@ func TestCommunityCandidatePackageValidation(t *testing.T) {
 		{"control in license code", edit("code = 'MIT'", `code = "MIT\u0007"`), files, "invalid_candidate_skin_package"},
 		{"newline in license assets", edit("assets = 'CC-BY-4.0'", `assets = "CC-BY-4.0\nCC0"`), files, "invalid_candidate_skin_package"},
 		{"multi-line license source", edit("source = 'synthetic'", "source = \"\"\"https://example.com/a\nhttps://example.com/b\"\"\""), files, "invalid_candidate_skin_package"},
-		{"jpeg scan bomb", manifest, with(map[string][]byte{"assets/deco.jpg": candidateJPEGWithScans(t, jpgData, maxCandidateJPEGScans+1)}), "candidate_skin_image_invalid"},
+		{"jpeg scan bomb", manifest, with(map[string][]byte{"assets/deco.jpg": candidateJPEGWithScans(t, jpgData, maxJPEGScans+1)}), "candidate_skin_image_invalid"},
 		{"file over 1 MiB after re-encode", manifest, with(map[string][]byte{"assets/deco.jpg": candidateNoiseJPEG(t, 1250, 30)}), "candidate_skin_too_large"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -268,12 +268,12 @@ func TestCommunityCandidatePackageValidation(t *testing.T) {
 	})
 
 	t.Run("jpeg scan count", func(t *testing.T) {
-		atLimit := candidateJPEGWithScans(t, jpgData, maxCandidateJPEGScans)
-		if candidateJPEGScans(jpgData) != 1 || candidateJPEGScans(atLimit) != maxCandidateJPEGScans {
-			t.Fatal("scan count", candidateJPEGScans(jpgData), candidateJPEGScans(atLimit))
+		atLimit := candidateJPEGWithScans(t, jpgData, maxJPEGScans)
+		if jpegScans(jpgData) != 1 || jpegScans(atLimit) != maxJPEGScans {
+			t.Fatal("scan count", jpegScans(jpgData), jpegScans(atLimit))
 		}
 		// The repeated scans are real work for the decoder, so the cap is what keeps the bomb case out.
-		if _, err := jpeg.Decode(bytes.NewReader(candidateJPEGWithScans(t, jpgData, maxCandidateJPEGScans+1))); err != nil {
+		if _, err := jpeg.Decode(bytes.NewReader(candidateJPEGWithScans(t, jpgData, maxJPEGScans+1))); err != nil {
 			t.Fatal("decoder refused repeated scans", err)
 		}
 		if code := candidatePipeline(manifest, with(map[string][]byte{"assets/deco.jpg": atLimit})); code != "" {
@@ -283,14 +283,14 @@ func TestCommunityCandidatePackageValidation(t *testing.T) {
 		payload := []byte("Exif\x00\x00\xFF\xDA\xFF\xDA")
 		app1 := append([]byte{0xFF, 0xE1, 0, byte(len(payload) + 2)}, payload...)
 		padded := append(append(append([]byte{}, jpgData[:2]...), app1...), append([]byte{0x12, 0xFF, 0xFF}, jpgData[2:]...)...)
-		if candidateJPEGScans(padded) != 1 {
-			t.Fatal("payload bytes counted as scans", candidateJPEGScans(padded))
+		if jpegScans(padded) != 1 {
+			t.Fatal("payload bytes counted as scans", jpegScans(padded))
 		}
 		if _, err := jpeg.Decode(bytes.NewReader(padded)); err != nil {
 			t.Fatal("padded fixture is not a JPEG the decoder accepts", err)
 		}
 		for _, truncated := range [][]byte{jpgData[:2], jpgData[:3], append(append([]byte{}, jpgData[:2]...), 0xFF, 0xDB, 0)} {
-			if candidateJPEGScans(truncated) != 0 {
+			if jpegScans(truncated) != 0 {
 				t.Fatal("truncated header counted", truncated)
 			}
 		}

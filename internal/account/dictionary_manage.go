@@ -95,29 +95,10 @@ func (s *Store) EditManagedDictionary(ctx context.Context, user string, expected
 			}
 		}
 	}
-	for _, row := range []struct {
-		e       *DictionaryEntry
-		deleted bool
-	}{{change.Previous, true}, {change.Replacement, false}} {
-		if row.e == nil {
-			continue
-		}
-		raw, err := json.Marshal(row.e)
-		if err != nil {
-			return change, err
-		}
-		if _, err = tx.Exec(ctx, `INSERT INTO user_dictionary_overlay(user_id,kind,code,word,entry,deleted) VALUES($1,$2,$3,$4,$5::jsonb,$6) ON CONFLICT(user_id,kind,code,word) DO UPDATE SET entry=excluded.entry,deleted=excluded.deleted`, user, row.e.Kind, row.e.Code, row.e.Word, raw, row.deleted); err != nil {
-			return change, err
-		}
-	}
 	if _, err = tx.Exec(ctx, `INSERT INTO user_dictionary_state(user_id,revision) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET revision=excluded.revision`, user, change.Revision); err != nil {
 		return change, err
 	}
-	raw, err := json.Marshal(change)
-	if err != nil {
-		return change, err
-	}
-	if _, err = tx.Exec(ctx, `INSERT INTO user_dictionary_changes(user_id,revision,change) VALUES($1,$2,$3::jsonb)`, user, change.Revision, raw); err != nil {
+	if err = writeDictionaryOverlayAndChange(ctx, tx, user, change); err != nil {
 		return change, err
 	}
 	return change, tx.Commit(ctx)

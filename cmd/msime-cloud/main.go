@@ -48,7 +48,7 @@ Environment:
   MSIME_ADMIN_TOKEN       the admin key or a personal access token, used instead of "login admin"
   MSIME_CLOUD_CONFIG_DIR  where the session is kept (default <user config dir>/msime-cloud)
 
-Exit status: 0 for a 2xx response, 1 when the call fails or the server answers with an error (its body is still printed), 2 for a usage error.`
+Exit status: 0 when the command and output succeed, 1 when the call or output fails or the server answers with an error (its body is printed when possible), 2 for a usage error.`
 
 const (
 	defaultServer      = "https://api.msime.app"
@@ -105,11 +105,11 @@ func (c cli) dispatch(args []string) error {
 	command, args := args[0], args[1:]
 	switch command {
 	case "version", "--version":
-		fmt.Fprintln(c.stdout, "msime-cloud "+msimebackend.Version())
-		return nil
+		_, err := fmt.Fprintln(c.stdout, "msime-cloud "+msimebackend.Version())
+		return err
 	case "help", "-h", "--help":
-		fmt.Fprintln(c.stdout, usage)
-		return nil
+		_, err := fmt.Fprintln(c.stdout, usage)
+		return err
 	case "routes":
 		if len(args) > 1 {
 			return usageError{"routes takes at most one filter"}
@@ -462,8 +462,8 @@ func (c cli) print(response *http.Response, output string) error {
 			return err
 		}
 		saved, _ := json.Marshal(map[string]any{"saved": output, "bytes": n, "content_type": response.Header.Get("Content-Type")})
-		fmt.Fprintln(c.stdout, string(saved))
-		return nil
+		_, err = fmt.Fprintln(c.stdout, string(saved))
+		return err
 	}
 	data, err := io.ReadAll(response.Body)
 	if err != nil {
@@ -477,13 +477,16 @@ func (c cli) print(response *http.Response, output string) error {
 		if json.Indent(&indented, data, "", "  ") == nil {
 			data = indented.Bytes()
 		}
-		fmt.Fprintln(c.stdout, strings.TrimRight(string(data), "\n"))
+		_, err = fmt.Fprintln(c.stdout, strings.TrimRight(string(data), "\n"))
 	case strings.HasPrefix(kind, "text/"):
-		fmt.Fprintln(c.stdout, strings.TrimRight(string(data), "\n"))
+		_, err = fmt.Fprintln(c.stdout, strings.TrimRight(string(data), "\n"))
 	default:
 		if !failed {
 			return fmt.Errorf("the response is %s (%d bytes); pass -o <file> to save it", kind, len(data))
 		}
+	}
+	if err != nil {
+		return err
 	}
 	if failed {
 		return statusError{response.Status}
@@ -558,7 +561,9 @@ func (c cli) signIn(server, challenge, credential string) error {
 		return err
 	}
 	if response.StatusCode != http.StatusOK {
-		fmt.Fprintln(c.stdout, strings.TrimSpace(string(data)))
+		if _, err = fmt.Fprintln(c.stdout, strings.TrimSpace(string(data))); err != nil {
+			return err
+		}
 		return statusError{response.Status}
 	}
 	var tokens tokenResponse
@@ -571,8 +576,8 @@ func (c cli) signIn(server, challenge, credential string) error {
 	}
 	// The tokens stay in the credentials file; only the user is shown.
 	user, _ := json.MarshalIndent(json.RawMessage(tokens.User), "", "  ")
-	fmt.Fprintln(c.stdout, string(user))
-	return nil
+	_, err = fmt.Fprintln(c.stdout, string(user))
+	return err
 }
 
 func (c cli) logout(args []string) error {

@@ -136,7 +136,9 @@ func listRoutes(out io.Writer, filter string) error {
 	for _, op := range operations {
 		line := fmt.Sprintf("%-6s %-52s %-14s %s", op.Method, op.Path, op.Auth, op.Summary)
 		if filter == "" || strings.Contains(strings.ToLower(line), filter) {
-			fmt.Fprintln(out, strings.TrimRight(line, " "))
+			if _, err := fmt.Fprintln(out, strings.TrimRight(line, " ")); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

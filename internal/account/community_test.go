@@ -24,6 +24,33 @@ func TestCommunityDesignValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestCommunityPublishRejectsControlCharactersInMetadata(t *testing.T) {
+	store := testStore(t)
+	owner := complete(t, store, Identity{"apple", "metadata-owner"})
+	a := &Service{store: store}
+	request := func(body string) *httptest.ResponseRecorder {
+		mux := http.NewServeMux()
+		Mount(mux, a)
+		r := httptest.NewRequest("POST", "/v1/community/skins", bytes.NewBufferString(body))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Authorization", "Bearer "+owner.AccessToken)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		return w
+	}
+	base := `{"id":"ab334455-1234-1234-1234-123456789abd","name":"正常标题","description":"正常说明","design":` + communityFixture + `}`
+	for _, body := range []string{
+		strings.Replace(base, "正常标题", `坏\u0007标题`, 1),
+		strings.Replace(base, "正常说明", `坏\u0000说明`, 1),
+	} {
+		w := request(body)
+		if w.Code != 400 || !strings.Contains(w.Body.String(), `"invalid_skin_metadata"`) {
+			t.Fatalf("control metadata accepted: %d %s", w.Code, w.Body.String())
+		}
+	}
+}
+
 func TestCommunityPublishDownloadRatingOwnershipAndRestart(t *testing.T) {
 	store := testStore(t)
 	owner := complete(t, store, Identity{"apple", "owner"})

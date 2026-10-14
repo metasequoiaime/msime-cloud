@@ -64,6 +64,9 @@ type Cache struct {
 	reads  map[string]cachedRead
 	// mints shares one in-flight token request per repository and permission set, so concurrent callers that all miss the cache (for example several word submissions arriving together) cause a single mint.
 	mints singleflight.Group
+	// 同一路径的并发读取共享一次请求；缓存失效递增代次，隔离失效前后的请求。
+	readFlights    singleflight.Group
+	readGeneration uint64
 }
 
 type cachedToken struct {
@@ -281,16 +284,48 @@ func (c Client) doFormat(ctx context.Context, token, method, path string, body a
 	return Response{resp.StatusCode, raw, resp.Header}, nil
 }
 
-// Get is a GET that is answered from the cache for ReadTTL and revalidated with the stored ETag afterwards. Only 2xx answers are cached, so errors are retried on the next call. The cache key is the path alone: callers must use tokens whose scope can read the path.
+// readRequestTimeout 限制共享读取的时间，每个调用者仍可以独立取消等待。
+const readRequestTimeout = 30 * time.Second
+
+// Get 在 ReadTTL 内返回缓存，过期后用 ETag 校验，同一路径的并发读取共享请求。
+// 只缓存成功响应；调用者必须使用有权限读取该路径的令牌。
 func (c Client) Get(ctx context.Context, token, path string) (Response, error) {
 	if c.Cache == nil {
 		return c.Do(ctx, token, "GET", path, nil)
 	}
 	key := c.apiURL() + path
-	now := c.now()
+	c.Cache.mu.Lock()
+	cached, ok := c.Cache.reads[key]
+	if ok && c.now().Sub(cached.fetched) < ReadTTL {
+		c.Cache.mu.Unlock()
+		return cached.response, nil
+	}
+	if err := ctx.Err(); err != nil {
+		c.Cache.mu.Unlock()
+		return Response{}, err
+	}
+	generation := c.Cache.readGeneration
+	// 注册与失效共用缓存锁，确保失效后的调用不会等待之前的请求。
+	result := c.Cache.readFlights.DoChan(key+"|"+strconv.FormatUint(generation, 10), func() (any, error) {
+		readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), readRequestTimeout)
+		defer cancel()
+		return c.getRead(readCtx, token, path, key, generation)
+	})
+	c.Cache.mu.Unlock()
+	select {
+	case r := <-result:
+		return r.Val.(Response), r.Err
+	case <-ctx.Done():
+		return Response{}, ctx.Err()
+	}
+}
+
+func (c Client) getRead(ctx context.Context, token, path, key string, generation uint64) (Response, error) {
 	c.Cache.mu.Lock()
 	cached, ok := c.Cache.reads[key]
 	c.Cache.mu.Unlock()
+	now := c.now()
+	// 前一个请求可能在当前请求注册前刚刚填充缓存。
 	if ok && now.Sub(cached.fetched) < ReadTTL {
 		return cached.response, nil
 	}
@@ -304,18 +339,22 @@ func (c Client) Get(ctx context.Context, token, path string) (Response, error) {
 	}
 	if r.Status == http.StatusNotModified && ok {
 		cached.fetched = now
-		c.store(key, cached)
+		c.store(key, cached, generation)
 		return cached.response, nil
 	}
 	if r.OK() {
-		c.store(key, cachedRead{r, r.Header.Get("ETag"), now})
+		c.store(key, cachedRead{r, r.Header.Get("ETag"), now}, generation)
 	}
 	return r, nil
 }
 
-func (c Client) store(key string, entry cachedRead) {
+func (c Client) store(key string, entry cachedRead, generation uint64) {
 	c.Cache.mu.Lock()
 	defer c.Cache.mu.Unlock()
+	// 写入或失效之后才返回的旧读取不能重新填充缓存。
+	if generation != c.Cache.readGeneration {
+		return
+	}
 	if c.Cache.reads == nil {
 		c.Cache.reads = map[string]cachedRead{}
 	}
@@ -333,7 +372,7 @@ func (c Client) store(key string, entry cachedRead) {
 	c.Cache.reads[key] = entry
 }
 
-// Invalidate drops cached reads whose path starts with prefix, so a read after a write sees the write. An empty prefix drops every cached read.
+// Invalidate 删除路径前缀匹配的缓存，并隔离在途读取；空前缀删除全部缓存。
 func (c Client) Invalidate(prefix string) {
 	if c.Cache == nil {
 		return
@@ -341,6 +380,7 @@ func (c Client) Invalidate(prefix string) {
 	full := c.apiURL() + prefix
 	c.Cache.mu.Lock()
 	defer c.Cache.mu.Unlock()
+	c.Cache.readGeneration++
 	for k := range c.Cache.reads {
 		if strings.HasPrefix(k, full) {
 			delete(c.Cache.reads, k)

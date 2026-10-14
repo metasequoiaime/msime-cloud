@@ -16,6 +16,29 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
 )
 
+func TestAdminLogsRedirectFailureDoesNotLogUpstreamURL(t *testing.T) {
+	s, _ := adminLogsFixture(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		location := "https://synthetic-user:synthetic-private-key@example.test/%invalid?query=" + url.QueryEscape(r.URL.Query().Get("query"))
+		w.Header().Set("Location", location)
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer upstream.Close()
+	s.config.Admin.Logs.LokiURL = upstream.URL
+	s.loki = upstream.Client()
+	s.loki.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	logs := captureLogs(t)
+	w := adminLogsGet(s, "/api/logs?q=synthetic-private-input", ownerCookie, "")
+	if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), "logs_unavailable") || !strings.Contains(logs.String(), "admin logs: loki query failed") || !strings.Contains(logs.String(), "loki unreachable") {
+		t.Fatalf("没有正确归类重定向解析失败：status=%d body=%s logs=%s", w.Code, w.Body.String(), logs.String())
+	}
+	for _, private := range []string{"synthetic-private-input", "synthetic-private-key", "synthetic-user", "example.test", "%invalid"} {
+		if strings.Contains(logs.String(), private) || strings.Contains(w.Body.String(), private) {
+			t.Errorf("Loki 重定向错误泄露了 %q：logs=%s body=%s", private, logs.String(), w.Body.String())
+		}
+	}
+}
+
 func TestAdminIssueDecodeFailureDoesNotLogUpstreamBody(t *testing.T) {
 	s := fixture(t, func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `[{"number":1,"created_at":"synthetic-private-input"}]`)

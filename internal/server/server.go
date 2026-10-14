@@ -468,7 +468,7 @@ func (s *Server) sendUpstream(req *http.Request) ([]byte, error) {
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, contract.UpstreamResponseBytes+1))
 	if err != nil {
-		return nil, err
+		return nil, upstreamTransportError{cause: err}
 	}
 	if len(b) > contract.UpstreamResponseBytes || !json.Valid(b) {
 		return nil, errors.New("invalid upstream response")

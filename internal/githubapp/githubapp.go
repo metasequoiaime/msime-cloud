@@ -293,7 +293,7 @@ func (c Client) doFormat(ctx context.Context, token, method, path string, body a
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		return Response{Status: resp.StatusCode, Header: resp.Header}, err
+		return Response{Status: resp.StatusCode, Header: resp.Header}, requestError{cause: err}
 	}
 	if int64(len(raw)) > limit {
 		return Response{Status: resp.StatusCode, Header: resp.Header}, errors.New("GitHub response too large")

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/textproto"
 	"net/url"
 	"strings"
 	"testing"
@@ -15,6 +16,143 @@ import (
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
 )
+
+func writeInvalidTrailerResponse(t *testing.T, w http.ResponseWriter, contentType, body string) {
+	t.Helper()
+	conn, _, err := w.(http.Hijacker).Hijack()
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	defer conn.Close()
+	// 正文分块合法，非法 trailer 使读取错误包含上游回显的合成用户输入。
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nTrailer: X-Synthetic\r\nContent-Type: %s\r\n\r\n%x\r\n%s\r\n0\r\nsynthetic-private-user-input\r\n\r\n", contentType, len(body), body); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestJSONUpstreamBodyReadErrorsDoNotExposeContent(t *testing.T) {
+	s := fixture(t, func(w http.ResponseWriter, r *http.Request) {
+		writeInvalidTrailerResponse(t, w, "application/json", `{}`)
+	})
+	r := httptest.NewRequest(http.MethodGet, "/v1/cloud/candidates", nil)
+	r.Pattern = "GET /v1/cloud/candidates"
+	mr, meter := metered(r, "cloud", 0)
+	req, err := http.NewRequestWithContext(mr.Context(), http.MethodGet, s.config.Cloud.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := s.doUpstream(req)
+	var original textproto.ProtocolError
+	if !errors.As(err, &original) || !strings.Contains(original.Error(), "synthetic-private-user-input") {
+		t.Fatal("丢失了正文读取的原始协议错误", err)
+	}
+	if len(body) != 0 || !meter.sent || meter.err != err {
+		t.Fatal("正文读取失败返回了不完整正文或没有记录计量错误", body, meter)
+	}
+	logs := captureLogs(t)
+	w := httptest.NewRecorder()
+	upstreamError(w, mr, err)
+	if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), "upstream_failure") || !strings.Contains(logs.String(), "upstream failed") {
+		t.Fatal("正文读取失败没有正确归类", w.Code, w.Body.String(), logs.String())
+	}
+	if strings.Contains(err.Error(), "synthetic-private-user-input") || strings.Contains(logs.String(), "synthetic-private-user-input") || strings.Contains(w.Body.String(), "synthetic-private-user-input") {
+		t.Fatal("共享上游正文读取错误泄露了上游内容", err, logs.String(), w.Body.String())
+	}
+}
+
+func TestQQFallbackDoesNotLogUpstreamBodyReadError(t *testing.T) {
+	s := fixture(t, func(w http.ResponseWriter, r *http.Request) {
+		var input chatRequest
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Error(err)
+			return
+		}
+		if input.Model == "server-model" {
+			writeInvalidTrailerResponse(t, w, "application/json", `{}`)
+			return
+		}
+		respond(w, http.StatusOK, map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": `{"answer":"合成备用回答"}`}, "finish_reason": "stop"}}})
+	})
+	s.qq = &qqBot{config: QQBotConfig{Model: "server-model", FallbackModel: "fallback-model"}}
+	logs := captureLogs(t)
+	var out struct{ Answer string }
+	if err := s.qqChatModel(t.Context(), "server-model", "合成系统说明", "合成用户输入", &out); err != nil || out.Answer != "合成备用回答" {
+		t.Fatal(out, err)
+	}
+	if !strings.Contains(logs.String(), "trying the fallback model") || strings.Contains(logs.String(), "synthetic-private-user-input") {
+		t.Fatal("QQ 正文读取失败的回退日志未脱敏", logs.String())
+	}
+}
+
+func TestAdminIssueBodyReadFailureDoesNotLogUpstreamContent(t *testing.T) {
+	s := fixture(t, func(w http.ResponseWriter, r *http.Request) {
+		writeInvalidTrailerResponse(t, w, "application/json", `[]`)
+	})
+	client := &githubapp.Client{APIURL: s.config.Chat.URL, HTTP: s.client, Cache: &githubapp.Cache{}}
+	logs := captureLogs(t)
+	_, _, err := s.issuePage(t.Context(), client, "synthetic-token", "o/r", "/repos/o/r/issues")
+	if err == nil {
+		t.Fatal("正文读取失败没有导致 issue 查询失败")
+	}
+	w := httptest.NewRecorder()
+	issueFail(w, err)
+	if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), "github_unavailable") || !strings.Contains(logs.String(), "issues: GitHub unavailable") {
+		t.Fatal("没有正确归类正文读取失败", w.Code, w.Body.String(), logs.String())
+	}
+	if strings.Contains(logs.String(), "synthetic-private-user-input") || strings.Contains(w.Body.String(), "synthetic-private-user-input") {
+		t.Fatal("后台 issue 正文读取错误泄露了上游内容", logs.String(), w.Body.String())
+	}
+}
+
+func TestChatStreamBodyReadFailureDoesNotLogUpstreamContent(t *testing.T) {
+	for _, scenario := range []string{"before-streaming", "fallback", "after-streaming"} {
+		t.Run(scenario, func(t *testing.T) {
+			s := fixture(t, func(w http.ResponseWriter, r *http.Request) {
+				var input chatRequest
+				if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+					t.Error(err)
+					return
+				}
+				if input.Model == "fallback-model" {
+					if scenario != "fallback" {
+						t.Error("流开始后的失败不应触发备用模型")
+					}
+					w.Header().Set("Content-Type", "text/event-stream")
+					io.WriteString(w, contentFrame("合成备用回答")+"data: [DONE]\n\n")
+					return
+				}
+				body := ": heartbeat\n\n"
+				if scenario == "after-streaming" {
+					body = contentFrame("合成部分回答")
+				}
+				writeInvalidTrailerResponse(t, w, "text/event-stream", body)
+			})
+			if scenario != "before-streaming" {
+				s.config.Chat.FallbackModel = "fallback-model"
+			}
+			logs := captureLogs(t)
+			w := call(s, http.MethodPost, "/v1/chat/completions", `{"stream":true,"messages":[{"role":"user","content":"合成输入"}]}`)
+			switch scenario {
+			case "before-streaming":
+				if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), "upstream_failure") || !strings.Contains(logs.String(), "upstream failed") {
+					t.Fatal("流开始前的正文读取失败没有正确归类", w.Code, w.Body.String(), logs.String())
+				}
+			case "fallback":
+				if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "合成备用回答") || !strings.Contains(logs.String(), "trying the fallback model") {
+					t.Fatal("流开始前的正文读取失败没有切换备用模型", w.Code, w.Body.String(), logs.String())
+				}
+			case "after-streaming":
+				if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "合成部分回答") || !strings.Contains(w.Body.String(), chatStreamError) || strings.Contains(w.Body.String(), "[DONE]") || !strings.Contains(logs.String(), "upstream stream failed") {
+					t.Fatal("流开始后的正文读取失败没有结束为错误事件", w.Code, w.Body.String(), logs.String())
+				}
+			}
+			if strings.Contains(logs.String(), "synthetic-private-user-input") || strings.Contains(w.Body.String(), "synthetic-private-user-input") {
+				t.Fatal("流式聊天正文读取错误泄露了上游内容", logs.String(), w.Body.String())
+			}
+		})
+	}
+}
 
 func TestAdminLogsRedirectFailureDoesNotLogUpstreamURL(t *testing.T) {
 	s, _ := adminLogsFixture(t)

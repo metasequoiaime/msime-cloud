@@ -532,20 +532,22 @@ func (a *Service) communityPluginRate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 登录即可评分，不再要求先下载；仍然不能给自己的作品评分。
-	result, e := a.store.pool.Exec(r.Context(), `INSERT INTO community_plugin_ratings(pack_id,user_id,stars)
- SELECT p.id,$2,$3 FROM community_plugins p WHERE p.id=$1 AND p.owner_id<>$2 AND p.moderation<>'removed'
- ON CONFLICT(pack_id,user_id) DO UPDATE SET stars=excluded.stars`, r.PathValue("id"), p.UserID, input.Stars)
+	var written, exists bool
+	e := a.store.pool.QueryRow(r.Context(), `WITH eligible AS MATERIALIZED (
+ SELECT id FROM community_plugins WHERE id=$1 AND owner_id<>$2 AND moderation<>'removed'
+), written AS (
+ INSERT INTO community_plugin_ratings(pack_id,user_id,stars)
+ SELECT id,$2,$3 FROM eligible
+ ON CONFLICT(pack_id,user_id) DO UPDATE SET stars=excluded.stars
+ RETURNING pack_id
+)
+SELECT EXISTS(SELECT 1 FROM written),EXISTS(SELECT 1 FROM community_plugins WHERE id=$1 AND moderation<>'removed')`, r.PathValue("id"), p.UserID, input.Stars).Scan(&written, &exists)
 	if e != nil {
 		a.error(w, e)
 		return
 	}
-	if result.RowsAffected() == 0 {
+	if !written {
 		// 不存在或已下架的插件返回 404；剩下的只可能是自己的作品，沿用客户端已经认识的 403 错误码。
-		var exists bool
-		if e = a.store.pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM community_plugins WHERE id=$1 AND moderation<>'removed')`, r.PathValue("id")).Scan(&exists); e != nil {
-			a.error(w, e)
-			return
-		}
 		if !exists {
 			writeError(w, 404, "plugin_not_found")
 			return

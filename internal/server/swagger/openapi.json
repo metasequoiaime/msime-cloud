@@ -19957,7 +19957,7 @@
             "userSession": []
           }
         ],
-        "description": "在一个事务里确认当前密钥编号等于 previous_key_id（没有密钥时为 null），删除 revoke 里的设备，删除全部条目和全部旧封装，写入新的 key_id 和 wraps。wraps 有 1 到 20 项，每个设备都必须已登记、不重复且不在 revoke 里；revoke 最多 20 项。服务端只检查格式，不验证密码学内容。协议见 msime 主仓库 docs/cloud-clipboard-e2e.md。",
+        "description": "在一个事务里确认当前密钥编号等于 previous_key_id（没有密钥时为 null），新 key_id 必须与当前编号不同，否则返回 400 invalid_clipboard_key 且不改变已有数据。删除 revoke 里的设备，删除全部条目和全部旧封装，写入新的 key_id 和 wraps。wraps 有 1 到 20 项，每个设备都必须已登记、不重复且不在 revoke 里；revoke 最多 20 项。服务端只检查格式，不验证密码学内容。协议见 msime 主仓库 docs/cloud-clipboard-e2e.md。",
         "requestBody": {
           "required": true,
           "content": {

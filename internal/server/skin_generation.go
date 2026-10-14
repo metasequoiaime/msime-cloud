@@ -13,12 +13,30 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
 
 // Skin artwork is returned inline: clients never download a model-supplied URL.
 func (s *Server) generateSkinArtwork(w http.ResponseWriter, r *http.Request) {
 	if !enabled(w, s.config.Images) {
 		return
+	}
+	owner, _ := r.Context().Value(skinJobOwnerKey{}).(string)
+	if user, ok := strings.CutPrefix(owner, "user:"); ok {
+		err := s.accounts.EnsureUserActive(r.Context(), user)
+		if errors.Is(err, account.ErrBanned) {
+			fail(w, http.StatusForbidden, "account_banned")
+			return
+		}
+		if errors.Is(err, account.ErrInvalid) {
+			fail(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		if err != nil {
+			fail(w, http.StatusServiceUnavailable, "auth_unavailable")
+			return
+		}
 	}
 	var input struct {
 		Prompt string `json:"prompt"`

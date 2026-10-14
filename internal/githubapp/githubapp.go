@@ -90,8 +90,19 @@ type Response struct {
 // OK reports a 2xx status.
 func (r Response) OK() bool { return r.Status >= 200 && r.Status < 300 }
 
-// Decode unmarshals the body into out.
-func (r Response) Decode(out any) error { return json.Unmarshal(r.Body, out) }
+// Decode 把响应正文解码到 out，错误文本不包含上游字段值。
+func (r Response) Decode(out any) error {
+	if err := json.Unmarshal(r.Body, out); err != nil {
+		return responseDecodeError{cause: err}
+	}
+	return nil
+}
+
+// responseDecodeError 保留原始解析错误链，隐藏错误文本可能回显的上游正文。
+type responseDecodeError struct{ cause error }
+
+func (e responseDecodeError) Error() string { return "invalid GitHub response" }
+func (e responseDecodeError) Unwrap() error { return e.cause }
 
 func (c Client) now() time.Time {
 	if c.Now != nil {

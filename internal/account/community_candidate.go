@@ -159,19 +159,27 @@ const candidateSkinSelectBase = `SELECT s.id,s.package_id,s.name,s.description,
  s.visibility,s.updated_at,CASE WHEN s.owner_id=$1 THEN s.request_sha256 ELSE '' END,s.category,
  CASE WHEN s.owner_id=$1 THEN s.moderation ELSE '' END,`
 
-// 人数、平均分和个人评分共用一次聚合；主键保证每个用户每款皮肤只有一条评分。
-const candidateSkinFrom = `
- FROM community_candidate_skins s JOIN auth_users u ON u.id=s.owner_id
- CROSS JOIN LATERAL (SELECT COALESCE(sum(size),0) AS size,count(*) AS files FROM community_candidate_skin_files WHERE skin_id=s.id) f
- CROSS JOIN LATERAL (SELECT count(*) AS count,COALESCE(avg(stars),0) AS average,
- COALESCE(max(stars) FILTER (WHERE user_id=$1),0) AS mine FROM community_candidate_skin_ratings WHERE skin_id=s.id) rating_stats `
-
 // candidateSkinSelect 只有客户端声明 fields=saved 时才计算收藏总数和当前用户的收藏状态；默认目录不需要这两个逐行子查询。
 func candidateSkinSelect(saved bool) string {
-	if saved {
-		return candidateSkinSelectBase + `(SELECT count(*) FROM community_candidate_skin_saves WHERE skin_id=s.id),EXISTS(SELECT 1 FROM community_candidate_skin_saves WHERE skin_id=s.id AND user_id=$1)` + candidateSkinFrom
+	return candidateSkinSelectQuery(saved, false)
+}
+
+func candidateSkinSelectQuery(saved, page bool) string {
+	from := ` FROM community_candidate_skins s JOIN auth_users u ON u.id=s.owner_id `
+	skinID := "s.id"
+	if page {
+		from += `JOIN candidate_page p ON p.id=s.id `
+		// 文件和评分依赖本页 ID，避免优化器将聚合排到分页关联之前。
+		skinID = "p.id"
 	}
-	return candidateSkinSelectBase + `0,false` + candidateSkinFrom
+	from += `CROSS JOIN LATERAL (SELECT COALESCE(sum(size),0) AS size,count(*) AS files FROM community_candidate_skin_files WHERE skin_id=` + skinID + `) f `
+	// 人数、平均分和个人评分共用一次聚合；主键保证每个用户每款皮肤只有一条评分。
+	from += `CROSS JOIN LATERAL (SELECT count(*) AS count,COALESCE(avg(stars),0) AS average,
+ COALESCE(max(stars) FILTER (WHERE user_id=$1),0) AS mine FROM community_candidate_skin_ratings WHERE skin_id=` + skinID + `) rating_stats `
+	if saved {
+		return candidateSkinSelectBase + `(SELECT count(*) FROM community_candidate_skin_saves WHERE skin_id=s.id),EXISTS(SELECT 1 FROM community_candidate_skin_saves WHERE skin_id=s.id AND user_id=$1)` + from
+	}
+	return candidateSkinSelectBase + `0,false` + from
 }
 
 func scanCandidateSkin(row interface{ Scan(...any) error }) (CommunityCandidateSkin, error) {
@@ -444,7 +452,7 @@ func (a *Service) communityCandidateList(w http.ResponseWriter, r *http.Request)
  SELECT s.id FROM community_candidate_skins s JOIN auth_users u ON u.id=s.owner_id `+join+`
  WHERE strpos(lower(s.name),lower($2))>0 AND ($3<>'mine' OR s.owner_id=$1) AND (s.visibility='public' OR ($3<>'' AND $5 AND s.owner_id=$1)) AND (s.moderation<>'removed' OR s.owner_id=$1) AND ($6='' OR s.category=$6)
  ORDER BY `+order+` LIMIT 21 OFFSET $4
-) `+candidateSkinSelect(fields["saved"])+join+`JOIN candidate_page p ON p.id=s.id ORDER BY `+order, viewer, search, scope, offset, sync, category)
+) `+candidateSkinSelectQuery(fields["saved"], true)+join+`ORDER BY `+order, viewer, search, scope, offset, sync, category)
 	if e != nil {
 		a.error(w, e)
 		return

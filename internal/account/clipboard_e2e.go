@@ -163,27 +163,32 @@ func (s *Store) ClipboardKeys(ctx context.Context, user, device string) (Clipboa
 	}
 	defer tx.Rollback(ctx)
 	v := ClipboardKeys{Devices: []ClipboardDevice{}}
-	if v.Enabled, v.KeyID, e = clipboardState(ctx, tx, user); e != nil {
-		return v, e
-	}
-	if e = tx.QueryRow(ctx, "SELECT max(wrap) FROM user_clipboard_wraps w JOIN user_clipboard_settings cs ON cs.user_id=w.user_id AND cs.key_id=w.key_id WHERE w.user_id=$1 AND w.device_id=$2", user, device).Scan(&v.Wrap); e != nil {
-		return v, e
-	}
-	rows, e := tx.Query(ctx, `SELECT d.device_id,d.public_key,d.name,d.created_at,w.device_id IS NOT NULL FROM user_clipboard_devices d
+	batch := &pgx.Batch{}
+	batch.Queue("SELECT COALESCE(bool_or(enabled),false),max(key_id) FROM user_clipboard_settings WHERE user_id=$1", user).QueryRow(func(row pgx.Row) error {
+		return row.Scan(&v.Enabled, &v.KeyID)
+	})
+	batch.Queue("SELECT max(wrap) FROM user_clipboard_wraps w JOIN user_clipboard_settings cs ON cs.user_id=w.user_id AND cs.key_id=w.key_id WHERE w.user_id=$1 AND w.device_id=$2", user, device).QueryRow(func(row pgx.Row) error {
+		return row.Scan(&v.Wrap)
+	})
+	batch.Queue(`SELECT d.device_id,d.public_key,d.name,d.created_at,w.device_id IS NOT NULL FROM user_clipboard_devices d
  LEFT JOIN user_clipboard_settings cs ON cs.user_id=d.user_id
  LEFT JOIN user_clipboard_wraps w ON w.user_id=d.user_id AND w.device_id=d.device_id AND w.key_id=cs.key_id
- WHERE d.user_id=$1 ORDER BY d.created_at,d.device_id`, user)
-	if e != nil {
+	 WHERE d.user_id=$1 ORDER BY d.created_at,d.device_id`, user).Query(func(rows pgx.Rows) error {
+		var err error
+		v.Devices, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (ClipboardDevice, error) {
+			var d ClipboardDevice
+			return d, row.Scan(&d.DeviceID, &d.PublicKey, &d.Name, &d.CreatedAt, &d.Approved)
+		})
+		if v.Devices == nil {
+			v.Devices = []ClipboardDevice{}
+		}
+		return err
+	})
+	// 三次只读查询共享同一个可重复读快照，批量发送把三次往返合成一次。
+	if e = tx.SendBatch(ctx, batch).Close(); e != nil {
 		return v, e
 	}
-	v.Devices, e = pgx.CollectRows(rows, func(row pgx.CollectableRow) (ClipboardDevice, error) {
-		var d ClipboardDevice
-		return d, row.Scan(&d.DeviceID, &d.PublicKey, &d.Name, &d.CreatedAt, &d.Approved)
-	})
-	if v.Devices == nil {
-		v.Devices = []ClipboardDevice{}
-	}
-	return v, e
+	return v, tx.Commit(ctx)
 }
 
 // PutClipboardDevice 登记一台设备；已登记时只更新名称。满 20 台时先淘汰最早登记、尚未批准的一台，都已批准时返回 errClipboardDeviceLimit。

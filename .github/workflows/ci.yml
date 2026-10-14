@@ -12,6 +12,16 @@ concurrency:
 permissions:
   contents: read
 jobs:
+  security:
+    name: Go 已知漏洞检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
   admin-web:
     name: Admin Web 构建与检查
     runs-on: ubuntu-latest

@@ -1,6 +1,6 @@
 module github.com/metasequoiaime/MSIME-Backend
 
-go 1.25.0
+go 1.26.9
 
 require (
 	github.com/aliyun/alibaba-cloud-sdk-go v1.63.107

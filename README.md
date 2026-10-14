@@ -6,7 +6,7 @@
 
 ## 启动
 
-需要 Go 1.25 或更高版本。
+需要 Go 1.26.9 或更高版本。Docker 构建和 CI 使用同一最低版本，包含已发布的标准库安全修复；CI 通过 `govulncheck` 检查项目可达的已知 Go 漏洞。
 
 ```sh
 cp config.example.json config.json

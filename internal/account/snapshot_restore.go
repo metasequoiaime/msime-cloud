@@ -114,10 +114,18 @@ func (s *Store) RestoreDictionarySnapshot(ctx context.Context, user string, expe
 	if revision <= current {
 		return 0, errInvalidSnapshot
 	}
-	for _, table := range []string{"user_dictionary_entries", "user_dictionary_overlay", "user_candidate_positions", "user_candidate_selections"} {
-		if _, err = tx.Exec(ctx, `DELETE FROM `+table+` WHERE user_id=$1`, user); err != nil {
-			return 0, err
-		}
+	// 四张相互独立的用户表一起清理，恢复大词库时少占三次数据库往返；它们都只按 user_id 删除，没有依赖执行顺序。
+	if _, err = tx.Exec(ctx, `WITH deleted_entries AS (
+ DELETE FROM user_dictionary_entries WHERE user_id=$1
+), deleted_overlay AS (
+ DELETE FROM user_dictionary_overlay WHERE user_id=$1
+), deleted_positions AS (
+ DELETE FROM user_candidate_positions WHERE user_id=$1
+), deleted_selections AS (
+ DELETE FROM user_candidate_selections WHERE user_id=$1
+)
+SELECT 1`, user); err != nil {
+		return 0, err
 	}
 	// Entries and their overlay share a new revision. Source IDs are replaced to
 	// prevent collisions across accounts; clients reload after the reset event.

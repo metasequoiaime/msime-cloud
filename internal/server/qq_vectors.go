@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
+	"golang.org/x/sync/errgroup"
 )
 
 // 答疑的向量检索。目录挑段落只看得到标题和开头几十个字，答案埋在正文深处、或者群友的口语问法和文档说法对不上时挑不中；GitHub 搜索要求每个词都匹配，也搜不到意思相同、说法不同的旧 issue。所以把文档段落、答疑仓库全部的 issue 和 PR 都算成向量存进 PostgreSQL（pgvector，见 account/qq_knowledge.go），答疑时把问题也算成向量，按余弦相似度召回：文档段落并进模型挑出的段落，issue 和 PR 作为「语义相近的历史记录」交给回答的模型。
@@ -28,6 +29,8 @@ const (
 	defaultQQEmbeddingModel = "doubao-embedding-vision"
 	// qqEmbedBatch 是一次请求算的文本数：doubao-embedding-vision 一次最多 10 条（多了上游返回 400 「input limit exceeded: max 10」），10 条 1500 字的文本响应约 340KB，在上游响应 1MB 的上限内。
 	qqEmbedBatch = 10
+	// qqEmbedParallel 限制一次同步同时发出的 embedding 请求数，避免批量同步把上游并发额度打满。
+	qqEmbedParallel = 4
 	// qqEmbedRunes 是算向量时每段文本的长度上限。
 	qqEmbedRunes = 1500
 	// qqVectorSyncInterval 是同步的间隔，qqVectorSyncPages 是每次每个仓库最多拉的页数（每页 100 条）。
@@ -109,12 +112,29 @@ func (s *Server) qqEmbed(ctx context.Context, texts []string) ([][]float32, erro
 
 // qqEmbedItems 给 items 算向量（texts 与 items 一一对应），分批请求。
 func (s *Server) qqEmbedItems(ctx context.Context, items []account.QQKnowledgeItem, texts []string) error {
-	for start := 0; start < len(items); start += qqEmbedBatch {
-		end := min(start+qqEmbedBatch, len(items))
-		vectors, err := s.qqEmbed(ctx, texts[start:end])
-		if err != nil {
-			return err
-		}
+	if len(items) != len(texts) {
+		return errors.New("embedding items and texts length mismatch")
+	}
+	results := make([][][]float32, (len(texts)+qqEmbedBatch-1)/qqEmbedBatch)
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(qqEmbedParallel)
+	for batch, start := 0, 0; start < len(texts); batch, start = batch+1, start+qqEmbedBatch {
+		batch, start := batch, start
+		end := min(start+qqEmbedBatch, len(texts))
+		group.Go(func() error {
+			vectors, err := s.qqEmbed(groupCtx, texts[start:end])
+			if err != nil {
+				return err
+			}
+			results[batch] = vectors
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return err
+	}
+	for batch, vectors := range results {
+		start := batch * qqEmbedBatch
 		for i, v := range vectors {
 			items[start+i].Embedding = v
 		}

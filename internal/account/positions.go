@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/jackc/pgx/v5"
 )
 
 type CandidatePosition struct {
@@ -28,27 +30,22 @@ func (s *Store) SetCandidatePosition(ctx context.Context, user string, expected 
 	if revision != expected {
 		return 0, errRevisionConflict
 	}
+	batch := &pgx.Batch{}
 	if p.Position > 0 {
-		_, err = tx.Exec(ctx, `DELETE FROM user_candidate_positions WHERE user_id=$1 AND context=$2 AND position=$3`, user, p.Context, p.Position)
-		if err != nil {
-			return 0, err
-		}
-		_, err = tx.Exec(ctx, `INSERT INTO user_candidate_positions(user_id,context,code,word,position) VALUES($1,$2,$3,$4,$5) ON CONFLICT(user_id,context,code,word) DO UPDATE SET position=excluded.position`, user, p.Context, p.Code, p.Word, p.Position)
+		batch.Queue(`DELETE FROM user_candidate_positions WHERE user_id=$1 AND context=$2 AND position=$3`, user, p.Context, p.Position)
+		batch.Queue(`INSERT INTO user_candidate_positions(user_id,context,code,word,position) VALUES($1,$2,$3,$4,$5) ON CONFLICT(user_id,context,code,word) DO UPDATE SET position=excluded.position`, user, p.Context, p.Code, p.Word, p.Position)
 	} else {
-		_, err = tx.Exec(ctx, `DELETE FROM user_candidate_positions WHERE user_id=$1 AND context=$2 AND code=$3 AND word=$4`, user, p.Context, p.Code, p.Word)
-	}
-	if err != nil {
-		return 0, err
+		batch.Queue(`DELETE FROM user_candidate_positions WHERE user_id=$1 AND context=$2 AND code=$3 AND word=$4`, user, p.Context, p.Code, p.Word)
 	}
 	revision++
-	if _, err = tx.Exec(ctx, `INSERT INTO user_dictionary_state(user_id,revision) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET revision=excluded.revision`, user, revision); err != nil {
-		return 0, err
-	}
+	batch.Queue(`INSERT INTO user_dictionary_state(user_id,revision) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET revision=excluded.revision`, user, revision)
 	raw, err := json.Marshal(DictionaryChange{Revision: revision, Position: &p})
 	if err != nil {
 		return 0, err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO user_dictionary_changes(user_id,revision,change) VALUES($1,$2,$3::jsonb)`, user, revision, raw); err != nil {
+	batch.Queue(`INSERT INTO user_dictionary_changes(user_id,revision,change) VALUES($1,$2,$3::jsonb)`, user, revision, raw)
+	// 槽位删除必须先于写入；批量发送保持执行顺序，任一语句失败仍由外层事务回滚。
+	if err = tx.SendBatch(ctx, batch).Close(); err != nil {
 		return 0, err
 	}
 	return revision, tx.Commit(ctx)

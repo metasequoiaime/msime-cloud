@@ -771,10 +771,13 @@ func (s *Store) SetAvatarKey(ctx context.Context, uid, key string) (string, erro
 	}
 	defer tx.Rollback(ctx)
 	var previous string
-	if e = tx.QueryRow(ctx, "SELECT avatar_key FROM auth_users WHERE id=$1", uid).Scan(&previous); e != nil {
-		return "", e
-	}
-	if _, e = tx.Exec(ctx, "UPDATE auth_users SET avatar_key=$2 WHERE id=$1", uid, key); e != nil {
+	if e = tx.QueryRow(ctx, `WITH old AS MATERIALIZED (
+ SELECT avatar_key FROM auth_users WHERE id=$1
+), updated AS (
+ UPDATE auth_users SET avatar_key=$2 WHERE id=$1
+ RETURNING 1
+)
+SELECT avatar_key FROM old`, uid, key).Scan(&previous); e != nil {
 		return "", e
 	}
 	return previous, tx.Commit(ctx)

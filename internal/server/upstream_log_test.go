@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNiuTransTransportFailureDoesNotLogSignedURL(t *testing.T) {
@@ -77,5 +79,100 @@ func TestChatStreamFallbackDoesNotLogUpstreamURL(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), "synthetic-private-key") {
 		t.Fatal("备用模型日志泄露了上游查询串")
+	}
+}
+
+func TestQQFallbackDoesNotLogUpstreamURL(t *testing.T) {
+	s := fixture(t, func(w http.ResponseWriter, r *http.Request) {
+		var input chatRequest
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Error(err)
+			return
+		}
+		if input.Model == "server-model" {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			conn.Close()
+			return
+		}
+		respond(w, 200, map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": `{"answer":"合成备用回答"}`}, "finish_reason": "stop"}}})
+	})
+	s.config.Chat.URL += "?api_key=synthetic-private-key&query=synthetic-private-input"
+	s.qq = &qqBot{config: QQBotConfig{Model: "server-model", FallbackModel: "fallback-model"}}
+	logs := captureLogs(t)
+	var out struct {
+		Answer string `json:"answer"`
+	}
+	if err := s.qqChatModel(t.Context(), "server-model", "合成系统说明", "合成用户输入", &out); err != nil || out.Answer != "合成备用回答" {
+		t.Fatal(out, err)
+	}
+	if !strings.Contains(logs.String(), "trying the fallback model") {
+		t.Fatal("未记录主模型失败", logs.String())
+	}
+	for _, private := range []string{"synthetic-private-key", "synthetic-private-input", "api_key="} {
+		if strings.Contains(logs.String(), private) {
+			t.Errorf("QQ 回退日志泄露了 %q", private)
+		}
+	}
+}
+
+func TestQQWebSearchDoesNotLogUpstreamURL(t *testing.T) {
+	s := fixture(t, func(w http.ResponseWriter, r *http.Request) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		conn.Close()
+	})
+	s.config.Chat.URL += "/chat/completions?api_key=synthetic-private-key"
+	s.qq = &qqBot{config: QQBotConfig{Model: "server-model"}}
+	logs := captureLogs(t)
+	if result := s.qqWebSearch(t.Context(), "合成查询"); result != "联网搜索失败。" {
+		t.Fatal(result)
+	}
+	if !strings.Contains(logs.String(), "web search failed") || strings.Contains(logs.String(), "synthetic-private-key") {
+		t.Fatal("联网搜索错误日志未脱敏", logs.String())
+	}
+}
+
+// 共享上游错误的文本应能安全记录，同时保留超时、取消及原始传输类型供调用方判断。
+func TestJSONUpstreamErrorsKeepClassificationWithoutURL(t *testing.T) {
+	for _, timeout := range []bool{false, true} {
+		name := "cancelled"
+		if timeout {
+			name = "timeout"
+		}
+		t.Run(name, func(t *testing.T) {
+			s := fixture(t, func(w http.ResponseWriter, r *http.Request) { t.Error("已经结束的请求仍发往上游") })
+			ctx, cancel := context.WithCancel(t.Context())
+			want := context.Canceled
+			if timeout {
+				cancel()
+				ctx, cancel = context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+				want = context.DeadlineExceeded
+			} else {
+				cancel()
+			}
+			defer cancel()
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.config.Chat.URL+"?api_key=synthetic-private-key", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = s.doUpstream(req)
+			if !errors.Is(err, want) {
+				t.Fatal("丢失了取消或超时分类", err)
+			}
+			var transport *url.Error
+			if !errors.As(err, &transport) {
+				t.Fatal("丢失了传输错误类型", err)
+			}
+			if strings.Contains(err.Error(), "synthetic-private-key") || strings.Contains(err.Error(), "api_key=") {
+				t.Error("共享上游错误文本泄露了请求地址")
+			}
+		})
 	}
 }

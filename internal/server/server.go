@@ -451,10 +451,16 @@ func (s *Server) doUpstream(req *http.Request) ([]byte, error) {
 	return b, err
 }
 
+// upstreamTransportError 隐藏传输错误文本中的地址、凭据和用户参数，同时保留错误链供超时、取消和指标分类使用。
+type upstreamTransportError struct{ cause error }
+
+func (e upstreamTransportError) Error() string { return "upstream transport failed" }
+func (e upstreamTransportError) Unwrap() error { return e.cause }
+
 func (s *Server) sendUpstream(req *http.Request) ([]byte, error) {
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, upstreamTransportError{cause: err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

@@ -110,7 +110,8 @@ func (a *Service) putAvatar(w http.ResponseWriter, r *http.Request) {
 	// A fresh random key per upload is what lets the public URL be cached forever, and it says nothing about whose avatar it is.
 	key := "avatars/" + randomToken() + ".jpg"
 	if e = a.avatars.Put(r.Context(), key, normalized, "image/jpeg"); e != nil {
-		slog.Error("头像上传失败", "error", e)
+		// 存储 SDK 的错误可能包含上游响应正文、请求地址或签名，只记录固定的操作原因。
+		slog.Error("头像上传失败", "reason", "storage_write_failed")
 		writeError(w, 502, "avatar_storage_unavailable")
 		return
 	}
@@ -147,6 +148,6 @@ func (a *Service) deleteAvatarObject(key string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if e := a.avatars.Delete(ctx, key); e != nil {
-		slog.Warn("旧头像删除失败", "error", e)
+		slog.Warn("旧头像删除失败", "reason", "storage_delete_failed")
 	}
 }

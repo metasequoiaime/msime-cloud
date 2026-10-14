@@ -4329,6 +4329,7 @@ func TestQQBotChatSkipsThinkingAndLogsTiming(t *testing.T) {
 type memoryDrafts struct {
 	mu        sync.Mutex
 	drafts    []account.QQDraft
+	createErr error
 	updateErr error
 	claimErr  error
 }
@@ -4336,6 +4337,9 @@ type memoryDrafts struct {
 func (m *memoryDrafts) CreateQQDraft(_ context.Context, subject, original, report string) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.createErr != nil {
+		return 0, m.createErr
+	}
 	m.drafts = append(m.drafts, account.QQDraft{ID: int64(len(m.drafts) + 1), Subject: account.QQDraftSubject(subject), Original: original, Report: report, CreatedAt: time.Date(2026, 10, 12, 1, 0, 0, 0, time.UTC), UpdatedAt: time.Now()})
 	return int64(len(m.drafts)), nil
 }
@@ -4520,11 +4524,28 @@ func TestQQBotDraftNotReport(t *testing.T) {
 	if len(fake.comments) != 0 || len(drafts.drafts) != 0 {
 		t.Fatal(fake.comments, drafts.drafts)
 	}
+	if got := limiter.counts["qq-bot-drafts|GROUP1/MEMBER1"]; got != 0 {
+		t.Fatalf("整理为非反馈时不应占用草稿额度，实际剩余计数 %d", got)
+	}
+	fake.summary = "好的，这是一个 bug"
+	qqPost(t, s, qqMessageFrom("m-summary-failed", "MEMBER1", "候选框又跑到左上角了"))
+	s.qqWorkers.Wait()
+	if got := limiter.counts["qq-bot-drafts|GROUP1/MEMBER1"]; got != 0 {
+		t.Fatalf("整理失败时不应占用草稿额度，实际剩余计数 %d", got)
+	}
+	fake.summary = qqBugSummary
+	drafts.createErr = errors.New("database down")
+	s.qqDraftReport(context.Background(), "GROUP1/MEMBER1", "候选框又跑到左上角了", nil, func(bool) {})
+	if got := limiter.counts["qq-bot-drafts|GROUP1/MEMBER1"]; got != 0 {
+		t.Fatalf("草稿保存失败时不应占用草稿额度，实际剩余计数 %d", got)
+	}
+	drafts.createErr = nil
 	// 额度用完：分不清是不是具体的 bug，照旧记进汇总 issue。
 	limiter.counts["qq-bot-drafts|GROUP1/MEMBER2"] = qqDraftsDaily
+	before := len(fake.replyTexts())
 	qqPost(t, s, qqMessageFrom("m-limited", "MEMBER2", "候选框老是跑到屏幕左上角"))
 	s.qqWorkers.Wait()
-	if replies := fake.replyTexts(); len(replies) != 3 || replies[2] != qqEscalation || fake.comments["/repos/o/docs/issues/77/comments"] == nil {
+	if replies := fake.replyTexts()[before:]; len(replies) != 2 || replies[1] != qqEscalation || fake.comments["/repos/o/docs/issues/77/comments"] == nil {
 		t.Fatalf("%q %v", replies, fake.comments)
 	}
 	var outcomes []string
@@ -4533,7 +4554,7 @@ func TestQQBotDraftNotReport(t *testing.T) {
 			outcomes = append(outcomes, fmt.Sprint(entry["outcome"]))
 		}
 	}
-	if strings.Join(outcomes, ",") != "answered,answered_escalate" {
+	if strings.Join(outcomes, ",") != "answered,answered_escalate,answered_escalate" {
 		t.Fatal(outcomes)
 	}
 }
@@ -5312,7 +5333,7 @@ func TestQQParseWords(t *testing.T) {
 
 // 群友提的需求已经有人提过时，不起草稿，在那个 issue 下的计数评论里记一票；同一个群友只算一次；找不到同一个需求时照旧起草稿。
 func TestQQBotFeatureVotes(t *testing.T) {
-	s, fake, _ := qqServer(t)
+	s, fake, limiter := qqServer(t)
 	drafts := &memoryDrafts{}
 	s.qqDrafts = drafts
 	s.qq.config.Admins = nil
@@ -5336,6 +5357,9 @@ func TestQQBotFeatureVotes(t *testing.T) {
 	}
 	if want := "这个需求已经有人提过：r #7（https://github.com/o/r/issues/7），我帮你在那里记了一票，现在 QQ 群里一共 1 人需要。之后 @我 发「#7」可以查进度。"; last() != want || len(drafts.drafts) != 0 {
 		t.Fatalf("%q %d", last(), len(drafts.drafts))
+	}
+	if got := limiter.counts["qq-bot-drafts|GROUP1/MEMBER1"]; got != 0 {
+		t.Fatalf("需求已记入已有 issue 时不应占用草稿额度，实际剩余计数 %d", got)
 	}
 	// 第二个人：改同一条计数评论。
 	fake.issueComments = map[string]string{"/repos/o/r/issues/7/comments": `[{"id":55,"body":"` + strings.ReplaceAll(qqVoteBody(1), `"`, `\"`) + `",` + qqAppAuthor + `}]`}

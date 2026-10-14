@@ -1,7 +1,6 @@
 package account
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -85,21 +84,17 @@ func adminDevice(header string) string {
 	return strings.Join(parts, " · ")
 }
 
-// adminCurrentSession is the id of the caller's own cookie session, or "" for token callers.
-func (a *Service) adminCurrentSession(ctx context.Context, r *http.Request, email string) (string, error) {
+// adminCurrentSessionHashes 返回请求中按优先级排列的管理后台会话哈希；令牌调用没有 cookie。
+func adminCurrentSessionHashes(r *http.Request) []string {
+	hashes := []string{}
 	for _, name := range adminSessionCookies {
 		cookie, err := r.Cookie(name)
 		if err != nil || len(cookie.Value) != 64 {
 			continue
 		}
-		var id string
-		err = a.store.pool.QueryRow(ctx, `SELECT id FROM admin_sessions WHERE token_hash=$1 AND email=$2`, hash(cookie.Value), email).Scan(&id)
-		if errors.Is(err, pgx.ErrNoRows) {
-			continue
-		}
-		return id, err
+		hashes = append(hashes, hash(cookie.Value))
 	}
-	return "", nil
+	return hashes
 }
 
 // adminMe serves GET /api/me. Dictionary PRs and issues count distinct targets, so triaging and then commenting on one issue counts it once.
@@ -173,12 +168,19 @@ FROM (SELECT count(DISTINCT target) FILTER (WHERE action LIKE 'dict\_pr\_%') AS 
 	out["token"] = nil
 	if access.Email != "" {
 		var stored map[string]any
-		current, err := a.adminCurrentSession(ctx, r, access.Email)
-		if err != nil {
-			a.error(w, err)
-			return
-		}
+		var current string
 		batch := &pgx.Batch{}
+		if hashes := adminCurrentSessionHashes(r); len(hashes) > 0 {
+			batch.Queue(`SELECT s.id FROM unnest($1::text[]) WITH ORDINALITY AS c(token_hash,ord)
+JOIN admin_sessions s ON s.token_hash=c.token_hash AND s.email=$2
+ORDER BY c.ord LIMIT 1`, hashes, access.Email).QueryRow(func(row pgx.Row) error {
+				err := row.Scan(&current)
+				if errors.Is(err, pgx.ErrNoRows) {
+					return nil
+				}
+				return err
+			})
+		}
 		batch.Queue(`SELECT prefs FROM admin_preferences WHERE email=$1`, access.Email).QueryRow(func(row pgx.Row) error {
 			err := row.Scan(&stored)
 			if errors.Is(err, pgx.ErrNoRows) {

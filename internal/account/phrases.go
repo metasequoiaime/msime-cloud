@@ -34,7 +34,14 @@ type Phrases struct {
 	Phrases  []Phrase `json:"phrases"`
 }
 
-func utf16Length(s string) int { return len(utf16.Encode([]rune(s))) }
+func utf16Length(s string) int {
+	length := 0
+	// range 和 []rune 都把无效 UTF-8 解码为 U+FFFD，计数与原先编码后取长度一致。
+	for _, r := range s {
+		length += utf16.RuneLen(r)
+	}
+	return length
+}
 
 // validPhraseID 只接受 1–64 个 ASCII 字母、数字、`-` 和 `_`。
 func validPhraseID(id string) bool {
@@ -60,7 +67,7 @@ func validPhrases(list []Phrase) bool {
 			return false
 		}
 		seen[p.ID] = true
-		if !utf8.ValidString(p.Text) || strings.ContainsRune(p.Text, 0) || utf16Length(p.Text) < 1 || utf16Length(p.Text) > maximumPhraseText {
+		if !utf8.ValidString(p.Text) || strings.ContainsRune(p.Text, 0) || p.Text == "" || utf16Length(p.Text) > maximumPhraseText {
 			return false
 		}
 		if !utf8.ValidString(p.Group) || strings.ContainsFunc(p.Group, unicode.IsControl) || utf16Length(p.Group) > maximumPhraseGroup {

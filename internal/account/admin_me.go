@@ -130,8 +130,11 @@ func (a *Service) adminMe(w http.ResponseWriter, r *http.Request, _ string) {
 	out["joined_at"] = joined
 
 	var stats adminMeStats
+	recent := []adminAuditEntry{}
+	var err error
 	// 只向月度聚合传入相关操作，并在一次遍历中分别完成审计计数和审核数量、耗时统计。
-	err := a.store.pool.QueryRow(ctx, `WITH mine AS (
+	batch := &pgx.Batch{}
+	batch.Queue(`WITH mine AS (
  SELECT action,target FROM admin_audit WHERE created_at>=date_trunc('month',now(),'UTC') AND `+adminActorClause("actor", access)+`
  AND (action LIKE 'dict\_pr\_%' OR action LIKE 'issue\_%' OR action IN ('delete_skin','delete_candidate_skin','delete_plugin','delete_dictionary','delete_reply'))
 ), moderated AS (
@@ -144,31 +147,25 @@ SELECT audit_stats.dict_prs,moderation_stats.total+audit_stats.deleted,audit_sta
 FROM (SELECT count(DISTINCT target) FILTER (WHERE action LIKE 'dict\_pr\_%') AS dict_prs,
  count(*) FILTER (WHERE action IN ('delete_skin','delete_candidate_skin','delete_plugin','delete_dictionary','delete_reply')) AS deleted,
  count(DISTINCT target) FILTER (WHERE action LIKE 'issue\_%') AS issues FROM mine) audit_stats
-CROSS JOIN (SELECT count(*) AS total,avg(extract(epoch FROM moderated_at-created_at))/3600 AS avg_hours FROM moderated) moderation_stats`, arg).Scan(&stats.DictPRsMonth, &stats.CommunityMonth, &stats.IssuesMonth, &stats.AvgHandleHours)
-	if err != nil {
+	CROSS JOIN (SELECT count(*) AS total,avg(extract(epoch FROM moderated_at-created_at))/3600 AS avg_hours FROM moderated) moderation_stats`, arg).QueryRow(func(row pgx.Row) error {
+		return row.Scan(&stats.DictPRsMonth, &stats.CommunityMonth, &stats.IssuesMonth, &stats.AvgHandleHours)
+	})
+	batch.Queue(`SELECT id,action,target,detail,created_at FROM admin_audit WHERE `+adminActorClause("actor", access)+` ORDER BY created_at DESC,id DESC LIMIT 6`, arg).Query(func(rows pgx.Rows) error {
+		defer rows.Close()
+		for rows.Next() {
+			var e adminAuditEntry
+			if scanErr := rows.Scan(&e.ID, &e.Action, &e.Target, &e.Detail, &e.CreatedAt); scanErr != nil {
+				return scanErr
+			}
+			recent = append(recent, e)
+		}
+		return rows.Err()
+	})
+	if err = a.store.pool.SendBatch(ctx, batch).Close(); err != nil {
 		a.error(w, err)
 		return
 	}
 	out["stats"] = stats
-
-	recent := []adminAuditEntry{}
-	rows, err := a.store.pool.Query(ctx, `SELECT id,action,target,detail,created_at FROM admin_audit WHERE `+adminActorClause("actor", access)+` ORDER BY created_at DESC,id DESC LIMIT 6`, arg)
-	if err != nil {
-		a.error(w, err)
-		return
-	}
-	for rows.Next() {
-		var e adminAuditEntry
-		if err = rows.Scan(&e.ID, &e.Action, &e.Target, &e.Detail, &e.CreatedAt); err != nil {
-			break
-		}
-		recent = append(recent, e)
-	}
-	rows.Close()
-	if err = errors.Join(err, rows.Err()); err != nil {
-		a.error(w, err)
-		return
-	}
 	out["recent"] = recent
 
 	prefs := map[string]bool{}

@@ -688,12 +688,14 @@ func insertCandidateFiles(ctx context.Context, tx pgx.Tx, id string, clean map[s
 		paths = append(paths, path)
 	}
 	slices.Sort(paths)
-	for _, path := range paths {
-		if _, e := tx.Exec(ctx, `INSERT INTO community_candidate_skin_files(skin_id,path,bytes) VALUES($1,$2,$3)`, id, path, clean[path]); e != nil {
-			return e
-		}
+	contents := make([][]byte, len(paths))
+	for i, path := range paths {
+		contents[i] = clean[path]
 	}
-	return nil
+	_, err := tx.Exec(ctx, `INSERT INTO community_candidate_skin_files(skin_id,path,bytes)
+SELECT $1,files.path,files.bytes
+FROM unnest($2::text[],$3::bytea[]) AS files(path,bytes)`, id, paths, contents)
+	return err
 }
 func (a *Service) communityCandidateDownload(w http.ResponseWriter, r *http.Request) {
 	p, ok := a.principal(w, r, false)

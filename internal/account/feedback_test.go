@@ -297,6 +297,52 @@ func TestFeedbackSubmitAndValidationHTTP(t *testing.T) {
 	}
 }
 
+func TestFeedbackSubmitBatchesScreenshotInserts(t *testing.T) {
+	db := testStore(t)
+	ctx := t.Context()
+	if _, err := db.pool.Exec(ctx, `TRUNCATE feedback CASCADE`); err != nil {
+		t.Fatal(err)
+	}
+	anonymous := complete(t, db, Identity{"anonymous", "msime-device-feedback-batch:hmac"})
+	cfg := db.pool.Config()
+	trace := &statementCancellation{}
+	cfg.ConnConfig.Tracer = trace
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if err = pool.Ping(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	Mount(mux, &Service{store: &Store{pool: pool}})
+	trace.mu.Lock()
+	trace.seen, trace.statements = 0, nil
+	trace.mu.Unlock()
+	postFeedback(t, mux, anonymous.AccessToken, 201,
+		payloadPart(validFeedbackPayload),
+		screenshotPart(feedbackPNG(t, 40, 80), "image/png"),
+		screenshotPart(feedbackJPEG(t), "image/jpeg"),
+		screenshotPart(feedbackPNG(t, 12, 12), "image/png"),
+	)
+	trace.mu.Lock()
+	var inserts int
+	for _, statement := range trace.statements {
+		if strings.Contains(statement, "INSERT INTO feedback_screenshots") {
+			inserts++
+		}
+	}
+	trace.mu.Unlock()
+	if inserts != 1 {
+		t.Fatalf("三张反馈截图用了 %d 次 INSERT，期望批量写入 1 次", inserts)
+	}
+	var count int
+	if err = db.pool.QueryRow(ctx, `SELECT count(*) FROM feedback_screenshots`).Scan(&count); err != nil || count != 3 {
+		t.Fatalf("写入截图数 %d，期望 3：%v", count, err)
+	}
+}
+
 // 限流：每个用户每小时 5 次（超出 429，且不写入），每个地址每天 50 次；180 天后由 Prune 删除，注销账号时级联删除。
 func TestFeedbackLimitsRetentionAndDeletion(t *testing.T) {
 	db := testStore(t)

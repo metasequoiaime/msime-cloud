@@ -533,7 +533,8 @@ func validPluginFiles(members map[string]pluginMember, audio []string, data map[
 		case "wav":
 			ok = len(head) >= 12 && string(head[:4]) == "RIFF" && string(head[8:12]) == "WAVE"
 		case "ogg":
-			ok = len(head) >= 4 && string(head[:4]) == "OggS"
+			// 客户端对两种音频都先读满 12 字节；只有 OggS 签名的截断文件不能安装。
+			ok = len(head) >= 12 && string(head[:4]) == "OggS"
 		default:
 			ok = false
 		}

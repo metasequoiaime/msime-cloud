@@ -621,28 +621,34 @@ func (a *Service) communityCandidatePublish(w http.ResponseWriter, r *http.Reque
 		a.error(w, e)
 		return
 	}
-	var total, public int
-	if e = tx.QueryRow(r.Context(), `SELECT count(*),count(*) FILTER (WHERE visibility='public') FROM community_candidate_skins WHERE owner_id=$1`, p.UserID).Scan(&total, &public); e != nil {
+	license := candidatePackageLicense(pkg)
+	publicLimit := a.candidatePublicLimit(p.UserID)
+	var withinTotal, withinPublic, inserted bool
+	if e = tx.QueryRow(r.Context(), `WITH quota AS MATERIALIZED (
+ SELECT count(*) AS total_count,count(*) FILTER (WHERE visibility='public') AS public_count
+ FROM community_candidate_skins WHERE owner_id=$2
+), inserted AS (
+ INSERT INTO community_candidate_skins(id,owner_id,package_id,name,description,version,license_code,license_assets,license_source,manifest,preview_path,request_sha256,visibility,moderation,moderation_reason,category)
+ SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending',$14,$15 FROM quota
+ WHERE total_count<$16 AND ($13<>'public' OR public_count<$17)
+ ON CONFLICT(id) DO NOTHING
+ RETURNING id
+)
+SELECT (SELECT total_count<$16 FROM quota),(SELECT $13<>'public' OR public_count<$17 FROM quota),EXISTS(SELECT 1 FROM inserted)`,
+		input.ID, p.UserID, pkg.ID, input.Name, input.Description, pkg.Version, license.Code, license.Assets, license.Source, []byte(input.Manifest), pkg.Preview, digest, visibility, flag, category, maxCandidateLibraryRows, publicLimit).Scan(&withinTotal, &withinPublic, &inserted); e != nil {
 		a.error(w, e)
 		return
 	}
-	if total >= maxCandidateLibraryRows {
+	if !withinTotal {
 		writeError(w, 409, "candidate_skin_library_limit")
 		return
 	}
-	if visibility == "public" && public >= a.candidatePublicLimit(p.UserID) {
+	if !withinPublic {
 		writeError(w, 409, "candidate_skin_publish_limit")
 		return
 	}
-	license := candidatePackageLicense(pkg)
 	// The row lock covers only this account, so another account can commit the same id between the probe and this insert; ON CONFLICT waits for that commit and then reports it as a conflict instead of a unique violation.
-	inserted, e := tx.Exec(r.Context(), `INSERT INTO community_candidate_skins(id,owner_id,package_id,name,description,version,license_code,license_assets,license_source,manifest,preview_path,request_sha256,visibility,moderation,moderation_reason,category) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending',$14,$15) ON CONFLICT(id) DO NOTHING`,
-		input.ID, p.UserID, pkg.ID, input.Name, input.Description, pkg.Version, license.Code, license.Assets, license.Source, []byte(input.Manifest), pkg.Preview, digest, visibility, flag, category)
-	if e != nil {
-		a.error(w, e)
-		return
-	}
-	if inserted.RowsAffected() == 0 {
+	if !inserted {
 		writeError(w, 409, "candidate_skin_id_conflict")
 		return
 	}

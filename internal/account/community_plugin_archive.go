@@ -131,7 +131,7 @@ func isASCIIAlnum(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
 }
 
-// validPluginFileName is the client's valid_file_name: one plain component of at most 64 ASCII letters, digits, dots, dashes and underscores, starting with a letter or digit.
+// validPluginFileName 与客户端 valid_file_name 一致：单个文件名至多 64 个 ASCII 字母、数字、点、横线和下划线，以字母或数字开头，并拒绝客户端列出的设备保留名。
 func validPluginFileName(name string) bool {
 	if name == "" || len(name) > 64 || !isASCIIAlnum(name[0]) || name == "." || name == ".." {
 		return false
@@ -141,6 +141,14 @@ func validPluginFileName(name string) bool {
 		if !(isASCIIAlnum(c) || c == '.' || c == '-' || c == '_') {
 			return false
 		}
+	}
+	stem, _, _ := strings.Cut(strings.ToLower(name), ".")
+	switch stem {
+	case "con", "prn", "aux", "nul":
+		return false
+	}
+	if len(stem) == 4 && (strings.HasPrefix(stem, "com") || strings.HasPrefix(stem, "lpt")) && stem[3] >= '0' && stem[3] <= '9' {
+		return false
 	}
 	return true
 }

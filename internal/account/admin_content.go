@@ -23,9 +23,10 @@ func (a *Service) adminContent(w http.ResponseWriter, r *http.Request, section, 
 		query = `SELECT json_build_object('id',s.id,'name',s.name,'description',s.description,'owner_id',s.owner_id,'author',u.display_name,'created_at',s.created_at,'category',s.category,'content',s.design,
  'moderation',s.moderation,'previous_moderation',s.previous_moderation,'moderation_reason',s.moderation_reason,'moderated_by',s.moderated_by,'moderated_at',s.moderated_at,'owner_banned',u.banned_at IS NOT NULL,
  'downloads',(SELECT count(*) FROM community_skin_downloads WHERE skin_id=s.id),
- 'rating_count',(SELECT count(*) FROM community_skin_ratings WHERE skin_id=s.id),
- 'rating_average',(SELECT COALESCE(avg(stars),0) FROM community_skin_ratings WHERE skin_id=s.id))
- FROM community_skins s JOIN auth_users u ON u.id=s.owner_id WHERE s.id=$1`
+ 'rating_count',rating_stats.count,'rating_average',rating_stats.average)
+ FROM community_skins s JOIN auth_users u ON u.id=s.owner_id
+ CROSS JOIN LATERAL (SELECT count(*) AS count,COALESCE(avg(stars),0) AS average FROM community_skin_ratings WHERE skin_id=s.id) rating_stats
+ WHERE s.id=$1`
 	} else if section == "candidate-skins" {
 		// Metadata, the manifest text and per-file digests only; image bytes never leave the database through the admin API.
 		query = `SELECT json_build_object('id',s.id,'package_id',s.package_id,'name',s.name,'description',s.description,'owner_id',s.owner_id,'author',u.display_name,'created_at',s.created_at,'updated_at',s.updated_at,'visibility',s.visibility,'category',s.category,'version',s.version,

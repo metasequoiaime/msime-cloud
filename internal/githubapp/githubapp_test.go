@@ -187,6 +187,32 @@ func TestGetCachesAndRevalidates(t *testing.T) {
 	}
 }
 
+func TestGetSeparatesCachesByBearerToken(t *testing.T) {
+	var calls atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.Header.Get("Authorization") == "Bearer high-privilege-token" {
+			_, _ = io.WriteString(w, `{"visibility":"private","secret":"synthetic-private"}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"visibility":"public"}`)
+	}))
+	t.Cleanup(upstream.Close)
+	c := Client{APIURL: upstream.URL, HTTP: upstream.Client(), Cache: &Cache{}}
+	path := "/repos/example/repository/issues/1"
+	private, err := c.Get(t.Context(), "high-privilege-token", path)
+	if err != nil || string(private.Body) != `{"visibility":"private","secret":"synthetic-private"}` {
+		t.Fatalf("private response: %s, %v", private.Body, err)
+	}
+	public, err := c.Get(t.Context(), "low-privilege-token", path)
+	if err != nil || string(public.Body) != `{"visibility":"public"}` {
+		t.Fatalf("low-privilege response reused another token's cache: %s, %v", public.Body, err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("different bearer tokens made %d upstream calls, want 2", calls.Load())
+	}
+}
+
 func TestDoSendsJSONAndBoundsResponses(t *testing.T) {
 	var got string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

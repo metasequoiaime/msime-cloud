@@ -119,21 +119,16 @@ func (a *Service) adminMe(w http.ResponseWriter, r *http.Request, _ string) {
 
 	var name string
 	var joined *time.Time
-	if access.Email != "" {
-		err := a.store.pool.QueryRow(ctx, `SELECT COALESCE((SELECT name FROM admin_sessions WHERE email=$1 AND name<>'' ORDER BY created_at DESC LIMIT 1),''),(SELECT created_at FROM admin_members WHERE email=$1)`, access.Email).Scan(&name, &joined)
-		if err != nil {
-			a.error(w, err)
-			return
-		}
-	}
-	out["name"] = name
-	out["joined_at"] = joined
-
 	var stats adminMeStats
 	recent := []adminAuditEntry{}
 	var err error
 	// 只向月度聚合传入相关操作，并在一次遍历中分别完成审计计数和审核数量、耗时统计。
 	batch := &pgx.Batch{}
+	if access.Email != "" {
+		batch.Queue(`SELECT COALESCE((SELECT name FROM admin_sessions WHERE email=$1 AND name<>'' ORDER BY created_at DESC LIMIT 1),''),(SELECT created_at FROM admin_members WHERE email=$1)`, access.Email).QueryRow(func(row pgx.Row) error {
+			return row.Scan(&name, &joined)
+		})
+	}
 	batch.Queue(`WITH mine AS (
  SELECT action,target FROM admin_audit WHERE created_at>=date_trunc('month',now(),'UTC') AND `+adminActorClause("actor", access)+`
  AND (action LIKE 'dict\_pr\_%' OR action LIKE 'issue\_%' OR action IN ('delete_skin','delete_candidate_skin','delete_plugin','delete_dictionary','delete_reply'))
@@ -165,6 +160,8 @@ FROM (SELECT count(DISTINCT target) FILTER (WHERE action LIKE 'dict\_pr\_%') AS 
 		a.error(w, err)
 		return
 	}
+	out["name"] = name
+	out["joined_at"] = joined
 	out["stats"] = stats
 	out["recent"] = recent
 

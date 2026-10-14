@@ -18,6 +18,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // feedbackPNG 是一张带 tEXt 元数据块的 PNG，用来确认重新编码会去掉它。
@@ -342,6 +345,28 @@ func TestFeedbackLimitsRetentionAndDeletion(t *testing.T) {
 	}
 }
 
+// feedbackRateCancellation 在最后一个反馈限流查询成功结束后取消请求，保证截图名额测试先完成鉴权和限流。
+type feedbackRateCancellation struct {
+	cancel context.CancelFunc
+}
+
+type feedbackRateCancellationKey struct{}
+
+func (*feedbackRateCancellation) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	last := false
+	if strings.HasPrefix(data.SQL, "INSERT INTO auth_rates(") && len(data.Args) > 0 {
+		key, ok := data.Args[0].(string)
+		last = ok && strings.HasPrefix(key, "feedback-ip:")
+	}
+	return context.WithValue(ctx, feedbackRateCancellationKey{}, last)
+}
+
+func (trace *feedbackRateCancellation) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
+	if data.Err == nil && ctx.Value(feedbackRateCancellationKey{}) == true {
+		trace.cancel()
+	}
+}
+
 func TestFeedbackUnavailable(t *testing.T) {
 	db := testStore(t)
 	user := complete(t, db, Identity{"email", "feedback-unavailable@example.test"})
@@ -358,16 +383,29 @@ func TestFeedbackUnavailable(t *testing.T) {
 	if w.Code != 503 {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	// 截图解码名额被占满且请求期限已到：返回 503 server_busy。
+	// 名额占满时，在最后一个限流查询完成后取消，避免短期限在鉴权阶段耗尽。
+	// 十秒期限只防止查询跟踪失效时卡住测试；成功路径必须由查询完成主动取消。
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	config := db.pool.Config()
+	config.ConnConfig.Tracer = &feedbackRateCancellation{cancel: cancel}
+	pool, err := pgxpool.NewWithConfig(t.Context(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
 	for range cap(candidateImageSlots) {
 		candidateImageSlots <- struct{}{}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer func() {
+		for range cap(candidateImageSlots) {
+			<-candidateImageSlots
+		}
+	}()
 	w = httptest.NewRecorder()
-	(&Service{store: db}).feedback(w, request().WithContext(ctx))
-	cancel()
-	for range cap(candidateImageSlots) {
-		<-candidateImageSlots
+	(&Service{store: &Store{pool: pool}}).feedback(w, request().WithContext(ctx))
+	if ctx.Err() != context.Canceled {
+		t.Fatal("请求未在最后一个限流查询完成后取消", ctx.Err())
 	}
 	if w.Code != 503 || !strings.Contains(w.Body.String(), "server_busy") {
 		t.Fatal(w.Code, w.Body.String())

@@ -141,11 +141,15 @@ func (a *Service) adminList(w http.ResponseWriter, r *http.Request, list adminLi
 		n := "$" + strconv.Itoa(len(args))
 		unfiltered = unfiltered && value == ""
 		emptyFilters += " AND " + n + "::text=''"
-		// f.field is a fixed identifier from adminLists, never request text.
+		// f.field 是 adminLists 中的固定字段名，不来自请求；无搜索时只读取筛选字段，让其他列的统计可被裁剪。
+		filterValue := "to_jsonb(x)->>'" + f.field + "'"
+		if search == "" {
+			filterValue = "(to_jsonb(x." + f.field + ") #>> '{}')"
+		}
 		if f.contains {
-			conditions += "\n AND (" + n + "='' OR to_jsonb(x)->>'" + f.field + "' ILIKE '%'||" + n + "||'%')"
+			conditions += "\n AND (" + n + "='' OR " + filterValue + " ILIKE '%'||" + n + "||'%')"
 		} else {
-			conditions += "\n AND (" + n + "='' OR to_jsonb(x)->>'" + f.field + "'=" + n + ")"
+			conditions += "\n AND (" + n + "='' OR " + filterValue + "=" + n + ")"
 		}
 	}
 	for param := range adminListFilterParams() {
@@ -165,13 +169,21 @@ func (a *Service) adminList(w http.ResponseWriter, r *http.Request, list adminLi
 ), selected AS (SELECT * FROM filtered ORDER BY created_at DESC,id DESC LIMIT 50 OFFSET $2)
 SELECT json_build_object('items', COALESCE((SELECT json_agg(item ORDER BY created_at DESC,id DESC) FROM selected),'[]'::json),
  'page',$3::int,'total',(SELECT count(*) FROM filtered),'has_more',(SELECT count(*) FROM filtered)>$2+50)`
-	if unfiltered {
-		// 空搜索和空筛选只需要页内完整条目；允许各处分别展开 source，使计数和分页跳过逐条统计。
+	if search == "" {
+		// 无搜索时只需要页内完整条目；筛选阶段仅保留 ID 和时间，避免对匹配和不匹配的行都计算完整条目。
+		pageSource := "source"
+		pageWhere := ` WHERE $1::text=''` + emptyFilters
+		filteredCTE := ""
+		if !unfiltered {
+			pageSource = "filtered"
+			pageWhere = ""
+			filteredCTE = `, filtered AS MATERIALIZED (SELECT id,created_at FROM source x WHERE $1::text=''` + conditions + `)`
+		}
 		// 空参数仍显式绑定，保留各列表固定参数的编号和类型。
 		// 详情按页内 ID 关联查询；OFFSET 0 阻止子查询展开，避免内部统计先于页内筛选执行。
-		sql = `WITH source AS NOT MATERIALIZED (` + list.query + `), selected AS MATERIALIZED (
- SELECT id,created_at FROM source WHERE $1::text=''` + emptyFilters + ` ORDER BY created_at DESC,id DESC LIMIT 50 OFFSET $2
-), total AS MATERIALIZED (SELECT count(*) AS count FROM source)
+		sql = `WITH source AS NOT MATERIALIZED (` + list.query + `)` + filteredCTE + `, selected AS MATERIALIZED (
+ SELECT id,created_at FROM ` + pageSource + pageWhere + ` ORDER BY created_at DESC,id DESC LIMIT 50 OFFSET $2
+), total AS MATERIALIZED (SELECT count(*) AS count FROM ` + pageSource + `)
 SELECT json_build_object('items',COALESCE((SELECT json_agg(to_jsonb(x) ORDER BY x.created_at DESC,x.id DESC) FROM selected p CROSS JOIN LATERAL (SELECT * FROM source item_row WHERE item_row.id=p.id OFFSET 0) x),'[]'::json),
  'page',$3::int,'total',(SELECT count FROM total),'has_more',(SELECT count FROM total)>$2+50)`
 	}

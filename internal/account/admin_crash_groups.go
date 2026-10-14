@@ -194,34 +194,34 @@ func (a *Service) adminCrashGroups(w http.ResponseWriter, r *http.Request, _ str
 		// 按分组自身的平台选签名，不能用可能与分组不同的事件平台代替。
 		countsQuery = crashGroupCountsBase + ` AND signature IN (SELECT signature FROM admin_crash_groups WHERE platform=$2) GROUP BY signature`
 	}
-	rows, err = tx.Query(ctx, `WITH c AS (`+countsQuery+`)
+	var items []crashGroupRow
+	batch := &pgx.Batch{}
+	batch.Queue(`WITH c AS (`+countsQuery+`)
 SELECT `+crashGroupColumns+` FROM admin_crash_groups g LEFT JOIN c USING(signature)
 WHERE ($2='' OR g.platform=$2)
-ORDER BY COALESCE(c.c7,0) DESC,g.last_seen DESC,g.signature LIMIT $3`, "", platform, crashGroupsLimit+1)
-	if err != nil {
-		a.error(w, err)
-		return
-	}
-	items, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (crashGroupRow, error) { return scanCrashGroup(row) })
-	if err != nil {
+ORDER BY COALESCE(c.c7,0) DESC,g.last_seen DESC,g.signature LIMIT $3`, "", platform, crashGroupsLimit+1).Query(func(rows pgx.Rows) error {
+		defer rows.Close()
+		var err error
+		items, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (crashGroupRow, error) { return scanCrashGroup(row) })
+		return err
+	})
+	var summary crashSummary
+	batch.Queue(`SELECT
+ (SELECT count(*) FROM admin_crash_groups WHERE $1='' OR platform=$1),
+ count(*) FILTER (WHERE kind='crash'),
+ CASE WHEN count(install_id) FILTER (WHERE kind='crash')=0 THEN NULL ELSE count(DISTINCT install_id) FILTER (WHERE kind='crash') END,
+ CASE WHEN count(install_id)=0 THEN NULL ELSE count(DISTINCT install_id) FILTER (WHERE created_at>=date_trunc('day',now(),'UTC')) END,
+ round(count(*) FILTER (WHERE kind='session')::numeric/NULLIF(count(*) FILTER (WHERE kind IN ('session','session_crash')),0),4)::float8
+	FROM admin_events WHERE kind IN ('download','crash','active','session','session_crash') AND created_at>=now()-interval '7 days' AND ($1='' OR `+overviewPlatform("platform")+`=$1)`, platform).QueryRow(func(row pgx.Row) error {
+		return row.Scan(&summary.Groups, &summary.Crashes7d, &summary.Devices7d, &summary.InstallsToday, &summary.CrashFreeRate)
+	})
+	if err = tx.SendBatch(ctx, batch).Close(); err != nil {
 		a.error(w, err)
 		return
 	}
 	hasMore := len(items) > crashGroupsLimit
 	if hasMore {
 		items = items[:crashGroupsLimit]
-	}
-	var summary crashSummary
-	err = tx.QueryRow(ctx, `SELECT
- (SELECT count(*) FROM admin_crash_groups WHERE $1='' OR platform=$1),
- count(*) FILTER (WHERE kind='crash'),
- CASE WHEN count(install_id) FILTER (WHERE kind='crash')=0 THEN NULL ELSE count(DISTINCT install_id) FILTER (WHERE kind='crash') END,
- CASE WHEN count(install_id)=0 THEN NULL ELSE count(DISTINCT install_id) FILTER (WHERE created_at>=date_trunc('day',now(),'UTC')) END,
- round(count(*) FILTER (WHERE kind='session')::numeric/NULLIF(count(*) FILTER (WHERE kind IN ('session','session_crash')),0),4)::float8
-FROM admin_events WHERE kind IN ('download','crash','active','session','session_crash') AND created_at>=now()-interval '7 days' AND ($1='' OR `+overviewPlatform("platform")+`=$1)`, platform).Scan(&summary.Groups, &summary.Crashes7d, &summary.Devices7d, &summary.InstallsToday, &summary.CrashFreeRate)
-	if err != nil {
-		a.error(w, err)
-		return
 	}
 	write(w, 200, map[string]any{"items": items, "has_more": hasMore, "platforms": platforms, "summary": summary})
 }

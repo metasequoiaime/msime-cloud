@@ -16,12 +16,25 @@ type downloadSummaryTrace struct {
 }
 
 func (trace *downloadSummaryTrace) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	if strings.Contains(data.SQL, "FROM admin_events") {
-		trace.queries = append(trace.queries, data.SQL)
-	}
+	trace.capture(data.SQL)
 	return ctx
 }
 
+func (trace *downloadSummaryTrace) TraceBatchStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceBatchStartData) context.Context {
+	return ctx
+}
+
+func (trace *downloadSummaryTrace) TraceBatchQuery(_ context.Context, _ *pgx.Conn, data pgx.TraceBatchQueryData) {
+	trace.capture(data.SQL)
+}
+
+func (trace *downloadSummaryTrace) capture(sql string) {
+	if strings.Contains(sql, "FROM admin_events") {
+		trace.queries = append(trace.queries, sql)
+	}
+}
+
+func (*downloadSummaryTrace) TraceBatchEnd(context.Context, *pgx.Conn, pgx.TraceBatchEndData) {}
 func (*downloadSummaryTrace) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
 func TestDownloadsSummaryScansTelemetryOnce(t *testing.T) {

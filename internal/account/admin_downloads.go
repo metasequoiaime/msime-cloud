@@ -92,7 +92,10 @@ func (a *Service) downloadsSummary(ctx context.Context, now time.Time) (download
 	defer tx.Rollback(ctx)
 
 	// 平台别名（win、darwin、harmonyos 等）归到规范 ID 下，所以同一平台在每个版本、安装包和渠道下只占一行。
-	rows, err := tx.Query(ctx, `WITH grouped AS (
+	var telemetryToday, telemetryWeek, telemetryMirrorWeek int64
+	var telemetryChannelReported bool
+	batch := &pgx.Batch{}
+	batch.Queue(`WITH grouped AS (
  SELECT `+canonicalPlatformSQL("platform")+` AS p,version,artifact,channel,
    count(*) FILTER (WHERE created_at>=$1) AS today,
    count(*) AS week,
@@ -105,22 +108,21 @@ SELECT p,version,artifact,channel,today,week,
  sum(today) OVER ()::bigint,sum(week) OVER ()::bigint,sum(mirror) OVER ()::bigint,
  bool_or(channel_reported) OVER ()
  FROM grouped
- ORDER BY week DESC,p,version,artifact NULLS LAST,channel NULLS LAST LIMIT $5`, today, weekStart, today.AddDate(0, 0, 1), downloadsMirrorChannel, downloadsRowLimit+1)
-	if err != nil {
-		return summary, err
-	}
-	var telemetryToday, telemetryWeek, telemetryMirrorWeek int64
-	var telemetryChannelReported bool
-	for rows.Next() {
-		row := downloadsRow{Source: downloadsSourceTelemetry}
-		if err = rows.Scan(&row.Platform, &row.Version, &row.Artifact, &row.Channel, &row.Today, &row.Week, &telemetryToday, &telemetryWeek, &telemetryMirrorWeek, &telemetryChannelReported); err != nil {
-			rows.Close()
-			return summary, err
+	 ORDER BY week DESC,p,version,artifact NULLS LAST,channel NULLS LAST LIMIT $5`, today, weekStart, today.AddDate(0, 0, 1), downloadsMirrorChannel, downloadsRowLimit+1).Query(func(rows pgx.Rows) error {
+		defer rows.Close()
+		for rows.Next() {
+			row := downloadsRow{Source: downloadsSourceTelemetry}
+			if err := rows.Scan(&row.Platform, &row.Version, &row.Artifact, &row.Channel, &row.Today, &row.Week, &telemetryToday, &telemetryWeek, &telemetryMirrorWeek, &telemetryChannelReported); err != nil {
+				return err
+			}
+			summary.Rows = append(summary.Rows, row)
 		}
-		summary.Rows = append(summary.Rows, row)
-	}
-	rows.Close()
-	if err = rows.Err(); err != nil {
+		return rows.Err()
+	})
+	batch.Queue(`SELECT to_char(max(day),'YYYY-MM-DD') FROM release_asset_snapshots`).QueryRow(func(row pgx.Row) error {
+		return row.Scan(&summary.SnapshotDay)
+	})
+	if err = tx.SendBatch(ctx, batch).Close(); err != nil {
 		return summary, err
 	}
 	if len(summary.Rows) > downloadsRowLimit {
@@ -135,9 +137,6 @@ SELECT p,version,artifact,channel,today,week,
 		return summary, err
 	}
 	summary.Rows = append(summary.Rows, github...)
-	if err = tx.QueryRow(ctx, `SELECT to_char(max(day),'YYYY-MM-DD') FROM release_asset_snapshots`).Scan(&summary.SnapshotDay); err != nil {
-		return summary, err
-	}
 	summary.Totals.Today = telemetryToday + summary.Totals.GitHubToday
 	summary.Totals.Week = telemetryWeek + summary.Totals.GitHubWeek
 	if summary.ChannelReported && summary.Totals.Week > 0 {

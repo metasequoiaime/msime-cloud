@@ -2,6 +2,10 @@
 import "../../src/zod-config";
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { QueryClient, QueryClientProvider, useMutation } from "@tanstack/react-query";
+import { z } from "zod";
+import { AuthProvider, useAuth } from "../../src/auth";
+import { APIError, useAPI } from "../../src/api/client";
 import { Button } from "../../src/ui/button";
 import { Card, CardHeader, Banner } from "../../src/ui/card";
 import { AreaChart, ChartLegend, Sparkline } from "../../src/ui/charts";
@@ -28,6 +32,34 @@ const columns: Column<Row>[] = [
 ];
 const series = Array.from({ length: 30 }, (_, index) => ({ day: `09-${String(index + 1).padStart(2, "0")}`, a: 100 + index * 3, b: 50 + (index % 7) * 9 }));
 const skin = { background: 0xf5faf6, keyBackground: 0xffffff, keyForeground: 0x0f2419, accent: 0x1e8e4e, actionBackground: 0x1e8e4e, cornerRadius: 8, borderWidth: 1, shadow: 0.1, pattern: 1, monospaced: false };
+
+const authClient = new QueryClient();
+
+function AuthHarness() {
+  const auth = useAuth();
+  const api = useAPI();
+  const toast = useToast();
+  const [token, setToken] = useState("test-admin-token");
+  const [result, setResult] = useState("");
+  const mutation = useMutation({
+    mutationFn: (path: string) => api.post(`auth-test/${path}`, z.unknown()),
+  });
+  const request = (path: string) => {
+    setResult("");
+    void mutation.mutateAsync(path).then(() => setResult(`${path}:成功`), error => setResult(`${path}:${error instanceof APIError ? String(error.status) : "请求失败"}`));
+  };
+  return <main>
+    <output data-testid="auth-status">{auth.loading ? "加载中" : auth.authenticated ? "已登录" : "未登录"}</output>
+    <output data-testid="auth-error">{auth.error}</output>
+    <output data-testid="auth-result">{result}</output>
+    <input aria-label="测试密钥" value={token} onChange={event => setToken(event.target.value)} />
+    <button type="button" onClick={() => { setResult(""); void auth.login(token).then(() => setResult("登录完成")); }}>测试登录</button>
+    <button type="button" onClick={() => request("delayed")}>启动旧请求</button>
+    <button type="button" onClick={() => request("unauthorized")}>使当前登录失效</button>
+    <button type="button" onClick={() => toast({ text: "待提交", delayCommit: () => api.post("auth-test/delayed", z.unknown()) })}>排队延迟提交</button>
+    <button type="button" onClick={() => { setResult(""); void auth.logout().then(() => setResult("退出完成")); }}>测试退出</button>
+  </main>;
+}
 
 function DebounceHarness() {
   const [value, setValue] = useState("初始值");
@@ -91,4 +123,6 @@ function Harness() {
 
 const root = document.getElementById("root");
 if (!root) throw new Error("Missing harness root");
-createRoot(root).render(<StrictMode><ToastProvider><ConfirmProvider><Harness /></ConfirmProvider></ToastProvider></StrictMode>);
+createRoot(root).render(<StrictMode><ToastProvider>{new URLSearchParams(window.location.search).has("auth")
+  ? <QueryClientProvider client={authClient}><AuthProvider><AuthHarness /></AuthProvider></QueryClientProvider>
+  : <ConfirmProvider><Harness /></ConfirmProvider>}</ToastProvider></StrictMode>);

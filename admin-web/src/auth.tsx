@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
@@ -21,7 +21,9 @@ type Auth = {
 const AuthContext = createContext<Auth | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [token, setToken] = useState("");
+  const [identity, setIdentity] = useState({ token: "" });
+  const currentIdentity = useRef(identity);
+  const token = identity.token;
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -36,33 +38,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, []);
+  const replaceToken = useCallback((value: string) => {
+    // 同一密钥重新登录也属于新身份；立即更新引用，避免旧响应抢在重绘前清掉新登录。
+    const next = { token: value };
+    currentIdentity.current = next;
+    setIdentity(next);
+  }, []);
   const clear = useCallback(() => {
-    setToken("");
+    replaceToken("");
     setSession(previous => previous ? { ...previous, authenticated: false, email: "" } : previous);
     client.clear();
-  }, [client]);
-  const onUnauthorized = useCallback(() => { clear(); setError("登录已失效，请重新登录。"); }, [clear]);
+  }, [client, replaceToken]);
+  const onUnauthorized = useCallback(() => {
+    if (currentIdentity.current !== identity) return;
+    clear();
+    setError("登录已失效，请重新登录。");
+  }, [identity, clear]);
   const flushToast = useFlushToast();
   const logout = useCallback(async () => {
     setError("");
-    // A merge or rejection still inside its 4s undo window is sent with the current session; after auth/logout it would fail with 401 and be lost.
+    // 先用当前身份提交仍在 4 秒撤销窗口内的合并或驳回，否则退出后会因 401 丢失。
     await flushToast();
+    if (currentIdentity.current !== identity) return;
     try {
       await requestAPI("auth/logout", z.unknown(), { method: "POST", body: {}, token });
-      clear();
+      if (currentIdentity.current === identity) clear();
     } catch (err) {
-      setError(errorMessage(err));
+      if (currentIdentity.current === identity) setError(errorMessage(err));
     }
-  }, [token, clear, flushToast]);
+  }, [token, identity, clear, flushToast]);
   // The legacy admin token is verified through /api/auth/session, which reports authenticated for a valid bearer token.
   const login = useCallback(async (value: string) => {
     const result = await requestAPI("auth/session", sessionSchema, { token: value });
     if (!result.authenticated) throw new APIError(401, "unauthorized");
     client.clear();
-    setToken(value);
+    replaceToken(value);
     setError("");
     setSession(result);
-  }, [client]);
+  }, [client, replaceToken]);
   const credentials = useMemo(() => ({ token, onUnauthorized }), [token, onUnauthorized]);
   const value = useMemo<Auth>(() => ({ authenticated: session?.authenticated ?? false, loading, session, error, logout, login, reload: () => window.location.reload() }), [session, loading, error, logout, login]);
   return <AuthContext.Provider value={value}><APICredentialsContext.Provider value={credentials}>{children}</APICredentialsContext.Provider></AuthContext.Provider>;

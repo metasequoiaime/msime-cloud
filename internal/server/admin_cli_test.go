@@ -6,11 +6,14 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -73,10 +76,23 @@ func TestAdminCommandLineSignIn(t *testing.T) {
 	if w := call("GET", "/api/auth/session", "", ""); !strings.Contains(w.Body.String(), `"cli_enabled":true`) {
 		t.Fatal(w.Body.String())
 	}
-	for _, bad := range []string{`{"redirect_uri":"https://evil.test/callback"}`, `{"redirect_uri":"http://127.0.0.1:80/callback"}`, `{"redirect_uri":"http://127.0.0.1:50123/other"}`, `{"redirect_uri":"` + redirect + `","extra":1}`, `not json`} {
+	for _, bad := range []string{
+		`{"redirect_uri":"https://evil.test/callback"}`,
+		`{"redirect_uri":"http://127.0.0.1:80/callback"}`,
+		`{"redirect_uri":"http://127.0.0.1:50123/other"}`,
+		`{"redirect_uri":"` + redirect + `","extra":1}`,
+		`not json`,
+		`{"redirect_uri":"` + redirect + `"} {}`,
+		`{"redirect_uri":"` + redirect + `"} null`,
+		`{"redirect_uri":"` + redirect + `"} trailing`,
+		`{"redirect_uri":"` + redirect + `"}` + strings.Repeat(" ", 16<<10),
+	} {
 		if w := call("POST", "/api/auth/cli/start", bad, ""); w.Code != 400 {
-			t.Fatal(bad, w.Code, w.Body.String())
+			t.Errorf("无效登录请求被接受：长度=%d 状态=%d 响应=%s", len(bad), w.Code, w.Body.String())
 		}
+	}
+	if len(store.flows) != 0 {
+		t.Error("无效登录请求创建了登录状态")
 	}
 	resetLimits := func() {
 		s.mu.Lock()
@@ -86,7 +102,7 @@ func TestAdminCommandLineSignIn(t *testing.T) {
 	start := func() (string, string) {
 		t.Helper()
 		resetLimits()
-		w := call("POST", "/api/auth/cli/start", `{"redirect_uri":"`+redirect+`"}`, "")
+		w := call("POST", "/api/auth/cli/start", " \t"+`{"redirect_uri":"`+redirect+`"}`+"\r\n", "")
 		var started struct {
 			State            string `json:"state"`
 			AuthorizationURL string `json:"authorization_url"`
@@ -117,6 +133,16 @@ func TestAdminCommandLineSignIn(t *testing.T) {
 		t.Fatal("an unknown state was accepted", w.Code)
 	}
 	_, body := start()
+	// 无效的尾随内容必须在消费 state、调用令牌交换或创建会话之前拒绝。
+	for _, suffix := range []string{" {}", " null", " trailing", strings.Repeat(" ", 16<<10)} {
+		w := call("POST", "/api/auth/cli/finish", body+suffix, "")
+		if w.Code != 400 || !strings.Contains(w.Body.String(), "invalid_request") {
+			t.Errorf("无效登录完成请求被接受：长度=%d 状态=%d 响应=%s", len(suffix), w.Code, w.Body.String())
+		}
+		if len(store.sessions) != 0 {
+			t.Error("无效登录完成请求创建了管理员会话")
+		}
+	}
 	w := call("POST", "/api/auth/cli/finish", body, "")
 	var finished struct {
 		Token     string `json:"token"`
@@ -170,5 +196,36 @@ func TestAdminCommandLineSignIn(t *testing.T) {
 	}
 	if code := behindProxy("198.51.100.50"); code != 200 {
 		t.Fatal("another administrator behind the same proxy was limited", code)
+	}
+}
+
+func TestReadAdminJSONSizeBoundary(t *testing.T) {
+	const body = `{"redirect_uri":"http://127.0.0.1:50123/callback"}`
+	for _, size := range []int{16 << 10, (16 << 10) + 1} {
+		r := httptest.NewRequest("POST", "/api/auth/cli/start", strings.NewReader(body+strings.Repeat(" ", size-len(body))))
+		w := httptest.NewRecorder()
+		var value struct {
+			RedirectURI string `json:"redirect_uri"`
+		}
+		accepted := readAdminJSON(w, r, &value)
+		if size == 16<<10 {
+			if !accepted || value.RedirectURI != "http://127.0.0.1:50123/callback" {
+				t.Fatal("上限内带尾随空白的合法请求被拒绝", w.Code, w.Body.String())
+			}
+		} else if accepted || w.Code != 400 || !strings.Contains(w.Body.String(), "invalid_request") {
+			t.Fatal("含尾随空白的请求绕过大小上限", accepted, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestReadAdminJSONRejectsFailureAfterObject(t *testing.T) {
+	const message = "合成请求体读取故障"
+	r := httptest.NewRequest("POST", "/api/auth/cli/start", io.MultiReader(strings.NewReader(`{"redirect_uri":"http://127.0.0.1:50123/callback"}`), iotest.ErrReader(errors.New(message))))
+	w := httptest.NewRecorder()
+	var value struct {
+		RedirectURI string `json:"redirect_uri"`
+	}
+	if readAdminJSON(w, r, &value) || w.Code != 400 || !strings.Contains(w.Body.String(), "invalid_request") || strings.Contains(w.Body.String(), message) {
+		t.Fatal("对象之后的读取故障被忽略或泄露", w.Code, w.Body.String())
 	}
 }

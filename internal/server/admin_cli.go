@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -31,7 +32,7 @@ func (s *Server) adminCLIAvailable(w http.ResponseWriter, r *http.Request) bool 
 func readAdminJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(v); err != nil {
+	if decoder.Decode(v) != nil || decoder.Decode(new(any)) != io.EOF {
 		fail(w, 400, "invalid_request")
 		return false
 	}

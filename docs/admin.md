@@ -105,6 +105,7 @@ Google 登录时，后端校验 ID Token 的签名、issuer、audience、有效�
 
 - 网页客户端只能回调到后台域名，所以命令行登录使用用户体系已有的「桌面应用」OAuth 客户端（`auth.google.desktop`），按 RFC 8252 回调到本机 `127.0.0.1` 的临时端口。需要同时配置 `admin.google` 和 `auth.google.desktop`，两者缺一时 `cli/*` 返回 404 `cli_login_disabled`，`GET /api/auth/session` 的 `cli_enabled` 为 false。桌面客户端无需登记回调地址；Google Cloud 项目处于测试发布状态时，同样要把管理员加入测试用户。
 - 服务端持有桌面客户端密钥和 PKCE verifier，自己用授权码换取 ID Token，按网页登录完全相同的规则校验（签名、issuer、audience 为桌面客户端、有效期、nonce、`email_verified`、白名单或 `admin_members`），并同样记录 Google 名字和 User-Agent。state 不绑定 Cookie，而是由命令行在本机回调上核对；回调地址不入库，换取令牌时 Google 会拒绝与授权时不同的 `redirect_uri`。`cli/start` 与网页登录共用每个来源 IP 每分钟 10 次的限额。
+- `cli/start` 和 `cli/finish` 的请求体只能包含一个 JSON 对象，总大小（含前后空白）至多 16 KiB；未知字段、尾随 JSON 值、垃圾字符、读取失败或超出上限均返回 400 `invalid_request`，在创建或消费登录状态之前拒绝。合法的前后空白仍可使用。
 - 返回的会话与浏览器会话是同一种：8 小时、只存哈希、出现在个人中心的会话列表里、可吊销，审计 actor 为 `google:<sub>:<email>`。命令行以 `Authorization: Bearer <token>` 发送，和个人访问令牌一样不需要 `Origin`；`POST /api/auth/logout` 带上它即结束该会话。
 
 ### 个人访问令牌（PAT）

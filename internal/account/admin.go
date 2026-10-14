@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // AdminReady 检查管理后台需要的表。缺表时就地补迁移再检查一次:Ready 只探用户表,而管理后台是后加
@@ -75,7 +76,7 @@ func (a *Service) AdminHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	search := r.URL.Query().Get("q")
-	if len(search) > 200 {
+	if len(search) > 200 || !utf8.ValidString(search) || strings.ContainsRune(search, 0) {
 		writeError(w, 400, "invalid_search")
 		return
 	}
@@ -124,7 +125,7 @@ func (a *Service) adminList(w http.ResponseWriter, r *http.Request, list adminLi
 	for _, f := range list.filters {
 		accepted[f.param] = true
 		value := query.Get(f.param)
-		if len(value) > f.max {
+		if len(value) > f.max || !utf8.ValidString(value) || strings.ContainsRune(value, 0) {
 			writeError(w, 400, "invalid_filter")
 			return
 		}

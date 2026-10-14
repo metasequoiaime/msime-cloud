@@ -200,6 +200,8 @@ Google 登录时，后端校验 ID Token 的签名、issuer、audience、有效�
 | 权限日志 | `/perm` | `GET /api/permissions`、`/api/audit` | `manage_permissions`；成员管理仅限所有者 |
 | 个人中心 | `/me` | `GET /api/me` | 只作用于本人 |
 
+数据库分页列表（例如 `GET /api/users`、`GET /api/downloads`、`GET /api/audit`）的 `q` 最多 200 字节，必须是有效 UTF-8 且不能含 NUL，否则返回 400 `invalid_search`。各列表的筛选值同样必须是有效 UTF-8 且不能含 NUL；超过对应字段的字节上限或不符合枚举值时，返回 400 `invalid_filter`。
+
 - **数据概览**：累计下载、注册用户、近 30 天新增、活跃设备（按天分 Windows、Mac/Linux、移动端）、近 7 天各平台活跃、无崩溃会话率及拖累最大的平台版本、最新出现的崩溃分组、待处理事项和服务状态。活跃与会话指标依赖客户端上报 `active`、`session`、`session_crash`，近 60 天没有任何上报时显示「客户端未上报」而不是 0。「累计下载」来自下载事件，不是安装数。
 - **词库管理**：读取 `admin.github.dictionary_repo` 的默认分支，按 `custom/`、`packs/`、`sources/` 分类显示词条数据目录。目录、文件读取和跨词库搜索共用同一筛选规则，排除 README（含 `.txt`）、许可文件、配置文件，以及日文词库的连接代价矩阵、词性编号和过滤规则表。`GET /api/dictionary` 返回仓库信息、文件列表、各目录的文件数和总字节数；`GET /api/dictionary/file?path=…&page=1&q=…` 返回 `rows:[{"line","columns"}]`、匹配总数 `total`、`page`、`has_more`、文件 `sha`、`encoding` 和 `editable`，每页 100 行，`line` 是原文件行号，搜索不区分大小写，`q` 最多 200 字节且不能含控制字符。预览支持 UTF-8、UTF-16、CSV、Rime YAML 和制表符词表，单个文件最多 64 MiB；上游文件只在预览时解码，不写回转换后的字节。GitHub 目录元数据最多缓存 60 秒，大型原始词表不进通用响应缓存。
 

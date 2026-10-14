@@ -130,18 +130,21 @@ func (a *Service) adminMe(w http.ResponseWriter, r *http.Request, _ string) {
 	out["joined_at"] = joined
 
 	var stats adminMeStats
+	// 只向月度聚合传入相关操作，并在一次遍历中分别完成审计计数和审核数量、耗时统计。
 	err := a.store.pool.QueryRow(ctx, `WITH mine AS (
  SELECT action,target FROM admin_audit WHERE created_at>=date_trunc('month',now(),'UTC') AND `+adminActorClause("actor", access)+`
+ AND (action LIKE 'dict\_pr\_%' OR action LIKE 'issue\_%' OR action IN ('delete_skin','delete_candidate_skin','delete_plugin','delete_dictionary','delete_reply'))
 ), moderated AS (
  SELECT created_at,moderated_at FROM community_skins WHERE moderated_at>=date_trunc('month',now(),'UTC') AND moderation<>'pending' AND `+adminActorClause("moderated_by", access)+`
  UNION ALL SELECT created_at,moderated_at FROM community_resources WHERE moderated_at>=date_trunc('month',now(),'UTC') AND moderation<>'pending' AND `+adminActorClause("moderated_by", access)+`
  UNION ALL SELECT created_at,moderated_at FROM community_candidate_skins WHERE moderated_at>=date_trunc('month',now(),'UTC') AND moderation<>'pending' AND `+adminActorClause("moderated_by", access)+`
  UNION ALL SELECT created_at,moderated_at FROM community_plugins WHERE moderated_at>=date_trunc('month',now(),'UTC') AND moderation<>'pending' AND `+adminActorClause("moderated_by", access)+`
 )
-SELECT (SELECT count(DISTINCT target) FROM mine WHERE action LIKE 'dict\_pr\_%'),
- (SELECT count(*) FROM moderated)+(SELECT count(*) FROM mine WHERE action IN ('delete_skin','delete_candidate_skin','delete_plugin','delete_dictionary','delete_reply')),
- (SELECT count(DISTINCT target) FROM mine WHERE action LIKE 'issue\_%'),
- (SELECT avg(extract(epoch FROM moderated_at-created_at))/3600 FROM moderated)::float8`, arg).Scan(&stats.DictPRsMonth, &stats.CommunityMonth, &stats.IssuesMonth, &stats.AvgHandleHours)
+SELECT audit_stats.dict_prs,moderation_stats.total+audit_stats.deleted,audit_stats.issues,moderation_stats.avg_hours::float8
+FROM (SELECT count(DISTINCT target) FILTER (WHERE action LIKE 'dict\_pr\_%') AS dict_prs,
+ count(*) FILTER (WHERE action IN ('delete_skin','delete_candidate_skin','delete_plugin','delete_dictionary','delete_reply')) AS deleted,
+ count(DISTINCT target) FILTER (WHERE action LIKE 'issue\_%') AS issues FROM mine) audit_stats
+CROSS JOIN (SELECT count(*) AS total,avg(extract(epoch FROM moderated_at-created_at))/3600 AS avg_hours FROM moderated) moderation_stats`, arg).Scan(&stats.DictPRsMonth, &stats.CommunityMonth, &stats.IssuesMonth, &stats.AvgHandleHours)
 	if err != nil {
 		a.error(w, err)
 		return

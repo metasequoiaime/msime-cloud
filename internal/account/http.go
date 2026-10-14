@@ -163,6 +163,18 @@ func (a *Service) Authenticate(ctx context.Context, token string) (Principal, er
 	return a.store.Authenticate(ctx, token)
 }
 
+// EnsureUserActive 在用户行锁内复查封禁状态，供认证通过后仍会产生外部副作用的请求确定线性化点。
+func (a *Service) EnsureUserActive(ctx context.Context, user string) error {
+	if a == nil {
+		return ErrInvalid
+	}
+	tx, err := a.store.userDataTransaction(ctx, user)
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // RateLimit counts one attempt for subject in a fixed PostgreSQL window shared by every replica and returns ErrLimited once more than limit attempts fall inside it. The subject (for example a client address) is stored only as a SHA-256 digest, the same way the per-address limits above store it.
 func (a *Service) RateLimit(ctx context.Context, scope, subject string, limit int, window time.Duration) error {
 	return a.store.Rate(ctx, scope+":"+hash(subject), limit, window)

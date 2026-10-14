@@ -73,7 +73,7 @@ func TestMergeResourceDictionaryBatch(t *testing.T) {
 		}
 		return revision
 	}
-	revision := apply(3, 127, 6)
+	revision := apply(3, 127, 3)
 	changes, more, err := s.DictionaryChanges(ctx, user, 3, 200)
 	if err != nil || more || len(changes) != 127 {
 		t.Fatal(len(changes), more, err)
@@ -108,7 +108,7 @@ func TestMergeResourceDictionaryBatch(t *testing.T) {
 	apply(revision, 0, 1)
 	pack = pack[:1]
 	pack[0].Weight++
-	apply(revision, 1, 6)
+	apply(revision, 1, 3)
 }
 
 func TestMergeResourceDictionaryCapacity(t *testing.T) {

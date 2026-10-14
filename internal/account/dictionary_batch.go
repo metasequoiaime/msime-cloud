@@ -67,26 +67,25 @@ func writeDictionaryChanges(ctx context.Context, tx pgx.Tx, user string, changes
 	if err != nil {
 		return err
 	}
-	// 每条变化保留独立版本和完整前后状态；四次批量写入与单条编辑生成相同的同步记录。
-	queries := []string{
-		`INSERT INTO user_dictionary_entries(id,user_id,kind,code,word,weight,revision,updated_at)
-SELECT e->>'id',$1,e->>'kind',e->>'code',e->>'word',(e->>'weight')::bigint,(e->>'revision')::bigint,(e->>'updated_at')::timestamptz
-FROM jsonb_array_elements($2::jsonb) c CROSS JOIN LATERAL (SELECT c->'replacement' AS e) r
-ON CONFLICT(id) DO UPDATE SET weight=excluded.weight,revision=excluded.revision,updated_at=excluded.updated_at`,
-		`INSERT INTO user_dictionary_overlay(user_id,kind,code,word,entry,deleted)
-SELECT $1,e->>'kind',e->>'code',e->>'word',e,false
-FROM jsonb_array_elements($2::jsonb) c CROSS JOIN LATERAL (SELECT c->'replacement' AS e) r
-ON CONFLICT(user_id,kind,code,word) DO UPDATE SET entry=excluded.entry,deleted=false`,
-		`INSERT INTO user_dictionary_changes(user_id,revision,change)
-SELECT $1,(c->>'revision')::bigint,c FROM jsonb_array_elements($2::jsonb) c`,
-		`INSERT INTO user_dictionary_state(user_id,revision)
-SELECT $1,max((c->>'revision')::bigint) FROM jsonb_array_elements($2::jsonb) c
-ON CONFLICT(user_id) DO UPDATE SET revision=excluded.revision`,
-	}
-	for _, query := range queries {
-		if _, err = tx.Exec(ctx, query, user, raw); err != nil {
-			return err
-		}
-	}
-	return nil
+	// JSON 只传输、解析和展开一次；四张表各写自己的投影，不依赖彼此的执行顺序。
+	// 每条变化仍保留独立版本与完整前后状态，任意写入失败均由外层事务回滚。
+	_, err = tx.Exec(ctx, `WITH input AS MATERIALIZED (
+ SELECT c AS change,c->'replacement' AS entry FROM jsonb_array_elements($2::jsonb) c
+), written_entries AS (
+ INSERT INTO user_dictionary_entries(id,user_id,kind,code,word,weight,revision,updated_at)
+ SELECT entry->>'id',$1,entry->>'kind',entry->>'code',entry->>'word',(entry->>'weight')::bigint,(entry->>'revision')::bigint,(entry->>'updated_at')::timestamptz
+ FROM input
+ ON CONFLICT(id) DO UPDATE SET weight=excluded.weight,revision=excluded.revision,updated_at=excluded.updated_at
+), written_overlay AS (
+ INSERT INTO user_dictionary_overlay(user_id,kind,code,word,entry,deleted)
+ SELECT $1,entry->>'kind',entry->>'code',entry->>'word',entry,false FROM input
+ ON CONFLICT(user_id,kind,code,word) DO UPDATE SET entry=excluded.entry,deleted=false
+), written_changes AS (
+ INSERT INTO user_dictionary_changes(user_id,revision,change)
+ SELECT $1,(change->>'revision')::bigint,change FROM input
+)
+INSERT INTO user_dictionary_state(user_id,revision)
+SELECT $1,max((change->>'revision')::bigint) FROM input
+ON CONFLICT(user_id) DO UPDATE SET revision=excluded.revision`, user, raw)
+	return err
 }

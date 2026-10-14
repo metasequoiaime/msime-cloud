@@ -238,6 +238,12 @@ func (c Client) Raw(ctx context.Context, token, path string, limit int64) (Respo
 	return c.doFormat(ctx, token, "GET", path, nil, "", "application/vnd.github.raw+json", limit)
 }
 
+// requestError 隐藏请求错误中的地址和用户参数，保留错误链供调用方判断取消、超时及传输类型。
+type requestError struct{ cause error }
+
+func (e requestError) Error() string { return "GitHub request failed" }
+func (e requestError) Unwrap() error { return e.cause }
+
 func (c Client) doFormat(ctx context.Context, token, method, path string, body any, etag, accept string, limit int64) (Response, error) {
 	var reader io.Reader
 	if body != nil {
@@ -249,7 +255,7 @@ func (c Client) doFormat(ctx context.Context, token, method, path string, body a
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.apiURL()+path, reader)
 	if err != nil {
-		return Response{}, err
+		return Response{}, requestError{cause: err}
 	}
 	agent := c.UserAgent
 	if agent == "" {
@@ -271,7 +277,7 @@ func (c Client) doFormat(ctx context.Context, token, method, path string, body a
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return Response{}, err
+		return Response{}, requestError{cause: err}
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))

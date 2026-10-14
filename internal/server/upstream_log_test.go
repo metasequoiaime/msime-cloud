@@ -12,7 +12,38 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
 )
+
+func TestQQIssueSearchDoesNotLogUpstreamURL(t *testing.T) {
+	s := fixture(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/app/installations/77/access_tokens" {
+			respond(w, http.StatusCreated, map[string]any{"token": "synthetic-token", "expires_at": time.Now().Add(time.Hour)})
+			return
+		}
+		if r.URL.Path != "/search/issues" {
+			t.Error("出现意外的 GitHub 请求", r.URL.Path)
+		}
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		conn.Close()
+	})
+	s.adminGitHub = &githubapp.Client{AppID: 42, InstallationID: 77, Key: wordsKey(t), APIURL: s.config.Chat.URL, HTTP: s.client, Cache: &githubapp.Cache{}}
+	logs := captureLogs(t)
+	hits, failed := s.qqSearchIssuesFor(t.Context(), []string{"o/r"}, "synthetic-private-input", "", false)
+	if !failed || len(hits) != 0 || !strings.Contains(logs.String(), "issue search failed") {
+		t.Fatalf("没有记录搜索失败：hits=%v failed=%v logs=%s", hits, failed, logs.String())
+	}
+	for _, private := range []string{"synthetic-private-input", "/search/issues?", s.config.Chat.URL} {
+		if strings.Contains(logs.String(), private) {
+			t.Errorf("QQ issue 搜索日志泄露了 %q：%s", private, logs.String())
+		}
+	}
+}
 
 func TestNiuTransTransportFailureDoesNotLogSignedURL(t *testing.T) {
 	s := fixture(t, func(w http.ResponseWriter, r *http.Request) {

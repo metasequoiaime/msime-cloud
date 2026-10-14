@@ -631,7 +631,15 @@ func (s *Store) Refresh(ctx context.Context, token string) (Tokens, error) {
 	defer tx.Rollback(ctx)
 	var sid, uid string
 	var revoked, banned bool
-	e = tx.QueryRow(ctx, `SELECT s.id,s.user_id,s.revoked,u.banned_at IS NOT NULL FROM auth_sessions s JOIN auth_users u ON u.id=s.user_id WHERE s.refresh_hash=$1 AND s.expires_at>now() FOR UPDATE OF s`, hash(token)).Scan(&sid, &uid, &revoked, &banned)
+	// 使用 clock_timestamp 而不是 now()：事务可能在等待会话行锁时跨过 expires_at，不能让事务开始时的时间把已过期会话放行。
+	e = tx.QueryRow(ctx, `SELECT s.id,s.user_id,s.revoked,u.banned_at IS NOT NULL FROM auth_sessions s JOIN auth_users u ON u.id=s.user_id WHERE s.refresh_hash=$1 AND s.expires_at>clock_timestamp() FOR UPDATE OF s`, hash(token)).Scan(&sid, &uid, &revoked, &banned)
+	if e == nil {
+		// WHERE 在等待 FOR UPDATE 前可能已经通过了时间条件；再次读取是在锁拿到后执行，避免锁等待跨过 expires_at 仍继续轮换。
+		var valid bool
+		if e = tx.QueryRow(ctx, "SELECT expires_at>clock_timestamp() FROM auth_sessions WHERE id=$1", sid).Scan(&valid); e == nil && !valid {
+			e = pgx.ErrNoRows
+		}
+	}
 	if e == nil && banned {
 		// The ban revoked this session; the client learns why instead of being sent back to a login that would fail the same way.
 		return Tokens{}, ErrBanned
@@ -642,7 +650,7 @@ func (s *Store) Refresh(ctx context.Context, token string) (Tokens, error) {
 	if errors.Is(e, pgx.ErrNoRows) {
 		// 刚被轮换的令牌再次出现，多半是并发刷新（官网 BFF、多个标签页）输掉了竞争：会话仍有效时返回 ErrRefreshSuperseded，不撤销。另一次刷新持有会话行锁时，上面的查询会等它提交，所以这里能读到它写入的 used_at。
 		var superseded bool
-		e = tx.QueryRow(ctx, "SELECT COALESCE(u.used_at>now()-interval '"+refreshSupersededGrace+"',false) AND NOT s.revoked AND s.expires_at>now() FROM auth_used_refresh u JOIN auth_sessions s ON s.id=u.session_id WHERE u.hash=$1", hash(token)).Scan(&superseded)
+		e = tx.QueryRow(ctx, "SELECT COALESCE(u.used_at>clock_timestamp()-interval '"+refreshSupersededGrace+"',false) AND NOT s.revoked AND s.expires_at>clock_timestamp() FROM auth_used_refresh u JOIN auth_sessions s ON s.id=u.session_id WHERE u.hash=$1", hash(token)).Scan(&superseded)
 		if e != nil && !errors.Is(e, pgx.ErrNoRows) {
 			return Tokens{}, e
 		}
@@ -663,17 +671,17 @@ func (s *Store) Refresh(ctx context.Context, token string) (Tokens, error) {
 		return Tokens{}, e
 	}
 	t := Tokens{AccessToken: randomToken(), RefreshToken: randomToken(), TokenType: "Bearer", ExpiresIn: 900}
-	if _, e = tx.Exec(ctx, "INSERT INTO auth_used_refresh(hash,session_id,used_at) VALUES($1,$2,now())", hash(token), sid); e != nil {
+	if _, e = tx.Exec(ctx, "INSERT INTO auth_used_refresh(hash,session_id,used_at) VALUES($1,$2,clock_timestamp())", hash(token), sid); e != nil {
 		return t, e
 	}
-	if _, e = tx.Exec(ctx, "UPDATE auth_sessions SET access_hash=$1,refresh_hash=$2,access_expires=least(now()+interval '15 minutes',expires_at) WHERE id=$3", hash(t.AccessToken), hash(t.RefreshToken), sid); e != nil {
+	if _, e = tx.Exec(ctx, "UPDATE auth_sessions SET access_hash=$1,refresh_hash=$2,access_expires=least(clock_timestamp()+interval '15 minutes',expires_at) WHERE id=$3", hash(t.AccessToken), hash(t.RefreshToken), sid); e != nil {
 		return t, e
 	}
 	e = scanUser(tx.QueryRow(ctx, userQuery, uid), &t.User)
 	if e != nil {
 		return t, e
 	}
-	if e = tx.QueryRow(ctx, "SELECT greatest(0,floor(extract(epoch FROM access_expires-now())))::int FROM auth_sessions WHERE id=$1", sid).Scan(&t.ExpiresIn); e != nil {
+	if e = tx.QueryRow(ctx, "SELECT greatest(0,floor(extract(epoch FROM access_expires-clock_timestamp())))::int FROM auth_sessions WHERE id=$1", sid).Scan(&t.ExpiresIn); e != nil {
 		return t, e
 	}
 	return t, tx.Commit(ctx)

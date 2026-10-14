@@ -250,6 +250,7 @@ CREATE TABLE IF NOT EXISTS release_asset_snapshots (
  download_count bigint NOT NULL CHECK(download_count>=0),
  PRIMARY KEY(repo,tag,asset,day)
 );
+CREATE INDEX IF NOT EXISTS release_asset_snapshots_day ON release_asset_snapshots(day);
 
 -- Sensitive words screen community uploads and dictionary submissions. Hits are counted per word and day.
 CREATE TABLE IF NOT EXISTS admin_sensitive_words (

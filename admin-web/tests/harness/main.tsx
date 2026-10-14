@@ -17,6 +17,7 @@ import { Segmented } from "../../src/ui/segmented";
 import { StatGrid, StatTile } from "../../src/ui/stat-tile";
 import { Switch } from "../../src/ui/switch";
 import { ToastProvider, useToast } from "../../src/ui/toast";
+import { useDebounced } from "../../src/hooks/use-debounced";
 import "./harness.css";
 
 type Row = { id: string; title: string; state: "open" | "closed" };
@@ -28,6 +29,20 @@ const columns: Column<Row>[] = [
 const series = Array.from({ length: 30 }, (_, index) => ({ day: `09-${String(index + 1).padStart(2, "0")}`, a: 100 + index * 3, b: 50 + (index % 7) * 9 }));
 const skin = { background: 0xf5faf6, keyBackground: 0xffffff, keyForeground: 0x0f2419, accent: 0x1e8e4e, actionBackground: 0x1e8e4e, cornerRadius: 8, borderWidth: 1, shadow: 0.1, pattern: 1, monospaced: false };
 
+function DebounceHarness() {
+  const [value, setValue] = useState("初始值");
+  const [delay, setDelay] = useState(200);
+  const debounced = useDebounced(value, delay);
+  return <Card>
+    <CardHeader title="防抖" />
+    <input aria-label="防抖输入" value={value} onChange={event => setValue(event.target.value)} />
+    <select aria-label="防抖延迟" value={delay} onChange={event => setDelay(Number(event.target.value))}>
+      <option value={200}>200ms</option><option value={400}>400ms</option>
+    </select>
+    <output data-testid="debounced-value">{debounced}</output>
+  </Card>;
+}
+
 function Harness() {
   const confirm = useConfirm();
   const toast = useToast();
@@ -38,6 +53,7 @@ function Harness() {
   const [reply, setReply] = useState("");
   const [committed, setCommitted] = useState("none");
   return <main className="grid gap-4 p-6">
+    <DebounceHarness />
     <StatGrid kpi><StatTile size="kpi" label="KPI" value="1,234" delta="+12%" sub="较上月" /><StatTile label="Stat" value={7} delta="-3" /></StatGrid>
     <Card><CardHeader title="图表" actions={<ChartLegend series={[{ key: "a", label: "A" }, { key: "b", label: "B" }]} />} />
       <AreaChart data={series} xKey="day" series={[{ key: "a", label: "A" }, { key: "b", label: "B" }]} ariaLabel="面积图" />

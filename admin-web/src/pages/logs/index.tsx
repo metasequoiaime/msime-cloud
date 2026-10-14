@@ -1,5 +1,6 @@
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { formatDateTime } from "../../utils/time";
+import { useDebounced } from "../../hooks/use-debounced";
 import { Pause, Play, Search } from "lucide-react";
 import { ToggleGroup } from "radix-ui";
 import { APICredentialsContext, APIError, errorMessage } from "../../api/client";
@@ -73,15 +74,6 @@ const pageCodeMessages: Record<string, string> = { invalid_level: "日志级别�
 function streamError(error: unknown): string {
   if (error instanceof APIError && Object.hasOwn(pageCodeMessages, error.code)) return pageCodeMessages[error.code];
   return errorMessage(error);
-}
-
-function useDebounced<T>(value: T, ms: number): T {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebounced(value), ms);
-    return () => window.clearTimeout(timer);
-  }, [value, ms]);
-  return debounced;
 }
 
 function waitOrAbort(ms: number, signal: AbortSignal): Promise<void> {

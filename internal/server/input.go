@@ -19,6 +19,7 @@ var unicodeCode = regexp.MustCompile(`^\+?[0-9a-fA-F]{1,6}$`)
 var romajiCode = regexp.MustCompile(`^[a-zA-Z'-]{1,256}$`)
 var kanaText = regexp.MustCompile(`^[\x{3040}-\x{30ff}]+$`)
 var englishCode = regexp.MustCompile(`^[a-zA-Z]{1,64}$`)
+var quickCode = regexp.MustCompile(`^[a-zA-Z0-9]{1,32}$`)
 
 type inputRequest struct {
 	Text      string `json:"text"`
@@ -135,7 +136,7 @@ func (s *Server) inputQuery(w http.ResponseWriter, r *http.Request) {
 		}
 		request["direction"] = v.Direction
 	case "quick":
-		if !regexp.MustCompile(`^[a-zA-Z0-9]{1,32}$`).MatchString(v.Text) {
+		if !quickCode.MatchString(v.Text) {
 			fail(w, 400, "invalid_quick_code")
 			return
 		}

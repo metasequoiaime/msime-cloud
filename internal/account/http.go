@@ -474,6 +474,9 @@ func (a *Service) codeHash(challenge, code string) string {
 	mac.Write([]byte(challenge + ":" + code))
 	return hex.EncodeToString(mac.Sum(nil))
 }
+
+var phoneTargetPattern = regexp.MustCompile(`^\+[1-9][0-9]{7,14}$`)
+
 func normalize(provider, target string) (string, error) {
 	target = strings.TrimSpace(target)
 	if provider == "email" {
@@ -483,7 +486,7 @@ func normalize(provider, target string) (string, error) {
 		}
 		return strings.ToLower(target), nil
 	}
-	if provider == "phone" && regexp.MustCompile(`^\+[1-9][0-9]{7,14}$`).MatchString(target) {
+	if provider == "phone" && phoneTargetPattern.MatchString(target) {
 		return target, nil
 	}
 	return "", ErrInvalid

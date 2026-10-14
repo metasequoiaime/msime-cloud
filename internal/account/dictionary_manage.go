@@ -77,10 +77,9 @@ func (s *Store) EditManagedDictionary(ctx context.Context, user string, expected
 	old.Revision = change.Revision
 	old.UpdatedAt = time.Now().UTC()
 	change.Previous = old
+	batch := &pgx.Batch{}
 	if inserted {
-		if _, err = tx.Exec(ctx, `DELETE FROM user_dictionary_entries WHERE user_id=$1 AND id=$2`, user, old.ID); err != nil {
-			return change, err
-		}
+		batch.Queue(`DELETE FROM user_dictionary_entries WHERE user_id=$1 AND id=$2`, user, old.ID)
 	}
 	if next != nil {
 		replacement := *next
@@ -90,15 +89,16 @@ func (s *Store) EditManagedDictionary(ctx context.Context, user string, expected
 		replacement.UpdatedAt = old.UpdatedAt
 		change.Replacement = &replacement
 		if inserted {
-			if _, err = tx.Exec(ctx, `INSERT INTO user_dictionary_entries(id,user_id,kind,code,word,weight,revision,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, replacement.ID, user, replacement.Kind, replacement.Code, replacement.Word, replacement.Weight, replacement.Revision, replacement.UpdatedAt); err != nil {
-				return change, err
-			}
+			batch.Queue(`INSERT INTO user_dictionary_entries(id,user_id,kind,code,word,weight,revision,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, replacement.ID, user, replacement.Kind, replacement.Code, replacement.Word, replacement.Weight, replacement.Revision, replacement.UpdatedAt)
 		}
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO user_dictionary_state(user_id,revision) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET revision=excluded.revision`, user, change.Revision); err != nil {
+	batch.Queue(`INSERT INTO user_dictionary_state(user_id,revision) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET revision=excluded.revision`, user, change.Revision)
+	query, args, err := dictionaryOverlayAndChangeQuery(user, change)
+	if err != nil {
 		return change, err
 	}
-	if err = writeDictionaryOverlayAndChange(ctx, tx, user, change); err != nil {
+	batch.Queue(query, args...)
+	if err = tx.SendBatch(ctx, batch).Close(); err != nil {
 		return change, err
 	}
 	return change, tx.Commit(ctx)

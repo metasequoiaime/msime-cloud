@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/metasequoiaime/MSIME-Backend/internal/engine"
 )
 
@@ -35,6 +36,66 @@ type RankingResult struct {
 func (s *Store) RankCandidate(ctx context.Context, user string, expected int64, cfg engine.Config, query map[string]any, action RankingAction) (RankingResult, error) {
 	return s.mutateCandidate(ctx, user, expected, cfg, query, action, "personal_rank")
 }
+
+type rankingEntryKey struct {
+	kind, code, word string
+}
+
+// persistRankingUpdates 一次更新排名产生的所有个人词条和覆盖投影。引擎通常会返回一页候选词，逐条更新会让一次排名动作产生两倍于候选数的数据库往返。
+func persistRankingUpdates(ctx context.Context, tx pgx.Tx, user string, revision int64, updates []DictionaryEntry) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	updatedAt := time.Now().UTC()
+	for i := range updates {
+		updates[i].Revision, updates[i].UpdatedAt = revision, updatedAt
+	}
+	raw, err := json.Marshal(updates)
+	if err != nil {
+		return err
+	}
+	rows, err := tx.Query(ctx, `WITH input AS MATERIALIZED (
+ SELECT value, value->>'kind' AS kind, value->>'code' AS code, value->>'word' AS word
+ FROM jsonb_array_elements($2::jsonb) AS items(value)
+), updated AS (
+ UPDATE user_dictionary_entries e
+ SET weight=(i.value->>'weight')::bigint,revision=$3,updated_at=$4
+ FROM input i
+ WHERE e.user_id=$1 AND e.kind=i.kind AND e.code=i.code AND e.word=i.word
+ RETURNING e.id,e.kind,e.code,e.word
+), written AS (
+ INSERT INTO user_dictionary_overlay(user_id,kind,code,word,entry,deleted)
+ SELECT $1,i.kind,i.code,i.word,
+   CASE WHEN u.id IS NULL THEN i.value ELSE jsonb_set(i.value,'{id}',to_jsonb(u.id)) END,
+   false
+ FROM input i LEFT JOIN updated u ON u.kind=i.kind AND u.code=i.code AND u.word=i.word
+ ON CONFLICT(user_id,kind,code,word) DO UPDATE SET entry=excluded.entry,deleted=false
+)
+SELECT kind,code,word,id FROM updated`, user, raw, revision, updatedAt)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	ids := make(map[rankingEntryKey]string, len(updates))
+	for rows.Next() {
+		var key rankingEntryKey
+		var id string
+		if err = rows.Scan(&key.kind, &key.code, &key.word, &id); err != nil {
+			return err
+		}
+		ids[key] = id
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	for i := range updates {
+		if id, ok := ids[rankingEntryKey{kind: updates[i].Kind, code: updates[i].Code, word: updates[i].Word}]; ok {
+			updates[i].ID = id
+		}
+	}
+	return nil
+}
+
 func (s *Store) mutateCandidate(ctx context.Context, user string, expected int64, cfg engine.Config, query map[string]any, action RankingAction, operation string) (RankingResult, error) {
 	var result RankingResult
 	tx, err := s.userDataTransaction(ctx, user)
@@ -65,32 +126,8 @@ func (s *Store) mutateCandidate(ctx context.Context, user string, expected int64
 		return result, err
 	}
 	result.Revision = revision + 1
-	for i := range result.Updates {
-		e := &result.Updates[i]
-		e.Revision = result.Revision
-		e.UpdatedAt = time.Now().UTC()
-		// Existing personal entries retain their stable ID; ranked base entries stay in the overlay only.
-		rows, err := tx.Query(ctx, `UPDATE user_dictionary_entries SET weight=$5,revision=$6,updated_at=$7 WHERE user_id=$1 AND kind=$2 AND code=$3 AND word=$4 RETURNING id`, user, e.Kind, e.Code, e.Word, e.Weight, e.Revision, e.UpdatedAt)
-		if err != nil {
-			return result, err
-		}
-		if rows.Next() {
-			if err = rows.Scan(&e.ID); err != nil {
-				rows.Close()
-				return result, err
-			}
-		}
-		rows.Close()
-		if err = rows.Err(); err != nil {
-			return result, err
-		}
-		data, err := json.Marshal(e)
-		if err != nil {
-			return result, err
-		}
-		if _, err = tx.Exec(ctx, `INSERT INTO user_dictionary_overlay(user_id,kind,code,word,entry,deleted) VALUES($1,$2,$3,$4,$5::jsonb,false) ON CONFLICT(user_id,kind,code,word) DO UPDATE SET entry=excluded.entry,deleted=false`, user, e.Kind, e.Code, e.Word, data); err != nil {
-			return result, err
-		}
+	if err = persistRankingUpdates(ctx, tx, user, result.Revision, result.Updates); err != nil {
+		return result, err
 	}
 	var selection *CandidateSelection
 	if result.Deleted != nil {

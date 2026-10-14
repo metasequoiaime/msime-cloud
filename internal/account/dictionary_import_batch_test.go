@@ -46,8 +46,8 @@ func TestImportDictionaryBatchQueriesAndChanges(t *testing.T) {
 	trace.mu.Lock()
 	queries := trace.seen
 	trace.mu.Unlock()
-	if queries != 9 {
-		t.Fatalf("500 条导入用了 %d 次数据库调用，期望 9 次（含事务和用户锁）", queries)
+	if queries != 6 {
+		t.Fatalf("500 条导入用了 %d 次数据库调用，期望 6 次（含事务和用户锁）", queries)
 	}
 	t.Logf("500 条导入：%d 次数据库调用（含事务和用户锁）", queries)
 	changes, more, err := db.DictionaryChanges(ctx, user, 1, 501)

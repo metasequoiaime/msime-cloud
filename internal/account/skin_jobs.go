@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -42,6 +43,18 @@ func (a *Service) CreateSkinJob(ctx context.Context, id, owner string, perOwner,
 	// The lock is held only for a few statements, but a replica whose node vanishes inside them would otherwise block every replica's job creation until the kernel reaps the dead connection.
 	if _, err = tx.Exec(ctx, serverKeepalives); err != nil {
 		return expires, err
+	}
+	// 用户任务在共享计数和写入前锁定账号行，保证管理员封禁与任务创建按提交顺序线性化；配置客户端的 owner 不对应 auth_users，沿用原有路径。
+	if uid, ok := strings.CutPrefix(owner, "user:"); ok {
+		var banned bool
+		if err = tx.QueryRow(ctx, "SELECT banned_at IS NOT NULL FROM auth_users WHERE id=$1 FOR UPDATE", uid).Scan(&banned); errors.Is(err, pgx.ErrNoRows) {
+			return expires, ErrInvalid
+		} else if err != nil {
+			return expires, err
+		}
+		if banned {
+			return expires, ErrBanned
+		}
 	}
 	if _, err = tx.Exec(ctx, skinJobsLock); err != nil {
 		return expires, err

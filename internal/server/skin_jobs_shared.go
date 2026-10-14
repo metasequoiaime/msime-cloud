@@ -44,6 +44,10 @@ func (s *Server) createSharedSkinJob(w http.ResponseWriter, r *http.Request, id,
 		s.skinJobsBusy(w)
 		return
 	}
+	if errors.Is(err, account.ErrBanned) {
+		fail(w, http.StatusForbidden, "account_banned")
+		return
+	}
 	if err != nil {
 		skinJobUnavailable(w, err)
 		return

@@ -16,6 +16,48 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
 )
 
+func TestAdminIssueDecodeFailureDoesNotLogUpstreamBody(t *testing.T) {
+	s := fixture(t, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `[{"number":1,"created_at":"synthetic-private-input"}]`)
+	})
+	client := &githubapp.Client{APIURL: s.config.Chat.URL, HTTP: s.client, Cache: &githubapp.Cache{}}
+	logs := captureLogs(t)
+	_, _, err := s.issuePage(t.Context(), client, "synthetic-token", "o/r", "/repos/o/r/issues")
+	if err == nil {
+		t.Fatal("无效的 issue 正文没有导致查询失败")
+	}
+	w := httptest.NewRecorder()
+	issueFail(w, err)
+	if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), "github_unavailable") || !strings.Contains(logs.String(), "issues: GitHub unavailable") {
+		t.Fatalf("没有正确归类解码失败：status=%d body=%s logs=%s", w.Code, w.Body.String(), logs.String())
+	}
+	if strings.Contains(logs.String(), "synthetic-private-input") || strings.Contains(w.Body.String(), "synthetic-private-input") {
+		t.Fatal("后台 issue 解码错误泄露了上游字段值", logs.String(), w.Body.String())
+	}
+}
+
+func TestQQIssueDecodeFailureDoesNotLogUpstreamBody(t *testing.T) {
+	s := fixture(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/app/installations/77/access_tokens" {
+			respond(w, http.StatusCreated, map[string]any{"token": "synthetic-token", "expires_at": time.Now().Add(time.Hour)})
+			return
+		}
+		io.WriteString(w, `{"number":987654321098765432109876543210}`)
+	})
+	s.adminGitHub = &githubapp.Client{AppID: 42, InstallationID: 77, Key: wordsKey(t), APIURL: s.config.Chat.URL, HTTP: s.client, Cache: &githubapp.Cache{}}
+	s.qq = &qqBot{config: QQBotConfig{Repo: "o/r"}}
+	logs := captureLogs(t)
+	if result := s.qqIssueStatus(t.Context(), "", "1", 0); !strings.Contains(result, "暂时查不了") {
+		t.Fatal("无效的 issue 正文没有导致查询失败", result)
+	}
+	if !strings.Contains(logs.String(), "issue lookup failed") {
+		t.Fatal("没有记录 issue 解码失败", logs.String())
+	}
+	if strings.Contains(logs.String(), "987654321098765432109876543210") {
+		t.Fatal("QQ issue 解码错误泄露了上游字段值", logs.String())
+	}
+}
+
 func TestQQIssueSearchDoesNotLogUpstreamURL(t *testing.T) {
 	s := fixture(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/app/installations/77/access_tokens" {

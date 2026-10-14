@@ -438,6 +438,13 @@ SELECT word_id,day,count FROM admin_sensitive_hits WHERE false`); e != nil {
 	if !current {
 		return errors.New("release snapshot day index missing")
 	}
+	// 通知查重和崩溃通知静默期共用目标索引，旧库缺少时需要在启动阶段补建。
+	if e := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass('admin_notifications') AND c.relname='admin_notifications_target')`).Scan(&current); e != nil {
+		return e
+	}
+	if !current {
+		return errors.New("notification target index missing")
+	}
 	return nil
 }
 func (s *Store) Rate(ctx context.Context, key string, limit int, window time.Duration) error {

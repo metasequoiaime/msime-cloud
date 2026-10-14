@@ -819,14 +819,25 @@ func (s *Store) DeleteUser(ctx context.Context, uid string) error {
 	return e
 }
 
-// DeleteUserWithAvatarKey 原子删除账号并返回其头像对象键，避免注销与并发上传之间漏删新头像。
+// DeleteUserWithAvatarKey 在用户行锁内复查封禁后原子删除账号并返回其头像对象键，避免迟到注销破坏封禁恢复语义，也避免注销与并发上传之间漏删新头像。
 func (s *Store) DeleteUserWithAvatarKey(ctx context.Context, uid string) (string, error) {
-	var key string
-	err := s.pool.QueryRow(ctx, "DELETE FROM auth_users WHERE id=$1 RETURNING avatar_key", uid).Scan(&key)
+	tx, err := s.userDataTransaction(ctx, uid)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", nil
 	}
-	return key, err
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx)
+	var key string
+	err = tx.QueryRow(ctx, "DELETE FROM auth_users WHERE id=$1 RETURNING avatar_key", uid).Scan(&key)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return key, tx.Commit(ctx)
 }
 func (s *Store) Prune(ctx context.Context) {
 	batch := &pgx.Batch{}

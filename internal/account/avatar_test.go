@@ -320,6 +320,39 @@ func TestDeleteUserWithAvatarKeySeesConcurrentAvatarUpdate(t *testing.T) {
 	}
 }
 
+func TestDeleteUserWithAvatarKeyWaitsForConcurrentBan(t *testing.T) {
+	db := testStore(t)
+	ctx := t.Context()
+	user := complete(t, db, Identity{"email", "avatar-delete-ban-race@example.test"})
+	ban, err := db.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ban.Rollback(context.Background())
+	if _, err := actionBanUser(&Service{store: db}, ctx, ban, actionRequest{ID: user.User.ID, Reason: "合成封禁原因"}); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := db.DeleteUserWithAvatarKey(ctx, user.User.ID)
+		done <- err
+	}()
+	waitForAdminDatabaseLock(t, db, ban.Conn().PgConn().PID())
+	if err := ban.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, ErrBanned) {
+		t.Fatalf("封禁提交后迟到注销未被拒绝：%v", err)
+	}
+	var exists bool
+	if err := db.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM auth_users WHERE id=$1)`, user.User.ID).Scan(&exists); err != nil {
+		t.Fatal(err)
+	}
+	if !exists {
+		t.Fatal("封禁后的账号被迟到注销永久删除")
+	}
+}
+
 func TestAvatarConfigurationValidation(t *testing.T) {
 	t.Setenv("CONFIG_DB", "postgres://local/test")
 	t.Setenv("CONFIG_PEPPER", strings.Repeat("p", 32))

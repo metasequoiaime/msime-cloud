@@ -173,6 +173,8 @@ CREATE TABLE IF NOT EXISTS admin_notifications (
  created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS admin_notifications_time ON admin_notifications(created_at DESC,id DESC);
+-- 按类型和目标查重，并在同一目标内按时间检查崩溃通知的静默期；允许同一目标有多条通知。
+CREATE INDEX IF NOT EXISTS admin_notifications_target ON admin_notifications(kind,target_id,created_at DESC);
 CREATE TABLE IF NOT EXISTS admin_notification_reads (
  email text NOT NULL CHECK(email=lower(email)),
  notification_id bigint NOT NULL REFERENCES admin_notifications(id) ON DELETE CASCADE,

@@ -689,6 +689,12 @@ func (a *Service) candidatePublicLimit(userID string) int {
 
 // insertCandidateFiles stores the re-encoded images of one package in path order.
 func insertCandidateFiles(ctx context.Context, tx pgx.Tx, id string, clean map[string][]byte) error {
+	query, args := candidateFilesInsertQuery(id, clean)
+	_, err := tx.Exec(ctx, query, args...)
+	return err
+}
+
+func candidateFilesInsertQuery(id string, clean map[string][]byte) (string, []any) {
 	paths := make([]string, 0, len(clean))
 	for path := range clean {
 		paths = append(paths, path)
@@ -698,10 +704,9 @@ func insertCandidateFiles(ctx context.Context, tx pgx.Tx, id string, clean map[s
 	for i, path := range paths {
 		contents[i] = clean[path]
 	}
-	_, err := tx.Exec(ctx, `INSERT INTO community_candidate_skin_files(skin_id,path,bytes)
+	return `INSERT INTO community_candidate_skin_files(skin_id,path,bytes)
 SELECT $1,files.path,files.bytes
-FROM unnest($2::text[],$3::bytea[]) AS files(path,bytes)`, id, paths, contents)
-	return err
+FROM unnest($2::text[],$3::bytea[]) AS files(path,bytes)`, []any{id, paths, contents}
 }
 func (a *Service) communityCandidateDownload(w http.ResponseWriter, r *http.Request) {
 	p, ok := a.principal(w, r, false)
@@ -949,16 +954,13 @@ func (a *Service) communityCandidateReplace(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	license := candidatePackageLicense(pkg)
-	if _, e = tx.Exec(r.Context(), `UPDATE community_candidate_skins SET name=$2,description=$3,version=$4,license_code=$5,license_assets=$6,license_source=$7,manifest=$8,preview_path=$9,request_sha256=$10,updated_at=now(),`+reviewAgain("$11")+` WHERE id=$1`,
-		id, input.Name, input.Description, pkg.Version, license.Code, license.Assets, license.Source, []byte(input.Manifest), pkg.Preview, digest, flag); e != nil {
-		a.error(w, e)
-		return
-	}
-	if _, e = tx.Exec(r.Context(), `DELETE FROM community_candidate_skin_files WHERE skin_id=$1`, id); e != nil {
-		a.error(w, e)
-		return
-	}
-	if e = insertCandidateFiles(r.Context(), tx, id, clean); e != nil {
+	batch := &pgx.Batch{}
+	batch.Queue(`UPDATE community_candidate_skins SET name=$2,description=$3,version=$4,license_code=$5,license_assets=$6,license_source=$7,manifest=$8,preview_path=$9,request_sha256=$10,updated_at=now(),`+reviewAgain("$11")+` WHERE id=$1`,
+		id, input.Name, input.Description, pkg.Version, license.Code, license.Assets, license.Source, []byte(input.Manifest), pkg.Preview, digest, flag)
+	batch.Queue(`DELETE FROM community_candidate_skin_files WHERE skin_id=$1`, id)
+	query, args := candidateFilesInsertQuery(id, clean)
+	batch.Queue(query, args...)
+	if e = tx.SendBatch(r.Context(), batch).Close(); e != nil {
 		a.error(w, e)
 		return
 	}

@@ -70,8 +70,10 @@ const (
 	logStreamMaxDuration = 30 * time.Minute
 	// logStreamWriteTimeout 是每次写出时延长的写超时；服务端的全局 WriteTimeout 只有几十秒，长连接必须逐次延长。
 	logStreamWriteTimeout = 30 * time.Second
-	logStreamPodsEvery    = 30 * time.Second
-	logStreamMaxFailures  = 5
+	// 每轮重新校验凭据与权限，鉴权存储异常时最多等待五秒后关闭流。
+	logStreamAuthTimeout = 5 * time.Second
+	logStreamPodsEvery   = 30 * time.Second
+	logStreamMaxFailures = 5
 	// 每个管理员同时最多 logStreamsPerActor 个日志流，每个副本合计最多 logStreamsTotal 个。
 	logStreamsPerActor = 2
 	logStreamsTotal    = 10
@@ -563,13 +565,34 @@ func (s *Server) pollLogs(ctx context.Context, t *logTail, now int64) (out []lok
 	return out, gap, nil
 }
 
+// logStreamAccess 重新读取建立日志流时使用的凭据和当前角色，返回空字符串表示仍可读日志，其余值是结束流的公开原因。
+func (s *Server) logStreamAccess(ctx context.Context, r *http.Request) string {
+	ctx, cancel := context.WithTimeout(ctx, logStreamAuthTimeout)
+	defer cancel()
+	actor, email, err := s.adminCredentialIdentity(r.WithContext(ctx))
+	if err == nil {
+		var access account.AdminAccess
+		access, err = s.adminAccess(ctx, actor, email)
+		if err == nil {
+			if slices.Contains(access.Permissions, account.PermViewLogs) {
+				return ""
+			}
+			return "permission_denied"
+		}
+	}
+	if errors.Is(err, account.ErrInvalid) {
+		return "unauthorized"
+	}
+	return "admin_auth_unavailable"
+}
+
 // adminLogsStream 服务 GET /api/logs/stream?pod=&level=&q=&since=&backfill=&cursor=，需要 view_logs。返回 Server-Sent Events：
 //
 //   - lines：{"lines":[...]}，事件 id 是续传游标；
 //   - pods：{"pods":[...]}，since 窗口内有日志的副本，连接时和之后每 30 秒发送一次；
 //   - gap：{"from","to"}，日志产生得比速率上限快，落后太多，中间一段被跳过；
 //   - error：{"code":"logs_unavailable"}，Loki 暂时不可用，连接保持并继续重试，连续失败 5 次后关闭；
-//   - end：{"reason":"max_duration"}，连接满 30 分钟，客户端带游标重连。
+//   - end：{"reason":"..."}，连接满 30 分钟或凭据、权限校验失败后关闭。
 //
 // 没有新行时每 15 秒发送一行注释作为心跳。不带 cursor（也没有 Last-Event-ID 请求头）时先回填 since 窗口内最新的 backfill 行；带 cursor 时从它之后继续，最早回到一小时前。
 func (s *Server) adminLogsStream(w http.ResponseWriter, r *http.Request) {
@@ -719,6 +742,11 @@ func (s *Server) adminLogsStream(w http.ResponseWriter, r *http.Request) {
 		case tick := <-ticker.C:
 			if tick.After(deadline) {
 				send("end", "", map[string]string{"reason": "max_duration"})
+				return
+			}
+			// 长连接必须重新校验；退出、撤销令牌、停用成员或收回权限后不能继续按旧快照查询日志。
+			if reason := s.logStreamAccess(ctx, r); reason != "" {
+				send("end", "", map[string]string{"reason": reason})
 				return
 			}
 			from := t.cursor

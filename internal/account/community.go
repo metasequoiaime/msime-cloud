@@ -416,7 +416,7 @@ func (a *Service) communityPublish(w http.ResponseWriter, r *http.Request) {
 	input.ID = strings.ToLower(input.ID)
 	input.Name = strings.TrimSpace(input.Name)
 	input.Description = strings.TrimSpace(input.Description)
-	if len(input.ID) != 36 || !validCommunityID(input.ID) || utf8.RuneCountInString(input.Name) < 1 || utf8.RuneCountInString(input.Name) > 32 || utf8.RuneCountInString(input.Description) > 280 {
+	if len(input.ID) != 36 || !validCommunityID(input.ID) || !resourceText(input.Name, 1, 32, false) || !resourceText(input.Description, 0, 280, true) {
 		writeError(w, 400, "invalid_skin_metadata")
 		return
 	}

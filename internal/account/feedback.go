@@ -288,8 +288,16 @@ func (a *Service) feedback(w http.ResponseWriter, r *http.Request) {
 		a.error(w, err)
 		return
 	}
-	for position, shot := range screenshots {
-		if _, err = tx.Exec(ctx, `INSERT INTO feedback_screenshots(feedback_id,position,mime,bytes) VALUES($1,$2,$3,$4)`, id, position, shot.mime, shot.bytes); err != nil {
+	if len(screenshots) > 0 {
+		positions := make([]int32, len(screenshots))
+		mimes := make([]string, len(screenshots))
+		contents := make([][]byte, len(screenshots))
+		for i, shot := range screenshots {
+			positions[i], mimes[i], contents[i] = int32(i), shot.mime, shot.bytes
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO feedback_screenshots(feedback_id,position,mime,bytes)
+SELECT $1,shots.position,shots.mime,shots.bytes
+FROM unnest($2::integer[],$3::text[],$4::bytea[]) AS shots(position,mime,bytes)`, id, positions, mimes, contents); err != nil {
 			a.error(w, err)
 			return
 		}

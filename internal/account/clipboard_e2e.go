@@ -319,19 +319,25 @@ func (s *Store) PutClipboardWrap(ctx context.Context, user, key, device, wrap st
 		return e
 	}
 	defer tx.Rollback(ctx)
-	_, current, e := clipboardState(ctx, tx, user)
+	var current, written bool
+	// 在同一语句内校验当前密钥并写入已登记设备的封装，继续由用户行锁保护并发换钥。
+	e = tx.QueryRow(ctx, `WITH current_key AS (
+ SELECT key_id FROM user_clipboard_settings WHERE user_id=$1
+), written AS (
+ INSERT INTO user_clipboard_wraps(user_id,device_id,key_id,wrap)
+ SELECT user_id,device_id,$3,$4 FROM user_clipboard_devices WHERE user_id=$1 AND device_id=$2
+ AND EXISTS(SELECT 1 FROM current_key WHERE key_id=$3)
+ ON CONFLICT(user_id,device_id) DO UPDATE SET key_id=excluded.key_id,wrap=excluded.wrap
+ RETURNING 1
+)
+SELECT EXISTS(SELECT 1 FROM current_key WHERE key_id=$3),EXISTS(SELECT 1 FROM written)`, user, device, key, wrap).Scan(&current, &written)
 	if e != nil {
 		return e
 	}
-	if current == nil || *current != key {
+	if !current {
 		return errClipboardKeyConflict
 	}
-	result, e := tx.Exec(ctx, `INSERT INTO user_clipboard_wraps(user_id,device_id,key_id,wrap) SELECT user_id,device_id,$3,$4 FROM user_clipboard_devices WHERE user_id=$1 AND device_id=$2
- ON CONFLICT(user_id,device_id) DO UPDATE SET key_id=excluded.key_id,wrap=excluded.wrap`, user, device, key, wrap)
-	if e != nil {
-		return e
-	}
-	if result.RowsAffected() == 0 {
+	if !written {
 		return errDataNotFound
 	}
 	return tx.Commit(ctx)

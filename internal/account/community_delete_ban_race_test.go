@@ -57,3 +57,40 @@ func TestCommunityDeleteWaitsForConcurrentBan(t *testing.T) {
 		})
 	}
 }
+
+func TestCommunityCategoryUpdateWaitsForConcurrentBan(t *testing.T) {
+	db := testStore(t)
+	ctx := t.Context()
+	user := complete(t, db, Identity{"email", "community-category-ban@example.test"})
+	const id = "ab334455-1234-1234-1234-000000000004"
+	if _, err := db.pool.Exec(ctx, `INSERT INTO community_skins(id,owner_id,name,design) VALUES($1,$2,'皮肤','{}')`, id, user.User.ID); err != nil {
+		t.Fatal(err)
+	}
+	ban, err := db.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ban.Rollback(context.Background())
+	if _, err := actionBanUser(&Service{store: db}, ctx, ban, actionRequest{ID: user.User.ID, Reason: "合成封禁原因"}); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := (&Service{store: db}).updateOwnedCommunitySkinCategory(ctx, id, user.User.ID, "tech")
+		done <- err
+	}()
+	waitForAdminDatabaseLock(t, db, ban.Conn().PgConn().PID())
+	if err := ban.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, ErrBanned) {
+		t.Fatalf("封禁提交后迟到分类修改未被拒绝：%v", err)
+	}
+	var category string
+	if err := db.pool.QueryRow(ctx, `SELECT category FROM community_skins WHERE id=$1`, id).Scan(&category); err != nil {
+		t.Fatal(err)
+	}
+	if category != "other" {
+		t.Fatalf("封禁后的作品分类被迟到请求修改为 %q", category)
+	}
+}

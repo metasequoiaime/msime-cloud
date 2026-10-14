@@ -526,6 +526,23 @@ func (a *Service) deleteOwnedCommunity(ctx context.Context, table, id, owner str
 	return result.RowsAffected(), nil
 }
 
+// updateOwnedCommunitySkinCategory 在用户行锁内修改作者作品的分类，避免封禁提交后迟到的请求改变已下架内容。
+func (a *Service) updateOwnedCommunitySkinCategory(ctx context.Context, id, owner, category string) (int64, error) {
+	tx, err := a.store.userDataTransaction(ctx, owner)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+	result, err := tx.Exec(ctx, `UPDATE community_skins SET category=$3 WHERE id=$1 AND owner_id=$2`, id, owner, category)
+	if err != nil {
+		return 0, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 func (a *Service) communityDelete(w http.ResponseWriter, r *http.Request) {
 	p, ok := a.principal(w, r, false)
 	if !ok {
@@ -569,12 +586,12 @@ func (a *Service) communityUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_category")
 		return
 	}
-	result, e := a.store.pool.Exec(r.Context(), `UPDATE community_skins SET category=$3 WHERE id=$1 AND owner_id=$2`, r.PathValue("id"), p.UserID, *input.Category)
+	rows, e := a.updateOwnedCommunitySkinCategory(r.Context(), r.PathValue("id"), p.UserID, *input.Category)
 	if e != nil {
 		a.error(w, e)
 		return
 	}
-	if result.RowsAffected() == 0 {
+	if rows == 0 {
 		writeError(w, 404, "skin_not_found")
 		return
 	}

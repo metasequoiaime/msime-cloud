@@ -457,18 +457,13 @@ func (a *Service) ResolveAutoIncident(ctx context.Context, service string) (bool
 
 // PruneServiceMonitoring drops daily rollups older than the status page's 60 days, hourly metrics older than 90 days, and per-minute metrics and verdicts older than serviceDetailRetention.
 func (a *Service) PruneServiceMonitoring(ctx context.Context) error {
-	if _, err := a.store.pool.Exec(ctx, `DELETE FROM admin_service_daily WHERE day<(now() AT TIME ZONE 'UTC')::date-$1::int`, serviceDailyRetentionDays-1); err != nil {
-		return err
-	}
-	if _, err := a.store.pool.Exec(ctx, `DELETE FROM admin_service_metrics WHERE hour<now()-make_interval(days=>$1::int)`, serviceMetricsRetentionDays); err != nil {
-		return err
-	}
 	detail := int(serviceDetailRetention / time.Second)
-	if _, err := a.store.pool.Exec(ctx, `DELETE FROM admin_service_minutes WHERE minute<now()-make_interval(secs=>$1::int)`, detail); err != nil {
-		return err
-	}
-	_, err := a.store.pool.Exec(ctx, `DELETE FROM admin_service_verdicts WHERE minute<now()-make_interval(secs=>$1::int)`, detail)
-	return err
+	batch := &pgx.Batch{}
+	batch.Queue(`DELETE FROM admin_service_daily WHERE day<(now() AT TIME ZONE 'UTC')::date-$1::int`, serviceDailyRetentionDays-1)
+	batch.Queue(`DELETE FROM admin_service_metrics WHERE hour<now()-make_interval(days=>$1::int)`, serviceMetricsRetentionDays)
+	batch.Queue(`DELETE FROM admin_service_minutes WHERE minute<now()-make_interval(secs=>$1::int)`, detail)
+	batch.Queue(`DELETE FROM admin_service_verdicts WHERE minute<now()-make_interval(secs=>$1::int)`, detail)
+	return a.store.pool.SendBatch(ctx, batch).Close()
 }
 
 // PingDatabase checks that the database answers a query, for the status probe.

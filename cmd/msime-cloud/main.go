@@ -36,10 +36,10 @@ const usage = `usage: msime-cloud <command> [arguments]
   login admin [--browser false]          sign in to the admin site with an administrator's Google account
                                          the same way; the session lasts 8 hours
   whoami [--admin]                       print the signed-in user, or the signed-in administrator
-  logout [--all | --admin]               end this session, every session of the user, or the admin session
+  logout [--all | --admin]               end the kept session, every session of its user, or the kept admin session
   version                                print the version
 
-PATH may be a template from routes or a concrete path. /v1 paths go to the API with the kept session (or MSIME_CLOUD_TOKEN) when the operation needs one; /api paths go to the admin site with MSIME_ADMIN_TOKEN when set, otherwise with the session "login admin" kept; describe shows what docs/admin.md says about an /api route. A request body is a JSON object given inline, or read from stdin with -; -F sends multipart form fields instead, @ reading a file. A response that is not JSON or text needs -o. A 429 that asks to wait at most a minute is waited out and retried once.
+PATH may be a template from routes or a concrete path. /v1 paths go to the API with the kept session (or MSIME_CLOUD_TOKEN) when the operation needs one; /api paths go to the admin site with MSIME_ADMIN_TOKEN when set, otherwise with the session "login admin" kept; describe shows what docs/admin.md says about an /api route. logout always uses the kept session, ignoring environment tokens. A request body is a JSON object given inline, or read from stdin with -; -F sends multipart form fields instead, @ reading a file. A response that is not JSON or text needs -o. A 429 that asks to wait at most a minute is waited out and retried once.
 
 Environment:
   MSIME_CLOUD_URL         API base URL (default https://api.msime.app)
@@ -268,6 +268,12 @@ func (c cli) send(r request) (*http.Response, error) {
 	if token := c.env("MSIME_CLOUD_TOKEN"); token != "" {
 		return c.do(server, r, token)
 	}
+	return c.sendKeptSession(r)
+}
+
+// sendKeptSession 使用本地保存的用户会话，必要时刷新；退出不能改用环境令牌的身份。
+func (c cli) sendKeptSession(r request) (*http.Response, error) {
+	server := c.server()
 	sessions := c.store()
 	current, ok, err := sessions.get(server)
 	if err != nil {
@@ -567,7 +573,7 @@ func (c cli) logout(args []string) error {
 		return err
 	}
 	body, _ := json.Marshal(map[string]bool{"all": all})
-	response, err := c.send(request{method: "POST", path: "/v1/auth/logout", body: body, contentType: "application/json"})
+	response, err := c.sendKeptSession(request{method: "POST", path: "/v1/auth/logout", body: body, contentType: "application/json"})
 	if err != nil {
 		return err
 	}

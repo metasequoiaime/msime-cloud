@@ -85,7 +85,7 @@ func TestAdminPermissionsMemberSessionsUseOneScan(t *testing.T) {
 		}
 	}
 	visit(plans[0].Plan)
-	if loops != 4 {
-		t.Fatalf("成员会话读取执行了 %d 次，期望每位非 owner 成员一次，共 4 次", loops)
+	if loops != 5 {
+		t.Fatalf("成员会话读取执行了 %d 次，期望每位所有者及普通成员一次，共 5 次", loops)
 	}
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Command } from "cmdk";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
@@ -9,16 +9,8 @@ import { keys } from "../api/keys";
 import { searchSchema } from "../api/shell";
 import { navItems, pageForTarget } from "../nav";
 import { overlayOpen } from "../ui/overlay";
+import { useDebounced } from "../hooks/use-debounced";
 import { navAllowed, usePermissions } from "./permissions";
-
-function useDebounced<T>(value: T, ms: number): T {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebounced(value), ms);
-    return () => window.clearTimeout(timer);
-  }, [value, ms]);
-  return debounced;
-}
 
 type Result = { key: string; title: string; where: string; path: string; focus?: string };
 

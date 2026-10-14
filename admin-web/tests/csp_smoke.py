@@ -9,6 +9,7 @@ Usage: python3 admin-web/tests/csp_smoke.py   (after `pnpm build`; needs pnpm an
 """
 
 import json
+import datetime
 import re
 import subprocess
 import sys
@@ -311,6 +312,38 @@ class Server(ThreadingHTTPServer):
     def handle_error(self, request, client_address):
         if not isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError)):
             super().handle_error(request, client_address)
+
+
+def check_debounce(context, base: str, problems: list[str]):
+    page = context.new_page()
+    page.on("pageerror", lambda error: problems.append(f"debounce page error: {error}"))
+    try:
+        # 加载前安装可控时钟，连续输入的断言不依赖真实等待时间。
+        page.clock.install(time=datetime.datetime(2026, 1, 1, 0, 0, tzinfo=datetime.timezone.utc))
+        page.goto(base + "/harness/")
+        value = page.get_by_test_id("debounced-value")
+        expect(value).to_have_text("初始值")
+        page.clock.pause_at(datetime.datetime(2026, 1, 1, 0, 1, tzinfo=datetime.timezone.utc))
+        typed = page.get_by_role("textbox", name="防抖输入", exact=True)
+        typed.fill("中间值")
+        page.clock.run_for(199)
+        expect(value).to_have_text("初始值")
+        typed.fill("最终值")
+        page.clock.run_for(199)
+        expect(value).to_have_text("初始值")
+        page.clock.run_for(1)
+        expect(value).to_have_text("最终值")
+        # 修改延迟后从新时长重新计时，旧定时器不能提前发布输入。
+        typed.fill("调整延迟")
+        page.clock.run_for(100)
+        page.get_by_role("combobox", name="防抖延迟", exact=True).select_option("400")
+        page.clock.run_for(399)
+        expect(value).to_have_text("最终值")
+        page.clock.run_for(1)
+        expect(value).to_have_text("调整延迟")
+        problems.extend(f"CSP violation on debounce harness: {item}" for item in page.evaluate("window.__csp.splice(0)"))
+    finally:
+        page.close()
 
 
 def main() -> int:
@@ -904,6 +937,7 @@ def main() -> int:
                 expect(dialog).to_be_hidden()
                 page.get_by_role("button", name="取消选择").click()
                 violations("ui harness")
+                check_debounce(context, base, problems)
             finally:
                 browser.close()
     finally:

@@ -41,7 +41,8 @@ var (
 	}
 	// Candidate skins hold both the public gallery and each account's private library, so moderation can list either one. 也可以按图库分类筛选。
 	candidateSkinsList = adminList{
-		query:   `SELECT s.id,s.package_id,s.name,s.description,s.owner_id,` + authorColumn + `,s.version,(SELECT COALESCE(sum(size),0) FROM community_candidate_skin_files WHERE skin_id=s.id) AS size,(SELECT count(*) FROM community_candidate_skin_files WHERE skin_id=s.id) AS file_count,(SELECT count(*) FROM community_candidate_skin_downloads WHERE skin_id=s.id) AS downloads,s.visibility,s.category,s.created_at,s.updated_at,` + moderationColumns("s", "candidate-skins") + ` FROM community_candidate_skins s JOIN auth_users u ON u.id=s.owner_id`,
+		// 文件大小和数量共用一次按作品聚合，避免列表页对每个作品重复扫描文件表。
+		query:   `SELECT s.id,s.package_id,s.name,s.description,s.owner_id,` + authorColumn + `,s.version,files.size,files.file_count,(SELECT count(*) FROM community_candidate_skin_downloads WHERE skin_id=s.id) AS downloads,s.visibility,s.category,s.created_at,s.updated_at,` + moderationColumns("s", "candidate-skins") + ` FROM community_candidate_skins s JOIN auth_users u ON u.id=s.owner_id LEFT JOIN LATERAL (SELECT COALESCE(sum(f.size),0) AS size,count(*) AS file_count FROM community_candidate_skin_files f WHERE f.skin_id=s.id) files ON true`,
 		filters: []listFilter{{param: "visibility", field: "visibility", max: 7, values: map[string]string{"public": "public", "private": "private"}}, candidateCategoryFilter(), statusFilter},
 	}
 	pluginsList = adminList{

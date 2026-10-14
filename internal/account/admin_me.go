@@ -116,6 +116,14 @@ func (a *Service) adminMe(w http.ResponseWriter, r *http.Request, _ string) {
 	var joined *time.Time
 	var stats adminMeStats
 	recent := []adminAuditEntry{}
+	prefs := map[string]bool{}
+	for key, value := range adminPrefDefaults {
+		prefs[key] = value
+	}
+	sessions := []adminMeSession{}
+	out["token"] = nil
+	var stored map[string]any
+	var current string
 	var err error
 	// 只向月度聚合传入相关操作，并在一次遍历中分别完成审计计数和审核数量、耗时统计。
 	batch := &pgx.Batch{}
@@ -151,25 +159,7 @@ FROM (SELECT count(DISTINCT target) FILTER (WHERE action LIKE 'dict\_pr\_%') AS 
 		}
 		return rows.Err()
 	})
-	if err = a.store.pool.SendBatch(ctx, batch).Close(); err != nil {
-		a.error(w, err)
-		return
-	}
-	out["name"] = name
-	out["joined_at"] = joined
-	out["stats"] = stats
-	out["recent"] = recent
-
-	prefs := map[string]bool{}
-	for key, value := range adminPrefDefaults {
-		prefs[key] = value
-	}
-	sessions := []adminMeSession{}
-	out["token"] = nil
 	if access.Email != "" {
-		var stored map[string]any
-		var current string
-		batch := &pgx.Batch{}
 		if hashes := adminCurrentSessionHashes(r); len(hashes) > 0 {
 			batch.Queue(`SELECT s.id FROM unnest($1::text[]) WITH ORDINALITY AS c(token_hash,ord)
 JOIN admin_sessions s ON s.token_hash=c.token_hash AND s.email=$2
@@ -213,15 +203,19 @@ ORDER BY c.ord LIMIT 1`, hashes, access.Email).QueryRow(func(row pgx.Row) error 
 			}
 			return err
 		})
-		if err = a.store.pool.SendBatch(ctx, batch).Close(); err != nil {
-			a.error(w, err)
-			return
-		}
-		for key, value := range stored {
-			if flag, ok := value.(bool); ok {
-				if _, known := adminPrefDefaults[key]; known {
-					prefs[key] = flag
-				}
+	}
+	if err = a.store.pool.SendBatch(ctx, batch).Close(); err != nil {
+		a.error(w, err)
+		return
+	}
+	out["name"] = name
+	out["joined_at"] = joined
+	out["stats"] = stats
+	out["recent"] = recent
+	for key, value := range stored {
+		if flag, ok := value.(bool); ok {
+			if _, known := adminPrefDefaults[key]; known {
+				prefs[key] = flag
 			}
 		}
 	}

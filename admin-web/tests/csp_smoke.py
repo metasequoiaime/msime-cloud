@@ -346,6 +346,116 @@ def check_debounce(context, base: str, problems: list[str]):
         page.close()
 
 
+def check_auth_generation(context, base: str, problems: list[str]):
+    # 用受控响应模拟真实 mutation：清空 QueryClient 后，旧请求仍可能完成。
+    for initial_token in (None, "test-admin-token"):
+        page = context.new_page()
+        page.on("pageerror", lambda error: problems.append(f"认证测试页面异常：{error}"))
+        pending = []
+        session = {**FIXTURES["/api/auth/session"], "token_enabled": True}
+        page.route("**/api/auth/session", lambda route: route.fulfill(json=session))
+        page.route("**/api/auth-test/delayed", lambda route: pending.append(route))
+        page.route("**/api/auth-test/unauthorized", lambda route: route.fulfill(status=401, json={"error": "unauthorized"}))
+        try:
+            page.goto(base + "/harness/?auth")
+            status = page.get_by_test_id("auth-status")
+            expect(status).to_have_text("已登录")
+            if initial_token:
+                page.get_by_role("button", name="测试登录", exact=True).click()
+                expect(page.get_by_test_id("auth-result")).to_have_text("登录完成")
+                expect(page.get_by_test_id("auth-error")).to_be_empty()
+            with page.expect_request("**/api/auth-test/delayed") as request:
+                page.get_by_role("button", name="启动旧请求", exact=True).click()
+            assert request.value.headers.get("authorization") == (f"Bearer {initial_token}" if initial_token else None)
+            page.get_by_role("button", name="使当前登录失效", exact=True).click()
+            expect(status).to_have_text("未登录")
+            page.get_by_role("button", name="测试登录", exact=True).click()
+            expect(page.get_by_test_id("auth-result")).to_have_text("登录完成")
+            expect(status).to_have_text("已登录")
+            expect(page.get_by_test_id("auth-error")).to_be_empty()
+            assert len(pending) == 1
+            pending.pop().fulfill(status=401, json={"error": "unauthorized"})
+            expect(page.get_by_test_id("auth-result")).to_have_text("delayed:401")
+            expect(status).to_have_text("已登录")
+            expect(page.get_by_test_id("auth-error")).to_be_empty()
+            # 新登录自己的 401 仍必须使当前身份退出。
+            page.get_by_role("button", name="使当前登录失效", exact=True).click()
+            expect(status).to_have_text("未登录")
+            problems.extend(f"认证测试 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+        finally:
+            page.close()
+
+
+def check_auth_logout(context, base: str, problems: list[str]):
+    for response_status in (200, 500):
+        page = context.new_page()
+        page.on("pageerror", lambda error: problems.append(f"退出测试页面异常：{error}"))
+        pending = []
+        session = {**FIXTURES["/api/auth/session"], "token_enabled": True}
+        page.route("**/api/auth/session", lambda route: route.fulfill(json=session))
+        page.route("**/api/auth/logout", lambda route: pending.append(route))
+        page.route("**/api/auth-test/unauthorized", lambda route: route.fulfill(status=401, json={"error": "unauthorized"}))
+        try:
+            page.goto(base + "/harness/?auth")
+            status = page.get_by_test_id("auth-status")
+            expect(status).to_have_text("已登录")
+            with page.expect_request("**/api/auth/logout"):
+                page.get_by_role("button", name="测试退出", exact=True).click()
+            page.get_by_role("button", name="使当前登录失效", exact=True).click()
+            expect(status).to_have_text("未登录")
+            page.get_by_role("button", name="测试登录", exact=True).click()
+            expect(page.get_by_test_id("auth-result")).to_have_text("登录完成")
+            expect(status).to_have_text("已登录")
+            assert len(pending) == 1
+            pending.pop().fulfill(status=response_status, json={"ok": True} if response_status == 200 else {"error": "admin_auth_unavailable"})
+            expect(page.get_by_test_id("auth-result")).to_have_text("退出完成")
+            expect(status).to_have_text("已登录")
+            expect(page.get_by_test_id("auth-error")).to_be_empty()
+            # 当前身份发出的正常退出仍会清空登录状态。
+            page.unroute("**/api/auth/logout")
+            page.route("**/api/auth/logout", lambda route: route.fulfill(json={"ok": True}))
+            page.get_by_role("button", name="测试退出", exact=True).click()
+            expect(status).to_have_text("未登录")
+            problems.extend(f"退出测试 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+        finally:
+            page.close()
+
+
+def check_auth_logout_flush(context, base: str, problems: list[str]):
+    page = context.new_page()
+    page.on("pageerror", lambda error: problems.append(f"退出等待提交测试页面异常：{error}"))
+    pending = []
+    logout_requests = []
+    session = {**FIXTURES["/api/auth/session"], "token_enabled": True}
+    page.route("**/api/auth/session", lambda route: route.fulfill(json=session))
+    page.route("**/api/auth-test/delayed", lambda route: pending.append(route))
+    page.route("**/api/auth-test/unauthorized", lambda route: route.fulfill(status=401, json={"error": "unauthorized"}))
+
+    def logout(route):
+        logout_requests.append(route.request)
+        route.fulfill(json={"ok": True})
+
+    page.route("**/api/auth/logout", logout)
+    try:
+        page.goto(base + "/harness/?auth")
+        status = page.get_by_test_id("auth-status")
+        expect(status).to_have_text("已登录")
+        page.get_by_role("button", name="排队延迟提交", exact=True).click()
+        with page.expect_request("**/api/auth-test/delayed"):
+            page.get_by_role("button", name="测试退出", exact=True).click()
+        page.get_by_role("button", name="使当前登录失效", exact=True).click()
+        expect(status).to_have_text("未登录")
+        page.get_by_role("button", name="测试登录", exact=True).click()
+        expect(page.get_by_test_id("auth-result")).to_have_text("登录完成")
+        pending.pop().fulfill(json={"ok": True})
+        expect(page.get_by_test_id("auth-result")).to_have_text("退出完成")
+        assert not logout_requests, "身份已改变，不应再发送旧身份的退出请求"
+        expect(status).to_have_text("已登录")
+        problems.extend(f"退出等待提交测试 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+    finally:
+        page.close()
+
+
 def main() -> int:
     if not (DIST / "index.html").is_file():
         raise SystemExit("admin-web/dist is missing; run pnpm build first")
@@ -938,6 +1048,9 @@ def main() -> int:
                 page.get_by_role("button", name="取消选择").click()
                 violations("ui harness")
                 check_debounce(context, base, problems)
+                check_auth_generation(context, base, problems)
+                check_auth_logout(context, base, problems)
+                check_auth_logout_flush(context, base, problems)
             finally:
                 browser.close()
     finally:

@@ -43,7 +43,7 @@ var (
 // qqAnswerPrefix 是「写进FAQ F12 答：……」里答案的开头。
 var qqAnswerPrefix = regexp.MustCompile(`^答[:：]\s*`)
 
-// recordQQFAQCandidate 记下一条文档候选；同一个问题 7 天内只记一次，出错只记日志。在回复之后调用，不跟随处理消息的 ctx、另限 3 秒（写法照 recordQQTurn）：滚动发布取消了 ctx 也要记下。
+// recordQQFAQCandidate 记下一条文档候选；同一个问题 7 天内只记一次，写入失败退回去重额度。在回复之后调用，不跟随处理消息的 ctx、另限 3 秒（写法照 recordQQTurn）：滚动发布取消了 ctx 也要记下。
 func (s *Server) recordQQFAQCandidate(ctx context.Context, question, answer string) {
 	if s.qqFAQCandidates == nil {
 		return
@@ -54,13 +54,19 @@ func (s *Server) recordQQFAQCandidate(ctx context.Context, question, answer stri
 	if question == "" {
 		return
 	}
-	if err := s.limits.RateLimit(ctx, "qq-bot-faq-candidate", strings.Join(strings.Fields(question), ""), 1, 7*24*time.Hour); err != nil {
+	subject := strings.Join(strings.Fields(question), "")
+	if err := s.limits.RateLimit(ctx, "qq-bot-faq-candidate", subject, 1, 7*24*time.Hour); err != nil {
 		if !errors.Is(err, account.ErrLimited) {
 			slog.Warn("qq bot: faq candidate limit unavailable", "reason", err.Error())
 		}
 		return
 	}
 	if _, err := s.qqFAQCandidates.AddQQFAQCandidate(ctx, question, qqTruncate(answer, qqFAQCandidateRunes)); err != nil {
+		releaseCtx, releaseCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		if releaseErr := s.limits.ReleaseRateLimit(releaseCtx, "qq-bot-faq-candidate", subject); releaseErr != nil {
+			slog.Warn("qq bot: faq candidate quota not released", "reason", releaseErr.Error())
+		}
+		releaseCancel()
 		slog.Warn("qq bot: faq candidate not stored", "reason", err.Error())
 	}
 }

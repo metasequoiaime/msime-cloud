@@ -132,14 +132,19 @@ func actionBanUser(a *Service, ctx context.Context, tx pgx.Tx, v actionRequest) 
 	if err != nil {
 		return actionResult{}, err
 	}
+	// 四张表的封禁更新互不依赖，一次 CTE 完成并汇总影响行数，避免每个内容表各占一次数据库往返。
 	var removed int64
-	for _, table := range communityModeratedTables {
-		// Content a moderator already removed keeps its own reason, so unbanning leaves it removed. moderated_by and moderated_at keep the last real review: the ban is in the audit log, and counting it as a review would inflate the personal page's moderation stats.
-		tag, err := tx.Exec(ctx, `UPDATE `+table+` SET previous_moderation=moderation,moderation='removed',moderation_reason=$2 WHERE owner_id=$1 AND moderation<>'removed'`, v.ID, banModerationReason)
-		if err != nil {
-			return actionResult{}, err
-		}
-		removed += tag.RowsAffected()
+	if err = tx.QueryRow(ctx, `WITH skins AS (
+ UPDATE community_skins SET previous_moderation=moderation,moderation='removed',moderation_reason=$2 WHERE owner_id=$1 AND moderation<>'removed' RETURNING 1
+), resources AS (
+ UPDATE community_resources SET previous_moderation=moderation,moderation='removed',moderation_reason=$2 WHERE owner_id=$1 AND moderation<>'removed' RETURNING 1
+), candidate_skins AS (
+ UPDATE community_candidate_skins SET previous_moderation=moderation,moderation='removed',moderation_reason=$2 WHERE owner_id=$1 AND moderation<>'removed' RETURNING 1
+), plugins AS (
+ UPDATE community_plugins SET previous_moderation=moderation,moderation='removed',moderation_reason=$2 WHERE owner_id=$1 AND moderation<>'removed' RETURNING 1
+)
+SELECT (SELECT count(*) FROM skins)+(SELECT count(*) FROM resources)+(SELECT count(*) FROM candidate_skins)+(SELECT count(*) FROM plugins)`, v.ID, banModerationReason).Scan(&removed); err != nil {
+		return actionResult{}, err
 	}
 	return actionResult{
 		Affected: 1,

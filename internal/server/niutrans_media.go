@@ -23,6 +23,8 @@ import (
 const (
 	niuTransFileBytes     = 64 << 20
 	niuTransResponseBytes = 1 << 20
+	// 单次上传只需要文件、语言和少量可选参数，限制部件数避免大量小字段耗尽内存。
+	niuTransMaxParts = 32
 )
 
 func niuTransAuth(params map[string]string, apiKey string) string {
@@ -76,6 +78,7 @@ func (s *Server) niuTransUpload(w http.ResponseWriter, r *http.Request, e NiuTra
 	filename := "upload.bin"
 	fields := map[string]string{}
 	seen := map[string]bool{}
+	parts := 0
 	for {
 		part, nextErr := reader.NextPart()
 		if nextErr == io.EOF {
@@ -83,6 +86,11 @@ func (s *Server) niuTransUpload(w http.ResponseWriter, r *http.Request, e NiuTra
 		}
 		if nextErr != nil {
 			fail(w, http.StatusBadRequest, "invalid_multipart")
+			return
+		}
+		parts++
+		if parts > niuTransMaxParts {
+			fail(w, http.StatusRequestEntityTooLarge, "too_many_parts")
 			return
 		}
 		name := part.FormName()

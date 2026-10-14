@@ -6,6 +6,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -254,6 +255,25 @@ func TestNiuTransUploadValidation(t *testing.T) {
 	}
 	if w := callMultipart(s, http.MethodPost, "/v1/niutrans/documents", "multipart/form-data; boundary=bad", []byte("bad")); w.Code != http.StatusBadRequest && w.Code != http.StatusUnsupportedMediaType {
 		t.Fatalf("malformed multipart: %d", w.Code)
+	}
+}
+
+func TestNiuTransUploadRejectsTooManyParts(t *testing.T) {
+	s := fixture(t, func(w http.ResponseWriter, r *http.Request) { t.Fatal("upstream should not be called") })
+	s.config.NiuTrans.Document = NiuTransEndpoint{URL: s.config.Chat.URL + "/v2/doc/translate/upload", appID: "app", apiKey: "key"}
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	for i := 0; i < 33; i++ {
+		if err := mw.WriteField("field"+strconv.Itoa(i), "x"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	w := callMultipart(s, http.MethodPost, "/v1/niutrans/documents", mw.FormDataContentType(), body.Bytes())
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("too many parts: status=%d body=%s", w.Code, w.Body.String())
 	}
 }
 

@@ -294,7 +294,15 @@ func (a *Service) diagnosticsGet(w http.ResponseWriter, r *http.Request) {
 		Sections  []string  `json:"sections"`
 		TokenHint string    `json:"token_hint"`
 	}
-	err := a.store.pool.QueryRow(r.Context(), `SELECT id,created_at,expires_at,bytes,sections,token_hint FROM diagnostic_snapshots WHERE user_id=$1 AND expires_at>now()`, p.UserID).Scan(&snapshot.ID, &snapshot.CreatedAt, &snapshot.ExpiresAt, &snapshot.Bytes, &snapshot.Sections, &snapshot.TokenHint)
+	var rawAccesses []byte
+	err := a.store.pool.QueryRow(r.Context(), `SELECT d.id,d.created_at,d.expires_at,d.bytes,d.sections,d.token_hint,
+COALESCE((SELECT jsonb_agg(jsonb_build_object(
+	'at',x.at,'tool',x.tool,'arguments',x.arguments,'result_count',x.result_count,'bytes',x.bytes
+) ORDER BY x.at DESC,x.id DESC) FROM (
+	SELECT id,at,tool,arguments,result_count,bytes FROM diagnostic_accesses
+	WHERE snapshot_id=d.id ORDER BY at DESC,id DESC LIMIT $2
+) x),'[]'::jsonb)
+FROM diagnostic_snapshots d WHERE d.user_id=$1 AND d.expires_at>now()`, p.UserID, diagnosticAccessListLimit).Scan(&snapshot.ID, &snapshot.CreatedAt, &snapshot.ExpiresAt, &snapshot.Bytes, &snapshot.Sections, &snapshot.TokenHint, &rawAccesses)
 	if errors.Is(err, pgx.ErrNoRows) {
 		write(w, 200, map[string]any{"snapshot": nil, "accesses": []diagnosticAccess{}})
 		return
@@ -303,19 +311,8 @@ func (a *Service) diagnosticsGet(w http.ResponseWriter, r *http.Request) {
 		a.error(w, err)
 		return
 	}
-	rows, err := a.store.pool.Query(r.Context(), `SELECT at,tool,arguments,result_count,bytes FROM diagnostic_accesses WHERE snapshot_id=$1 ORDER BY at DESC,id DESC LIMIT $2`, snapshot.ID, diagnosticAccessListLimit)
-	if err != nil {
-		a.error(w, err)
-		return
-	}
-	accesses, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (diagnosticAccess, error) {
-		var v diagnosticAccess
-		var arguments []byte
-		err := row.Scan(&v.At, &v.Tool, &arguments, &v.ResultCount, &v.Bytes)
-		v.Arguments = arguments
-		return v, err
-	})
-	if err != nil {
+	var accesses []diagnosticAccess
+	if err = json.Unmarshal(rawAccesses, &accesses); err != nil {
 		a.error(w, err)
 		return
 	}

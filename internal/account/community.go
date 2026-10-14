@@ -2,6 +2,7 @@ package account
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"image/jpeg"
@@ -507,17 +508,35 @@ func validCommunityID(v string) bool {
 	}
 	return true
 }
+
+// deleteOwnedCommunity 在用户行锁内删除作者自己的作品，封禁提交后到达的迟到请求不能绕过封禁恢复语义。
+func (a *Service) deleteOwnedCommunity(ctx context.Context, table, id, owner string) (int64, error) {
+	tx, err := a.store.userDataTransaction(ctx, owner)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+	result, err := tx.Exec(ctx, `DELETE FROM `+table+` WHERE id=$1 AND owner_id=$2`, id, owner)
+	if err != nil {
+		return 0, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 func (a *Service) communityDelete(w http.ResponseWriter, r *http.Request) {
 	p, ok := a.principal(w, r, false)
 	if !ok {
 		return
 	}
-	result, e := a.store.pool.Exec(r.Context(), `DELETE FROM community_skins WHERE id=$1 AND owner_id=$2`, r.PathValue("id"), p.UserID)
+	rows, e := a.deleteOwnedCommunity(r.Context(), "community_skins", r.PathValue("id"), p.UserID)
 	if e != nil {
 		a.error(w, e)
 		return
 	}
-	if result.RowsAffected() == 0 {
+	if rows == 0 {
 		writeError(w, 404, "skin_not_found")
 		return
 	}

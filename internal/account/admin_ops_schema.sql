@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS community_reports (
  UNIQUE(kind,item_id,reporter_id)
 );
 CREATE INDEX IF NOT EXISTS community_reports_item ON community_reports(kind,item_id);
+-- 账号注销按 reporter_id 触发外键级联；查询举报内容的索引以 kind,item_id 开头。
+CREATE INDEX IF NOT EXISTS community_reports_reporter ON community_reports(reporter_id);
 -- 举报的 kind 加入短语包 phrases：命名约束还不含它时，删掉列着 kind 取值的旧约束（早期是自动命名的）再加命名约束，可以重复执行。
 DO $$
 DECLARE c record;

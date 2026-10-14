@@ -44,12 +44,13 @@ func (a *Service) adminPermissions(w http.ResponseWriter, r *http.Request, _ str
 	// A nil slice would be sent as NULL, and email=ANY(NULL) filters out every member.
 	owners := append([]string{}, a.admin.Owners...)
 	var rolesRaw, matrixRaw, membersRaw json.RawMessage
+	// 成员的有效会话数和最近活动共用一次聚合，最近活动仍包含过期会话。
 	err := a.store.pool.QueryRow(ctx, `SELECT
  (SELECT COALESCE(json_agg(json_build_object('key',key,'name',name,'builtin',builtin) ORDER BY NOT builtin,array_position(ARRAY['maintainer','reviewer','operator','readonly'],key),key),'[]'::json) FROM admin_roles),
  (SELECT COALESCE(json_object_agg(r.key,COALESCE((SELECT json_agg(p.permission ORDER BY p.permission) FROM admin_role_permissions p WHERE p.role=r.key),'[]'::json)),'{}'::json) FROM admin_roles r),
  (SELECT COALESCE(json_agg(json_build_object('email',m.email,'role',m.role,'enabled',m.enabled,'created_at',m.created_at,
-   'sessions',(SELECT count(*) FROM admin_sessions s WHERE s.email=m.email AND s.expires_at>now()),
-   'last_seen_at',(SELECT max(last_seen_at) FROM admin_sessions s WHERE s.email=m.email)) ORDER BY m.email),'[]'::json) FROM admin_members m WHERE NOT (m.email=ANY($1)))`, owners).Scan(&rolesRaw, &matrixRaw, &membersRaw)
+   'sessions',activity.sessions,'last_seen_at',activity.last_seen_at) ORDER BY m.email),'[]'::json) FROM admin_members m LEFT JOIN LATERAL (SELECT count(*) FILTER (WHERE s.expires_at>now()) AS sessions,max(s.last_seen_at) AS last_seen_at FROM admin_sessions s WHERE s.email=m.email) activity ON true
+   WHERE NOT (m.email=ANY($1)))`, owners).Scan(&rolesRaw, &matrixRaw, &membersRaw)
 	if err != nil {
 		a.error(w, err)
 		return

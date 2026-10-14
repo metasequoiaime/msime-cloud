@@ -200,18 +200,18 @@ func (a *Service) communitySave(w http.ResponseWriter, r *http.Request, t commun
 		return
 	}
 	defer tx.Rollback(r.Context())
+	batch := &pgx.Batch{}
 	if input.Saved {
-		_, e = tx.Exec(r.Context(), `INSERT INTO `+t.saves+`(`+t.column+`,user_id) SELECT s.id,$2 FROM `+t.items+` s WHERE s.id=$1 AND `+t.visible+` ON CONFLICT DO NOTHING`, id, p.UserID)
+		batch.Queue(`INSERT INTO `+t.saves+`(`+t.column+`,user_id) SELECT s.id,$2 FROM `+t.items+` s WHERE s.id=$1 AND `+t.visible+` ON CONFLICT DO NOTHING`, id, p.UserID)
 	} else {
-		_, e = tx.Exec(r.Context(), `DELETE FROM `+t.saves+` WHERE `+t.column+`=$1 AND user_id=$2`, id, p.UserID)
-	}
-	if e != nil {
-		a.error(w, e)
-		return
+		batch.Queue(`DELETE FROM `+t.saves+` WHERE `+t.column+`=$1 AND user_id=$2`, id, p.UserID)
 	}
 	var visible bool
 	var saves int
-	if e = tx.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM `+t.items+` s WHERE s.id=$1 AND `+t.visible+`),(SELECT count(*) FROM `+t.saves+` WHERE `+t.column+`=$1)`, id, p.UserID).Scan(&visible, &saves); e != nil {
+	batch.Queue(`SELECT EXISTS(SELECT 1 FROM `+t.items+` s WHERE s.id=$1 AND `+t.visible+`),(SELECT count(*) FROM `+t.saves+` WHERE `+t.column+`=$1)`, id, p.UserID).QueryRow(func(row pgx.Row) error {
+		return row.Scan(&visible, &saves)
+	})
+	if e = tx.SendBatch(r.Context(), batch).Close(); e != nil {
 		a.error(w, e)
 		return
 	}

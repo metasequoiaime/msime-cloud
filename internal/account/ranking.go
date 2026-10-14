@@ -130,41 +130,34 @@ func (s *Store) mutateCandidate(ctx context.Context, user string, expected int64
 		return result, err
 	}
 	var selection *CandidateSelection
+	batch := &pgx.Batch{}
 	if result.Deleted != nil {
 		e := result.Deleted
 		e.Revision = result.Revision
 		e.UpdatedAt = time.Now().UTC()
-		if _, err = tx.Exec(ctx, `DELETE FROM user_dictionary_entries WHERE user_id=$1 AND kind=$2 AND code=$3 AND word=$4`, user, e.Kind, e.Code, e.Word); err != nil {
-			return result, err
-		}
+		batch.Queue(`DELETE FROM user_dictionary_entries WHERE user_id=$1 AND kind=$2 AND code=$3 AND word=$4`, user, e.Kind, e.Code, e.Word)
 		data, err := json.Marshal(e)
 		if err != nil {
 			return result, err
 		}
-		if _, err = tx.Exec(ctx, `INSERT INTO user_dictionary_overlay(user_id,kind,code,word,entry,deleted) VALUES($1,$2,$3,$4,$5::jsonb,true) ON CONFLICT(user_id,kind,code,word) DO UPDATE SET entry=excluded.entry,deleted=true`, user, e.Kind, e.Code, e.Word, data); err != nil {
-			return result, err
-		}
+		batch.Queue(`INSERT INTO user_dictionary_overlay(user_id,kind,code,word,entry,deleted) VALUES($1,$2,$3,$4,$5::jsonb,true) ON CONFLICT(user_id,kind,code,word) DO UPDATE SET entry=excluded.entry,deleted=true`, user, e.Kind, e.Code, e.Word, data)
 	} else {
 		selection = &result.Selection
 		p := result.Selection
 		if p.Count == 0 {
-			_, err = tx.Exec(ctx, `DELETE FROM user_candidate_selections WHERE user_id=$1 AND context=$2 AND code=$3 AND word=$4`, user, p.Context, p.Code, p.Word)
+			batch.Queue(`DELETE FROM user_candidate_selections WHERE user_id=$1 AND context=$2 AND code=$3 AND word=$4`, user, p.Context, p.Code, p.Word)
 		} else {
-			_, err = tx.Exec(ctx, `INSERT INTO user_candidate_selections(user_id,context,code,word,count) VALUES($1,$2,$3,$4,$5) ON CONFLICT(user_id,context,code,word) DO UPDATE SET count=excluded.count`, user, p.Context, p.Code, p.Word, p.Count)
+			batch.Queue(`INSERT INTO user_candidate_selections(user_id,context,code,word,count) VALUES($1,$2,$3,$4,$5) ON CONFLICT(user_id,context,code,word) DO UPDATE SET count=excluded.count`, user, p.Context, p.Code, p.Word, p.Count)
 		}
-		if err != nil {
-			return result, err
-		}
-
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO user_dictionary_state(user_id,revision) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET revision=excluded.revision`, user, result.Revision); err != nil {
-		return result, err
-	}
+	batch.Queue(`INSERT INTO user_dictionary_state(user_id,revision) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET revision=excluded.revision`, user, result.Revision)
 	data, err := json.Marshal(DictionaryChange{Revision: result.Revision, Ranking: result.Updates, Selection: selection, Previous: result.Deleted})
 	if err != nil {
 		return result, err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO user_dictionary_changes(user_id,revision,change) VALUES($1,$2,$3::jsonb)`, user, result.Revision, data); err != nil {
+	batch.Queue(`INSERT INTO user_dictionary_changes(user_id,revision,change) VALUES($1,$2,$3::jsonb)`, user, result.Revision, data)
+	// 后续写入一次发送，保持删除、覆盖层、版本和变更记录的顺序，任一失败仍回滚整个用户事务。
+	if err = tx.SendBatch(ctx, batch).Close(); err != nil {
 		return result, err
 	}
 	return result, tx.Commit(ctx)

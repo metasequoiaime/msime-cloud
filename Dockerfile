@@ -7,7 +7,7 @@ RUN pnpm install --frozen-lockfile
 COPY admin-web/ ./
 RUN pnpm build
 
-FROM --platform=$BUILDPLATFORM golang:1.25 AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.9@sha256:37cfcca63222ec499bec5e8ad7aad52dbf7529db36d5812b8eae2f0621aa92d6 AS build
 ARG TARGETOS
 ARG TARGETARCH
 WORKDIR /src

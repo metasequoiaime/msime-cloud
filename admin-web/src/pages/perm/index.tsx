@@ -15,7 +15,7 @@ import { useConfirm } from "../../ui/confirm";
 import { Pill } from "../../ui/pill";
 import { Empty, ErrorState, SkeletonRows } from "../../ui/states";
 import { useToast } from "../../ui/toast";
-import { relativeTime } from "../../shell/notifications";
+import { relativeTime } from "../../utils/time";
 import { Avatar, SectionCard, SectionRow } from "../me/section";
 
 const permKey = keys.page("perm", "matrix");

@@ -3,12 +3,12 @@ import { isGithubDisabled, useAPI } from "../../api/client";
 import { keys } from "../../api/keys";
 import { crashGroupDetailSchema, crashIssueTargetSchema, crashStatusLabel, crashStatusTone, crashTrend, platformName } from "../../api/crash";
 import type { CrashGroup, CrashStatus } from "../../api/crash";
-import { relativeTime } from "../../shell/notifications";
+import { formatDateTime, relativeTime } from "../../utils/time";
 import { noPermissionHint } from "../../shell/permissions";
 import { DetailDrawer } from "../../ui/drawer";
 import type { DrawerAction, DrawerField } from "../../ui/drawer";
 import { ErrorState, SkeletonRows } from "../../ui/states";
-import { formatCount, formatTime } from "./actions";
+import { formatCount } from "./actions";
 
 export type CrashDrawerProps = {
   signature: string | null;
@@ -55,8 +55,8 @@ export function CrashDrawer({ signature, override, issueURL, canTriage, onClose,
     { label: "前 7 天", value: `${formatCount(group.count_prev_7d)} 次（${crashTrend(group).text}）` },
     { label: "影响设备", value: group.devices_7d === null ? "客户端未上报" : `${formatCount(group.devices_7d)} 台` },
     { label: "Issue 仓库", value: repoText, mono: Boolean(repo) },
-    { label: "首次出现", value: formatTime(group.first_seen) },
-    { label: "最近出现", value: `${formatTime(group.last_seen)}（${relativeTime(group.last_seen)}）` },
+    { label: "首次出现", value: formatDateTime(group.first_seen) },
+    { label: "最近出现", value: `${formatDateTime(group.last_seen)}（${relativeTime(group.last_seen)}）` },
     ...(group.issue_url ? [{ label: "Issue", value: <a className="text-accent-ink underline underline-offset-2" href={group.issue_url} target="_blank" rel="noopener noreferrer">{group.issue_url.replace(/^https:\/\/github\.com\//, "")}</a> }] : []),
   ] : [];
 
@@ -92,7 +92,7 @@ export function CrashDrawer({ signature, override, issueURL, canTriage, onClose,
         ? <div className="rounded-[10px] bg-panel-2 px-3 py-2.5 text-[13.5px] text-muted">原始上报已被清理，只保留了分组。</div>
         : <div className="grid gap-2">{samples.map(sample => <div key={sample.id} className="min-w-0 rounded-[10px] bg-panel-2 px-3 py-2.5">
           <div className="text-[13.5px] leading-[1.7] [overflow-wrap:anywhere] whitespace-pre-wrap text-ink">{sample.message}</div>
-          <div className="mt-0.5 text-xs text-muted"><span className="font-mono">{sample.version}</span> · {formatTime(sample.created_at)}{sample.resolved ? " · 已解决" : ""}</div>
+          <div className="mt-0.5 text-xs text-muted"><span className="font-mono">{sample.version}</span> · {formatDateTime(sample.created_at)}{sample.resolved ? " · 已解决" : ""}</div>
           {sample.stack.trim()
             ? <pre className="m-0 mt-2 max-h-64 overflow-auto rounded-lg bg-panel px-2.5 py-2 font-mono text-[11.5px] leading-[1.6] text-body ring-1 ring-hair">{sample.stack}</pre>
             : <div className="mt-2 text-xs text-muted">这条上报没有堆栈。</div>}

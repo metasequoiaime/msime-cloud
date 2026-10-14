@@ -1,6 +1,5 @@
 import { useCallback, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { format } from "date-fns";
 import { APIError, useAPI } from "../../api/client";
 import type { API } from "../../api/client";
 import { keys } from "../../api/keys";
@@ -74,9 +73,4 @@ export function useCrashActions(): CrashActions {
 
 export function formatCount(value: number): string {
   return value.toLocaleString("zh-CN");
-}
-
-export function formatTime(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : format(date, "yyyy-MM-dd HH:mm");
 }

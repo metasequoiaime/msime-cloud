@@ -3,7 +3,7 @@ import { differenceInMinutes, format, isToday, parseISO } from "date-fns";
 import { useEffect, useRef } from "react";
 import { useAPI } from "../../api/client";
 import { formatLatency, formatRate, stateTone } from "../../api/cloud";
-import { relativeTime } from "../../shell/notifications";
+import { relativeTime } from "../../utils/time";
 import { keys } from "../../api/keys";
 import type { Incident, Status, StatusService } from "../../api/status";
 import { statusSchema } from "../../api/status";

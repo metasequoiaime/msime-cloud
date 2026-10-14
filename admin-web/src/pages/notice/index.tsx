@@ -8,7 +8,7 @@ import type { Notice, NoticeStatus, NoticeValue } from "../../api/notice";
 import { PageIntro } from "../../shell/page-intro";
 import { usePageSearch } from "../../shell/page-search";
 import { noPermissionHint, usePermissions } from "../../shell/permissions";
-import { relativeTime } from "../../shell/notifications";
+import { relativeTime } from "../../utils/time";
 import { Button } from "../../ui/button";
 import { Card, CardHeader } from "../../ui/card";
 import { cn } from "../../ui/cn";

@@ -7,7 +7,7 @@ import { errorMessage, isGithubDisabled, useAPI } from "../../api/client";
 import { keys } from "../../api/keys";
 import { issueActionResultSchema, issueDetailSchema, issueKey, issuePath, issueRef, issuesSchema, parseIssueKey } from "../../api/issues";
 import type { IssueAction, IssueDetail, IssueEvent, IssuePlatform, IssueRef, IssueRow, IssueState, IssueStateFilter } from "../../api/issues";
-import { relativeTime } from "../../shell/notifications";
+import { relativeTime } from "../../utils/time";
 import { PageIntro } from "../../shell/page-intro";
 import { usePageSearch, useSetPageSearch } from "../../shell/page-search";
 import { noPermissionHint, usePermissions } from "../../shell/permissions";

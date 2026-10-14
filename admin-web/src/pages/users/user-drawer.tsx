@@ -4,13 +4,13 @@ import { keys } from "../../api/keys";
 import { userDetailSchema } from "../../api/users";
 import type { UserDetail } from "../../api/users";
 import { noPermissionHint, usePermissions } from "../../shell/permissions";
-import { relativeTime } from "../../shell/notifications";
+import { formatDateTime, relativeTime } from "../../utils/time";
 import { Button } from "../../ui/button";
 import { DetailDrawer } from "../../ui/drawer";
 import type { DrawerAction, DrawerField, DrawerItem } from "../../ui/drawer";
 import { ErrorState, SkeletonRows } from "../../ui/states";
 import type { useUserActions } from "./actions";
-import { activeText, contactText, dateText, devicePlatform, displayName, historyText, providersText, roleOf, workMeta, workText } from "./labels";
+import { activeText, contactText, devicePlatform, displayName, historyText, providersText, roleOf, workMeta, workText } from "./labels";
 
 type Actions = ReturnType<typeof useUserActions>;
 
@@ -31,7 +31,7 @@ export function UserDrawer({ id, onClose, actions }: { id: string | undefined; o
   const fields: DrawerField[] = user ? [
     { label: "账号 ID", value: user.id, mono: true },
     { label: "登录方式", value: providersText(user.providers) },
-    { label: "注册时间", value: dateText(user.created_at) },
+    { label: "注册时间", value: formatDateTime(user.created_at, "yyyy-MM-dd") },
     { label: "最近活跃", value: activeText(user.last_active) },
     { label: "设置同步", value: user.sync ? "已开启" : "未开启" },
     { label: "有效会话", value: `${user.active_sessions} / ${user.total_sessions}` },

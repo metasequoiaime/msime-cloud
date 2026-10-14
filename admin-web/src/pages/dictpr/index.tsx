@@ -6,7 +6,7 @@ import { authorLabel, prListSchema, stateLabels, stateTones } from "../../api/di
 import { keys } from "../../api/keys";
 import { PageIntro } from "../../shell/page-intro";
 import { usePageSearch, useSetPageSearch } from "../../shell/page-search";
-import { relativeTime } from "../../shell/notifications";
+import { relativeTime } from "../../utils/time";
 import { buttonVariants } from "../../ui/button";
 import { Card } from "../../ui/card";
 import { cn } from "../../ui/cn";

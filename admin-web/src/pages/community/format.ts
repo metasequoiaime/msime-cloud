@@ -1,13 +1,10 @@
-import { format } from "date-fns";
-import { zhCN } from "date-fns/locale";
+import { formatDateTime } from "../../utils/time";
 import { z } from "zod";
 import type { Item, Section } from "../../api/community";
 import { candidateCategoryLabel, pluginKindLabels } from "../../api/community";
 
 export function formatTime(value: string | null | undefined): string {
-  if (!value) return "—";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : format(date, "yyyy-MM-dd HH:mm", { locale: zhCN });
+  return value ? formatDateTime(value) : "—";
 }
 
 export function formatBytes(value: number): string {

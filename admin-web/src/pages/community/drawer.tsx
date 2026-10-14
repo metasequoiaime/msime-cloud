@@ -4,7 +4,7 @@ import { APICredentialsContext, APIError, useAPI } from "../../api/client";
 import { keys } from "../../api/keys";
 import type { CandidateCategory, Detail, Section } from "../../api/community";
 import { candidateCategories, candidateCategoryLabels, detailSchema, isCandidateCategory, moderationLabels, moderationTones, pluginKindLabels, resourceContentSchema, sectionLabels, sensitiveCategoryLabels, sensitiveLevelLabels } from "../../api/community";
-import { relativeTime } from "../../shell/notifications";
+import { relativeTime } from "../../utils/time";
 import { usePermissions } from "../../shell/permissions";
 import { DetailDrawer } from "../../ui/drawer";
 import type { DrawerAction, DrawerField, DrawerSection } from "../../ui/drawer";

@@ -28,10 +28,13 @@ var downloadLinkLimits = []struct {
 	window time.Duration
 }{{"download-link-hour", 3, time.Hour}, {"download-link-day", 10, 24 * time.Hour}}
 
-// verifiedEmail 返回账号已验证的邮箱：邮箱登录身份的 subject 优先（登录时已经验证过），其次是 email_verified 的 Google 邮箱。没有时返回空字符串。
-func (s *Store) verifiedEmail(ctx context.Context, user string) (string, error) {
+type queryRower interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func verifiedEmailQuery(ctx context.Context, q queryRower, user string) (string, error) {
 	var email string
-	err := s.pool.QueryRow(ctx, `SELECT email FROM (
+	err := q.QueryRow(ctx, `SELECT email FROM (
  SELECT 0 AS o,subject AS email,created_at FROM auth_identities WHERE user_id=$1 AND provider='email'
  UNION ALL SELECT 1,email,created_at FROM auth_identities WHERE user_id=$1 AND provider='google' AND email_verified AND email<>''
 ) e ORDER BY o,created_at LIMIT 1`, user).Scan(&email)
@@ -39,6 +42,11 @@ func (s *Store) verifiedEmail(ctx context.Context, user string) (string, error) 
 		return "", nil
 	}
 	return email, err
+}
+
+// verifiedEmail 返回账号已验证的邮箱：邮箱登录身份的 subject 优先（登录时已经验证过），其次是 email_verified 的 Google 邮箱。没有时返回空字符串。
+func (s *Store) verifiedEmail(ctx context.Context, user string) (string, error) {
+	return verifiedEmailQuery(ctx, s.pool, user)
 }
 
 // maskEmail 只保留本地部分的第一个字符和完整域名，例如 u***@example.com。
@@ -77,7 +85,13 @@ func (a *Service) downloadLink(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 503, "provider_disabled")
 		return
 	}
-	email, err := a.store.verifiedEmail(r.Context(), p.UserID)
+	tx, err := a.store.userDataTransaction(r.Context(), p.UserID)
+	if err != nil {
+		a.error(w, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	email, err := verifiedEmailQuery(r.Context(), tx, p.UserID)
 	if err != nil {
 		a.error(w, err)
 		return
@@ -99,6 +113,10 @@ func (a *Service) downloadLink(w http.ResponseWriter, r *http.Request) {
 	subject, body := downloadLinkMessage(v.Platform)
 	if err = a.mailer.Mail(r.Context(), email, subject, body); err != nil {
 		writeError(w, 503, "delivery_failed")
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		a.error(w, err)
 		return
 	}
 	write(w, 202, map[string]any{"sent_to": maskEmail(email)})

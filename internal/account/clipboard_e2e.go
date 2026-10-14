@@ -299,15 +299,13 @@ func (s *Store) RotateClipboardKey(ctx context.Context, user string, c Clipboard
 	if registered != len(devices) {
 		return errClipboardKeyInvalid
 	}
-	for _, q := range []string{"DELETE FROM user_clipboard WHERE user_id=$1", "DELETE FROM user_clipboard_wraps WHERE user_id=$1"} {
-		if _, e = tx.Exec(ctx, q, user); e != nil {
-			return e
-		}
-	}
-	if _, e = tx.Exec(ctx, "UPDATE user_clipboard_settings SET key_id=$2 WHERE user_id=$1", user, c.KeyID); e != nil {
-		return e
-	}
-	if _, e = tx.Exec(ctx, "INSERT INTO user_clipboard_wraps(user_id,device_id,key_id,wrap) SELECT $1,d,$2,w FROM unnest($3::text[],$4::text[]) AS t(d,w)", user, c.KeyID, devices, wraps); e != nil {
+	// 校验通过后，一次发送历史清理和新密钥写入；保留先删旧封装再写新封装的顺序。
+	batch := &pgx.Batch{}
+	batch.Queue("DELETE FROM user_clipboard WHERE user_id=$1", user)
+	batch.Queue("DELETE FROM user_clipboard_wraps WHERE user_id=$1", user)
+	batch.Queue("UPDATE user_clipboard_settings SET key_id=$2 WHERE user_id=$1", user, c.KeyID)
+	batch.Queue("INSERT INTO user_clipboard_wraps(user_id,device_id,key_id,wrap) SELECT $1,d,$2,w FROM unnest($3::text[],$4::text[]) AS t(d,w)", user, c.KeyID, devices, wraps)
+	if e = tx.SendBatch(ctx, batch).Close(); e != nil {
 		return e
 	}
 	return tx.Commit(ctx)

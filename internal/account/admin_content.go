@@ -34,9 +34,10 @@ func (a *Service) adminContent(w http.ResponseWriter, r *http.Request, section, 
  'moderation',s.moderation,'previous_moderation',s.previous_moderation,'moderation_reason',s.moderation_reason,'moderated_by',s.moderated_by,'moderated_at',s.moderated_at,'owner_banned',u.banned_at IS NOT NULL,
  'files',COALESCE((SELECT json_agg(json_build_object('path',f.path,'size',f.size,'sha256',f.sha256) ORDER BY f.path) FROM community_candidate_skin_files f WHERE f.skin_id=s.id),'[]'::json),
  'downloads',(SELECT count(*) FROM community_candidate_skin_downloads WHERE skin_id=s.id),
- 'rating_count',(SELECT count(*) FROM community_candidate_skin_ratings WHERE skin_id=s.id),
- 'rating_average',(SELECT COALESCE(avg(stars),0) FROM community_candidate_skin_ratings WHERE skin_id=s.id))
- FROM community_candidate_skins s JOIN auth_users u ON u.id=s.owner_id WHERE s.id=$1`
+ 'rating_count',rating_stats.count,'rating_average',rating_stats.average)
+ FROM community_candidate_skins s JOIN auth_users u ON u.id=s.owner_id
+ CROSS JOIN LATERAL (SELECT count(*) AS count,COALESCE(avg(stars),0) AS average FROM community_candidate_skin_ratings WHERE skin_id=s.id) rating_stats
+ WHERE s.id=$1`
 	} else if section == "plugins" {
 		// Metadata, the manifest text and the archive digest only; archive bytes never leave the database through the admin API.
 		query = `SELECT json_build_object('id',p.id,'kind',p.kind,'plugin_id',p.plugin_id,'name',p.name,'description',p.description,'owner_id',p.owner_id,'author',u.display_name,'created_at',p.created_at,'version',p.version,'license',p.license,

@@ -155,22 +155,23 @@ const candidateSkinSelectBase = `SELECT s.id,s.package_id,s.name,s.description,
  COALESCE(NULLIF(btrim(u.display_name),''),'水杉小鹿·'||upper(left(u.id,6))),s.version,s.license_code,s.license_assets,s.license_source,
  f.size,f.files,
  (SELECT count(*) FROM community_candidate_skin_downloads WHERE skin_id=s.id),
- (SELECT count(*) FROM community_candidate_skin_ratings WHERE skin_id=s.id),
- COALESCE((SELECT avg(stars) FROM community_candidate_skin_ratings WHERE skin_id=s.id),0),
- s.owner_id=$1,COALESCE((SELECT stars FROM community_candidate_skin_ratings WHERE skin_id=s.id AND user_id=$1),0),s.created_at,
+ rating_stats.count,rating_stats.average,s.owner_id=$1,rating_stats.mine,s.created_at,
  s.visibility,s.updated_at,CASE WHEN s.owner_id=$1 THEN s.request_sha256 ELSE '' END,s.category,
  CASE WHEN s.owner_id=$1 THEN s.moderation ELSE '' END,`
+
+// 人数、平均分和个人评分共用一次聚合；主键保证每个用户每款皮肤只有一条评分。
+const candidateSkinFrom = `
+ FROM community_candidate_skins s JOIN auth_users u ON u.id=s.owner_id
+ CROSS JOIN LATERAL (SELECT COALESCE(sum(size),0) AS size,count(*) AS files FROM community_candidate_skin_files WHERE skin_id=s.id) f
+ CROSS JOIN LATERAL (SELECT count(*) AS count,COALESCE(avg(stars),0) AS average,
+ COALESCE(max(stars) FILTER (WHERE user_id=$1),0) AS mine FROM community_candidate_skin_ratings WHERE skin_id=s.id) rating_stats `
 
 // candidateSkinSelect 只有客户端声明 fields=saved 时才计算收藏总数和当前用户的收藏状态；默认目录不需要这两个逐行子查询。
 func candidateSkinSelect(saved bool) string {
 	if saved {
-		return candidateSkinSelectBase + `(SELECT count(*) FROM community_candidate_skin_saves WHERE skin_id=s.id),EXISTS(SELECT 1 FROM community_candidate_skin_saves WHERE skin_id=s.id AND user_id=$1)
- FROM community_candidate_skins s JOIN auth_users u ON u.id=s.owner_id
- CROSS JOIN LATERAL (SELECT COALESCE(sum(size),0) AS size,count(*) AS files FROM community_candidate_skin_files WHERE skin_id=s.id) f `
+		return candidateSkinSelectBase + `(SELECT count(*) FROM community_candidate_skin_saves WHERE skin_id=s.id),EXISTS(SELECT 1 FROM community_candidate_skin_saves WHERE skin_id=s.id AND user_id=$1)` + candidateSkinFrom
 	}
-	return candidateSkinSelectBase + `0,false
- FROM community_candidate_skins s JOIN auth_users u ON u.id=s.owner_id
- CROSS JOIN LATERAL (SELECT COALESCE(sum(size),0) AS size,count(*) AS files FROM community_candidate_skin_files WHERE skin_id=s.id) f `
+	return candidateSkinSelectBase + `0,false` + candidateSkinFrom
 }
 
 func scanCandidateSkin(row interface{ Scan(...any) error }) (CommunityCandidateSkin, error) {

@@ -77,8 +77,8 @@ func (a *Service) adminOverview(w http.ResponseWriter, r *http.Request, _ string
    'skin_downloads',(SELECT count(*) FROM community_skin_downloads),
    'plugins',(SELECT count(*) FROM community_plugins WHERE moderation<>'removed'),
    'plugin_downloads',(SELECT count(*) FROM community_plugin_downloads),
-   'dictionaries',(SELECT count(*) FROM community_resources WHERE kind='dictionary' AND moderation<>'removed'),
-   'replies',(SELECT count(*) FROM community_resources WHERE kind='reply' AND moderation<>'removed'),
+   'dictionaries',resource_counts.dictionaries,
+   'replies',resource_counts.replies,
    'resource_saves',(SELECT count(*) FROM community_resource_saves),
    'daily',(SELECT json_agg(x ORDER BY day) FROM (
      SELECT to_char(d AT TIME ZONE 'UTC','YYYY-MM-DD') AS day,
@@ -129,7 +129,7 @@ func (a *Service) adminOverview(w http.ResponseWriter, r *http.Request, _ string
        UNION ALL
        SELECT service,service,'',1000+row_number() OVER (ORDER BY service) FROM (SELECT DISTINCT service FROM admin_service_daily WHERE day>=(now() AT TIME ZONE 'UTC')::date-59) d WHERE cardinality($3::text[])=0
      ) s
-     LEFT JOIN LATERAL (SELECT ok_minutes,total_minutes,degraded,p95_ms FROM admin_service_daily WHERE service=s.key AND day>=(now() AT TIME ZONE 'UTC')::date-1 ORDER BY day DESC LIMIT 1) today ON true))`,
+     LEFT JOIN LATERAL (SELECT ok_minutes,total_minutes,degraded,p95_ms FROM admin_service_daily WHERE service=s.key AND day>=(now() AT TIME ZONE 'UTC')::date-1 ORDER BY day DESC LIMIT 1) today ON true)) FROM (`+communityResourceCountsQuery+`) resource_counts`,
 		days, community, keys, names, providers, len(a.admin.Services) > 0).Scan(&result)
 	if err != nil {
 		a.error(w, err)

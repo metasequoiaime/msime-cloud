@@ -15,14 +15,19 @@ type CommunityStats struct {
 	GeneratedAt   time.Time `json:"generated_at"`
 }
 
-// The counters mirror the community subset of the admin overview query so both surfaces report the same numbers.
+// 公共统计和后台概览共用一次资源表聚合；短语包与已移除资源不计入词包、回复总数。
+const communityResourceCountsQuery = `SELECT
+ count(*) FILTER (WHERE kind='dictionary') AS dictionaries,
+ count(*) FILTER (WHERE kind='reply') AS replies
+ FROM community_resources WHERE kind IN ('dictionary','reply') AND moderation<>'removed'`
+
+// 公共统计与后台概览保持相同的社区计数口径。
 const communityStatsQuery = `SELECT
  (SELECT count(*) FROM community_skins WHERE moderation<>'removed'),
  (SELECT count(*) FROM community_skin_downloads),
- (SELECT count(*) FROM community_resources WHERE kind='dictionary' AND moderation<>'removed'),
- (SELECT count(*) FROM community_resources WHERE kind='reply' AND moderation<>'removed'),
+ resource_counts.dictionaries,resource_counts.replies,
  (SELECT count(*) FROM community_resource_saves),
- now()`
+ now() FROM (` + communityResourceCountsQuery + `) resource_counts`
 
 func (a *Service) communityStats(w http.ResponseWriter, r *http.Request) {
 	var s CommunityStats

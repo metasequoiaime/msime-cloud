@@ -93,19 +93,20 @@ func (a *Service) AdminSession(ctx context.Context, token string) (AdminIdentity
 	if len(token) != 64 {
 		return identity, ErrInvalid
 	}
-	var stale bool
-	err := a.store.pool.QueryRow(ctx, `SELECT subject,email,name,user_agent,last_seen_at<now()-make_interval(secs=>$2) FROM admin_sessions WHERE token_hash=$1 AND expires_at>now()`, hash(token), adminSessionTouch.Seconds()).Scan(&identity.Subject, &identity.Email, &identity.Name, &identity.UserAgent, &stale)
+	err := a.store.pool.QueryRow(ctx, `WITH session AS MATERIALIZED (
+ SELECT id,subject,email,name,user_agent,last_seen_at<now()-make_interval(secs=>$2) AS stale
+ FROM admin_sessions WHERE token_hash=$1 AND expires_at>now()
+), touched AS (
+ UPDATE admin_sessions s SET last_seen_at=now()
+ FROM session x WHERE s.id=x.id AND x.stale
+ RETURNING s.id
+)
+SELECT subject,email,name,user_agent FROM session`, hash(token), adminSessionTouch.Seconds()).Scan(&identity.Subject, &identity.Email, &identity.Name, &identity.UserAgent)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return identity, ErrInvalid
 	}
 	if err != nil {
 		return identity, err
-	}
-	// The condition is repeated so concurrent requests refresh the row once.
-	if stale {
-		if _, err = a.store.pool.Exec(ctx, `UPDATE admin_sessions SET last_seen_at=now() WHERE token_hash=$1 AND last_seen_at<now()-make_interval(secs=>$2)`, hash(token), adminSessionTouch.Seconds()); err != nil {
-			return identity, err
-		}
 	}
 	return identity, nil
 }

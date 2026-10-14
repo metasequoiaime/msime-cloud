@@ -12,14 +12,17 @@ import (
 
 func fakeRankingEngine(t *testing.T) engine.Config {
 	t.Helper()
+	return fakeRankingEngineWithResponse(t, `{"updates":[{"kind":"pinyin","code":"ni","word":"你好","weight":100},{"id":"base-id","kind":"pinyin","code":"hao","word":"好","weight":200}],"selection":{"count":0},"changed":true}`)
+}
+
+func fakeRankingEngineWithResponse(t *testing.T, response string) engine.Config {
+	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("测试脚本使用 POSIX shell，仅在 Unix 上验证数据库批量写入调用次数")
 	}
 	path := t.TempDir() + "/engine.sh"
-	const response = `#!/bin/sh
-printf '%s\n' '{"updates":[{"kind":"pinyin","code":"ni","word":"你好","weight":100},{"id":"base-id","kind":"pinyin","code":"hao","word":"好","weight":200}],"selection":{"count":0},"changed":true}'
-`
-	if err := os.WriteFile(path, []byte(response), 0o700); err != nil {
+	script := "#!/bin/sh\nprintf '%s\\n' '" + strings.ReplaceAll(response, "'", "'\\''") + "'\n"
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return engine.Config{Binary: "/bin/sh", Resources: path}

@@ -307,7 +307,11 @@ func (s *Server) syncQQHistoryVectors(ctx context.Context, repo string) (int, er
 			// 维护者在 issue 下的回复常常就是答案；PR 的正文已经说明了改了什么，不再读评论。
 			comment := ""
 			if kind == "issue" {
-				comment = s.qqMaintainerComment(ctx, repo, issue.Number, issue.qqIssueDetail, qqHistorySummaryRunes)
+				comment, err = s.qqLookupMaintainerComment(ctx, repo, issue.Number, issue.qqIssueDetail, qqHistorySummaryRunes)
+				if err != nil {
+					// 不写入这一页的摘要、哈希或游标，下一轮仍会读取这些 issue 并补全评论。
+					return synced, err
+				}
 			}
 			summary := state + "；" + qqTruncate(body, qqHistorySummaryRunes)
 			if comment != "" {

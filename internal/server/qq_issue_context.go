@@ -125,13 +125,22 @@ func (s *Server) qqReleases(ctx context.Context, repo string) ([]qqRelease, bool
 
 // qqMaintainerComment 返回维护者在 issue 下最近的一条评论（去掉图片后转成纯文本，见 qqPlainText，按句子截到 limit 字以内）；没有评论或读取失败时为空。
 func (s *Server) qqMaintainerComment(ctx context.Context, repo string, number int64, issue qqIssueDetail, limit int) string {
+	comment, err := s.qqLookupMaintainerComment(ctx, repo, number, issue, limit)
+	if err != nil {
+		slog.Warn("qq bot: comment lookup failed", "repo", repo, "reason", err.Error())
+	}
+	return comment
+}
+
+// qqLookupMaintainerComment 区分没有维护者评论和查询失败，持久化索引不能把失败当成已经同步完整。
+func (s *Server) qqLookupMaintainerComment(ctx context.Context, repo string, number int64, issue qqIssueDetail, limit int) (string, error) {
 	if issue.Comments == 0 {
-		return ""
+		return "", nil
 	}
 	client := s.adminGitHub
 	token, err := client.Token(ctx, repo, qqGitHubReadPerms)
 	if err != nil {
-		return ""
+		return "", err
 	}
 	// 评论按时间从旧到新，最多读最近的 100 条：从最后一页读起。
 	page := (issue.Comments + 99) / 100
@@ -141,8 +150,7 @@ func (s *Server) qqMaintainerComment(ctx context.Context, repo string, number in
 		AuthorAssociation string `json:"author_association"`
 	}
 	if err != nil || !r.OK() || r.Decode(&comments) != nil {
-		slog.Warn("qq bot: comment lookup failed", "repo", repo, "reason", githubFailure("comments", r, err).Error())
-		return ""
+		return "", githubFailure("comments", r, err)
 	}
 	for i := len(comments) - 1; i >= 0; i-- {
 		switch comments[i].AuthorAssociation {
@@ -154,9 +162,9 @@ func (s *Server) qqMaintainerComment(ctx context.Context, repo string, number in
 		if text == "" {
 			continue
 		}
-		return qqTruncateSentence(text, limit)
+		return qqTruncateSentence(text, limit), nil
 	}
-	return ""
+	return "", nil
 }
 
 // qqIssueExtras 是一个 issue 补充的上下文文字，每样一行，前面带 prefix；没有可补充的时为空。

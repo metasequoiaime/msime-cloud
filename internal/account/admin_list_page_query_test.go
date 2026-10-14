@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func TestAdminListUserStatisticsRunOnlyForPage(t *testing.T) {
+func TestAdminListUserDetailsRunOnlyForPage(t *testing.T) {
 	db := testStore(t)
 	for _, query := range []string{
 		`INSERT INTO auth_users(id,display_name,created_at) SELECT 'list-user-'||n,'合成账号',now()+n*interval '1 second' FROM generate_series(1,121) n`,
@@ -79,7 +79,9 @@ func TestAdminListUserStatisticsRunOnlyForPage(t *testing.T) {
 					}
 					type node struct {
 						Relation string `json:"Relation Name"`
+						Parent   string `json:"Parent Relationship"`
 						Loops    int    `json:"Actual Loops"`
+						Rows     int    `json:"Actual Rows"`
 						Plans    []node `json:"Plans"`
 					}
 					var plans []struct{ Plan node }
@@ -87,10 +89,18 @@ func TestAdminListUserStatisticsRunOnlyForPage(t *testing.T) {
 						t.Fatal(err, string(raw))
 					}
 					loops := 0
+					identityRows := 0
 					var visit func(node)
 					visit = func(n node) {
+						// 角色子查询也读取身份表，排除它们以单独检查联系人连接。
+						if n.Parent == "SubPlan" {
+							return
+						}
 						if n.Relation == "auth_sessions" {
 							loops += n.Loops
+						}
+						if n.Relation == "auth_identities" {
+							identityRows += n.Rows * n.Loops
 						}
 						for _, child := range n.Plans {
 							visit(child)
@@ -99,6 +109,9 @@ func TestAdminListUserStatisticsRunOnlyForPage(t *testing.T) {
 					visit(plans[0].Plan)
 					if loops != wantRows {
 						t.Errorf("会话统计执行了 %d 次，期望页内 %d 次", loops, wantRows)
+					}
+					if identityRows != wantRows {
+						t.Errorf("联系人读取了 %d 条身份，期望页内 %d 条", identityRows, wantRows)
 					}
 				})
 			}

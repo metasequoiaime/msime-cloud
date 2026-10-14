@@ -66,7 +66,7 @@ func (a *Service) adminOverview(w http.ResponseWriter, r *http.Request, _ string
 		providers = append(providers, service.Provider)
 	}
 	var result json.RawMessage
-	// 每日用户、下载和崩溃序列先按 UTC 日期各聚合一次，再与完整日期序列连接，避免每一天重复扫描三张范围。
+	// 每日序列按 UTC 日期聚合后再补齐空日期；活跃设备先按日期、平台组和设备去重，避免重复遍历事件和大范围排序。
 	err = a.store.pool.QueryRow(r.Context(), `SELECT json_build_object(
    'users',(SELECT count(*) FROM auth_users),
    'new_users_30d',(SELECT count(*) FROM auth_users WHERE created_at>=now()-interval '30 days'),
@@ -103,15 +103,24 @@ func (a *Service) adminOverview(w http.ResponseWriter, r *http.Request, _ string
    'telemetry',json_build_object(
      'active',EXISTS(SELECT 1 FROM admin_events WHERE kind='active' AND created_at>=now()-interval '60 days'),
      'sessions',EXISTS(SELECT 1 FROM admin_events WHERE kind IN ('session','session_crash') AND created_at>=now()-interval '60 days')),
-   'active_devices_daily',(SELECT json_agg(x ORDER BY day) FROM (
-     SELECT to_char(d AT TIME ZONE 'UTC','YYYY-MM-DD') AS day,
-     count(DISTINCT e.install_id) FILTER (WHERE `+overviewPlatform("e.platform")+` = 'windows') AS windows,
-     count(DISTINCT e.install_id) FILTER (WHERE `+overviewPlatform("e.platform")+` IN ('macos','linux')) AS mac_linux,
-     count(DISTINCT e.install_id) FILTER (WHERE `+overviewPlatform("e.platform")+` IN ('android','ios','harmonyos')) AS mobile
-     FROM generate_series(date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' - ($1::int - 1) * interval '1 day',date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC',interval '1 day') d
-     LEFT JOIN admin_events e ON e.kind='active' AND e.install_id IS NOT NULL AND e.created_at>=d AND e.created_at<d+interval '1 day'
-     GROUP BY d
-   ) x),
+   'active_devices_daily',(WITH active_days AS (
+     SELECT d FROM generate_series(date_trunc('day',now() AT TIME ZONE 'UTC') - ($1::int - 1) * interval '1 day',date_trunc('day',now() AT TIME ZONE 'UTC'),interval '1 day') d
+   ), active_devices AS (
+     SELECT date_trunc('day',e.created_at AT TIME ZONE 'UTC') AS d,e.install_id,
+       CASE `+overviewPlatform("e.platform")+` WHEN 'windows' THEN 'windows' WHEN 'macos' THEN 'mac_linux' WHEN 'linux' THEN 'mac_linux' WHEN 'android' THEN 'mobile' WHEN 'ios' THEN 'mobile' WHEN 'harmonyos' THEN 'mobile' END AS device_group
+     FROM admin_events e
+     WHERE e.kind='active' AND e.install_id IS NOT NULL
+       AND e.created_at>= (SELECT min(d) AT TIME ZONE 'UTC' FROM active_days)
+       AND e.created_at< (SELECT (max(d)+interval '1 day') AT TIME ZONE 'UTC' FROM active_days)
+     GROUP BY 1,2,3
+   ), active_daily AS (
+     SELECT d,count(*) FILTER (WHERE device_group='windows') AS windows,
+       count(*) FILTER (WHERE device_group='mac_linux') AS mac_linux,
+       count(*) FILTER (WHERE device_group='mobile') AS mobile
+     FROM active_devices GROUP BY d
+   ) SELECT json_agg(json_build_object('day',to_char(active_days.d,'YYYY-MM-DD'),
+     'windows',COALESCE(active_daily.windows,0),'mac_linux',COALESCE(active_daily.mac_linux,0),'mobile',COALESCE(active_daily.mobile,0)) ORDER BY active_days.d)
+     FROM active_days LEFT JOIN active_daily USING(d)),
    'active_devices_7d',(SELECT count(DISTINCT install_id) FROM admin_events WHERE kind='active' AND created_at>=now()-interval '7 days'),
    'active_devices_prev_7d',(SELECT count(DISTINCT install_id) FROM admin_events WHERE kind='active' AND created_at>=now()-interval '14 days' AND created_at<now()-interval '7 days'),
    'platform_active_7d',(SELECT COALESCE(json_object_agg(platform,devices ORDER BY devices DESC),'{}'::json) FROM (

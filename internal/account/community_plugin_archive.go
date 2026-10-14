@@ -3,6 +3,7 @@ package account
 import (
 	"archive/zip"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -17,10 +18,12 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-// Limits for community plugin packs. The pack rules mirror crates/client-core/src/plugins.rs and plugins/import.rs in the client, so a pack the server accepts installs there; the archive, decompression and quota bounds are the server's own.
+// 社区插件包的规则与客户端 plugins.rs 和 plugins/import.rs 一致；上传、解压和账号配额另受服务端限制。
 const (
 	maxPluginArchiveBytes   = 8 << 20
 	maxPluginArchiveMembers = 64
+	// 与客户端的目录读取预算一致：为结尾记录、最长归档注释及 64 个成员的元数据保留空间。
+	maxPluginDirectoryReadBytes = 128<<10 + maxPluginArchiveMembers*(4<<10)
 	// The client refuses a pack folder with more regular files than this, the manifest and notices included.
 	maxPluginPackFiles     = 16
 	maxPluginManifestBytes = 256 << 10
@@ -213,18 +216,44 @@ type pluginMember struct {
 	data []byte
 }
 
-// readPluginArchive walks a bounded zip archive the way the client's import does and returns the pack files by plain name. Hidden members and __MACOSX are skipped like the client skips them, but they still count toward the member cap and must have safe paths. Every pack file is inflated once, through a reader bounded by its declared size, so a forged size or a bad CRC fails here.
+var errPluginDirectoryTooLarge = errors.New("plugin archive directory exceeds read budget")
+
+// pluginDirectoryReader 在解析目录期间限制累计读取量，避免标准库在成员数检查前解析全部成员。
+// 校验通过后解除预算，文件内容仍由各自的大小上限约束；整个归档校验按顺序读取。
+type pluginDirectoryReader struct {
+	*bytes.Reader
+	remaining int64
+}
+
+func (r *pluginDirectoryReader) ReadAt(p []byte, offset int64) (int, error) {
+	if r.remaining >= 0 && int64(len(p)) > r.remaining {
+		return 0, errPluginDirectoryTooLarge
+	}
+	n, err := r.Reader.ReadAt(p, offset)
+	if r.remaining >= 0 {
+		r.remaining -= int64(n)
+	}
+	return n, err
+}
+
+// readPluginArchive 按客户端导入规则返回插件文件。隐藏成员也计入成员数并检查路径。
+// 目录解析受读取预算限制，各文件按声明大小解压一次；伪造长度或 CRC 不符均拒绝。
 func readPluginArchive(archive []byte) (map[string]pluginMember, string) {
 	if len(archive) < 1 || len(archive) > maxPluginArchiveBytes {
 		return nil, "plugin_too_large"
 	}
-	reader, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+	directory := &pluginDirectoryReader{Reader: bytes.NewReader(archive), remaining: maxPluginDirectoryReadBytes}
+	reader, err := zip.NewReader(directory, int64(len(archive)))
+	if errors.Is(err, errPluginDirectoryTooLarge) {
+		return nil, "plugin_too_large"
+	}
 	if err != nil {
 		return nil, "invalid_plugin_archive"
 	}
 	if len(reader.File) > maxPluginArchiveMembers {
 		return nil, "plugin_too_large"
 	}
+	directory.remaining = -1
 	type entry struct {
 		parts []string
 		file  *zip.File

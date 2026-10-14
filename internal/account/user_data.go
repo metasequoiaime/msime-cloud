@@ -97,10 +97,12 @@ func (s *Store) DeleteUserData(ctx context.Context, user string, sections map[st
  INSERT INTO user_dictionary_changes(user_id,revision,change) SELECT $1,revision,jsonb_build_object('revision',revision,'reset',true) FROM next`,
 			`INSERT INTO user_dictionary_state(user_id,revision) VALUES($1,1) ON CONFLICT(user_id) DO UPDATE SET revision=user_dictionary_state.revision+1`)
 	}
+	batch := &pgx.Batch{}
 	for _, statement := range statements {
-		if _, err = tx.Exec(ctx, statement, user); err != nil {
-			return err
-		}
+		batch.Queue(statement, user)
+	}
+	if err = tx.SendBatch(ctx, batch).Close(); err != nil {
+		return err
 	}
 	return tx.Commit(ctx)
 }

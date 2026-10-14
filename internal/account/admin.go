@@ -167,10 +167,11 @@ SELECT json_build_object('items', COALESCE((SELECT json_agg(item ORDER BY create
 	if unfiltered {
 		// 空搜索和空筛选只需要页内完整条目；允许各处分别展开 source，使计数和分页跳过逐条统计。
 		// 空参数仍显式绑定，保留各列表固定参数的编号和类型。
+		// 详情按页内 ID 关联查询；OFFSET 0 阻止子查询展开，避免内部统计先于页内筛选执行。
 		sql = `WITH source AS NOT MATERIALIZED (` + list.query + `), selected AS MATERIALIZED (
  SELECT id,created_at FROM source WHERE $1::text=''` + emptyFilters + ` ORDER BY created_at DESC,id DESC LIMIT 50 OFFSET $2
 ), total AS MATERIALIZED (SELECT count(*) AS count FROM source)
-SELECT json_build_object('items',COALESCE((SELECT json_agg(to_jsonb(x) ORDER BY x.created_at DESC,x.id DESC) FROM source x JOIN selected p ON p.id=x.id),'[]'::json),
+SELECT json_build_object('items',COALESCE((SELECT json_agg(to_jsonb(x) ORDER BY x.created_at DESC,x.id DESC) FROM selected p CROSS JOIN LATERAL (SELECT * FROM source item_row WHERE item_row.id=p.id OFFSET 0) x),'[]'::json),
  'page',$3::int,'total',(SELECT count FROM total),'has_more',(SELECT count FROM total)>$2+50)`
 	}
 	var result json.RawMessage

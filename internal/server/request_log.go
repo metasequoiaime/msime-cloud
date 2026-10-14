@@ -23,8 +23,8 @@ type requestRecorder struct {
 }
 
 func (w *requestRecorder) WriteHeader(status int) {
-	// 1xx 是中间响应（例如 WebSocket 的 101），之后仍可能写最终状态。
-	if w.status == 0 || w.status < 200 {
+	// 普通 1xx 不结束响应；101 升级协议是最终状态，与 net/http 的行为一致。
+	if w.status == 0 && (status >= 200 || status == http.StatusSwitchingProtocols) {
 		w.status = status
 	}
 	w.ResponseWriter.WriteHeader(status)

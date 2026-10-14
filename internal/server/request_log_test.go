@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"log"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -184,7 +185,6 @@ func TestRequestLogRoutesAndLevels(t *testing.T) {
 func TestRequestRecorder(t *testing.T) {
 	inner := httptest.NewRecorder()
 	rec := &requestRecorder{ResponseWriter: inner}
-	rec.WriteHeader(http.StatusSwitchingProtocols)
 	rec.WriteHeader(http.StatusAccepted)
 	rec.WriteHeader(http.StatusTeapot)
 	if rec.status != http.StatusAccepted {
@@ -201,6 +201,52 @@ func TestRequestRecorder(t *testing.T) {
 	_, _ = implicit.Write([]byte("x"))
 	if implicit.status != http.StatusOK {
 		t.Fatal(implicit.status)
+	}
+}
+
+func TestRequestRecorderInformationalResponses(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		headers []int
+		body    string
+		status  int
+	}{
+		{"implicit after hints", []int{http.StatusEarlyHints}, "abc", http.StatusOK},
+		{"explicit after hints", []int{http.StatusContinue, http.StatusEarlyHints, http.StatusAccepted}, "abc", http.StatusAccepted},
+		{"switching protocols is final", []int{http.StatusSwitchingProtocols, http.StatusAccepted}, "", http.StatusSwitchingProtocols},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			type recorded struct {
+				status int
+				bytes  int64
+				err    error
+			}
+			done := make(chan recorded, 1)
+			// 真实 HTTP 服务支持多次 1xx；httptest.ResponseRecorder 只保留首个状态。
+			srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				rec := &requestRecorder{ResponseWriter: w}
+				for _, status := range tc.headers {
+					rec.WriteHeader(status)
+				}
+				var err error
+				if tc.body != "" {
+					_, err = rec.Write([]byte(tc.body))
+				}
+				done <- recorded{rec.status, rec.bytes, err}
+			}))
+			srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+			srv.Start()
+			defer srv.Close()
+			res, err := srv.Client().Get(srv.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer res.Body.Close()
+			got := <-done
+			if got.err != nil || got.status != tc.status || got.bytes != int64(len(tc.body)) || res.StatusCode != tc.status {
+				t.Fatalf("记录=%+v，HTTP 状态=%d，期望=%d", got, res.StatusCode, tc.status)
+			}
+		})
 	}
 }
 

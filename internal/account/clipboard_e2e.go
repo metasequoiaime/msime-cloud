@@ -285,16 +285,18 @@ func (s *Store) RotateClipboardKey(ctx context.Context, user string, c Clipboard
 	if revoke == nil {
 		revoke = []string{}
 	}
-	if _, e = tx.Exec(ctx, "DELETE FROM user_clipboard_devices WHERE user_id=$1 AND device_id=ANY($2)", user, revoke); e != nil {
-		return e
-	}
 	devices := make([]string, len(c.Wraps))
 	wraps := make([]string, len(c.Wraps))
 	for i, w := range c.Wraps {
 		devices[i], wraps[i] = w.DeviceID, w.Wrap
 	}
 	var registered int
-	if e = tx.QueryRow(ctx, "SELECT count(*) FROM user_clipboard_devices WHERE user_id=$1 AND device_id=ANY($2)", user, devices).Scan(&registered); e != nil {
+	// 同一语句的计数读取删除前的快照，显式排除撤销设备才能得到删除后的登记数。
+	if e = tx.QueryRow(ctx, `WITH revoked AS (
+ DELETE FROM user_clipboard_devices WHERE user_id=$1 AND device_id=ANY($3)
+)
+SELECT count(*) FROM user_clipboard_devices
+WHERE user_id=$1 AND device_id=ANY($2) AND NOT (device_id=ANY($3))`, user, devices, revoke).Scan(&registered); e != nil {
 		return e
 	}
 	if registered != len(devices) {

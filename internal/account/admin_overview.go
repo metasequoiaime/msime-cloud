@@ -72,8 +72,8 @@ func (a *Service) adminOverview(w http.ResponseWriter, r *http.Request, _ string
    'new_users_30d',(SELECT count(*) FROM auth_users WHERE created_at>=now()-interval '30 days'),
    'session_users',(SELECT count(DISTINCT user_id) FROM auth_sessions WHERE NOT revoked AND expires_at>now()),
    'downloads',(SELECT count(*) FROM admin_events WHERE kind='download'),
-   'crashes',(SELECT count(*) FROM admin_events WHERE kind='crash'),
-   'open_crashes',(SELECT count(*) FROM admin_events WHERE kind='crash' AND NOT resolved),
+   'crashes',crash_counts.crashes,
+   'open_crashes',crash_counts.open_crashes,
    'skins',(SELECT count(*) FROM community_skins WHERE moderation<>'removed'),
    'skin_downloads',(SELECT count(*) FROM community_skin_downloads),
    'plugins',(SELECT count(*) FROM community_plugins WHERE moderation<>'removed'),
@@ -140,7 +140,8 @@ func (a *Service) adminOverview(w http.ResponseWriter, r *http.Request, _ string
        UNION ALL
        SELECT service,service,'',1000+row_number() OVER (ORDER BY service) FROM (SELECT DISTINCT service FROM admin_service_daily WHERE day>=(now() AT TIME ZONE 'UTC')::date-59) d WHERE cardinality($3::text[])=0
      ) s
-     LEFT JOIN LATERAL (SELECT ok_minutes,total_minutes,degraded,p95_ms FROM admin_service_daily WHERE service=s.key AND day>=(now() AT TIME ZONE 'UTC')::date-1 ORDER BY day DESC LIMIT 1) today ON true)) FROM (`+communityResourceCountsQuery+`) resource_counts`,
+     LEFT JOIN LATERAL (SELECT ok_minutes,total_minutes,degraded,p95_ms FROM admin_service_daily WHERE service=s.key AND day>=(now() AT TIME ZONE 'UTC')::date-1 ORDER BY day DESC LIMIT 1) today ON true)) FROM (`+communityResourceCountsQuery+`) resource_counts
+ CROSS JOIN (SELECT count(*) AS crashes,count(*) FILTER (WHERE NOT resolved) AS open_crashes FROM admin_events WHERE kind='crash') crash_counts`,
 		days, community, keys, names, providers, len(a.admin.Services) > 0).Scan(&result)
 	if err != nil {
 		a.error(w, err)

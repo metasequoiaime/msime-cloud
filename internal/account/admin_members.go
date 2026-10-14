@@ -135,11 +135,10 @@ func (a *Service) AdminMembersHTTP(w http.ResponseWriter, r *http.Request, owner
 	}
 	// Also clear sessions and personal access tokens on re-enable and on add, so historical credentials never regain access: a former owner removed from the configuration keeps rows that no longer pass the allow list, and adding that email as a member would otherwise revive them. A role change applies on the next request and keeps them.
 	if v.Action == "add" || v.Action == "enable" || v.Action == "disable" || v.Action == "revoke" {
-		if _, err = tx.Exec(r.Context(), `DELETE FROM admin_sessions WHERE email=$1`, v.Email); err != nil {
-			a.error(w, err)
-			return
-		}
-		if _, err = tx.Exec(r.Context(), `DELETE FROM admin_tokens WHERE email=$1`, v.Email); err != nil {
+		batch := &pgx.Batch{}
+		batch.Queue(`DELETE FROM admin_sessions WHERE email=$1`, v.Email)
+		batch.Queue(`DELETE FROM admin_tokens WHERE email=$1`, v.Email)
+		if err = tx.SendBatch(r.Context(), batch).Close(); err != nil {
 			a.error(w, err)
 			return
 		}

@@ -57,7 +57,7 @@ func TestResourceSaveExistingUsesOneDatabaseRoundTrip(t *testing.T) {
 	trace.mu.Lock()
 	queries := trace.queries
 	trace.mu.Unlock()
-	if queries != 3 {
-		t.Fatalf("重复收藏应使用限流、鉴权和一次合并写入共 3 条语句，实际为 %d", queries)
+	if queries != 6 {
+		t.Fatalf("重复收藏应使用包含用户行锁事务的固定查询数，实际为 %d", queries)
 	}
 }

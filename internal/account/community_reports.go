@@ -54,7 +54,7 @@ func (a *Service) CommunityReport(w http.ResponseWriter, r *http.Request) {
 		a.error(w, err)
 		return
 	}
-	tx, err := a.store.pool.Begin(ctx)
+	tx, err := a.store.userDataTransaction(ctx, p.UserID)
 	if err != nil {
 		a.error(w, err)
 		return

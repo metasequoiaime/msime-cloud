@@ -708,7 +708,7 @@ func (a *Service) communityCandidateDownload(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
-	tx, e := a.store.pool.Begin(r.Context())
+	tx, e := a.store.userDataTransaction(r.Context(), p.UserID)
 	if e != nil {
 		a.error(w, e)
 		return
@@ -765,7 +765,13 @@ func (a *Service) communityCandidateRate(w http.ResponseWriter, r *http.Request)
 	}
 	// 登录即可评分，不再要求先下载；仍然不能给自己的作品评分。
 	var written, exists bool
-	e := a.store.pool.QueryRow(r.Context(), `WITH eligible AS MATERIALIZED (
+	tx, e := a.store.userDataTransaction(r.Context(), p.UserID)
+	if e != nil {
+		a.error(w, e)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	e = tx.QueryRow(r.Context(), `WITH eligible AS MATERIALIZED (
  SELECT id FROM community_candidate_skins WHERE id=$1 AND visibility='public' AND moderation<>'removed' AND owner_id<>$2
 ), written AS (
  INSERT INTO community_candidate_skin_ratings(skin_id,user_id,stars)
@@ -785,6 +791,10 @@ SELECT EXISTS(SELECT 1 FROM written),EXISTS(SELECT 1 FROM community_candidate_sk
 			return
 		}
 		writeError(w, 403, "download_before_rating_or_own_skin")
+		return
+	}
+	if e = tx.Commit(r.Context()); e != nil {
+		a.error(w, e)
 		return
 	}
 	write(w, 200, map[string]int{"stars": input.Stars})

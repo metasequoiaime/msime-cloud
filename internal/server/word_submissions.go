@@ -366,8 +366,13 @@ func (s *Server) submitWords(w http.ResponseWriter, r *http.Request) {
 	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, wordSubmissionBodyBytes))
 	d.DisallowUnknownFields()
 	err := d.Decode(&input)
-	if err == nil && d.Decode(new(any)) != io.EOF {
-		err = errors.New("trailing data")
+	if err == nil {
+		err = d.Decode(new(any))
+		if err == io.EOF {
+			err = nil
+		} else if err == nil {
+			err = errors.New("trailing data")
+		}
 	}
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {

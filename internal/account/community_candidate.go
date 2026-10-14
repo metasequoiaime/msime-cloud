@@ -415,7 +415,7 @@ func (a *Service) communityCandidateList(w http.ResponseWriter, r *http.Request)
 		offset = n
 	}
 	search := r.URL.Query().Get("q")
-	if !utf8.ValidString(search) || len(search) > 128 {
+	if !utf8.ValidString(search) || len(search) > 128 || strings.ContainsRune(search, 0) {
 		writeError(w, 400, "invalid_search")
 		return
 	}

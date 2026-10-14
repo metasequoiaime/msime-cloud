@@ -1,5 +1,7 @@
 # 插件社区
 
+目录的 `q` 必须是有效 UTF-8 且不能含 NUL，否则返回 400 `invalid_search`。
+
 社区插件接口位于 `/v1/community/plugins`，分发客户端插件包：音效包（`sound`）、音乐包（`music`）、指令表（`command_table`）、特效包（`effect`）、辅助码表（`helpcode`）、符号集（`symbol_set`）、短语表（`phrase_table`）和单词本（`wordbook`），与客户端的 `PluginKind` 一致。插件包是一个 zip，内含 `plugin.toml`、被引用的音频或数据文件和可选的说明文本（`effect`、`phrase_table`、`symbol_set` 只有清单）。新增的四种类型都是纯数据，不能带可执行内容。服务器只校验、存储和原样分发字节，从不解码音频、执行脚本或加载包内任何内容；客户端安装前仍按自己的规则再校验一次。
 
 ## 接口

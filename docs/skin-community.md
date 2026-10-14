@@ -5,6 +5,7 @@
 ## 接口
 
 - `GET /v1/community/skins?q=&offset=0&scope=&fields=&category=&include=`：公开目录，按发布时间倒序每页 20 条，返回 `skins` 和 `has_more`。目录不含壁纸字节。`scope=mine` 只列出自己的作品（含被审核员下架的）；`scope=saved` 只列出自己收藏的作品，按收藏时间倒序，分页方式相同，别人已下架的作品不再列出。两者都需要用户会话，否则 401 `user_session_required`；其他 scope 返回 400 `invalid_scope`。`category` 只列出该分类的作品（见下文「键盘皮肤分类」），未知分类返回 400 `invalid_category`。
+- 目录的 `q` 按名称不区分大小写子串匹配，最多 128 字节，必须是有效 UTF-8 且不能含 NUL，否则返回 400 `invalid_search`。
 - `GET /v1/community/skins/{id}?fields=&include=`：公开详情，含完整 design；登录时额外返回自己的评分与是否为作者。
 - `POST /v1/community/skins`：需要用户会话，提交 `{id,name,description,design,category?}`。id 为客户端生成的 UUID，用于网络失败后的安全重试。`category` 缺省（或为 null）时为 `other`，未知值或空串返回 400 `invalid_category`。每个账号最多 50 款。响应仍为 `{id}`（首次 201，重试 200），不是作品条目，所以不读 `include`。
 - `PATCH /v1/community/skins/{id}?fields=&include=`：仅作者可修改（他人的作品与不存在一样返回 404 `skin_not_found`），提交 `{"category":"<分类>"}`；category 缺省、为 null、空串或未知值都返回 400 `invalid_category`，其他键返回 400 `invalid_json`。返回 200 和与详情形状相同的作品（含完整 design），同样支持 `fields=moderation` 与 `include=category`。不改变审核状态，设为当前分类同样返回 200。被审核员下架的作品作者仍可修改。限流与其他社区接口相同，计入按地址的每分钟额度（超出 429 `rate_limit_exceeded`）。分类见下文「键盘皮肤分类」。
@@ -107,6 +108,7 @@ msime-skins 清单写 `base = "fluent"`（msime-windows 只接受四个内置 ID
 ### 接口
 
 - `GET /v1/community/candidate-skins?q=&offset=0&scope=&fields=&category=&include=`：公开目录，按发布时间倒序每页 20 条，返回 `skins` 和 `has_more`，不含清单和图片字节。`scope=mine` 只列出自己的作品；`scope=saved` 只列出自己收藏的作品，按收藏时间倒序。两者都需要用户会话，否则 401 `user_session_required`；其他 scope 返回 400 `invalid_scope`。只有 scope 非空且 `fields` 含 `sync` 时才会包含自己的私有作品，其余情况只列公开作品；别人的私有作品永远不出现，收藏之后被作者设为私有的作品也会从收藏者的列表里消失。`category` 只列出该分类的作品（见下文「分类」），未知分类返回 400 `invalid_category`。
+- 候选皮肤目录的 `q` 与键盘皮肤目录相同：按名称不区分大小写子串匹配，最多 128 字节，必须是有效 UTF-8 且不能含 NUL，否则返回 400 `invalid_search`。
 - `GET /v1/community/candidate-skins/{id}?fields=&include=`：公开详情；登录时额外返回自己的评分与是否为作者。私有作品只有作者带 `fields=sync` 时可见，其他情况与不存在一样返回 404 `skin_not_found`。
 - 列表和详情的 `fields` 是逗号分隔的列表，取值 `sync`、`moderation`、`saved`，可任意组合，例如 `fields=sync,moderation`、`fields=sync,saved`。`moderation` 和 `saved` 的含义与用户皮肤相同（见上文），单独使用时不会带出同步字段。
 - `GET /v1/community/candidate-skins/{id}/preview`：返回预览图 `{path,content_type,data}`，data 为标准 base64，content_type 为 `image/png` 或 `image/jpeg`。公开作品任何人可取，私有作品仅作者可取，否则 404。

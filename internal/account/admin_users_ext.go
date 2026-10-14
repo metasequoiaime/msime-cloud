@@ -36,11 +36,11 @@ func (a *Service) adminOwnersArg() []string {
 	return append([]string{}, a.admin.Owners...)
 }
 
-// userContactSQL picks the user's primary contact (an email-code address, then a provider email, then a phone number) and masks it in the database, so the console never receives a full address or number: "j***@gmail.com", "+86****2201"; a short phone number keeps only its last two digits, so most of it stays hidden.
-const userContactSQL = `LEFT JOIN LATERAL (SELECT CASE WHEN c.kind='phone' THEN left(c.value,3)||'****'||right(c.value,CASE WHEN length(c.value)>=12 THEN 4 ELSE 2 END) ELSE left(c.value,1)||'***@'||split_part(c.value,'@',2) END AS contact,c.kind AS contact_kind FROM (
+// userContactSQL 按邮箱验证码、提供方邮箱、手机的优先级选择并脱敏联系人，短手机号只保留末两位；外层聚合最多一行，让分页和总数查询可以移除未使用的联系人连接。
+const userContactSQL = `LEFT JOIN LATERAL (SELECT max(chosen.contact) AS contact,max(chosen.contact_kind) AS contact_kind FROM (SELECT CASE WHEN c.kind='phone' THEN left(c.value,3)||'****'||right(c.value,CASE WHEN length(c.value)>=12 THEN 4 ELSE 2 END) ELSE left(c.value,1)||'***@'||split_part(c.value,'@',2) END AS contact,c.kind AS contact_kind FROM (
  SELECT CASE WHEN i.provider='phone' THEN 'phone' ELSE 'email' END AS kind,CASE WHEN i.provider IN ('email','phone') THEN i.subject ELSE i.email END AS value,
  CASE i.provider WHEN 'email' THEN 0 WHEN 'phone' THEN 2 ELSE 1 END AS rank,i.created_at
- FROM auth_identities i WHERE i.user_id=u.id AND (i.provider IN ('email','phone') OR i.email LIKE '_%@_%')) c ORDER BY c.rank,c.created_at LIMIT 1) contact ON true`
+ FROM auth_identities i WHERE i.user_id=u.id AND (i.provider IN ('email','phone') OR i.email LIKE '_%@_%')) c ORDER BY c.rank,c.created_at LIMIT 1) chosen) contact ON true`
 
 // userActivitySQL 在一次聚合里统计用户的总会话数、活跃会话数和最近活动：每次刷新都会签发有效期 15 分钟的访问令牌，因此 access_expires 减去 15 分钟就是最近刷新时间。
 const userActivitySQL = `LEFT JOIN LATERAL (SELECT count(*) AS total_sessions,count(*) FILTER (WHERE NOT s.revoked AND s.expires_at>now()) AS devices,

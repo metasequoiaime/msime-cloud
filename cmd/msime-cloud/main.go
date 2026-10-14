@@ -54,7 +54,7 @@ const (
 	defaultServer      = "https://api.msime.app"
 	defaultAdminServer = "https://admin.msime.app"
 	requestTimeout     = 5 * time.Minute
-	// The longest Retry-After the command waits out by itself; a longer one is reported.
+	// 自动等待 Retry-After 的最长时长；超过上限时直接返回响应。
 	maxRetryWait = time.Minute
 )
 
@@ -376,17 +376,18 @@ func (c cli) refresh(server string, used session) (session, error) {
 	return next, sessions.putLocked(server, &next)
 }
 
-// do sends r, and once more after the wait a 429 asks for when that is at most maxRetryWait: the body is in memory, so the retry is the same request.
+// do 发送请求，429 要求的等待不超过 maxRetryWait 时重试一次；请求正文保存在内存中。
 func (c cli) do(server string, r request, token string) (*http.Response, error) {
 	response, err := c.doOnce(server, r, token)
 	if err != nil || response.StatusCode != http.StatusTooManyRequests {
 		return response, err
 	}
 	seconds, parseErr := strconv.Atoi(strings.TrimSpace(response.Header.Get("Retry-After")))
-	wait := time.Duration(seconds) * time.Second
-	if parseErr != nil || seconds < 0 || wait > maxRetryWait {
+	// 先检查秒数再转换时长，避免大整数乘以 time.Second 后溢出。
+	if parseErr != nil || seconds < 0 || seconds > int(maxRetryWait/time.Second) {
 		return response, nil
 	}
+	wait := time.Duration(seconds) * time.Second
 	response.Body.Close()
 	fmt.Fprintf(c.stderr, "msime-cloud: rate limited; retrying in %s\n", wait)
 	time.Sleep(wait)

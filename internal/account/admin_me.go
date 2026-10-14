@@ -297,7 +297,12 @@ func (a *Service) adminMeAction(w http.ResponseWriter, r *http.Request, _ string
 	case "regenerate_token":
 		var token string
 		var info adminTokenInfo
-		if token, info, err = issueAdminToken(ctx, tx, access.Email); err == nil {
+		token, info, err = issueAdminToken(ctx, tx, access.Email)
+		if errors.Is(err, ErrInvalid) {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		if err == nil {
 			err = auditTx(ctx, tx, "admin_token_regenerate", access.Email, map[string]any{"last4": info.Last4})
 		}
 		out["token"], out["last4"], out["created_at"], out["expires_at"] = token, info.Last4, info.CreatedAt, info.ExpiresAt

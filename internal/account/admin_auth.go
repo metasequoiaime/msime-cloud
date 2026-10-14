@@ -38,6 +38,12 @@ func adminProfileText(s string, max int) string {
 
 type AdminLoginFlow struct{ Nonce, Verifier string }
 type adminActorKey struct{}
+type adminSessionKey struct{}
+
+// WithAdminSession 保存已通过鉴权的来源会话哈希，供敏感操作在事务中重新验证；不保存明文凭据。
+func WithAdminSession(ctx context.Context, token string) context.Context {
+	return context.WithValue(ctx, adminSessionKey{}, hash(token))
+}
 
 func WithAdminActor(ctx context.Context, actor string) context.Context {
 	return context.WithValue(ctx, adminActorKey{}, actor)

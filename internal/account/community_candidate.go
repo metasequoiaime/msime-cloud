@@ -998,7 +998,12 @@ func (a *Service) communityCandidateVisibility(w http.ResponseWriter, r *http.Re
 	}
 	defer tx.Rollback(r.Context())
 	var visibility, assets, category string
-	e = tx.QueryRow(r.Context(), `SELECT visibility,license_assets,category FROM community_candidate_skins WHERE id=$1 AND owner_id=$2 FOR UPDATE`, id, p.UserID).Scan(&visibility, &assets, &category)
+	var public int
+	e = tx.QueryRow(r.Context(), `SELECT s.visibility,s.license_assets,s.category,
+	CASE WHEN $3 AND s.visibility<>'public' AND btrim(s.license_assets)<>''
+		THEN (SELECT count(*) FROM community_candidate_skins WHERE owner_id=$2 AND visibility='public')
+		ELSE 0 END
+FROM community_candidate_skins s WHERE s.id=$1 AND s.owner_id=$2 FOR UPDATE`, id, p.UserID, input.Visibility != nil && *input.Visibility == "public").Scan(&visibility, &assets, &category, &public)
 	if errors.Is(e, pgx.ErrNoRows) {
 		writeError(w, 404, "skin_not_found")
 		return
@@ -1011,11 +1016,6 @@ func (a *Service) communityCandidateVisibility(w http.ResponseWriter, r *http.Re
 		if *input.Visibility == "public" {
 			if strings.TrimSpace(assets) == "" {
 				writeError(w, 400, "candidate_skin_license_required")
-				return
-			}
-			var public int
-			if e = tx.QueryRow(r.Context(), `SELECT count(*) FROM community_candidate_skins WHERE owner_id=$1 AND visibility='public'`, p.UserID).Scan(&public); e != nil {
-				a.error(w, e)
 				return
 			}
 			if public >= a.candidatePublicLimit(p.UserID) {

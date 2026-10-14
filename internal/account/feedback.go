@@ -105,10 +105,13 @@ func (p *feedbackPayload) validate() string {
 
 var errInvalidScreenshot = errors.New("invalid_screenshot")
 
-// normalizeScreenshot 解码一张 PNG 或 JPEG 截图并按原格式重新编码，存下来的只有像素，不带 EXIF、文本块等元数据。
+// normalizeScreenshot 在完整解码前校验尺寸和 JPEG 扫描数，再按原格式重新编码 PNG 或 JPEG，存下来的只有像素，不带 EXIF、文本块等元数据。
 func normalizeScreenshot(data []byte) (feedbackScreenshot, error) {
 	config, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil || (format != "png" && format != "jpeg") || config.Width < 1 || config.Height < 1 || config.Width > maxFeedbackScreenshotSide || config.Height > maxFeedbackScreenshotSide || config.Width*config.Height > maxFeedbackScreenshotPixels {
+		return feedbackScreenshot{}, errInvalidScreenshot
+	}
+	if format == "jpeg" && jpegScans(data) > maxJPEGScans {
 		return feedbackScreenshot{}, errInvalidScreenshot
 	}
 	source, _, err := image.Decode(bytes.NewReader(data))

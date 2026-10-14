@@ -90,7 +90,7 @@ func parseCommunityDesign(raw json.RawMessage) (CommunityDesign, error) {
 		}
 	}
 	if len(v.Photo) > 0 {
-		if len(v.Photo) > 512000 {
+		if len(v.Photo) > 512000 || jpegScans(v.Photo) > maxJPEGScans {
 			return v, ErrInvalid
 		}
 		config, err := jpeg.DecodeConfig(bytes.NewReader(v.Photo))

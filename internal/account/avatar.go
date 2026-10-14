@@ -51,10 +51,13 @@ func (a *Service) present(u User) User {
 	return u
 }
 
-// normalizeAvatar decodes an uploaded PNG or JPEG, crops it to its centred square and re-encodes it as a 256×256 JPEG on white, so what is stored carries no metadata and has one size and type however it was uploaded.
+// normalizeAvatar 在完整解码前校验尺寸和 JPEG 扫描数，再将 PNG 或 JPEG 居中裁为正方形，透明像素铺白底并重编码为不含元数据的 256×256 JPEG。
 func normalizeAvatar(data []byte) ([]byte, error) {
 	config, format, e := image.DecodeConfig(bytes.NewReader(data))
 	if e != nil || (format != "png" && format != "jpeg") || config.Width < 1 || config.Height < 1 || config.Width > maxAvatarSourceSide || config.Height > maxAvatarSourceSide {
+		return nil, errInvalidAvatar
+	}
+	if format == "jpeg" && jpegScans(data) > maxJPEGScans {
 		return nil, errInvalidAvatar
 	}
 	source, _, e := image.Decode(bytes.NewReader(data))

@@ -16,7 +16,7 @@
 
 摘要字段：id、name、description、author、design、downloads、rating_count、rating_average、owned、my_rating，仅在 `fields=moderation` 时出现在自己作品上的 moderation，仅在 `fields=saved` 时出现的 saved（当前用户是否收藏，匿名为 false）和 saves（收藏总数），以及仅在 `include=category` 时出现的 category。列表和详情的 `fields` 是逗号分隔的列表，可以组合，例如 `fields=moderation,saved`；不带 `saved` 时响应与加入收藏之前逐字节相同。人数代表累计去重下载账号数，不代表实时活跃使用人数。发布之后不允许原地替换设计以继承旧版评分；修改设计需发布新作品。
 
-标题最多 32 个 Unicode 字符，说明最多 280 个；设计颜色为 24-bit RGB、数值范围与 iOS 编辑器一致。JSON 请求最大 710,000 字节，壁纸最多 512,000 字节且长宽均不超过 1024。服务器解码后重编码 JPEG，移除原图元数据。未知字段或错误图片会被拒绝。
+标题最多 32 个 Unicode 字符，说明最多 280 个；设计颜色为 24-bit RGB、数值范围与 iOS 编辑器一致。JSON 请求最大 710,000 字节，壁纸最多 512,000 字节且长宽均不超过 1024，JPEG 最多 32 个扫描段（SOS），在完整解码前校验。服务器解码后重编码 JPEG，移除原图元数据。未知字段或错误图片会被拒绝。
 
 作者查看自己作品的审核状态：列表和详情带 `fields=moderation` 时，当前用户自己的作品多一个 `moderation` 字段（`approved`、`pending` 或 `removed`）；他人的作品和匿名访问永远不带，也不返回下架原因。不带这个参数时响应与以前逐字节相同，因为已发布的客户端按拒绝未知字段的方式解析。社区是事后审核，`pending` 的作品已经公开，客户端只需对 `removed` 显示「已下架」徽标。其他 `fields` 值返回 400 `invalid_fields`。
 

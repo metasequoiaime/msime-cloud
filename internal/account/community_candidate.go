@@ -32,8 +32,6 @@ const (
 	maxCandidateManifestBytes = 65536
 	maxCandidateSide          = 2048
 	maxCandidatePixels        = 8_000_000
-	// Go's JPEG decoder walks every block of the image once per scan and sets no limit on the scan count, so decode cost is scans times pixels and a small file with thousands of scans pins a core. Standard progressive scripts use about ten scans and optimising encoders stay near twenty.
-	maxCandidateJPEGScans = 32
 	// Covers 2 MiB of images in base64 (2,796,204 bytes) plus a JSON-escaped 64 KiB manifest, keys and metadata.
 	maxCandidatePublishBytes = 3_200_000
 	// Public rows are the gallery quota; private rows are an account's synced library, so the total bound is higher.
@@ -319,40 +317,6 @@ func candidatePackageLicense(pkg skins.Package) CandidateSkinLicense {
 	return CandidateSkinLicense{Code: pkg.License.Code, Assets: pkg.License.Assets, Source: pkg.License.Source}
 }
 
-// candidateJPEGScans counts the SOS markers the Go decoder would process, following its marker loop: bytes outside a marker are skipped, fill bytes and restart markers carry no length, and the entropy-coded data after an SOS header ends at the first 0xFF that is not followed by 0x00 or a restart marker. It stops at EOI or at the end of the data and leaves structural errors to the decoder.
-func candidateJPEGScans(data []byte) int {
-	scans := 0
-	for i := 2; i+1 < len(data); {
-		if data[i] != 0xFF {
-			i++
-			continue
-		}
-		marker := data[i+1]
-		switch {
-		case marker == 0xFF:
-			i++
-			continue
-		case marker == 0xD9:
-			return scans
-		case marker == 0x00 || marker >= 0xD0 && marker <= 0xD7:
-			i += 2
-			continue
-		}
-		if i+3 >= len(data) {
-			return scans
-		}
-		i += 2 + (int(data[i+2])<<8 | int(data[i+3]))
-		if marker != 0xDA {
-			continue
-		}
-		scans++
-		for i+1 < len(data) && (data[i] != 0xFF || data[i+1] == 0x00 || data[i+1] >= 0xD0 && data[i+1] <= 0xD7) {
-			i++
-		}
-	}
-	return scans
-}
-
 // sanitizeCandidateImages decodes every image with the codec its extension names and re-encodes it, which drops EXIF, XMP, ICC and text chunks and flattens APNG to its first frame. Dimensions and JPEG scan counts are checked from the headers before any full decode.
 func sanitizeCandidateImages(files map[string][]byte, preview string) (map[string][]byte, string) {
 	pixels := 0
@@ -361,7 +325,7 @@ func sanitizeCandidateImages(files map[string][]byte, preview string) (map[strin
 		var err error
 		if candidateExtension(path) == "png" {
 			config, err = png.DecodeConfig(bytes.NewReader(data))
-		} else if candidateJPEGScans(data) > maxCandidateJPEGScans {
+		} else if jpegScans(data) > maxJPEGScans {
 			return nil, "candidate_skin_image_invalid"
 		} else {
 			config, err = jpeg.DecodeConfig(bytes.NewReader(data))

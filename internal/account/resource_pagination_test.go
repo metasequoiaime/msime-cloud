@@ -109,8 +109,17 @@ func TestResourcePaginationLimitsRatingQueries(t *testing.T) {
 			default:
 				t.Fatal("没有记录到资源目录查询")
 			}
+			tx, err := db.pool.Begin(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback(t.Context())
+			// 固定连接顺序，验证评分不会因优化器重排而先于分页关联执行。
+			if _, err := tx.Exec(t.Context(), `SET LOCAL join_collapse_limit=1`); err != nil {
+				t.Fatal(err)
+			}
 			var raw json.RawMessage
-			if err := db.pool.QueryRow(t.Context(), `EXPLAIN (ANALYZE,TIMING OFF,FORMAT JSON) `+query.sql, query.args...).Scan(&raw); err != nil {
+			if err := tx.QueryRow(t.Context(), `EXPLAIN (ANALYZE,TIMING OFF,FORMAT JSON) `+query.sql, query.args...).Scan(&raw); err != nil {
 				t.Fatal(err)
 			}
 			type node struct {

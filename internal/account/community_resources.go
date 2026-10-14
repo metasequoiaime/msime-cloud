@@ -146,16 +146,23 @@ func (a *Service) validateResource(ctx context.Context, kind string, content Res
 	return content, nil
 }
 
-// 人数、平均分和个人评分共用一次聚合；每个用户每条资源只有一条评分，所以 max 可取出个人评分。
-const resourceSelect = `SELECT s.id,s.kind,s.name,s.description,
+const resourceSelectBase = `SELECT s.id,s.kind,s.name,s.description,
  COALESCE(NULLIF(btrim(u.display_name),''),'水杉小鹿·'||upper(left(u.id,6))),s.content,s.revision,
  (SELECT count(*) FROM community_resource_saves WHERE resource_id=s.id),
  EXISTS(SELECT 1 FROM community_resource_saves WHERE resource_id=s.id AND user_id=$1),s.owner_id=$1,
  rating_stats.count,rating_stats.average,rating_stats.mine,
- CASE WHEN s.owner_id=$1 THEN s.moderation ELSE '' END
- FROM community_resources s JOIN auth_users u ON u.id=s.owner_id
- CROSS JOIN LATERAL (SELECT count(*) AS count,COALESCE(avg(stars),0) AS average,
- COALESCE(max(stars) FILTER (WHERE user_id=$1),0) AS mine FROM community_resource_ratings WHERE resource_id=s.id) rating_stats `
+ CASE WHEN s.owner_id=$1 THEN s.moderation ELSE '' END `
+
+const resourceFrom = `FROM community_resources s JOIN auth_users u ON u.id=s.owner_id `
+
+// 人数、平均分和个人评分共用一次聚合；每个用户每条资源只有一条评分，所以 max 可取出个人评分。
+const resourceRatingAggregate = `CROSS JOIN LATERAL (SELECT count(*) AS count,COALESCE(avg(stars),0) AS average,
+ COALESCE(max(stars) FILTER (WHERE user_id=$1),0) AS mine FROM community_resource_ratings WHERE resource_id=`
+
+const resourceSelect = resourceSelectBase + resourceFrom + resourceRatingAggregate + `s.id) rating_stats `
+
+// 目录评分依赖本页 ID，避免优化器将聚合排到分页关联之前。
+const resourcePageSelect = resourceSelectBase + resourceFrom + `JOIN resource_page p ON p.id=s.id ` + resourceRatingAggregate + `p.id) rating_stats `
 
 func scanResource(row interface{ Scan(...any) error }) (CommunityResource, error) {
 	var v CommunityResource
@@ -185,7 +192,7 @@ func (a *Service) resourceList(w http.ResponseWriter, r *http.Request) {
  WHERE s.kind=$2 AND strpos(lower(s.name),lower($3))>0 AND (s.moderation<>'removed' OR s.owner_id=$1)
  AND ($4='' OR ($4='mine' AND s.owner_id=$1) OR ($4='saved' AND EXISTS(SELECT 1 FROM community_resource_saves WHERE resource_id=s.id AND user_id=$1)))
  ORDER BY s.created_at DESC,s.id LIMIT 21 OFFSET $5
-) `+resourceSelect+`JOIN resource_page p ON p.id=s.id ORDER BY s.created_at DESC,s.id`, viewer, kind, q, scope, offset)
+) `+resourcePageSelect+`ORDER BY s.created_at DESC,s.id`, viewer, kind, q, scope, offset)
 	if err != nil {
 		a.error(w, err)
 		return

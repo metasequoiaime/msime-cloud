@@ -5420,9 +5420,10 @@ func TestQQBotFeatureVotes(t *testing.T) {
 
 // memoryFAQCandidates 是测试用的文档候选存储。state 为空是还没处理，"writing" 是认领了正在写进 FAQ，处理过的是「状态:PR」。
 type memoryFAQCandidates struct {
-	mu    sync.Mutex
-	items []account.QQFAQCandidate
-	state map[int64]string
+	mu     sync.Mutex
+	items  []account.QQFAQCandidate
+	state  map[int64]string
+	addErr error
 	// claims 是认领成功的次数。
 	claims int
 }
@@ -5430,6 +5431,9 @@ type memoryFAQCandidates struct {
 func (m *memoryFAQCandidates) AddQQFAQCandidate(_ context.Context, question, answer string) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.addErr != nil {
+		return 0, m.addErr
+	}
 	m.items = append(m.items, account.QQFAQCandidate{ID: int64(len(m.items) + 1), Question: question, Answer: answer})
 	return int64(len(m.items)), nil
 }
@@ -5504,6 +5508,31 @@ func (m *memoryFAQCandidates) CloseQQFAQCandidate(ctx context.Context, id int64,
 	}
 	m.state[id] = state + ":" + ref
 	return true, nil
+}
+
+func TestQQBotFAQCandidateWriteFailureReleasesQuota(t *testing.T) {
+	s, _, limiter := qqServer(t)
+	candidates := &memoryFAQCandidates{addErr: errors.New("database unavailable")}
+	s.qqFAQCandidates = candidates
+
+	s.recordQQFAQCandidate(context.Background(), "五笔怎么切换", "在设置的输入方案里选五笔。")
+
+	key := "qq-bot-faq-candidate|五笔怎么切换"
+	limiter.mu.Lock()
+	count := limiter.counts[key]
+	limiter.mu.Unlock()
+	if count != 0 {
+		t.Fatalf("failed candidate write kept quota: count=%d", count)
+	}
+	if len(candidates.items) != 0 {
+		t.Fatalf("failed candidate write stored an item: %#v", candidates.items)
+	}
+
+	candidates.addErr = nil
+	s.recordQQFAQCandidate(context.Background(), "五笔怎么切换", "在设置的输入方案里选五笔。")
+	if len(candidates.items) != 1 {
+		t.Fatalf("candidate could not be retried after failed write: %#v", candidates.items)
+	}
 }
 
 // 现查 GitHub 才答上的问题和答不上的问题记成文档候选；管理员「文档缺口」看列表，「写进FAQ F编号」走「记录答案」开 PR，没答案的要补上，「忽略」拿掉；普通群友不能用。

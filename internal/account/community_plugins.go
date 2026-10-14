@@ -230,7 +230,12 @@ func (a *Service) communityPluginList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	join, order := communitySavedScope(scope, "community_plugin_saves", "pack_id", "p")
-	rows, e := a.store.pool.Query(r.Context(), communityPluginSelect(fields["saved"])+join+`WHERE strpos(lower(p.name),lower($2))>0 AND ($3='' OR p.kind=$3) AND ($5<>'mine' OR p.owner_id=$1) AND (p.moderation<>'removed' OR p.owner_id=$1) AND p.kind=ANY($6) ORDER BY `+order+` LIMIT 21 OFFSET $4`, viewer, search, kind, offset, scope, pluginVisibleKinds(r, kind))
+	// 先选本页插件，再读取互动统计，避免为 OFFSET 跳过的插件执行逐条子查询。
+	rows, e := a.store.pool.Query(r.Context(), `WITH plugin_page AS MATERIALIZED (
+ SELECT p.id FROM community_plugins p JOIN auth_users u ON u.id=p.owner_id `+join+`
+ WHERE strpos(lower(p.name),lower($2))>0 AND ($3='' OR p.kind=$3) AND ($5<>'mine' OR p.owner_id=$1) AND (p.moderation<>'removed' OR p.owner_id=$1) AND p.kind=ANY($6)
+ ORDER BY `+order+` LIMIT 21 OFFSET $4
+) `+communityPluginSelect(fields["saved"])+join+`JOIN plugin_page q ON q.id=p.id ORDER BY `+order, viewer, search, kind, offset, scope, pluginVisibleKinds(r, kind))
 	if e != nil {
 		a.error(w, e)
 		return

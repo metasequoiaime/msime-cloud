@@ -784,6 +784,7 @@ func (s *Store) DeleteUser(ctx context.Context, uid string) error {
 	return e
 }
 func (s *Store) Prune(ctx context.Context) {
+	batch := &pgx.Batch{}
 	for _, q := range []string{"DELETE FROM admin_login_flows WHERE expires_at<now()", "DELETE FROM admin_sessions WHERE expires_at<now()", "DELETE FROM admin_tokens WHERE expires_at<now()", "DELETE FROM auth_challenges WHERE expires_at<now()", "DELETE FROM auth_rates WHERE expires_at<now()", "DELETE FROM auth_sessions WHERE expires_at<now()", "DELETE FROM skin_jobs WHERE expires_at<now()",
 		// 诊断快照到期即删，访问记录随外键一起删除。
 		"DELETE FROM diagnostic_snapshots WHERE expires_at<now()",
@@ -805,8 +806,10 @@ func (s *Store) Prune(ctx context.Context) {
 		"DELETE FROM user_clipboard c USING user_clipboard_settings cs WHERE cs.user_id=c.user_id AND cs.retention_days>0 AND NOT c.pinned AND c.updated_at<now()-make_interval(days=>cs.retention_days)",
 		// 云剪贴板只保存密文；滚动升级期间旧版本副本可能还会写入明文条目，这里把它们删掉。
 		"DELETE FROM user_clipboard WHERE ciphertext=''"} {
-		s.pool.Exec(ctx, q)
+		batch.Queue(q)
 	}
+	// 清理任务互不依赖，合并成一次批量请求，保留原来的逐条执行顺序。
+	_ = s.pool.SendBatch(ctx, batch).Close()
 }
 
 // voiceContributionRetentionDays 是语音贡献的保留期，到期由 Store.Prune 删除。

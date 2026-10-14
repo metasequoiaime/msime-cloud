@@ -28,7 +28,7 @@ func (a *Service) dictionaryQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := a.engine.QuerySnapshot(r.Context(), map[string]any{"operation": "personal_query", "query": query}, func(ctx context.Context, writer io.Writer) error {
-		return a.store.StreamDictionarySnapshot(ctx, p.UserID, func(raw json.RawMessage) error {
+		return streamDictionaryQuerySnapshot(ctx, a.store.pool, p.UserID, query, func(raw json.RawMessage) error {
 			if _, err := writer.Write(raw); err != nil {
 				return err
 			}

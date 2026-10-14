@@ -50,7 +50,7 @@ func (s *Store) mutateCandidate(ctx context.Context, user string, expected int64
 		return result, errRevisionConflict
 	}
 	raw, err := cfg.QuerySnapshot(ctx, map[string]any{"operation": operation, "query": query, "action": action}, func(ctx context.Context, w io.Writer) error {
-		return streamDictionarySnapshot(ctx, tx, user, func(raw json.RawMessage) error {
+		return streamDictionaryQuerySnapshot(ctx, tx, user, query, func(raw json.RawMessage) error {
 			if _, err := w.Write(raw); err != nil {
 				return err
 			}

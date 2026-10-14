@@ -27,8 +27,9 @@ func (s *Store) EditManagedDictionary(ctx context.Context, user string, expected
 		return change, errRevisionConflict
 	}
 	lookup := func(e DictionaryEntry) (*DictionaryEntry, error) {
-		raw, err := cfg.QuerySnapshot(ctx, map[string]any{"operation": "personal_query", "query": map[string]any{"operation": "dictionary", "kind": e.Kind, "text": e.Code, "word": e.Word, "exact": true, "limit": 1}}, func(ctx context.Context, w io.Writer) error {
-			return streamDictionarySnapshot(ctx, tx, user, func(raw json.RawMessage) error {
+		query := map[string]any{"operation": "dictionary", "kind": e.Kind, "text": e.Code, "word": e.Word, "exact": true, "limit": 1}
+		raw, err := cfg.QuerySnapshot(ctx, map[string]any{"operation": "personal_query", "query": query}, func(ctx context.Context, w io.Writer) error {
+			return streamDictionaryQuerySnapshot(ctx, tx, user, query, func(raw json.RawMessage) error {
 				if _, err := w.Write(raw); err != nil {
 					return err
 				}

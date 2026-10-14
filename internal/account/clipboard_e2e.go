@@ -18,9 +18,10 @@ import (
 // 云剪贴板端到端加密的服务端部分，协议见 msime 主仓库的 docs/cloud-clipboard-e2e.md。服务端只能检查格式，验证不了密码学内容：公钥与设备编号是否一致可以算出来，封装和密文能否解开只有设备知道。
 
 var (
-	errClipboardKeyConflict = errors.New("clipboard_key_conflict")
-	errClipboardKeyInvalid  = errors.New("invalid_clipboard_key")
-	errClipboardDeviceLimit = errors.New("clipboard_device_limit")
+	errClipboardKeyConflict         = errors.New("clipboard_key_conflict")
+	errClipboardKeyInvalid          = errors.New("invalid_clipboard_key")
+	errClipboardDeviceLimit         = errors.New("clipboard_device_limit")
+	errClipboardKeyRotationRequired = errors.New("clipboard_key_rotation_required")
 )
 
 const (
@@ -221,13 +222,26 @@ func (s *Store) PutClipboardDevice(ctx context.Context, user, device, publicKey,
 	return tx.Commit(ctx)
 }
 
-// DeleteClipboardDevice 删除一台设备和它的封装（拒绝一台待批准的设备）；不存在时返回 errDataNotFound。移除已批准的设备要换钥，见 RotateClipboardKey。
+// DeleteClipboardDevice 在用户行锁内检查批准状态后删除待批准设备和它的旧封装；不存在时返回 errDataNotFound，持有当前密钥封装时返回 errClipboardKeyRotationRequired。移除已批准的设备要换钥，见 RotateClipboardKey。
 func (s *Store) DeleteClipboardDevice(ctx context.Context, user, device string) error {
 	tx, e := s.userDataTransaction(ctx, user)
 	if e != nil {
 		return e
 	}
 	defer tx.Rollback(ctx)
+	var approved bool
+	e = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM user_clipboard_wraps w WHERE w.user_id=d.user_id AND w.device_id=d.device_id AND w.key_id=cs.key_id)
+ FROM user_clipboard_devices d LEFT JOIN user_clipboard_settings cs ON cs.user_id=d.user_id
+ WHERE d.user_id=$1 AND d.device_id=$2`, user, device).Scan(&approved)
+	if errors.Is(e, pgx.ErrNoRows) {
+		return errDataNotFound
+	}
+	if e != nil {
+		return e
+	}
+	if approved {
+		return errClipboardKeyRotationRequired
+	}
 	result, e := tx.Exec(ctx, "DELETE FROM user_clipboard_devices WHERE user_id=$1 AND device_id=$2", user, device)
 	if e != nil {
 		return e
@@ -329,6 +343,8 @@ func (a *Service) clipboardError(w http.ResponseWriter, e error) bool {
 		writeError(w, 400, "invalid_clipboard_key")
 	case errors.Is(e, errClipboardDeviceLimit):
 		writeError(w, 409, "clipboard_device_limit")
+	case errors.Is(e, errClipboardKeyRotationRequired):
+		writeError(w, 409, "clipboard_key_rotation_required")
 	case errors.Is(e, errDataNotFound):
 		writeError(w, 404, "not_found")
 	default:

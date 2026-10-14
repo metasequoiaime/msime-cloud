@@ -146,15 +146,16 @@ func (a *Service) validateResource(ctx context.Context, kind string, content Res
 	return content, nil
 }
 
+// 人数、平均分和个人评分共用一次聚合；每个用户每条资源只有一条评分，所以 max 可取出个人评分。
 const resourceSelect = `SELECT s.id,s.kind,s.name,s.description,
  COALESCE(NULLIF(btrim(u.display_name),''),'水杉小鹿·'||upper(left(u.id,6))),s.content,s.revision,
  (SELECT count(*) FROM community_resource_saves WHERE resource_id=s.id),
  EXISTS(SELECT 1 FROM community_resource_saves WHERE resource_id=s.id AND user_id=$1),s.owner_id=$1,
- (SELECT count(*) FROM community_resource_ratings WHERE resource_id=s.id),
- COALESCE((SELECT avg(stars) FROM community_resource_ratings WHERE resource_id=s.id),0),
- COALESCE((SELECT stars FROM community_resource_ratings WHERE resource_id=s.id AND user_id=$1),0),
+ rating_stats.count,rating_stats.average,rating_stats.mine,
  CASE WHEN s.owner_id=$1 THEN s.moderation ELSE '' END
- FROM community_resources s JOIN auth_users u ON u.id=s.owner_id `
+ FROM community_resources s JOIN auth_users u ON u.id=s.owner_id
+ CROSS JOIN LATERAL (SELECT count(*) AS count,COALESCE(avg(stars),0) AS average,
+ COALESCE(max(stars) FILTER (WHERE user_id=$1),0) AS mine FROM community_resource_ratings WHERE resource_id=s.id) rating_stats `
 
 func scanResource(row interface{ Scan(...any) error }) (CommunityResource, error) {
 	var v CommunityResource

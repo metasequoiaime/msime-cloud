@@ -154,7 +154,8 @@ func (s *Server) publishQQMedia(ctx context.Context, attachments []qqAttachment)
 		key := "qq-feedback/" + s.qq.now().UTC().Format("2006/01/") + qqMediaName() + ext
 		published, err := s.media.PublishMedia(ctx, key, body, contentType)
 		if err != nil {
-			slog.Warn("qq bot: attachment not stored", "reason", err.Error())
+			// 存储 SDK 的错误可能带有上游响应正文和请求凭据，不写入附件错误日志。
+			slog.Warn("qq bot: attachment not stored", "reason", "storage_write_failed")
 			failed++
 			continue
 		}

@@ -3,6 +3,7 @@ package account
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +13,9 @@ import (
 
 // QQEmbeddingDims 是向量索引的维度，和 qq_knowledge_schema.sql 里的 halfvec(2048) 一致。
 const QQEmbeddingDims = 2048
+
+// 每次至多积攒一页向量，限制批量参数的内存占用和单个事务持有的行锁数量。
+const qqKnowledgeWriteBatch = 100
 
 // ErrQQVectorsUnavailable 表示数据库没有安装 pgvector，向量索引不可用。
 var ErrQQVectorsUnavailable = errors.New("pgvector is not installed")
@@ -61,16 +65,37 @@ func (a *Service) QQKnowledgeHashes(ctx context.Context, ids []string) (map[stri
 	return hashes, rows.Err()
 }
 
-// UpsertQQKnowledge 写入或更新索引里的行。
+// UpsertQQKnowledge 分批写入或更新索引里的行，同批失败时整批回滚，之前完成的批次保留。
 func (a *Service) UpsertQQKnowledge(ctx context.Context, items []QQKnowledgeItem) error {
-	for _, item := range items {
-		if len(item.Embedding) != QQEmbeddingDims {
-			return errors.New("embedding has " + strconv.Itoa(len(item.Embedding)) + " dimensions")
+	const query = `INSERT INTO qq_knowledge_items(id,kind,repo,number,title,summary,content_hash,updated_at,embedding) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::halfvec)
+ ON CONFLICT (id) DO UPDATE SET kind=EXCLUDED.kind,repo=EXCLUDED.repo,number=EXCLUDED.number,title=EXCLUDED.title,summary=EXCLUDED.summary,content_hash=EXCLUDED.content_hash,updated_at=EXCLUDED.updated_at,embedding=EXCLUDED.embedding`
+	for start := 0; start < len(items); start += qqKnowledgeWriteBatch {
+		chunk := items[start:min(start+qqKnowledgeWriteBatch, len(items))]
+		if len(chunk) > 1 {
+			// 各批次按同一顺序取得行锁；稳定排序保留重复 ID 的最后一次更新，不修改调用方切片。
+			chunk = slices.Clone(chunk)
+			slices.SortStableFunc(chunk, func(a, b QQKnowledgeItem) int { return strings.Compare(a.ID, b.ID) })
 		}
-		if _, err := a.store.pool.Exec(ctx, `INSERT INTO qq_knowledge_items(id,kind,repo,number,title,summary,content_hash,updated_at,embedding) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::halfvec)
- ON CONFLICT (id) DO UPDATE SET kind=EXCLUDED.kind,repo=EXCLUDED.repo,number=EXCLUDED.number,title=EXCLUDED.title,summary=EXCLUDED.summary,content_hash=EXCLUDED.content_hash,updated_at=EXCLUDED.updated_at,embedding=EXCLUDED.embedding`,
-			item.ID, item.Kind, item.Repo, item.Number, item.Title, item.Summary, item.ContentHash, item.UpdatedAt, vectorLiteral(item.Embedding)); err != nil {
-			return err
+		batch := &pgx.Batch{}
+		for _, item := range chunk {
+			if len(item.Embedding) != QQEmbeddingDims {
+				return errors.New("embedding has " + strconv.Itoa(len(item.Embedding)) + " dimensions")
+			}
+			args := []any{item.ID, item.Kind, item.Repo, item.Number, item.Title, item.Summary, item.ContentHash, item.UpdatedAt, vectorLiteral(item.Embedding)}
+			if len(chunk) == 1 {
+				// 单条没有可合并的往返，沿用普通执行以免增加批处理开销。
+				if _, err := a.store.pool.Exec(ctx, query, args...); err != nil {
+					return err
+				}
+			} else {
+				batch.Queue(query, args...)
+			}
+		}
+		if batch.Len() > 0 {
+			// SendBatch 使用隐式事务；Close 读取全部结果并释放连接，同时返回批内的数据库错误。
+			if err := a.store.pool.SendBatch(ctx, batch).Close(); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

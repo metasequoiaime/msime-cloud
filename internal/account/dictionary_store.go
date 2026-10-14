@@ -204,7 +204,7 @@ func (s *Store) StreamDictionary(ctx context.Context, user, kind string, emit fu
 	return rows.Err()
 }
 
-// StreamDictionarySnapshot reads the current overlay under one SQL statement snapshot.
+// StreamDictionarySnapshot 用一条 SQL 读取全量覆盖快照。
 func (s *Store) StreamDictionarySnapshot(ctx context.Context, user string, emit func(json.RawMessage) error) error {
 	return streamDictionarySnapshot(ctx, s.pool, user, emit)
 }
@@ -213,14 +213,48 @@ type snapshotQuerier interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
 }
 
+// streamDictionaryQuerySnapshot 只回放查询依赖的词库，保留全局版本与全部候选状态。
+func streamDictionaryQuerySnapshot(ctx context.Context, q snapshotQuerier, user string, query map[string]any, emit func(json.RawMessage) error) error {
+	kind := ""
+	switch query["operation"] {
+	case "dictionary":
+		if value, ok := query["kind"].(string); ok && dictionaryKind(value) {
+			kind = value
+		}
+	case "english", "quick":
+		kind = query["operation"].(string)
+	case "jianpin":
+		kind = "pinyin"
+	case "candidates":
+		switch query["scheme"] {
+		case nil, "pinyin", "shuangpin":
+			kind = "pinyin"
+		case "wubi", "wubi98":
+			kind = query["scheme"].(string)
+		}
+	}
+	// 未识别的内部查询继续提供全量快照，由引擎按原规则处理。
+	return streamDictionarySnapshotKind(ctx, q, user, kind, emit)
+}
+
 func streamDictionarySnapshot(ctx context.Context, q snapshotQuerier, user string, emit func(json.RawMessage) error) error {
+	return streamDictionarySnapshotKind(ctx, q, user, "", emit)
+}
+
+func streamDictionarySnapshotKind(ctx context.Context, q snapshotQuerier, user, kind string, emit func(json.RawMessage) error) error {
+	filter := ""
+	args := []any{user}
+	if kind != "" {
+		filter = " AND kind=$2"
+		args = append(args, kind)
+	}
 	rows, err := q.Query(ctx, `SELECT record FROM (
  SELECT 0 AS category,'' AS kind,'' AS code,'' AS word,jsonb_build_object('snapshot_revision',COALESCE((SELECT revision FROM user_dictionary_state WHERE user_id=$1),0)) AS record
  UNION ALL
- SELECT 1,kind,code,word,jsonb_build_object('previous',CASE WHEN deleted THEN entry ELSE 'null'::jsonb END,'replacement',CASE WHEN deleted THEN 'null'::jsonb ELSE entry END) FROM user_dictionary_overlay WHERE user_id=$1
+ SELECT 1,kind,code,word,jsonb_build_object('previous',CASE WHEN deleted THEN entry ELSE 'null'::jsonb END,'replacement',CASE WHEN deleted THEN 'null'::jsonb ELSE entry END) FROM user_dictionary_overlay WHERE user_id=$1`+filter+`
   UNION ALL SELECT 2,'' AS kind,context AS code,code||word AS word,jsonb_build_object('fixed',jsonb_build_object('context',context,'code',code,'word',word,'position',position)) FROM user_candidate_positions WHERE user_id=$1
  UNION ALL SELECT 3,'',context,code||word,jsonb_build_object('selection',jsonb_build_object('context',context,'code',code,'word',word,'count',count)) FROM user_candidate_selections WHERE user_id=$1
- ) snapshot ORDER BY category,kind,code,word`, user)
+ ) snapshot ORDER BY category,kind,code,word`, args...)
 	if err != nil {
 		return err
 	}

@@ -105,13 +105,8 @@ func TestAdminAuthEndpointMethodsAndLocalSession(t *testing.T) {
 			}
 		}
 		if tc.path == "logout" && tc.method == "POST" {
-			if len(w.Result().Cookies()) != 2 {
-				t.Fatal("logout did not clear both auth cookies")
-			}
-			for _, cookie := range w.Result().Cookies() {
-				if cookie.MaxAge != -1 || !cookie.HttpOnly {
-					t.Fatal("invalid clearing cookie", cookie.Name)
-				}
+			if len(w.Result().Cookies()) != 0 {
+				t.Fatal("退出响应不应修改共享的认证 Cookie")
 			}
 		}
 	}

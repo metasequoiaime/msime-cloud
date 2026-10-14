@@ -59,8 +59,10 @@ func (m *adminMemoryStore) AdminSession(_ context.Context, k string) (account.Ad
 	}
 	return v, nil
 }
-func (m *adminMemoryStore) DeleteAdminSession(_ context.Context, k string) error {
-	delete(m.sessions, k)
+func (m *adminMemoryStore) DeleteAdminSession(_ context.Context, tokens ...string) error {
+	for _, token := range tokens {
+		delete(m.sessions, token)
+	}
 	return nil
 }
 

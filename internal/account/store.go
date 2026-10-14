@@ -813,6 +813,16 @@ func (s *Store) DeleteUser(ctx context.Context, uid string) error {
 	_, e := s.pool.Exec(ctx, "DELETE FROM auth_users WHERE id=$1", uid)
 	return e
 }
+
+// DeleteUserWithAvatarKey 原子删除账号并返回其头像对象键，避免注销与并发上传之间漏删新头像。
+func (s *Store) DeleteUserWithAvatarKey(ctx context.Context, uid string) (string, error) {
+	var key string
+	err := s.pool.QueryRow(ctx, "DELETE FROM auth_users WHERE id=$1 RETURNING avatar_key", uid).Scan(&key)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return key, err
+}
 func (s *Store) Prune(ctx context.Context) {
 	batch := &pgx.Batch{}
 	for _, q := range []string{"DELETE FROM admin_login_flows WHERE expires_at<now()", "DELETE FROM admin_sessions WHERE expires_at<now()", "DELETE FROM admin_tokens WHERE expires_at<now()", "DELETE FROM auth_challenges WHERE expires_at<now()", "DELETE FROM auth_rates WHERE expires_at<now()", "DELETE FROM auth_sessions WHERE expires_at<now()", "DELETE FROM skin_jobs WHERE expires_at<now()",

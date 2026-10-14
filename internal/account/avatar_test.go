@@ -263,6 +263,63 @@ func TestGoogleProfileAndAvatarUpload(t *testing.T) {
 	avatarUpload(t, offMux, "image/png", encodedImage(t, "png", 8, 8, color.Black), plain.AccessToken, 503)
 }
 
+func TestDeleteUserWithAvatarKeyReturnsKeyFromDeletedRow(t *testing.T) {
+	db := testStore(t)
+	user := complete(t, db, Identity{"email", "avatar-delete-key@example.test"})
+	const key = "avatars/deleted-account.jpg"
+	if _, err := db.pool.Exec(t.Context(), "UPDATE auth_users SET avatar_key=$2 WHERE id=$1", user.User.ID, key); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := db.DeleteUserWithAvatarKey(t.Context(), user.User.ID)
+	if err != nil || got != key {
+		t.Fatalf("删除账号应原子返回头像键：key=%q err=%v", got, err)
+	}
+	var remaining int
+	if err = db.pool.QueryRow(t.Context(), "SELECT count(*) FROM auth_users WHERE id=$1", user.User.ID).Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 0 {
+		t.Fatal("账号删除后仍存在")
+	}
+}
+
+func TestDeleteUserWithAvatarKeySeesConcurrentAvatarUpdate(t *testing.T) {
+	db := testStore(t)
+	user := complete(t, db, Identity{"email", "avatar-delete-race@example.test"})
+	if _, err := db.pool.Exec(t.Context(), "UPDATE auth_users SET avatar_key='avatars/old.jpg' WHERE id=$1", user.User.ID); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := db.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var locked string
+	if err = tx.QueryRow(t.Context(), "SELECT id FROM auth_users WHERE id=$1 FOR UPDATE", user.User.ID).Scan(&locked); err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		key string
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		key, err := db.DeleteUserWithAvatarKey(t.Context(), user.User.ID)
+		done <- result{key, err}
+	}()
+	const latest = "avatars/new.jpg"
+	if _, err = tx.Exec(t.Context(), "UPDATE auth_users SET avatar_key=$2 WHERE id=$1", user.User.ID, latest); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	got := <-done
+	if got.err != nil || got.key != latest {
+		t.Fatalf("注销应读取并发提交的最新头像键：key=%q err=%v", got.key, got.err)
+	}
+}
+
 func TestAvatarConfigurationValidation(t *testing.T) {
 	t.Setenv("CONFIG_DB", "postgres://local/test")
 	t.Setenv("CONFIG_PEPPER", strings.Repeat("p", 32))

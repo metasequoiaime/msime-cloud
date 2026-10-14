@@ -566,16 +566,16 @@ func (a *Service) communityDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(r.Context())
 	var design json.RawMessage
-	e = tx.QueryRow(r.Context(), `SELECT design FROM community_skins WHERE id=$1 AND (moderation<>'removed' OR owner_id=$2) FOR SHARE`, r.PathValue("id"), p.UserID).Scan(&design)
+	batch := &pgx.Batch{}
+	batch.Queue(`SELECT design FROM community_skins WHERE id=$1 AND (moderation<>'removed' OR owner_id=$2) FOR SHARE`, r.PathValue("id"), p.UserID).QueryRow(func(row pgx.Row) error {
+		return row.Scan(&design)
+	})
+	batch.Queue(`INSERT INTO community_skin_downloads(skin_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, r.PathValue("id"), p.UserID)
+	e = tx.SendBatch(r.Context(), batch).Close()
 	if errors.Is(e, pgx.ErrNoRows) {
 		writeError(w, 404, "skin_not_found")
 		return
 	}
-	if e != nil {
-		a.error(w, e)
-		return
-	}
-	_, e = tx.Exec(r.Context(), `INSERT INTO community_skin_downloads(skin_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, r.PathValue("id"), p.UserID)
 	if e == nil {
 		e = tx.Commit(r.Context())
 	}

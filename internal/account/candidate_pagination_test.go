@@ -52,7 +52,7 @@ func TestCandidatePaginationLimitsStatisticsQueries(t *testing.T) {
 		}
 	}
 	cfg := db.pool.Config()
-	trace := &communityPaginationTrace{table: "community_candidate_skins", queries: make(chan communityPageQuery, 8)}
+	trace := &communityPaginationTrace{table: "community_candidate_skins", queries: make(chan communityPageQuery, 8), fixedJoinOrder: true}
 	cfg.ConnConfig.Tracer = trace
 	pool, err := pgxpool.NewWithConfig(t.Context(), cfg)
 	if err != nil {

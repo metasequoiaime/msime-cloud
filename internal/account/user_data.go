@@ -2,6 +2,7 @@ package account
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -219,15 +220,11 @@ func (a *Service) userDataExport(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// indentJSON 把数据库返回的 jsonb 排成两格缩进，方便用户直接打开阅读。
+// indentJSON 只调整数据库返回的 jsonb 缩进，保留原数字文本，避免解码成 float64 后丢失精度。
 func indentJSON(raw []byte) []byte {
-	var v any
-	if json.Unmarshal(raw, &v) != nil {
+	var out bytes.Buffer
+	if json.Indent(&out, raw, "", "  ") != nil {
 		return raw
 	}
-	out, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return raw
-	}
-	return append(out, '\n')
+	return append(out.Bytes(), '\n')
 }

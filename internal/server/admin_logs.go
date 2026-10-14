@@ -284,11 +284,7 @@ func (s *Server) lokiGet(ctx context.Context, path string, params url.Values, v 
 	req.Header.Set("Accept", "application/json")
 	resp, err := s.loki.Do(req)
 	if err != nil {
-		var urlErr *url.Error
-		if errors.As(err, &urlErr) {
-			err = urlErr.Err
-		}
-		return errLoki{"unreachable: " + err.Error()}
+		return errLoki{"unreachable"}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {

@@ -244,18 +244,26 @@ const communitySkinSelectBase = `SELECT s.id,s.name,s.description,
  rating_stats.count,rating_stats.average,s.owner_id=$1,rating_stats.mine,
  CASE WHEN s.owner_id=$1 THEN s.moderation ELSE '' END,s.category,`
 
-// 人数、平均分和个人评分共用一次聚合；主键保证每个用户每款皮肤只有一条评分。
-const communitySkinFrom = `
- FROM community_skins s JOIN auth_users u ON u.id=s.owner_id
- CROSS JOIN LATERAL (SELECT count(*) AS count,COALESCE(avg(stars),0) AS average,
- COALESCE(max(stars) FILTER (WHERE user_id=$1),0) AS mine FROM community_skin_ratings WHERE skin_id=s.id) rating_stats `
-
 // communitySkinSelect 只有客户端声明 fields=saved 时才计算收藏总数和当前用户的收藏状态；默认目录不需要这两个逐行子查询。
 func communitySkinSelect(saved bool) string {
-	if saved {
-		return communitySkinSelectBase + `(SELECT count(*) FROM community_skin_saves WHERE skin_id=s.id),EXISTS(SELECT 1 FROM community_skin_saves WHERE skin_id=s.id AND user_id=$1)` + communitySkinFrom
+	return communitySkinSelectQuery(saved, false)
+}
+
+func communitySkinSelectQuery(saved, page bool) string {
+	from := ` FROM community_skins s JOIN auth_users u ON u.id=s.owner_id `
+	ratingID := "s.id"
+	if page {
+		from += `JOIN skin_page p ON p.id=s.id `
+		// 评分依赖本页 ID，避免优化器将聚合排到分页关联之前。
+		ratingID = "p.id"
 	}
-	return communitySkinSelectBase + `0,false` + communitySkinFrom
+	// 人数、平均分和个人评分共用一次聚合；主键保证每个用户每款皮肤只有一条评分。
+	from += `CROSS JOIN LATERAL (SELECT count(*) AS count,COALESCE(avg(stars),0) AS average,
+ COALESCE(max(stars) FILTER (WHERE user_id=$1),0) AS mine FROM community_skin_ratings WHERE skin_id=` + ratingID + `) rating_stats `
+	if saved {
+		return communitySkinSelectBase + `(SELECT count(*) FROM community_skin_saves WHERE skin_id=s.id),EXISTS(SELECT 1 FROM community_skin_saves WHERE skin_id=s.id AND user_id=$1)` + from
+	}
+	return communitySkinSelectBase + `0,false` + from
 }
 
 func scanSkin(row interface{ Scan(...any) error }) (CommunitySkin, error) {
@@ -318,7 +326,7 @@ func (a *Service) communityList(w http.ResponseWriter, r *http.Request) {
  SELECT s.id FROM community_skins s JOIN auth_users u ON u.id=s.owner_id `+join+`
  WHERE strpos(lower(s.name),lower($2))>0 AND ($4<>'mine' OR s.owner_id=$1) AND (s.moderation<>'removed' OR s.owner_id=$1) AND ($5='' OR s.category=$5)
  ORDER BY `+order+` LIMIT 21 OFFSET $3
-) `+communitySkinSelect(fields["saved"])+join+`JOIN skin_page p ON p.id=s.id ORDER BY `+order, viewer, search, offset, scope, category)
+) `+communitySkinSelectQuery(fields["saved"], true)+join+`ORDER BY `+order, viewer, search, offset, scope, category)
 	if e != nil {
 		a.error(w, e)
 		return

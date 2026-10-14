@@ -238,15 +238,23 @@ func ownerModeration(fields map[string]bool, state string) string {
 	return ""
 }
 
-const communitySelect = `SELECT s.id,s.name,s.description,
+const communitySkinSelectBase = `SELECT s.id,s.name,s.description,
  COALESCE(NULLIF(btrim(u.display_name),''),'水杉小鹿·'||upper(left(u.id,6))),s.design-'photo',
  (SELECT count(*) FROM community_skin_downloads WHERE skin_id=s.id),
  (SELECT count(*) FROM community_skin_ratings WHERE skin_id=s.id),
  COALESCE((SELECT avg(stars) FROM community_skin_ratings WHERE skin_id=s.id),0),
  s.owner_id=$1,COALESCE((SELECT stars FROM community_skin_ratings WHERE skin_id=s.id AND user_id=$1),0),
- CASE WHEN s.owner_id=$1 THEN s.moderation ELSE '' END,s.category,
- (SELECT count(*) FROM community_skin_saves WHERE skin_id=s.id),EXISTS(SELECT 1 FROM community_skin_saves WHERE skin_id=s.id AND user_id=$1)
+ CASE WHEN s.owner_id=$1 THEN s.moderation ELSE '' END,s.category,`
+
+// communitySkinSelect 只有客户端声明 fields=saved 时才计算收藏总数和当前用户的收藏状态；默认目录不需要这两个逐行子查询。
+func communitySkinSelect(saved bool) string {
+	if saved {
+		return communitySkinSelectBase + `(SELECT count(*) FROM community_skin_saves WHERE skin_id=s.id),EXISTS(SELECT 1 FROM community_skin_saves WHERE skin_id=s.id AND user_id=$1)
  FROM community_skins s JOIN auth_users u ON u.id=s.owner_id `
+	}
+	return communitySkinSelectBase + `0,false
+ FROM community_skins s JOIN auth_users u ON u.id=s.owner_id `
+}
 
 func scanSkin(row interface{ Scan(...any) error }) (CommunitySkin, error) {
 	var s CommunitySkin
@@ -303,7 +311,7 @@ func (a *Service) communityList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	join, order := communitySavedScope(scope, "community_skin_saves", "skin_id", "s")
-	rows, e := a.store.pool.Query(r.Context(), communitySelect+join+`WHERE strpos(lower(s.name),lower($2))>0 AND ($4<>'mine' OR s.owner_id=$1) AND (s.moderation<>'removed' OR s.owner_id=$1) AND ($5='' OR s.category=$5) ORDER BY `+order+` LIMIT 21 OFFSET $3`, viewer, search, offset, scope, category)
+	rows, e := a.store.pool.Query(r.Context(), communitySkinSelect(fields["saved"])+join+`WHERE strpos(lower(s.name),lower($2))>0 AND ($4<>'mine' OR s.owner_id=$1) AND (s.moderation<>'removed' OR s.owner_id=$1) AND ($5='' OR s.category=$5) ORDER BY `+order+` LIMIT 21 OFFSET $3`, viewer, search, offset, scope, category)
 	if e != nil {
 		a.error(w, e)
 		return
@@ -344,7 +352,7 @@ func (a *Service) communityDetail(w http.ResponseWriter, r *http.Request) {
 
 // writeCommunitySkin 以详情接口的形状写出 viewer 看到的 {id} 作品（含完整 design），详情和作者修改分类的 PATCH 共用。
 func (a *Service) writeCommunitySkin(w http.ResponseWriter, r *http.Request, viewer string, fields map[string]bool, withCategory bool) {
-	v, e := scanSkin(a.store.pool.QueryRow(r.Context(), communitySelect+`WHERE s.id=$2 AND (s.moderation<>'removed' OR s.owner_id=$1)`, viewer, r.PathValue("id")))
+	v, e := scanSkin(a.store.pool.QueryRow(r.Context(), communitySkinSelect(fields["saved"])+`WHERE s.id=$2 AND (s.moderation<>'removed' OR s.owner_id=$1)`, viewer, r.PathValue("id")))
 	if errors.Is(e, pgx.ErrNoRows) {
 		writeError(w, 404, "skin_not_found")
 		return

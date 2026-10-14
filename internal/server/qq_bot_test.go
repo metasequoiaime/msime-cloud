@@ -776,8 +776,13 @@ func qqPost(t *testing.T, s *Server, payload string) *httptest.ResponseRecorder 
 	t.Helper()
 	r := httptest.NewRequest("POST", qqBotEventsPath, strings.NewReader(payload))
 	r.Header.Set("Content-Type", "application/json")
-	r.Header.Set("X-Signature-Timestamp", "1728981195")
-	r.Header.Set("X-Signature-Ed25519", hex.EncodeToString(ed25519.Sign(qqBotKey(qqTestSecret), []byte("1728981195"+payload))))
+	now := time.Now()
+	if s.qq != nil && s.qq.now != nil {
+		now = s.qq.now()
+	}
+	timestamp := strconv.FormatInt(now.Unix(), 10)
+	r.Header.Set("X-Signature-Timestamp", timestamp)
+	r.Header.Set("X-Signature-Ed25519", hex.EncodeToString(ed25519.Sign(qqBotKey(qqTestSecret), []byte(timestamp+payload))))
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, r)
 	return w
@@ -853,6 +858,23 @@ func TestQQBotCallbackProtocol(t *testing.T) {
 	s.qq = nil
 	if w = qqPost(t, s, `{"op":13}`); w.Code != 503 {
 		t.Fatal("disabled", w.Code)
+	}
+}
+
+func TestQQBotRejectsStaleSignatureTimestamp(t *testing.T) {
+	s, _, _ := qqServer(t)
+	now := time.Unix(2_000_000_000, 0)
+	s.qq.now = func() time.Time { return now }
+	payload := `{"op":1,"d":42}`
+	timestamp := strconv.FormatInt(now.Add(-6*time.Minute).Unix(), 10)
+	r := httptest.NewRequest("POST", qqBotEventsPath, strings.NewReader(payload))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("X-Signature-Timestamp", timestamp)
+	r.Header.Set("X-Signature-Ed25519", hex.EncodeToString(ed25519.Sign(qqBotKey(qqTestSecret), []byte(timestamp+payload))))
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("过期签名时间戳未被拒绝：%d %s", w.Code, w.Body.String())
 	}
 }
 

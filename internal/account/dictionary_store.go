@@ -115,6 +115,15 @@ func (s *Store) dictionaryEdit(ctx context.Context, tx pgx.Tx, user, kind, id st
 
 // writeDictionaryOverlayAndChange 一次写入词库覆盖层和变更记录，避免替换词的前后两条覆盖层各占一次往返。
 func writeDictionaryOverlayAndChange(ctx context.Context, tx pgx.Tx, user string, change DictionaryChange) error {
+	query, args, err := dictionaryOverlayAndChangeQuery(user, change)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, query, args...)
+	return err
+}
+
+func dictionaryOverlayAndChangeQuery(user string, change DictionaryChange) (string, []any, error) {
 	type overlayRow struct {
 		Kind    string          `json:"kind"`
 		Code    string          `json:"code"`
@@ -133,7 +142,7 @@ func writeDictionaryOverlayAndChange(ctx context.Context, tx pgx.Tx, user string
 		}
 		raw, err := json.Marshal(state.entry)
 		if err != nil {
-			return err
+			return "", nil, err
 		}
 		row := overlayRow{Kind: state.entry.Kind, Code: state.entry.Code, Word: state.entry.Word, Entry: raw, Deleted: state.deleted}
 		key := row.Kind + "\x00" + row.Code + "\x00" + row.Word
@@ -146,13 +155,13 @@ func writeDictionaryOverlayAndChange(ctx context.Context, tx pgx.Tx, user string
 	}
 	overlayJSON, err := json.Marshal(overlays)
 	if err != nil {
-		return err
+		return "", nil, err
 	}
 	changeJSON, err := json.Marshal(change)
 	if err != nil {
-		return err
+		return "", nil, err
 	}
-	_, err = tx.Exec(ctx, `WITH overlay AS (
+	return `WITH overlay AS (
  INSERT INTO user_dictionary_overlay(user_id,kind,code,word,entry,deleted)
  SELECT $1,kind,code,word,entry,deleted FROM jsonb_to_recordset($2::jsonb) AS v(kind text,code text,word text,entry jsonb,deleted boolean)
  ON CONFLICT(user_id,kind,code,word) DO UPDATE SET entry=excluded.entry,deleted=excluded.deleted
@@ -162,8 +171,7 @@ func writeDictionaryOverlayAndChange(ctx context.Context, tx pgx.Tx, user string
  SELECT $1,$3,$4::jsonb FROM (SELECT count(*) FROM overlay) dependency
  RETURNING 1
 )
-SELECT 1 FROM change`, user, overlayJSON, change.Revision, changeJSON)
-	return err
+SELECT 1 FROM change`, []any{user, overlayJSON, change.Revision, changeJSON}, nil
 }
 func (s *Store) EditDictionary(ctx context.Context, user, kind, id string, expected int64, next *DictionaryEntry) (DictionaryChange, error) {
 	tx, err := s.userDataTransaction(ctx, user)

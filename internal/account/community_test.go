@@ -395,10 +395,10 @@ func TestCommunitySkinCategorySchemaUpgrade(t *testing.T) {
 		}
 	}
 	var category string
-	var checks, indexes int
+	var checks, indexes, ownerIndexes int
 	// 其他包会并行创建测试 schema，索引计数只检查当前 schema。
-	if err = db.pool.QueryRow(t.Context(), `SELECT category,(SELECT count(*) FROM pg_constraint WHERE conrelid='community_skins'::regclass AND contype='c' AND conname LIKE 'community_skins_category%'),(SELECT count(*) FROM pg_indexes WHERE schemaname=current_schema() AND tablename='community_skins' AND indexname='community_skins_category_newest') FROM community_skins WHERE id=$1`, id).Scan(&category, &checks, &indexes); err != nil || category != "other" || checks != 1 || indexes != 1 {
-		t.Fatal("upgrade", category, checks, indexes, err)
+	if err = db.pool.QueryRow(t.Context(), `SELECT category,(SELECT count(*) FROM pg_constraint WHERE conrelid='community_skins'::regclass AND contype='c' AND conname LIKE 'community_skins_category%'),(SELECT count(*) FROM pg_indexes WHERE schemaname=current_schema() AND tablename='community_skins' AND indexname='community_skins_category_newest'),(SELECT count(*) FROM pg_indexes WHERE schemaname=current_schema() AND tablename='community_skins' AND indexname='community_skins_owner') FROM community_skins WHERE id=$1`, id).Scan(&category, &checks, &indexes, &ownerIndexes); err != nil || category != "other" || checks != 1 || indexes != 1 || ownerIndexes != 1 {
+		t.Fatal("upgrade", category, checks, indexes, ownerIndexes, err)
 	}
 	if err = db.Ready(t.Context()); err != nil {
 		t.Fatal(err)

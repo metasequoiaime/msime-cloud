@@ -42,6 +42,17 @@ func TestCommunityResourceSaveScopeIndex(t *testing.T) {
 	}
 }
 
+func TestCommunityOwnerIndexes(t *testing.T) {
+	db := testStore(t)
+	var skins, resources int
+	if err := db.pool.QueryRow(t.Context(), `SELECT (SELECT count(*) FROM pg_indexes WHERE schemaname=current_schema() AND indexname='community_skins_owner'),(SELECT count(*) FROM pg_indexes WHERE schemaname=current_schema() AND indexname='community_resources_owner')`).Scan(&skins, &resources); err != nil {
+		t.Fatal(err)
+	}
+	if skins != 1 || resources != 1 {
+		t.Fatalf("作者查询索引缺失：skins=%d resources=%d", skins, resources)
+	}
+}
+
 func TestResourcePublishVersionSaveRatingIsolation(t *testing.T) {
 	store := testStore(t)
 	owner := complete(t, store, Identity{"apple", "resource-owner"})

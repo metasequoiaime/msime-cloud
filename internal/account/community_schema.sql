@@ -9,6 +9,8 @@ CREATE TABLE IF NOT EXISTS community_skins (
  UNIQUE(owner_id,id)
 );
 CREATE INDEX IF NOT EXISTS community_skins_newest ON community_skins(created_at DESC,id);
+-- 我的作品、发布上限和后台作者作品查询都按 owner_id 筛选。
+CREATE INDEX IF NOT EXISTS community_skins_owner ON community_skins(owner_id,created_at DESC);
 -- 社区键盘皮肤的图库分类，只是发布元数据，不属于 design。已有行迁移后为 other。取值与 Go 中的 candidateSkinCategories 一致（与候选窗皮肤共用同一组分类）。约束在下面的循环里以命名约束单独添加，因为 PostgreSQL 12 每次重跑 ADD COLUMN IF NOT EXISTS 都会再加一份行内 CHECK；之前重跑留下的副本（name1、name2……）会被删掉。
 ALTER TABLE community_skins ADD COLUMN IF NOT EXISTS category text NOT NULL DEFAULT 'other';
 DO $$
@@ -60,6 +62,8 @@ CREATE TABLE IF NOT EXISTS community_resources (
  updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS community_resources_catalog ON community_resources(kind,created_at DESC,id);
+-- 我的资源、发布上限和后台作者作品查询都按 owner_id 筛选。
+CREATE INDEX IF NOT EXISTS community_resources_owner ON community_resources(owner_id,created_at DESC);
 -- 早期建的表用的是自动命名的 kind 约束（不含 phrase）。命名约束还不含 phrase 时，按 pg_constraint 查出列着 kind 取值的旧约束逐个删掉，再加上命名约束；整段在迁移的 advisory lock 下执行，可以重复执行。以后再加类型时把这里探测的类型名换成新加的那个，并同步 store.go 的 Ready。
 DO $$
 DECLARE c record;

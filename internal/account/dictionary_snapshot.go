@@ -8,8 +8,8 @@ import (
 	"net/http"
 )
 
-// All records come from one SQL statement snapshot. Source user IDs and credentials
-// never enter this portable format. The footer detects incomplete downloads.
+// StreamFullDictionarySnapshot 从同一条 SQL 的快照读取数据记录，不包含来源账户或凭据。
+// 下载格式的校验尾记录由 streamFullDictionarySnapshotWithFooter 补齐。
 func (s *Store) StreamFullDictionarySnapshot(ctx context.Context, user string, emit func(json.RawMessage) error) error {
 	rows, err := s.pool.Query(ctx, `SELECT record FROM (
  SELECT 0 AS category,'' AS sort1,'' AS sort2,'' AS sort3,jsonb_build_object('type','header','format','msime-dictionary-snapshot','version',1,'revision',COALESCE((SELECT revision FROM user_dictionary_state WHERE user_id=$1),0)) AS record
@@ -33,15 +33,34 @@ func (s *Store) StreamFullDictionarySnapshot(ctx context.Context, user string, e
 	}
 	return rows.Err()
 }
+
+// streamFullDictionarySnapshotWithFooter 为全部记录补上数量和校验和，统一独立下载与 ZIP 导出格式。
+func (s *Store) streamFullDictionarySnapshotWithFooter(ctx context.Context, user string, emit func(json.RawMessage) error) error {
+	hash := sha256.New()
+	records := 0
+	err := s.StreamFullDictionarySnapshot(ctx, user, func(raw json.RawMessage) error {
+		hash.Write(raw)
+		hash.Write([]byte{'\n'})
+		records++
+		return emit(raw)
+	})
+	if err != nil {
+		return err
+	}
+	footer, err := json.Marshal(map[string]any{"type": "footer", "records": records, "sha256": hex.EncodeToString(hash.Sum(nil))})
+	if err != nil {
+		return err
+	}
+	return emit(footer)
+}
+
 func (a *Service) dictionarySnapshot(w http.ResponseWriter, r *http.Request) {
 	p, ok := a.principal(w, r, false)
 	if !ok {
 		return
 	}
 	started := false
-	hash := sha256.New()
-	records := 0
-	err := a.store.StreamFullDictionarySnapshot(r.Context(), p.UserID, func(raw json.RawMessage) error {
+	err := a.store.streamFullDictionarySnapshotWithFooter(r.Context(), p.UserID, func(raw json.RawMessage) error {
 		if !started {
 			w.Header().Set("Content-Type", "application/x-ndjson")
 			w.Header().Set("Content-Disposition", `attachment; filename="msime-dictionary-snapshot.ndjson"`)
@@ -49,8 +68,6 @@ func (a *Service) dictionarySnapshot(w http.ResponseWriter, r *http.Request) {
 			started = true
 		}
 		line := append(raw, '\n')
-		hash.Write(line)
-		records++
 		_, err := w.Write(line)
 		return err
 	})
@@ -60,12 +77,5 @@ func (a *Service) dictionarySnapshot(w http.ResponseWriter, r *http.Request) {
 		}
 		a.dictionaryError(w, err)
 		return
-	}
-	footer, err := json.Marshal(map[string]any{"type": "footer", "records": records, "sha256": hex.EncodeToString(hash.Sum(nil))})
-	if err != nil {
-		panic(http.ErrAbortHandler)
-	}
-	if _, err = w.Write(append(footer, '\n')); err != nil {
-		panic(http.ErrAbortHandler)
 	}
 }

@@ -172,10 +172,26 @@ func adminPersonalToken(r *http.Request) (string, bool) {
 }
 
 func (s *Server) adminIdentity(r *http.Request) (string, string, error) {
+	actor, email, err := s.adminCredentialIdentity(r)
+	if err != nil || actor == "legacy-token" {
+		return actor, email, err
+	}
+	allowed, err := s.adminEmailAllowed(r.Context(), email)
+	if err != nil {
+		return "", "", err
+	}
+	if !allowed {
+		return "", "", account.ErrInvalid
+	}
+	return actor, email, nil
+}
+
+// adminCredentialIdentity 只验证凭据；调用方还须通过 adminAccess 或 adminEmailAllowed 检查当前成员资格。
+func (s *Server) adminCredentialIdentity(r *http.Request) (string, string, error) {
 	if s.adminBearer(r) {
 		return "legacy-token", "", nil
 	}
-	// A personal access token stands for its holder, whose membership is checked as for a session.
+	// 个人访问令牌代表持有者，成员资格与会话一样由调用方实时检查。
 	if token, ok := adminPersonalToken(r); ok {
 		if s.adminStore == nil {
 			return "", "", account.ErrInvalid
@@ -183,13 +199,6 @@ func (s *Server) adminIdentity(r *http.Request) (string, string, error) {
 		identity, err := s.adminStore.AdminTokenIdentity(r.Context(), token)
 		if err != nil {
 			return "", "", err
-		}
-		allowed, err := s.adminEmailAllowed(r.Context(), identity.Email)
-		if err != nil {
-			return "", "", err
-		}
-		if !allowed {
-			return "", "", account.ErrInvalid
 		}
 		return "pat:" + strings.ToLower(identity.Email), identity.Email, nil
 	}
@@ -203,13 +212,6 @@ func (s *Server) adminIdentity(r *http.Request) (string, string, error) {
 	identity, err := s.adminStore.AdminSession(r.Context(), token)
 	if err != nil {
 		return "", "", err
-	}
-	allowed, err := s.adminEmailAllowed(r.Context(), identity.Email)
-	if err != nil {
-		return "", "", err
-	}
-	if !allowed {
-		return "", "", account.ErrInvalid
 	}
 	return "google:" + identity.Subject + ":" + identity.Email, identity.Email, nil
 }

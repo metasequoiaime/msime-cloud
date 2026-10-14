@@ -133,7 +133,13 @@ func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) bool {
 		if s.adminAuthRoute(w, r) {
 			return true
 		}
-		actor, email, err := s.adminIdentity(r)
+		actor, email, err := s.adminCredentialIdentity(r)
+		if err != nil {
+			s.adminAuthError(w, err)
+			return true
+		}
+		// 角色查询同时验证成员仍启用，每次请求只读一次成员记录，失效身份在限流前拒绝。
+		access, err := s.adminAccess(ctx, actor, email)
 		if err != nil {
 			s.adminAuthError(w, err)
 			return true
@@ -142,11 +148,6 @@ func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 		if !s.adminLimit(ctx, w, "admin", actor, adminRateLimit) {
-			return true
-		}
-		access, err := s.adminAccess(ctx, actor, email)
-		if err != nil {
-			s.adminAuthError(w, err)
 			return true
 		}
 		if strings.HasPrefix(actor, "google:") {

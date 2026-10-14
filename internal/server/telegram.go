@@ -23,7 +23,6 @@ const telegramMessageMax = 4096
 // telegramNotices posts published notices to one chat with the Bot API.
 type telegramNotices struct {
 	endpoint string
-	token    string
 	chatID   string
 	client   *http.Client
 }
@@ -36,7 +35,6 @@ func (s *Server) noticeBroadcaster() account.NoticeBroadcaster {
 	}
 	return &telegramNotices{
 		endpoint: strings.TrimRight(t.APIURL, "/") + "/bot" + t.botToken + "/sendMessage",
-		token:    t.botToken,
 		chatID:   t.ChatID,
 		client:   &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 	}
@@ -79,7 +77,7 @@ func telegramLength(text string) int {
 	return n
 }
 
-// BroadcastNotice sends n and succeeds only when the Bot API confirms delivery. Errors never include the request URL, because it carries the bot token.
+// BroadcastNotice 在 Bot API 确认投递后才成功；错误只记录状态和数字错误码，不含请求地址或上游描述。
 func (t *telegramNotices) BroadcastNotice(ctx context.Context, n account.Notice) error {
 	body, err := json.Marshal(map[string]any{"chat_id": t.chatID, "text": telegramText(n), "disable_web_page_preview": true})
 	if err != nil {
@@ -96,16 +94,11 @@ func (t *telegramNotices) BroadcastNotice(ctx context.Context, n account.Notice)
 	}
 	defer resp.Body.Close()
 	var reply struct {
-		OK          bool   `json:"ok"`
-		Description string `json:"description"`
+		OK        bool `json:"ok"`
+		ErrorCode int  `json:"error_code"`
 	}
 	if json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&reply) != nil || resp.StatusCode != http.StatusOK || !reply.OK {
-		// The Bot API's description (for example "Forbidden: bot is not a member of the channel chat") tells the operator what to fix; it is bounded and never echoes the token.
-		description := strings.ReplaceAll(reply.Description, t.token, "[redacted]")
-		if len(description) > 200 {
-			description = description[:200]
-		}
-		return fmt.Errorf("telegram: sendMessage answered %d: %q", resp.StatusCode, description)
+		return fmt.Errorf("telegram: sendMessage answered %d (code %d)", resp.StatusCode, reply.ErrorCode)
 	}
 	return nil
 }

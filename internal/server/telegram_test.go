@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -84,9 +85,9 @@ func TestTelegramNoticeBroadcaster(t *testing.T) {
 	if err := b.BroadcastNotice(ctx, account.Notice{Title: "x"}); err == nil || strings.Contains(err.Error(), testTelegramToken) {
 		t.Fatal(err)
 	}
-	// The Bot API's description reaches the error for the operator, with the token redacted should it ever be echoed.
+	// 上游拒绝只保留状态码，不把供应商描述写进错误文本。
 	fake.status, fake.description = 403, "Forbidden: bot "+testTelegramToken+" is not a member of the channel chat"
-	if err := b.BroadcastNotice(ctx, account.Notice{Title: "x"}); err == nil || strings.Contains(err.Error(), testTelegramToken) || !strings.Contains(err.Error(), "not a member of the channel chat") {
+	if err := b.BroadcastNotice(ctx, account.Notice{Title: "x"}); err == nil || strings.Contains(err.Error(), testTelegramToken) || strings.Contains(err.Error(), "not a member of the channel chat") || !strings.Contains(err.Error(), "answered 403") {
 		t.Fatal(err)
 	}
 	fake.description = ""
@@ -97,6 +98,42 @@ func TestTelegramNoticeBroadcaster(t *testing.T) {
 	srv.Close()
 	if err := b.BroadcastNotice(ctx, account.Notice{Title: "x"}); err == nil || strings.Contains(err.Error(), testTelegramToken) {
 		t.Fatal(err)
+	}
+}
+
+func TestTelegramNoticeFailuresDoNotExposeUpstreamContent(t *testing.T) {
+	for _, scenario := range []struct {
+		name   string
+		status int
+		body   string
+		code   string
+	}{
+		{"rejected-status", http.StatusForbidden, `{"ok":false,"error_code":403,"description":"synthetic-private-input key=synthetic-private-key ` + url.QueryEscape(testTelegramToken) + `"}`, "403"},
+		{"rejected-response", http.StatusOK, `{"ok":false,"error_code":429,"description":"synthetic-private-input"}`, "429"},
+		{"invalid-response", http.StatusBadGateway, `{"ok":false,"description":"synthetic-private-input","error_code":"synthetic-private-key"}`, "0"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(scenario.status)
+				io.WriteString(w, scenario.body)
+			}))
+			defer srv.Close()
+			s := fixture(t, nil)
+			s.config.Admin.Telegram = AdminTelegramConfig{ChatID: "@synthetic_news", APIURL: srv.URL, botToken: testTelegramToken}
+			err := s.noticeBroadcaster().BroadcastNotice(t.Context(), account.Notice{Title: "合成公告"})
+			if err == nil {
+				t.Fatal("Telegram 失败没有返回错误")
+			}
+			for _, private := range []string{"synthetic-private-input", "synthetic-private-key", testTelegramToken, url.QueryEscape(testTelegramToken)} {
+				if strings.Contains(err.Error(), private) {
+					t.Errorf("Telegram 错误泄露了上游内容 %q：%s", private, err)
+				}
+			}
+			if !strings.Contains(err.Error(), "code "+scenario.code) {
+				t.Error("Telegram 失败没有保留数字错误码", err)
+			}
+		})
 	}
 }
 
@@ -146,8 +183,18 @@ func TestPublicNoticesFeedAndTelegramPublish(t *testing.T) {
 	}
 
 	fake.status = 500
+	fake.description = "synthetic-private-input key=synthetic-private-key " + url.QueryEscape(testTelegramToken)
+	logs := captureLogs(t)
 	if w := action(`{"action":"publish_notice","value":{"title":"失败的公告","targets":["all"],"channels":["telegram"]}}`); w.Code != 502 || !strings.Contains(w.Body.String(), "telegram_failed") {
 		t.Fatal(w.Code, w.Body.String())
+	}
+	if !strings.Contains(logs.String(), "notice telegram broadcast failed") || !strings.Contains(logs.String(), "answered 500") {
+		t.Fatal("公告推送失败没有记录状态", logs.String())
+	}
+	for _, private := range []string{"synthetic-private-input", "synthetic-private-key", testTelegramToken, url.QueryEscape(testTelegramToken)} {
+		if strings.Contains(logs.String(), private) {
+			t.Errorf("公告推送失败日志泄露了上游内容 %q：%s", private, logs.String())
+		}
 	}
 
 	w := feed("?platform=ios&channel=app")

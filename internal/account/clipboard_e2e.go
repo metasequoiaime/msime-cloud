@@ -59,7 +59,7 @@ type ClipboardWrap struct {
 	Wrap     string `json:"wrap"`
 }
 
-// ClipboardKeyChange 是 POST /v1/users/me/clipboard/keys 的请求体：Previous 必须等于当前密钥编号（没有密钥时为 nil），成功后 KeyID 成为当前密钥。
+// ClipboardKeyChange 是 POST /v1/users/me/clipboard/keys 的请求体：Previous 必须等于当前密钥编号（没有密钥时为 nil），KeyID 必须与当前编号不同，成功后成为当前密钥。
 type ClipboardKeyChange struct {
 	Previous *string         `json:"previous_key_id"`
 	KeyID    string          `json:"key_id"`
@@ -238,7 +238,7 @@ func (s *Store) DeleteClipboardDevice(ctx context.Context, user, device string) 
 	return tx.Commit(ctx)
 }
 
-// RotateClipboardKey 换钥：在持有用户行锁的事务里确认当前密钥编号等于 c.Previous（比较后写入，并发换钥只有一个成功），删除 revoke 里的设备、全部条目和全部旧封装，再写入新密钥编号和封装。c 已经过 validClipboardKeyChange 检查。云剪贴板关闭时返回 errClipboardDisabled，编号不符返回 errClipboardKeyConflict，封装给了没登记的设备返回 errClipboardKeyInvalid。
+// RotateClipboardKey 换钥：在持有用户行锁的事务里确认当前密钥编号等于 c.Previous、新编号与当前编号不同（比较后写入，并发换钥只有一个成功），删除 revoke 里的设备、全部条目和全部旧封装，再写入新密钥编号和封装。c 已经过 validClipboardKeyChange 检查。云剪贴板关闭时返回 errClipboardDisabled，旧编号不符返回 errClipboardKeyConflict，新编号未改变或封装给了没登记的设备返回 errClipboardKeyInvalid。
 func (s *Store) RotateClipboardKey(ctx context.Context, user string, c ClipboardKeyChange) error {
 	tx, e := s.userDataTransaction(ctx, user)
 	if e != nil {
@@ -254,6 +254,9 @@ func (s *Store) RotateClipboardKey(ctx context.Context, user string, c Clipboard
 	}
 	if (key == nil) != (c.Previous == nil) || (key != nil && *key != *c.Previous) {
 		return errClipboardKeyConflict
+	}
+	if key != nil && *key == c.KeyID {
+		return errClipboardKeyInvalid
 	}
 	revoke := c.Revoke
 	if revoke == nil {

@@ -176,8 +176,45 @@ FROM (SELECT count(DISTINCT target) FILTER (WHERE action LIKE 'dict\_pr\_%') AS 
 	out["token"] = nil
 	if access.Email != "" {
 		var stored map[string]any
-		err = a.store.pool.QueryRow(ctx, `SELECT prefs FROM admin_preferences WHERE email=$1`, access.Email).Scan(&stored)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		current, err := a.adminCurrentSession(ctx, r, access.Email)
+		if err != nil {
+			a.error(w, err)
+			return
+		}
+		batch := &pgx.Batch{}
+		batch.Queue(`SELECT prefs FROM admin_preferences WHERE email=$1`, access.Email).QueryRow(func(row pgx.Row) error {
+			err := row.Scan(&stored)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			}
+			return err
+		})
+		batch.Queue(`SELECT id,created_at,last_seen_at,user_agent FROM admin_sessions WHERE email=$1 AND expires_at>now() ORDER BY last_seen_at DESC,id`, access.Email).Query(func(rows pgx.Rows) error {
+			defer rows.Close()
+			for rows.Next() {
+				var s adminMeSession
+				var agent string
+				if err := rows.Scan(&s.ID, &s.CreatedAt, &s.LastSeenAt, &agent); err != nil {
+					return err
+				}
+				s.Device = adminDevice(agent)
+				s.Current = s.ID == current
+				sessions = append(sessions, s)
+			}
+			return rows.Err()
+		})
+		batch.Queue(`SELECT last4,created_at,expires_at FROM admin_tokens WHERE email=$1 AND expires_at>now() ORDER BY created_at DESC LIMIT 1`, access.Email).QueryRow(func(row pgx.Row) error {
+			var token adminTokenInfo
+			err := row.Scan(&token.Last4, &token.CreatedAt, &token.ExpiresAt)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			}
+			if err == nil {
+				out["token"] = token
+			}
+			return err
+		})
+		if err = a.store.pool.SendBatch(ctx, batch).Close(); err != nil {
 			a.error(w, err)
 			return
 		}
@@ -187,39 +224,6 @@ FROM (SELECT count(DISTINCT target) FILTER (WHERE action LIKE 'dict\_pr\_%') AS 
 					prefs[key] = flag
 				}
 			}
-		}
-		current, err := a.adminCurrentSession(ctx, r, access.Email)
-		if err != nil {
-			a.error(w, err)
-			return
-		}
-		rows, err := a.store.pool.Query(ctx, `SELECT id,created_at,last_seen_at,user_agent FROM admin_sessions WHERE email=$1 AND expires_at>now() ORDER BY last_seen_at DESC,id`, access.Email)
-		if err != nil {
-			a.error(w, err)
-			return
-		}
-		for rows.Next() {
-			var s adminMeSession
-			var agent string
-			if err = rows.Scan(&s.ID, &s.CreatedAt, &s.LastSeenAt, &agent); err != nil {
-				break
-			}
-			s.Device = adminDevice(agent)
-			s.Current = s.ID == current
-			sessions = append(sessions, s)
-		}
-		rows.Close()
-		if err = errors.Join(err, rows.Err()); err != nil {
-			a.error(w, err)
-			return
-		}
-		var token adminTokenInfo
-		err = a.store.pool.QueryRow(ctx, `SELECT last4,created_at,expires_at FROM admin_tokens WHERE email=$1 AND expires_at>now() ORDER BY created_at DESC LIMIT 1`, access.Email).Scan(&token.Last4, &token.CreatedAt, &token.ExpiresAt)
-		if err == nil {
-			out["token"] = token
-		} else if !errors.Is(err, pgx.ErrNoRows) {
-			a.error(w, err)
-			return
 		}
 	}
 	out["prefs"] = prefs

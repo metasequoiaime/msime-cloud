@@ -522,30 +522,23 @@ func sensitiveFlagText(patterns []string) string {
 
 // contentScreenSQL selects, for the id in $1, the fields contentScreenText reads; content is the manifest or resource content of sections that have one.
 func contentScreenSQL(section string, table moderationTable) string {
-	content := "NULL"
-	switch section {
-	case "candidate-skins", "plugins":
-		content = "convert_from(manifest,'UTF8')"
-	case "dictionaries", "replies", "phrases":
-		content = "content"
-	}
-	return `SELECT json_build_object('name',name,'description',description,'content',` + content + `) FROM ` + table.table + table.where(`id=$1`)
+	return `SELECT json_build_object('name',name,'description',description,'content',` + screenContentColumn(section) + `) FROM ` + table.table + table.where(`id=$1`)
 }
 
 // rescreenRestored puts the automatic flag back on the items of section among ids that are pending review again after a restore or an unban. Removing an item overwrote its flag with the removal reason, so it is computed afresh from the item's text, with the preview matcher because a restore is not a new submission.
 func (a *Service) rescreenRestored(ctx context.Context, tx pgx.Tx, section string, ids []string) error {
 	table := moderationSections[section]
-	rows, err := tx.Query(ctx, `SELECT id FROM `+table.table+table.match()+` AND moderation='pending'`, ids)
+	rows, err := tx.Query(ctx, `SELECT id,json_build_object('name',name,'description',description,'content',`+screenContentColumn(section)+`) FROM `+table.table+table.where(`id=ANY($1) AND moderation='pending'`), ids)
 	if err != nil {
 		return err
 	}
-	pending, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil {
-		return err
-	}
-	for _, id := range pending {
+	defer rows.Close()
+	var flaggedIDs, flags []string
+	for rows.Next() {
+		var id string
 		var raw json.RawMessage
-		if err = tx.QueryRow(ctx, contentScreenSQL(section, table), id).Scan(&raw); err != nil {
+		if err = rows.Scan(&id, &raw); err != nil {
+			rows.Close()
 			return err
 		}
 		var base map[string]json.RawMessage
@@ -565,11 +558,34 @@ func (a *Service) rescreenRestored(ctx context.Context, tx pgx.Tx, section strin
 				patterns = append(patterns, hit.Pattern)
 			}
 		}
-		if _, err = tx.Exec(ctx, `UPDATE `+table.table+` SET moderation_reason=$2 WHERE id=$1`, id, sensitiveFlagText(patterns)); err != nil {
-			return err
-		}
+		flaggedIDs = append(flaggedIDs, id)
+		flags = append(flags, sensitiveFlagText(patterns))
 	}
-	return nil
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	if len(flaggedIDs) == 0 {
+		return nil
+	}
+	where := `target.id=v.id`
+	if table.kind != "" {
+		where += ` AND target.kind='` + table.kind + `'`
+	}
+	_, err = tx.Exec(ctx, `UPDATE `+table.table+` AS target SET moderation_reason=v.reason
+FROM unnest($1::text[],$2::text[]) AS v(id,reason) WHERE `+where, flaggedIDs, flags)
+	return err
+}
+
+func screenContentColumn(section string) string {
+	switch section {
+	case "candidate-skins", "plugins":
+		return `convert_from(manifest,'UTF8')`
+	case "dictionaries", "replies", "phrases":
+		return `content`
+	default:
+		return `NULL`
+	}
 }
 
 // screenUpload 检查上传内容的文本，命中拦截级规则时返回 422 `blocked_content`；ok 为 false 表示响应已写出。规则无法加载时以 503 `screening_unavailable` 和 `Retry-After` 拒绝上传（与官网词条表单用的错误码相同），客户端据此提示作者稍后重试，而不是报告账号服务故障。返回的 flag 写入待复核行的 `moderation_reason`。

@@ -469,16 +469,23 @@ func (a *Service) communityPublish(w http.ResponseWriter, r *http.Request) {
 		a.error(w, e)
 		return
 	}
-	var count int
-	if e = tx.QueryRow(r.Context(), `SELECT count(*) FROM community_skins WHERE owner_id=$1`, p.UserID).Scan(&count); e != nil {
+	var inserted bool
+	if e = tx.QueryRow(r.Context(), `WITH owned AS (
+ SELECT count(*) AS n FROM community_skins WHERE owner_id=$2
+), inserted AS (
+ INSERT INTO community_skins(id,owner_id,name,description,design,moderation,moderation_reason,category)
+ SELECT $1,$2,$3,$4,$5,'pending',$6,$7
+ WHERE (SELECT n FROM owned) < 50
+ RETURNING id
+)
+SELECT EXISTS(SELECT 1 FROM inserted)`, input.ID, p.UserID, input.Name, input.Description, raw, flag, category).Scan(&inserted); e != nil {
 		a.error(w, e)
 		return
 	}
-	if count >= 50 {
+	if !inserted {
 		writeError(w, 409, "skin_publish_limit")
 		return
 	}
-	_, e = tx.Exec(r.Context(), `INSERT INTO community_skins(id,owner_id,name,description,design,moderation,moderation_reason,category) VALUES($1,$2,$3,$4,$5,'pending',$6,$7)`, input.ID, p.UserID, input.Name, input.Description, raw, flag, category)
 	if e == nil {
 		e = tx.Commit(r.Context())
 	}

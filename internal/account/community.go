@@ -241,19 +241,21 @@ func ownerModeration(fields map[string]bool, state string) string {
 const communitySkinSelectBase = `SELECT s.id,s.name,s.description,
  COALESCE(NULLIF(btrim(u.display_name),''),'水杉小鹿·'||upper(left(u.id,6))),s.design-'photo',
  (SELECT count(*) FROM community_skin_downloads WHERE skin_id=s.id),
- (SELECT count(*) FROM community_skin_ratings WHERE skin_id=s.id),
- COALESCE((SELECT avg(stars) FROM community_skin_ratings WHERE skin_id=s.id),0),
- s.owner_id=$1,COALESCE((SELECT stars FROM community_skin_ratings WHERE skin_id=s.id AND user_id=$1),0),
+ rating_stats.count,rating_stats.average,s.owner_id=$1,rating_stats.mine,
  CASE WHEN s.owner_id=$1 THEN s.moderation ELSE '' END,s.category,`
+
+// 人数、平均分和个人评分共用一次聚合；主键保证每个用户每款皮肤只有一条评分。
+const communitySkinFrom = `
+ FROM community_skins s JOIN auth_users u ON u.id=s.owner_id
+ CROSS JOIN LATERAL (SELECT count(*) AS count,COALESCE(avg(stars),0) AS average,
+ COALESCE(max(stars) FILTER (WHERE user_id=$1),0) AS mine FROM community_skin_ratings WHERE skin_id=s.id) rating_stats `
 
 // communitySkinSelect 只有客户端声明 fields=saved 时才计算收藏总数和当前用户的收藏状态；默认目录不需要这两个逐行子查询。
 func communitySkinSelect(saved bool) string {
 	if saved {
-		return communitySkinSelectBase + `(SELECT count(*) FROM community_skin_saves WHERE skin_id=s.id),EXISTS(SELECT 1 FROM community_skin_saves WHERE skin_id=s.id AND user_id=$1)
- FROM community_skins s JOIN auth_users u ON u.id=s.owner_id `
+		return communitySkinSelectBase + `(SELECT count(*) FROM community_skin_saves WHERE skin_id=s.id),EXISTS(SELECT 1 FROM community_skin_saves WHERE skin_id=s.id AND user_id=$1)` + communitySkinFrom
 	}
-	return communitySkinSelectBase + `0,false
- FROM community_skins s JOIN auth_users u ON u.id=s.owner_id `
+	return communitySkinSelectBase + `0,false` + communitySkinFrom
 }
 
 func scanSkin(row interface{ Scan(...any) error }) (CommunitySkin, error) {

@@ -85,13 +85,7 @@ func (a *Service) downloadLink(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 503, "provider_disabled")
 		return
 	}
-	tx, err := a.store.userDataTransaction(r.Context(), p.UserID)
-	if err != nil {
-		a.error(w, err)
-		return
-	}
-	defer tx.Rollback(r.Context())
-	email, err := verifiedEmailQuery(r.Context(), tx, p.UserID)
+	email, err := a.store.verifiedEmail(r.Context(), p.UserID)
 	if err != nil {
 		a.error(w, err)
 		return
@@ -108,6 +102,23 @@ func (a *Service) downloadLink(w http.ResponseWriter, r *http.Request) {
 	}
 	if err = a.store.Rate(r.Context(), "delivery-global", 500, 24*time.Hour); err != nil {
 		a.error(w, err)
+		return
+	}
+	// 限流在事务前独立计数，避免持有连接时再申请同一连接池；发送失败仍消耗额度。
+	tx, err := a.store.userDataTransaction(r.Context(), p.UserID)
+	if err != nil {
+		a.error(w, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	// 发信前在用户锁内重新读取邮箱，保证等待期间提交的封禁或身份变更生效。
+	email, err = verifiedEmailQuery(r.Context(), tx, p.UserID)
+	if err != nil {
+		a.error(w, err)
+		return
+	}
+	if email == "" {
+		writeError(w, 409, "no_verified_email")
 		return
 	}
 	subject, body := downloadLinkMessage(v.Platform)

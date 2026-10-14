@@ -1,0 +1,1 @@
+function e(e){return e<1024?{value:e,unit:`B`}:e<1048576?{value:e/1024,unit:`KB`}:{value:e/1024/1024,unit:`MB`}}export{e as t};

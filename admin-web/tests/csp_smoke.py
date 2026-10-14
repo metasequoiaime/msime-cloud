@@ -313,6 +313,30 @@ class Server(ThreadingHTTPServer):
             super().handle_error(request, client_address)
 
 
+def check_bytes(page):
+    # 直接调用三个页面的格式化函数，分别保留精度、舍入和特殊值行为。
+    expected = [
+        ["0", "0 B", "0 B", "0 B"],
+        ["1.5", "1.5 B", "1.5 B", "1.5 B"],
+        ["1023", "1023 B", "1023 B", "1023 B"],
+        ["1024", "1.0 KB", "1.0 KB", "1 KB"],
+        ["1536", "1.5 KB", "1.5 KB", "2 KB"],
+        ["10239", "10.0 KB", "10.0 KB", "10 KB"],
+        ["10240", "10.0 KB", "10 KB", "10 KB"],
+        ["1048575", "1024.0 KB", "1024 KB", "1024 KB"],
+        ["1048576", "1.0 MB", "1.0 MB", "1.0 MB"],
+        ["1610612736", "1536.0 MB", "1536.0 MB", "1536.0 MB"],
+        ["-1", "-1 B", "-1 B", "-1 B"],
+        ["NaN", "NaN MB", "NaN MB", "NaN B"],
+        ["Infinity", "Infinity MB", "Infinity MB", "Infinity MB"],
+        ["-Infinity", "-Infinity B", "-Infinity B", "-Infinity B"],
+    ]
+    rows = page.get_by_test_id("byte-case")
+    expect(rows).to_have_count(len(expected))
+    for index, values in enumerate(expected):
+        expect(rows.nth(index).locator("td")).to_have_text(values)
+
+
 def check_debounce(browser, base: str, problems: list[str]):
     # Playwright 时钟作用于整个上下文；独立上下文避免暂停后影响其他页面的 Query 通知。
     context = browser.new_context(viewport={"width": 1280, "height": 860})
@@ -1113,6 +1137,7 @@ def main() -> int:
                 expect(dialog).to_be_hidden()
                 page.get_by_role("button", name="取消选择").click()
                 violations("ui harness")
+                check_bytes(page)
                 check_debounce(browser, base, problems)
                 check_auth_generation(context, base, problems)
                 check_auth_logout(context, base, problems)

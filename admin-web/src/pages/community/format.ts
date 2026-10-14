@@ -1,4 +1,5 @@
 import { formatDateTime } from "../../utils/time";
+import { splitBytes } from "../../utils/bytes";
 import { z } from "zod";
 import type { Item, Section } from "../../api/community";
 import { candidateCategoryLabel, pluginKindLabels } from "../../api/community";
@@ -8,9 +9,10 @@ export function formatTime(value: string | null | undefined): string {
 }
 
 export function formatBytes(value: number): string {
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(value < 10 * 1024 ? 1 : 0)} KB`;
-  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  const { value: amount, unit } = splitBytes(value);
+  if (unit === "B") return `${amount} B`;
+  if (unit === "KB") return `${amount.toFixed(value < 10 * 1024 ? 1 : 0)} KB`;
+  return `${amount.toFixed(1)} MB`;
 }
 
 const count = (value: number) => value.toLocaleString("zh-CN");

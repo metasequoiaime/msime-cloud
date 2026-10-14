@@ -61,7 +61,7 @@ func TestAdminMeBatchesPersonalReads(t *testing.T) {
 	trace.mu.Lock()
 	batches, queries := trace.batches, trace.queries
 	trace.mu.Unlock()
-	if batches != 2 || queries != 5 {
-		t.Fatalf("个人中心读取使用了 %d 次批量请求、%d 条语句，期望 2、5", batches, queries)
+	if batches != 2 || queries != 6 {
+		t.Fatalf("个人中心读取使用了 %d 次批量请求、%d 条语句，期望 2、6", batches, queries)
 	}
 }

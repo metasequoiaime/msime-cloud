@@ -110,14 +110,16 @@ type crashGroupRow struct {
 // crashGroupColumns selects a crashGroupRow from admin_crash_groups g joined with the per-signature counts c of crashGroupCounts.
 const crashGroupColumns = `g.signature,g.platform,g.version,g.title,g.status,g.issue_url,g.first_seen,g.last_seen,COALESCE(c.c7,0),COALESCE(c.p7,0),CASE WHEN COALESCE(c.reported,0)=0 THEN NULL ELSE c.devices END,g.first_seen>=now()-interval '7 days'`
 
-// crashGroupCounts counts the crashes of the last 14 days per signature; $1 restricts it to one signature when non-empty.
-const crashGroupCounts = `SELECT signature,
+// crashGroupCountsBase 是最近 14 天崩溃统计的聚合和条件部分；$1 非空时限定单个签名，调用处追加分组。
+const crashGroupCountsBase = `SELECT signature,
  count(*) FILTER (WHERE created_at>=now()-interval '7 days') AS c7,
  count(*) FILTER (WHERE created_at<now()-interval '7 days') AS p7,
  count(install_id) FILTER (WHERE created_at>=now()-interval '7 days') AS reported,
  count(DISTINCT install_id) FILTER (WHERE created_at>=now()-interval '7 days') AS devices
- FROM admin_events WHERE kind='crash' AND signature IS NOT NULL AND created_at>=now()-interval '14 days' AND ($1='' OR signature=$1)
- GROUP BY signature`
+ FROM admin_events WHERE kind='crash' AND signature IS NOT NULL AND created_at>=now()-interval '14 days' AND ($1='' OR signature=$1)`
+
+// crashGroupCounts 为所有平台或单个签名统计，供详情和崩溃增长检测共用。
+const crashGroupCounts = crashGroupCountsBase + ` GROUP BY signature`
 
 func scanCrashGroup(row pgx.Row) (crashGroupRow, error) {
 	var g crashGroupRow
@@ -166,7 +168,33 @@ func (a *Service) adminCrashGroups(w http.ResponseWriter, r *http.Request, _ str
 		return
 	}
 	defer tx.Rollback(ctx)
-	rows, err := tx.Query(ctx, `WITH c AS (`+crashGroupCounts+`)
+	rows, err := tx.Query(ctx, `SELECT platform,count(*) FROM admin_crash_groups GROUP BY platform ORDER BY platform`)
+	if err != nil {
+		a.error(w, err)
+		return
+	}
+	platforms, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (crashPlatformCount, error) {
+		var p crashPlatformCount
+		return p, row.Scan(&p.Platform, &p.Count)
+	})
+	if err != nil {
+		a.error(w, err)
+		return
+	}
+	var totalGroups, selectedGroups int64
+	for _, p := range platforms {
+		totalGroups += p.Count
+		if p.Platform == platform {
+			selectedGroups = p.Count
+		}
+	}
+	countsQuery := crashGroupCounts
+	if platform != "" && selectedGroups <= totalGroups/2 {
+		// 复用平台计数，只为至多半数分组的平台提前限定签名，避免多数平台的额外关联开销。
+		// 按分组自身的平台选签名，不能用可能与分组不同的事件平台代替。
+		countsQuery = crashGroupCountsBase + ` AND signature IN (SELECT signature FROM admin_crash_groups WHERE platform=$2) GROUP BY signature`
+	}
+	rows, err = tx.Query(ctx, `WITH c AS (`+countsQuery+`)
 SELECT `+crashGroupColumns+` FROM admin_crash_groups g LEFT JOIN c USING(signature)
 WHERE ($2='' OR g.platform=$2)
 ORDER BY COALESCE(c.c7,0) DESC,g.last_seen DESC,g.signature LIMIT $3`, "", platform, crashGroupsLimit+1)
@@ -182,19 +210,6 @@ ORDER BY COALESCE(c.c7,0) DESC,g.last_seen DESC,g.signature LIMIT $3`, "", platf
 	hasMore := len(items) > crashGroupsLimit
 	if hasMore {
 		items = items[:crashGroupsLimit]
-	}
-	rows, err = tx.Query(ctx, `SELECT platform,count(*) FROM admin_crash_groups GROUP BY platform ORDER BY platform`)
-	if err != nil {
-		a.error(w, err)
-		return
-	}
-	platforms, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (crashPlatformCount, error) {
-		var p crashPlatformCount
-		return p, row.Scan(&p.Platform, &p.Count)
-	})
-	if err != nil {
-		a.error(w, err)
-		return
 	}
 	var summary crashSummary
 	err = tx.QueryRow(ctx, `SELECT

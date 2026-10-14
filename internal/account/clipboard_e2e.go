@@ -205,24 +205,27 @@ func (s *Store) PutClipboardDevice(ctx context.Context, user, device, publicKey,
 	if result.RowsAffected() == 1 {
 		return tx.Commit(ctx)
 	}
-	var count int
-	if e = tx.QueryRow(ctx, "SELECT count(*) FROM user_clipboard_devices WHERE user_id=$1", user).Scan(&count); e != nil {
+	var inserted bool
+	if e = tx.QueryRow(ctx, `WITH device_count AS (
+ SELECT count(*) AS n FROM user_clipboard_devices WHERE user_id=$1
+), evicted AS (
+ DELETE FROM user_clipboard_devices d
+ WHERE d.user_id=$1 AND (SELECT n FROM device_count) >= $5 AND d.device_id=(
+  SELECT d2.device_id FROM user_clipboard_devices d2 LEFT JOIN user_clipboard_settings cs ON cs.user_id=d2.user_id
+  WHERE d2.user_id=$1 AND NOT EXISTS(SELECT 1 FROM user_clipboard_wraps w WHERE w.user_id=d2.user_id AND w.device_id=d2.device_id AND w.key_id=cs.key_id)
+  ORDER BY d2.created_at,d2.device_id LIMIT 1)
+ RETURNING 1
+), inserted AS (
+ INSERT INTO user_clipboard_devices(user_id,device_id,public_key,name)
+ SELECT $1,$2,$3,$4
+ WHERE (SELECT n FROM device_count) < $5 OR EXISTS(SELECT 1 FROM evicted)
+ RETURNING 1
+)
+SELECT EXISTS(SELECT 1 FROM inserted)`, user, device, publicKey, name, clipboardDeviceLimit).Scan(&inserted); e != nil {
 		return e
 	}
-	if count >= clipboardDeviceLimit {
-		result, e = tx.Exec(ctx, `DELETE FROM user_clipboard_devices WHERE user_id=$1 AND device_id=(
- SELECT d.device_id FROM user_clipboard_devices d LEFT JOIN user_clipboard_settings cs ON cs.user_id=d.user_id
- WHERE d.user_id=$1 AND NOT EXISTS(SELECT 1 FROM user_clipboard_wraps w WHERE w.user_id=d.user_id AND w.device_id=d.device_id AND w.key_id=cs.key_id)
- ORDER BY d.created_at,d.device_id LIMIT 1)`, user)
-		if e != nil {
-			return e
-		}
-		if result.RowsAffected() == 0 {
-			return errClipboardDeviceLimit
-		}
-	}
-	if _, e = tx.Exec(ctx, "INSERT INTO user_clipboard_devices(user_id,device_id,public_key,name) VALUES($1,$2,$3,$4)", user, device, publicKey, name); e != nil {
-		return e
+	if !inserted {
+		return errClipboardDeviceLimit
 	}
 	return tx.Commit(ctx)
 }

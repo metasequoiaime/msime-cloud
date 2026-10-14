@@ -25,13 +25,26 @@ type communityPaginationTrace struct {
 }
 
 func (trace *communityPaginationTrace) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	if strings.Contains(data.SQL, "FROM "+trace.table+" ") {
-		trace.queries <- communityPageQuery{data.SQL, append([]any(nil), data.Args...)}
-	}
+	trace.capture(data.SQL, data.Args)
 	return ctx
 }
 
+func (trace *communityPaginationTrace) TraceBatchStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceBatchStartData) context.Context {
+	return ctx
+}
+
+func (trace *communityPaginationTrace) TraceBatchQuery(_ context.Context, _ *pgx.Conn, data pgx.TraceBatchQueryData) {
+	trace.capture(data.SQL, data.Args)
+}
+
+func (*communityPaginationTrace) TraceBatchEnd(context.Context, *pgx.Conn, pgx.TraceBatchEndData) {}
 func (*communityPaginationTrace) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+func (trace *communityPaginationTrace) capture(sql string, args []any) {
+	if strings.Contains(sql, "FROM "+trace.table+" ") {
+		trace.queries <- communityPageQuery{sql, append([]any(nil), args...)}
+	}
+}
 
 func assertCommunityPageWork(t *testing.T, db *Store, trace *communityPaginationTrace, relations ...string) {
 	t.Helper()

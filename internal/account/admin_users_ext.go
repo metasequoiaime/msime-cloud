@@ -237,29 +237,25 @@ SELECT COALESCE(r.role,'user') AS role,count(*) FROM auth_users u LEFT JOIN user
 // adminUserStats 提供 GET /api/users/stats 的统计卡片和角色筛选计数，角色规则与用户列表一致。
 func (a *Service) adminUserStats(w http.ResponseWriter, r *http.Request, _ string) {
 	var total, new7d, banned, synced int64
-	err := a.store.pool.QueryRow(r.Context(), `SELECT count(*),count(*) FILTER (WHERE created_at>now()-interval '7 days'),count(*) FILTER (WHERE banned_at IS NOT NULL),
- (SELECT count(*) FROM user_preferences) FROM auth_users`).Scan(&total, &new7d, &banned, &synced)
-	if err != nil {
-		a.error(w, err)
-		return
-	}
-	rows, err := a.store.pool.Query(r.Context(), userRoleCountsQuery, a.adminOwnersArg())
-	if err != nil {
-		a.error(w, err)
-		return
-	}
-	defer rows.Close()
 	roles := map[string]int64{}
-	for rows.Next() {
-		var role string
-		var count int64
-		if err = rows.Scan(&role, &count); err != nil {
-			a.error(w, err)
-			return
+	batch := &pgx.Batch{}
+	batch.Queue(`SELECT count(*),count(*) FILTER (WHERE created_at>now()-interval '7 days'),count(*) FILTER (WHERE banned_at IS NOT NULL),
+ (SELECT count(*) FROM user_preferences) FROM auth_users`).QueryRow(func(row pgx.Row) error {
+		return row.Scan(&total, &new7d, &banned, &synced)
+	})
+	batch.Queue(userRoleCountsQuery, a.adminOwnersArg()).Query(func(rows pgx.Rows) error {
+		defer rows.Close()
+		for rows.Next() {
+			var role string
+			var count int64
+			if err := rows.Scan(&role, &count); err != nil {
+				return err
+			}
+			roles[role] = count
 		}
-		roles[role] = count
-	}
-	if err = rows.Err(); err != nil {
+		return rows.Err()
+	})
+	if err := a.store.pool.SendBatch(r.Context(), batch).Close(); err != nil {
 		a.error(w, err)
 		return
 	}

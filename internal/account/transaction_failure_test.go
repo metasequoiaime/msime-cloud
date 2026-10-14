@@ -39,7 +39,21 @@ func (f *statementCancellation) TraceQueryStart(ctx context.Context, _ *pgx.Conn
 	}
 	return ctx
 }
-func (*statementCancellation) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+func (f *statementCancellation) TraceBatchStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceBatchStartData) context.Context {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seen++
+	f.statements = append(f.statements, "<batch>")
+	if f.at > 0 && f.seen == f.at {
+		ctx, cancel := context.WithCancel(ctx)
+		cancel()
+		return ctx
+	}
+	return ctx
+}
+func (*statementCancellation) TraceBatchQuery(context.Context, *pgx.Conn, pgx.TraceBatchQueryData) {}
+func (*statementCancellation) TraceBatchEnd(context.Context, *pgx.Conn, pgx.TraceBatchEndData)     {}
+func (*statementCancellation) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData)     {}
 
 func TestUserDataTransactionsRollbackAtEveryDatabaseStatement(t *testing.T) {
 	testUserDataTransactions(t, false)

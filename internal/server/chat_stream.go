@@ -78,6 +78,9 @@ func (c *cappedReader) Read(p []byte) (int, error) {
 	}
 	n, err := c.r.Read(p)
 	c.left -= int64(n)
+	if err != nil && err != io.EOF {
+		return n, upstreamTransportError{cause: err}
+	}
 	return n, err
 }
 

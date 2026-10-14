@@ -6,11 +6,56 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/textproto"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestResponseBodyReadErrorsDoNotExposeContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		// 响应头和 JSON 分块合法，只有末尾的 trailer 非法，确保错误发生在读取正文时。
+		_, err = io.WriteString(conn, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nTrailer: X-Synthetic\r\nContent-Type: application/json\r\nX-GitHub-Request-Id: synthetic-request\r\n\r\n2\r\n{}\r\n0\r\nsynthetic-private-user-input\r\n\r\n")
+		if err != nil {
+			t.Error(err)
+		}
+	}))
+	defer server.Close()
+	for _, operation := range []string{"Do", "Get", "Raw"} {
+		t.Run(operation, func(t *testing.T) {
+			c := Client{APIURL: server.URL, HTTP: server.Client(), Cache: &Cache{}}
+			for range 2 {
+				var response Response
+				var err error
+				switch operation {
+				case "Do":
+					response, err = c.Do(t.Context(), "synthetic-token", http.MethodGet, "/repos/o/r/issues", nil)
+				case "Get":
+					response, err = c.Get(t.Context(), "synthetic-token", "/repos/o/r/issues")
+				case "Raw":
+					response, err = c.Raw(t.Context(), "synthetic-token", "/repos/o/r/contents/file", 1024)
+				}
+				var original textproto.ProtocolError
+				if !errors.As(err, &original) || !strings.Contains(original.Error(), "synthetic-private-user-input") {
+					t.Fatal("丢失了正文读取的原始协议错误", err)
+				}
+				if response.Status != http.StatusOK || response.Header.Get("X-GitHub-Request-Id") != "synthetic-request" || len(response.Body) != 0 {
+					t.Fatal("正文读取失败没有保留状态和响应头，或返回了不完整正文", response)
+				}
+				if strings.Contains(err.Error(), "synthetic-private-user-input") {
+					t.Error("GitHub 正文读取错误泄露了上游内容", err)
+				}
+			}
+		})
+	}
+}
 
 func TestRequestErrorsDoNotExposeURL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

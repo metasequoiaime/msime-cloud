@@ -74,17 +74,22 @@ func (a *Service) CreateAdminSession(ctx context.Context, identity AdminIdentity
 		return "", err
 	}
 	defer tx.Rollback(ctx)
-	var enabled bool
-	err = tx.QueryRow(ctx, `SELECT enabled FROM admin_members WHERE email=$1 FOR UPDATE`, strings.ToLower(identity.Email)).Scan(&enabled)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return "", err
-	}
-	if err == nil && !enabled {
-		return "", ErrInvalid
-	}
-	_, err = tx.Exec(ctx, `INSERT INTO admin_sessions(token_hash,subject,email,name,user_agent) VALUES($1,$2,$3,$4,$5)`, hash(token), identity.Subject, strings.ToLower(identity.Email), adminProfileText(identity.Name, 200), adminProfileText(identity.UserAgent, 256))
+	var inserted bool
+	email := strings.ToLower(identity.Email)
+	err = tx.QueryRow(ctx, `WITH member AS MATERIALIZED (
+ SELECT enabled FROM admin_members WHERE email=$3 FOR UPDATE
+), inserted AS (
+ INSERT INTO admin_sessions(token_hash,subject,email,name,user_agent)
+ SELECT $1,$2,$3,$4,$5
+ WHERE NOT EXISTS (SELECT 1 FROM member) OR (SELECT enabled FROM member)
+ RETURNING token_hash
+)
+SELECT EXISTS(SELECT 1 FROM inserted)`, hash(token), identity.Subject, email, adminProfileText(identity.Name, 200), adminProfileText(identity.UserAgent, 256)).Scan(&inserted)
 	if err != nil {
 		return "", err
+	}
+	if !inserted {
+		return "", ErrInvalid
 	}
 	return token, tx.Commit(ctx)
 }

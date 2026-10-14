@@ -116,6 +116,9 @@ func TestSkinJobCapacityCancelExpiryAndShutdown(t *testing.T) {
 	s.mu.Lock()
 	s.skinJobs[paths[1][len("/v1/skins/jobs/"):]].expires = time.Now().Add(-time.Second)
 	s.mu.Unlock()
+	if w := call(s, "DELETE", paths[1], ""); w.Code != 404 {
+		t.Fatal("过期任务仍可删除", w.Code)
+	}
 	if w := call(s, "GET", paths[1], ""); w.Code != 404 {
 		t.Fatal("expired", w.Code)
 	}

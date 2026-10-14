@@ -32,9 +32,9 @@ func (a *Service) adminUser(w http.ResponseWriter, r *http.Request, id string) {
  'skins',(SELECT count(*) FROM community_skins WHERE owner_id=u.id),
  'candidate_skins',(SELECT count(*) FROM community_candidate_skins WHERE owner_id=u.id),
  'plugins',(SELECT count(*) FROM community_plugins WHERE owner_id=u.id),
- 'dictionaries',(SELECT count(*) FROM community_resources WHERE owner_id=u.id AND kind='dictionary'),
- 'replies',(SELECT count(*) FROM community_resources WHERE owner_id=u.id AND kind='reply'),
- 'phrases',(SELECT count(*) FROM community_resources WHERE owner_id=u.id AND kind='phrase'),
+ 'dictionaries',resource_stats.dictionaries,
+ 'replies',resource_stats.replies,
+ 'phrases',resource_stats.phrases,
  'sessions',COALESCE((SELECT json_agg(x ORDER BY created_at DESC,id DESC) FROM (
  SELECT id,created_at,expires_at,greatest(created_at,access_expires-interval '15 minutes') AS last_active,user_agent,CASE WHEN revoked THEN 'revoked' WHEN expires_at<=now() THEN 'expired' ELSE 'active' END AS status
  FROM auth_sessions WHERE user_id=u.id ORDER BY created_at DESC,id DESC LIMIT 50
@@ -57,7 +57,10 @@ func (a *Service) adminUser(w http.ResponseWriter, r *http.Request, id string) {
  WHERE (a.target=u.id AND a.action IN ('ban_user','unban_user','revoke_sessions'))
   OR (a.action='revoke_session' AND a.target IN (SELECT id FROM auth_sessions WHERE user_id=u.id))
  ORDER BY a.created_at DESC,a.id DESC LIMIT 20
- ) h),'[]'::json)) FROM auth_users u `+userContactSQL+` `+userActivitySQL+` WHERE u.id=$1`, id, a.adminOwnersArg()).Scan(&result)
+ ) h),'[]'::json)) FROM auth_users u `+userContactSQL+` `+userActivitySQL+`
+ CROSS JOIN LATERAL (SELECT count(*) FILTER (WHERE kind='dictionary') AS dictionaries,count(*) FILTER (WHERE kind='reply') AS replies,
+ count(*) FILTER (WHERE kind='phrase') AS phrases FROM community_resources WHERE owner_id=u.id) resource_stats
+ WHERE u.id=$1`, id, a.adminOwnersArg()).Scan(&result)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, 404, "not_found")
 		return

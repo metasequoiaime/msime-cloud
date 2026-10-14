@@ -32,10 +32,16 @@ type UserDataSection struct {
 // userDataSummaryQuery 用一条语句汇总本人各分区的行数和大小。头像存在对象存储里，这里只报告有没有（items 0 或 1）。
 const userDataSummaryQuery = `SELECT id,bytes,items FROM (
  SELECT 1 AS o,'preferences' AS id,COALESCE(sum(pg_column_size(t.*)),0)::bigint AS bytes,count(*)::bigint AS items FROM user_preferences t WHERE user_id=$1
- UNION ALL SELECT 2,'dictionary',(SELECT COALESCE(sum(pg_column_size(t.*)),0) FROM user_dictionary_entries t WHERE user_id=$1)+(SELECT COALESCE(sum(pg_column_size(t.*)),0) FROM user_dictionary_overlay t WHERE user_id=$1)+(SELECT COALESCE(sum(pg_column_size(t.*)),0) FROM user_dictionary_changes t WHERE user_id=$1)+(SELECT COALESCE(sum(pg_column_size(t.*)),0) FROM user_candidate_positions t WHERE user_id=$1)+(SELECT COALESCE(sum(pg_column_size(t.*)),0) FROM user_candidate_selections t WHERE user_id=$1),(SELECT count(*) FROM user_dictionary_entries WHERE user_id=$1)
+ UNION ALL SELECT 2,'dictionary',entries.bytes+(SELECT COALESCE(sum(pg_column_size(t.*)),0) FROM user_dictionary_overlay t WHERE user_id=$1)+(SELECT COALESCE(sum(pg_column_size(t.*)),0) FROM user_dictionary_changes t WHERE user_id=$1)+(SELECT COALESCE(sum(pg_column_size(t.*)),0) FROM user_candidate_positions t WHERE user_id=$1)+(SELECT COALESCE(sum(pg_column_size(t.*)),0) FROM user_candidate_selections t WHERE user_id=$1),entries.items
+ FROM (SELECT COALESCE(sum(pg_column_size(t.*)),0) AS bytes,count(*) AS items FROM user_dictionary_entries t WHERE user_id=$1) entries
  UNION ALL SELECT 3,'phrases',COALESCE(sum(pg_column_size(t.*)),0),COALESCE(sum(jsonb_array_length(t.phrases)),0) FROM user_phrases t WHERE user_id=$1
  UNION ALL SELECT 4,'clipboard',COALESCE(sum(pg_column_size(t.*)),0),count(*) FROM user_clipboard t WHERE user_id=$1
- UNION ALL SELECT 5,'community',(SELECT COALESCE(sum(pg_column_size(t.*)),0) FROM community_skins t WHERE owner_id=$1)+(SELECT COALESCE(sum(pg_column_size(t.*)),0) FROM community_candidate_skins t WHERE owner_id=$1)+(SELECT COALESCE(sum(pg_column_size(t.*)),0) FROM community_resources t WHERE owner_id=$1)+(SELECT COALESCE(sum(pg_column_size(t.*)),0) FROM community_plugins t WHERE owner_id=$1),(SELECT count(*) FROM community_skins WHERE owner_id=$1)+(SELECT count(*) FROM community_candidate_skins WHERE owner_id=$1)+(SELECT count(*) FROM community_resources WHERE owner_id=$1)+(SELECT count(*) FROM community_plugins WHERE owner_id=$1)
+ UNION ALL SELECT 5,'community',sum(bytes)::bigint,sum(items)::bigint FROM (
+  SELECT COALESCE(sum(pg_column_size(t.*)),0) AS bytes,count(*) AS items FROM community_skins t WHERE owner_id=$1
+  UNION ALL SELECT COALESCE(sum(pg_column_size(t.*)),0),count(*) FROM community_candidate_skins t WHERE owner_id=$1
+  UNION ALL SELECT COALESCE(sum(pg_column_size(t.*)),0),count(*) FROM community_resources t WHERE owner_id=$1
+  UNION ALL SELECT COALESCE(sum(pg_column_size(t.*)),0),count(*) FROM community_plugins t WHERE owner_id=$1
+ ) community
  UNION ALL SELECT 6,'voice',COALESCE(sum(octet_length(t.audio)+octet_length(t.transcript)),0),count(*) FROM voice_contributions t WHERE user_id=$1
  UNION ALL SELECT 7,'avatar',0,(SELECT count(*) FROM auth_users WHERE id=$1 AND avatar_key<>'')
 ) s ORDER BY o`

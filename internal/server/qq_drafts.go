@@ -75,12 +75,22 @@ func (s *Server) qqDraftReport(ctx context.Context, subject, text string, histor
 		slog.Warn("qq bot: draft limit unavailable", "reason", err.Error())
 		return qqDraftResult{}
 	}
+	// 只有真正新建草稿才占用额度；整理失败、判定不是反馈、并入旧草稿或记成已有 issue 时退回。
+	releaseDraftSlot := func() {
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		defer cancel()
+		if err := s.limits.ReleaseRateLimit(rctx, "qq-bot-drafts", subject); err != nil {
+			slog.Warn("qq bot: draft slot not released", "reason", err.Error())
+		}
+	}
 	report, err := s.qqSummarise(ctx, text)
 	switch {
 	case err != nil:
 		slog.Warn("qq bot: draft not summarised", "reason", err.Error())
+		releaseDraftSlot()
 		return qqDraftResult{}
 	case report.Kind == "other":
+		releaseDraftSlot()
 		return qqDraftResult{NotReport: true}
 	}
 	missing := s.qqDraftMissing(ctx, report, text)
@@ -88,16 +98,13 @@ func (s *Server) qqDraftReport(ctx context.Context, subject, text string, histor
 	// 需求先找有没有人提过，提过就在那里记一票，不起新草稿（见 qq_votes.go）。
 	if report.Kind == "feature" {
 		if note := s.qqVoteFeature(ctx, subject, report, text); note != "" {
+			releaseDraftSlot()
 			return qqDraftResult{Note: note}
 		}
 	}
 	if note, asked, ok := s.qqMergeDraft(ctx, subject, text, report, history); ok {
 		// 没有新建草稿，退回这一次的名额：每天的额度只算新建的草稿。
-		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-		if err := s.limits.ReleaseRateLimit(rctx, "qq-bot-drafts", subject); err != nil {
-			slog.Warn("qq bot: draft slot not released", "reason", err.Error())
-		}
-		cancel()
+		releaseDraftSlot()
 		return qqDraftResult{Note: note, Asked: asked}
 	}
 	// 整理、记票、并入都做完了，最后这一步写库不跟随处理消息的 ctx（写法照 recordQQTurn）：答案可能已经按「说明里会追问」去掉了末尾的追问发出去，这时滚动发布取消了 ctx、草稿没建成，追问就落空了。
@@ -107,6 +114,7 @@ func (s *Server) qqDraftReport(ctx context.Context, subject, text string, histor
 	cancel()
 	if err != nil {
 		slog.Warn("qq bot: draft not stored", "reason", err.Error())
+		releaseDraftSlot()
 		return qqDraftResult{}
 	}
 	// 群友看到的说法不用「草稿」「GitHub」这类内部叫法；编号要留着，补充时用得到。压成一行：原来「我已经把这个问题记下来了，编号 D12…还想知道：…」又长又和答案末尾的追问重复。

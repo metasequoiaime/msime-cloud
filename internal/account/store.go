@@ -541,9 +541,10 @@ func (s *Store) completeWith(ctx context.Context, c Challenge, identity Identity
 		account = c.LinkUser
 	}
 	if account != "" {
-		// A banned account can neither sign in nor gain identities. The challenge is still consumed, so the verified credential cannot be replayed. FOR SHARE waits for a ban committing concurrently (it holds the row FOR UPDATE), so a login racing a ban either sees the ban or creates its session before the ban revokes every session.
+		// 封禁账号不能登录或绑定身份，但仍消费挑战，阻止已验证凭据被重放。
+		// 提前取得更新锁，避免不同已绑定身份并发登录后更新默认昵称时从共享锁升级造成死锁；也等待并发封禁提交并读取最终状态。
 		var banned bool
-		if e = tx.QueryRow(ctx, "SELECT banned_at IS NOT NULL FROM auth_users WHERE id=$1 FOR SHARE", account).Scan(&banned); e != nil && !errors.Is(e, pgx.ErrNoRows) {
+		if e = tx.QueryRow(ctx, "SELECT banned_at IS NOT NULL FROM auth_users WHERE id=$1 FOR NO KEY UPDATE", account).Scan(&banned); e != nil && !errors.Is(e, pgx.ErrNoRows) {
 			return Tokens{}, e
 		}
 		if banned {

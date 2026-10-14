@@ -105,15 +105,23 @@ type CommunityPlugin struct {
 	saves int
 }
 
-const pluginSelect = `SELECT p.id,p.kind,p.plugin_id,p.name,p.description,
+const pluginSelectBase = `SELECT p.id,p.kind,p.plugin_id,p.name,p.description,
  COALESCE(NULLIF(btrim(u.display_name),''),'水杉小鹿·'||upper(left(u.id,6))),p.version,p.license,p.size,p.sha256,
  (SELECT count(*) FROM community_plugin_downloads WHERE pack_id=p.id),
  (SELECT count(*) FROM community_plugin_ratings WHERE pack_id=p.id),
  COALESCE((SELECT avg(stars) FROM community_plugin_ratings WHERE pack_id=p.id),0),
  p.owner_id=$1,COALESCE((SELECT stars FROM community_plugin_ratings WHERE pack_id=p.id AND user_id=$1),0),p.created_at,
- CASE WHEN p.owner_id=$1 THEN p.moderation ELSE '' END,
- (SELECT count(*) FROM community_plugin_saves WHERE pack_id=p.id),EXISTS(SELECT 1 FROM community_plugin_saves WHERE pack_id=p.id AND user_id=$1)
+ CASE WHEN p.owner_id=$1 THEN p.moderation ELSE '' END,`
+
+// communityPluginSelect 只有客户端声明 fields=saved 时才计算收藏总数和当前用户的收藏状态；默认目录不需要这两个逐行子查询。
+func communityPluginSelect(saved bool) string {
+	if saved {
+		return pluginSelectBase + `(SELECT count(*) FROM community_plugin_saves WHERE pack_id=p.id),EXISTS(SELECT 1 FROM community_plugin_saves WHERE pack_id=p.id AND user_id=$1)
  FROM community_plugins p JOIN auth_users u ON u.id=p.owner_id `
+	}
+	return pluginSelectBase + `0,false
+ FROM community_plugins p JOIN auth_users u ON u.id=p.owner_id `
+}
 
 func scanCommunityPlugin(row interface{ Scan(...any) error }) (CommunityPlugin, error) {
 	var p CommunityPlugin
@@ -222,7 +230,7 @@ func (a *Service) communityPluginList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	join, order := communitySavedScope(scope, "community_plugin_saves", "pack_id", "p")
-	rows, e := a.store.pool.Query(r.Context(), pluginSelect+join+`WHERE strpos(lower(p.name),lower($2))>0 AND ($3='' OR p.kind=$3) AND ($5<>'mine' OR p.owner_id=$1) AND (p.moderation<>'removed' OR p.owner_id=$1) AND p.kind=ANY($6) ORDER BY `+order+` LIMIT 21 OFFSET $4`, viewer, search, kind, offset, scope, pluginVisibleKinds(r, kind))
+	rows, e := a.store.pool.Query(r.Context(), communityPluginSelect(fields["saved"])+join+`WHERE strpos(lower(p.name),lower($2))>0 AND ($3='' OR p.kind=$3) AND ($5<>'mine' OR p.owner_id=$1) AND (p.moderation<>'removed' OR p.owner_id=$1) AND p.kind=ANY($6) ORDER BY `+order+` LIMIT 21 OFFSET $4`, viewer, search, kind, offset, scope, pluginVisibleKinds(r, kind))
 	if e != nil {
 		a.error(w, e)
 		return
@@ -257,7 +265,7 @@ func (a *Service) communityPluginDetail(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	// 客户端没有声明能安装的类型按不存在处理，与列表看不到它一致。
-	v, e := scanCommunityPlugin(a.store.pool.QueryRow(r.Context(), pluginSelect+`WHERE p.id=$2 AND (p.moderation<>'removed' OR p.owner_id=$1) AND p.kind=ANY($3)`, a.communityViewer(r), r.PathValue("id"), pluginVisibleKinds(r, "")))
+	v, e := scanCommunityPlugin(a.store.pool.QueryRow(r.Context(), communityPluginSelect(fields["saved"])+`WHERE p.id=$2 AND (p.moderation<>'removed' OR p.owner_id=$1) AND p.kind=ANY($3)`, a.communityViewer(r), r.PathValue("id"), pluginVisibleKinds(r, "")))
 	if errors.Is(e, pgx.ErrNoRows) {
 		writeError(w, 404, "plugin_not_found")
 		return
@@ -323,7 +331,7 @@ func (a *Service) communityPluginPublish(w http.ResponseWriter, r *http.Request)
 			writeError(w, 409, "plugin_id_conflict")
 			return
 		}
-		v, e := scanCommunityPlugin(a.store.pool.QueryRow(r.Context(), pluginSelect+`WHERE p.id=$2`, p.UserID, input.ID))
+		v, e := scanCommunityPlugin(a.store.pool.QueryRow(r.Context(), communityPluginSelect(false)+`WHERE p.id=$2`, p.UserID, input.ID))
 		if e != nil {
 			a.error(w, e)
 			return
@@ -363,7 +371,7 @@ func (a *Service) communityPluginPublish(w http.ResponseWriter, r *http.Request)
 			writeError(w, 409, "plugin_id_conflict")
 			return
 		}
-		v, e := scanCommunityPlugin(tx.QueryRow(r.Context(), pluginSelect+`WHERE p.id=$2`, p.UserID, input.ID))
+		v, e := scanCommunityPlugin(tx.QueryRow(r.Context(), communityPluginSelect(false)+`WHERE p.id=$2`, p.UserID, input.ID))
 		if e != nil {
 			a.error(w, e)
 			return
@@ -399,7 +407,7 @@ func (a *Service) communityPluginPublish(w http.ResponseWriter, r *http.Request)
 		writeError(w, 409, "plugin_id_conflict")
 		return
 	}
-	v, e := scanCommunityPlugin(tx.QueryRow(r.Context(), pluginSelect+`WHERE p.id=$2`, p.UserID, input.ID))
+	v, e := scanCommunityPlugin(tx.QueryRow(r.Context(), communityPluginSelect(false)+`WHERE p.id=$2`, p.UserID, input.ID))
 	if e == nil {
 		e = tx.Commit(r.Context())
 	}

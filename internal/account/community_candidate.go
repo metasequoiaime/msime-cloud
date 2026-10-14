@@ -151,7 +151,7 @@ func candidateFields(r *http.Request) (fields map[string]bool, ok bool) {
 	return communityFields(r, "sync", "moderation", "saved")
 }
 
-const candidateSelect = `SELECT s.id,s.package_id,s.name,s.description,
+const candidateSkinSelectBase = `SELECT s.id,s.package_id,s.name,s.description,
  COALESCE(NULLIF(btrim(u.display_name),''),'水杉小鹿·'||upper(left(u.id,6))),s.version,s.license_code,s.license_assets,s.license_source,
  f.size,f.files,
  (SELECT count(*) FROM community_candidate_skin_downloads WHERE skin_id=s.id),
@@ -159,10 +159,19 @@ const candidateSelect = `SELECT s.id,s.package_id,s.name,s.description,
  COALESCE((SELECT avg(stars) FROM community_candidate_skin_ratings WHERE skin_id=s.id),0),
  s.owner_id=$1,COALESCE((SELECT stars FROM community_candidate_skin_ratings WHERE skin_id=s.id AND user_id=$1),0),s.created_at,
  s.visibility,s.updated_at,CASE WHEN s.owner_id=$1 THEN s.request_sha256 ELSE '' END,s.category,
- CASE WHEN s.owner_id=$1 THEN s.moderation ELSE '' END,
- (SELECT count(*) FROM community_candidate_skin_saves WHERE skin_id=s.id),EXISTS(SELECT 1 FROM community_candidate_skin_saves WHERE skin_id=s.id AND user_id=$1)
+ CASE WHEN s.owner_id=$1 THEN s.moderation ELSE '' END,`
+
+// candidateSkinSelect 只有客户端声明 fields=saved 时才计算收藏总数和当前用户的收藏状态；默认目录不需要这两个逐行子查询。
+func candidateSkinSelect(saved bool) string {
+	if saved {
+		return candidateSkinSelectBase + `(SELECT count(*) FROM community_candidate_skin_saves WHERE skin_id=s.id),EXISTS(SELECT 1 FROM community_candidate_skin_saves WHERE skin_id=s.id AND user_id=$1)
  FROM community_candidate_skins s JOIN auth_users u ON u.id=s.owner_id
  CROSS JOIN LATERAL (SELECT COALESCE(sum(size),0) AS size,count(*) AS files FROM community_candidate_skin_files WHERE skin_id=s.id) f `
+	}
+	return candidateSkinSelectBase + `0,false
+ FROM community_candidate_skins s JOIN auth_users u ON u.id=s.owner_id
+ CROSS JOIN LATERAL (SELECT COALESCE(sum(size),0) AS size,count(*) AS files FROM community_candidate_skin_files WHERE skin_id=s.id) f `
+}
 
 func scanCandidateSkin(row interface{ Scan(...any) error }) (CommunityCandidateSkin, error) {
 	var s CommunityCandidateSkin
@@ -429,7 +438,7 @@ func (a *Service) communityCandidateList(w http.ResponseWriter, r *http.Request)
 	}
 	// 私有作品只出现在作者自己、且声明了 fields=sync 的 mine 或 saved 列表里：已发布的客户端拒绝 license assets 为空的条目，而私有作品可以为空，一条就会让整页解析失败。
 	join, order := communitySavedScope(scope, "community_candidate_skin_saves", "skin_id", "s")
-	rows, e := a.store.pool.Query(r.Context(), candidateSelect+join+`WHERE strpos(lower(s.name),lower($2))>0 AND ($3<>'mine' OR s.owner_id=$1) AND (s.visibility='public' OR ($3<>'' AND $5 AND s.owner_id=$1)) AND (s.moderation<>'removed' OR s.owner_id=$1) AND ($6='' OR s.category=$6) ORDER BY `+order+` LIMIT 21 OFFSET $4`, viewer, search, scope, offset, sync, category)
+	rows, e := a.store.pool.Query(r.Context(), candidateSkinSelect(fields["saved"])+join+`WHERE strpos(lower(s.name),lower($2))>0 AND ($3<>'mine' OR s.owner_id=$1) AND (s.visibility='public' OR ($3<>'' AND $5 AND s.owner_id=$1)) AND (s.moderation<>'removed' OR s.owner_id=$1) AND ($6='' OR s.category=$6) ORDER BY `+order+` LIMIT 21 OFFSET $4`, viewer, search, scope, offset, sync, category)
 	if e != nil {
 		a.error(w, e)
 		return
@@ -470,7 +479,7 @@ func (a *Service) communityCandidateDetail(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	// A private row is the owner's alone, and only an opted-in client can decode it; everyone else gets the same 404 as for a missing id.
-	v, e := scanCandidateSkin(a.store.pool.QueryRow(r.Context(), candidateSelect+`WHERE s.id=$2 AND (s.visibility='public' OR ($3 AND s.owner_id=$1)) AND (s.moderation<>'removed' OR s.owner_id=$1)`, a.communityViewer(r), r.PathValue("id"), sync))
+	v, e := scanCandidateSkin(a.store.pool.QueryRow(r.Context(), candidateSkinSelect(fields["saved"])+`WHERE s.id=$2 AND (s.visibility='public' OR ($3 AND s.owner_id=$1)) AND (s.moderation<>'removed' OR s.owner_id=$1)`, a.communityViewer(r), r.PathValue("id"), sync))
 	if errors.Is(e, pgx.ErrNoRows) {
 		writeError(w, 404, "skin_not_found")
 		return
@@ -580,7 +589,7 @@ func (a *Service) communityCandidatePublish(w http.ResponseWriter, r *http.Reque
 			writeError(w, 409, "candidate_skin_id_conflict")
 			return
 		}
-		v, e := scanCandidateSkin(a.store.pool.QueryRow(r.Context(), candidateSelect+`WHERE s.id=$2`, p.UserID, input.ID))
+		v, e := scanCandidateSkin(a.store.pool.QueryRow(r.Context(), candidateSkinSelect(false)+`WHERE s.id=$2`, p.UserID, input.ID))
 		if e != nil {
 			a.error(w, e)
 			return
@@ -622,7 +631,7 @@ func (a *Service) communityCandidatePublish(w http.ResponseWriter, r *http.Reque
 			writeError(w, 409, "candidate_skin_id_conflict")
 			return
 		}
-		v, e := scanCandidateSkin(tx.QueryRow(r.Context(), candidateSelect+`WHERE s.id=$2`, p.UserID, input.ID))
+		v, e := scanCandidateSkin(tx.QueryRow(r.Context(), candidateSkinSelect(false)+`WHERE s.id=$2`, p.UserID, input.ID))
 		if e != nil {
 			a.error(w, e)
 			return
@@ -663,7 +672,7 @@ func (a *Service) communityCandidatePublish(w http.ResponseWriter, r *http.Reque
 		a.error(w, e)
 		return
 	}
-	v, e := scanCandidateSkin(tx.QueryRow(r.Context(), candidateSelect+`WHERE s.id=$2`, p.UserID, input.ID))
+	v, e := scanCandidateSkin(tx.QueryRow(r.Context(), candidateSkinSelect(false)+`WHERE s.id=$2`, p.UserID, input.ID))
 	if e == nil {
 		e = tx.Commit(r.Context())
 	}
@@ -906,7 +915,7 @@ func (a *Service) communityCandidateReplace(w http.ResponseWriter, r *http.Reque
 		case packageID != pkg.ID:
 			writeError(w, 409, "candidate_skin_package_mismatch")
 		case stored == digest:
-			v, e := scanCandidateSkin(q.QueryRow(r.Context(), candidateSelect+`WHERE s.id=$2`, p.UserID, id))
+			v, e := scanCandidateSkin(q.QueryRow(r.Context(), candidateSkinSelect(false)+`WHERE s.id=$2`, p.UserID, id))
 			if e != nil {
 				a.error(w, e)
 			} else {
@@ -963,7 +972,7 @@ func (a *Service) communityCandidateReplace(w http.ResponseWriter, r *http.Reque
 		a.error(w, e)
 		return
 	}
-	v, e := scanCandidateSkin(tx.QueryRow(r.Context(), candidateSelect+`WHERE s.id=$2`, p.UserID, id))
+	v, e := scanCandidateSkin(tx.QueryRow(r.Context(), candidateSkinSelect(false)+`WHERE s.id=$2`, p.UserID, id))
 	if e == nil {
 		e = tx.Commit(r.Context())
 	}
@@ -1053,7 +1062,7 @@ func (a *Service) communityCandidateVisibility(w http.ResponseWriter, r *http.Re
 			return
 		}
 	}
-	v, e := scanCandidateSkin(tx.QueryRow(r.Context(), candidateSelect+`WHERE s.id=$2`, p.UserID, id))
+	v, e := scanCandidateSkin(tx.QueryRow(r.Context(), candidateSkinSelect(false)+`WHERE s.id=$2`, p.UserID, id))
 	if e == nil {
 		e = tx.Commit(r.Context())
 	}

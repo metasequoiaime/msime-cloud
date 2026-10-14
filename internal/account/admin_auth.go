@@ -109,7 +109,13 @@ func (a *Service) AdminSession(ctx context.Context, token string) (AdminIdentity
 	}
 	return identity, nil
 }
-func (a *Service) DeleteAdminSession(ctx context.Context, token string) error {
-	_, err := a.store.pool.Exec(ctx, `DELETE FROM admin_sessions WHERE token_hash=$1`, hash(token))
+
+// DeleteAdminSession 原子撤销请求携带的会话，避免组合凭据退出时留下部分仍有效的会话。
+func (a *Service) DeleteAdminSession(ctx context.Context, tokens ...string) error {
+	hashes := make([]string, len(tokens))
+	for i, token := range tokens {
+		hashes[i] = hash(token)
+	}
+	_, err := a.store.pool.Exec(ctx, `DELETE FROM admin_sessions WHERE token_hash=ANY($1)`, hashes)
 	return err
 }

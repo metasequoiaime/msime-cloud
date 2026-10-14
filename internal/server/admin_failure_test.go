@@ -36,11 +36,11 @@ func (s *unavailableAdminStore) AdminSession(ctx context.Context, k string) (acc
 	}
 	return s.adminMemoryStore.AdminSession(ctx, k)
 }
-func (s *unavailableAdminStore) DeleteAdminSession(ctx context.Context, k string) error {
+func (s *unavailableAdminStore) DeleteAdminSession(ctx context.Context, tokens ...string) error {
 	if s.fail == "delete" {
 		return errAdminStorage
 	}
-	return s.adminMemoryStore.DeleteAdminSession(ctx, k)
+	return s.adminMemoryStore.DeleteAdminSession(ctx, tokens...)
 }
 func (s *unavailableAdminStore) AdminEmailAllowed(ctx context.Context, email string) (bool, error) {
 	if s.fail == "allowed" {

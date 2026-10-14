@@ -95,7 +95,7 @@ Google 登录时，后端校验 ID Token 的签名、issuer、audience、有效�
 | `GET /api/auth/session` | 登录状态、版本号、管理员邮箱和启用的登录方式 |
 | `GET /api/auth/google/start` | 创建 state、nonce 和 PKCE，跳转到 Google |
 | `GET /api/auth/google/callback` | 校验回调并创建管理员会话 |
-| `POST /api/auth/logout` | 删除服务端会话（Cookie 或 Bearer 携带的会话）并清除 Cookie |
+| `POST /api/auth/logout` | 原子删除本次请求携带的服务端会话（会话 Bearer 和浏览器 Cookie）；不修改浏览器 Cookie，避免迟到的退出响应覆盖其他标签页的新登录或授权流程。已撤销会话的 Cookie 无法继续鉴权，会在到期或下次登录时替换；个人访问令牌和旧管理员密钥仍由各自入口撤销 |
 | `POST /api/auth/cli/start` | 命令行登录：`{"redirect_uri":"http://127.0.0.1:<端口>/callback"}`，返回 `state`、`expires_in` 和 Google 授权地址 |
 | `POST /api/auth/cli/finish` | 命令行登录：`{"state","code","redirect_uri"}`，校验后返回 8 小时的管理员会话 `token` |
 

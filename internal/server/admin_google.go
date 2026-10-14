@@ -88,7 +88,7 @@ type adminAuthStore interface {
 	ConsumeAdminFlow(context.Context, string) (account.AdminLoginFlow, error)
 	CreateAdminSession(context.Context, account.AdminIdentity) (string, error)
 	AdminSession(context.Context, string) (account.AdminIdentity, error)
-	DeleteAdminSession(context.Context, string) error
+	DeleteAdminSession(context.Context, ...string) error
 	AdminEmailAllowed(context.Context, string) (bool, error)
 	// AdminMemberRole resolves an enabled member's role and permissions; see account.Service.AdminMemberRole.
 	AdminMemberRole(context.Context, string) (string, []string, error)
@@ -266,16 +266,22 @@ func (s *Server) adminAuthRoute(w http.ResponseWriter, r *http.Request) bool {
 		if !s.adminMutationOrigin(w, r) {
 			return true
 		}
-		// Only a session ends here; the admin key and personal access tokens are revoked where they are managed.
+		// 撤销请求携带的会话，包含 Bearer 登录时浏览器仍附带的 Cookie 会话；管理员密钥和个人令牌在各自入口撤销。
 		_, personal := adminPersonalToken(r)
-		if token, ok := s.adminSessionToken(r); ok && !personal && !s.adminBearer(r) && s.adminStore != nil {
-			if err := s.adminStore.DeleteAdminSession(r.Context(), token); err != nil {
+		var sessions []string
+		if token, ok := s.adminSessionToken(r); ok && !personal && !s.adminBearer(r) {
+			sessions = append(sessions, token)
+		}
+		if cookie, err := r.Cookie(s.adminCookieName(false)); err == nil && (len(sessions) == 0 || cookie.Value != sessions[0]) {
+			sessions = append(sessions, cookie.Value)
+		}
+		if len(sessions) != 0 && s.adminStore != nil {
+			if err := s.adminStore.DeleteAdminSession(r.Context(), sessions...); err != nil {
 				s.adminAuthError(w, err)
 				return true
 			}
 		}
-		s.adminCookie(w, "", false, -1)
-		s.adminCookie(w, "", true, -1)
+		// 服务端撤销已使旧会话失效；退出响应不改共享 Cookie，避免迟到时清掉其他标签页的新登录或授权流程。
 		respond(w, 200, map[string]bool{"ok": true})
 	case "/api/auth/google/start":
 		if r.Method != "GET" {

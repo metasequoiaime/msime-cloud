@@ -475,17 +475,15 @@ func (a *Service) adminCandidateSkinPreview(w http.ResponseWriter, r *http.Reque
 	_, _ = w.Write(data)
 }
 
-// PendingCommunity counts community items awaiting review, for the console shell's badge.
+// PendingCommunity 只统计待审核项供后台徽标使用，让已有的待审部分索引参与查询；私有候选皮肤不计入。
 func (a *Service) PendingCommunity(ctx context.Context) (int, error) {
-	counts, err := a.moderationCounts(ctx)
-	if err != nil {
-		return 0, err
-	}
-	total := 0
-	for _, states := range counts {
-		total += states["pending"]
-	}
-	return total, nil
+	var total int
+	err := a.store.pool.QueryRow(ctx, `SELECT
+ (SELECT count(*) FROM community_skins WHERE moderation='pending')+
+ (SELECT count(*) FROM community_candidate_skins WHERE moderation='pending' AND visibility='public')+
+ (SELECT count(*) FROM community_plugins WHERE moderation='pending')+
+ (SELECT count(*) FROM community_resources WHERE moderation='pending')`).Scan(&total)
+	return total, err
 }
 
 // screenCommunityText runs an upload's text through the sensitive-word matcher: blocked reports a block-level hit, and flag is the warning stored with a review-level hit (nil when nothing needs review).

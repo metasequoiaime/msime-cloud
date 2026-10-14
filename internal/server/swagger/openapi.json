@@ -20390,7 +20390,7 @@
             }
           }
         ],
-        "description": "删除设备和它的封装，用于拒绝一台待批准的设备。移除已批准的设备要换钥，见 POST /v1/users/me/clipboard/keys 的 revoke。",
+        "description": "在用户行锁内检查批准状态，删除待批准设备和它的旧封装。已持有当前密钥封装的设备返回 409 clipboard_key_rotation_required，设备、封装和条目保持不变。移除已批准的设备要换钥，见 POST /v1/users/me/clipboard/keys 的 revoke。",
         "responses": {
           "204": {
             "description": "已删除"
@@ -20417,6 +20417,16 @@
           },
           "404": {
             "description": "not_found：设备没有登记",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "clipboard_key_rotation_required：已批准设备必须通过换钥移除",
             "content": {
               "application/json": {
                 "schema": {

@@ -28,8 +28,9 @@ type qqFAQCandidateStore interface {
 	AddQQFAQCandidate(ctx context.Context, question, answer string) (int64, error)
 	QQFAQCandidate(ctx context.Context, id int64) (account.QQFAQCandidate, error)
 	OpenQQFAQCandidates(ctx context.Context, limit int) ([]account.QQFAQCandidate, int, error)
-	ClaimQQFAQCandidate(ctx context.Context, id int64) (bool, error)
-	ReleaseQQFAQCandidate(ctx context.Context, id int64) error
+	ClaimQQFAQCandidateLease(ctx context.Context, id int64) (time.Time, bool, error)
+	ReleaseQQFAQCandidateLease(ctx context.Context, id int64, claimedAt time.Time) (bool, error)
+	CloseQQFAQCandidateLease(ctx context.Context, id int64, claimedAt time.Time, state, ref string) (bool, error)
 	CloseQQFAQCandidate(ctx context.Context, id int64, state, ref string) (bool, error)
 }
 
@@ -150,7 +151,7 @@ func (s *Server) qqFAQCandidateCommands(ctx context.Context, text string, admin 
 		reply(code + " 还没有答案，请写成「写进FAQ " + code + " 答：……」。")
 		return "cmd_faq_candidate"
 	}
-	claimed, err := s.qqFAQCandidates.ClaimQQFAQCandidate(ctx, id)
+	claimedAt, claimed, err := s.qqFAQCandidates.ClaimQQFAQCandidateLease(ctx, id)
 	switch {
 	case err != nil:
 		slog.Warn("qq bot: faq candidate not claimed", "reason", err.Error())
@@ -165,10 +166,12 @@ func (s *Server) qqFAQCandidateCommands(ctx context.Context, text string, admin 
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), qqFAQCandidateStoreTimeout)
 	defer cancel()
 	if pull > 0 {
-		if _, err := s.qqFAQCandidates.CloseQQFAQCandidate(sctx, id, "done", s.qq.config.KnowledgeRepo+" #"+strconv.FormatInt(pull, 10)); err != nil {
+		if closed, err := s.qqFAQCandidates.CloseQQFAQCandidateLease(sctx, id, claimedAt, "done", s.qq.config.KnowledgeRepo+" #"+strconv.FormatInt(pull, 10)); err != nil {
 			slog.Warn("qq bot: faq candidate not closed", "reason", err.Error())
+		} else if !closed {
+			slog.Warn("qq bot: faq candidate claim is stale")
 		}
-	} else if err := s.qqFAQCandidates.ReleaseQQFAQCandidate(sctx, id); err != nil {
+	} else if _, err := s.qqFAQCandidates.ReleaseQQFAQCandidateLease(sctx, id, claimedAt); err != nil {
 		slog.Warn("qq bot: faq candidate not released", "reason", err.Error())
 	}
 	return "cmd_faq_candidate_write"

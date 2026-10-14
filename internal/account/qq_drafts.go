@@ -76,8 +76,18 @@ func (a *Service) UpdateQQDraft(ctx context.Context, id int64, original, report 
 
 // ClaimQQDraft 认领一份还没提交的草稿准备提交，返回是否认领到：两个副本同时收到「提交」时只有一个能认领，不会提两遍。认领超过 QQDraftClaimTimeout 还没记下 issue 的草稿可以重新认领，提交中途副本被杀掉、来不及放回认领时，草稿不会永远卡在「提交中」。
 func (a *Service) ClaimQQDraft(ctx context.Context, id int64) (bool, error) {
-	tag, err := a.store.pool.Exec(ctx, `UPDATE qq_drafts SET filed_at=now() WHERE id=$1 AND `+qqDraftUnclaimed+` AND created_at>now()-$2::interval`, id, QQDraftWindow.String())
-	return tag.RowsAffected() == 1, err
+	_, ok, err := a.ClaimQQDraftLease(ctx, id)
+	return ok, err
+}
+
+// ClaimQQDraftLease 认领草稿并返回本次认领的时间戳。完成或放回时必须带回这个时间戳，避免旧副本在认领超时后覆盖新副本的结果。
+func (a *Service) ClaimQQDraftLease(ctx context.Context, id int64) (time.Time, bool, error) {
+	var claimedAt time.Time
+	err := a.store.pool.QueryRow(ctx, `UPDATE qq_drafts SET filed_at=clock_timestamp() WHERE id=$1 AND `+qqDraftUnclaimed+` AND created_at>now()-$2::interval RETURNING filed_at`, id, QQDraftWindow.String()).Scan(&claimedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, false, nil
+	}
+	return claimedAt, err == nil, err
 }
 
 // ReleaseQQDraft 在提交失败时放回认领，之后可以再提交。
@@ -90,6 +100,18 @@ func (a *Service) ReleaseQQDraft(ctx context.Context, id int64) error {
 func (a *Service) SetQQDraftIssue(ctx context.Context, id int64, ref string) error {
 	_, err := a.store.pool.Exec(ctx, `UPDATE qq_drafts SET issue_ref=$2 WHERE id=$1`, id, ref)
 	return err
+}
+
+// SetQQDraftIssueLease 只为仍属于本次认领的草稿记下 issue，返回是否成功写入。
+func (a *Service) SetQQDraftIssueLease(ctx context.Context, id int64, claimedAt time.Time, ref string) (bool, error) {
+	tag, err := a.store.pool.Exec(ctx, `UPDATE qq_drafts SET issue_ref=$2 WHERE id=$1 AND issue_ref='' AND filed_at=$3`, id, ref, claimedAt)
+	return tag.RowsAffected() == 1, err
+}
+
+// ReleaseQQDraftLease 只释放仍属于本次认领且尚未记下 issue 的草稿。
+func (a *Service) ReleaseQQDraftLease(ctx context.Context, id int64, claimedAt time.Time) (bool, error) {
+	tag, err := a.store.pool.Exec(ctx, `UPDATE qq_drafts SET filed_at=NULL WHERE id=$1 AND issue_ref='' AND filed_at=$2`, id, claimedAt)
+	return tag.RowsAffected() == 1, err
 }
 
 // DismissQQDraft 忽略一份还没提交的草稿（包括认领超时的），返回是否忽略了：已经在提交、提交过或者忽略过的不改。忽略后 filed_at 记成现在、issue_ref 记成 QQDraftIgnored，不再列出，也不能再补充或提交。

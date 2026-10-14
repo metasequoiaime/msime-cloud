@@ -50,11 +50,7 @@ func (a *Service) adminOverview(w http.ResponseWriter, r *http.Request, _ string
 		}
 		days = parsed
 	}
-	community, err := a.PendingCommunity(r.Context())
-	if err != nil {
-		a.error(w, err)
-		return
-	}
+	var err error
 	keys, names, providers := []string{}, []string{}, []string{}
 	services := a.admin.Services
 	if len(services) == 0 {
@@ -133,10 +129,10 @@ func (a *Service) adminOverview(w http.ResponseWriter, r *http.Request, _ string
    ) c),
    'crash_group_latest',(SELECT json_build_object('signature',signature,'platform',`+overviewPlatform("platform")+`,'title',title) FROM admin_crash_groups WHERE status='open' AND first_seen>=now()-interval '7 days' ORDER BY first_seen DESC,signature LIMIT 1),
    'pending',json_build_object(
-     'community',$2::int,
+   'community',pending_community.total,
      'reports_7d',(SELECT count(*) FROM community_reports WHERE created_at>=now()-interval '7 days'),
      'crash_groups',(SELECT count(*) FROM admin_crash_groups WHERE status='open' AND first_seen>=now()-interval '7 days')),
-   'services_configured',$6::bool,
+   'services_configured',$5::bool,
    'services',(SELECT COALESCE(json_agg(json_build_object('key',s.key,'name',s.name,'provider',s.provider,
        'state',CASE WHEN today.total_minutes>0 AND today.ok_minutes=0 THEN 'down'
          WHEN EXISTS(SELECT 1 FROM admin_incidents i WHERE i.service=s.key AND i.state='open') THEN 'degraded'
@@ -145,13 +141,17 @@ func (a *Service) adminOverview(w http.ResponseWriter, r *http.Request, _ string
        'uptime_60d',(SELECT round(sum(ok_minutes)::numeric*100/NULLIF(sum(total_minutes),0),2) FROM admin_service_daily WHERE service=s.key AND day>=(now() AT TIME ZONE 'UTC')::date-59),
        'p95_ms',today.p95_ms) ORDER BY s.ord),'[]'::json)
      FROM (
-       SELECT key,name,provider,ord FROM unnest($3::text[],$4::text[],$5::text[]) WITH ORDINALITY AS c(key,name,provider,ord)
+       SELECT key,name,provider,ord FROM unnest($2::text[],$3::text[],$4::text[]) WITH ORDINALITY AS c(key,name,provider,ord)
        UNION ALL
-       SELECT service,service,'',1000+row_number() OVER (ORDER BY service) FROM (SELECT DISTINCT service FROM admin_service_daily WHERE day>=(now() AT TIME ZONE 'UTC')::date-59) d WHERE cardinality($3::text[])=0
+       SELECT service,service,'',1000+row_number() OVER (ORDER BY service) FROM (SELECT DISTINCT service FROM admin_service_daily WHERE day>=(now() AT TIME ZONE 'UTC')::date-59) d WHERE cardinality($2::text[])=0
      ) s
      LEFT JOIN LATERAL (SELECT ok_minutes,total_minutes,degraded,p95_ms FROM admin_service_daily WHERE service=s.key AND day>=(now() AT TIME ZONE 'UTC')::date-1 ORDER BY day DESC LIMIT 1) today ON true)) FROM (`+communityResourceCountsQuery+`) resource_counts
+ CROSS JOIN (SELECT (SELECT count(*) FROM community_skins WHERE moderation='pending')+
+                    (SELECT count(*) FROM community_candidate_skins WHERE moderation='pending' AND visibility='public')+
+                    (SELECT count(*) FROM community_plugins WHERE moderation='pending')+
+                    (SELECT count(*) FROM community_resources WHERE moderation='pending') AS total) pending_community
  CROSS JOIN (SELECT count(*) AS crashes,count(*) FILTER (WHERE NOT resolved) AS open_crashes FROM admin_events WHERE kind='crash') crash_counts`,
-		days, community, keys, names, providers, len(a.admin.Services) > 0).Scan(&result)
+		days, keys, names, providers, len(a.admin.Services) > 0).Scan(&result)
 	if err != nil {
 		a.error(w, err)
 		return

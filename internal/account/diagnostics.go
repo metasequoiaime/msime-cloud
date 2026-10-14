@@ -133,7 +133,7 @@ func validateDiagnosticUpload(v diagnosticUpload) string {
 			return "invalid_crash_logs"
 		}
 		for _, c := range *s.CrashLogs {
-			if _, err := time.Parse(time.RFC3339, c.At); err != nil || len(c.At) > 64 || len(c.Message) > diagnosticCrashMessageBytes || len(c.Stack) > diagnosticCrashStackBytes || !utf8.ValidString(c.Message) || !utf8.ValidString(c.Stack) {
+			if _, err := time.Parse(time.RFC3339, c.At); err != nil || len(c.At) > 64 || len(c.Message) > diagnosticCrashMessageBytes || len(c.Stack) > diagnosticCrashStackBytes || !utf8.ValidString(c.Message) || !utf8.ValidString(c.Stack) || strings.ContainsRune(c.Message, 0) || strings.ContainsRune(c.Stack, 0) {
 				return "invalid_crash_logs"
 			}
 		}
@@ -174,7 +174,7 @@ func validateDiagnosticConfig(value any, depth int, entries *int) string {
 	case map[string]any:
 		for key, child := range v {
 			*entries++
-			if *entries > diagnosticConfigEntries || len(key) > diagnosticConfigKeyBytes {
+			if *entries > diagnosticConfigEntries || len(key) > diagnosticConfigKeyBytes || strings.ContainsRune(key, 0) {
 				return "invalid_config_snapshot"
 			}
 			if diagnosticCredentialKey.MatchString(key) {
@@ -198,7 +198,7 @@ func validateDiagnosticConfig(value any, depth int, entries *int) string {
 			}
 		}
 	case string:
-		if len(v) > diagnosticConfigStringBytes {
+		if len(v) > diagnosticConfigStringBytes || strings.ContainsRune(v, 0) {
 			return "invalid_config_snapshot"
 		}
 	}

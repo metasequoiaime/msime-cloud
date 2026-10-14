@@ -294,21 +294,41 @@ func (m sensitiveMatcher) Match(ctx context.Context, text string) ([]SensitiveHi
 	if len(words) == 0 || text == "" {
 		return nil, nil
 	}
-	compact, spaced := foldSensitive(text, true), foldSensitive(text, false)
-	// A regex written with full-width letters is not folded (folding a pattern could change its meaning), so regexes also run against the text with only format characters removed.
-	visible := strings.Map(func(r rune) rune {
-		if unicode.Is(unicode.Cf, r) {
-			return -1
-		}
-		return r
-	}, text)
+	var compact, spaced, visible string
+	var compactReady, spacedReady, visibleReady bool
 	var hits []SensitiveHit
 	for _, w := range words {
 		// A single match cannot be interrupted, but a request that timed out or was abandoned stops before the next word.
 		if err = ctx.Err(); err != nil {
 			return nil, err
 		}
-		if (w.re != nil && (w.re.MatchString(spaced) || (visible != spaced && w.re.MatchString(visible)))) || (w.re == nil && strings.Contains(compact, w.plain)) {
+		// 每种文本形式只在对应规则首次需要时生成，空结果也要记住，避免逐词重复转换。
+		matched := false
+		if w.re == nil {
+			if !compactReady {
+				compact, compactReady = foldSensitive(text, true), true
+			}
+			matched = strings.Contains(compact, w.plain)
+		} else {
+			if !spacedReady {
+				spaced, spacedReady = foldSensitive(text, false), true
+			}
+			matched = w.re.MatchString(spaced)
+			if !matched {
+				if !visibleReady {
+					// 正则中的全角字符不能直接折叠；仅在折叠文本未命中时，再保留原字符宽度匹配。
+					visible = strings.Map(func(r rune) rune {
+						if unicode.Is(unicode.Cf, r) {
+							return -1
+						}
+						return r
+					}, text)
+					visibleReady = true
+				}
+				matched = visible != spaced && w.re.MatchString(visible)
+			}
+		}
+		if matched {
 			hits = append(hits, w.hit)
 		}
 	}

@@ -12,7 +12,7 @@ TRIGGER_PATHS = ['cmd/**', 'internal/**', 'admin-web/**', '!**/*.md', 'version.g
                  '.dockerignore', '.gitmodules', 'native/**', 'third_party/**', 'scripts/release/**',
                  '.github/workflows/backend-release.yml']
 
-PATHS = ['cmd', 'internal', 'admin-web', 'go.mod', 'go.sum', 'Dockerfile', '.dockerignore', '.gitmodules', 'native', 'third_party',
+PATHS = ['cmd', 'internal', 'admin-web', 'version.go', 'go.mod', 'go.sum', 'Dockerfile', '.dockerignore', '.gitmodules', 'native', 'third_party',
          'scripts/release', '.github/workflows/backend-release.yml',
          ':(exclude)**/*.md']
 

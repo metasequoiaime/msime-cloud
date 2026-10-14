@@ -88,25 +88,10 @@ func (a *Service) resourceApply(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "revision_conflict")
 		return
 	}
-	changed := 0
-	for _, entry := range content.Entries {
-		var existingID string
-		var existingRevision, weight int64
-		err = tx.QueryRow(r.Context(), `SELECT id,revision,weight FROM user_dictionary_entries WHERE user_id=$1 AND kind=$2 AND code=$3 AND word=$4`, p.UserID, entry.Kind, entry.Code, entry.Word).Scan(&existingID, &existingRevision, &weight)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			a.error(w, err)
-			return
-		}
-		if err == nil && weight == entry.Weight {
-			continue
-		}
-		change, err := a.store.dictionaryEdit(r.Context(), tx, p.UserID, entry.Kind, existingID, existingRevision, &DictionaryEntry{Code: entry.Code, Word: entry.Word, Weight: entry.Weight})
-		if err != nil {
-			a.dictionaryError(w, err)
-			return
-		}
-		revision = change.Revision
-		changed++
+	revision, changed, err := mergeResourceDictionary(r.Context(), tx, p.UserID, revision, content.Entries)
+	if err != nil {
+		a.dictionaryError(w, err)
+		return
 	}
 	if err = tx.Commit(r.Context()); err != nil {
 		a.error(w, err)

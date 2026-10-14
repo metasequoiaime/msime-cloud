@@ -148,6 +148,18 @@ func testUserDataTransactions(t *testing.T, native bool) {
 		return all.String()
 	}
 	operations := map[string]func(*Store, fixture) error{
+		"resource dictionary merge": func(s *Store, f fixture) error {
+			tx, err := s.userDataTransaction(t.Context(), f.user.User.ID)
+			if err != nil {
+				return err
+			}
+			defer tx.Rollback(t.Context())
+			_, _, err = mergeResourceDictionary(t.Context(), tx, f.user.User.ID, f.revision, []SharedWord{{"quick", f.entry.Code, f.entry.Word, 9}, {"quick", "batch-new", "合成新词", 2}})
+			if err != nil {
+				return err
+			}
+			return tx.Commit(t.Context())
+		},
 		"dictionary insert": func(s *Store, f fixture) error {
 			_, e := s.EditDictionary(t.Context(), f.user.User.ID, "quick", "", 0, &DictionaryEntry{Code: "bye", Word: "goodbye", Weight: 2})
 			return e

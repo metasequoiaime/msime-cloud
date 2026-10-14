@@ -727,23 +727,25 @@ func (s *Store) Logout(ctx context.Context, p Principal, all bool) error {
 func (s *Store) Me(ctx context.Context, uid string) (User, []Identity, error) {
 	var u User
 	ids := []Identity{}
-	e := scanUser(s.pool.QueryRow(ctx, userQuery, uid), &u)
-	if e != nil {
-		return u, ids, e
-	}
-	rows, e := s.pool.Query(ctx, "SELECT provider,subject FROM auth_identities WHERE user_id=$1 ORDER BY provider,subject", uid)
-	if e != nil {
-		return u, ids, e
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var i Identity
-		if e = rows.Scan(&i.Provider, &i.Subject); e != nil {
-			return u, ids, e
+	batch := &pgx.Batch{}
+	batch.Queue(userQuery, uid).QueryRow(func(row pgx.Row) error {
+		return scanUser(row, &u)
+	})
+	batch.Queue("SELECT provider,subject FROM auth_identities WHERE user_id=$1 ORDER BY provider,subject", uid).Query(func(rows pgx.Rows) error {
+		var err error
+		ids, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (Identity, error) {
+			var i Identity
+			return i, row.Scan(&i.Provider, &i.Subject)
+		})
+		if ids == nil {
+			ids = []Identity{}
 		}
-		ids = append(ids, i)
+		return err
+	})
+	if e := s.pool.SendBatch(ctx, batch).Close(); e != nil {
+		return u, ids, e
 	}
-	return u, ids, rows.Err()
+	return u, ids, nil
 }
 
 // profileDisplayName turns a provider's name claim into a nickname the PATCH /v1/users/me rules would accept, or "" when it cannot be one: blank, not UTF-8, or carrying control characters. A longer name is cut to the 64-character limit rather than dropped.

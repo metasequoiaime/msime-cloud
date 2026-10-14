@@ -206,7 +206,7 @@ func (a *Service) userDataExport(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := entry("dictionary.ndjson")
 	if err == nil {
-		err = a.store.StreamFullDictionarySnapshot(r.Context(), p.UserID, func(raw json.RawMessage) error {
+		err = a.store.streamFullDictionarySnapshotWithFooter(r.Context(), p.UserID, func(raw json.RawMessage) error {
 			_, e := out.Write(append(raw, '\n'))
 			return e
 		})

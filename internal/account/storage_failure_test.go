@@ -29,6 +29,9 @@ func TestDictionaryStreamConsumerFailureAndClosedDatabase(t *testing.T) {
 		"windows":    func() error { return db.StreamWindowsDictionary(ctx, uid, "quick", emitEntry) },
 		"overlay":    func() error { return db.StreamDictionarySnapshot(ctx, uid, emit) },
 		"full":       func() error { return db.StreamFullDictionarySnapshot(ctx, uid, emit) },
+		"full with footer": func() error {
+			return db.streamFullDictionarySnapshotWithFooter(ctx, uid, emit)
+		},
 	}
 	for name, stream := range streams {
 		t.Run(name, func(t *testing.T) {

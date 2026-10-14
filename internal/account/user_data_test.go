@@ -97,6 +97,13 @@ func TestUserDataSummaryExportAndDelete(t *testing.T) {
 	if !strings.Contains(files["preferences.json"], "dark") || !strings.Contains(files["dictionary.ndjson"], "水杉") || !strings.Contains(files["clipboard.json"], "v1.owner-ciphertext") || !strings.Contains(files["clipboard.json"], "剪贴设备") || strings.Contains(files["clipboard.json"], "other-ciphertext") || !strings.Contains(files["profile.json"], `"email"`) || strings.Contains(files["profile.json"], "data@example.test") {
 		t.Fatal(files)
 	}
+	if err := decodeDictionarySnapshot(strings.NewReader(files["dictionary.ndjson"]), func(snapshotRecord) error { return nil }); err != nil {
+		t.Fatalf("ZIP 内的词库不能通过快照校验：%v", err)
+	}
+	snapshot := userDataRequest(mux, "GET", "/v1/users/me/dictionary/snapshot", owner.AccessToken, "")
+	if snapshot.Code != 200 || files["dictionary.ndjson"] != snapshot.Body.String() {
+		t.Fatal("ZIP 内的词库与独立快照格式不同", snapshot.Code)
+	}
 	for i := 0; i < 2; i++ {
 		if w = userDataRequest(mux, "GET", "/v1/users/me/data/export", owner.AccessToken, ""); w.Code != 200 {
 			t.Fatal(w.Code)

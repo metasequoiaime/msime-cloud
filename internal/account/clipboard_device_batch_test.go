@@ -25,6 +25,17 @@ func (t *clipboardDevicePutTrace) TraceQueryStart(ctx context.Context, _ *pgx.Co
 
 func (*clipboardDevicePutTrace) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
+func (t *clipboardDevicePutTrace) TraceBatchStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceBatchStartData) context.Context {
+	t.mu.Lock()
+	t.queries++
+	t.mu.Unlock()
+	return ctx
+}
+
+func (*clipboardDevicePutTrace) TraceBatchQuery(context.Context, *pgx.Conn, pgx.TraceBatchQueryData) {
+}
+func (*clipboardDevicePutTrace) TraceBatchEnd(context.Context, *pgx.Conn, pgx.TraceBatchEndData) {}
+
 func TestPutClipboardDeviceEvictionUsesOneWriteRoundTrip(t *testing.T) {
 	db := testStore(t)
 	ctx := t.Context()

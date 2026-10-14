@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -121,7 +122,15 @@ func LoadConfig(path string) (Config, error) {
 		return c, err
 	}
 	defer f.Close()
-	d := json.NewDecoder(io.LimitReader(f, 1<<20))
+	// 多读一个字节区分真实文件结尾和大小截断，避免把上限之外的内容当成不存在。
+	data, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
+	if err != nil {
+		return c, err
+	}
+	if len(data) > 1<<20 {
+		return c, errors.New("config exceeds 1 MiB")
+	}
+	d := json.NewDecoder(bytes.NewReader(data))
 	d.DisallowUnknownFields()
 	if err = d.Decode(&c); err != nil {
 		return c, err

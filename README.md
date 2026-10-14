@@ -25,6 +25,8 @@ curl -G -H "Authorization: Bearer $MSIME_CLIENT_TOKEN" \
 
 `config.example.json` 仅启用云候选。配置其他功能时填入管理员控制的完整 HTTPS 接口地址、服务端模型及 `token_env` 指向的环境变量；空 URL 表示关闭功能，返回 503。对外部署需由 TLS 反向代理暴露 HTTPS，限制公网端口只到反向代理。容器内把 `listen` 改为 `0.0.0.0:8080`，只读挂载配置到 `/config/config.json` 并注入令牌环境变量。Dockerfile 已通过构建；`python3 scripts/smoke_container.py --image msime-server:verification` 可验证只读容器的启动、鉴权、功能查询和优雅关闭。
 
+配置文件只能包含一个 JSON 对象，含前后空白的总大小至多 1 MiB。未知字段、尾随内容和超出大小上限都会拒绝启动；合法的前后空白仍可使用。
+
 ## 接口
 
 业务接口除 `GET /healthz`、官网词条提交（见下文）、公告、社区浏览和匿名遥测上报（见 [管理后台文档](docs/admin.md#公开客户端接口)）外均需 Bearer 鉴权；Swagger 和 OpenAPI 文档可匿名访问。响应禁用缓存，输入正文、音频和凭据不写日志或磁盘。

@@ -44,9 +44,10 @@ func (a *Service) adminContent(w http.ResponseWriter, r *http.Request, section, 
  'size',p.size,'sha256',p.sha256,'content',convert_from(p.manifest,'UTF8'),
  'moderation',p.moderation,'previous_moderation',p.previous_moderation,'moderation_reason',p.moderation_reason,'moderated_by',p.moderated_by,'moderated_at',p.moderated_at,'owner_banned',u.banned_at IS NOT NULL,
  'downloads',(SELECT count(*) FROM community_plugin_downloads WHERE pack_id=p.id),
- 'rating_count',(SELECT count(*) FROM community_plugin_ratings WHERE pack_id=p.id),
- 'rating_average',(SELECT COALESCE(avg(stars),0) FROM community_plugin_ratings WHERE pack_id=p.id))
- FROM community_plugins p JOIN auth_users u ON u.id=p.owner_id WHERE p.id=$1`
+ 'rating_count',rating_stats.count,'rating_average',rating_stats.average)
+ FROM community_plugins p JOIN auth_users u ON u.id=p.owner_id
+ CROSS JOIN LATERAL (SELECT count(*) AS count,COALESCE(avg(stars),0) AS average FROM community_plugin_ratings WHERE pack_id=p.id) rating_stats
+ WHERE p.id=$1`
 	} else {
 		args = append(args, moderationSections[section].kind)
 		query = `SELECT json_build_object('id',s.id,'name',s.name,'description',s.description,'owner_id',s.owner_id,'author',u.display_name,'created_at',s.created_at,'updated_at',s.updated_at,'revision',s.revision,'content',s.content,

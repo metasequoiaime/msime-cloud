@@ -178,9 +178,13 @@ func (a *Service) resourceList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 401, "login_required")
 		return
 	}
-	rows, err := a.store.pool.Query(r.Context(), resourceSelect+`WHERE s.kind=$2 AND strpos(lower(s.name),lower($3))>0 AND (s.moderation<>'removed' OR s.owner_id=$1)
+	// 先选本页资源，再计算逐条收藏和评分，避免为 OFFSET 跳过的条目重复查询互动表。
+	rows, err := a.store.pool.Query(r.Context(), `WITH resource_page AS MATERIALIZED (
+ SELECT s.id FROM community_resources s JOIN auth_users u ON u.id=s.owner_id
+ WHERE s.kind=$2 AND strpos(lower(s.name),lower($3))>0 AND (s.moderation<>'removed' OR s.owner_id=$1)
  AND ($4='' OR ($4='mine' AND s.owner_id=$1) OR ($4='saved' AND EXISTS(SELECT 1 FROM community_resource_saves WHERE resource_id=s.id AND user_id=$1)))
- ORDER BY s.created_at DESC,s.id LIMIT 21 OFFSET $5`, viewer, kind, q, scope, offset)
+ ORDER BY s.created_at DESC,s.id LIMIT 21 OFFSET $5
+) `+resourceSelect+`JOIN resource_page p ON p.id=s.id ORDER BY s.created_at DESC,s.id`, viewer, kind, q, scope, offset)
 	if err != nil {
 		a.error(w, err)
 		return

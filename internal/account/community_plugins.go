@@ -398,27 +398,31 @@ func (a *Service) communityPluginPublish(w http.ResponseWriter, r *http.Request)
 		a.error(w, e)
 		return
 	}
-	var count, stored int64
-	if e = tx.QueryRow(r.Context(), `SELECT count(*),COALESCE(sum(size),0) FROM community_plugins WHERE owner_id=$1`, p.UserID).Scan(&count, &stored); e != nil {
+	var withinCount, withinStorage, inserted bool
+	if e = tx.QueryRow(r.Context(), `WITH quota AS MATERIALIZED (
+ SELECT count(*) AS count,COALESCE(sum(size),0)::bigint AS stored FROM community_plugins WHERE owner_id=$2
+), inserted AS (
+ INSERT INTO community_plugins(id,owner_id,kind,plugin_id,name,description,version,license,manifest,archive,request_sha256,moderation,moderation_reason)
+ SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12 FROM quota
+ WHERE count<$13 AND stored+$14<=$15
+ ON CONFLICT(id) DO NOTHING
+ RETURNING id
+)
+SELECT (SELECT count<$13 FROM quota),(SELECT stored+$14<=$15 FROM quota),EXISTS(SELECT 1 FROM inserted)`,
+		input.ID, p.UserID, pack.Kind, pack.ID, input.Name, input.Description, pack.Version, pack.License, pack.Manifest, input.Archive, digest, flag, maxPluginsPerUser, int64(len(input.Archive)), maxPluginBytesPerUser).Scan(&withinCount, &withinStorage, &inserted); e != nil {
 		a.error(w, e)
 		return
 	}
-	if count >= maxPluginsPerUser {
+	if !withinCount {
 		writeError(w, 409, "plugin_publish_limit")
 		return
 	}
-	if stored+int64(len(input.Archive)) > maxPluginBytesPerUser {
+	if !withinStorage {
 		writeError(w, 409, "plugin_storage_limit")
 		return
 	}
 	// The row lock covers only this account, so another account can commit the same id between the probe and this insert; ON CONFLICT waits for that commit and then reports it as a conflict instead of a unique violation.
-	inserted, e := tx.Exec(r.Context(), `INSERT INTO community_plugins(id,owner_id,kind,plugin_id,name,description,version,license,manifest,archive,request_sha256,moderation,moderation_reason) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12) ON CONFLICT(id) DO NOTHING`,
-		input.ID, p.UserID, pack.Kind, pack.ID, input.Name, input.Description, pack.Version, pack.License, pack.Manifest, input.Archive, digest, flag)
-	if e != nil {
-		a.error(w, e)
-		return
-	}
-	if inserted.RowsAffected() == 0 {
+	if !inserted {
 		writeError(w, 409, "plugin_id_conflict")
 		return
 	}

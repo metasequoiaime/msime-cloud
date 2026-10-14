@@ -82,16 +82,17 @@ func (s *Store) SetClipboardEnabled(ctx context.Context, user string, enabled bo
 		return e
 	}
 	defer tx.Rollback(ctx)
-	if _, e = tx.Exec(ctx, "INSERT INTO user_clipboard_settings(user_id,enabled) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET enabled=excluded.enabled,key_id=CASE WHEN excluded.enabled THEN user_clipboard_settings.key_id END", user, enabled); e != nil {
-		return e
-	}
 	// 撤销同步时清空云端历史和密钥材料；不会操作用户设备的系统剪贴板。封装随设备的外键一起删除。
 	if !enabled {
-		for _, q := range []string{"DELETE FROM user_clipboard WHERE user_id=$1", "DELETE FROM user_clipboard_devices WHERE user_id=$1"} {
-			if _, e = tx.Exec(ctx, q, user); e != nil {
-				return e
-			}
+		batch := &pgx.Batch{}
+		batch.Queue("INSERT INTO user_clipboard_settings(user_id,enabled) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET enabled=excluded.enabled,key_id=CASE WHEN excluded.enabled THEN user_clipboard_settings.key_id END", user, enabled)
+		batch.Queue("DELETE FROM user_clipboard WHERE user_id=$1", user)
+		batch.Queue("DELETE FROM user_clipboard_devices WHERE user_id=$1", user)
+		if e = tx.SendBatch(ctx, batch).Close(); e != nil {
+			return e
 		}
+	} else if _, e = tx.Exec(ctx, "INSERT INTO user_clipboard_settings(user_id,enabled) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET enabled=excluded.enabled,key_id=CASE WHEN excluded.enabled THEN user_clipboard_settings.key_id END", user, enabled); e != nil {
+		return e
 	}
 	return tx.Commit(ctx)
 }

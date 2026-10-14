@@ -40,7 +40,9 @@ func (c cli) postJSON(server, path string, body any, v any) error {
 		return err
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
-		fmt.Fprintln(c.stdout, strings.TrimSpace(string(data)))
+		if _, err = fmt.Fprintln(c.stdout, strings.TrimSpace(string(data))); err != nil {
+			return err
+		}
 		return statusError{response.Status}
 	}
 	if err = json.Unmarshal(data, v); err != nil {
@@ -139,8 +141,8 @@ func (c cli) adminSignIn(open bool) error {
 	if err = c.store().put(adminKey(admin), &kept); err != nil {
 		return err
 	}
-	fmt.Fprintf(c.stdout, "{\n  \"email\": %q\n}\n", finished.Email)
-	return nil
+	_, err = fmt.Fprintf(c.stdout, "{\n  \"email\": %q\n}\n", finished.Email)
+	return err
 }
 
 // adminKey is where the admin session for admin is kept, apart from user sessions for the same host.

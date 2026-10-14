@@ -91,6 +91,21 @@ class RepositoryTests(unittest.TestCase):
         self.run_git(self.repo, 'push', 'origin', 'main')
         self.assertEqual(self.release()['version'], '0.2.0')
 
+    def test_version_source_only_change_releases_new_revision(self):
+        first = self.release()
+        (self.repo / 'version.go').write_text('package backend\n// 修复版本读取\n')
+        self.commit('fix: 修复版本读取')
+        self.run_git(self.repo, 'push', 'origin', 'main')
+        source = self.run_git(self.repo, 'rev-parse', 'HEAD')
+        result = self.release()
+        self.assertEqual(result['version'], '0.1.1')
+        self.assertNotEqual(result['revision'], first['revision'])
+        self.assertEqual(self.run_git(self.remote, 'rev-parse', result['tag']), result['revision'])
+        self.assertEqual(self.run_git(self.remote, 'merge-base', source, result['revision']), source)
+        self.assertEqual(self.run_git(self.remote, 'show', result['tag'] + ':version.go'),
+                         'package backend\n// 修复版本读取')
+        self.assertEqual(self.release(), result)
+
     def test_atomic_push_rejects_unvalidated_new_main(self):
         self.release()
         (self.repo / 'cmd/main.go').write_text('package main\n// 修复\n')

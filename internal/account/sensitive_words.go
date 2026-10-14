@@ -136,7 +136,8 @@ func loadSensitiveWords(ctx context.Context, store *Store) ([]sensitiveWord, err
 		}
 		if isRegex {
 			if w.re, err = compileSensitiveRegex(w.hit.Pattern); err != nil {
-				slog.Warn("sensitive words: stored regex skipped", "id", w.hit.WordID, "reason", err.Error())
+				// 正则编译错误会回显规则内容；只记固定原因和规则 ID，供后台定位。
+				slog.Warn("sensitive words: stored regex skipped", "id", w.hit.WordID, "reason", "invalid_regex")
 				continue
 			}
 		} else if w.plain = foldSensitive(w.hit.Pattern, true); w.plain == "" {

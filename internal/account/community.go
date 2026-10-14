@@ -311,7 +311,12 @@ func (a *Service) communityList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	join, order := communitySavedScope(scope, "community_skin_saves", "skin_id", "s")
-	rows, e := a.store.pool.Query(r.Context(), communitySkinSelect(fields["saved"])+join+`WHERE strpos(lower(s.name),lower($2))>0 AND ($4<>'mine' OR s.owner_id=$1) AND (s.moderation<>'removed' OR s.owner_id=$1) AND ($5='' OR s.category=$5) ORDER BY `+order+` LIMIT 21 OFFSET $3`, viewer, search, offset, scope, category)
+	// 先选本页皮肤，再读取互动统计；收藏范围在两层查询中都沿用收藏时间排序。
+	rows, e := a.store.pool.Query(r.Context(), `WITH skin_page AS MATERIALIZED (
+ SELECT s.id FROM community_skins s JOIN auth_users u ON u.id=s.owner_id `+join+`
+ WHERE strpos(lower(s.name),lower($2))>0 AND ($4<>'mine' OR s.owner_id=$1) AND (s.moderation<>'removed' OR s.owner_id=$1) AND ($5='' OR s.category=$5)
+ ORDER BY `+order+` LIMIT 21 OFFSET $3
+) `+communitySkinSelect(fields["saved"])+join+`JOIN skin_page p ON p.id=s.id ORDER BY `+order, viewer, search, offset, scope, category)
 	if e != nil {
 		a.error(w, e)
 		return

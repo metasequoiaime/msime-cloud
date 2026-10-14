@@ -160,26 +160,21 @@ func (a *Service) adminNotifications(w http.ResponseWriter, r *http.Request, _ s
 		return
 	}
 	email := strings.ToLower(access.Email)
-	rows, err := a.store.pool.Query(r.Context(), `SELECT n.id,n.kind,n.title,n.target_page,n.target_id,to_char(n.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),`+notificationRead+` FROM admin_notifications n WHERE `+notificationVisible+` ORDER BY n.created_at DESC,n.id DESC LIMIT $2`, email, limit)
-	if err != nil {
-		a.error(w, err)
-		return
-	}
-	for rows.Next() {
-		var item notificationItem
-		if err := rows.Scan(&item.ID, &item.Kind, &item.Title, &item.TargetPage, &item.TargetID, &item.CreatedAt, &item.Read); err != nil {
-			rows.Close()
-			a.error(w, err)
-			return
+	var unread int
+	batch := &pgx.Batch{}
+	batch.Queue(`SELECT n.id,n.kind,n.title,n.target_page,n.target_id,to_char(n.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),`+notificationRead+` FROM admin_notifications n WHERE `+notificationVisible+` ORDER BY n.created_at DESC,n.id DESC LIMIT $2`, email, limit).Query(func(rows pgx.Rows) error {
+		defer rows.Close()
+		for rows.Next() {
+			var item notificationItem
+			if err := rows.Scan(&item.ID, &item.Kind, &item.Title, &item.TargetPage, &item.TargetID, &item.CreatedAt, &item.Read); err != nil {
+				return err
+			}
+			items = append(items, item)
 		}
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
-		a.error(w, err)
-		return
-	}
-	unread, err := a.UnreadNotifications(r.Context(), email)
-	if err != nil {
+		return rows.Err()
+	})
+	batch.Queue(`SELECT count(*) FROM admin_notifications n WHERE `+notificationVisible+` AND NOT `+notificationRead, email).QueryRow(func(row pgx.Row) error { return row.Scan(&unread) })
+	if err := a.store.pool.SendBatch(r.Context(), batch).Close(); err != nil {
 		a.error(w, err)
 		return
 	}

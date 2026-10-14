@@ -119,6 +119,8 @@ func (a *Service) adminList(w http.ResponseWriter, r *http.Request, list adminLi
 		args = append(args, list.args(a)...)
 	}
 	conditions := ""
+	emptyFilters := ""
+	unfiltered := search == ""
 	for _, f := range list.filters {
 		accepted[f.param] = true
 		value := query.Get(f.param)
@@ -136,6 +138,8 @@ func (a *Service) adminList(w http.ResponseWriter, r *http.Request, list adminLi
 		}
 		args = append(args, value)
 		n := "$" + strconv.Itoa(len(args))
+		unfiltered = unfiltered && value == ""
+		emptyFilters += " AND " + n + "::text=''"
 		// f.field is a fixed identifier from adminLists, never request text.
 		if f.contains {
 			conditions += "\n AND (" + n + "='' OR to_jsonb(x)->>'" + f.field + "' ILIKE '%'||" + n + "||'%')"
@@ -154,13 +158,23 @@ func (a *Service) adminList(w http.ResponseWriter, r *http.Request, list adminLi
 	if len(list.unsearched) > 0 {
 		searched += " - '{" + strings.Join(list.unsearched, ",") + "}'::text[]"
 	}
-	var result json.RawMessage
-	err := a.store.pool.QueryRow(r.Context(), `WITH filtered AS MATERIALIZED (
- SELECT to_jsonb(x) AS item, created_at, id FROM (`+list.query+`) x
- WHERE ($1='' OR EXISTS(SELECT 1 FROM jsonb_each_text(`+searched+`) e WHERE e.value ILIKE '%'||$1||'%'))`+conditions+`
+	sql := `WITH filtered AS MATERIALIZED (
+ SELECT to_jsonb(x) AS item, created_at, id FROM (` + list.query + `) x
+ WHERE ($1='' OR EXISTS(SELECT 1 FROM jsonb_each_text(` + searched + `) e WHERE e.value ILIKE '%'||$1||'%'))` + conditions + `
 ), selected AS (SELECT * FROM filtered ORDER BY created_at DESC,id DESC LIMIT 50 OFFSET $2)
 SELECT json_build_object('items', COALESCE((SELECT json_agg(item ORDER BY created_at DESC,id DESC) FROM selected),'[]'::json),
- 'page',$3::int,'total',(SELECT count(*) FROM filtered),'has_more',(SELECT count(*) FROM filtered)>$2+50)`, args...).Scan(&result)
+ 'page',$3::int,'total',(SELECT count(*) FROM filtered),'has_more',(SELECT count(*) FROM filtered)>$2+50)`
+	if unfiltered {
+		// 空搜索和空筛选只需要页内完整条目；允许各处分别展开 source，使计数和分页跳过逐条统计。
+		// 空参数仍显式绑定，保留各列表固定参数的编号和类型。
+		sql = `WITH source AS NOT MATERIALIZED (` + list.query + `), selected AS MATERIALIZED (
+ SELECT id,created_at FROM source WHERE $1::text=''` + emptyFilters + ` ORDER BY created_at DESC,id DESC LIMIT 50 OFFSET $2
+), total AS MATERIALIZED (SELECT count(*) AS count FROM source)
+SELECT json_build_object('items',COALESCE((SELECT json_agg(to_jsonb(x) ORDER BY x.created_at DESC,x.id DESC) FROM source x JOIN selected p ON p.id=x.id),'[]'::json),
+ 'page',$3::int,'total',(SELECT count FROM total),'has_more',(SELECT count FROM total)>$2+50)`
+	}
+	var result json.RawMessage
+	err := a.store.pool.QueryRow(r.Context(), sql, args...).Scan(&result)
 	if err != nil {
 		a.error(w, err)
 		return

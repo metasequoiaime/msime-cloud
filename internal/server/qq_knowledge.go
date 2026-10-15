@@ -652,11 +652,12 @@ func qqStripLinks(text string) string {
 	return strings.TrimSpace(qqCollapseSpaceRuns(text))
 }
 
-// qqRemoveLinks 按 qqLinkPattern 的规则扫描链接，避免正则替换为长正文建立中间副本。
+// qqRemoveLinks 按 qqLinkPattern 的规则扫描链接并合并留下的空格，避免删除链接后再建立一次正文副本。
 func qqRemoveLinks(text string) string {
 	var out strings.Builder
 	initialized := false
 	start := 0
+	var pendingSpace byte
 	for search := 0; ; {
 		i := strings.Index(text[search:], "://")
 		if i < 0 {
@@ -678,18 +679,50 @@ func qqRemoveLinks(text string) string {
 			out.Grow(len(text))
 			initialized = true
 		}
+		writeQQCollapsedSegment(&out, text[start:begin], &pendingSpace)
 		end := i + 3
 		for end < len(text) && text[end] >= '!' && text[end] <= '~' {
 			end++
 		}
-		out.WriteString(text[start:begin])
 		start, search = end, end
 	}
 	if start == 0 {
-		return text
+		return qqCollapseSpaceRuns(text)
 	}
-	out.WriteString(text[start:])
+	writeQQCollapsedSegment(&out, text[start:], &pendingSpace)
+	if pendingSpace != 0 {
+		out.WriteByte(pendingSpace)
+	}
 	return out.String()
+}
+
+// writeQQCollapsedSegment 写入不含链接的一段正文，保留单个制表符，只把连续或跨链接的 ASCII 空白合并为一个空格。
+func writeQQCollapsedSegment(out *strings.Builder, text string, pendingSpace *byte) {
+	for i := 0; i < len(text); {
+		if text[i] == ' ' || text[i] == '\t' {
+			end := i + 1
+			for end < len(text) && (text[end] == ' ' || text[end] == '\t') {
+				end++
+			}
+			if *pendingSpace != 0 || end-i > 1 {
+				*pendingSpace = ' '
+			} else {
+				*pendingSpace = text[i]
+			}
+			i = end
+			continue
+		}
+		if *pendingSpace != 0 {
+			out.WriteByte(*pendingSpace)
+			*pendingSpace = 0
+		}
+		end := i + 1
+		for end < len(text) && text[end] != ' ' && text[end] != '\t' {
+			end++
+		}
+		out.WriteString(text[i:end])
+		i = end
+	}
 }
 
 func qqURLSchemeByte(c byte) bool {

@@ -12,7 +12,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-// 本文件校验数据库里的皮肤包。它们用跨平台客户端与 msime-windows 统一后的清单规则（base 是全局主题或 msime-windows 内置外观），不是 Parse 给内置皮肤和 skins_root 用的旧 Windows 方言。规则逐条移植 msime 的 crates/client-core/src/skin/catalog.rs load()，连拒绝原因也相同，所以这里接受的包每个客户端都能列出；testdata/client_dialect.json 是 msime 那份共享用例表的副本（scripts/sync_client_dialect.py 同步），同时约束本文件和 scripts/candidate_skins_seed.py。
+// 本文件校验数据库里的皮肤包。它们用跨平台客户端与 msime-windows 统一后的清单规则（base 是全局主题或 msime-windows 内置外观），不是 Parse 给内置皮肤和 skins_root 用的旧 Windows 方言。规则逐条移植 msime 的 crates/client-services/src/skin/catalog.rs load()，连拒绝原因也相同，所以这里接受的包每个客户端都能列出；testdata/client_dialect.json 是 msime 那份共享用例表的副本（scripts/sync_client_dialect.py 同步），同时约束本文件和 scripts/candidate_skins_seed.py。
 
 // Background is the image drawn over the candidate card, with the client's defaults (cover, opacity 1) filled in.
 type Background struct {

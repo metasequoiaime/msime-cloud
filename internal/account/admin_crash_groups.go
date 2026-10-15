@@ -379,18 +379,27 @@ func (a *Service) SetCrashGroupIssue(ctx context.Context, signature, repo string
 		return err
 	}
 	defer tx.Rollback(ctx)
+	detail, err := auditDetail(map[string]any{"repo": repo, "number": number, "issue_url": url, "to": "known"})
+	if err != nil {
+		return err
+	}
 	var previous string
-	err = tx.QueryRow(ctx, `SELECT status FROM admin_crash_groups WHERE signature=$1 FOR UPDATE`, signature).Scan(&previous)
+	err = tx.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+ SELECT status FROM admin_crash_groups WHERE signature=$1 FOR UPDATE
+), updated AS (
+ UPDATE admin_crash_groups g SET status='known',issue_url=$2
+ FROM locked l WHERE g.signature=$1 RETURNING 1
+), audited AS (
+ INSERT INTO admin_audit(action,target,actor,detail)
+ SELECT 'crash_group_issue',$1,$3,jsonb_set($4::jsonb,'{from}',to_jsonb(l.status))
+ FROM locked l CROSS JOIN updated
+ RETURNING 1
+)
+SELECT status FROM locked`, signature, url, adminActor(ctx), detail).Scan(&previous)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrCrashGroupNotFound
 	}
 	if err != nil {
-		return err
-	}
-	if _, err = tx.Exec(ctx, `UPDATE admin_crash_groups SET status='known',issue_url=$2 WHERE signature=$1`, signature, url); err != nil {
-		return err
-	}
-	if err = auditTx(ctx, tx, "crash_group_issue", signature, map[string]any{"repo": repo, "number": number, "issue_url": url, "from": previous, "to": "known"}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

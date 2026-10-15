@@ -865,9 +865,9 @@ func (s *Server) similarIssues(ctx context.Context, gh *githubapp.Client, row is
 	return out
 }
 
-// titleBigrams is the set of adjacent letter or digit pairs of a lowercased title; punctuation and spaces separate words and never join a pair.
-func titleBigrams(title string) map[string]bool {
-	set := map[string]bool{}
+// titleBigrams 收集小写标题中相邻的字母或数字对；标点和空格分隔词语，不跨边界组合。
+func titleBigrams(title string) map[[2]rune]bool {
+	set := map[[2]rune]bool{}
 	var prev rune
 	for _, c := range strings.ToLower(title) {
 		if !unicode.IsLetter(c) && !unicode.IsDigit(c) {
@@ -875,15 +875,15 @@ func titleBigrams(title string) map[string]bool {
 			continue
 		}
 		if prev != 0 {
-			set[string([]rune{prev, c})] = true
+			set[[2]rune{prev, c}] = true
 		}
 		prev = c
 	}
 	return set
 }
 
-// bigramSimilarity is the Dice coefficient of two bigram sets.
-func bigramSimilarity(a, b map[string]bool) float64 {
+// bigramSimilarity 返回两个二元组集合的 Dice 相似系数。
+func bigramSimilarity(a, b map[[2]rune]bool) float64 {
 	if len(a) == 0 || len(b) == 0 {
 		return 0
 	}

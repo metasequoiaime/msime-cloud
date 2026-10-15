@@ -92,7 +92,6 @@ func TestQQSnippetLabelsUsesBoundedCollectionMemory(t *testing.T) {
 	if got != want {
 		t.Fatalf("列表摘要=%q，预期 %q", got, want)
 	}
-	// 竞态检测会随机丢弃 sync.Pool 条目，预算包含正则状态重建的额外分配。
 	if allocated := result.AllocedBytesPerOp(); allocated > 256<<10 {
 		t.Fatalf("列表摘要分配 %d 字节，超过 256 KiB 预算", allocated)
 	}
@@ -107,6 +106,7 @@ func BenchmarkQQSnippetLabels(b *testing.B) {
 		{"short", "- 换肤：说明\n- 删除：说明\n- 隐私：说明"},
 		{"distinct", distinct.String()},
 		{"repeated", strings.Repeat("- 换肤：说明\n", 32768)},
+		{"normalized_duplicates", strings.Repeat("- 换肤：说明\n- `换肤`：说明\n- [换肤](x):说明\n- _换肤_：说明\n", 8192)},
 		{"late_second", strings.Repeat("- 换肤：说明\n", 32768) + "- 隐私：尾部"},
 	} {
 		b.Run(tc.name, func(b *testing.B) {

@@ -2,10 +2,14 @@ package server
 
 import (
 	"math/rand"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 )
+
+// qqMarkdownNoise 保留旧清理正则，供兼容性测试对照。
+var qqMarkdownNoise = regexp.MustCompile("\\]\\([^)]*\\)|[`*_>#\\[|]")
 
 func TestQQListLabelsKeepsBoundariesAndOrder(t *testing.T) {
 	for _, tc := range []struct {
@@ -68,6 +72,47 @@ func TestQQListLabelsMatchesPreviousSemantics(t *testing.T) {
 				}
 			}
 		}
+	}
+	texts := []string{
+		"- [甲](x)：说明", "- ](x)[甲：说明", "- ]([](x)尾：说明", "- ](未闭合[甲：说明",
+		"- `甲`\u3000乙：说明", "- 甲\xff：说明\n- 甲�：重复", "- 甲|乙：说明\n- 甲 乙：重复",
+	}
+	units := []string{"水", "😀", "a", " ", "\t", "\u3000", "\xff", "\xe4\xb8", "`", "*", ">", "#", "_", "[", "](", ")", "|", ":", "：", "/"}
+	for range 500 {
+		var input strings.Builder
+		input.WriteString("- ")
+		for range random.Intn(15) {
+			input.WriteString(units[random.Intn(len(units))])
+		}
+		input.WriteString("：说明")
+		texts = append(texts, input.String())
+	}
+	for _, text := range texts {
+		if got, want := qqListLabels(text), previous(text); !slices.Equal(got, want) {
+			t.Fatalf("列表标签清理不兼容：text=%q，结果=%q，期望=%q", text, got, want)
+		}
+	}
+}
+
+func TestQQListLabelsReusesNormalizationMemory(t *testing.T) {
+	for _, tc := range []struct {
+		name, text string
+		want       []string
+	}{
+		{"重复标签", strings.Repeat("- 换肤：说明\n", 32768), []string{"换肤"}},
+		{"不同标记清理后重复", strings.Repeat("- 换肤：说明\n- `换肤`：说明\n- [换肤](x):说明\n- _换肤_：说明\n", 8192), []string{"换肤"}},
+		{"无效编码清理后重复", strings.Repeat("- 水\xff：说明\n- 水�：说明\n", 16384), []string{"水�"}},
+		{"最大四字节标签", strings.Repeat("- "+strings.Repeat("😀", 11)+"：说明\n", 32768), []string{strings.Repeat("😀", 11)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []string
+			if allocations := testing.AllocsPerRun(3, func() { got = qqListLabels(tc.text) }); allocations > 8 {
+				t.Fatalf("重复标签清理分配 %.0f 次，超过 8 次预算", allocations)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("重复标签=%q，期望 %q", got, tc.want)
+			}
+		})
 	}
 }
 

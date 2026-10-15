@@ -74,8 +74,11 @@ func seedCrash(t *testing.T, a *Service, id, platform, version, message, stack, 
 	if _, err = tx.Exec(ctx, `INSERT INTO admin_events(id,kind,platform,version,message,stack,install_id,signature,created_at) VALUES($1,'crash',$2,$3,$4,$5,$6,$7,now()-$8::interval)`, id, platform, version, message, stack, install, signature, strconv.FormatInt(int64(ago/time.Second), 10)+" seconds"); err != nil {
 		t.Fatal(err)
 	}
-	if err = a.upsertCrashGroup(ctx, tx, signature, platform, version, crashGroupTitle(message)); err != nil {
-		t.Fatal(err)
+	if signature != "" {
+		if _, err = tx.Exec(ctx, `INSERT INTO admin_crash_groups(signature,platform,version,title) VALUES($1,$2,$3,$4)
+ON CONFLICT(signature) DO UPDATE SET version=EXCLUDED.version,last_seen=GREATEST(admin_crash_groups.last_seen,EXCLUDED.last_seen)`, signature, crashPlatform(platform), version, crashGroupTitle(message)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err = tx.Exec(ctx, `UPDATE admin_crash_groups SET first_seen=LEAST(first_seen,now()-$2::interval) WHERE signature=$1`, signature, strconv.FormatInt(int64(ago/time.Second), 10)+" seconds"); err != nil {
 		t.Fatal(err)

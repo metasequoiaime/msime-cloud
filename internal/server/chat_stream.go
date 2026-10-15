@@ -84,6 +84,28 @@ func (c *cappedReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// splitSSELines 按 SSE 规则识别 LF、CRLF 和单 CR。CR 立即结束本行，下一次只跳过紧随的 LF，避免为判断 CRLF 等待上游继续发送。
+func splitSSELines() bufio.SplitFunc {
+	skipLF := false
+	return func(data []byte, atEOF bool) (advance int, token []byte, err error) {
+		if skipLF && len(data) > 0 {
+			skipLF = false
+			if data[0] == '\n' {
+				advance = 1
+				data = data[1:]
+			}
+		}
+		if i := bytes.IndexAny(data, "\r\n"); i >= 0 {
+			skipLF = data[i] == '\r'
+			return advance + i + 1, data[:i], nil
+		}
+		if atEOF && len(data) > 0 {
+			return advance + len(data), data, nil
+		}
+		return advance, nil, nil
+	}
+}
+
 // chatStream 处理 `stream: true` 的 `/v1/chat/completions`，v 已经过与非流式请求相同的校验和模型选择。
 //
 // 第一个字节之前的失败（上游连不上、非 2xx、在出现任何正文之前就结束或出错）沿用非流式的 JSON 错误和状态码；为此在累计正文出现非空白字符之前，角色等增量先缓存不发。流开始后上游失败则发 `chatStreamError` 后断开。整条流受中间件的请求截止时间（`timeout_seconds`）、`UpstreamResponseBytes` 和 `OutputTextBytes` 约束；客户端断开时请求上下文取消，上游请求随之取消。
@@ -220,10 +242,17 @@ func (s *Server) chatStreamOnce(w http.ResponseWriter, r *http.Request, v chatRe
 
 	scanner := bufio.NewScanner(&cappedReader{r: resp.Body, left: contract.UpstreamResponseBytes})
 	scanner.Buffer(make([]byte, 0, 4096), contract.UpstreamResponseBytes)
+	scanner.Split(splitSSELines())
+	firstLine := true
 	var data []string
 	done := false
 	for !done && err == nil && scanner.Scan() {
-		line := strings.TrimSuffix(scanner.Text(), "\r")
+		line := scanner.Text()
+		if firstLine {
+			// SSE 只剥离流开头的一个 BOM，后续字段和正文中的同一字符必须保留。
+			line = strings.TrimPrefix(line, "\ufeff")
+			firstLine = false
+		}
 		switch {
 		case line == "":
 			if len(data) > 0 {

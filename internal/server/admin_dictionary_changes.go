@@ -208,6 +208,7 @@ func applyDictionaryChanges(name, text string, changes []dictionaryEdit) (string
 		return "", dictionaryChangeFail(400, "dictionary_readonly")
 	}
 	lines := strings.Split(text, "\n")
+	validator := dictionaryColumnValidator{name: name, lines: lines}
 	newline := "\n"
 	if strings.Contains(text, "\r\n") {
 		newline = "\r\n"
@@ -237,7 +238,7 @@ func applyDictionaryChanges(name, text string, changes []dictionaryEdit) (string
 			updates[edit.Line] = nil
 			continue
 		}
-		if err := validateDictionaryColumns(name, text, edit.Columns); err != nil {
+		if err := validator.validate(edit.Columns); err != nil {
 			return "", err
 		}
 		value := strings.Join(edit.Columns, "\t")
@@ -301,7 +302,17 @@ func applyDictionaryChanges(name, text string, changes []dictionaryEdit) (string
 	return result, nil
 }
 
-func validateDictionaryColumns(name, existing string, cols []string) error {
+// dictionaryColumnValidator 在单次变更中复用原词库的权重范围，避免每条新增词条都重扫文件。
+type dictionaryColumnValidator struct {
+	name        string
+	lines       []string
+	weightsRead bool
+	minimum     int64
+	maximum     int64
+}
+
+func (v *dictionaryColumnValidator) validate(cols []string) error {
+	name := v.name
 	invalid := func() error { return dictionaryChangeFail(400, "invalid_dictionary_entry") }
 	isTranslation := path.Base(name) == "translations.txt"
 	required := 3
@@ -338,24 +349,26 @@ func validateDictionaryColumns(name, existing string, cols []string) error {
 		return invalid()
 	}
 	if strings.HasPrefix(name, "custom/") {
-		minimum, maximum := int64(0), int64(0)
-		for _, line := range strings.Split(existing, "\n") {
-			fields := strings.Split(strings.TrimSpace(line), "\t")
-			if len(fields) != 3 || strings.HasPrefix(fields[0], "#") {
-				continue
+		if !v.weightsRead {
+			for _, line := range v.lines {
+				fields := strings.Split(strings.TrimSpace(line), "\t")
+				if len(fields) != 3 || strings.HasPrefix(fields[0], "#") {
+					continue
+				}
+				n, err := strconv.ParseInt(fields[2], 10, 64)
+				if err != nil {
+					continue
+				}
+				if v.minimum == 0 || n < v.minimum {
+					v.minimum = n
+				}
+				if n > v.maximum {
+					v.maximum = n
+				}
 			}
-			n, err := strconv.ParseInt(fields[2], 10, 64)
-			if err != nil {
-				continue
-			}
-			if minimum == 0 || n < minimum {
-				minimum = n
-			}
-			if n > maximum {
-				maximum = n
-			}
+			v.weightsRead = true
 		}
-		if minimum == 0 || weight < minimum || weight > maximum {
+		if v.minimum == 0 || weight < v.minimum || weight > v.maximum {
 			return invalid()
 		}
 	}

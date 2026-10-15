@@ -385,11 +385,15 @@ func (v *dictionaryColumnValidator) validate(cols []string) error {
 	if strings.HasPrefix(name, "custom/") {
 		if !v.weightsRead {
 			for _, line := range v.lines {
-				fields := strings.Split(strings.TrimSpace(line), "\t")
-				if len(fields) != 3 || strings.HasPrefix(fields[0], "#") {
+				first, rest, ok := strings.Cut(strings.TrimSpace(line), "\t")
+				if !ok || strings.HasPrefix(first, "#") {
 					continue
 				}
-				n, err := strconv.ParseInt(fields[2], 10, 64)
+				_, weightField, ok := strings.Cut(rest, "\t")
+				if !ok || strings.Contains(weightField, "\t") {
+					continue
+				}
+				n, err := strconv.ParseInt(weightField, 10, 64)
 				if err != nil {
 					continue
 				}

@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"fmt"
+	"math/rand"
 	"path"
 	"strconv"
 	"strings"
@@ -143,6 +144,60 @@ func TestApplyDictionaryWeightValidationMatchesPrevious(t *testing.T) {
 				if (got == nil) != (want == nil) || (got != nil && (!errors.As(got, &gotChange) || !errors.As(want, &wantChange) || *gotChange != *wantChange)) {
 					t.Fatalf("权重校验变化：文件=%q 原文=%q 权重=%v got=%v want=%v", name, text, weights, got, want)
 				}
+			}
+		}
+	}
+}
+
+func TestDictionaryWeightScanAllocationBudget(t *testing.T) {
+	text, edits := dictionaryWeightBatchFixture(5000, 1)
+	lines := strings.Split(text, "\n")
+	var err error
+	allocations := testing.AllocsPerRun(3, func() {
+		validator := dictionaryColumnValidator{name: "custom/english.txt", lines: lines}
+		err = validator.validate(edits[0].Columns)
+	})
+	if err != nil {
+		t.Fatalf("有效权重被拒绝：%v", err)
+	}
+	if allocations > 10 {
+		t.Fatalf("扫描五千行权重分配 %.0f 次，超过 10 次预算", allocations)
+	}
+}
+
+func TestDictionaryWeightFieldScanMatchesPrevious(t *testing.T) {
+	texts := []string{
+		"\tword\tdisplay\t3\t\r\n",
+		"word\t\t3\n",
+		"word\tdisplay\t3\textra\n",
+		"\u2003word\tdisplay\t+5\u2003\n",
+		"#ignored\tdisplay\t9\nword\tdisplay\t3\n",
+		"word\tdisplay\t-5\nother\tdisplay\t0\nlast\tdisplay\t5\n",
+	}
+	random := rand.New(rand.NewSource(718))
+	fields := []string{"word", "display", "", "#ignored", "0", "-5", "+5", "3", "nan", "9223372036854775808", "\r", "\u2003"}
+	for range 500 {
+		var text strings.Builder
+		for range random.Intn(8) {
+			for i := range random.Intn(6) {
+				if i > 0 {
+					text.WriteByte('\t')
+				}
+				text.WriteString(fields[random.Intn(len(fields))])
+			}
+			text.WriteByte('\n')
+		}
+		texts = append(texts, text.String())
+	}
+	for _, text := range texts {
+		validator := dictionaryColumnValidator{name: "custom/english.txt", lines: strings.Split(text, "\n")}
+		for _, weight := range []string{"1", "3", "5", "6", "10000"} {
+			cols := []string{"synthetic", "Synthetic", weight}
+			got := validator.validate(cols)
+			want := previousValidateDictionaryColumns(validator.name, text, cols)
+			var gotChange, wantChange *dictionaryChangeError
+			if (got == nil) != (want == nil) || (got != nil && (!errors.As(got, &gotChange) || !errors.As(want, &wantChange) || *gotChange != *wantChange)) {
+				t.Fatalf("权重字段扫描变化：原文=%q 权重=%q got=%v want=%v", text, weight, got, want)
 			}
 		}
 	}

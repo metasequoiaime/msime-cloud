@@ -296,8 +296,34 @@ func (a *Service) resourcePublish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
-	err = tx.QueryRow(r.Context(), `SELECT owner_id,kind,revision,name=$2 AND description=$3 AND content=$4::jsonb FROM community_resources WHERE id=$1 FOR UPDATE`, input.ID, input.Name, input.Description, raw).Scan(&owner, &kind, &revision, &same)
-	if err == nil {
+	// 事务内合并 ID 冲突、版本检查、额度检查和更新/首发写入，避免锁定用户后为这些步骤分别往返。
+	var exists, updated, inserted bool
+	var updatedRevision int
+	err = tx.QueryRow(r.Context(), `WITH existing AS MATERIALIZED (
+ SELECT owner_id,kind,revision,name=$3 AND description=$4 AND content=$5::jsonb AS same
+ FROM community_resources WHERE id=$1 FOR UPDATE
+), updated AS (
+ UPDATE community_resources r
+ SET name=$3,description=$4,content=$5,revision=r.revision+1,updated_at=now(),`+reviewAgain("$8")+`
+ FROM existing e
+ WHERE r.id=$1 AND e.owner_id=$2 AND e.kind=$6 AND NOT e.same AND e.revision=$7
+ RETURNING r.revision
+), inserted AS (
+ INSERT INTO community_resources(id,owner_id,kind,name,description,content,moderation,moderation_reason)
+ SELECT $1,$2,$6,$3,$4,$5,'pending',$8
+ WHERE NOT EXISTS(SELECT 1 FROM existing) AND $7=0
+   AND (SELECT count(*) FROM community_resources WHERE owner_id=$2) < 50
+ RETURNING id
+)
+SELECT COALESCE((SELECT owner_id FROM existing),''),COALESCE((SELECT kind FROM existing),''),
+ COALESCE((SELECT revision FROM existing),0),COALESCE((SELECT same FROM existing),false),
+ EXISTS(SELECT 1 FROM existing),COALESCE((SELECT revision FROM updated),0),EXISTS(SELECT 1 FROM updated),EXISTS(SELECT 1 FROM inserted)`,
+		input.ID, p.UserID, input.Name, input.Description, raw, input.Kind, input.Revision, flag).Scan(&owner, &kind, &revision, &same, &exists, &updatedRevision, &updated, &inserted)
+	if err != nil {
+		a.error(w, err)
+		return
+	}
+	if exists {
 		if owner != p.UserID || kind != input.Kind {
 			writeError(w, 409, "resource_id_conflict")
 			return
@@ -310,24 +336,14 @@ func (a *Service) resourcePublish(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 409, "revision_conflict")
 			return
 		}
-		_, err = tx.Exec(r.Context(), `UPDATE community_resources SET name=$2,description=$3,content=$4,revision=revision+1,updated_at=now(),`+reviewAgain("$5")+` WHERE id=$1`, input.ID, input.Name, input.Description, raw, flag)
-		revision++
-	} else if errors.Is(err, pgx.ErrNoRows) {
-		if input.Revision != 0 {
-			writeError(w, 409, "revision_conflict")
+		if !updated {
+			a.error(w, errors.New("resource update was not applied"))
 			return
 		}
-		var inserted bool
-		if err = tx.QueryRow(r.Context(), `WITH owned AS (
- SELECT count(*) AS n FROM community_resources WHERE owner_id=$2
-), inserted AS (
- INSERT INTO community_resources(id,owner_id,kind,name,description,content,moderation,moderation_reason)
- SELECT $1,$2,$3,$4,$5,$6,'pending',$7
- WHERE (SELECT n FROM owned) < 50
- RETURNING id
-)
-SELECT EXISTS(SELECT 1 FROM inserted)`, input.ID, p.UserID, input.Kind, input.Name, input.Description, raw, flag).Scan(&inserted); err != nil {
-			a.error(w, err)
+		revision = updatedRevision
+	} else {
+		if input.Revision != 0 {
+			writeError(w, 409, "revision_conflict")
 			return
 		}
 		if !inserted {

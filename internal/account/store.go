@@ -270,56 +270,40 @@ func (s *Store) Ready(ctx context.Context) error {
 	if !refreshSessionIndex {
 		return errors.New("refresh session index missing")
 	}
-	// App 内反馈与它的截图；缺表时启动走迁移。
-	if _, e := s.pool.Exec(ctx, `SELECT id,user_id,type,text,platform,app_version,edition,diagnostics,status,created_at FROM feedback WHERE false;
-SELECT feedback_id,position,mime,bytes FROM feedback_screenshots WHERE false`); e != nil {
-		return e
-	}
-	// 云剪贴板端到端加密的密文列、当前密钥编号、设备与封装表；缺任何一个时启动走迁移，迁移同时删除旧的明文条目。
-	if _, e := s.pool.Exec(ctx, `SELECT ciphertext,key_id FROM user_clipboard WHERE false;
+	// 连续的表和列探测只检查执行错误，一次发送并按顺序执行，任意语句失败都会触发迁移。
+	// 先取得迁移锁的共享模式，避免同批表锁与其他副本迁移的 DDL 锁反向等待。
+	if _, e := s.pool.Exec(ctx, `
+SELECT pg_advisory_xact_lock_shared(8372419);
+-- App 内反馈与它的截图；缺表时启动走迁移。
+SELECT id,user_id,type,text,platform,app_version,edition,diagnostics,status,created_at FROM feedback WHERE false;
+SELECT feedback_id,position,mime,bytes FROM feedback_screenshots WHERE false;
+-- 云剪贴板端到端加密的密文列、当前密钥编号、设备与封装表；缺任何一个时启动走迁移，迁移同时删除旧的明文条目。
+SELECT ciphertext,key_id FROM user_clipboard WHERE false;
 SELECT key_id FROM user_clipboard_settings WHERE false;
 SELECT user_id,device_id,public_key,name,created_at,last_seen FROM user_clipboard_devices WHERE false;
-SELECT user_id,device_id,key_id,wrap FROM user_clipboard_wraps WHERE false`); e != nil {
-		return e
-	}
-	// Apple 网页登录的挑战列、云剪贴板的保留天数 / 置顶 / 设备列和语音贡献表；缺任何一个时启动走迁移。
-	if _, e := s.pool.Exec(ctx, `SELECT code_challenge,verified_subject,verified_email,verified_email_verified,verified_name,grant_hash,granted_at FROM auth_challenges WHERE false;
+SELECT user_id,device_id,key_id,wrap FROM user_clipboard_wraps WHERE false;
+-- Apple 网页登录的挑战列、云剪贴板的保留天数 / 置顶 / 设备列和语音贡献表；缺任何一个时启动走迁移。
+SELECT code_challenge,verified_subject,verified_email,verified_email_verified,verified_name,grant_hash,granted_at FROM auth_challenges WHERE false;
 SELECT retention_days FROM user_clipboard_settings WHERE false;
 SELECT pinned,device FROM user_clipboard WHERE false;
-SELECT id,user_id,language,provider,duration_ms,transcript,app_version,audio_mime,audio,created_at FROM voice_contributions WHERE false`); e != nil {
-		return e
-	}
-	// 诊断快照与它的访问记录；缺表时启动走迁移。
-	if _, e := s.pool.Exec(ctx, `SELECT id,user_id,token_hash,token_hint,platform,app_version,sections,content,bytes,created_at,expires_at FROM diagnostic_snapshots WHERE false;
-SELECT id,snapshot_id,tool,arguments,result_count,bytes,at FROM diagnostic_accesses WHERE false`); e != nil {
-		return e
-	}
-	// QQ 群答疑接上追问用的最近问答；缺表时启动走迁移。
-	if _, e := s.pool.Exec(ctx, `SELECT id,subject,question,answer,created_at FROM qq_conversations WHERE false`); e != nil {
-		return e
-	}
-	// QQ 群友反馈的 issue 草稿；缺表时启动走迁移。
-	if _, e := s.pool.Exec(ctx, `SELECT id,subject,original,report,created_at,updated_at,filed_at,issue_ref FROM qq_drafts WHERE false`); e != nil {
-		return e
-	}
-	// QQ 答疑沉淀进文档的候选；缺表或缺认领时间列时启动走迁移。state 认 writing 的 CHECK 和认领时间列在同一次迁移中换上，所以只探测列。
-	if _, e := s.pool.Exec(ctx, `SELECT id,question,answer,state,ref,created_at,claimed_at FROM qq_faq_candidates WHERE false`); e != nil {
-		return e
-	}
-	// QQ 答疑的改进依据；缺表时启动走迁移。
-	if _, e := s.pool.Exec(ctx, `SELECT kind,topic,detail,created_at FROM qq_improvement_events WHERE false`); e != nil {
-		return e
-	}
-	// QQ 答疑从核对过的答案里学到的自测题；缺表时启动走迁移。
-	if _, e := s.pool.Exec(ctx, `SELECT question,answer,created_at FROM qq_selftest_cases WHERE false`); e != nil {
-		return e
-	}
-	// QQ 答疑每天的处理结果计数；缺表时启动走迁移。
-	if _, e := s.pool.Exec(ctx, `SELECT day,outcome,count FROM qq_daily_stats WHERE false`); e != nil {
-		return e
-	}
-	// 被群友说答错的回答；缺表或缺处理状态列时启动走迁移（状态列的命名 CHECK 和列在同一次迁移中加上，只探测列）。
-	if _, e := s.pool.Exec(ctx, `SELECT id,question,answer,feedback,retry,state,created_at FROM qq_bad_answers WHERE false`); e != nil {
+SELECT id,user_id,language,provider,duration_ms,transcript,app_version,audio_mime,audio,created_at FROM voice_contributions WHERE false;
+-- 诊断快照与它的访问记录；缺表时启动走迁移。
+SELECT id,user_id,token_hash,token_hint,platform,app_version,sections,content,bytes,created_at,expires_at FROM diagnostic_snapshots WHERE false;
+SELECT id,snapshot_id,tool,arguments,result_count,bytes,at FROM diagnostic_accesses WHERE false;
+-- QQ 群答疑接上追问用的最近问答；缺表时启动走迁移。
+SELECT id,subject,question,answer,created_at FROM qq_conversations WHERE false;
+-- QQ 群友反馈的 issue 草稿；缺表时启动走迁移。
+SELECT id,subject,original,report,created_at,updated_at,filed_at,issue_ref FROM qq_drafts WHERE false;
+-- QQ 答疑沉淀进文档的候选；缺表或缺认领时间列时启动走迁移。state 认 writing 的 CHECK 和认领时间列在同一次迁移中换上，所以只探测列。
+SELECT id,question,answer,state,ref,created_at,claimed_at FROM qq_faq_candidates WHERE false;
+-- QQ 答疑的改进依据；缺表时启动走迁移。
+SELECT kind,topic,detail,created_at FROM qq_improvement_events WHERE false;
+-- QQ 答疑从核对过的答案里学到的自测题；缺表时启动走迁移。
+SELECT question,answer,created_at FROM qq_selftest_cases WHERE false;
+-- QQ 答疑每天的处理结果计数；缺表时启动走迁移。
+SELECT day,outcome,count FROM qq_daily_stats WHERE false;
+-- 被群友说答错的回答；缺表或缺处理状态列时启动走迁移（状态列的命名 CHECK 和列在同一次迁移中加上，只探测列）。
+SELECT id,question,answer,feedback,retry,state,created_at FROM qq_bad_answers WHERE false`); e != nil {
 		return e
 	}
 	// QQ 答疑的向量索引：pgvector 的 halfvec 解析得到、表却还没建时（扩展是在库已经迁移过之后才装的）启动走迁移；解析不到时这个功能本来就关闭，不算缺表。
@@ -330,16 +314,15 @@ SELECT id,snapshot_id,tool,arguments,result_count,bytes,at FROM diagnostic_acces
 	if vectorsMissing {
 		return errors.New("qq knowledge tables missing")
 	}
-	// AI skin artwork jobs are shared between replicas through this table; without it a poll on another replica could not find the job.
-	if _, e := s.pool.Exec(ctx, `SELECT id,owner,state,reason,artwork,cancelled,created_at,heartbeat_at,expires_at FROM skin_jobs WHERE false`); e != nil {
-		return e
-	}
-	// 候选窗皮肤的分类列与它的命名 CHECK 约束、索引在同一次迁移中加上，所以只探测列；缺列时启动会走迁移。
-	if _, e := s.pool.Exec(ctx, `SELECT category FROM community_candidate_skins WHERE false`); e != nil {
-		return e
-	}
-	// 键盘皮肤的分类列同理：约束和索引与列在同一次迁移中加上，只探测列。
-	if _, e := s.pool.Exec(ctx, `SELECT category FROM community_skins WHERE false`); e != nil {
+	// 向量能力检查通过后，连续的任务表和皮肤分类列探测同样在迁移共享锁下发送。
+	if _, e := s.pool.Exec(ctx, `
+SELECT pg_advisory_xact_lock_shared(8372419);
+-- AI 皮肤绘图任务由多个副本共享；缺表时启动走迁移，避免其他副本查询不到任务。
+SELECT id,owner,state,reason,artwork,cancelled,created_at,heartbeat_at,expires_at FROM skin_jobs WHERE false;
+-- 候选窗皮肤的分类列与它的命名 CHECK 约束、索引在同一次迁移中加上，所以只探测列；缺列时启动会走迁移。
+SELECT category FROM community_candidate_skins WHERE false;
+-- 键盘皮肤的分类列同理：约束和索引与列在同一次迁移中加上，只探测列。
+SELECT category FROM community_skins WHERE false`); e != nil {
 		return e
 	}
 	// 两张候选窗皮肤表的保留 ID 写在 CHECK 约束里，SELECT 探测不到；约束还不含 msime-windows 后加的内置外观时启动走迁移。

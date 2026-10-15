@@ -447,13 +447,15 @@ func boundedDiagnosticArguments(arguments json.RawMessage) json.RawMessage {
 	if trimmed == "" || trimmed == "null" {
 		return json.RawMessage(`{}`)
 	}
-	if len(trimmed) <= diagnosticAccessArgumentBytes && json.Valid([]byte(trimmed)) {
+	if len(trimmed) <= diagnosticAccessArgumentBytes && utf8.ValidString(trimmed) && json.Valid([]byte(trimmed)) {
 		return json.RawMessage(trimmed)
 	}
 	return quotedDiagnosticArguments(trimmed)
 }
 
 func quotedDiagnosticArguments(trimmed string) json.RawMessage {
+	// 无效字节替换为可见字符，保留其后的内容，再按 UTF-8 边界截断。
+	trimmed = strings.ToValidUTF8(trimmed, "\ufffd")
 	// 实际 NUL 也不能存入 `jsonb` 字符串，保留为可见的转义文本。
 	trimmed = strings.ReplaceAll(trimmed, "\x00", `\u0000`)
 	cut := trimmed[:min(len(trimmed), diagnosticAccessArgumentBytes)]

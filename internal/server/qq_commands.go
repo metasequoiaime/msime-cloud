@@ -396,7 +396,7 @@ func (s *Server) qqIssueBodyText(ctx context.Context, name, number string) strin
 		default:
 			return ""
 		}
-		return qqTruncateSentence(qqPlainText(qqImagePattern.ReplaceAllString(issue.Body, " ")), qqIssueBodyRunes)
+		return qqTruncateSentence(qqPlainText(qqStripImagesAndHTML(issue.Body)), qqIssueBodyRunes)
 	}
 	return ""
 }

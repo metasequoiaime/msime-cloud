@@ -413,10 +413,7 @@ func (a *Service) NotifyCrashSpikes(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, crashSpikeLock); err != nil {
-		return 0, err
-	}
-	spikes, err := crashSpikes(ctx, tx)
+	spikes, err := lockCrashSpikes(ctx, tx)
 	if err != nil {
 		return 0, err
 	}
@@ -480,20 +477,25 @@ func crashPlatformName(platform string) string {
 	return platform
 }
 
-// crashSpikes lists the groups to notify, skipping fixed groups and those already notified within crashSpikeQuiet.
-func crashSpikes(ctx context.Context, tx pgx.Tx) ([]crashSpike, error) {
-	rows, err := tx.Query(ctx, `WITH c AS (`+crashGroupCounts+`)
+// lockCrashSpikes 先取得跨副本事务锁，再用独立语句筛选待告警分组，排除已修复及静默期内已告警的分组。
+func lockCrashSpikes(ctx context.Context, tx pgx.Tx) ([]crashSpike, error) {
+	var spikes []crashSpike
+	batch := &pgx.Batch{}
+	batch.Queue(`SELECT pg_advisory_xact_lock($1)`, crashSpikeLock)
+	batch.Queue(`WITH c AS (`+crashGroupCounts+`)
 SELECT g.signature,g.platform,g.title,c.c7,c.p7 FROM admin_crash_groups g JOIN c USING(signature)
 WHERE g.status<>'fixed' AND c.c7>c.p7*$3::float8 AND (c.c7>=$2 OR (c.p7=0 AND g.first_seen>=now()-interval '7 days'))
  AND NOT EXISTS (SELECT 1 FROM admin_notifications n WHERE n.kind=$4 AND n.target_id=g.signature AND n.created_at>now()-$5::interval)
-ORDER BY c.c7 DESC,g.signature`, "", crashSpikeMinimum, crashSpikeRise, NotifyCrashSpike, crashSpikeQuiet)
-	if err != nil {
-		return nil, err
-	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (crashSpike, error) {
-		var s crashSpike
-		return s, row.Scan(&s.Signature, &s.Platform, &s.Title, &s.Count7d, &s.CountPrev7d)
+ORDER BY c.c7 DESC,g.signature`, "", crashSpikeMinimum, crashSpikeRise, NotifyCrashSpike, crashSpikeQuiet).Query(func(rows pgx.Rows) error {
+		var err error
+		spikes, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (crashSpike, error) {
+			var s crashSpike
+			return s, row.Scan(&s.Signature, &s.Platform, &s.Title, &s.Count7d, &s.CountPrev7d)
+		})
+		return err
 	})
+	err := tx.SendBatch(ctx, batch).Close()
+	return spikes, err
 }
 
 var (

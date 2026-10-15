@@ -74,7 +74,41 @@ func TestApplyDictionaryDuplicateMemoryBudget(t *testing.T) {
 	if err != nil || got != text+strings.Join(edits[0].Columns, "\t")+"\n" {
 		t.Fatalf("词库追加结果发生变化：err=%v", err)
 	}
-	if bytes := result.AllocedBytesPerOp(); bytes > 1700<<10 {
-		t.Fatalf("五千行词库追加一条词条分配 %d 字节，超过 1700 KiB 预算", bytes)
+	if bytes := result.AllocedBytesPerOp(); bytes > 700<<10 {
+		t.Fatalf("五千行词库追加一条词条分配 %d 字节，超过 700 KiB 预算", bytes)
+	}
+}
+
+func dictionaryEarlyDuplicateFixture() (string, []dictionaryEdit) {
+	text := "alpha\tAlpha\t1\nbeta\tBeta\t2\n" + strings.Repeat("#\n", 100000)
+	edits := []dictionaryEdit{{Operation: "replace", Line: 1, Columns: []string{"beta", "Beta", "3"}}}
+	return text, edits
+}
+
+func TestApplyDictionaryEarlyDuplicateMemoryBudget(t *testing.T) {
+	text, edits := dictionaryEarlyDuplicateFixture()
+	var got string
+	var err error
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			got, err = applyDictionaryChanges("packs/demo/english.txt", text, edits)
+		}
+	})
+	var rejected *dictionaryChangeError
+	if got != "" || !errors.As(err, &rejected) || rejected.code != "dictionary_duplicate" || rejected.status != 409 {
+		t.Fatalf("未拒绝开头的重复词条：got=%q err=%v", got, err)
+	}
+	if bytes := result.AllocedBytesPerOp(); bytes > 2<<20 {
+		t.Fatalf("拒绝开头重复词条分配 %d 字节，超过 2 MiB 预算", bytes)
+	}
+}
+
+func BenchmarkApplyDictionaryEarlyDuplicate(b *testing.B) {
+	text, edits := dictionaryEarlyDuplicateFixture()
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := applyDictionaryChanges("packs/demo/english.txt", text, edits); err == nil {
+			b.Fatal("未拒绝重复词条")
+		}
 	}
 }

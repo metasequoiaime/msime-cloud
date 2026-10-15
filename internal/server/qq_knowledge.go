@@ -726,23 +726,37 @@ func qqNormalizeAnswer(answer string) string {
 	if word := qqPromptLeak.FindString(answer); word != "" {
 		slog.Info("qq bot: prompt leak", "word", word)
 	}
-	answer = qqAnswerReplacer.Replace(qqApostrophe.ReplaceAllString(answer, "$1'$2"))
-	if !qqWindowsPath.MatchString(answer) {
+	// 无匹配时正则替换仍会复制正文，先确认有英文单词里的弯撇号。
+	if strings.ContainsRune(answer, '’') && qqApostrophe.MatchString(answer) {
+		answer = qqApostrophe.ReplaceAllString(answer, "$1'$2")
+	}
+	// 这组含多字节引号的替换规则也会复制无匹配正文，缺少所有标记时直接复用。
+	if strings.ContainsAny(answer, "“”‘’\t") || strings.Contains(answer, "**") || strings.Contains(answer, "__") {
+		answer = qqAnswerReplacer.Replace(answer)
+	}
+	if strings.Contains(answer, `\t`) && !qqWindowsPath.MatchString(answer) {
 		answer = strings.ReplaceAll(answer, `\t`, " ")
 	}
-	lines := strings.Split(answer, "\n")
-	for i, line := range lines {
-		heading := qqAnswerHeading.FindString(line)
-		if heading == "" {
-			continue
+	// 原规则只处理行首的 #；没有候选标题时无需拆行后重建正文。
+	if strings.HasPrefix(answer, "#") || strings.Contains(answer, "\n#") {
+		lines := strings.Split(answer, "\n")
+		for i, line := range lines {
+			heading := qqAnswerHeading.FindString(line)
+			if heading == "" {
+				continue
+			}
+			// 「#123」是 issue 编号，不是标题。
+			if rest := line[len(heading):]; strings.TrimRight(heading, "#") == "" && rest != "" && rest[0] >= '0' && rest[0] <= '9' {
+				continue
+			}
+			lines[i] = line[len(heading):]
 		}
-		// 「#123」是 issue 编号，不是标题。
-		if rest := line[len(heading):]; strings.TrimRight(heading, "#") == "" && rest != "" && rest[0] >= '0' && rest[0] <= '9' {
-			continue
-		}
-		lines[i] = line[len(heading):]
+		answer = strings.Join(lines, "\n")
 	}
-	return qqBlankLines.ReplaceAllString(strings.Join(lines, "\n"), "\n\n")
+	if strings.Contains(answer, "\n\n\n") {
+		answer = qqBlankLines.ReplaceAllString(answer, "\n\n")
+	}
+	return answer
 }
 
 // qqGroupNumberPattern 匹配 QQ 群号（「加群 12345678」「QQ群号：12345678」）。只认紧跟在「群」后面的数字，不按纯数字长度过滤：22631 这类 Windows 内部版本号、issue 号和日期也是五位以上的数字。

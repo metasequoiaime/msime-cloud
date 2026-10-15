@@ -343,6 +343,8 @@ func (a *Service) clipboardError(w http.ResponseWriter, e error) bool {
 		writeError(w, 403, "clipboard_sync_disabled")
 	case errors.Is(e, errClipboardKeyConflict):
 		writeError(w, 409, "clipboard_key_conflict")
+	case errors.Is(e, errClipboardLimit):
+		writeError(w, 409, "clipboard_limit")
 	case errors.Is(e, errClipboardKeyInvalid):
 		writeError(w, 400, "invalid_clipboard_key")
 	case errors.Is(e, errClipboardDeviceLimit):

@@ -6432,7 +6432,7 @@
         "tags": [
           "用户同步数据"
         ],
-        "description": "必须显式开启同步，否则返回 403 clipboard_sync_disabled。请求最多 32 KiB。带非空 text 返回 400 clipboard_e2e_required；密文或去重标签格式不对返回 400 invalid_clipboard_ciphertext；key_id 不是当前密钥（包括还没有密钥）返回 409 clipboard_key_conflict。dedup 相同的条目保留 ID、换成新密文并移动到最前；超过 50 条移除最旧条目。 设备令牌不能访问用户同步数据；注销账号会级联删除这些数据。",
+        "description": "必须显式开启同步，否则返回 403 clipboard_sync_disabled。请求最多 32 KiB。带非空 text 返回 400 clipboard_e2e_required；密文或去重标签格式不对返回 400 invalid_clipboard_ciphertext；key_id 不是当前密钥（包括还没有密钥）返回 409 clipboard_key_conflict。dedup 相同的条目保留 ID 和置顶状态、换成新密文并移动到最前；超过 50 条移除最旧的未置顶条目。已有 50 条且全部置顶时，上传新 dedup 返回 409 clipboard_limit，原条目不变；更新已有 dedup 仍可成功。 设备令牌不能访问用户同步数据；注销账号会级联删除这些数据。",
         "security": [
           {
             "userSession": []
@@ -6518,7 +6518,7 @@
             }
           },
           "409": {
-            "description": "clipboard_key_conflict：key_id 不是当前密钥",
+            "description": "clipboard_key_conflict：key_id 不是当前密钥；clipboard_limit：已有 50 条且全部置顶，不能新增条目",
             "content": {
               "application/json": {
                 "schema": {

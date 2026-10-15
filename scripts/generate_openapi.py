@@ -87,7 +87,7 @@ result['info']['description']+=' 用户接口详见用户体系标签；登录�
 # 小牛异步媒体接口独立于 Engine 契约，供 Swagger 和命令行共用。
 niutrans_field=string(minLength=1,description='非空，最多 256 UTF-8 字节，不得含 CR 或 LF。')
 niutrans_upload=obj({'file':string(format='binary',description='非空文件，最多 64 MiB。'),'from':niutrans_field,'to':niutrans_field,**{name:niutrans_field for name in ['realmCode','termId','memoryId','processingMode','translationEngine']}},['file','from','to'])
-niutrans_file={'name':'file_no','in':'path','required':True,'schema':string(minLength=1,description='小牛返回的任务编号，最多 256 UTF-8 字节，不得含 /、反斜杠、CR 或 LF。')}
+niutrans_file={'name':'file_no','in':'path','required':True,'schema':string(minLength=1,description='小牛返回的任务编号，最多 256 UTF-8 字节，不得含 /、反斜杠、CR 或 LF。调用方对路径段进行一次 URL 编码；服务端按编号原文转发，编号中的百分号序列不再作为路径分隔符解码。')}
 niutrans_json={'description':'成功转发小牛 JSON，最多 1 MiB；业务状态由上游 JSON 表示。','content':{'application/json':{'schema':{}}}}
 niutrans_errors={code:{'description':description,'content':{'application/json':{'schema':{'$ref':'#/components/schemas/Error'}}}} for code,description in [('400','请求参数无效'),('401','需要有效设备令牌或用户 access_token'),('403','来源不被允许或账号已封禁'),('429','请求过于频繁或并发已满'),('502','上游不可用、响应不是有效 JSON 或超过响应上限'),('503','niutrans_api_not_configured：该小牛接口未配置，或服务不可用')]}
 for kind,title in [('documents','文档'),('images','图片'),('voice','语音')]:

@@ -551,43 +551,53 @@
     ],
     "GET /v1/niutrans/documents/{file_no}": [
       "internal/server/niutrans_media_test.go::TestNiuTransDocumentUploadAndStatus",
-      "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes"
+      "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes",
+      "internal/server/niutrans_file_path_test.go::TestNiuTransFileOperationsPreserveTaskIdentifier"
     ],
     "PUT /v1/niutrans/documents/{file_no}/interrupt": [
-      "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes"
+      "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes",
+      "internal/server/niutrans_file_path_test.go::TestNiuTransFileOperationsPreserveTaskIdentifier"
     ],
     "GET /v1/niutrans/documents/{file_no}/download": [
       "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes",
-      "internal/server/niutrans_media_test.go::TestNiuTransDownloadsAboveJSONLimit"
+      "internal/server/niutrans_media_test.go::TestNiuTransDownloadsAboveJSONLimit",
+      "internal/server/niutrans_file_path_test.go::TestNiuTransFileOperationsPreserveTaskIdentifier"
     ],
     "POST /v1/niutrans/images": [
       "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes"
     ],
     "GET /v1/niutrans/images/{file_no}": [
-      "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes"
+      "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes",
+      "internal/server/niutrans_file_path_test.go::TestNiuTransFileOperationsPreserveTaskIdentifier"
     ],
     "PUT /v1/niutrans/images/{file_no}/interrupt": [
-      "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes"
+      "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes",
+      "internal/server/niutrans_file_path_test.go::TestNiuTransFileOperationsPreserveTaskIdentifier"
     ],
     "GET /v1/niutrans/images/{file_no}/download": [
       "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes",
-      "internal/server/niutrans_media_test.go::TestNiuTransDownloadsAboveJSONLimit"
+      "internal/server/niutrans_media_test.go::TestNiuTransDownloadsAboveJSONLimit",
+      "internal/server/niutrans_file_path_test.go::TestNiuTransFileOperationsPreserveTaskIdentifier"
     ],
     "POST /v1/niutrans/voice": [
       "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes"
     ],
     "GET /v1/niutrans/voice/{file_no}": [
-      "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes"
+      "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes",
+      "internal/server/niutrans_file_path_test.go::TestNiuTransFileOperationsPreserveTaskIdentifier"
     ],
     "PUT /v1/niutrans/voice/{file_no}/interrupt": [
-      "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes"
+      "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes",
+      "internal/server/niutrans_file_path_test.go::TestNiuTransFileOperationsPreserveTaskIdentifier"
     ],
     "GET /v1/niutrans/voice/{file_no}/download": [
       "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes",
-      "internal/server/niutrans_media_test.go::TestNiuTransDownloadsAboveJSONLimit"
+      "internal/server/niutrans_media_test.go::TestNiuTransDownloadsAboveJSONLimit",
+      "internal/server/niutrans_file_path_test.go::TestNiuTransFileOperationsPreserveTaskIdentifier"
     ],
     "DELETE /v1/niutrans/documents/{file_no}": [
-      "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes"
+      "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes",
+      "internal/server/niutrans_file_path_test.go::TestNiuTransFileOperationsPreserveTaskIdentifier"
     ],
     "GET /v1/niutrans/resources": [
       "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes",

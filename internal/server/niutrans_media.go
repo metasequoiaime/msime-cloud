@@ -196,7 +196,8 @@ func (s *Server) niuTransFileRequest(w http.ResponseWriter, r *http.Request, e N
 		upstreamError(w, r, err)
 		return
 	}
-	base.Path = strings.TrimSuffix(base.Path, "/upload") + "/" + operation + "/" + url.PathEscape(fileNo)
+	// `URL.Path` 保存解码后的任务编号，`URL.String` 会统一转义一次。
+	base.Path = strings.TrimSuffix(base.Path, "/upload") + "/" + operation + "/" + fileNo
 	query := base.Query()
 	for key, value := range params {
 		query.Set(key, value)

@@ -269,12 +269,7 @@ func (a *Service) adminMeAction(w http.ResponseWriter, r *http.Request, _ string
 		return
 	}
 	ctx := r.Context()
-	tx, err := a.store.pool.Begin(ctx)
-	if err != nil {
-		a.error(w, err)
-		return
-	}
-	defer tx.Rollback(ctx)
+	var err error
 	out := map[string]any{"ok": true}
 	switch v.Action {
 	case "set_pref":
@@ -283,7 +278,7 @@ func (a *Service) adminMeAction(w http.ResponseWriter, r *http.Request, _ string
 			err = e
 			break
 		}
-		err = tx.QueryRow(ctx, `WITH written AS (
+		err = a.store.pool.QueryRow(ctx, `WITH written AS (
  INSERT INTO admin_preferences(email,prefs) VALUES($1,jsonb_build_object($2::text,$3::boolean))
  ON CONFLICT(email) DO UPDATE SET prefs=admin_preferences.prefs||EXCLUDED.prefs
  RETURNING 1
@@ -296,7 +291,7 @@ SELECT 1 FROM audited`, access.Email, v.Key, *v.Value, adminActor(ctx), detail).
 		out["key"], out["value"] = v.Key, *v.Value
 	case "revoke_session":
 		var affected int64
-		err = tx.QueryRow(ctx, `WITH revoked AS (
+		err = a.store.pool.QueryRow(ctx, `WITH revoked AS (
  DELETE FROM admin_sessions WHERE id=$1 AND email=$2 RETURNING id
 ), audited AS (
  INSERT INTO admin_audit(action,target,actor,detail)
@@ -309,6 +304,12 @@ SELECT count(*) FROM revoked`, v.ID, access.Email, adminActor(ctx)).Scan(&affect
 			return
 		}
 	case "regenerate_token":
+		tx, e := a.store.pool.Begin(ctx)
+		if e != nil {
+			a.error(w, e)
+			return
+		}
+		defer tx.Rollback(ctx)
 		var token string
 		var info adminTokenInfo
 		token, info, err = issueAdminToken(ctx, tx, access.Email)
@@ -319,10 +320,10 @@ SELECT count(*) FROM revoked`, v.ID, access.Email, adminActor(ctx)).Scan(&affect
 		if err == nil {
 			err = auditTx(ctx, tx, "admin_token_regenerate", access.Email, map[string]any{"last4": info.Last4})
 		}
+		if err == nil {
+			err = tx.Commit(ctx)
+		}
 		out["token"], out["last4"], out["created_at"], out["expires_at"] = token, info.Last4, info.CreatedAt, info.ExpiresAt
-	}
-	if err == nil {
-		err = tx.Commit(ctx)
 	}
 	if err != nil {
 		a.error(w, err)

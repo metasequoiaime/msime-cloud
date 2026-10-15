@@ -2,26 +2,35 @@ package account
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestLoginChallengeConsumptionRoundTrips(t *testing.T) {
-	for _, mode := range []string{"new", "returning", "link"} {
+	for _, mode := range []string{"new", "returning", "link", "new-profile", "returning-profile", "link-profile"} {
 		t.Run(mode, func(t *testing.T) {
 			db := testStore(t)
 			ctx := t.Context()
-			identity := Identity{"email", "consume@example.test"}
+			identity := Identity{"google", "consume@example.test"}
 			challenge := Challenge{IDHash: hash(randomToken()), Provider: identity.Provider, Subject: identity.Subject}
-			wantID, wantQueries := "", 9
-			switch mode {
+			wantID, wantQueries := "", 6
+			switch strings.TrimSuffix(mode, "-profile") {
 			case "returning":
 				wantID = complete(t, db, identity).User.ID
-				wantQueries = 8
+				wantQueries = 7
 			case "link":
 				wantID = complete(t, db, Identity{"email", "link-owner@example.test"}).User.ID
 				challenge.LinkUser = wantID
+				wantQueries = 7
+			}
+			var grant *providerGrant
+			if strings.HasSuffix(mode, "-profile") {
+				grant = &providerGrant{
+					Profile:       &providerProfile{Email: "profile@example.test", EmailVerified: true, Name: "合成昵称", Picture: "https://example.test/picture.jpg"},
+					SealedRefresh: []byte("synthetic-sealed-refresh"), Scope: "openid profile email",
+				}
 			}
 			if err := db.PutChallenge(ctx, challenge); err != nil {
 				t.Fatal(err)
@@ -41,7 +50,7 @@ func TestLoginChallengeConsumptionRoundTrips(t *testing.T) {
 			trace.seen, trace.statements = 0, nil
 			trace.mu.Unlock()
 			store := &Store{pool: pool}
-			tokens, err := store.Complete(ctx, challenge, identity)
+			tokens, err := store.completeWith(ctx, challenge, identity, grant)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -53,6 +62,15 @@ func TestLoginChallengeConsumptionRoundTrips(t *testing.T) {
 			}
 			if tokens.User.ID == "" || (wantID != "" && tokens.User.ID != wantID) {
 				t.Fatal("登录关联了错误的账号")
+			}
+			if grant != nil {
+				if tokens.User.DisplayName != grant.Profile.Name || tokens.User.Email != grant.Profile.Email || tokens.User.googlePicture != grant.Profile.Picture {
+					t.Fatal("签发会话返回的资料没有包含本次登录更新")
+				}
+				var sealed, scope string
+				if err = db.pool.QueryRow(ctx, `SELECT convert_from(refresh_token,'UTF8'),scope FROM auth_provider_tokens WHERE provider=$1 AND subject=$2`, identity.Provider, identity.Subject).Scan(&sealed, &scope); err != nil || sealed != string(grant.SealedRefresh) || scope != grant.Scope {
+					t.Fatal("服务商刷新令牌未随会话提交", err)
+				}
 			}
 			if principal, err := db.Authenticate(ctx, tokens.AccessToken); err != nil || principal.UserID != tokens.User.ID {
 				t.Fatal("登录未创建有效会话", err)

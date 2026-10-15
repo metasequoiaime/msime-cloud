@@ -21956,7 +21956,7 @@
             "userSession": []
           }
         ],
-        "description": "只在用户打开「贡献语音」后由客户端上传；需要用户会话（匿名账号也可以），设备令牌返回 401。multipart/form-data：payload 为 JSON（最多 16 KiB，未知字段返回 400），audio 为 WAV（RIFF 结构校验）或 Ogg，最多 2 MiB、60 秒。每个用户每小时 30 次（auth_rates，所有副本共享）。样本只用于改进语音识别，保留 180 天，注销账号或删除云端数据时一并删除；音频和文本不写日志。",
+        "description": "只在用户打开「贡献语音」后由客户端上传；需要用户会话（匿名账号也可以），设备令牌返回 401。multipart/form-data：payload 为 JSON（最多 16 KiB，未知字段返回 400），audio 为 WAV（RIFF 结构校验）或 Ogg（起始页签名校验），最多 2 MiB。duration_ms 是客户端声明的时长，服务端校验其在 1–60000 范围内，不解析媒体实际时长；客户端须在上传前确认实际音频不超过 60 秒。每个用户每小时 30 次（auth_rates，所有副本共享）。样本只用于改进语音识别，保留 180 天，注销账号或删除云端数据时一并删除；音频和文本不写日志。",
         "requestBody": {
           "required": true,
           "content": {
@@ -21980,7 +21980,8 @@
                       "duration_ms": {
                         "type": "integer",
                         "minimum": 1,
-                        "maximum": 60000
+                        "maximum": 60000,
+                        "description": "客户端声明的音频时长（毫秒）；服务端只校验字段范围，不解析媒体的实际时长。客户端须在上传前确认实际音频不超过 60 秒。"
                       },
                       "transcript": {
                         "type": "string",

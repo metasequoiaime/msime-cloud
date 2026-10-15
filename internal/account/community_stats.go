@@ -24,7 +24,7 @@ const communityResourceCountsQuery = `SELECT
 // 公共统计与后台概览保持相同的社区计数口径。
 const communityStatsQuery = `SELECT
  (SELECT count(*) FROM community_skins WHERE moderation<>'removed'),
- (SELECT count(*) FROM community_skin_downloads),
+ (SELECT count(*) FROM community_skin_downloads d JOIN community_skins s ON s.id=d.skin_id WHERE s.moderation<>'removed'),
  resource_counts.dictionaries,resource_counts.replies,
  (SELECT count(*) FROM community_resource_saves),
  now() FROM (` + communityResourceCountsQuery + `) resource_counts`

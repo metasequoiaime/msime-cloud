@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"golang.org/x/sync/errgroup"
@@ -142,9 +143,22 @@ func (s *Server) qqEmbedItems(ctx context.Context, items []account.QQKnowledgeIt
 	return nil
 }
 
+// qqTruncate 按 Unicode 标量截断并追加省略号，只扫描保留的前缀，避免为长正文分配全文 rune 切片。
 func qqTruncate(text string, limit int) string {
-	if runes := []rune(text); len(runes) > limit {
-		return string(runes[:limit]) + "…"
+	if limit < 0 {
+		panic("negative truncate limit")
+	}
+	count := 0
+	for i := range text {
+		if count == limit {
+			prefix := text[:i]
+			if !utf8.ValidString(prefix) {
+				// 沿用截断时的 rune 转换语义，每个无效字节分别替换为 U+FFFD。
+				prefix = string([]rune(prefix))
+			}
+			return prefix + "…"
+		}
+		count++
 	}
 	return text
 }

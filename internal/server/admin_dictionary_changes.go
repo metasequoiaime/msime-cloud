@@ -191,6 +191,7 @@ func (s *Server) createDictionaryPR(ctx context.Context, gh *githubapp.Client, i
 	if pull.Number <= 0 || pull.URL != "https://github.com/"+repo+"/pull/"+strconv.Itoa(pull.Number) {
 		return result, dictionaryChangeFail(502, "dictionary_uncertain")
 	}
+	gh.Invalidate("/repos/" + repo + "/pulls")
 	result.Number, result.URL = pull.Number, pull.URL
 	return result, nil
 }

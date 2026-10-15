@@ -258,8 +258,18 @@ func (s *Server) syncQQDocVectors(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	ids := make([]string, len(sections))
+	var idCache map[struct{ doc, title string }]string
+	if len(sections) > 0 {
+		idCache = make(map[struct{ doc, title string }]string, len(sections))
+	}
 	for i, section := range sections {
+		key := struct{ doc, title string }{section.Doc, section.Title}
+		if id, ok := idCache[key]; ok {
+			ids[i] = id
+			continue
+		}
 		ids[i] = qqDocID(section)
+		idCache[key] = ids[i]
 	}
 	hashes, err := s.qqVectors.QQKnowledgeHashes(ctx, ids)
 	if err != nil {

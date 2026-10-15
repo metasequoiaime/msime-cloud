@@ -925,9 +925,15 @@ func (s *Server) shippedEntries(ctx context.Context, operation string, batch []m
 	return listed
 }
 
-// listedLines returns the indexes of lines whose key (the first two columns) content already has. Columns are stripped and blank and # lines skipped, as the dictionary build reads the files.
+// listedLines 按输入顺序返回已有词条的索引，只保存待查键；列去除首尾空白，跳过空行和 # 注释，与词库构建规则一致。
 func listedLines(content string, lines []submissionLine) alreadyListedError {
-	existing := map[string]bool{}
+	pending := map[string]bool{}
+	for _, line := range lines {
+		pending[line.key] = true
+	}
+	if len(pending) == 0 {
+		return nil
+	}
 	scanner := bufio.NewScanner(strings.NewReader(content))
 	scanner.Buffer(make([]byte, 0, 4096), 1<<20)
 	for scanner.Scan() {
@@ -936,12 +942,15 @@ func listedLines(content string, lines []submissionLine) alreadyListedError {
 			continue
 		}
 		if fields := strings.Split(line, "\t"); len(fields) >= 2 {
-			existing[strings.TrimSpace(fields[0])+"\t"+strings.TrimSpace(fields[1])] = true
+			delete(pending, strings.TrimSpace(fields[0])+"\t"+strings.TrimSpace(fields[1]))
+			if len(pending) == 0 {
+				break
+			}
 		}
 	}
 	var listed alreadyListedError
 	for i, line := range lines {
-		if existing[line.key] {
+		if !pending[line.key] {
 			listed = append(listed, i)
 		}
 	}

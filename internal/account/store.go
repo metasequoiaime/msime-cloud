@@ -528,7 +528,7 @@ func (s *Store) Complete(ctx context.Context, c Challenge, identity Identity) (T
 	return s.completeWith(ctx, c, identity, nil)
 }
 
-// completeWith consumes the challenge, resolves or creates the user and, when grant is set, records the provider profile and sealed refresh token in the same transaction.
+// completeWith 在同一事务中消费挑战、解析或创建用户，并记录服务商资料和密封的刷新令牌。
 func (s *Store) completeWith(ctx context.Context, c Challenge, identity Identity, grant *providerGrant) (Tokens, error) {
 	tx, e := s.pool.Begin(ctx)
 	if e != nil {
@@ -579,38 +579,30 @@ RETURNING c.id_hash`, c.IDHash).Scan(&id)
 			return Tokens{}, ErrBanned
 		}
 	}
+	// 身份归属和封禁检查完成后，把后续写入按原顺序排入同一批次，再读取资料并创建会话。
+	batch := &pgx.Batch{}
 	if uid == "" {
 		uid = c.LinkUser
 		if uid == "" {
 			uid = randomToken()
-			if _, e = tx.Exec(ctx, "INSERT INTO auth_users(id,display_name) VALUES($1,$2)", uid, defaultUserName(uid)); e != nil {
-				return Tokens{}, e
-			}
+			batch.Queue("INSERT INTO auth_users(id,display_name) VALUES($1,$2)", uid, defaultUserName(uid))
 		}
-		if _, e = tx.Exec(ctx, "INSERT INTO auth_identities(provider,subject,user_id) VALUES($1,$2,$3)", identity.Provider, identity.Subject, uid); e != nil {
-			return Tokens{}, e
-		}
+		batch.Queue("INSERT INTO auth_identities(provider,subject,user_id) VALUES($1,$2,$3)", identity.Provider, identity.Subject, uid)
 	}
 	if grant != nil && grant.Profile != nil {
 		p := grant.Profile
-		if _, e = tx.Exec(ctx, "UPDATE auth_identities SET email=$3,email_verified=$4,name=$5,picture=$6,updated_at=now() WHERE provider=$1 AND subject=$2", identity.Provider, identity.Subject, p.Email, p.EmailVerified, p.Name, p.Picture); e != nil {
-			return Tokens{}, e
-		}
-		// The Google name becomes the nickname only while the user has not chosen one: an empty name or the generated 水杉小鹿 default. A name the user set themselves is never replaced by a later login.
+		batch.Queue("UPDATE auth_identities SET email=$3,email_verified=$4,name=$5,picture=$6,updated_at=now() WHERE provider=$1 AND subject=$2", identity.Provider, identity.Subject, p.Email, p.EmailVerified, p.Name, p.Picture)
+		// 只有空昵称或生成的默认昵称才采用 Google 昵称，用户自行设置的昵称不会被后续登录覆盖。
 		if name := profileDisplayName(p.Name); name != "" {
-			if _, e = tx.Exec(ctx, "UPDATE auth_users SET display_name=$2 WHERE id=$1 AND (btrim(display_name)='' OR display_name=$3)", uid, name, defaultUserName(uid)); e != nil {
-				return Tokens{}, e
-			}
+			batch.Queue("UPDATE auth_users SET display_name=$2 WHERE id=$1 AND (btrim(display_name)='' OR display_name=$3)", uid, name, defaultUserName(uid))
 		}
 	}
-	// Google omits refresh_token on repeat consents; an absent one keeps the stored token rather than erasing it.
+	// Google 重复授权可能省略刷新令牌，此时保留已存储的令牌。
 	if grant != nil && len(grant.SealedRefresh) > 0 {
-		if _, e = tx.Exec(ctx, `INSERT INTO auth_provider_tokens(provider,subject,refresh_token,scope,updated_at) VALUES($1,$2,$3,$4,now())
- ON CONFLICT(provider,subject) DO UPDATE SET refresh_token=excluded.refresh_token,scope=excluded.scope,updated_at=now()`, identity.Provider, identity.Subject, grant.SealedRefresh, grant.Scope); e != nil {
-			return Tokens{}, e
-		}
+		batch.Queue(`INSERT INTO auth_provider_tokens(provider,subject,refresh_token,scope,updated_at) VALUES($1,$2,$3,$4,now())
+ ON CONFLICT(provider,subject) DO UPDATE SET refresh_token=excluded.refresh_token,scope=excluded.scope,updated_at=now()`, identity.Provider, identity.Subject, grant.SealedRefresh, grant.Scope)
 	}
-	t, e := newSession(ctx, tx, uid)
+	t, e := newSession(ctx, tx, uid, batch)
 	if e != nil {
 		return Tokens{}, e
 	}
@@ -619,15 +611,17 @@ RETURNING c.id_hash`, c.IDHash).Scan(&id)
 	}
 	return t, nil
 }
-func newSession(ctx context.Context, tx pgx.Tx, uid string) (Tokens, error) {
+
+// newSession 在已排队的账号、身份和资料写入之后读取最新资料并创建会话，一并提交给数据库执行。
+func newSession(ctx context.Context, tx pgx.Tx, uid string, batch *pgx.Batch) (Tokens, error) {
 	t := Tokens{AccessToken: randomToken(), RefreshToken: randomToken(), TokenType: "Bearer", ExpiresIn: 900}
-	e := scanUser(tx.QueryRow(ctx, userQuery, uid), &t.User)
-	if e != nil {
-		return t, e
-	}
-	// The login request's User-Agent, when the handler passed one, lets the console tell the user's devices apart.
-	_, e = tx.Exec(ctx, `INSERT INTO auth_sessions(id,user_id,access_hash,refresh_hash,access_expires,expires_at,user_agent) VALUES($1,$2,$3,$4,now()+interval '15 minutes',now()+interval '30 days',$5)`, randomToken(), uid, hash(t.AccessToken), hash(t.RefreshToken), sessionUserAgent(ctx))
-	return t, e
+	batch.Queue(userQuery, uid).QueryRow(func(row pgx.Row) error {
+		return scanUser(row, &t.User)
+	})
+	// 保存请求传入的 User-Agent，供管理后台区分用户设备。
+	batch.Queue(`INSERT INTO auth_sessions(id,user_id,access_hash,refresh_hash,access_expires,expires_at,user_agent) VALUES($1,$2,$3,$4,now()+interval '15 minutes',now()+interval '30 days',$5)`, randomToken(), uid, hash(t.AccessToken), hash(t.RefreshToken), sessionUserAgent(ctx))
+	err := tx.SendBatch(ctx, batch).Close()
+	return t, err
 }
 func (s *Store) Authenticate(ctx context.Context, token string) (Principal, error) {
 	var p Principal

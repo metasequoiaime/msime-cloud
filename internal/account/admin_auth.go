@@ -61,7 +61,13 @@ func (a *Service) SaveAdminFlow(ctx context.Context, state string, flow AdminLog
 }
 func (a *Service) ConsumeAdminFlow(ctx context.Context, state string) (AdminLoginFlow, error) {
 	var flow AdminLoginFlow
-	err := a.store.pool.QueryRow(ctx, `DELETE FROM admin_login_flows WHERE state_hash=$1 AND expires_at>now() RETURNING nonce,verifier`, hash(state)).Scan(&flow.Nonce, &flow.Verifier)
+	// 先取得行锁，再按实时时钟检查有效期，避免等待期间过期的登录流程仍被消费。
+	err := a.store.pool.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+ SELECT state_hash,expires_at FROM admin_login_flows WHERE state_hash=$1 FOR UPDATE
+)
+DELETE FROM admin_login_flows f USING locked
+WHERE f.state_hash=locked.state_hash AND locked.expires_at>clock_timestamp()
+RETURNING f.nonce,f.verifier`, hash(state)).Scan(&flow.Nonce, &flow.Verifier)
 	if errors.Is(err, pgx.ErrNoRows) {
 		err = ErrInvalid
 	}

@@ -112,7 +112,10 @@ func (f *fakeReleaseGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == "GET" && strings.HasPrefix(rest, "commits/") && strings.HasSuffix(rest, "/check-runs"):
 		ref := strings.TrimSuffix(strings.TrimPrefix(rest, "commits/"), "/check-runs")
 		runs := f.runs[repo+"@"+ref]
-		write(200, map[string]any{"total_count": len(runs), "check_runs": runs})
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		page = max(page, 1)
+		start := min((page-1)*100, len(runs))
+		write(200, map[string]any{"total_count": len(runs), "check_runs": runs[start:min(start+100, len(runs))]})
 	case r.Method == "POST" && strings.HasPrefix(rest, "actions/workflows/") && strings.HasSuffix(rest, "/dispatches"):
 		w.WriteHeader(204)
 	case r.Method == "PATCH" && strings.HasPrefix(rest, "releases/"):

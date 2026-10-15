@@ -39,6 +39,9 @@ const (
 	maxReleaseBodyBytes = 50000
 	// releaseHistoryLimit bounds the history returned for one platform.
 	releaseHistoryLimit = 50
+	// 发布检查最多读取 1000 条，超过上限时报告未知，避免把不完整的结果当作全部通过。
+	releaseCheckPageSize = 100
+	releaseCheckPages    = 10
 )
 
 // releaseVersionPattern is a version a release workflow can be dispatched with: an optional v, then a dotted version with optional pre-release or build suffix.
@@ -443,7 +446,8 @@ func parseReleaseNotes(body string) []releaseNote {
 }
 
 type ghCheckRuns struct {
-	CheckRuns []ghCheckRun `json:"check_runs"`
+	TotalCount int          `json:"total_count"`
+	CheckRuns  []ghCheckRun `json:"check_runs"`
 }
 
 type ghCheckRun struct {
@@ -493,11 +497,30 @@ func releaseCheckRuns(ctx context.Context, gh *githubapp.Client, repo, ref strin
 	if err != nil {
 		return runs, false
 	}
-	resp, err := gh.Get(ctx, token, "/repos/"+repo+"/commits/"+url.PathEscape(ref)+"/check-runs?per_page=100")
-	if err != nil || !resp.OK() || resp.Decode(&runs) != nil {
-		return runs, false
+	path := "/repos/" + repo + "/commits/" + url.PathEscape(ref) + "/check-runs?per_page=" + strconv.Itoa(releaseCheckPageSize)
+	for page := 1; page <= releaseCheckPages; page++ {
+		pagePath := path
+		if page > 1 {
+			pagePath += "&page=" + strconv.Itoa(page)
+		}
+		resp, err := gh.Get(ctx, token, pagePath)
+		var current ghCheckRuns
+		if err != nil || !resp.OK() || resp.Decode(&current) != nil || current.TotalCount < 0 || current.TotalCount > releaseCheckPageSize*releaseCheckPages {
+			return ghCheckRuns{}, false
+		}
+		if page == 1 {
+			runs.TotalCount = current.TotalCount
+		}
+		// 分页期间总数变化或缺少应有的行时，不使用部分结果下结论。
+		if current.TotalCount != runs.TotalCount || len(current.CheckRuns) != min(releaseCheckPageSize, runs.TotalCount-len(runs.CheckRuns)) {
+			return ghCheckRuns{}, false
+		}
+		runs.CheckRuns = append(runs.CheckRuns, current.CheckRuns...)
+		if len(runs.CheckRuns) == runs.TotalCount {
+			return runs, true
+		}
 	}
-	return runs, true
+	return ghCheckRuns{}, false
 }
 
 // checkRunsState summarises the matching check runs: any failure fails, any unfinished run is pending, no runs is unknown.

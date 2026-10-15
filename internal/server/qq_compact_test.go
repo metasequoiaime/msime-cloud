@@ -2,8 +2,11 @@ package server
 
 import (
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 )
 
 func TestQQCompactConditionalRules(t *testing.T) {
@@ -55,5 +58,61 @@ func BenchmarkQQCompact(b *testing.B) {
 				_ = qqCompact(tc.input)
 			}
 		})
+	}
+}
+
+func BenchmarkQQCompactTrailing(b *testing.B) {
+	for _, count := range []int{128, 1024, 8192} {
+		b.Run(strconv.Itoa(count), func(b *testing.B) {
+			input := "帮助" + strings.Repeat("🙏", count)
+			b.ReportAllocs()
+			for b.Loop() {
+				_ = qqCompact(input)
+			}
+		})
+	}
+}
+
+func TestQQTrimCommandTrailingKeepsRules(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{
+		{"", ""},
+		{"?", "?"},
+		{"??", "?"},
+		{"🙏🙏", "🙏"},
+		{"帮助🙏\ufe0f\u200d👍🏽?!。~…", "帮助"},
+		{"帮🙏助?", "帮🙏助"},
+		{"甲\u0301?", "甲\u0301"},
+		{"帮助？", "帮助？"},
+		{"\xff?", "\xff"},
+		{"甲\xff", "甲"},
+		{"甲\ufffd", "甲"},
+		{"?\xe4\xb8", "?"},
+		{"帮助" + strings.Repeat("🙏", 8192), "帮助"},
+	} {
+		if got := qqTrimCommandTrailing(tc.input); got != tc.want {
+			t.Errorf("尾部字符裁剪不兼容：输入=%q，结果=%q，预期=%q", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestQQTrimCommandTrailingMatchesPreviousLoop(t *testing.T) {
+	units := []string{"a", "水", "?", "。", "🙏", "🏽", "\ufe0f", "\u200d", "\xff", "\xe4\xb8"}
+	for _, first := range units {
+		for _, middle := range units {
+			for _, last := range units {
+				input := first + middle + last
+				want := input
+				for utf8.RuneCountInString(want) > 1 {
+					r, size := utf8.DecodeLastRuneInString(want)
+					if !strings.ContainsRune(qqCommandTrailing, r) && !unicode.In(r, unicode.So, unicode.Sk) && r != 0xFE0F && r != 0x200D {
+						break
+					}
+					want = want[:len(want)-size]
+				}
+				if got := qqTrimCommandTrailing(input); got != want {
+					t.Fatalf("尾部字符裁剪不兼容：输入=%q，结果=%q，预期=%q", input, got, want)
+				}
+			}
+		}
 	}
 }

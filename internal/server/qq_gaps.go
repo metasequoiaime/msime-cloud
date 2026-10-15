@@ -237,7 +237,10 @@ func (s *Server) recordQQGapIn(ctx context.Context, dailyScope string, daily int
 		s.qq.gapsIssue = 0
 		s.qq.mu.Unlock()
 		slog.Warn("qq bot: gap not recorded", "reason", githubFailure("gaps comment", r, err).Error())
-		release()
+		// 传输错误或 5xx 的响应结果不确定，GitHub 可能已经接受了评论；保留去重名额，避免下一次重复发布。明确的 4xx 拒绝才退回名额。
+		if err == nil && r.Status > 0 && r.Status < 500 {
+			release()
+		}
 		return false
 	}
 	return true

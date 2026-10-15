@@ -2487,20 +2487,20 @@ func TestQQBotRecordsUnansweredTopics(t *testing.T) {
 	if s.qq.gapsIssue != 0 {
 		t.Fatal("a failed comment must drop the cached issue")
 	}
-	// 没写进去的问题退回去重名额：GitHub 评论返回 500 时如实说没记下，下一次同一个问题重新写评论，而不是说「已经记下来了」。
+	// 明确拒绝的评论退回去重名额；5xx 的结果不确定，保留名额避免下一次重复写入。
 	if limiter.counts["qq-bot-gap|第四个问题"] != 0 || fake.replyTexts()[len(fake.replyTexts())-1] != qqUnknownUnrecordedReply {
 		t.Fatal(limiter.counts, fake.replyTexts())
 	}
 	fake.commentStatus = 500
 	qqDeliver(t, s, "m-gap-5-retry", "第四个")
-	if limiter.counts["qq-bot-gap|第四个问题"] != 0 || fake.replyTexts()[len(fake.replyTexts())-1] != qqUnknownUnrecordedReply {
+	if limiter.counts["qq-bot-gap|第四个问题"] != 1 || fake.replyTexts()[len(fake.replyTexts())-1] != qqUnknownUnrecordedReply {
 		t.Fatal(limiter.counts, fake.replyTexts())
 	}
 	fake.commentStatus = 0
 	delete(fake.comments, "/repos/o/docs/issues/77/comments")
 	qqDeliver(t, s, "m-gap-5-again", "第四个")
-	if c := fake.comments["/repos/o/docs/issues/77/comments"]; c == nil || c["body"] != "群友问：第四个问题" || fake.replyTexts()[len(fake.replyTexts())-1] != qqUnknownReply {
-		t.Fatal(fake.comments, fake.replyTexts())
+	if fake.comments["/repos/o/docs/issues/77/comments"] != nil || fake.replyTexts()[len(fake.replyTexts())-1] != qqUnknownReply {
+		t.Fatal("不确定的写入结果不应再次发布评论", fake.comments, fake.replyTexts())
 	}
 	// 每天的上限。
 	limiter.counts["qq-bot-gaps-day|o/docs"] = qqGapsDaily

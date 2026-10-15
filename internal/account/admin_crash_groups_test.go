@@ -367,7 +367,7 @@ func TestNotifyCrashSpikes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spikes, err := crashSpikes(ctx, tx)
+	spikes, err := lockCrashSpikes(ctx, tx)
 	tx.Rollback(ctx)
 	// A new group alerts whatever its size; an older group needs crashSpikeMinimum crashes, so minor (1 to 2) stays quiet.
 	if err != nil || len(spikes) != 3 || spikes[0].Signature != rising || spikes[1].Signature != fresh || spikes[2].Signature != small {
@@ -399,7 +399,7 @@ func TestNotifyCrashSpikes(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback(ctx)
-	if spikes, err = crashSpikes(ctx, tx); err != nil || len(spikes) != 1 || spikes[0].Signature != rising {
+	if spikes, err = lockCrashSpikes(ctx, tx); err != nil || len(spikes) != 1 || spikes[0].Signature != rising {
 		t.Fatalf("%+v %v", spikes, err)
 	}
 }

@@ -376,6 +376,30 @@ func (a *Service) diagnosticsDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 
+// RateDiagnosticSnapshot 仅为仍有效且所属账号未封禁的快照记录共享限流，避免任意未知 ID 生成数据库记录；令牌错误的请求仍占真实快照的额度。
+func (a *Service) RateDiagnosticSnapshot(ctx context.Context, id string, limit int, window time.Duration) error {
+	if !ValidDiagnosticID(id) {
+		return ErrInvalid
+	}
+	var n int
+	err := a.store.pool.QueryRow(ctx, `INSERT INTO auth_rates(key,count,expires_at)
+ SELECT $1,1,clock_timestamp()+$2::interval
+ FROM diagnostic_snapshots d JOIN auth_users u ON u.id=d.user_id AND u.banned_at IS NULL
+ WHERE d.id=$4 AND d.expires_at>clock_timestamp()
+ ON CONFLICT(key) DO UPDATE SET count=CASE WHEN auth_rates.expires_at<=clock_timestamp() THEN 1 ELSE least(auth_rates.count+1,$3+1) END,
+ expires_at=CASE WHEN auth_rates.expires_at<=clock_timestamp() THEN excluded.expires_at ELSE auth_rates.expires_at END RETURNING count`, "mcp-snapshot:"+hash(id), window.String(), limit, id).Scan(&n)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrInvalid
+	}
+	if err != nil {
+		return err
+	}
+	if n > limit {
+		return ErrLimited
+	}
+	return nil
+}
+
 // OpenDiagnosticSnapshot 用 MCP 请求带的令牌打开一份未过期的快照。ID 不存在、已过期、账号被封禁或令牌不符都返回 ErrInvalid，不区分原因；令牌按 SHA-256 常量时间比较。
 func (a *Service) OpenDiagnosticSnapshot(ctx context.Context, id, token string) (DiagnosticSnapshot, error) {
 	v := DiagnosticSnapshot{ID: id}

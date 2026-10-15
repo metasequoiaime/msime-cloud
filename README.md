@@ -112,6 +112,8 @@ go build ./cmd/msime-server
 
 测试使用本地 TLS 模拟服务，不需要真实服务商密钥、不消耗线上配额。测试覆盖认证、额度隔离与补充、并发上限、超时、凭据替换、模型限制、候选编码与过滤、翻译、语音 multipart、重定向与超大上游响应。
 
+账户与服务端的常规 JSON 请求由 `internal/httpjson` 统一检查内容类型、字节上限、未知字段和尾随数据。两个入口保留各自的默认上限（账户 16 KiB、服务端 64 KiB）、调用方指定上限及错误响应头；multipart、命令行登录等采用不同解析规则的入口仍由各功能处理。
+
 共享接口权威在本仓 `contracts/protocol.json`。它原是 MSIME-Engine `contracts/backend/protocol.json` 的副本，Engine 归档后由本仓维护。`python3 scripts/sync_contract.py --check` 检查生成常量。契约测试通过 HTTP 和 TLS 上游执行清单中每个操作的请求/响应示例。
 
 WAV 上传现在校验 RIFF 文件长度、分块边界、fmt/data 必需块和采样帧一致性，允许 PCM 8/16/24/32 位与 IEEE 浮点 32/64 位（1–8 声道、8–192 kHz）。分块规则参考 [Microsoft RIFF 文档](https://learn.microsoft.com/en-us/windows/win32/xaudio2/resource-interchange-file-format--riff-)。缺失或空白转写文本返回 502，不再伪装成功。

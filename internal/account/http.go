@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/metasequoiaime/MSIME-Backend/internal/engine"
-	"io"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 	"log/slog"
 	"math/big"
 	"net"
@@ -424,18 +424,7 @@ func read(w http.ResponseWriter, r *http.Request, v any) bool {
 	return readSized(w, r, v, 16384)
 }
 func readSized(w http.ResponseWriter, r *http.Request, v any, maxBytes int64) bool {
-	if strings.Split(r.Header.Get("Content-Type"), ";")[0] != "application/json" {
-		writeError(w, 415, "json_required")
-		return false
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
-	d := json.NewDecoder(r.Body)
-	d.DisallowUnknownFields()
-	if d.Decode(v) != nil || d.Decode(new(any)) != io.EOF {
-		writeError(w, 400, "invalid_json")
-		return false
-	}
-	return true
+	return httpjson.Decode(w, r, v, maxBytes, writeError)
 }
 func (a *Service) principal(w http.ResponseWriter, r *http.Request, fresh bool) (Principal, bool) {
 	h := r.Header.Get("Authorization")

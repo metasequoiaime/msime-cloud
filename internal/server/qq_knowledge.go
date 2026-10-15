@@ -576,6 +576,10 @@ func qqPlainText(md string) string {
 		}
 		return single
 	}
+	// 没有格式替换且输出等长时，只需排除仍会转成普通空格的 ASCII 空白。
+	if size == len(md) && text == md && !strings.ContainsAny(md, "\t\n\r\v\f") {
+		return md
+	}
 	var out strings.Builder
 	out.Grow(size)
 	for field := range fields {

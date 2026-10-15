@@ -5,23 +5,66 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
 )
 
-func (s *Server) translateDeepL(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint) {
-	form := url.Values{}
-	for _, text := range v.list() {
-		form.Add("text", text)
-	}
+// deepLRequestBodyBytes 是 DeepL 文本翻译的请求体上限，按表单编码后的字节数计算。
+const deepLRequestBodyBytes = 128 << 10
+
+type deepLTranslationBatch struct {
+	body  string
+	texts []string
+}
+
+// deepLTranslationBatches 保留文本原序，按实际表单大小分组；单条输入的 8192 字节上限保证它独自编码后也能放进一批。
+func deepLTranslationBatches(v translationRequest) []deepLTranslationBatch {
+	form := url.Values{"target_lang": {strings.ToUpper(v.Target)}}
 	if !strings.EqualFold(v.Source, "auto") {
 		form.Set("source_lang", strings.ToUpper(v.Source))
 	}
-	form.Set("target_lang", strings.ToUpper(v.Target))
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, e.URL, strings.NewReader(form.Encode()))
+	prefix := form.Encode()
+	body, start := prefix, 0
+	texts := v.list()
+	var batches []deepLTranslationBatch
+	for i, text := range texts {
+		field := "&text=" + url.QueryEscape(text)
+		if len(body)+len(field) > deepLRequestBodyBytes && i > start {
+			batches = append(batches, deepLTranslationBatch{body: body, texts: texts[start:i]})
+			body, start = prefix, i
+		}
+		body += field
+	}
+	return append(batches, deepLTranslationBatch{body: body, texts: texts[start:]})
+}
+
+// translateDeepL 为全部分组一次性预留额度，成功后合并响应；额度不足时让调用方直接切换后备。
+func (s *Server) translateDeepL(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint, budget *providerBudget) bool {
+	batches := deepLTranslationBatches(v)
+	if budget != nil && !budget.take(time.Now(), len(batches)) {
+		return false
+	}
+	translated := make([]string, 0, len(v.list()))
+	for _, batch := range batches {
+		// 每批单独计量，外层没有实际调用，不会把最后一批重复计入。
+		mr, call := metered(r, "translation", textChars(batch.texts))
+		texts, ok := s.translateDeepLBatch(w, mr, batch, e)
+		s.settleMeter(call, ok)
+		if !ok {
+			return true
+		}
+		translated = append(translated, texts...)
+	}
+	respondTranslations(w, v, translated)
+	return true
+}
+
+func (s *Server) translateDeepLBatch(w http.ResponseWriter, r *http.Request, batch deepLTranslationBatch, e TranslationEndpoint) ([]string, bool) {
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, e.URL, strings.NewReader(batch.body))
 	if err != nil {
 		upstreamError(w, r, err)
-		return
+		return nil, false
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
@@ -32,17 +75,17 @@ func (s *Server) translateDeepL(w http.ResponseWriter, r *http.Request, v transl
 			Text string `json:"text"`
 		} `json:"translations"`
 	}
-	if err != nil || json.Unmarshal(body, &result) != nil || len(result.Translations) != len(v.list()) {
+	if err != nil || json.Unmarshal(body, &result) != nil || len(result.Translations) != len(batch.texts) {
 		upstreamError(w, r, err)
-		return
+		return nil, false
 	}
 	translated := make([]string, len(result.Translations))
 	for i, item := range result.Translations {
 		if !bounded(item.Text, contract.OutputTextBytes) {
 			upstreamError(w, r, err)
-			return
+			return nil, false
 		}
 		translated[i] = item.Text
 	}
-	respondTranslations(w, v, translated)
+	return translated, true
 }

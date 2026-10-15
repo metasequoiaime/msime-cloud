@@ -37,7 +37,7 @@ type TranslationEndpoint struct {
 	AppIDEnv    string `json:"app_id_env"`
 	APIKeyEnv   string `json:"apikey_env"`
 	Region      string `json:"region"`
-	// RequestsPerSecond 是这个服务商整个账号的每秒请求上限，各副本平分（向下取整，至少 1）。还有后备服务商时，按实际的上游 HTTP 请求数预留额度（批量接口一次，逐条接口按文本数，腾讯全部命中缓存时不占）；本副本这一秒额度不够就直接交给下一家，不去撞服务商的限流。0 表示不限；小牛（niutrans）为 0 时按 5 次计算，这是当前账号被拒时错误码 10001 报出的上限。
+	// RequestsPerSecond 是这个服务商整个账号的每秒请求上限，各副本平分（向下取整，至少 1）。还有后备服务商时，按实际的上游 HTTP 请求数预留额度（批量接口按实际分组数，逐条接口按文本数，腾讯全部命中缓存时不占）；本副本这一秒额度不够就直接交给下一家，不去撞服务商的限流。0 表示不限；小牛（niutrans）为 0 时按 5 次计算，这是当前账号被拒时错误码 10001 报出的上限。
 	RequestsPerSecond int `json:"requests_per_second,omitempty"`
 	secretID          string
 	appID             string

@@ -227,11 +227,8 @@ var qqPlatformList = func() string {
 	return strings.Join(platforms, "、")
 }()
 
-// qqBoldPattern 匹配 Markdown 加粗，qqMarkdownNoise 是做摘要时去掉的 Markdown 符号和链接地址。
-var (
-	qqBoldPattern   = regexp.MustCompile(`\*\*([^*\n]+)\*\*`)
-	qqMarkdownNoise = regexp.MustCompile("\\]\\([^)]*\\)|[`*_>#\\[|]")
-)
+// qqMarkdownNoise 匹配列表标签里需要清理的 Markdown 符号和链接地址。
+var qqMarkdownNoise = regexp.MustCompile("\\]\\([^)]*\\)|[`*_>#\\[|]")
 
 // qqSnippet 是目录里段落标题后面的摘要：有加粗词时列出加粗词；没有加粗词、但有两个以上「- 标签：说明」这样的列表项时列出标签（见 qqListLabels）；都没有时取正文开头，最多 qqSnippetRunes 字。
 func qqSnippet(text string) string {
@@ -239,20 +236,58 @@ func qqSnippet(text string) string {
 		return qqTruncate(qqSnippetNormalizedPrefix(text, false), qqSnippetRunes)
 	}
 	var snippet string
-	if bold := qqBoldPattern.FindAllStringSubmatch(text, -1); len(bold) > 0 {
-		words := make([]string, 0, len(bold))
-		for _, m := range bold {
-			if !slices.Contains(words, m[1]) {
-				words = append(words, m[1])
-			}
-		}
-		snippet = strings.Join(words, "、")
+	if bold, ok := qqBoldSnippetPrefix(text); ok {
+		snippet = bold
 	} else if labels := qqListLabels(text); len(labels) >= 2 {
 		snippet = strings.Join(labels, "、")
 	} else {
 		snippet = qqSnippetNormalizedPrefix(text, true)
 	}
 	return qqTruncate(snippet, qqSnippetRunes)
+}
+
+// qqBoldSnippetPrefix 按首次出现的顺序收集加粗词，只保留摘要所需的前缀和去重记录。
+func qqBoldSnippetPrefix(text string) (string, bool) {
+	const limit = qqSnippetRunes + 1
+	var out strings.Builder
+	var words []string
+	count := 0
+	for offset := 0; offset < len(text); {
+		open := strings.Index(text[offset:], "**")
+		if open < 0 {
+			break
+		}
+		start := offset + open + 2
+		span := strings.IndexAny(text[start:], "*\n")
+		if span < 0 {
+			break
+		}
+		end := start + span
+		if end == start || text[end] != '*' || end+1 == len(text) || text[end+1] != '*' {
+			// 匹配失败后从第二个星号继续，保留连续星号中重叠起点的原有语义。
+			offset = start - 1
+			continue
+		}
+		offset = end + 2
+		word := text[start:end]
+		if slices.Contains(words, word) {
+			continue
+		}
+		if count == 0 {
+			out.Grow(min(len(text), limit*utf8.UTFMax))
+		} else {
+			out.WriteString("、")
+			count++
+		}
+		prefix := word[:qqRuneEnd(word, limit-count)]
+		out.WriteString(prefix)
+		count += utf8.RuneCountInString(prefix)
+		if count == limit {
+			break
+		}
+		words = append(words, word)
+	}
+	return out.String(), count > 0
 }
 
 // qqSnippetNormalizedPrefix 合并词间空白，按需沿用 qqMarkdownNoise 的清理规则，只构建摘要所需的前缀；多留一字供 qqTruncate 判断省略号。

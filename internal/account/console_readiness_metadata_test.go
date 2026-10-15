@@ -9,21 +9,36 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+type readinessMetadataFixture struct {
+	table, name, missing string
+	constraint           bool
+}
+
+func TestReadyPreservesMissingMetadataOrder(t *testing.T) {
+	checkMissingReadinessMetadataOrder(t, (*Store).Ready, []readinessMetadataFixture{
+		{"candidate_skins", "candidate_skins_id_check", "candidate skin id constraints predate the msime-windows looks", true},
+		{"community_resources", "community_resources_kind_known", "community resource and report kind constraints predate phrase packs", true},
+		{"user_dictionary_entries", "user_dictionary_entries_kind_check", "user_dictionary_entries kind constraint predates wubi98", true},
+		{"", "community_resource_saves_user", "community indexes missing", false},
+	})
+}
+
 func TestConsoleReadyPreservesMissingMetadataOrder(t *testing.T) {
-	db := testStore(t)
-	ctx := t.Context()
-	renamed := map[string]bool{}
-	checks := []struct {
-		table, name, missing string
-		constraint           bool
-	}{
+	checkMissingReadinessMetadataOrder(t, (*Store).consoleReady, []readinessMetadataFixture{
 		{"admin_events", "admin_events_kind_check", "admin_events kind constraint", true},
 		{"admin_role_permissions", "admin_role_permissions_permission_check", "admin_role_permissions permission constraint", true},
 		{"community_plugins", "community_plugins_kind_known", "community_plugins kind constraint", true},
 		{"", "release_asset_snapshots_day", "release snapshot day index", false},
 		{"", "admin_notifications_target", "notification target index", false},
 		{"", "admin_audit_time", "audit time index", false},
-	}
+	})
+}
+
+func checkMissingReadinessMetadataOrder(t *testing.T, readiness func(*Store, context.Context) error, checks []readinessMetadataFixture) {
+	t.Helper()
+	db := testStore(t)
+	ctx := t.Context()
+	renamed := map[string]bool{}
 	for _, tc := range checks {
 		name := pgx.Identifier{tc.name}.Sanitize()
 		next := pgx.Identifier{"readiness_" + tc.name}.Sanitize()
@@ -56,7 +71,7 @@ func TestConsoleReadyPreservesMissingMetadataOrder(t *testing.T) {
 		renamed[tc.name] = true
 	}
 	for _, tc := range checks {
-		if err := db.consoleReady(ctx); err == nil || !strings.Contains(err.Error(), tc.missing) {
+		if err := readiness(db, ctx); err == nil || !strings.Contains(err.Error(), tc.missing) {
 			t.Fatalf("缺失元数据未按原顺序报告，期望 %s，得到 %v", tc.missing, err)
 		}
 		old, current := pgx.Identifier{"readiness_" + tc.name}.Sanitize(), pgx.Identifier{tc.name}.Sanitize()
@@ -71,7 +86,7 @@ func TestConsoleReadyPreservesMissingMetadataOrder(t *testing.T) {
 		}
 		renamed[tc.name] = false
 	}
-	if err := db.consoleReady(ctx); err != nil {
+	if err := readiness(db, ctx); err != nil {
 		t.Fatal("恢复元数据后探测仍失败", err)
 	}
 }

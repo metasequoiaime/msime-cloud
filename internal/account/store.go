@@ -325,33 +325,15 @@ SELECT category FROM community_candidate_skins WHERE false;
 SELECT category FROM community_skins WHERE false`); e != nil {
 		return e
 	}
-	// 两张候选窗皮肤表的保留 ID 写在 CHECK 约束里，SELECT 探测不到；约束还不含 msime-windows 后加的内置外观时启动走迁移。
-	var reservedIDs bool
-	if e := s.pool.QueryRow(ctx, `SELECT count(*)=2 FROM pg_constraint WHERE conname IN ('candidate_skins_id_check','community_candidate_skins_package_id_check') AND conrelid IN ('candidate_skins'::regclass,'community_candidate_skins'::regclass) AND pg_get_constraintdef(oid) LIKE '%microsoft%'`).Scan(&reservedIDs); e != nil {
-		return e
-	}
-	if !reservedIDs {
-		return errors.New("candidate skin id constraints predate the msime-windows looks")
-	}
-	// 社区资源和举报的 kind 也在 CHECK 约束里：约束还不含短语包（phrase、phrases）时启动走迁移，否则发布短语包和举报它会在插入时失败。
-	var phraseKinds bool
-	if e := s.pool.QueryRow(ctx, `SELECT count(*)=2 FROM pg_constraint WHERE (conrelid='community_resources'::regclass AND conname='community_resources_kind_known' AND pg_get_constraintdef(oid) LIKE '%phrase%') OR (conrelid='community_reports'::regclass AND conname='community_reports_kind_known' AND pg_get_constraintdef(oid) LIKE '%phrases%')`).Scan(&phraseKinds); e != nil {
-		return e
-	}
-	if !phraseKinds {
-		return errors.New("community resource and report kind constraints predate phrase packs")
-	}
-	// 个人词库的词条种类同样在 CHECK 约束里：约束还不含 98 版五笔 wubi98 时启动走迁移，否则含 98 版词条的快照恢复和编辑会在插入时失败。
-	var wubi98Kind bool
-	if e := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='user_dictionary_entries'::regclass AND conname='user_dictionary_entries_kind_check' AND pg_get_constraintdef(oid) LIKE '%wubi98%')`).Scan(&wubi98Kind); e != nil {
-		return e
-	}
-	if !wubi98Kind {
-		return errors.New("user_dictionary_entries kind constraint predates wubi98")
-	}
-	// 索引单独加入时，表和列探测不会发现旧库；按 search_path 解析实际表，缺索引或保留重复皮肤索引时启动走迁移。
-	var communityIndexes bool
-	if e := s.pool.QueryRow(ctx, `SELECT NOT EXISTS(
+	if err := s.checkReadinessMetadata(ctx, []readinessMetadataCheck{
+		// 两张候选窗皮肤表的保留 ID 写在 CHECK 约束里，SELECT 探测不到；约束还不含 msime-windows 后加的内置外观时启动走迁移。
+		{`SELECT count(*)=2 FROM pg_constraint WHERE conname IN ('candidate_skins_id_check','community_candidate_skins_package_id_check') AND conrelid IN ('candidate_skins'::regclass,'community_candidate_skins'::regclass) AND pg_get_constraintdef(oid) LIKE '%microsoft%'`, "candidate skin id constraints predate the msime-windows looks"},
+		// 社区资源和举报的 kind 也在 CHECK 约束里：约束还不含短语包（phrase、phrases）时启动走迁移，否则发布短语包和举报它会在插入时失败。
+		{`SELECT count(*)=2 FROM pg_constraint WHERE (conrelid='community_resources'::regclass AND conname='community_resources_kind_known' AND pg_get_constraintdef(oid) LIKE '%phrase%') OR (conrelid='community_reports'::regclass AND conname='community_reports_kind_known' AND pg_get_constraintdef(oid) LIKE '%phrases%')`, "community resource and report kind constraints predate phrase packs"},
+		// 个人词库的词条种类同样在 CHECK 约束里：约束还不含 98 版五笔 wubi98 时启动走迁移，否则含 98 版词条的快照恢复和编辑会在插入时失败。
+		{`SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='user_dictionary_entries'::regclass AND conname='user_dictionary_entries_kind_check' AND pg_get_constraintdef(oid) LIKE '%wubi98%')`, "user_dictionary_entries kind constraint predates wubi98"},
+		// 索引单独加入时，表和列探测不会发现旧库；按 search_path 解析实际表，缺索引或保留重复皮肤索引时启动走迁移。
+		{`SELECT NOT EXISTS(
  SELECT 1 FROM (VALUES
   ('community_resource_saves','community_resource_saves_user'),
   ('community_resources','community_resources_owner'),
@@ -366,11 +348,9 @@ SELECT category FROM community_skins WHERE false`); e != nil {
   ('community_reports','community_reports_item_newest')
  ) required(tbl,name)
  WHERE NOT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass(required.tbl) AND c.relname=required.name)
-) AND NOT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass('community_skins') AND c.relname='community_skins_owner')`).Scan(&communityIndexes); e != nil {
-		return e
-	}
-	if !communityIndexes {
-		return errors.New("community indexes missing")
+) AND NOT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass('community_skins') AND c.relname='community_skins_owner')`, "community indexes missing"},
+	}); err != nil {
+		return err
 	}
 	return s.consoleReady(ctx)
 }
@@ -392,10 +372,7 @@ SELECT id,pattern,is_regex,category,level,created_by,created_at FROM admin_sensi
 SELECT word_id,day,count FROM admin_sensitive_hits WHERE false`); e != nil {
 		return e
 	}
-	// 元数据检查按原顺序批量发送；先取得迁移共享锁，避免跨查询持有的锁与自动迁移冲突。
-	batch := &pgx.Batch{}
-	batch.Queue(`SELECT pg_advisory_xact_lock_shared(8372419)`)
-	for _, check := range []struct{ query, missing string }{
+	return s.checkReadinessMetadata(ctx, []readinessMetadataCheck{
 		// 遥测种类由 CHECK 约束限定，普通列探测无法发现旧约束。
 		{`SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='admin_events'::regclass AND conname='admin_events_kind_check' AND pg_get_constraintdef(oid) LIKE '%session_crash%')`, "admin_events kind constraint predates the active and session kinds"},
 		// 权限键约束需要支持 view_logs。
@@ -408,7 +385,18 @@ SELECT word_id,day,count FROM admin_sensitive_hits WHERE false`); e != nil {
 		{`SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass('admin_notifications') AND c.relname='admin_notifications_target')`, "notification target index missing"},
 		// 审计列表需要时间和 ID 索引。
 		{`SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass('admin_audit') AND c.relname='admin_audit_time')`, "audit time index missing"},
-	} {
+	})
+}
+
+type readinessMetadataCheck struct {
+	query, missing string
+}
+
+func (s *Store) checkReadinessMetadata(ctx context.Context, checks []readinessMetadataCheck) error {
+	// 元数据检查按原顺序批量发送；先取得迁移共享锁，避免跨查询持有的锁与自动迁移冲突。
+	batch := &pgx.Batch{}
+	batch.Queue(`SELECT pg_advisory_xact_lock_shared(8372419)`)
+	for _, check := range checks {
 		batch.Queue(check.query).QueryRow(func(row pgx.Row) error {
 			var current bool
 			if err := row.Scan(&current); err != nil {

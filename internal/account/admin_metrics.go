@@ -444,7 +444,12 @@ SELECT id FROM incident`, service, title, description, n.Kind, n.Title, n.Target
 
 // ResolveAutoIncident resolves the probe's open incident for service and reports whether there was one.
 func (a *Service) ResolveAutoIncident(ctx context.Context, service string) (bool, error) {
-	tag, err := a.store.pool.Exec(ctx, `UPDATE admin_incidents SET state='resolved',resolved_at=now() WHERE service=$1 AND state='open' AND auto`, service)
+	// 先取得事件行锁，再读取解决时刻，避免 UPDATE 在等待锁前就求值而低估故障持续时间。
+	tag, err := a.store.pool.Exec(ctx, `WITH locked AS MATERIALIZED (
+ SELECT id FROM admin_incidents WHERE service=$1 AND state='open' AND auto FOR UPDATE
+)
+UPDATE admin_incidents i SET state='resolved',resolved_at=clock_timestamp()
+FROM locked WHERE i.id=locked.id`, service)
 	return tag.RowsAffected() > 0, err
 }
 
@@ -562,7 +567,7 @@ func actionResolveIncident(a *Service, ctx context.Context, tx pgx.Tx, v actionR
 	err = tx.QueryRow(ctx, `WITH locked AS MATERIALIZED (
  SELECT id,service,title,state FROM admin_incidents WHERE id=$1 FOR UPDATE
 ), updated AS (
- UPDATE admin_incidents i SET state='resolved',resolved_at=now()
+ UPDATE admin_incidents i SET state='resolved',resolved_at=clock_timestamp()
  FROM locked WHERE i.id=locked.id AND locked.state='open'
  RETURNING i.id
 )

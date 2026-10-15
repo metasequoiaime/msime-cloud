@@ -3,7 +3,7 @@
   "info": {
     "title": "水杉输入法后端 API",
     "version": "1",
-    "description": "水杉输入法共通后端。点击 Authorize 填写设备令牌（不含 Bearer 前缀）。功能是否启用请查询 capabilities。默认 JSON 请求最多 64 KiB、multipart 总体最多 16 MiB；小牛媒体上传单个文件最多 64 MiB，其他例外见具体接口。在线输入接口不保存输入和音频；用户同步接口按用户操作保存偏好及显式上传的数据。 用户接口详见用户体系标签；登录成功后也可使用用户 access_token 调用在线输入接口。"
+    "description": "水杉输入法共通后端。点击 Authorize 填写设备令牌（不含 Bearer 前缀）。功能是否启用请查询 capabilities。默认 JSON 请求最多 64 KiB、multipart 总体最多 16 MiB；小牛媒体上传单个文件最多 64 MiB，其他例外见具体接口。在线输入接口不持久保存输入和音频；小牛媒体上传仅在请求期间使用私有临时文件；用户同步接口按用户操作保存偏好及显式上传的数据。 用户接口详见用户体系标签；登录成功后也可使用用户 access_token 调用在线输入接口。"
   },
   "servers": [
     {
@@ -2545,7 +2545,7 @@
         "tags": [
           "小牛媒体翻译"
         ],
-        "description": "multipart/form-data 上传 file、from、to，支持领域、术语、记忆、处理模式和翻译引擎参数。单个文件最多 64 MiB，请求体最多 65 MiB，最多 32 个部件；字段名不得为空或重复，非文件字段非空、最多 256 字节且不得含 CR/LF。未列出的字段不会转发。服务端签名请求，客户端不提供供应商凭据。",
+        "description": "multipart/form-data 上传 file、from、to，支持领域、术语、记忆、处理模式和翻译引擎参数。单个文件最多 64 MiB，请求体最多 65 MiB，最多 32 个部件；字段名不得为空或重复，非文件字段非空、最多 256 字节且不得含 CR/LF。未列出的字段不会转发。服务端签名请求，客户端不提供供应商凭据。请求期间使用系统临时目录中的私有临时文件，以固定 Content-Length 流式发送；完成、拒绝、上游失败或取消后关闭并删除，不长期保存文件。",
         "requestBody": {
           "required": true,
           "content": {
@@ -2663,7 +2663,7 @@
             }
           },
           "503": {
-            "description": "niutrans_api_not_configured：该小牛接口未配置，或服务不可用",
+            "description": "niutrans_api_not_configured：该小牛接口未配置；upload_storage_unavailable：临时目录不可用或写入失败；或服务不可用。",
             "content": {
               "application/json": {
                 "schema": {
@@ -3068,7 +3068,7 @@
         "tags": [
           "小牛媒体翻译"
         ],
-        "description": "multipart/form-data 上传 file、from、to，支持领域、术语、记忆、处理模式和翻译引擎参数。单个文件最多 64 MiB，请求体最多 65 MiB，最多 32 个部件；字段名不得为空或重复，非文件字段非空、最多 256 字节且不得含 CR/LF。未列出的字段不会转发。服务端签名请求，客户端不提供供应商凭据。",
+        "description": "multipart/form-data 上传 file、from、to，支持领域、术语、记忆、处理模式和翻译引擎参数。单个文件最多 64 MiB，请求体最多 65 MiB，最多 32 个部件；字段名不得为空或重复，非文件字段非空、最多 256 字节且不得含 CR/LF。未列出的字段不会转发。服务端签名请求，客户端不提供供应商凭据。请求期间使用系统临时目录中的私有临时文件，以固定 Content-Length 流式发送；完成、拒绝、上游失败或取消后关闭并删除，不长期保存文件。",
         "requestBody": {
           "required": true,
           "content": {
@@ -3186,7 +3186,7 @@
             }
           },
           "503": {
-            "description": "niutrans_api_not_configured：该小牛接口未配置，或服务不可用",
+            "description": "niutrans_api_not_configured：该小牛接口未配置；upload_storage_unavailable：临时目录不可用或写入失败；或服务不可用。",
             "content": {
               "application/json": {
                 "schema": {
@@ -3502,7 +3502,7 @@
         "tags": [
           "小牛媒体翻译"
         ],
-        "description": "multipart/form-data 上传 file、from、to，支持领域、术语、记忆、处理模式和翻译引擎参数。单个文件最多 64 MiB，请求体最多 65 MiB，最多 32 个部件；字段名不得为空或重复，非文件字段非空、最多 256 字节且不得含 CR/LF。未列出的字段不会转发。服务端签名请求，客户端不提供供应商凭据。",
+        "description": "multipart/form-data 上传 file、from、to，支持领域、术语、记忆、处理模式和翻译引擎参数。单个文件最多 64 MiB，请求体最多 65 MiB，最多 32 个部件；字段名不得为空或重复，非文件字段非空、最多 256 字节且不得含 CR/LF。未列出的字段不会转发。服务端签名请求，客户端不提供供应商凭据。请求期间使用系统临时目录中的私有临时文件，以固定 Content-Length 流式发送；完成、拒绝、上游失败或取消后关闭并删除，不长期保存文件。",
         "requestBody": {
           "required": true,
           "content": {
@@ -3620,7 +3620,7 @@
             }
           },
           "503": {
-            "description": "niutrans_api_not_configured：该小牛接口未配置，或服务不可用",
+            "description": "niutrans_api_not_configured：该小牛接口未配置；upload_storage_unavailable：临时目录不可用或写入失败；或服务不可用。",
             "content": {
               "application/json": {
                 "schema": {

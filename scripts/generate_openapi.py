@@ -92,7 +92,8 @@ niutrans_json={'description':'成功转发小牛 JSON，最多 1 MiB；业务状
 niutrans_errors={code:{'description':description,'content':{'application/json':{'schema':{'$ref':'#/components/schemas/Error'}}}} for code,description in [('400','请求参数无效'),('401','需要有效设备令牌或用户 access_token'),('403','来源不被允许或账号已封禁'),('429','请求过于频繁或并发已满'),('502','上游不可用、响应不是有效 JSON 或超过响应上限'),('503','niutrans_api_not_configured：该小牛接口未配置，或服务不可用')]}
 for kind,title in [('documents','文档'),('images','图片'),('voice','语音')]:
     base='/v1/niutrans/'+kind
-    paths[base]={'post':{'summary':'创建小牛'+title+'翻译任务','tags':['小牛媒体翻译'],'description':'multipart/form-data 上传 file、from、to，支持领域、术语、记忆、处理模式和翻译引擎参数。单个文件最多 64 MiB，请求体最多 65 MiB，最多 32 个部件；字段名不得为空或重复，非文件字段非空、最多 256 字节且不得含 CR/LF。未列出的字段不会转发。服务端签名请求，客户端不提供供应商凭据。','requestBody':{'required':True,'content':{'multipart/form-data':{'schema':niutrans_upload}}},'responses':{'200':niutrans_json,**niutrans_errors,'413':{'description':'file_too_large_or_empty 或 too_many_parts：文件为空、超过 64 MiB 或部件超过 32 个'},'415':{'description':'multipart_required：需要 multipart/form-data'}}}}
+    paths[base]={'post':{'summary':'创建小牛'+title+'翻译任务','tags':['小牛媒体翻译'],'description':'multipart/form-data 上传 file、from、to，支持领域、术语、记忆、处理模式和翻译引擎参数。单个文件最多 64 MiB，请求体最多 65 MiB，最多 32 个部件；字段名不得为空或重复，非文件字段非空、最多 256 字节且不得含 CR/LF。未列出的字段不会转发。服务端签名请求，客户端不提供供应商凭据。请求期间使用系统临时目录中的私有临时文件，以固定 Content-Length 流式发送；完成、拒绝、上游失败或取消后关闭并删除，不长期保存文件。','requestBody':{'required':True,'content':{'multipart/form-data':{'schema':niutrans_upload}}},'responses':{'200':niutrans_json,**niutrans_errors,'413':{'description':'file_too_large_or_empty 或 too_many_parts：文件为空、超过 64 MiB 或部件超过 32 个'},'415':{'description':'multipart_required：需要 multipart/form-data'}}}}
+    paths[base]['post']['responses']['503']={**niutrans_errors['503'],'description':'niutrans_api_not_configured：该小牛接口未配置；upload_storage_unavailable：临时目录不可用或写入失败；或服务不可用。'}
     for suffix,method,action in [('', 'get','查询状态'),('/interrupt','put','终止任务'),('/download','get','下载结果')]:
         download=suffix=='/download'
         description='使用小牛返回的 file_no 操作'+title+'翻译任务；不需要请求体。'
@@ -138,7 +139,7 @@ for path,method,title,body,response,status,description in shared_operations:
     if method=='get' and path.endswith('/clipboard'): op['parameters']=[{'name':'q','in':'query','schema':string(),'description':'已忽略，保留只为兼容旧客户端。'}]
     if method=='post' and path.endswith('/clipboard'): responses['409']=dict(responses['409'],description='clipboard_key_conflict：key_id 不是当前密钥')
     paths.setdefault(path,{})[method]=op
-result['info']['description']=result['info']['description'].replace('服务不保存输入和音频。','在线输入接口不保存输入和音频；用户同步接口按用户操作保存偏好及显式上传的数据。')
+result['info']['description']=result['info']['description'].replace('服务不保存输入和音频。','在线输入接口不持久保存输入和音频；小牛媒体上传仅在请求期间使用私有临时文件；用户同步接口按用户操作保存偏好及显式上传的数据。')
 # 无状态 Engine 查询；算法及发布词库由原生公共库提供。
 candidate=obj({'code':string(),'canonical_pinyin':string(),'word':string(),'weight':{'type':'integer','format':'int64'},'fixed_position':{'type':'integer'}})
 candidate_response=obj({'candidates':{'type':'array','items':candidate},'raw_segmentation':string(),'normalized_segmentation':string()})

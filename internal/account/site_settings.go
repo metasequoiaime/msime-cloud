@@ -128,19 +128,22 @@ func (a *Service) adminSiteSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
-	var s SiteSettings
-	var at time.Time
-	if err = tx.QueryRow(r.Context(), `INSERT INTO site_settings(key,value,updated_by) VALUES($1,$2,$3)
- ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=now(),updated_by=excluded.updated_by
- RETURNING value,updated_at,updated_by`, lanzouURLKey, value, actor).Scan(&s.LanzouURL, &at, &s.UpdatedBy); err != nil {
-		a.error(w, err)
-		return
-	}
 	action, target := "set_lanzou_url", value
 	if value == "" {
 		action, target = "clear_lanzou_url", lanzouURLKey
 	}
-	if _, err = tx.Exec(r.Context(), `INSERT INTO admin_audit(action,target,actor) VALUES($1,$2,$3)`, action, target, actor); err != nil {
+	var s SiteSettings
+	var at time.Time
+	// 设置写入和审计记录共用一条数据修改 CTE，确保同一事务内少一次往返。
+	if err = tx.QueryRow(r.Context(), `WITH written AS (
+ INSERT INTO site_settings(key,value,updated_by) VALUES($1,$2,$3)
+ ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=now(),updated_by=excluded.updated_by
+	 RETURNING value,updated_at,updated_by
+), audited AS (
+ INSERT INTO admin_audit(action,target,actor) SELECT $4,$5,$3 FROM written
+ RETURNING 1
+)
+SELECT w.value,w.updated_at,w.updated_by FROM written w CROSS JOIN audited`, lanzouURLKey, value, actor, action, target).Scan(&s.LanzouURL, &at, &s.UpdatedBy); err != nil {
 		a.error(w, err)
 		return
 	}

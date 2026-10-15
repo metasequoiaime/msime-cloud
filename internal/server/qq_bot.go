@@ -1330,7 +1330,15 @@ func qqWithoutLinks(text string) string {
 
 // qqFeedbackText 去掉消息里的 @ 标记、表情等尖括号标签和首尾空白。
 func qqFeedbackText(content string) string {
+	if !qqFeedbackMarkupCandidate(content) {
+		return strings.TrimSpace(content)
+	}
 	return strings.TrimSpace(qqMarkupPattern.ReplaceAllString(content, ""))
+}
+
+// qqFeedbackMarkupCandidate 判断消息是否可能含有尖括号标签；普通消息跳过标签正则扫描。
+func qqFeedbackMarkupCandidate(content string) bool {
+	return strings.ContainsRune(content, '<')
 }
 
 // qqReport 是模型整理出的一条反馈。字段与 msime 仓库 bug_report.yml、feature_request.yml 两个模板的栏目对应。

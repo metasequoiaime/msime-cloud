@@ -836,30 +836,45 @@ func (s *Server) similarIssues(ctx context.Context, gh *githubapp.Client, row is
 	if err != nil {
 		return out
 	}
+	return similarIssueRows(snap.items, row)
+}
+
+// similarIssueRows 从已读取的问题列表中筛选至多三个相似问题。
+func similarIssueRows(items []issueRow, row issueRow) []issueSimilar {
+	out := []issueSimilar{}
 	target := titleBigrams(row.Title)
 	type scored struct {
 		row   issueRow
 		score float64
 	}
-	var candidates []scored
-	for _, other := range snap.items {
+	candidates := make([]scored, 0, 3)
+	for _, other := range items {
 		if other.Repo == row.Repo && other.Number == row.Number {
 			continue
 		}
-		if score := bigramSimilarity(target, titleBigrams(other.Title)); score >= 0.3 {
-			candidates = append(candidates, scored{other, score})
+		score := bigramSimilarity(target, titleBigrams(other.Title))
+		if score < 0.3 {
+			continue
 		}
+		position := 0
+		for position < len(candidates) {
+			previous := candidates[position]
+			if score > previous.score || score == previous.score && other.CreatedAt.After(previous.row.CreatedAt) {
+				break
+			}
+			position++
+		}
+		if position == cap(candidates) {
+			continue
+		}
+		if len(candidates) < cap(candidates) {
+			candidates = append(candidates, scored{})
+		}
+		// 相同分数和时间的候选排在已有项之后，保留原稳定排序的次序。
+		copy(candidates[position+1:], candidates[position:len(candidates)-1])
+		candidates[position] = scored{other, score}
 	}
-	slices.SortStableFunc(candidates, func(a, b scored) int {
-		switch {
-		case a.score > b.score:
-			return -1
-		case a.score < b.score:
-			return 1
-		}
-		return b.row.CreatedAt.Compare(a.row.CreatedAt)
-	})
-	for _, c := range candidates[:min(3, len(candidates))] {
+	for _, c := range candidates {
 		out = append(out, issueSimilar{c.row.Repo, c.row.Number, c.row.Title, c.row.State, c.row.URL})
 	}
 	return out

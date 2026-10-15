@@ -82,12 +82,20 @@ func (a *Service) ClaimQQDraft(ctx context.Context, id int64) (bool, error) {
 
 // ClaimQQDraftLease 认领草稿并返回本次认领的时间戳。完成或放回时必须带回这个时间戳，避免旧副本在认领超时后覆盖新副本的结果。
 func (a *Service) ClaimQQDraftLease(ctx context.Context, id int64) (time.Time, bool, error) {
-	var claimedAt time.Time
-	err := a.store.pool.QueryRow(ctx, `UPDATE qq_drafts SET filed_at=clock_timestamp() WHERE id=$1 AND `+qqDraftUnclaimed+` AND created_at>now()-$2::interval RETURNING filed_at`, id, QQDraftWindow.String()).Scan(&claimedAt)
+	draft, ok, err := a.ClaimQQDraftSnapshot(ctx, id)
+	return draft.FiledAt, ok, err
+}
+
+// ClaimQQDraftSnapshot 在认领的同一条语句中返回当前内容，避免提交读取草稿之后、认领之前已被补充的旧报告。
+func (a *Service) ClaimQQDraftSnapshot(ctx context.Context, id int64) (QQDraft, bool, error) {
+	var draft QQDraft
+	err := a.store.pool.QueryRow(ctx, `UPDATE qq_drafts SET filed_at=clock_timestamp() WHERE id=$1 AND `+qqDraftUnclaimed+` AND created_at>now()-$2::interval
+RETURNING id,subject,original,report,created_at,updated_at,filed_at,issue_ref`, id, QQDraftWindow.String()).Scan(&draft.ID, &draft.Subject, &draft.Original, &draft.Report, &draft.CreatedAt, &draft.UpdatedAt, &draft.FiledAt, &draft.IssueRef)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return time.Time{}, false, nil
+		return QQDraft{}, false, nil
 	}
-	return claimedAt, err == nil, err
+	draft.Filed = err == nil
+	return draft, err == nil, err
 }
 
 // ReleaseQQDraft 在提交失败时放回认领，之后可以再提交。

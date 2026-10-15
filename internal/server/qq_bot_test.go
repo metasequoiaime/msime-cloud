@@ -4461,17 +4461,22 @@ func (m *memoryDrafts) ClaimQQDraft(_ context.Context, id int64) (bool, error) {
 }
 
 func (m *memoryDrafts) ClaimQQDraftLease(_ context.Context, id int64) (time.Time, bool, error) {
+	draft, ok, err := m.ClaimQQDraftSnapshot(context.Background(), id)
+	return draft.FiledAt, ok, err
+}
+
+func (m *memoryDrafts) ClaimQQDraftSnapshot(_ context.Context, id int64) (account.QQDraft, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.claimErr != nil {
-		return time.Time{}, false, m.claimErr
+		return account.QQDraft{}, false, m.claimErr
 	}
 	if !m.unclaimed(id) {
-		return time.Time{}, false, nil
+		return account.QQDraft{}, false, nil
 	}
 	claimedAt := time.Now()
 	m.drafts[id-1].Filed, m.drafts[id-1].FiledAt = true, claimedAt
-	return claimedAt, true, nil
+	return m.drafts[id-1], true, nil
 }
 
 // ReleaseQQDraft 和 SetQQDraftIssue 像数据库那样在 ctx 失效时失败，测得出调用方是不是用了已经取消的 ctx。

@@ -35,7 +35,7 @@ type qqDraftStore interface {
 	CreateQQDraft(ctx context.Context, subject, original, report string) (int64, error)
 	QQDraft(ctx context.Context, id int64) (account.QQDraft, error)
 	UpdateQQDraft(ctx context.Context, id int64, original, report string) (bool, error)
-	ClaimQQDraftLease(ctx context.Context, id int64) (time.Time, bool, error)
+	ClaimQQDraftSnapshot(ctx context.Context, id int64) (account.QQDraft, bool, error)
 	ReleaseQQDraftLease(ctx context.Context, id int64, claimedAt time.Time) (bool, error)
 	SetQQDraftIssueLease(ctx context.Context, id int64, claimedAt time.Time, ref string) (bool, error)
 	DismissQQDraft(ctx context.Context, id int64) (bool, error)
@@ -489,36 +489,16 @@ func qqQuestionEnd(question string) string {
 // qqFileDraft 提交一份草稿，返回结果的名字。extra 是管理员顺带补的内容。
 func (s *Server) qqFileDraft(ctx context.Context, draft account.QQDraft, extra string, reply func(string)) string {
 	code := qqDraftCode(draft.ID)
-	var report qqReport
-	if json.Unmarshal([]byte(draft.Report), &report) != nil {
-		reply(qqReplyUnavailable)
-		return "failed"
-	}
-	original := draft.Original
 	text, notes := qqParseNotes(extra)
 	if text != "" {
 		// 管理员顺带补了内容（例如版本号）时先并进草稿再提交。
-		updated, ok := s.qqSupplementDraft(ctx, draft, text, true, reply)
+		_, ok := s.qqSupplementDraft(ctx, draft, text, true, reply)
 		if !ok {
 			return "failed"
 		}
-		report, original = updated, qqTruncate(draft.Original+"\n补充："+text, qqDraftOriginalRunes)
 	}
-	// 管理员写了「版本 未知」时不再追问版本，正文写明版本未知（qqMarkVersionUnknown）；只看管理员这次补的内容，群友补充里的「版本 未知」不算。
-	unknown := qqVersionUnknown.MatchString(text)
-	if unknown {
-		report = qqMarkVersionUnknown(report)
-	}
-	repo, label, question := s.qqTarget(ctx, report, original, unknown)
-	if question != "" {
-		message := "草稿 " + code + " 还差：" + qqQuestionEnd(question) + "可以 @我 发「提交 " + code + " 版本 0.9.5」把缺的信息带上一起提交。"
-		if question == qqWindowsVersionQuestion {
-			message += "不知道版本就写「版本 未知」。"
-		}
-		reply(message)
-		return "needs_info"
-	}
-	claimedAt, claimed, err := s.qqDrafts.ClaimQQDraftLease(ctx, draft.ID)
+	// 认领时一并取得最新内容；管理员与发起人的消息锁不同，前面读到的草稿可能已经被补充。
+	draft, claimed, err := s.qqDrafts.ClaimQQDraftSnapshot(ctx, draft.ID)
 	switch {
 	case err != nil:
 		slog.Warn("qq bot: draft not claimed", "reason", err.Error())
@@ -528,18 +508,46 @@ func (s *Server) qqFileDraft(ctx context.Context, draft account.QQDraft, extra s
 		reply("草稿 " + code + " 已经在提交或提交过了。")
 		return "duplicate"
 	}
+	claimedAt := draft.FiledAt
+	release := true
+	defer func() {
+		if !release {
+			return
+		}
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), qqDraftStoreTimeout)
+		defer cancel()
+		if _, err := s.qqDrafts.ReleaseQQDraftLease(rctx, draft.ID, claimedAt); err != nil {
+			slog.Warn("qq bot: draft not released", "reason", err.Error())
+		}
+	}()
+	var report qqReport
+	if json.Unmarshal([]byte(draft.Report), &report) != nil {
+		reply(qqReplyUnavailable)
+		return "failed"
+	}
+	// 管理员写了「版本 未知」时不再追问版本，正文写明版本未知（qqMarkVersionUnknown）；只看管理员这次补的内容，群友补充里的「版本 未知」不算。
+	unknown := qqVersionUnknown.MatchString(text)
+	if unknown {
+		report = qqMarkVersionUnknown(report)
+	}
+	repo, label, question := s.qqTarget(ctx, report, draft.Original, unknown)
+	if question != "" {
+		message := "草稿 " + code + " 还差：" + qqQuestionEnd(question) + "可以 @我 发「提交 " + code + " 版本 0.9.5」把缺的信息带上一起提交。"
+		if question == qqWindowsVersionQuestion {
+			message += "不知道版本就写「版本 未知」。"
+		}
+		reply(message)
+		return "needs_info"
+	}
 	reply("收到，正在提交草稿 " + code + "。")
 	number, duplicate, err := s.fileQQReport(ctx, repo, label, report, nil, 0, notes)
 	if err != nil {
 		slog.Warn("qq bot: draft not filed", "repo", repo, "reason", err.Error())
-		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), qqDraftStoreTimeout)
-		if _, err := s.qqDrafts.ReleaseQQDraftLease(rctx, draft.ID, claimedAt); err != nil {
-			slog.Warn("qq bot: draft not released", "reason", err.Error())
-		}
-		cancel()
 		reply(qqReplyUnavailable)
 		return "failed"
 	}
+	// GitHub 已接收后保留认领；结果落库失败时仍按原来的超时恢复流程处理。
+	release = false
 	_, short, _ := strings.Cut(repo, "/")
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), qqDraftStoreTimeout)
 	if recorded, err := s.qqDrafts.SetQQDraftIssueLease(rctx, draft.ID, claimedAt, short+" #"+strconv.FormatInt(number, 10)); err != nil {

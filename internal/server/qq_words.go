@@ -60,28 +60,37 @@ func qqSplitPinyin(pinyin string, n int) string {
 	if strings.Contains(pinyin, "'") || n <= 1 {
 		return pinyin
 	}
-	var split func(rest string, left int) []string
-	split = func(rest string, left int) []string {
+	if n > len(pinyin) || (len(pinyin)-1)/6 >= n {
+		return pinyin
+	}
+	// 同一后缀和剩余音节数只搜索一次；路径复用，避免逐层复制成功结果。
+	failed := make(map[[2]int]bool)
+	syllables := make([]string, n)
+	var split func(rest string, left int) bool
+	split = func(rest string, left int) bool {
 		if rest == "" {
-			if left == 0 {
-				return []string{}
-			}
-			return nil
+			return left == 0
 		}
-		if left == 0 {
-			return nil
+		if left == 0 || len(rest) < left || (len(rest)-1)/6 >= left {
+			return false
+		}
+		state := [2]int{len(rest), left}
+		if failed[state] {
+			return false
 		}
 		for size := min(6, len(rest)); size >= 1; size-- {
 			if !pinyinSyllables[rest[:size]] {
 				continue
 			}
-			if tail := split(rest[size:], left-1); tail != nil {
-				return append([]string{rest[:size]}, tail...)
+			syllables[n-left] = rest[:size]
+			if split(rest[size:], left-1) {
+				return true
 			}
 		}
-		return nil
+		failed[state] = true
+		return false
 	}
-	if syllables := split(pinyin, n); syllables != nil {
+	if split(pinyin, n) {
 		return strings.Join(syllables, "'")
 	}
 	return pinyin

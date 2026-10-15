@@ -158,30 +158,32 @@ func (a *Service) FinishSkinJob(ctx context.Context, id, state, reason string, a
 		return false, err
 	}
 	defer tx.Rollback(ctx)
-	var cancelled bool
-	err = tx.QueryRow(ctx, `SELECT cancelled FROM skin_jobs WHERE id=$1 FOR UPDATE`, id).Scan(&cancelled)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return false, tx.Commit(ctx)
-	}
+	// 先锁定任务行，再在独立的物化 CTE 中计算锁后的有效期和心跳状态；一次语句完成读取、结果更新和取消任务删除。
+	var recorded bool
+	err = tx.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+ SELECT id,cancelled,state,heartbeat_at,expires_at
+ FROM skin_jobs WHERE id=$1 FOR UPDATE
+), classified AS MATERIALIZED (
+ SELECT id,cancelled,expires_at>clock_timestamp() AS valid,
+  (NOT cancelled AND state='running' AND heartbeat_at>=clock_timestamp()-make_interval(secs=>`+strconv.Itoa(int(SkinJobStaleAfter/time.Second))+`)) AS live
+ FROM locked
+), updated AS (
+ UPDATE skin_jobs s
+ SET state=$2,reason=$3,artwork=$4,heartbeat_at=clock_timestamp()
+ FROM classified c
+ WHERE s.id=c.id AND c.valid AND c.live
+ RETURNING 1
+), removed AS (
+ DELETE FROM skin_jobs s
+ USING classified c
+ WHERE s.id=c.id AND c.cancelled
+ RETURNING 1
+)
+SELECT EXISTS(SELECT 1 FROM updated)`, id, state, reason, artwork).Scan(&recorded)
 	if err != nil {
 		return false, err
 	}
-	var live bool
-	if err = tx.QueryRow(ctx, `SELECT NOT cancelled AND expires_at>clock_timestamp() AND (`+skinJobLive+`) FROM skin_jobs WHERE id=$1`, id).Scan(&live); err != nil {
-		return false, err
-	}
-	if live {
-		if _, err = tx.Exec(ctx, `UPDATE skin_jobs SET state=$2,reason=$3,artwork=$4,heartbeat_at=clock_timestamp() WHERE id=$1`, id, state, reason, artwork); err != nil {
-			return false, err
-		}
-		return true, tx.Commit(ctx)
-	}
-	if cancelled {
-		if _, err = tx.Exec(ctx, `DELETE FROM skin_jobs WHERE id=$1`, id); err != nil {
-			return false, err
-		}
-	}
-	return false, tx.Commit(ctx)
+	return recorded, tx.Commit(ctx)
 }
 
 // DropSkinJob deletes a job that was recorded but never started, for a replica that began shutting down between the insert and starting its worker.

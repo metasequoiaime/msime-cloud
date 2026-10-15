@@ -114,25 +114,31 @@ func (s *Server) qqGapsIssue(ctx context.Context, token string) (int64, error) {
 		defer release()
 	}
 	client, repo := s.adminGitHub, s.qq.config.GapsRepo
-	r, err := client.Do(ctx, token, "GET", "/repos/"+repo+"/issues?state=open&per_page=100", nil)
-	if err != nil || !r.OK() {
-		return 0, githubFailure("gaps list", r, err)
-	}
-	var issues []qqIssue
-	if r.Decode(&issues) != nil {
-		return 0, errors.New("gaps list: invalid response")
-	}
 	unknown := false
-	for _, issue := range issues {
-		if issue.Title != qqGapsTitle || len(issue.PullRequest) != 0 && string(issue.PullRequest) != "null" {
-			continue
+	for page := 1; ; page++ {
+		r, err := client.Do(ctx, token, "GET", "/repos/"+repo+"/issues?state=open&per_page=100&page="+strconv.Itoa(page), nil)
+		if err != nil || !r.OK() {
+			return 0, githubFailure("gaps list", r, err)
 		}
-		owned, known := s.qqWrittenByApp(ctx, issue.qqGitHubAuthor)
-		if owned {
-			number = issue.Number
+		var issues []qqIssue
+		if r.Decode(&issues) != nil {
+			return 0, errors.New("gaps list: invalid response")
+		}
+		for _, issue := range issues {
+			if issue.Title != qqGapsTitle || len(issue.PullRequest) != 0 && string(issue.PullRequest) != "null" {
+				continue
+			}
+			owned, known := s.qqWrittenByApp(ctx, issue.qqGitHubAuthor)
+			if owned {
+				number = issue.Number
+				break
+			}
+			unknown = unknown || !known
+		}
+		// 一页写满时继续查找，避免长期保留的汇总被后来的 Issue 挤出第一页后重复新建。
+		if number > 0 || len(issues) < 100 {
 			break
 		}
-		unknown = unknown || !known
 	}
 	if number == 0 && unknown {
 		return 0, errors.New("gaps list: app login unavailable")

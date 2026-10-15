@@ -115,8 +115,8 @@ var (
 	qqOpenIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 	// QQ 的消息 id 形如 ROBOT1.0_xxx!!，只出现在请求体和限流键的摘要里，这里只限制成单行可见 ASCII。
 	qqMessageIDPattern = regexp.MustCompile(`^[!-~]{1,256}$`)
-	// qqMarkupPattern 匹配消息内容里的 @ 标记和表情等尖括号标签。
-	qqMarkupPattern = regexp.MustCompile(`<[^<>\n]{1,200}>`)
+	// qqMarkupPattern 匹配 QQ 平台已知的 @ 标记和表情标签，避免把用户输入的数学或代码尖括号当成标签删除。
+	qqMarkupPattern = regexp.MustCompile(`<(?:(?:@|#|emoji:)[^<>\s]{1,200}|qqbot-at-(?:user|everyone)[^<>\n]{0,180}|faceType=[^<>\n]{0,191})>`)
 	// qqKnowledgeDirPattern 是知识库目录允许的形状：以 / 分隔的几段字母、数字、点、下划线和连字符。
 	qqKnowledgeDirPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$`)
 )

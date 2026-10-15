@@ -235,6 +235,9 @@ var (
 
 // qqSnippet 是目录里段落标题后面的摘要：有加粗词时列出加粗词；没有加粗词、但有两个以上「- 标签：说明」这样的列表项时列出标签（见 qqListLabels）；都没有时取正文开头，最多 qqSnippetRunes 字。
 func qqSnippet(text string) string {
+	if !qqSnippetNeedsStructuredScan(text) {
+		return qqTruncate(strings.Join(strings.Fields(text), " "), qqSnippetRunes)
+	}
 	var snippet string
 	if bold := qqBoldPattern.FindAllStringSubmatch(text, -1); len(bold) > 0 {
 		words := make([]string, 0, len(bold))
@@ -250,6 +253,11 @@ func qqSnippet(text string) string {
 		snippet = strings.Join(strings.Fields(qqMarkdownNoise.ReplaceAllString(text, " ")), " ")
 	}
 	return qqTruncate(snippet, qqSnippetRunes)
+}
+
+// qqSnippetNeedsStructuredScan 判断摘要是否可能含有加粗、列表标签或 Markdown 噪声；普通正文跳过三次结构化扫描。
+func qqSnippetNeedsStructuredScan(text string) bool {
+	return strings.ContainsAny(text, "*-_:：[]`>#|")
 }
 
 // qqListLabelRunes 是列表项里标签的冒号最晚出现的位置（按字数，从列表符号后面算起）：再往后的冒号多半是句子里的，不是标签。

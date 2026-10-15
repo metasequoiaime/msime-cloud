@@ -8,6 +8,22 @@ import (
 	"unsafe"
 )
 
+func TestQQSnippetStructuredScanCandidate(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  bool
+	}{
+		{"普通正文，没有 Markdown 标记", false},
+		{"**加粗**", true},
+		{"- 标签：说明", true},
+		{"[链接](https://example.test)", true},
+	} {
+		if got := qqSnippetNeedsStructuredScan(tc.input); got != tc.want {
+			t.Errorf("qqSnippetNeedsStructuredScan(%q) = %v，预期 %v", tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestQQSentencePrefixKeepsPreviousSemantics(t *testing.T) {
 	previous := func(text string, limit int) string {
 		runes := []rune(text)

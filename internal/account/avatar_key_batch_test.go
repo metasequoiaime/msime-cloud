@@ -48,7 +48,7 @@ func TestSetAvatarKeyReturnsPreviousKeyInOneWrite(t *testing.T) {
 	trace.mu.Lock()
 	queries := trace.queries
 	trace.mu.Unlock()
-	if queries != 4 {
-		t.Fatalf("头像替换应使用事务、用户锁和一次合并写入共 4 条语句，实际为 %d", queries)
+	if queries != 1 {
+		t.Fatalf("头像替换应在一次查询中锁定用户、复查封禁并写入头像键，实际为 %d", queries)
 	}
 }

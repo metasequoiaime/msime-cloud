@@ -95,7 +95,7 @@ func TestAvatarUploadRejectsBanBeforeRegistration(t *testing.T) {
 }
 
 func TestProfileChangeWaitsForConcurrentBan(t *testing.T) {
-	for _, operation := range []string{"replace_avatar", "delete_avatar", "update_name", "reset_name"} {
+	for _, operation := range []string{"replace_avatar", "delete_avatar", "avatar_with_me", "update_name", "reset_name"} {
 		t.Run(operation, func(t *testing.T) {
 			db := testStore(t)
 			ctx := t.Context()
@@ -124,6 +124,8 @@ func TestProfileChangeWaitsForConcurrentBan(t *testing.T) {
 					_, err = db.SetAvatarKey(ctx, user.User.ID, "avatars/replacement.jpg")
 				case "delete_avatar":
 					_, err = db.SetAvatarKey(ctx, user.User.ID, "")
+				case "avatar_with_me":
+					_, _, _, err = db.SetAvatarKeyAndMe(ctx, user.User.ID, "avatars/replacement.jpg")
 				case "update_name":
 					err = db.UpdateName(ctx, user.User.ID, "迟到昵称")
 				case "reset_name":

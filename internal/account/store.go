@@ -706,35 +706,39 @@ func profileDisplayName(name string) string {
 	return name
 }
 
+// setAvatarKeyQuery 先锁定用户行，再按锁后的封禁状态替换头像，旧键也取自锁定后的行。
+const setAvatarKeyQuery = `WITH locked AS MATERIALIZED (
+ SELECT id,banned_at IS NOT NULL AS banned,avatar_key FROM auth_users WHERE id=$1 FOR UPDATE
+), updated AS (
+ UPDATE auth_users u SET avatar_key=$2 FROM locked l WHERE u.id=l.id AND NOT l.banned
+)
+SELECT banned,avatar_key FROM locked`
+
+func scanAvatarKeyChange(row pgx.Row, previous *string) error {
+	var banned bool
+	if err := row.Scan(&banned, previous); errors.Is(err, pgx.ErrNoRows) {
+		return ErrInvalid
+	} else if err != nil {
+		return err
+	}
+	if banned {
+		return ErrBanned
+	}
+	return nil
+}
+
 // SetAvatarKey 在用户行锁内重新检查封禁，再替换或清空头像登记，返回旧键供调用方删除对象；封禁或失败时保持原登记。
 func (s *Store) SetAvatarKey(ctx context.Context, uid, key string) (string, error) {
-	tx, e := s.userDataTransaction(ctx, uid)
-	if errors.Is(e, pgx.ErrNoRows) {
-		return "", ErrInvalid
-	}
-	if e != nil {
-		return "", e
-	}
-	defer tx.Rollback(ctx)
 	var previous string
-	if e = tx.QueryRow(ctx, `WITH old AS MATERIALIZED (
- SELECT avatar_key FROM auth_users WHERE id=$1
-), updated AS (
- UPDATE auth_users SET avatar_key=$2 WHERE id=$1
- RETURNING 1
-)
-SELECT avatar_key FROM old`, uid, key).Scan(&previous); e != nil {
-		return "", e
+	if err := scanAvatarKeyChange(s.pool.QueryRow(ctx, setAvatarKeyQuery, uid, key), &previous); err != nil {
+		return "", err
 	}
-	return previous, tx.Commit(ctx)
+	return previous, nil
 }
 
 // SetAvatarKeyAndMe 在用户行锁内替换头像登记，并在同一个批次读取头像上传响应所需的资料，返回旧键供调用方删除对象。
 func (s *Store) SetAvatarKeyAndMe(ctx context.Context, uid, key string) (string, User, []Identity, error) {
-	tx, e := s.userDataTransaction(ctx, uid)
-	if errors.Is(e, pgx.ErrNoRows) {
-		return "", User{}, nil, ErrInvalid
-	}
+	tx, e := s.pool.Begin(ctx)
 	if e != nil {
 		return "", User{}, nil, e
 	}
@@ -743,14 +747,8 @@ func (s *Store) SetAvatarKeyAndMe(ctx context.Context, uid, key string) (string,
 	var u User
 	ids := []Identity{}
 	batch := &pgx.Batch{}
-	batch.Queue(`WITH old AS MATERIALIZED (
- SELECT avatar_key FROM auth_users WHERE id=$1
-), updated AS (
- UPDATE auth_users SET avatar_key=$2 WHERE id=$1
- RETURNING 1
-)
-SELECT avatar_key FROM old`, uid, key).QueryRow(func(row pgx.Row) error {
-		return row.Scan(&previous)
+	batch.Queue(setAvatarKeyQuery, uid, key).QueryRow(func(row pgx.Row) error {
+		return scanAvatarKeyChange(row, &previous)
 	})
 	batch.Queue(userQuery, uid).QueryRow(func(row pgx.Row) error {
 		return scanUser(row, &u)
@@ -793,18 +791,23 @@ func (s *Store) UpdateName(ctx context.Context, uid, name string) error {
 	if strings.TrimSpace(name) == "" {
 		name = defaultUserName(uid)
 	}
-	tx, e := s.userDataTransaction(ctx, uid)
-	if errors.Is(e, pgx.ErrNoRows) {
+	var banned bool
+	err := s.pool.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+ SELECT id,banned_at IS NOT NULL AS banned FROM auth_users WHERE id=$1 FOR UPDATE
+), updated AS (
+ UPDATE auth_users u SET display_name=$2 FROM locked l WHERE u.id=l.id AND NOT l.banned
+)
+SELECT banned FROM locked`, uid, name).Scan(&banned)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrInvalid
 	}
-	if e != nil {
-		return e
+	if err != nil {
+		return err
 	}
-	defer tx.Rollback(ctx)
-	if _, e = tx.Exec(ctx, "UPDATE auth_users SET display_name=$1 WHERE id=$2", name, uid); e != nil {
-		return e
+	if banned {
+		return ErrBanned
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 func (s *Store) DeleteUser(ctx context.Context, uid string) error {
 	_, e := s.pool.Exec(ctx, "DELETE FROM auth_users WHERE id=$1", uid)
@@ -813,23 +816,24 @@ func (s *Store) DeleteUser(ctx context.Context, uid string) error {
 
 // DeleteUserWithAvatarKey 在用户行锁内复查封禁后原子删除账号并返回其头像对象键，避免迟到注销破坏封禁恢复语义，也避免注销与并发上传之间漏删新头像。
 func (s *Store) DeleteUserWithAvatarKey(ctx context.Context, uid string) (string, error) {
-	tx, err := s.userDataTransaction(ctx, uid)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	defer tx.Rollback(ctx)
 	var key string
-	err = tx.QueryRow(ctx, "DELETE FROM auth_users WHERE id=$1 RETURNING avatar_key", uid).Scan(&key)
+	var banned bool
+	err := s.pool.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+ SELECT id,banned_at IS NOT NULL AS banned FROM auth_users WHERE id=$1 FOR UPDATE
+), removed AS (
+ DELETE FROM auth_users u USING locked l WHERE u.id=l.id AND NOT l.banned RETURNING u.avatar_key
+)
+SELECT banned,COALESCE((SELECT avatar_key FROM removed),'') FROM locked`, uid).Scan(&banned, &key)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", nil
 	}
 	if err != nil {
 		return "", err
 	}
-	return key, tx.Commit(ctx)
+	if banned {
+		return "", ErrBanned
+	}
+	return key, nil
 }
 func (s *Store) Prune(ctx context.Context) {
 	batch := &pgx.Batch{}

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -58,5 +59,53 @@ func BenchmarkQQStripLinks(b *testing.B) {
 				_ = qqStripLinks(tc.input)
 			}
 		})
+	}
+}
+
+func TestQQStripLinksSpaceRunAllocationBudget(t *testing.T) {
+	input := strings.Repeat("普通  ", 8192)
+	want := strings.TrimSpace(strings.Repeat("普通 ", 8192))
+	var got string
+	allocations := testing.AllocsPerRun(20, func() {
+		got = qqStripLinks(input)
+	})
+	if got != want {
+		t.Fatal("连续空格合并结果不正确")
+	}
+	// 只允许构建一个输出缓冲，排除正则替换的反复扩容和中间副本。
+	if allocations > 1 {
+		t.Fatalf("连续空格合并分配 %.1f 次，预期最多 1 次", allocations)
+	}
+}
+
+func TestQQStripLinksSpaceRunsMatchPreviousPattern(t *testing.T) {
+	previous := regexp.MustCompile(`[ \t]{2,}`)
+	units := []string{"", " ", "  ", "\t", "\t\t", " \t ", "\n", "\r", "\v", "\f", "\u3000", "\u0085", "甲", "\xff", "https://example.test", "7://"}
+	for _, first := range units {
+		for _, middle := range units {
+			for _, last := range units {
+				input := first + middle + last
+				want := strings.TrimSpace(previous.ReplaceAllString(qqLinkPattern.ReplaceAllString(input, ""), " "))
+				if got := qqStripLinks(input); got != want {
+					t.Fatalf("连续空白处理不兼容：输入=%q，结果=%q，预期=%q", input, got, want)
+				}
+			}
+		}
+	}
+}
+
+func TestQQStripLinksSpaceRunKeepsSmallOutputBuffer(t *testing.T) {
+	input := "甲" + strings.Repeat(" \t", 1<<18) + "乙"
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	got := qqStripLinks(input)
+	runtime.ReadMemStats(&after)
+	if got != "甲 乙" {
+		t.Fatalf("长空白段处理结果不正确：%q", got)
+	}
+	// 结果很短时，不应为原输入长度分配并保留缓冲。
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 64<<10 {
+		t.Fatalf("长空白段处理分配 %d 字节，超过 64 KiB 预算", allocated)
 	}
 }

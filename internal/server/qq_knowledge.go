@@ -456,8 +456,42 @@ type qqAnswer struct {
 // qqLinkPattern 匹配链接：协议名加上之后连续的 ASCII 可见字符。曾经用 \S*://\S*，会把紧挨着链接的中文（中文句子里没有空格）连同整句一起删掉。
 var qqLinkPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[!-~]*`)
 
-// qqSpaceRuns 匹配删掉链接后留下的连续空格。
-var qqSpaceRuns = regexp.MustCompile(`[ \t]{2,}`)
+// qqCollapseSpaceRuns 将连续的 ASCII 空格或制表符合并为一个空格，单个制表符保持原样。
+func qqCollapseSpaceRuns(text string) string {
+	size := len(text)
+	previousSpace := false
+	for i := 0; i < len(text); i++ {
+		space := text[i] == ' ' || text[i] == '\t'
+		if space && previousSpace {
+			size--
+		}
+		previousSpace = space
+	}
+	if size == len(text) {
+		return text
+	}
+	var out strings.Builder
+	// 按实际结果大小分配，避免短结果保留原输入中的长空白段。
+	out.Grow(size)
+	start := 0
+	for i := 0; i < len(text); i++ {
+		if text[i] != ' ' && text[i] != '\t' {
+			continue
+		}
+		end := i + 1
+		for end < len(text) && (text[end] == ' ' || text[end] == '\t') {
+			end++
+		}
+		if end-i > 1 {
+			out.WriteString(text[start:i])
+			out.WriteByte(' ')
+			start = end
+		}
+		i = end - 1
+	}
+	out.WriteString(text[start:])
+	return out.String()
+}
 
 // qqStripLinks 删掉链接并合并留下的连续空格。
 func qqStripLinks(text string) string {
@@ -465,15 +499,11 @@ func qqStripLinks(text string) string {
 	if hadLink {
 		text = qqLinkPattern.ReplaceAllString(text, "")
 	}
-	// 连续 ASCII 空白之外，正则不会改变正文；没有候选时只需裁掉首尾空白。
+	// 没有链接和连续 ASCII 空白的候选时，只需裁掉首尾空白。
 	if !hadLink && !strings.Contains(text, "  ") && !strings.ContainsRune(text, '\t') {
 		return strings.TrimSpace(text)
 	}
-	// 已知有两个连续空格时直接替换，避免先用正则重复扫描一次。
-	if strings.Contains(text, "  ") || qqSpaceRuns.MatchString(text) {
-		text = qqSpaceRuns.ReplaceAllString(text, " ")
-	}
-	return strings.TrimSpace(text)
+	return strings.TrimSpace(qqCollapseSpaceRuns(text))
 }
 
 // qqMarkdownLink 匹配 Markdown 链接和图片，第 1 组是链接文字。qqLinkPattern 的 [!-~]* 会连右括号一起吞掉，`[#730](https://…)，` 只用 qqStripLinks 会剩下「[#730](，」。

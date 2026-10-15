@@ -60,17 +60,17 @@ func (m *memorySnapshots) RecordDiagnosticAccess(_ context.Context, _, tool stri
 	return nil
 }
 
-func (m *memorySnapshots) RateLimit(_ context.Context, scope, subject string, limit int, _ time.Duration) error {
+func (m *memorySnapshots) RateDiagnosticSnapshot(_ context.Context, subject string, limit int, _ time.Duration) error {
 	if m.rateErr != nil {
 		return m.rateErr
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if scope != "mcp-snapshot" || !account.ValidDiagnosticID(subject) || limit != RequestsPerMinute {
+	if !account.ValidDiagnosticID(subject) || limit != RequestsPerMinute {
 		return errors.New("unexpected rate key")
 	}
 	if subject != snapshotID {
-		return nil
+		return account.ErrInvalid
 	}
 	m.requests++
 	if m.limit > 0 && m.requests > m.limit {
@@ -265,6 +265,9 @@ func TestAuthenticationAndRateLimit(t *testing.T) {
 		if resp := post(t, tc.url, tc.authorization); resp.StatusCode != tc.status {
 			t.Fatal(tc, resp.StatusCode)
 		}
+	}
+	if store.requests != 1 {
+		t.Fatal("真实快照的错误令牌未计入限流", store.requests)
 	}
 	r, _ := http.NewRequest("GET", url, nil)
 	r.Header.Set("Authorization", "Bearer "+goodToken)

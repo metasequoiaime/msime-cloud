@@ -23,7 +23,7 @@ const requestBodyBytes = 64 << 10
 type Snapshots interface {
 	OpenDiagnosticSnapshot(ctx context.Context, id, token string) (account.DiagnosticSnapshot, error)
 	RecordDiagnosticAccess(ctx context.Context, id, tool string, arguments json.RawMessage, resultCount, bytes int) error
-	RateLimit(ctx context.Context, scope, subject string, limit int, window time.Duration) error
+	RateDiagnosticSnapshot(ctx context.Context, id string, limit int, window time.Duration) error
 }
 
 // Handler 返回挂在 POST/GET /mcp/s/{id} 上的处理器。服务是无状态的（多副本、无粘性会话），每个请求按快照现建一个只读 MCP server；GET 在无状态模式下由 SDK 回 405。
@@ -43,7 +43,12 @@ func Handler(store Snapshots) http.Handler {
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 		defer cancel()
 		r = r.WithContext(ctx)
-		if err := store.RateLimit(ctx, "mcp-snapshot", id, RequestsPerMinute, time.Minute); err != nil {
+		if err := store.RateDiagnosticSnapshot(ctx, id, RequestsPerMinute, time.Minute); err != nil {
+			if errors.Is(err, account.ErrInvalid) {
+				w.Header().Set("WWW-Authenticate", "Bearer")
+				fail(w, 401, "unauthorized")
+				return
+			}
 			if errors.Is(err, account.ErrLimited) {
 				w.Header().Set("Retry-After", "60")
 				fail(w, 429, "rate_limit_exceeded")

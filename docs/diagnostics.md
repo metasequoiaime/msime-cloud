@@ -24,7 +24,7 @@
 `POST /mcp/s/{id}`（以及 `GET`）是 MCP Streamable HTTP 端点，用官方 Go SDK `github.com/modelcontextprotocol/go-sdk` 的 `mcp` 包实现，不手写协议。它不在 `/v1` 下，`account.IsPath` 让它绕过全局 Bearer 检查：
 
 - 鉴权：`Authorization: Bearer msk_…`，服务端按 SHA-256 常量时间比较。ID 不存在、已过期、令牌不对、账号被封禁都返回同样的 401，不区分原因。用户会话和设备令牌都不能读快照。
-- 限流：每份快照每分钟 60 次（`auth_rates`，所有副本共享），令牌错误的请求也计数，超出返回 429 并带 `Retry-After: 60`。
+- 限流：每份快照每分钟 60 次（`auth_rates`，所有副本共享），有效快照的令牌错误请求也计数，超出返回 429 并带 `Retry-After: 60`。不存在、已过期或所属账号被封禁的快照直接返回 401，不创建或更新限流记录。
 - 不要求 `Origin`；带了不在 `allowed_origins` 里的 `Origin`（浏览器跨站请求）照样返回 403。
 - 无状态模式：生产多副本、没有粘性会话，所以每个请求单独建一个只读 MCP server，不发 `Mcp-Session-Id`，响应是 `application/json`；`GET` 在无状态模式下返回 405，客户端不需要服务端推送。
 

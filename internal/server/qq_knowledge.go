@@ -348,6 +348,7 @@ func qqListLabels(text string) []string {
 	var labels []string
 	summaryRunes := 0
 	var scratch [qqListLabelRunes * utf8.UTFMax]byte
+	var previousCandidate string
 	for line := range strings.SplitSeq(text, "\n") {
 		line = strings.TrimSpace(line)
 		rest, ok := strings.CutPrefix(line, "- ")
@@ -357,7 +358,12 @@ func qqListLabels(text string) []string {
 			}
 		}
 		// 多保留冒号后的一个字，以便排除边界位置上的链接。
-		runes := []rune(rest[:qqRuneEnd(rest, qqListLabelRunes+1)])
+		candidate := rest[:qqRuneEnd(rest, qqListLabelRunes+1)]
+		if candidate == previousCandidate && previousCandidate != "" {
+			continue
+		}
+		previousCandidate = candidate
+		runes := []rune(candidate)
 		i := slices.IndexFunc(runes, func(r rune) bool { return r == '：' || r == ':' })
 		if i < 0 || i >= qqListLabelRunes || (i+1 < len(runes) && runes[i+1] == '/') {
 			continue

@@ -49,9 +49,10 @@ type SensitiveMatcher interface {
 
 // sensitiveWord is one cached entry: a plain word in its folded form, or a compiled regex.
 type sensitiveWord struct {
-	hit   SensitiveHit
-	plain string
-	re    *regexp.Regexp
+	hit     SensitiveHit
+	plain   string
+	re      *regexp.Regexp
+	literal string
 }
 
 // sensitiveHitKey counts hits per word and UTC day.
@@ -140,6 +141,7 @@ func loadSensitiveWords(ctx context.Context, store *Store) ([]sensitiveWord, err
 				slog.Warn("sensitive words: stored regex skipped", "id", w.hit.WordID, "reason", "invalid_regex")
 				continue
 			}
+			w.literal = sensitiveRegexLiteral(w.hit.Pattern)
 		} else if w.plain = foldSensitive(w.hit.Pattern, true); w.plain == "" {
 			continue
 		}
@@ -168,6 +170,31 @@ func compileSensitiveRegex(pattern string) (*regexp.Regexp, error) {
 		return nil, errors.New("pattern repeats too much")
 	}
 	return re, nil
+}
+
+// sensitiveRegexLiteral 返回可以安全作为前置 contains 检查的纯字面正则。大小写折叠、全角折叠或格式字符会让原文与规范化文本不再一一对应，这些规则保留完整正则匹配。
+func sensitiveRegexLiteral(pattern string) string {
+	for _, r := range pattern {
+		if r >= 'A' && r <= 'Z' {
+			return ""
+		}
+	}
+	tree, err := syntax.Parse("(?i)"+pattern, syntax.Perl)
+	if err != nil {
+		return ""
+	}
+	tree = tree.Simplify()
+	if tree.Op != syntax.OpLiteral || len(tree.Rune) == 0 {
+		return ""
+	}
+	literal := make([]rune, len(tree.Rune))
+	for i, r := range tree.Rune {
+		if unicode.Is(unicode.Cf, r) || r >= '！' && r <= '～' {
+			return ""
+		}
+		literal[i] = unicode.ToLower(r)
+	}
+	return string(literal)
 }
 
 // sensitiveRegexRepeatCost is the number of program steps a counted repeat ({n} or {n,m}) adds, mult being the product of the enclosing repeat counts: each leaf inside a repeat counts its width times mult. Unrepeated leaves and *, + and ? cost nothing here, because they keep the program as written and the pattern length (at most 200 characters) already bounds them.
@@ -312,6 +339,9 @@ func (m sensitiveMatcher) Match(ctx context.Context, text string) ([]SensitiveHi
 		} else {
 			if !spacedReady {
 				spaced, spacedReady = foldSensitive(text, false), true
+			}
+			if w.literal != "" && !strings.Contains(spaced, w.literal) {
+				continue
 			}
 			matched = w.re.MatchString(spaced)
 			if !matched {

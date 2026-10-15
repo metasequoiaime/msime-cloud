@@ -288,6 +288,7 @@ func qqSplitMarkdown(name, markdown string) []qqSection {
 	var body strings.Builder
 	fenced, intro := false, false
 	flush := func() {
+		capacity := body.Cap()
 		text := strings.TrimSpace(body.String())
 		body.Reset()
 		title := strings.Join(titles, " > ")
@@ -305,6 +306,9 @@ func qqSplitMarkdown(name, markdown string) []qqSection {
 			} else {
 				text = string([]rune(text))
 			}
+		} else if capacity > qqSectionRunes*utf8.UTFMax && len(text) < capacity/2 {
+			// 缓冲超过段落允许的最大字节数且大半为空白时，复制正文释放空白。
+			text = strings.Clone(text)
 		}
 		sections = append(sections, qqSection{Title: title, Text: text})
 	}

@@ -172,9 +172,33 @@ func qqRuneEnd(text string, limit int) int {
 	return len(text)
 }
 
+// qqContentHash 分块计算以 NUL 分隔的原始字节哈希，避免拼接和转换时复制完整正文。
 func qqContentHash(parts ...string) string {
-	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
-	return hex.EncodeToString(sum[:])
+	h := sha256.New()
+	var buf [1024]byte
+	used := 0
+	for i, part := range parts {
+		if i > 0 {
+			buf[used] = 0
+			used++
+			if used == len(buf) {
+				h.Write(buf[:])
+				used = 0
+			}
+		}
+		for part != "" {
+			n := copy(buf[used:], part)
+			used += n
+			part = part[n:]
+			if used == len(buf) {
+				h.Write(buf[:])
+				used = 0
+			}
+		}
+	}
+	h.Write(buf[:used])
+	var sum [sha256.Size]byte
+	return hex.EncodeToString(h.Sum(sum[:0]))
 }
 
 // qqDocID 是文档段落在向量索引里的 id：按文档名和标题，内容变了 id 不变。

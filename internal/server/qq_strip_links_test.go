@@ -1,11 +1,32 @@
 package server
 
 import (
+	"math/rand"
 	"regexp"
 	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestQQStripLinksMatchesPattern(t *testing.T) {
+	random := rand.New(rand.NewSource(11))
+	units := []string{"", "a", "1", "+", "-", ".", ":", "/", "!", " ", "甲", "\xff"}
+	for range 2000 {
+		var text strings.Builder
+		for range random.Intn(80) {
+			text.WriteString(units[random.Intn(len(units))])
+		}
+		input := text.String()
+		want := input
+		if strings.Contains(input, "://") {
+			want = qqLinkPattern.ReplaceAllString(want, "")
+		}
+		want = strings.TrimSpace(qqCollapseSpaceRuns(want))
+		if got := qqStripLinks(input); got != want {
+			t.Fatalf("链接过滤不兼容：输入=%q，结果=%q，预期=%q", input, got, want)
+		}
+	}
+}
 
 func TestQQStripLinksConditionalRules(t *testing.T) {
 	for _, tc := range []struct{ name, input, want string }{

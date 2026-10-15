@@ -249,10 +249,7 @@ func qqSnippet(text string) string {
 	} else {
 		snippet = strings.Join(strings.Fields(qqMarkdownNoise.ReplaceAllString(text, " ")), " ")
 	}
-	if runes := []rune(snippet); len(runes) > qqSnippetRunes {
-		snippet = string(runes[:qqSnippetRunes]) + "…"
-	}
-	return snippet
+	return qqTruncate(snippet, qqSnippetRunes)
 }
 
 // qqListLabelRunes 是列表项里标签的冒号最晚出现的位置（按字数，从列表符号后面算起）：再往后的冒号多半是句子里的，不是标签。
@@ -299,8 +296,14 @@ func qqSplitMarkdown(name, markdown string) []qqSection {
 		if text == "" || title == "" {
 			return
 		}
-		if runes := []rune(text); len(runes) > qqSectionRunes {
-			text = string(runes[:qqSectionRunes])
+		if end := qqRuneEnd(text, qqSectionRunes); end < len(text) {
+			text = text[:end]
+			if utf8.ValidString(text) {
+				// 段落会进入缓存，复制前缀以释放完整正文占用的底层内存。
+				text = strings.Clone(text)
+			} else {
+				text = string([]rune(text))
+			}
 		}
 		sections = append(sections, qqSection{Title: title, Text: text})
 	}
@@ -311,8 +314,10 @@ func qqSplitMarkdown(name, markdown string) []qqSection {
 		if m := qqHeadingPattern.FindStringSubmatch(line); m != nil && !fenced {
 			flush()
 			level := len(m[1])
+			// 标题随段落进入缓存，复制捕获结果以免引用整份 Markdown 的底层内存。
+			heading := strings.Clone(m[2])
 			if level == 1 {
-				doc, titles, intro = m[2], nil, true
+				doc, titles, intro = heading, nil, true
 				continue
 			}
 			// 二级标题是第一层，更深的标题接在上一层后面。
@@ -320,7 +325,7 @@ func qqSplitMarkdown(name, markdown string) []qqSection {
 			if depth > len(titles) {
 				depth = len(titles)
 			}
-			titles = append(titles[:depth], m[2])
+			titles = append(titles[:depth], heading)
 			continue
 		}
 		body.WriteString(line)
@@ -436,11 +441,14 @@ const qqSentenceBreaks = "。！？；\n"
 
 // qqTruncateSentence 把超过 limit 字的文字截到 limit 字以内（含结尾的「…」），免得停在半句话上：在能留下的部分里找最后一个句末标点或换行，位置不早于 limit 的一半就截在那里（保留标点），否则硬截。没超过时原样返回。
 func qqTruncateSentence(text string, limit int) string {
-	runes := []rune(text)
-	if len(runes) <= limit {
-		return text
+	end := len(text)
+	if limit >= 0 {
+		end = qqRuneEnd(text, limit)
+		if end == len(text) {
+			return text
+		}
 	}
-	kept := runes[:max(limit-1, 0)]
+	kept := []rune(text[:end])[:max(limit-1, 0)]
 	for i := len(kept) - 1; i >= limit/2; i-- {
 		if strings.ContainsRune(qqSentenceBreaks, kept[i]) {
 			kept = kept[:i+1]

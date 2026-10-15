@@ -56,58 +56,72 @@ func (s *Store) DictionaryEntries(ctx context.Context, user, kind, search string
 	return out, more, nil
 }
 func (s *Store) dictionaryEdit(ctx context.Context, tx pgx.Tx, user, kind, id string, expected int64, next *DictionaryEntry) (DictionaryChange, error) {
-	var previous *DictionaryEntry
-	if id != "" {
-		previous = &DictionaryEntry{}
-		err := tx.QueryRow(ctx, `SELECT id,kind,code,word,weight,revision,updated_at FROM user_dictionary_entries WHERE user_id=$1 AND kind=$2 AND id=$3`, user, kind, id).Scan(&previous.ID, &previous.Kind, &previous.Code, &previous.Word, &previous.Weight, &previous.Revision, &previous.UpdatedAt)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return DictionaryChange{}, errDataNotFound
-		}
-		if err != nil {
-			return DictionaryChange{}, err
-		}
-		if previous.Revision != expected {
-			return DictionaryChange{}, errRevisionConflict
-		}
-	}
+	entryID := id
+	var code, word string
+	var weight int64
 	if next != nil {
-		var duplicate bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM user_dictionary_entries WHERE user_id=$1 AND kind=$2 AND code=$3 AND word=$4 AND id<>$5)`, user, kind, next.Code, next.Word, id).Scan(&duplicate); err != nil {
-			return DictionaryChange{}, err
-		}
-		if duplicate {
-			return DictionaryChange{}, errDictionaryDuplicate
-		}
-		if id == "" {
-			var count int
-			if err := tx.QueryRow(ctx, `SELECT count(*) FROM user_dictionary_entries WHERE user_id=$1`, user).Scan(&count); err != nil {
-				return DictionaryChange{}, err
-			}
-			if count >= 100000 {
-				return DictionaryChange{}, errDictionaryLimit
-			}
-			id = randomToken()
+		code, word, weight = next.Code, next.Word, next.Weight
+		if entryID == "" {
+			entryID = randomToken()
 		}
 	}
-	var revision int64
-	err := tx.QueryRow(ctx, `INSERT INTO user_dictionary_state(user_id,revision) VALUES($1,1) ON CONFLICT(user_id) DO UPDATE SET revision=user_dictionary_state.revision+1 RETURNING revision`, user).Scan(&revision)
+	var outcome string
+	var previous *DictionaryEntry
+	var revision *int64
+	var updatedAt *time.Time
+	// 调用方已经持有用户行锁；校验按原错误优先级执行，仅通过后推进版本并修改词条。
+	// 前后状态通过物化读取和 RETURNING 传递，不从同一语句的旧快照重读写入结果。
+	err := tx.QueryRow(ctx, `WITH previous AS MATERIALIZED (
+ SELECT id,kind,code,word,weight,revision,updated_at FROM user_dictionary_entries
+ WHERE user_id=$1 AND kind=$2 AND id=$3
+), validation AS MATERIALIZED (
+ SELECT CASE
+ WHEN $3<>'' AND NOT EXISTS(SELECT 1 FROM previous) THEN 'missing'
+ WHEN $3<>'' AND (SELECT revision FROM previous)<>$5 THEN 'conflict'
+ WHEN NOT $6 THEN 'ok'
+ WHEN EXISTS(SELECT 1 FROM user_dictionary_entries WHERE user_id=$1 AND kind=$2 AND code=$7 AND word=$8 AND id<>$3) THEN 'duplicate'
+ WHEN $3='' THEN CASE WHEN (SELECT count(*) FROM user_dictionary_entries WHERE user_id=$1)>=100000 THEN 'limit' ELSE 'ok' END
+ ELSE 'ok' END AS outcome
+), version AS (
+ INSERT INTO user_dictionary_state(user_id,revision)
+ SELECT $1,1 FROM validation WHERE outcome='ok'
+ ON CONFLICT(user_id) DO UPDATE SET revision=user_dictionary_state.revision+1
+ RETURNING revision
+), removed AS (
+ DELETE FROM user_dictionary_entries USING version
+ WHERE user_id=$1 AND id=$3 AND NOT $6
+), written AS (
+ INSERT INTO user_dictionary_entries(id,user_id,kind,code,word,weight,revision)
+ SELECT $4,$1,$2,$7,$8,$9,revision FROM version WHERE $6
+ ON CONFLICT(id) DO UPDATE SET code=excluded.code,word=excluded.word,weight=excluded.weight,revision=excluded.revision,updated_at=now()
+ RETURNING updated_at
+)
+SELECT outcome,(SELECT row_to_json(p) FROM previous p),(SELECT revision FROM version),(SELECT updated_at FROM written)
+FROM validation`, user, kind, id, entryID, expected, next != nil, code, word, weight).Scan(&outcome, &previous, &revision, &updatedAt)
 	if err != nil {
 		return DictionaryChange{}, err
 	}
-	change := DictionaryChange{Revision: revision, Previous: previous}
-	if next == nil {
-		if _, err = tx.Exec(ctx, `DELETE FROM user_dictionary_entries WHERE user_id=$1 AND id=$2`, user, id); err != nil {
-			return change, err
+	switch outcome {
+	case "missing":
+		return DictionaryChange{}, errDataNotFound
+	case "conflict":
+		return DictionaryChange{}, errRevisionConflict
+	case "duplicate":
+		return DictionaryChange{}, errDictionaryDuplicate
+	case "limit":
+		return DictionaryChange{}, errDictionaryLimit
+	}
+	if revision == nil {
+		return DictionaryChange{}, pgx.ErrNoRows
+	}
+	change := DictionaryChange{Revision: *revision, Previous: previous}
+	if next != nil {
+		if updatedAt == nil {
+			return change, pgx.ErrNoRows
 		}
-	} else {
 		replacement := *next
-		replacement.ID = id
-		replacement.Kind = kind
-		replacement.Revision = revision
-		err = tx.QueryRow(ctx, `INSERT INTO user_dictionary_entries(id,user_id,kind,code,word,weight,revision) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(id) DO UPDATE SET code=excluded.code,word=excluded.word,weight=excluded.weight,revision=excluded.revision,updated_at=now() RETURNING updated_at`, id, user, kind, replacement.Code, replacement.Word, replacement.Weight, revision).Scan(&replacement.UpdatedAt)
-		if err != nil {
-			return change, err
-		}
+		replacement.ID, replacement.Kind = entryID, kind
+		replacement.Revision, replacement.UpdatedAt = *revision, *updatedAt
 		change.Replacement = &replacement
 	}
 	return change, writeDictionaryOverlayAndChange(ctx, tx, user, change)

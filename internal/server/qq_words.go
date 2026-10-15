@@ -40,7 +40,10 @@ var qqToneless = map[rune]rune{
 }
 
 // qqPinyinPunctuation 是群友常用来把拼音括起来的符号，规范时换成空格：「扛把子（kang ba zi）」「扛把子 “kang ba zi”」。
-var qqPinyinPunctuation = strings.NewReplacer("（", " ", "）", " ", "(", " ", ")", " ", "[", " ", "]", " ", "【", " ", "】", " ", "「", " ", "」", " ", "《", " ", "》", " ", "“", " ", "”", " ", "\"", " ")
+var (
+	qqPinyinPunctuation = strings.NewReplacer("（", " ", "）", " ", "(", " ", ")", " ", "[", " ", "]", " ", "【", " ", "】", " ", "「", " ", "」", " ", "《", " ", "》", " ", "“", " ", "”", " ", "\"", " ")
+	qqPinyinCleanup     = strings.NewReplacer("u:", "v", "’", "'", "-", " ", "　", " ")
+)
 
 // qqNormalizePinyin 把群友写的拼音规范成投稿用的格式：小写，去掉声调和括号，音节之间用 ' 分隔，ü 写作 v。
 func qqNormalizePinyin(raw string) string {
@@ -51,7 +54,7 @@ func qqNormalizePinyin(raw string) string {
 		return r
 	}, strings.ToLower(raw))
 	raw = qqPinyinPunctuation.Replace(raw)
-	raw = strings.NewReplacer("u:", "v", "’", "'", "-", " ", "　", " ").Replace(raw)
+	raw = qqPinyinCleanup.Replace(raw)
 	return strings.Join(strings.FieldsFunc(raw, func(r rune) bool { return r == ' ' || r == '\'' }), "'")
 }
 

@@ -17,7 +17,7 @@
 | Emoji、颜文字、符号 | 查询候选，目录/分类与关键词搜索，固定数据版本及来源 | 已接入 HTTP，候选及三类目录分页实测通过；词库来源和摘要随 third_party/msime 子模块里客户端的锁文件固定；文字搜索、分类筛选、特殊字符查询及请求间状态隔离已通过真实 HTTP 测试；已随 0.3.0 部署并通过公网验收 |
 | Unicode、日期时间候选 | 复用 Engine local_modes，日期时间明确时区和参考时间 | 已接入 HTTP；真实 Engine 码点和跨日时区测试通过；已随 0.3.0 部署并通过公网验收 |
 | 日语罗马字、假名转换与日语候选 | 复用 Engine 罗马字转换和日语候选提供器；固定日语模型及许可证来源 | 已接入 romaji / japanese 原生桥接与 HTTP，固定 dict-v1.0.0 日语模型与 Mozc 说明摘要；真实 HTTP 已验证罗马字/假名互转、日语候选、未完成输入及缺失模型报错；Linux 原生 CI、双架构镜像发布与 0.3.0 公网验收通过 |
-| 简繁转换 | 复用 OpenCC s2t 数据，固定词典和配置，不用模型伪装确定性转换 | 已接入 HTTP，s2t 数据随 msime 引擎内置（`msime-client-core` 的 `chinese_conversion`）；macOS/Linux 词组转换实测及编译词典跨平台摘要校验通过；已随 0.3.0 部署并通过公网验收 |
+| 简繁转换 | 复用 OpenCC s2t 数据，固定词典和配置，不用模型伪装确定性转换 | 已接入 HTTP，s2t 数据随 msime 引擎内置（`msime-client-base` 的 `chinese_conversion`，`msime-client-core` 仍转出）；macOS/Linux 词组转换实测及编译词典跨平台摘要校验通过；已随 0.3.0 部署并通过公网验收 |
 
 以下留在客户端，不创建远程操作入口：TSF/COM/Named Pipe 协商，按键吃键与焦点、composition 代次、候选上屏和窗口控制，DPI、UIAccess、WebView2、托盘、打开本机目录/外部程序、麦克风采集/播放/静音、系统剪贴板监听、Windows 手写 COM 识别、本机文件切换与安装升级。这些操作依赖本机权限或活动输入会话；其中可复用的数据和纯查询仍包含在上表，不以“本机功能”为由省略。
 

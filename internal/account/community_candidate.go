@@ -22,7 +22,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-// Limits for user-published candidate-window skin packages. crates/client-core/src/skin/candidate_community.rs mirrors them so the client can refuse a package before uploading it.
+// Limits for user-published candidate-window skin packages. crates/client-services/src/skin/candidate_community.rs mirrors them so the client can refuse a package before uploading it.
 const (
 	// The manifest can reference only the preview, the decoration image and the background image, and every uploaded file must be referenced, so three files is the real bound.
 	maxCandidateFiles         = 3

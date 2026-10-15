@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-// pluginFixtureRoot 存放与客户端解析器共用的插件包 fixture：valid/<kind>-<用例>/ 下的每个目录都必须被接受且类型与目录名前缀一致，invalid/<kind>-<用例>/ 下的每个目录都必须被拒绝。客户端仓库的 crates/client-core/tests/fixtures/plugin-packs 放着同样内容的一份，两边对同一批包给出相同结论，Go 校验器才算精确镜像了客户端语法。
+// pluginFixtureRoot 存放与客户端解析器共用的插件包 fixture：valid/<kind>-<用例>/ 下的每个目录都必须被接受且类型与目录名前缀一致，invalid/<kind>-<用例>/ 下的每个目录都必须被拒绝。客户端仓库的 crates/client-services/tests/fixtures/plugin-packs 放着同样内容的一份，两边对同一批包给出相同结论，Go 校验器才算精确镜像了客户端语法。
 const pluginFixtureRoot = "testdata/plugin-packs"
 
 // pluginFixtureZip 把一个 fixture 目录按文件名排序打成 zip，文件放在 zip 根部。

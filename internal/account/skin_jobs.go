@@ -40,24 +40,37 @@ func (a *Service) CreateSkinJob(ctx context.Context, id, owner string, perOwner,
 		return expires, err
 	}
 	defer tx.Rollback(ctx)
-	// The lock is held only for a few statements, but a replica whose node vanishes inside them would otherwise block every replica's job creation until the kernel reaps the dead connection.
-	if _, err = tx.Exec(ctx, serverKeepalives); err != nil {
-		return expires, err
+	// 保活设置与首个锁请求批量发送，仍在取锁前启用，避免持锁副本失联后长时间阻塞其他副本。
+	setup := &pgx.Batch{}
+	for _, statement := range strings.Split(serverKeepalives, ";") {
+		setup.Queue(statement)
 	}
 	// 用户任务在共享计数和写入前锁定账号行，保证管理员封禁与任务创建按提交顺序线性化；配置客户端的 owner 不对应 auth_users，沿用原有路径。
-	if uid, ok := strings.CutPrefix(owner, "user:"); ok {
-		var banned bool
-		if err = tx.QueryRow(ctx, "SELECT banned_at IS NOT NULL FROM auth_users WHERE id=$1 FOR UPDATE", uid).Scan(&banned); errors.Is(err, pgx.ErrNoRows) {
-			return expires, ErrInvalid
-		} else if err != nil {
+	uid, userOwner := strings.CutPrefix(owner, "user:")
+	if userOwner {
+		setup.Queue("SELECT banned_at IS NOT NULL FROM auth_users WHERE id=$1 FOR UPDATE", uid).QueryRow(func(row pgx.Row) error {
+			var banned bool
+			if err := row.Scan(&banned); errors.Is(err, pgx.ErrNoRows) {
+				return ErrInvalid
+			} else if err != nil {
+				return err
+			}
+			if banned {
+				return ErrBanned
+			}
+			return nil
+		})
+	} else {
+		setup.Queue(skinJobsLock)
+	}
+	if err = tx.SendBatch(ctx, setup).Close(); err != nil {
+		return expires, err
+	}
+	if userOwner {
+		// 先确认账号有效再等待全局锁；后续容量读取使用取锁后的独立语句快照。
+		if _, err = tx.Exec(ctx, skinJobsLock); err != nil {
 			return expires, err
 		}
-		if banned {
-			return expires, ErrBanned
-		}
-	}
-	if _, err = tx.Exec(ctx, skinJobsLock); err != nil {
-		return expires, err
 	}
 	// 先清理过期任务和失去工作进程的已取消任务，再基于清理后的快照判断容量并插入。
 	// 两条语句批量发送，保留执行顺序；达到容量上限时回滚，清理也不会单独提交。

@@ -312,7 +312,11 @@ func qqSplitMarkdown(name, markdown string) []qqSection {
 		}
 		sections = append(sections, qqSection{Title: title, Text: text})
 	}
-	for _, line := range strings.Split(strings.ReplaceAll(markdown, "\r\n", "\n"), "\n") {
+	for line := range strings.SplitAfterSeq(markdown, "\n") {
+		if before, ended := strings.CutSuffix(line, "\n"); ended {
+			// 只处理有 LF 的行，保留文件末尾未组成 CRLF 的孤立回车。
+			line = strings.TrimSuffix(before, "\r")
+		}
 		if strings.HasPrefix(strings.TrimSpace(line), "```") {
 			fenced = !fenced
 		}

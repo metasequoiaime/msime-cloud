@@ -43,7 +43,7 @@ func (t *crashGroupDetailBatchTrace) TraceBatchQuery(_ context.Context, _ *pgx.C
 func (*crashGroupDetailBatchTrace) TraceBatchEnd(context.Context, *pgx.Conn, pgx.TraceBatchEndData) {}
 func (*crashGroupDetailBatchTrace) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
-func TestAdminCrashGroupBatchesGroupAndSamples(t *testing.T) {
+func TestAdminCrashGroupReadsGroupAndSamplesTogether(t *testing.T) {
 	db := testStore(t)
 	if _, err := db.pool.Exec(t.Context(), `TRUNCATE admin_events,admin_crash_groups`); err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestAdminCrashGroupBatchesGroupAndSamples(t *testing.T) {
 	trace.mu.Lock()
 	batches, queries := trace.batches, trace.queries
 	trace.mu.Unlock()
-	if batches != 1 || queries != 2 {
-		t.Fatalf("崩溃分组详情使用了 %d 次批量请求、%d 条语句，期望 1、2", batches, queries)
+	if batches != 0 || queries != 1 {
+		t.Fatalf("崩溃分组详情使用了 %d 次批量请求、%d 条语句，期望 0、1", batches, queries)
 	}
 }

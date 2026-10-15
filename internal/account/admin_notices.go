@@ -294,7 +294,7 @@ func actionSaveNoticeDraft(a *Service, ctx context.Context, tx pgx.Tx, v actionR
 		if status != "draft" {
 			return actionResult{}, actionFail(409, "not_draft")
 		}
-		if _, err = tx.Exec(ctx, `UPDATE admin_notices SET title=$2,body=$3,targets=$4,channels=$5,updated_at=now() WHERE id=$1`, id, in.Title, in.Body, in.Targets, in.Channels); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE admin_notices SET title=$2,body=$3,targets=$4,channels=$5,updated_at=clock_timestamp() WHERE id=$1`, id, in.Title, in.Body, in.Targets, in.Channels); err != nil {
 			return actionResult{}, err
 		}
 	}
@@ -339,7 +339,8 @@ func actionPublishNotice(a *Service, ctx context.Context, tx pgx.Tx, v actionReq
 			return actionResult{}, err
 		}
 		n = Notice{ID: id, Title: in.Title, Body: in.Body, Targets: in.Targets, Channels: in.Channels}
-		if _, err = tx.Exec(ctx, `UPDATE admin_notices SET title=$2,body=$3,targets=$4,channels=$5,status='live',published_at=now(),updated_at=now() WHERE id=$1`, id, n.Title, n.Body, n.Targets, n.Channels); err != nil {
+		if _, err = tx.Exec(ctx, `WITH publication AS MATERIALIZED (SELECT clock_timestamp() AS at)
+UPDATE admin_notices SET title=$2,body=$3,targets=$4,channels=$5,status='live',published_at=publication.at,updated_at=publication.at FROM publication WHERE id=$1`, id, n.Title, n.Body, n.Targets, n.Channels); err != nil {
 			return actionResult{}, err
 		}
 	}
@@ -373,7 +374,7 @@ func actionArchiveNotice(a *Service, ctx context.Context, tx pgx.Tx, v actionReq
 	if status == "archived" {
 		return actionResult{}, actionFail(409, "already_archived")
 	}
-	if _, err = tx.Exec(ctx, `UPDATE admin_notices SET status='archived',updated_at=now() WHERE id=$1`, id); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE admin_notices SET status='archived',updated_at=clock_timestamp() WHERE id=$1`, id); err != nil {
 		return actionResult{}, err
 	}
 	detail := map[string]any{"title": stored.Title, "from": status}

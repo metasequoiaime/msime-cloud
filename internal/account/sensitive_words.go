@@ -239,6 +239,30 @@ func sensitiveRegexRepeatCost(re *syntax.Regexp, mult int) int {
 
 // foldSensitive normalises text for matching: invisible format characters (zero-width spaces and joiners, bidi marks) are removed so they cannot split a word, full-width ASCII becomes half-width, letters lowercase, and with dropSpace every white space character is removed so spacing cannot split a plain word.
 func foldSensitive(text string, dropSpace bool) string {
+	for offset := 0; offset < len(text); {
+		r, size := utf8.DecodeRuneInString(text[offset:])
+		out := r
+		remove := false
+		switch {
+		case unicode.Is(unicode.Cf, r):
+			remove = true
+		case r == '　':
+			out = ' '
+		case r >= '！' && r <= '～':
+			out -= 0xFEE0
+		}
+		if dropSpace && unicode.IsSpace(out) {
+			remove = true
+		}
+		if remove || unicode.ToLower(out) != r || r == utf8.RuneError && size == 1 {
+			return foldSensitiveChanged(text, dropSpace)
+		}
+		offset += size
+	}
+	return text
+}
+
+func foldSensitiveChanged(text string, dropSpace bool) string {
 	var b strings.Builder
 	b.Grow(len(text))
 	for _, r := range text {

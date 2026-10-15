@@ -63,7 +63,7 @@ func (s *Store) UserDataSummary(ctx context.Context, user string) ([]UserDataSec
 	return sections, total, err
 }
 
-// DeleteUserData 在一个事务里删除所选分区。偏好和常用语清空内容并推进 revision，其他设备的旧 revision 写入会 409 并拉到空文档；词库删除条目、覆盖层、位置和选择次数后写一条 reset 变更并推进 revision，与快照恢复的重置方式相同，开着同步的设备拉取时会整份重载而不是把旧数据推回来；剪贴板删除条目、密钥、封装和设备登记，保留同步开关和保留天数。
+// DeleteUserData 在一个事务里删除所选分区。偏好和常用语清空内容并推进 revision，其他设备的旧 revision 写入会 409 并拉到空文档；词库删除条目、覆盖层、位置、选择次数和历史变更后写一条 reset 变更并推进 revision，开着同步的设备拉取时会整份重载而不是把旧数据推回来；剪贴板删除条目、密钥、封装和设备登记，保留同步开关和保留天数。
 func (s *Store) DeleteUserData(ctx context.Context, user string, sections map[string]bool) error {
 	tx, err := s.userDataTransaction(ctx, user)
 	if err != nil {
@@ -95,6 +95,8 @@ func (s *Store) DeleteUserData(ctx context.Context, user string, sections map[st
 			`DELETE FROM user_dictionary_overlay WHERE user_id=$1`,
 			`DELETE FROM user_candidate_positions WHERE user_id=$1`,
 			`DELETE FROM user_candidate_selections WHERE user_id=$1`,
+			// 历史变更含词条原文，也属于需要清空的数据；保留状态表的版本，再写入新的 reset 供旧游标追上。
+			`DELETE FROM user_dictionary_changes WHERE user_id=$1`,
 			`WITH next AS (SELECT COALESCE((SELECT revision FROM user_dictionary_state WHERE user_id=$1),0)+1 AS revision)
  INSERT INTO user_dictionary_changes(user_id,revision,change) SELECT $1,revision,jsonb_build_object('revision',revision,'reset',true) FROM next`,
 			`INSERT INTO user_dictionary_state(user_id,revision) VALUES($1,1) ON CONFLICT(user_id) DO UPDATE SET revision=user_dictionary_state.revision+1`)

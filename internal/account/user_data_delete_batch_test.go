@@ -37,7 +37,7 @@ func TestDeleteUserDataUsesOneDatabaseBatch(t *testing.T) {
 	if batches != 1 {
 		t.Fatalf("删除用户数据使用了 %d 次数据库批量请求，期望 1 次", batches)
 	}
-	if queries != 12 {
-		t.Fatalf("删除用户数据批量请求包含 %d 条语句，期望 12 条", queries)
+	if queries != 13 {
+		t.Fatalf("删除用户数据批量请求包含 %d 条语句，期望 13 条", queries)
 	}
 }

@@ -435,15 +435,26 @@ func (a *Service) OpenAutoIncident(ctx context.Context, service, title, descript
 		return false, err
 	}
 	defer tx.Rollback(ctx)
+	n, err := normalizeNotification(Notification{Kind: NotifyIncident, Title: title, TargetPage: "status"})
+	if err != nil {
+		return false, err
+	}
 	var id int64
-	err = tx.QueryRow(ctx, `INSERT INTO admin_incidents(service,title,description,auto) VALUES($1,$2,$3,true) ON CONFLICT(service) WHERE state='open' AND auto DO NOTHING RETURNING id`, service, title, description).Scan(&id)
+	// incident 写入和通知写入共用一条数据修改 CTE，避免创建自动事件时往返两次。
+	err = tx.QueryRow(ctx, `WITH incident AS (
+ INSERT INTO admin_incidents(service,title,description,auto) VALUES($1,$2,$3,true)
+ ON CONFLICT(service) WHERE state='open' AND auto DO NOTHING
+ RETURNING id
+), notified AS (
+ INSERT INTO admin_notifications(kind,title,target_page,target_id,created_at)
+ SELECT $4,$5,$6,id::text,clock_timestamp() FROM incident
+ RETURNING 1
+)
+SELECT id FROM incident`, service, title, description, n.Kind, n.Title, n.TargetPage).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
-		return false, err
-	}
-	if err = a.Notify(ctx, tx, Notification{Kind: NotifyIncident, Title: title, TargetPage: "status", TargetID: strconv.FormatInt(id, 10)}); err != nil {
 		return false, err
 	}
 	return true, tx.Commit(ctx)

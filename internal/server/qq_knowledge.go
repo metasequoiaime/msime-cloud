@@ -1031,8 +1031,14 @@ func qqStripAnswerHeadings(answer string) string {
 		return answer
 	}
 	headings := func(yield func(start, end int) bool) {
-		offset := 0
-		for line := range strings.SplitSeq(answer, "\n") {
+		for offset := 0; offset < len(answer); {
+			lineEnd := strings.IndexByte(answer[offset:], '\n')
+			if lineEnd < 0 {
+				lineEnd = len(answer)
+			} else {
+				lineEnd += offset
+			}
+			line := answer[offset:lineEnd]
 			if strings.HasPrefix(line, "#") {
 				end := 1
 				for end < len(line) && end < 6 && line[end] == '#' {
@@ -1049,7 +1055,7 @@ func qqStripAnswerHeadings(answer string) string {
 					}
 				}
 			}
-			offset += len(line) + 1
+			offset = lineEnd + 1
 		}
 	}
 	// 先计算实际输出长度，避免大量标题空白被删掉后，短结果仍持有输入大小的缓冲。

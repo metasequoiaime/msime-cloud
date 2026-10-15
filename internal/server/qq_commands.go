@@ -75,6 +75,10 @@ const qqCommandTrailing = "?!。.~…"
 
 // qqCompact 把消息规范成和精确匹配的命令词比较的形状：全角折成半角，去掉所有空白，转小写，去掉开头的「/」，再循环去掉末尾的问号、感叹号、句号、波浪号、省略号和表情符号（unicode.So、unicode.Sk，以及表情后面的变体选择符和零宽连接符）。原来只去掉空白，中文输入法习惯在句末打的「帮助？」、QQ 机器人用户习惯的「/help」、「最新版本🙏」都认不出，绕到模型那里等十几秒。只剩一个字符时不再去掉，「?」本身就是帮助的别名。
 func qqCompact(text string) string {
+	// 普通中文消息没有任何需要规范化的字符时直接复用正文；qqFreeCommand 会在每条消息上调用这里。
+	if qqCompactCanReuse(text) {
+		return text
+	}
 	compact := strings.TrimPrefix(strings.ToLower(strings.Join(strings.Fields(qqFoldWidth(text)), "")), "/")
 	for utf8.RuneCountInString(compact) > 1 {
 		r, size := utf8.DecodeLastRuneInString(compact)
@@ -84,6 +88,25 @@ func qqCompact(text string) string {
 		compact = compact[:len(compact)-size]
 	}
 	return compact
+}
+
+func qqCompactCanReuse(text string) bool {
+	if text == "" || strings.HasPrefix(text, "/") {
+		return false
+	}
+	count := 0
+	var last rune
+	for _, r := range text {
+		count++
+		last = r
+		if unicode.IsSpace(r) || unicode.IsUpper(r) || r >= 0xFF01 && r <= 0xFF5E {
+			return false
+		}
+	}
+	if count > 1 && (strings.ContainsRune(qqCommandTrailing, last) || unicode.In(last, unicode.So, unicode.Sk) || last == 0xFE0F || last == 0x200D) {
+		return false
+	}
+	return true
 }
 
 // qqIssueRef 匹配「#编号」查进度的命令（qqIssueRefPattern），先把全角折成半角；不是这个命令时返回 nil。

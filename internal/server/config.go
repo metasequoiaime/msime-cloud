@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -75,7 +76,8 @@ type Client struct {
 	ID                string `json:"id"`
 	TokenEnv          string `json:"token_env"`
 	RequestsPerMinute int    `json:"requests_per_minute"`
-	token             string
+	// tokenHash 在配置校验时计算，请求直接比较摘要，避免按客户端数量重复散列固定令牌。
+	tokenHash [sha256.Size]byte
 }
 
 // maxReplicas bounds the replicas setting so a mistyped count cannot silently shrink every per-replica limit to one request per minute.
@@ -206,15 +208,16 @@ func (c *Config) Validate() error {
 	ids, tokens := map[string]bool{}, map[string]bool{}
 	for i := range c.Clients {
 		v := &c.Clients[i]
-		v.token = os.Getenv(v.TokenEnv)
-		if v.ID == "" || ids[v.ID] || len(v.token) < 32 || tokens[v.token] || strings.ContainsAny(v.token, " \r\n\t") {
+		token := os.Getenv(v.TokenEnv)
+		if v.ID == "" || ids[v.ID] || len(token) < 32 || tokens[token] || strings.ContainsAny(token, " \r\n\t") {
 			return errors.New("client IDs and tokens must be unique; tokens require at least 32 non-whitespace bytes")
 		}
 		if v.RequestsPerMinute < 1 || v.RequestsPerMinute > 100000 {
 			return errors.New("requests_per_minute must be 1..100000")
 		}
 		ids[v.ID] = true
-		tokens[v.token] = true
+		tokens[token] = true
+		v.tokenHash = sha256.Sum256([]byte(token))
 	}
 	if err := validateTranslationEndpoint(&c.Translation, false); err != nil {
 		return err

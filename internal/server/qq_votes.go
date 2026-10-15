@@ -140,6 +140,7 @@ func (s *Server) qqAddVote(ctx context.Context, token, repo string, number int64
 			}
 			return 0, failure
 		}
+		client.Invalidate("/repos/" + repo + "/issues")
 		return n + 1, nil
 	}
 	if unknown {
@@ -153,5 +154,6 @@ func (s *Server) qqAddVote(ctx context.Context, token, repo string, number int64
 		}
 		return 0, failure
 	}
+	client.Invalidate("/repos/" + repo + "/issues")
 	return 1, nil
 }

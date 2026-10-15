@@ -149,6 +149,7 @@ func (s *Server) fileQQDocs(ctx context.Context, subject, text string, admin boo
 			reply(qqReplyUnavailable)
 			return
 		}
+		client.Invalidate("/repos/" + repo + "/issues")
 		reply("这处文档已经有人反馈过，已补充到 " + qqIssueNumberText(repo, duplicate) + "。")
 		return
 	}

@@ -1808,6 +1808,7 @@ func (s *Server) fileQQReport(ctx context.Context, repo, platformLabel string, r
 		if err != nil || !r.OK() {
 			return 0, false, githubFailure("comment", r, err)
 		}
+		client.Invalidate("/repos/" + repo + "/issues")
 		return duplicate, true, nil
 	}
 	// 新 issue 的标签：类型、平台和配置的标签，加上模型从仓库分类标签里挑的，以及维护者标注对应的标签；仓库没有对应标签的标注写进正文。

@@ -152,6 +152,7 @@ func (s *Server) qqGapsIssue(ctx context.Context, token string) (int64, error) {
 			return 0, githubFailure("gaps create", r, err)
 		}
 		number = created.Number
+		client.Invalidate("/repos/" + repo + "/issues")
 	}
 	b.mu.Lock()
 	b.gapsIssue, b.gapsIssueAt = number, b.now()
@@ -233,5 +234,6 @@ func (s *Server) recordQQGapIn(ctx context.Context, dailyScope string, daily int
 		release()
 		return false
 	}
+	client.Invalidate("/repos/" + repo + "/issues")
 	return true
 }

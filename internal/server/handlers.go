@@ -304,22 +304,20 @@ func (s *Server) translateEndpoint(w http.ResponseWriter, r *http.Request, v tra
 		// 腾讯先查缓存，只有仍需调用上游时才预留一次请求额度。
 		return s.translateTencent(w, r, v, e, budget)
 	}
-	requests := len(v.list())
 	if e.Provider == "deepl" {
-		requests = 1
+		return s.translateDeepL(w, r, v, e, budget)
 	}
+	requests := len(v.list())
 	if budget != nil && !budget.take(time.Now(), requests) {
 		return false
 	}
-	if len(v.Texts) > 0 && e.Provider != "deepl" {
+	if len(v.Texts) > 0 {
 		s.translateEach(w, r, v, e)
 		return true
 	}
 	switch e.Provider {
 	case "openai":
 		s.translateOpenAI(w, r, v, e)
-	case "deepl":
-		s.translateDeepL(w, r, v, e)
 	case "niutrans":
 		s.translateNiuTrans(w, r, v, e)
 	default:

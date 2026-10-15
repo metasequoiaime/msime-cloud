@@ -545,14 +545,23 @@ func actionOpenIncident(a *Service, ctx context.Context, tx pgx.Tx, v actionRequ
 	if value.Description != nil {
 		description = *value.Description
 	}
+	n, err := normalizeNotification(Notification{Kind: NotifyIncident, Title: *value.Title, TargetPage: "status"})
+	if err != nil {
+		return actionResult{}, err
+	}
 	var id int64
-	if err = tx.QueryRow(ctx, `INSERT INTO admin_incidents(service,title,description) VALUES($1,$2,$3) RETURNING id`, *value.Service, *value.Title, description).Scan(&id); err != nil {
+	if err = tx.QueryRow(ctx, `WITH incident AS (
+ INSERT INTO admin_incidents(service,title,description) VALUES($1,$2,$3)
+ RETURNING id
+), notified AS (
+ INSERT INTO admin_notifications(kind,title,target_page,target_id,created_at)
+ SELECT $4,$5,'status',id::text,clock_timestamp() FROM incident
+ RETURNING 1
+)
+SELECT id FROM incident`, *value.Service, *value.Title, description, n.Kind, n.Title).Scan(&id); err != nil {
 		return actionResult{}, err
 	}
 	target := strconv.FormatInt(id, 10)
-	if err = a.Notify(ctx, tx, Notification{Kind: NotifyIncident, Title: *value.Title, TargetPage: "status", TargetID: target}); err != nil {
-		return actionResult{}, err
-	}
 	detail := map[string]any{"service": *value.Service, "title": *value.Title}
 	if v.Reason != "" {
 		detail["reason"] = v.Reason

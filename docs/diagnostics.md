@@ -15,7 +15,7 @@
   `perf_trace` 与 `input_events` 的 `kind` 只能是 `key_down`、`key_up`、`candidate_shown`、`candidate_selected`、`commit`、`backspace`、`panel_open`、`panel_close`、`ime_start`、`ime_finish`。事件对象只允许列出的字段，任何多出来的字段（文本、拼音、候选、按键字符）、未知的分类、超长字符串或未脱敏的凭据都让整份上传返回 400，不会只存一部分。错误码：`invalid_json`、`invalid_client`、`invalid_ttl`、`empty_snapshot`、`invalid_crash_logs`、`invalid_perf_trace`、`invalid_input_events`、`invalid_config_snapshot`、`unredacted_config`。
 
   成功返回 201 `{"id","mcp_url","token","expires_at"}`，`mcp_url` 是 `https://api.msime.app/mcp/s/<id>`。令牌是 `msk_` 加 43 位 base64url，只在这个响应里出现一次，库里只存 SHA-256 和最后 4 个字符。每个用户只有一份有效快照：新上传在同一事务里删除旧快照和它的访问记录。每个用户每小时 6 次（`auth_rates`，所有副本共享），校验失败的请求不计数。
-- `GET /v1/users/me/diagnostics`：`{"snapshot":{"id","created_at","expires_at","bytes","sections","token_hint"}|null,"accesses":[{"at","tool","arguments","result_count","bytes"}]}`。不返回快照内容和令牌；`accesses` 是最近 50 次工具调用，新的在前，`arguments` 超过 1 KiB 时截断成字符串。
+- `GET /v1/users/me/diagnostics`：`{"snapshot":{"id","created_at","expires_at","bytes","sections","token_hint"}|null,"accesses":[{"at","tool","arguments","result_count","bytes"}]}`。不返回快照内容和令牌；`accesses` 是最近 50 次工具调用，新的在前。`arguments` 通常保存为 JSON；超过 1 KiB、JSON 无效，或因 NUL 转义、未配对代理字符、数字范围等原因无法存入 PostgreSQL `jsonb` 时，改为不超过 1 KiB 的参数原文字符串，实际 NUL 字节显示为 `\u0000` 文本。
 - `POST /v1/users/me/diagnostics/token`：换一个新令牌，旧令牌立即失效，返回 200 `{"token"}`；没有有效快照返回 404 `diagnostics_not_found`。每个用户每小时 20 次。
 - `DELETE /v1/users/me/diagnostics`：删除快照和访问记录，返回 204（没有快照也是 204）。
 

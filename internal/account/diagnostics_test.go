@@ -93,6 +93,44 @@ func TestDiagnosticTokenAndArguments(t *testing.T) {
 	}
 }
 
+func TestRecordDiagnosticAccessPreservesIncompatibleArguments(t *testing.T) {
+	s := testStore(t)
+	a := &Service{store: s}
+	mux := http.NewServeMux()
+	Mount(mux, a)
+	user := complete(t, s, Identity{"anonymous", "device-diagnostic-arguments"})
+	w := userDataRequest(mux, "POST", diagnosticsPath, user.AccessToken, diagnosticBody(`{"input_events":[]}`))
+	var snapshot struct{ ID string }
+	if w.Code != 201 || json.Unmarshal(w.Body.Bytes(), &snapshot) != nil || snapshot.ID == "" {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	for _, raw := range []string{
+		`{"kind":"\u0000"}`,
+		`{"kind":"\ud800"}`,
+		`{"limit":1e200000}`,
+		`{"limit":0e2147483648}`,
+		"not JSON\x00tail",
+		"{\"kind\":\"" + strings.Repeat("水", 600) + "\x00\"}",
+	} {
+		if err := a.RecordDiagnosticAccess(t.Context(), snapshot.ID, "get_input_events", json.RawMessage(raw), 0, 13); err != nil {
+			t.Errorf("审计参数保存失败: %v", err)
+			continue
+		}
+		var stored []byte
+		if err := s.pool.QueryRow(t.Context(), `SELECT arguments FROM diagnostic_accesses WHERE snapshot_id=$1 ORDER BY id DESC LIMIT 1`, snapshot.ID).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		var original string
+		if json.Unmarshal(stored, &original) != nil || strings.ContainsRune(original, 0) {
+			t.Fatalf("审计参数没有转为安全字符串: %s", stored)
+		}
+		quoted, _ := json.Marshal(original)
+		if len(quoted) > diagnosticAccessArgumentBytes || !strings.HasPrefix(strings.ReplaceAll(raw, "\x00", `\u0000`), original) || original == "" {
+			t.Fatalf("审计参数原文或大小错误: %s", stored)
+		}
+	}
+}
+
 func TestDiagnosticsUploadReadRotateAndDelete(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()

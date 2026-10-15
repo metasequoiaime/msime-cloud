@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // DiagnosticsMCPPrefix 是诊断快照远程 MCP 端点的路径前缀，完整路径是 /mcp/s/{id}。它不在 /v1 下，不用用户会话而用快照令牌鉴权，IsPath 让它绕过全局 Bearer 检查。
@@ -425,9 +426,19 @@ func (a *Service) OpenDiagnosticSnapshot(ctx context.Context, id, token string) 
 	return v, nil
 }
 
-// RecordDiagnosticAccess 为一次 MCP 工具调用写访问记录。arguments 超过 1 KiB 或不是合法 JSON 时截断成 JSON 字符串保存。
+// RecordDiagnosticAccess 为一次 MCP 工具调用写访问记录。参数过长、不是合法 JSON 或无法存入 `jsonb` 时，以不超过 1 KiB 的原文字符串保存。
 func (a *Service) RecordDiagnosticAccess(ctx context.Context, id, tool string, arguments json.RawMessage, resultCount, bytes int) error {
-	_, err := a.store.pool.Exec(ctx, `INSERT INTO diagnostic_accesses(snapshot_id,tool,arguments,result_count,bytes) VALUES($1,$2,$3,$4,$5)`, id, tool, []byte(boundedDiagnosticArguments(arguments)), resultCount, bytes)
+	const query = `INSERT INTO diagnostic_accesses(snapshot_id,tool,arguments,result_count,bytes) VALUES($1,$2,$3,$4,$5)`
+	_, err := a.store.pool.Exec(ctx, query, id, tool, []byte(boundedDiagnosticArguments(arguments)), resultCount, bytes)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return err
+	}
+	switch pgErr.Code {
+	case "22P02", "22P05", "22003":
+		// `jsonb` 还限制 Unicode 编码和 `numeric` 范围；只在数据库明确拒绝该次写入后，用原文字符串重试一次。
+		_, err = a.store.pool.Exec(ctx, query, id, tool, []byte(quotedDiagnosticArguments(strings.TrimSpace(string(arguments)))), resultCount, bytes)
+	}
 	return err
 }
 
@@ -439,6 +450,12 @@ func boundedDiagnosticArguments(arguments json.RawMessage) json.RawMessage {
 	if len(trimmed) <= diagnosticAccessArgumentBytes && json.Valid([]byte(trimmed)) {
 		return json.RawMessage(trimmed)
 	}
+	return quotedDiagnosticArguments(trimmed)
+}
+
+func quotedDiagnosticArguments(trimmed string) json.RawMessage {
+	// 实际 NUL 也不能存入 `jsonb` 字符串，保留为可见的转义文本。
+	trimmed = strings.ReplaceAll(trimmed, "\x00", `\u0000`)
 	cut := trimmed[:min(len(trimmed), diagnosticAccessArgumentBytes)]
 	for !utf8.ValidString(cut) {
 		cut = cut[:len(cut)-1]

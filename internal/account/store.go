@@ -677,7 +677,7 @@ func (s *Store) Refresh(ctx context.Context, token string) (Tokens, error) {
 			return Tokens{}, ErrRefreshSuperseded
 		}
 		// 已轮换令牌被重放时撤销该会话族，已签发的新 access_token 也立即失效。
-		_, e = tx.Exec(ctx, "UPDATE auth_sessions SET revoked=true WHERE id=(SELECT session_id FROM auth_used_refresh WHERE hash=$1)", hash(token))
+		_, e = tx.Exec(ctx, "UPDATE auth_sessions SET revoked=true WHERE id=(SELECT session_id FROM auth_used_refresh WHERE hash=$1) AND NOT revoked", hash(token))
 		if e != nil {
 			return Tokens{}, e
 		}
@@ -707,10 +707,10 @@ func (s *Store) Refresh(ctx context.Context, token string) (Tokens, error) {
 }
 func (s *Store) Logout(ctx context.Context, p Principal, all bool) error {
 	if all {
-		_, e := s.pool.Exec(ctx, "UPDATE auth_sessions SET revoked=true WHERE user_id=$1", p.UserID)
+		_, e := s.pool.Exec(ctx, "UPDATE auth_sessions SET revoked=true WHERE user_id=$1 AND NOT revoked", p.UserID)
 		return e
 	}
-	_, e := s.pool.Exec(ctx, "UPDATE auth_sessions SET revoked=true WHERE id=$1", p.SessionID)
+	_, e := s.pool.Exec(ctx, "UPDATE auth_sessions SET revoked=true WHERE id=$1 AND NOT revoked", p.SessionID)
 	return e
 }
 func (s *Store) Me(ctx context.Context, uid string) (User, []Identity, error) {

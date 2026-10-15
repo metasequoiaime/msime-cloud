@@ -90,6 +90,7 @@ function formatHours(value: number | null): string {
 const isOpenRow = (row: IssueRow) => row.state === "new" || row.state === "triaged";
 
 type ActionInput = { action: IssueAction; items: IssueRef[]; body?: string };
+type ReplyDraft = { issueKey: string; body: string };
 
 export default function IssuesPage() {
   const api = useAPI();
@@ -105,7 +106,7 @@ export default function IssuesPage() {
   const [state, setState] = useState<IssueStateFilter>("open");
   const [page, setPage] = useState(1);
   const [openKey, setOpenKey] = useState<string | null>(null);
-  const [reply, setReply] = useState("");
+  const [reply, setReply] = useState<ReplyDraft | null>(null);
 
   const list = useQuery({
     queryKey: keys.page("issues", "list", { platform, state, page }),
@@ -123,12 +124,12 @@ export default function IssuesPage() {
   }, [focus]);
   const openRef = openKey ? parseIssueKey(openKey) : null;
   const openIssue = useCallback((key: string) => {
-    setReply("");
+    setReply(null);
     setOpenKey(key);
   }, []);
   const closeDrawer = () => {
     setOpenKey(null);
-    setReply("");
+    setReply(null);
     if (focus) setSearch({ focus: undefined });
   };
 
@@ -236,9 +237,10 @@ export default function IssuesPage() {
   const searchText = useCallback((row: IssueRow) => `#${row.number} ${row.title} ${row.author} ${row.labels.join(" ")} ${platformName(row.platform)}`, [platformName]);
 
   const sendReply = useMutation({
-    mutationFn: (v: { ref: IssueRef; body: string }) => runAction({ action: "comment", items: [v.ref], body: v.body }),
-    onSuccess: () => {
-      setReply("");
+    mutationFn: (v: { ref: IssueRef; draft: ReplyDraft }) => runAction({ action: "comment", items: [v.ref], body: v.draft.body.trim() }),
+    onSuccess: (_result, v) => {
+      // 仅清理本次提交的草稿对象，保留继续输入、重开抽屉或切换 Issue 后的新草稿。
+      setReply(current => current === v.draft ? null : current);
       toast("回复已发送");
     },
     onError: error => toast(`发送失败：${errorMessage(error)}`),
@@ -302,7 +304,7 @@ export default function IssuesPage() {
         pagination={{ page, total: data?.total ?? 0, pageSize: data?.page_size ?? 50, onPageChange: setPage }}
       />
     </div>
-    {openRef && <IssueDrawer
+    {openRef && openKey && <IssueDrawer
       onClose={closeDrawer}
       fallback={data?.items.find(row => issueKey(row) === openKey)}
       detail={detail}
@@ -313,13 +315,14 @@ export default function IssuesPage() {
       onTriage={row => void triage([row])}
       onCloseIssue={row => void close([row])}
       onReopen={row => void reopen([row])}
-      composer={<DrawerComposer value={reply} onChange={setReply} templates={replyTemplates} sending={sendReply.isPending}
+      composer={<DrawerComposer value={reply && reply.issueKey === openKey ? reply.body : ""} onChange={body => setReply({ issueKey: openKey, body })} templates={replyTemplates} sending={sendReply.isPending}
         onSend={() => {
           if (!canTriage) {
             toast(noPermissionHint);
             return;
           }
-          sendReply.mutate({ ref: openRef, body: reply.trim() });
+          if (!reply || reply.issueKey !== openKey || !reply.body.trim()) return;
+          sendReply.mutate({ ref: openRef, draft: reply });
         }} />}
     />}
   </>;

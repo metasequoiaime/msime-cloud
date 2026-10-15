@@ -697,6 +697,84 @@ def check_mirror_pending(context, base: str, problems: list[str]):
                 page.close()
 
 
+def check_pending_form_drafts(context, base: str, problems: list[str]):
+    # 成功只清理已提交的内容；等待期间继续输入的新草稿和失败时的原文都应保留。
+    cases = (
+        ("/words", "敏感词或正则", "添加", "**/api/actions", {"ok": True, "affected": 1, "id": 55}, "测试词甲", "测试词乙", "已添加「测试词甲」"),
+        ("/perm", "Google 账号邮箱", "添加管理员", "**/api/admins", {"ok": True, "affected": 1}, "first@example.test", "second@example.test", "已添加管理员 first"),
+        ("/issues?focus=metasequoiaime%2Fmsime%2312", "回复提交者…", "发送", "**/api/issues/actions", {"ok": True, "affected": 1, "failed": []}, "先提交的回复", "等待期间新写的回复", "回复已发送"),
+    )
+    for path, label, button, endpoint, response, first, newer, success in cases:
+        for editing in (True, False):
+            for status in (200, 500):
+                page = context.new_page()
+                page.on("pageerror", lambda error: problems.append(f"表单草稿测试页面异常：{error}"))
+                pending = []
+                page.route("**/api/auth/session", lambda route: route.fulfill(json=FIXTURES["/api/auth/session"]))
+                page.route("**/api/shell", lambda route: route.fulfill(json={**FIXTURES["/api/shell"], "me": {**FIXTURES["/api/shell"]["me"], "permissions": ["review_community", "manage_permissions", "triage_issues"]}}))
+                page.route(endpoint, lambda route: pending.append(route))
+                try:
+                    page.goto(base + path)
+                    field = page.get_by_role("textbox", name=label, exact=True)
+                    field.fill(first)
+                    with page.expect_request(lambda request: request.method == "POST") as sent:
+                        page.get_by_role("button", name=button, exact=True).click()
+                    payload = sent.value.post_data_json
+                    submitted = payload["value"]["pattern"] if path == "/words" else payload["email"] if path == "/perm" else payload["body"]
+                    assert submitted == first
+                    expect(field).to_be_enabled()
+                    if editing:
+                        field.fill(newer)
+                    pending.pop().fulfill(status=status, json=response if status == 200 else {"error": "admin_auth_unavailable"})
+                    if status == 200:
+                        expect(page.get_by_text(success, exact=True)).to_be_visible()
+                    else:
+                        expect(page.get_by_text(re.compile(r"^(添加失败|操作失败|发送失败)："))).to_be_visible()
+                    expect(field).to_have_value(newer if editing else "" if status == 200 else first)
+                    problems.extend(f"表单草稿测试 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+                finally:
+                    for route in pending:
+                        route.abort()
+                    page.unroute_all(behavior="ignoreErrors")
+                    page.close()
+
+
+def check_issue_reply_draft_switch(context, base: str, problems: list[str]):
+    # 关闭后重新打开同一 Issue，或切到另一 Issue，即使新旧正文相同也不能清空新草稿。
+    for target in (12, 13):
+        for status in (200, 500):
+            page = context.new_page()
+            page.on("pageerror", lambda error: problems.append(f"Issue 草稿切换测试页面异常：{error}"))
+            pending = []
+            other = {**SMOKE_ISSUE, "number": 13, "title": "另一个问题", "url": "https://github.com/metasequoiaime/msime/issues/13"}
+            page.route("**/api/auth/session", lambda route: route.fulfill(json=FIXTURES["/api/auth/session"]))
+            page.route("**/api/shell", lambda route: route.fulfill(json={**FIXTURES["/api/shell"], "me": {**FIXTURES["/api/shell"]["me"], "permissions": ["triage_issues"]}}))
+            page.route("**/api/issues?*", lambda route: route.fulfill(json={**FIXTURES["/api/issues"], "items": [SMOKE_ISSUE, other], "total": 2}))
+            page.route("**/api/issues/metasequoiaime/msime/13", lambda route: route.fulfill(json={**FIXTURES["/api/issues/metasequoiaime/msime/12"], "issue": {**other, "body": "另一个问题的正文"}}))
+            page.route("**/api/issues/actions", lambda route: pending.append(route))
+            try:
+                page.goto(base + "/issues?focus=metasequoiaime%2Fmsime%2312")
+                field = page.get_by_role("textbox", name="回复提交者…", exact=True)
+                field.fill("需要补充日志")
+                with page.expect_request(lambda request: request.method == "POST") as sent:
+                    page.get_by_role("button", name="发送", exact=True).click()
+                assert sent.value.post_data_json["items"] == [{"repo": "metasequoiaime/msime", "n": 12}]
+                page.get_by_role("button", name="关闭", exact=True).click()
+                page.get_by_role("row").filter(has_text=f"#{target}").click()
+                expect(page.get_by_role("dialog")).to_contain_text(f"#{target} ")
+                expect(field).to_have_value("")
+                field.fill("需要补充日志")
+                pending.pop().fulfill(status=status, json={"ok": True, "affected": 1, "failed": []} if status == 200 else {"error": "admin_auth_unavailable"})
+                expect(page.get_by_text("回复已发送", exact=True) if status == 200 else page.get_by_text(re.compile(r"^发送失败："))).to_be_visible()
+                expect(field).to_have_value("需要补充日志")
+                problems.extend(f"Issue 草稿切换测试 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+            finally:
+                for route in pending:
+                    route.abort()
+                page.unroute_all(behavior="ignoreErrors")
+                page.close()
+
+
 def main() -> int:
     if not (DIST / "index.html").is_file():
         raise SystemExit("admin-web/dist is missing; run pnpm build first")
@@ -1295,6 +1373,8 @@ def main() -> int:
                 check_notice_pending(context, base, problems)
                 check_notice_pending_focus(context, base, problems)
                 check_mirror_pending(context, base, problems)
+                check_pending_form_drafts(context, base, problems)
+                check_issue_reply_draft_switch(context, base, problems)
             finally:
                 browser.close()
     finally:

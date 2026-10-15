@@ -129,7 +129,7 @@ function Members({ data }: { data: Permissions }) {
       const name = v.email.split("@")[0];
       const text = { add: `已添加管理员 ${name}`, enable: `已重新启用 ${name}`, disable: `已停用 ${name}`, revoke: `已撤销 ${name} 的全部会话`, set_role: `已将 ${name} 设为「${roleLabel(v.role ?? "")}」` }[v.action];
       toast(text);
-      if (v.action === "add") setEmail("");
+      if (v.action === "add") setEmail(current => current.trim().toLowerCase() === v.email ? "" : current);
     },
     onError: error => toast(`操作失败：${errorMessage(error)}`),
     onSettled: () => client.invalidateQueries({ queryKey: keys.page("perm") }),

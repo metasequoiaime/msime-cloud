@@ -109,7 +109,7 @@ export default function WordsPage() {
     }
     add.mutate({ pattern: typed, category, level }, {
       onSuccess: () => {
-        setText("");
+        setText(current => current.trim() === typed ? "" : current);
         toast(`已添加「${typed}」`);
       },
       onError: error => {

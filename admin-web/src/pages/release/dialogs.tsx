@@ -57,8 +57,8 @@ export function TriggerDialog({ platform, workflow, initialVersion, pending, onC
     description={<>在默认分支上运行 <span className="font-mono text-[13px]">{workflow}</span>，流水线完成后 GitHub Release 会出现在发布历史里。</>}>
     <label className="block text-[12.5px] font-semibold text-muted" htmlFor="release-version">版本号</label>
     {/* biome-ignore lint/a11y/noAutofocus: the dialog exists to collect this one value */}
-    <input id="release-version" autoFocus value={version} onChange={event => setVersion(event.target.value)} placeholder="v0.5.5" spellCheck={false} autoComplete="off"
-      className="mt-1.5 block h-9 w-full rounded-[10px] bg-panel-2 px-3 font-mono text-[13.5px] text-ink outline-none placeholder:text-muted focus:ring-[1.5px] focus:ring-accent" />
+    <input id="release-version" autoFocus disabled={pending} value={version} onChange={event => setVersion(event.target.value)} placeholder="v0.5.5" spellCheck={false} autoComplete="off"
+      className="mt-1.5 block h-9 w-full rounded-[10px] bg-panel-2 px-3 font-mono text-[13.5px] text-ink outline-none placeholder:text-muted focus:ring-[1.5px] focus:ring-accent disabled:cursor-wait disabled:opacity-60" />
     {version.trim() !== "" && !valid && <p className="m-0 mt-1.5 text-xs text-bad">版本号格式不正确，例如 v0.5.5。</p>}
   </FormDialog>;
 }
@@ -76,8 +76,8 @@ export function NotesDialog({ title, initialBody, pending, onClose, onSubmit }: 
     description={<>Markdown 格式，保存后直接更新 GitHub Release。用 <span className="font-mono text-[13px]">### 新增</span>、<span className="font-mono text-[13px]">### 修复</span>、<span className="font-mono text-[13px]">### 改进</span>、<span className="font-mono text-[13px]">### 说明</span>、<span className="font-mono text-[13px]">### 待办</span> 分组。</>}>
     <label className="sr-only" htmlFor="release-notes">发布说明</label>
     {/* biome-ignore lint/a11y/noAutofocus: the dialog exists to edit this text */}
-    <textarea id="release-notes" autoFocus rows={14} value={body} onChange={event => setBody(event.target.value)} spellCheck={false}
+    <textarea id="release-notes" autoFocus disabled={pending} rows={14} value={body} onChange={event => setBody(event.target.value)} spellCheck={false}
       placeholder={"### 新增\n- 剪贴板历史支持固定条目\n\n### 修复\n- Win11 24H2 下候选窗偏移"}
-      className="block max-h-[60vh] w-full resize-y rounded-[10px] bg-panel-2 px-3 py-2.5 font-mono text-[13px] leading-relaxed text-ink outline-none placeholder:text-muted focus:ring-[1.5px] focus:ring-accent" />
+      className="block max-h-[60vh] w-full resize-y rounded-[10px] bg-panel-2 px-3 py-2.5 font-mono text-[13px] leading-relaxed text-ink outline-none placeholder:text-muted focus:ring-[1.5px] focus:ring-accent disabled:cursor-wait disabled:opacity-60" />
   </FormDialog>;
 }

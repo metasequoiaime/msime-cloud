@@ -82,6 +82,35 @@ func TestAdminPersonalTokenEndToEnd(t *testing.T) {
 	if w = call("POST", "/api/me", `{"action":"regenerate_token"}`, "", ownerToken); w.Code != 403 {
 		t.Fatal("token renewed itself", w.Code)
 	}
+	otherOwner, err := s.accounts.CreateAdminSession(ctx, account.AdminIdentity{Subject: "o", Email: "owner@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 当前会话只由通过鉴权的凭据决定，不能被附带的其他 Cookie 覆盖。
+	currentID := sessions[0].(map[string]any)["id"].(string)
+	for _, tc := range []struct {
+		name, cookie, bearer, current string
+	}{
+		{"cookie", owner, "", currentID},
+		{"bearer", "", owner, currentID},
+		{"bearer_with_other_cookie", otherOwner, owner, currentID},
+		{"personal_token_with_cookie", owner, ownerToken, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			me := decode(call("GET", "/api/me", "", tc.cookie, tc.bearer), 200)
+			sessions := me["sessions"].([]any)
+			if len(sessions) != 2 {
+				t.Fatalf("会话列表数量错误：%d", len(sessions))
+			}
+			for _, item := range sessions {
+				session := item.(map[string]any)
+				want := session["id"] == tc.current
+				if session["current"] != want {
+					t.Errorf("会话 %s 的 current=%v，期望 %v", session["id"], session["current"], want)
+				}
+			}
+		})
+	}
 	// 命令行的有效 Bearer 会话也能签发，来源验证必须沿用其鉴权优先级，不能误用附带的无效 Cookie。
 	ownerToken = decode(call("POST", "/api/me", `{"action":"regenerate_token"}`, strings.Repeat("0", 64), owner), 200)["token"].(string)
 

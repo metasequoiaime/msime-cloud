@@ -493,9 +493,9 @@ type logKey struct {
 
 func (e lokiEntry) key() logKey {
 	h := fnv.New64a()
-	_, _ = io.WriteString(h, e.pod)
+	_, _ = h.Write([]byte(e.pod))
 	_, _ = h.Write([]byte{0})
-	_, _ = io.WriteString(h, e.line)
+	_, _ = h.Write([]byte(e.line))
 	return logKey{e.ns, h.Sum64()}
 }
 

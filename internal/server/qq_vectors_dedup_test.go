@@ -48,7 +48,7 @@ func TestQQDocVectorsAvoidPreparingDuplicateContent(t *testing.T) {
 			t.Fatalf("合成 embedding 失败时 count=%d，err=%v", count, err)
 		}
 	})
-	// ID 仍逐段计算；其余开销只应来自首次保留的段落和一次合成请求。
+	// 相同文档名和标题只计算一次 ID；其余开销只应来自首次保留的段落和一次合成请求。
 	if overhead := allocations - identityAllocations; overhead > 256 {
 		t.Fatalf("重复正文准备额外分配 %.0f 次，超过 256 次预算", overhead)
 	}

@@ -701,17 +701,17 @@ func (s *Store) Refresh(ctx context.Context, token string) (Tokens, error) {
 		return Tokens{}, e
 	}
 	t := Tokens{AccessToken: randomToken(), RefreshToken: randomToken(), TokenType: "Bearer", ExpiresIn: 900}
-	if _, e = tx.Exec(ctx, "INSERT INTO auth_used_refresh(hash,session_id,used_at) VALUES($1,$2,clock_timestamp())", hash(token), sid); e != nil {
-		return t, e
-	}
-	if _, e = tx.Exec(ctx, "UPDATE auth_sessions SET access_hash=$1,refresh_hash=$2,access_expires=least(clock_timestamp()+interval '15 minutes',expires_at) WHERE id=$3", hash(t.AccessToken), hash(t.RefreshToken), sid); e != nil {
-		return t, e
-	}
-	e = scanUser(tx.QueryRow(ctx, userQuery, uid), &t.User)
-	if e != nil {
-		return t, e
-	}
-	if e = tx.QueryRow(ctx, "SELECT greatest(0,floor(extract(epoch FROM access_expires-clock_timestamp())))::int FROM auth_sessions WHERE id=$1", sid).Scan(&t.ExpiresIn); e != nil {
+	// 会话锁与锁后过期复查完成后，按原顺序批量记录轮换历史、更新会话并读取资料和剩余有效期。
+	batch := &pgx.Batch{}
+	batch.Queue("INSERT INTO auth_used_refresh(hash,session_id,used_at) VALUES($1,$2,clock_timestamp())", hash(token), sid)
+	batch.Queue("UPDATE auth_sessions SET access_hash=$1,refresh_hash=$2,access_expires=least(clock_timestamp()+interval '15 minutes',expires_at) WHERE id=$3", hash(t.AccessToken), hash(t.RefreshToken), sid)
+	batch.Queue(userQuery, uid).QueryRow(func(row pgx.Row) error {
+		return scanUser(row, &t.User)
+	})
+	batch.Queue("SELECT greatest(0,floor(extract(epoch FROM access_expires-clock_timestamp())))::int FROM auth_sessions WHERE id=$1", sid).QueryRow(func(row pgx.Row) error {
+		return row.Scan(&t.ExpiresIn)
+	})
+	if e = tx.SendBatch(ctx, batch).Close(); e != nil {
 		return t, e
 	}
 	return t, tx.Commit(ctx)

@@ -61,7 +61,7 @@ func (a *Service) CommunityReport(w http.ResponseWriter, r *http.Request) {
 	if input.Kind == "candidate-skins" {
 		visible += ` AND visibility='public'`
 	}
-	// 可见性检查和举报写入共用一条语句，避免在事务中为同一条举报往返两次。
+	// 可见性检查、举报和通知写入共用一条语句，避免在事务中为同一条举报往返多次。
 	var name string
 	var created, available bool
 	err = tx.QueryRow(ctx, `WITH visible AS MATERIALIZED (
@@ -71,8 +71,13 @@ func (a *Service) CommunityReport(w http.ResponseWriter, r *http.Request) {
  SELECT $2,$1,$3,$4,$5 FROM visible
  ON CONFLICT(kind,item_id,reporter_id) DO NOTHING
  RETURNING 1
+), notified AS (
+ INSERT INTO admin_notifications(kind,title,target_page,target_id,created_at)
+ SELECT $6,$7||'「'||visible.name||'」被举报：'||$4,'community',$2||'/'||$1,clock_timestamp()
+ FROM visible, inserted
+ RETURNING 1
 )
-SELECT COALESCE((SELECT name FROM visible),''),EXISTS(SELECT 1 FROM inserted),EXISTS(SELECT 1 FROM visible)`, input.ItemID, input.Kind, p.UserID, input.Reason, input.Detail).Scan(&name, &created, &available)
+SELECT COALESCE((SELECT name FROM visible),''),EXISTS(SELECT 1 FROM inserted),EXISTS(SELECT 1 FROM visible)`, input.ItemID, input.Kind, p.UserID, input.Reason, input.Detail, NotifyReport, section.label).Scan(&name, &created, &available)
 	if err != nil {
 		a.error(w, err)
 		return
@@ -80,12 +85,6 @@ SELECT COALESCE((SELECT name FROM visible),''),EXISTS(SELECT 1 FROM inserted),EX
 	if !available {
 		writeError(w, 404, "item_not_found")
 		return
-	}
-	if created {
-		if err = a.Notify(ctx, tx, Notification{Kind: NotifyReport, Title: section.label + "「" + name + "」被举报：" + input.Reason, TargetPage: "community", TargetID: input.Kind + "/" + input.ItemID}); err != nil {
-			a.error(w, err)
-			return
-		}
 	}
 	if err = tx.Commit(ctx); err != nil {
 		a.error(w, err)

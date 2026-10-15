@@ -797,6 +797,9 @@ const qqSentenceEnds = "。！？!?；;"
 
 // qqPromoSentence 判断一句话是不是在引流：带 QQ 群号、微信号，或者不在 qqAllowedDomains 里的裸域名。返回命中的种类，没有命中时为空。
 func qqPromoSentence(sentence string) string {
+	if !qqPromoSentenceCandidate(sentence) {
+		return ""
+	}
 	if qqGroupNumberPattern.MatchString(sentence) {
 		return "group"
 	}
@@ -821,10 +824,15 @@ func qqPromoSentence(sentence string) string {
 	return ""
 }
 
+// qqPromoSentenceCandidate 判断句子是否含有引流规则可能命中的字面字符；普通句子跳过三组正则扫描。
+func qqPromoSentenceCandidate(sentence string) bool {
+	return strings.ContainsAny(sentence, "群微信vV.")
+}
+
 // qqDropPromoSentences 删掉答案里引流的整句（见 qqPromoSentence）：资料里的 issue 正文和网页是任何人都能写的，模型偶尔会把里面的「加群」「加微信」「去某网址下载」转述出来，提示词之外再在输出端兜一道。一行里的句子都删光时整行去掉。
 func qqDropPromoSentences(answer string) string {
 	// 三类规则都依赖这些字面字符；没有候选字符时直接复用正文，避免逐句运行正则。
-	if !strings.ContainsAny(answer, "群微信vV.") {
+	if !qqPromoSentenceCandidate(answer) {
 		return strings.TrimSpace(answer)
 	}
 	// 先只扫描切片，不拆分或构建正文；绝大多数模型回答没有引流句。
@@ -837,7 +845,7 @@ func qqDropPromoSentences(answer string) string {
 				_, size := utf8.DecodeRuneInString(sentence[i:])
 				end = i + size
 			}
-			if qqPromoSentence(sentence[:end]) != "" {
+			if qqPromoSentenceCandidate(sentence[:end]) && qqPromoSentence(sentence[:end]) != "" {
 				goto filter
 			}
 			sentence = sentence[end:]

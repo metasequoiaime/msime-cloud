@@ -1,12 +1,9 @@
 package account
 
 import (
-	"errors"
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/jackc/pgx/v5"
 )
 
 // communityReportsPerHour bounds how many reports one account can file, so a single account cannot flood the moderators' notifications.
@@ -64,22 +61,26 @@ func (a *Service) CommunityReport(w http.ResponseWriter, r *http.Request) {
 	if input.Kind == "candidate-skins" {
 		visible += ` AND visibility='public'`
 	}
+	// 可见性检查和举报写入共用一条语句，避免在事务中为同一条举报往返两次。
 	var name string
-	err = tx.QueryRow(ctx, `SELECT name FROM `+section.table+section.where(`id=$1`)+visible, input.ItemID).Scan(&name)
-	if errors.Is(err, pgx.ErrNoRows) {
+	var created, available bool
+	err = tx.QueryRow(ctx, `WITH visible AS MATERIALIZED (
+ SELECT name FROM `+section.table+section.where(`id=$1`)+visible+`
+), inserted AS (
+ INSERT INTO community_reports(kind,item_id,reporter_id,reason,detail)
+ SELECT $2,$1,$3,$4,$5 FROM visible
+ ON CONFLICT(kind,item_id,reporter_id) DO NOTHING
+ RETURNING 1
+)
+SELECT COALESCE((SELECT name FROM visible),''),EXISTS(SELECT 1 FROM inserted),EXISTS(SELECT 1 FROM visible)`, input.ItemID, input.Kind, p.UserID, input.Reason, input.Detail).Scan(&name, &created, &available)
+	if err != nil {
+		a.error(w, err)
+		return
+	}
+	if !available {
 		writeError(w, 404, "item_not_found")
 		return
 	}
-	if err != nil {
-		a.error(w, err)
-		return
-	}
-	tag, err := tx.Exec(ctx, `INSERT INTO community_reports(kind,item_id,reporter_id,reason,detail) VALUES($1,$2,$3,$4,$5) ON CONFLICT(kind,item_id,reporter_id) DO NOTHING`, input.Kind, input.ItemID, p.UserID, input.Reason, input.Detail)
-	if err != nil {
-		a.error(w, err)
-		return
-	}
-	created := tag.RowsAffected() == 1
 	if created {
 		if err = a.Notify(ctx, tx, Notification{Kind: NotifyReport, Title: section.label + "「" + name + "」被举报：" + input.Reason, TargetPage: "community", TargetID: input.Kind + "/" + input.ItemID}); err != nil {
 			a.error(w, err)

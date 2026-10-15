@@ -275,12 +275,11 @@ func applyDictionaryChanges(name, text string, changes []dictionaryEdit) (string
 		result += strings.Join(additions, newline) + newline
 	}
 	// 翻译允许覆盖同一源词，其他文件按前两列去重。
-	seen := map[string]int{}
-	oldCounts := map[string]int{}
+	remaining := map[string]int{}
 
 	for _, line := range lines {
 		if k := dictionaryEntryKey(line); k != "" {
-			oldCounts[k]++
+			remaining[k]++
 		}
 	}
 	for _, line := range strings.Split(result, "\n") {
@@ -288,8 +287,12 @@ func applyDictionaryChanges(name, text string, changes []dictionaryEdit) (string
 		if k == "" {
 			continue
 		}
-		seen[k]++
-		if seen[k] > max(1, oldCounts[k]) {
+		if count, exists := remaining[k]; !exists {
+			// 新键只允许出现一次；保留零值以拒绝后续重复。
+			remaining[k] = 0
+		} else if count > 0 {
+			remaining[k] = count - 1
+		} else {
 			return "", dictionaryChangeFail(409, "dictionary_duplicate")
 		}
 	}

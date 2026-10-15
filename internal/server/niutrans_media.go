@@ -384,6 +384,8 @@ func (s *Server) sendNiuTrans(r *http.Request, target, method, contentType strin
 			return nil, "", statErr
 		}
 		req.ContentLength = info.Size()
+		// 传输层可在返回后异步关闭请求体；临时文件由上传处理函数独占关闭，避免 Windows 在并发关闭尚未完成时删除失败。
+		req.Body = io.NopCloser(file)
 	}
 	resp, err := s.client.Do(req)
 	if err != nil {

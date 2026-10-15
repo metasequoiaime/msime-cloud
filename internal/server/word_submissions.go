@@ -788,11 +788,13 @@ func wordWeightRange(content string) (low, high int, ok bool) {
 	return low, high, ok
 }
 
-// appendSubmissionLines adds the submission's lines to content, making sure the existing content ends with a newline first. Word weights are fitted to the range base words.txt uses (and never below 1, the build's minimum).
+// appendSubmissionLines 追加投稿词条，并在原文缺少末尾换行时补齐。仅中文词条需要读取基础词库的权重范围，且权重不低于 1。
 func appendSubmissionLines(content string, sub submission, base string) string {
-	low, high, ok := wordWeightRange(base)
-	if !ok {
-		low, high = 1, math.MaxInt
+	low, high := 1, math.MaxInt
+	if sub.kind == kindWords {
+		if baseLow, baseHigh, ok := wordWeightRange(base); ok {
+			low, high = baseLow, baseHigh
+		}
 	}
 	var b strings.Builder
 	b.WriteString(content)

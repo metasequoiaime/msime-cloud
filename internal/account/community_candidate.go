@@ -679,6 +679,17 @@ func (a *Service) candidateWriteRate(ctx context.Context, userID, visibility str
 	return a.RateLimit(ctx, scope, userID, limit, time.Hour)
 }
 
+func (a *Service) candidateWriteRateTx(ctx context.Context, tx pgx.Tx, userID, visibility string) error {
+	scope, limit := "candidate-library", candidateLibraryWritesPerHour
+	if visibility == "public" {
+		scope, limit = "candidate-publish", candidatePublishesPerHour
+	}
+	if a.config.Community.officialSkinPublisher(userID) {
+		limit = candidateOfficialWritesPerHour
+	}
+	return rateTx(ctx, tx, scope+":"+hash(userID), limit, time.Hour)
+}
+
 // candidatePublicLimit 返回账号最多可以有几款公开作品：普通账号 maxCandidateSkinsPerUser，官方发布账号只受总数上限 maxCandidateLibraryRows 约束。
 func (a *Service) candidatePublicLimit(userID string) int {
 	if a.config.Community.officialSkinPublisher(userID) {
@@ -1036,14 +1047,14 @@ FROM community_candidate_skins s WHERE s.id=$1 AND s.owner_id=$2 FOR UPDATE`, id
 				writeError(w, 409, "candidate_skin_publish_limit")
 				return
 			}
-			if e = a.candidateWriteRate(r.Context(), p.UserID, "public"); e != nil {
+			if e = a.candidateWriteRateTx(r.Context(), tx, p.UserID, "public"); e != nil {
 				a.error(w, e)
 				return
 			}
 		}
 	}
 	if categoryChanged {
-		if e = a.candidateWriteRate(r.Context(), p.UserID, "private"); e != nil {
+		if e = a.candidateWriteRateTx(r.Context(), tx, p.UserID, "private"); e != nil {
 			a.error(w, e)
 			return
 		}

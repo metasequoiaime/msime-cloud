@@ -11,6 +11,10 @@ func TestActionBanUserBatchesCommunityUpdates(t *testing.T) {
 	db := testStore(t)
 	ctx := t.Context()
 	user := complete(t, db, Identity{"email", "ban-content-batch@example.test"})
+	if _, err := db.pool.Exec(ctx, `UPDATE auth_sessions SET revoked=true WHERE user_id=$1`, user.User.ID); err != nil {
+		t.Fatal(err)
+	}
+	complete(t, db, Identity{"email", "ban-content-batch@example.test"})
 	if _, err := db.pool.Exec(ctx, `INSERT INTO community_skins(id,owner_id,name,design) VALUES('batch-ban-skin',$1,'Skin','{}')`, user.User.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -45,6 +49,7 @@ func TestActionBanUserBatchesCommunityUpdates(t *testing.T) {
 		t.Fatal(err)
 	}
 	trace.mu.Lock()
+	queries := trace.seen
 	var updates int
 	for _, statement := range trace.statements {
 		if strings.Contains(statement, "UPDATE community_") {
@@ -52,11 +57,17 @@ func TestActionBanUserBatchesCommunityUpdates(t *testing.T) {
 		}
 	}
 	trace.mu.Unlock()
+	if queries != 2 {
+		t.Errorf("封禁用了 %d 次数据库调用，期望 2 次（不含外层事务与审计）", queries)
+	}
 	if updates != 1 {
 		t.Fatalf("封禁四张社区表用了 %d 次数据库更新，期望批量写入 1 次", updates)
 	}
 	if removed, ok := result.Detail["removed"].(int64); !ok || removed != 4 {
 		t.Fatalf("封禁移除数量 %v，期望 4", result.Detail["removed"])
+	}
+	if sessions, ok := result.Detail["sessions"].(int64); !ok || sessions != 1 || result.Extra["sessions"] != sessions {
+		t.Fatal("撤销会话数量包含了已撤销的会话", result.Detail["sessions"])
 	}
 	if err = tx.Commit(ctx); err != nil {
 		t.Fatal(err)

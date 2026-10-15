@@ -48,10 +48,13 @@ func TestListedLinesMatchesPrevious(t *testing.T) {
 		{"", nil}, {"", []string{"a\tb"}},
 		{"# 说明\n\n a \t b \t3\textra\r\n", []string{"a\tb", "missing\tMissing", "a\tb"}},
 		{"a\t\t3\nonly\n\tword\t1\n", []string{"a\t", "word\t1", "only"}},
+		{"only\t\t3\nonly\tvalue\t3\n", []string{"only", "only\t", "only\tvalue", "only\tvalue\textra", "", "\t"}},
+		{"aaaa\tBBBB\t1\nx\ty\t2\nlong\tLong\t3\n", []string{"long\tLong", "x\ty"}},
 		{"b\tB\t1\na\tA\t2\na\tA\t3\n", []string{"a\tA", "b\tB", "a\tA"}},
 		{"\u2003a \t b\u2003\t1\r\n", []string{"a\tb"}},
 		{"a\tb\t" + strings.Repeat("ignored\t", 1000) + "\r\n", []string{"a\tb", "a\tb\tignored"}},
 		{"a\t" + strings.Repeat("合成", 64) + "\t1\nb\tB\t2\n", []string{"a\t" + strings.Repeat("合成", 64), "b\tB"}},
+		{"b\tB\t2\na\t" + strings.Repeat("合成", 64) + "\t1\n", []string{"a\t" + strings.Repeat("合成", 64), "b\tB"}},
 		{oversized + "\na\tA\t1\n", []string{"a\tA"}},
 		{"a\tA\t1\n" + oversized + "\nb\tB\t1", []string{"a\tA", "b\tB"}},
 		{"a\tA\t1\n" + oversized, []string{"a\tA", "a\tA"}},
@@ -126,7 +129,7 @@ func TestListedLinesLongFieldsMemoryBudget(t *testing.T) {
 		fmt.Fprintf(&text, "synthetic%04d\t%s%d\t1\n", i, strings.Repeat("合成", 20), i)
 	}
 	content := text.String()
-	lines := []submissionLine{{key: "missing\tMissing"}}
+	lines := []submissionLine{{key: "synthetic5000\t" + strings.Repeat("合成", 20) + "5000"}}
 	var got alreadyListedError
 	result := testing.Benchmark(func(b *testing.B) {
 		for b.Loop() {
@@ -136,8 +139,8 @@ func TestListedLinesLongFieldsMemoryBudget(t *testing.T) {
 	if got != nil {
 		t.Fatalf("不存在的词条被标为已有：%v", got)
 	}
-	if bytes := result.AllocedBytesPerOp(); bytes > 1<<20 {
-		t.Fatalf("扫描五千行长词条分配 %d 字节，超过 1 MiB 预算", bytes)
+	if bytes := result.AllocedBytesPerOp(); bytes > 64<<10 {
+		t.Fatalf("扫描五千行长词条分配 %d 字节，超过 64 KiB 预算", bytes)
 	}
 }
 

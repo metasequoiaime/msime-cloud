@@ -928,14 +928,18 @@ func (s *Server) shippedEntries(ctx context.Context, operation string, batch []m
 // listedLines 按输入顺序返回已有词条的索引，只保存待查键；列去除首尾空白，跳过空行和 # 注释，与词库构建规则一致。
 func listedLines(content string, lines []submissionLine) alreadyListedError {
 	pending := map[string]bool{}
+	maxKeyBytes := 0
 	for _, line := range lines {
 		pending[line.key] = true
+		maxKeyBytes = max(maxKeyBytes, len(line.key))
 	}
 	if len(pending) == 0 {
 		return nil
 	}
 	scanner := bufio.NewScanner(strings.NewReader(content))
 	scanner.Buffer(make([]byte, 0, 4096), 1<<20)
+	// 复用键缓冲区，避免为每条长词条重新分配拼接结果。
+	var keyBuffer []byte
 	for scanner.Scan() {
 		// 扫描缓冲区只在当前轮使用，待查表始终保存请求里的键。
 		line := bytes.TrimSpace(scanner.Bytes())
@@ -947,7 +951,16 @@ func listedLines(content string, lines []submissionLine) alreadyListedError {
 			continue
 		}
 		second, _, _ := bytes.Cut(rest, []byte("\t"))
-		delete(pending, string(bytes.TrimSpace(first))+"\t"+string(bytes.TrimSpace(second)))
+		first, second = bytes.TrimSpace(first), bytes.TrimSpace(second)
+		keyBytes := len(first) + 1 + len(second)
+		if keyBytes > maxKeyBytes {
+			continue
+		}
+		keyBuffer = slices.Grow(keyBuffer[:0], keyBytes)
+		keyBuffer = append(keyBuffer, first...)
+		keyBuffer = append(keyBuffer, '\t')
+		keyBuffer = append(keyBuffer, second...)
+		delete(pending, string(keyBuffer))
 		if len(pending) == 0 {
 			break
 		}

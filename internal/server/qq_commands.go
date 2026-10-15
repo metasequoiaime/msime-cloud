@@ -79,6 +79,9 @@ func qqCompact(text string) string {
 	if qqCompactCanReuse(text) {
 		return text
 	}
+	if prefix, ok := qqCompactTrailingPrefix(text); ok {
+		text = prefix
+	}
 	var compactBuilder strings.Builder
 	compactBuilder.Grow(len(text))
 	for len(text) > 0 {
@@ -98,6 +101,52 @@ func qqCompact(text string) string {
 	}
 	compact := strings.TrimPrefix(compactBuilder.String(), "/")
 	return qqTrimCommandTrailing(compact)
+}
+
+// qqCompactTrailingPrefix 找出规范化后会被裁掉的尾部表情和标点，避免先把它们写入大缓冲。
+func qqCompactTrailingPrefix(text string) (string, bool) {
+	suffixStart := len(text)
+	found := false
+	for end := len(text); end > 0; {
+		r, size := utf8.DecodeLastRuneInString(text[:end])
+		start := end - size
+		if unicode.IsSpace(r) {
+			if found {
+				suffixStart = start
+			}
+			end = start
+			continue
+		}
+		if r == utf8.RuneError && size == 1 {
+			break
+		}
+		if r >= 0xFF01 && r <= 0xFF5E {
+			r -= 0xFEE0
+		}
+		r = unicode.ToLower(r)
+		if !strings.ContainsRune(qqCommandTrailing, r) && !unicode.In(r, unicode.So, unicode.Sk) && r != 0xFE0F && r != 0x200D {
+			break
+		}
+		found = true
+		suffixStart = start
+		end = start
+	}
+	if !found {
+		return "", false
+	}
+	count, first := 0, rune(0)
+	for _, r := range text[:suffixStart] {
+		if !unicode.IsSpace(r) {
+			if count == 0 {
+				first = r
+			}
+			count++
+		}
+	}
+	if count > 0 && !(count == 1 && first == '/') {
+		return text[:suffixStart], true
+	}
+	return "", false
 }
 
 // qqTrimCommandTrailing 只统计一次字符数，逐个移除尾部标点和表情，同时至少保留一个字符。

@@ -139,3 +139,17 @@ func TestQQTrimCommandTrailingMatchesPreviousLoop(t *testing.T) {
 		}
 	}
 }
+
+func TestQQCompactTrailingAllocationBudget(t *testing.T) {
+	input := "帮助" + strings.Repeat("🙏", 8192)
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			if got := qqCompact(input); got != "帮助" {
+				t.Fatalf("尾部表情清理结果=%q", got)
+			}
+		}
+	})
+	if allocated := result.AllocedBytesPerOp(); allocated > 4<<10 {
+		t.Fatalf("尾部表情清理分配 %d 字节，超过 4 KiB 预算", allocated)
+	}
+}

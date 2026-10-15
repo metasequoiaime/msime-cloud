@@ -937,15 +937,19 @@ func listedLines(content string, lines []submissionLine) alreadyListedError {
 	scanner := bufio.NewScanner(strings.NewReader(content))
 	scanner.Buffer(make([]byte, 0, 4096), 1<<20)
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
+		// 扫描缓冲区只在当前轮使用，待查表始终保存请求里的键。
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 || bytes.HasPrefix(line, []byte("#")) {
 			continue
 		}
-		if fields := strings.Split(line, "\t"); len(fields) >= 2 {
-			delete(pending, strings.TrimSpace(fields[0])+"\t"+strings.TrimSpace(fields[1]))
-			if len(pending) == 0 {
-				break
-			}
+		first, rest, ok := bytes.Cut(line, []byte("\t"))
+		if !ok {
+			continue
+		}
+		second, _, _ := bytes.Cut(rest, []byte("\t"))
+		delete(pending, string(bytes.TrimSpace(first))+"\t"+string(bytes.TrimSpace(second)))
+		if len(pending) == 0 {
+			break
 		}
 	}
 	var listed alreadyListedError

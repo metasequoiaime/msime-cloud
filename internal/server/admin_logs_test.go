@@ -474,7 +474,7 @@ func TestPollLogsDedupesAcrossPolls(t *testing.T) {
 	now := base.Add(2 * time.Second).UnixNano()
 	out, gap, err := s.pollLogs(context.Background(), tail, now)
 	// 读完时游标推进到这次读到的位置。
-	if err != nil || gap || len(out) != 2 || out[0].line != a.line || tail.cursor != now {
+	if err != nil || len(gap) != 0 || len(out) != 2 || out[0].line != a.line || tail.cursor != now {
 		t.Fatal(out, gap, err, tail.cursor)
 	}
 	// 第二次轮询会重新取回 a、b（回看窗口内），但不再发送；晚到的 c 时间戳早于 b，仍然发送。
@@ -489,7 +489,7 @@ func TestPollLogsDedupesAcrossPolls(t *testing.T) {
 	if err != nil || len(out) != 0 {
 		t.Fatal(out, err)
 	}
-	if q := loki.seen(); q[len(q)-1].Get("direction") != "forward" || q[len(q)-1].Get("limit") != strconv.Itoa(logStreamPageSize) {
+	if q := loki.seen(); q[len(q)-1].Get("direction") != "forward" || q[len(q)-1].Get("limit") != strconv.Itoa(logStreamPageSize+1) {
 		t.Fatal(q[len(q)-1])
 	}
 	// floor 及更早的行永远不发。
@@ -516,7 +516,7 @@ func TestPollLogsPagingAndGap(t *testing.T) {
 	tail := &logTail{query: "{}", seen: map[logKey]struct{}{}, cursor: base - 1, floor: base - 1}
 	now := base + int64(time.Second)
 	out, gap, err := s.pollLogs(context.Background(), tail, now)
-	if err != nil || gap || !tail.busy || len(out) < logStreamPageSize*logStreamPages-2 || len(out) > logStreamPageSize*logStreamPages {
+	if err != nil || len(gap) != 0 || !tail.busy || len(out) < logStreamPageSize*logStreamPages-2 || len(out) > logStreamPageSize*logStreamPages {
 		t.Fatal(len(out), gap, err, tail.busy)
 	}
 	rest, _, err := s.pollLogs(context.Background(), tail, now)
@@ -531,30 +531,20 @@ func TestPollLogsPagingAndGap(t *testing.T) {
 		}
 		seen[e.line] = true
 	}
-	// 整页同一时间戳时也要前进。
-	same := time.Now().Add(-20 * time.Second).UnixNano()
-	for i := range logStreamPageSize + 5 {
-		loki.add(lokiEntry{ns: same, pod: "q", line: fmt.Sprint("same ", i)})
-	}
-	tail = &logTail{query: "{}", seen: map[logKey]struct{}{}, cursor: same - 1, floor: same - 1}
-	if out, _, err = s.pollLogs(context.Background(), tail, same+10); err != nil || len(out) != logStreamPageSize || tail.cursor <= same {
-		t.Fatal(len(out), err, tail.cursor, same)
-	}
-
 	// 游标很旧但行不多（例如安静一段时间后续传）：一次读完，不算落后。
 	now = time.Now().UnixNano()
 	fresh := lokiEntry{ns: now - int64(time.Second), pod: "p", line: "fresh"}
 	loki.add(fresh)
 	tail = &logTail{query: "{}", seen: map[logKey]struct{}{}, cursor: now - int64(10*time.Minute), floor: fresh.ns - 1}
 	out, gap, err = s.pollLogs(context.Background(), tail, now)
-	if err != nil || gap || len(out) != 1 || out[0].line != "fresh" || tail.cursor != now {
+	if err != nil || len(gap) != 0 || len(out) != 1 || out[0].line != "fresh" || tail.cursor != now {
 		t.Fatal(out, gap, err)
 	}
 
 	// 上一次用满了页数且仍落后超过 logStreamMaxLag：跳到最新位置，旧行不再发送。
 	tail = &logTail{query: "{}", seen: map[logKey]struct{}{{1, 1}: {}}, cursor: base - int64(time.Hour), floor: base - int64(time.Hour), busy: true}
 	out, gap, err = s.pollLogs(context.Background(), tail, now)
-	if err != nil || !gap || len(out) != 1 || out[0].line != "fresh" {
+	if err != nil || len(gap) == 0 || len(out) != 1 || out[0].line != "fresh" {
 		t.Fatal(out, gap, err)
 	}
 

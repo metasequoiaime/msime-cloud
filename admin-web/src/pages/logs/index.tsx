@@ -97,7 +97,7 @@ function PodChips({ pods, value, onChange, tone }: { pods: readonly string[]; va
 
 function LogRow({ row, tone }: { row: Row; tone: (pod: string) => PodTone }) {
   if (row.kind === "gap") {
-    return <div className="my-1 px-3 py-1 text-center text-[12px] text-warn" role="note">日志产生的速度超过单个连接的上限，已跳到最新位置，中间一段没有显示</div>;
+    return <div className="my-1 px-3 py-1 text-center text-[12px] text-warn" role="note">日志超出单个连接的读取上限，部分日志未显示</div>;
   }
   const { line } = row;
   return <div className={cn("flex items-start gap-2 px-3 py-[3px] hover:bg-panel-2", line.level === "ERROR" && "bg-bad-soft")}>

@@ -62,7 +62,7 @@ export function MirrorSettings() {
           <dd className="m-0 min-w-0 truncate text-body">{query.isPending ? <Skeleton className="h-4 w-32" /> : query.data?.updated_at ? `${new Date(query.data.updated_at).toLocaleString("zh-CN")} · ${query.data.updated_by}` : "从未修改"}</dd>
         </dl>
         <form onSubmit={submit} className="flex flex-wrap gap-2">
-          <input value={value} onChange={event => { setDraft(event.target.value); setInvalid(null); }} disabled={!canEdit || !query.data} title={disabledTitle}
+          <input value={value} onChange={event => { setDraft(event.target.value); setInvalid(null); }} disabled={!canEdit || !query.data || mutation.isPending} title={disabledTitle}
             type="text" inputMode="url" autoComplete="off" spellCheck={false} maxLength={512} placeholder="https://www.lanzouq.com/xxxxxx" aria-label="蓝奏云盘分享链接"
             aria-invalid={invalid !== null} aria-describedby={invalid ? "lanzou-url-error" : undefined}
             className="h-9 min-w-0 flex-[1_1_260px] rounded-[10px] bg-panel-2 px-3 text-[13.5px] text-ink outline-none placeholder:text-muted focus:ring-[1.5px] focus:ring-accent disabled:opacity-45" />

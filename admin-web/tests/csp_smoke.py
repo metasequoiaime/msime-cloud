@@ -640,6 +640,63 @@ def check_notice_pending_focus(context, base: str, problems: list[str]):
         page.close()
 
 
+def check_mirror_pending(context, base: str, problems: list[str]):
+    # 挂起保存和清空请求，避免旧响应丢掉等待期间的新输入；失败后应保留草稿供重试。
+    for clearing in (False, True):
+        for status in (200, 500):
+            page = context.new_page()
+            page.on("pageerror", lambda error: problems.append(f"镜像链接等待请求测试页面异常：{error}"))
+            pending = []
+            stored = dict(FIXTURES["/api/site-settings"])
+            draft = "https://example.test/mirror-draft"
+            page.route("**/api/auth/session", lambda route: route.fulfill(json=FIXTURES["/api/auth/session"]))
+            page.route("**/api/shell", lambda route: route.fulfill(json={**FIXTURES["/api/shell"], "me": {**FIXTURES["/api/shell"]["me"], "permissions": ["publish_notices"]}}))
+
+            def settings(route):
+                if route.request.method == "POST":
+                    pending.append(route)
+                else:
+                    route.fulfill(json=stored)
+
+            page.route("**/api/site-settings", settings)
+            try:
+                page.goto(base + "/downloads")
+                link = page.get_by_role("textbox", name="蓝奏云盘分享链接", exact=True)
+                expect(link).to_have_value(stored["lanzou_url"])
+                link.fill(draft)
+                if clearing:
+                    page.get_by_role("button", name="清空", exact=True).click()
+                    trigger = page.get_by_role("dialog").get_by_role("button", name="清空", exact=True)
+                else:
+                    trigger = page.get_by_role("button", name="保存", exact=True)
+                with page.expect_request(lambda request: request.url.endswith("/api/site-settings") and request.method == "POST") as sent:
+                    trigger.click()
+                submitted = "" if clearing else draft
+                assert sent.value.post_data_json == {"lanzou_url": submitted}
+                expect(link).to_be_disabled()
+                expect(page.get_by_role("button", name="正在保存…", exact=True)).to_be_disabled()
+                expect(page.get_by_role("button", name="清空", exact=True)).to_be_disabled()
+                expect(link).to_have_value(draft)
+                if status == 200:
+                    stored["lanzou_url"] = submitted
+                pending.pop().fulfill(status=status, json=stored if status == 200 else {"error": "admin_auth_unavailable"})
+                expect(link).to_be_enabled()
+                if status == 200:
+                    expect(link).to_have_value(submitted)
+                    expect(page.get_by_role("button", name="保存", exact=True)).to_be_disabled()
+                else:
+                    expect(page.get_by_text(re.compile(r"^保存失败："))).to_be_visible()
+                    expect(link).to_have_value(draft)
+                    expect(page.get_by_role("button", name="保存", exact=True)).to_be_enabled()
+                    expect(page.get_by_role("button", name="清空", exact=True)).to_be_enabled()
+                problems.extend(f"镜像链接等待请求测试 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+            finally:
+                for route in pending:
+                    route.abort()
+                page.unroute_all(behavior="ignoreErrors")
+                page.close()
+
+
 def main() -> int:
     if not (DIST / "index.html").is_file():
         raise SystemExit("admin-web/dist is missing; run pnpm build first")
@@ -1237,6 +1294,7 @@ def main() -> int:
                 check_profile_rollback(context, base, problems)
                 check_notice_pending(context, base, problems)
                 check_notice_pending_focus(context, base, problems)
+                check_mirror_pending(context, base, problems)
             finally:
                 browser.close()
     finally:

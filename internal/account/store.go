@@ -263,12 +263,17 @@ func (s *Store) Ready(ctx context.Context) error {
 		return e
 	}
 	// 单独补加的索引不会被表和列探测发现；按实际表检查，确保旧库启动时补齐。
-	var refreshSessionIndex bool
-	if e := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid='auth_used_refresh'::regclass AND c.relname='auth_used_refresh_session')`).Scan(&refreshSessionIndex); e != nil {
+	var refreshSessionIndex, googleProfileIndex bool
+	if e := s.pool.QueryRow(ctx, `SELECT
+ EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid='auth_used_refresh'::regclass AND c.relname='auth_used_refresh_session'),
+ EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid='auth_identities'::regclass AND c.relname='auth_identities_google_profile')`).Scan(&refreshSessionIndex, &googleProfileIndex); e != nil {
 		return e
 	}
 	if !refreshSessionIndex {
 		return errors.New("refresh session index missing")
+	}
+	if !googleProfileIndex {
+		return errors.New("google profile index missing")
 	}
 	// 连续的表和列探测只检查执行错误，一次发送并按顺序执行，任意语句失败都会触发迁移。
 	// 先取得迁移锁的共享模式，避免同批表锁与其他副本迁移的 DDL 锁反向等待。

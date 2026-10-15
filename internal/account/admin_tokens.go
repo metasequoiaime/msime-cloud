@@ -66,9 +66,10 @@ SELECT expires_at>clock_timestamp() FROM source`, sessionHash, email, adminActor
 	if err != nil {
 		return "", info, err
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM admin_tokens WHERE email=$1`, email); err != nil {
-		return "", info, err
-	}
-	err = tx.QueryRow(ctx, `INSERT INTO admin_tokens(hash,email,last4,expires_at) VALUES($1,$2,$3,now()+make_interval(secs=>$4)) RETURNING created_at,expires_at`, hash(token), email, info.Last4, adminTokenLifetime.Seconds()).Scan(&info.CreatedAt, &info.ExpiresAt)
+	// 邮箱锁与来源会话校验后，一次请求撤销旧令牌并写入新令牌，任意失败均随外层事务回滚。
+	err = tx.QueryRow(ctx, `WITH removed AS (
+ DELETE FROM admin_tokens WHERE email=$2
+)
+INSERT INTO admin_tokens(hash,email,last4,expires_at) VALUES($1,$2,$3,now()+make_interval(secs=>$4)) RETURNING created_at,expires_at`, hash(token), email, info.Last4, adminTokenLifetime.Seconds()).Scan(&info.CreatedAt, &info.ExpiresAt)
 	return token, info, err
 }

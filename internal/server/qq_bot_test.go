@@ -24,6 +24,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
 )
@@ -5811,7 +5812,7 @@ func (m *memoryFAQCandidates) CloseQQFAQCandidateLease(ctx context.Context, id i
 
 func TestQQBotFAQCandidateWriteFailureReleasesQuota(t *testing.T) {
 	s, _, limiter := qqServer(t)
-	candidates := &memoryFAQCandidates{addErr: errors.New("database unavailable")}
+	candidates := &memoryFAQCandidates{addErr: &pgconn.PgError{Code: "23514"}}
 	s.qqFAQCandidates = candidates
 
 	s.recordQQFAQCandidate(context.Background(), "五笔怎么切换", "在设置的输入方案里选五笔。")

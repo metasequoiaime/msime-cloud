@@ -20,6 +20,9 @@ var qqDraftUnclaimed = `(filed_at IS NULL OR (issue_ref='' AND filed_at<now()-'`
 // ErrQQDraftNotFound 表示草稿不存在或已经过期。
 var ErrQQDraftNotFound = errors.New("qq draft not found")
 
+// ErrQQDraftChanged 表示整理期间草稿内容已变化，本次补充没有保存。
+var ErrQQDraftChanged = errors.New("qq draft changed")
+
 // QQDraftIgnored 是管理员「忽略 D编号」后草稿的 issue_ref：被忽略的草稿和提交过的一样 filed_at 非空，不再列出、不能补充和提交，只是没有对应的 issue。
 const QQDraftIgnored = "ignored"
 
@@ -68,10 +71,21 @@ func QQDraftClaimStale(d QQDraft, now time.Time) bool {
 	return d.Filed && d.IssueRef == "" && now.Sub(d.FiledAt) > QQDraftClaimTimeout
 }
 
-// UpdateQQDraft 更新还没提交的草稿的原话和整理结果，返回是否更新了。认领超时的草稿也算没提交。
-func (a *Service) UpdateQQDraft(ctx context.Context, id int64, original, report string) (bool, error) {
-	tag, err := a.store.pool.Exec(ctx, `UPDATE qq_drafts SET original=$2,report=$3,updated_at=now() WHERE id=$1 AND `+qqDraftUnclaimed+` AND created_at>now()-$4::interval`, id, original, report, QQDraftWindow.String())
-	return tag.RowsAffected() == 1, err
+// UpdateQQDraft 更新还没提交的草稿的原话和整理结果，返回是否更新了。认领超时的草稿也算没提交；内容必须仍与整理前的快照相同，否则返回 ErrQQDraftChanged。
+func (a *Service) UpdateQQDraft(ctx context.Context, previous QQDraft, original, report string) (bool, error) {
+	var available, updated bool
+	// 先锁定并读取当前内容，等待其他补充提交后也能识别冲突；模型整理期间不持锁。
+	err := a.store.pool.QueryRow(ctx, `WITH current AS MATERIALIZED (
+SELECT id,original,report FROM qq_drafts WHERE id=$1 AND `+qqDraftUnclaimed+` AND created_at>now()-$4::interval FOR UPDATE
+), updated AS (
+UPDATE qq_drafts SET original=$2,report=$3,updated_at=now()
+WHERE id IN (SELECT id FROM current WHERE original=$5 AND report=$6) RETURNING id
+)
+SELECT EXISTS(SELECT 1 FROM current),EXISTS(SELECT 1 FROM updated)`, previous.ID, original, report, QQDraftWindow.String(), previous.Original, previous.Report).Scan(&available, &updated)
+	if err == nil && available && !updated {
+		return false, ErrQQDraftChanged
+	}
+	return updated, err
 }
 
 // ClaimQQDraft 认领一份还没提交的草稿准备提交，返回是否认领到：两个副本同时收到「提交」时只有一个能认领，不会提两遍。认领超过 QQDraftClaimTimeout 还没记下 issue 的草稿可以重新认领，提交中途副本被杀掉、来不及放回认领时，草稿不会永远卡在「提交中」。

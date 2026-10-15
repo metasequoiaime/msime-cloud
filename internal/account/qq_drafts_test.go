@@ -26,11 +26,12 @@ func TestQQDrafts(t *testing.T) {
 	if _, err := db.pool.Exec(ctx, `UPDATE qq_drafts SET updated_at=now()-interval '1 hour' WHERE id=$1`, id); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := a.UpdateQQDraft(ctx, id, "候选框跑了\n补充：Windows 11", `{"kind":"bug","platform":"windows"}`); err != nil || !ok {
+	if ok, err := a.UpdateQQDraft(ctx, d, "候选框跑了\n补充：Windows 11", `{"kind":"bug","platform":"windows"}`); err != nil || !ok {
 		t.Fatal(ok, err)
 	}
-	if updated, _ := a.QQDraft(ctx, id); time.Since(updated.UpdatedAt) > time.Minute {
-		t.Fatal("updated_at not refreshed", updated.UpdatedAt)
+	d, err = a.QQDraft(ctx, id)
+	if err != nil || time.Since(d.UpdatedAt) > time.Minute {
+		t.Fatal("updated_at not refreshed", d.UpdatedAt, err)
 	}
 	if drafts, total, err := a.OpenQQDrafts(ctx, 10); err != nil || len(drafts) != 1 || drafts[0].ID != id || total != 1 {
 		t.Fatal(drafts, total, err)
@@ -52,7 +53,7 @@ func TestQQDrafts(t *testing.T) {
 	if d, _ := a.QQDraft(ctx, id); !d.Filed || d.FiledAt.IsZero() || QQDraftClaimStale(d, time.Now()) {
 		t.Fatal(d)
 	}
-	if ok, _ := a.UpdateQQDraft(ctx, id, "候选框跑了\n补充：Windows 11", `{"kind":"bug","platform":"windows"}`); ok {
+	if ok, _ := a.UpdateQQDraft(ctx, d, "候选框跑了\n补充：Windows 11", `{"kind":"bug","platform":"windows"}`); ok {
 		t.Fatal("claimed draft updated")
 	}
 	if drafts, _, _ := a.OpenQQDrafts(ctx, 10); len(drafts) != 0 {
@@ -64,7 +65,7 @@ func TestQQDrafts(t *testing.T) {
 	if d, _ := a.QQDraft(ctx, id); !QQDraftClaimStale(d, time.Now()) {
 		t.Fatal("interrupted claim not stale", d)
 	}
-	if ok, err := a.UpdateQQDraft(ctx, id, "候选框跑了\n补充：Windows 11", `{"kind":"bug","platform":"windows"}`); err != nil || !ok {
+	if ok, err := a.UpdateQQDraft(ctx, d, "候选框跑了\n补充：Windows 11", `{"kind":"bug","platform":"windows"}`); err != nil || !ok {
 		t.Fatal("interrupted draft not updatable", ok, err)
 	}
 	if drafts, _, _ := a.OpenQQDrafts(ctx, 10); len(drafts) != 1 {
@@ -89,7 +90,7 @@ func TestQQDrafts(t *testing.T) {
 	if ok, _ := a.ClaimQQDraft(ctx, id); ok {
 		t.Fatal("filed draft claimed again")
 	}
-	if ok, _ := a.UpdateQQDraft(ctx, id, "x", "{}"); ok {
+	if ok, _ := a.UpdateQQDraft(ctx, d, "x", "{}"); ok {
 		t.Fatal("filed draft updated")
 	}
 	if drafts, _, _ := a.OpenQQDrafts(ctx, 10); len(drafts) != 0 {
@@ -169,7 +170,7 @@ func TestQQDraftsOrderAndDismiss(t *testing.T) {
 	if d, _ := a.QQDraft(ctx, ids[0]); !d.Filed || d.IssueRef != QQDraftIgnored || QQDraftClaimStale(d, time.Now().Add(time.Hour)) {
 		t.Fatal(d)
 	}
-	if ok, _ := a.UpdateQQDraft(ctx, ids[0], "x", "{}"); ok {
+	if ok, _ := a.UpdateQQDraft(ctx, QQDraft{ID: ids[0]}, "x", "{}"); ok {
 		t.Fatal("dismissed draft updated")
 	}
 	if ok, _ := a.ClaimQQDraft(ctx, ids[0]); ok {

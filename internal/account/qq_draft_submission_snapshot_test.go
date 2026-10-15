@@ -52,7 +52,7 @@ func TestQQDraftClaimSnapshotIncludesConcurrentSupplement(t *testing.T) {
 	if got.err != nil || !got.ok || got.draft.ID != id || got.draft.Subject != QQDraftSubject("G/M1") || got.draft.Original != original || got.draft.Report != report || !got.draft.Filed || got.draft.FiledAt.IsZero() || got.draft.UpdatedAt.IsZero() {
 		t.Fatalf("认领未返回补充后的完整草稿：%+v", got)
 	}
-	if ok, err := a.UpdateQQDraft(ctx, id, "迟到的补充", `{}`); err != nil || ok {
+	if ok, err := a.UpdateQQDraft(ctx, got.draft, "迟到的补充", `{}`); err != nil || ok {
 		t.Fatalf("已认领的内容仍可修改：ok=%v，错误=%v", ok, err)
 	}
 	if _, ok, err := a.ClaimQQDraftSnapshot(ctx, id); err != nil || ok {

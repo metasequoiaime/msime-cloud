@@ -34,7 +34,7 @@ const (
 type qqDraftStore interface {
 	CreateQQDraft(ctx context.Context, subject, original, report string) (int64, error)
 	QQDraft(ctx context.Context, id int64) (account.QQDraft, error)
-	UpdateQQDraft(ctx context.Context, id int64, original, report string) (bool, error)
+	UpdateQQDraft(ctx context.Context, previous account.QQDraft, original, report string) (bool, error)
 	ClaimQQDraftSnapshot(ctx context.Context, id int64) (account.QQDraft, bool, error)
 	ReleaseQQDraftLease(ctx context.Context, id int64, claimedAt time.Time) (bool, error)
 	SetQQDraftIssueLease(ctx context.Context, id int64, claimedAt time.Time, ref string) (bool, error)
@@ -359,7 +359,7 @@ func (s *Server) qqDraftCommands(ctx context.Context, m qqGroupMessage, text str
 	return "cmd_draft_file_" + s.qqFileDraft(ctx, draft, extra, reply)
 }
 
-// qqSupplementDraft 把补充内容并进草稿原话，重新整理并保存。filing 表示管理员在「提交 D编号 …」时顺带补充。几种失败分开回复：补充后整理成 other 不是临时故障，重发同一句结果不变，所以请群友写具体些、草稿不改；整理或数据库出错才是「稍后再试」；草稿已经提交或过期才说改不了。
+// qqSupplementDraft 把补充内容并进草稿原话，重新整理并保存。整理期间草稿被其他消息补充时保留已保存版本，提示重发。filing 表示管理员在「提交 D编号 …」时顺带补充。几种失败分开回复：补充后整理成 other 不是临时故障，重发同一句结果不变，所以请群友写具体些、草稿不改；整理或数据库出错才是「稍后再试」；草稿已经提交或过期才说改不了。
 func (s *Server) qqSupplementDraft(ctx context.Context, draft account.QQDraft, extra string, filing bool, reply func(string)) (qqReport, bool) {
 	code := qqDraftCode(draft.ID)
 	original := qqTruncate(draft.Original+"\n补充："+extra, qqDraftOriginalRunes)
@@ -378,8 +378,11 @@ func (s *Server) qqSupplementDraft(ctx context.Context, draft account.QQDraft, e
 		return report, false
 	}
 	raw, _ := json.Marshal(report)
-	ok, err := s.qqDrafts.UpdateQQDraft(ctx, draft.ID, original, string(raw))
+	ok, err := s.qqDrafts.UpdateQQDraft(ctx, draft, original, string(raw))
 	switch {
+	case errors.Is(err, account.ErrQQDraftChanged):
+		reply("草稿 " + code + " 刚收到另一条补充，本次补充未保存，请重新发送这条补充。")
+		return report, false
 	case err != nil:
 		slog.Warn("qq bot: draft not updated", "reason", err.Error())
 		reply(qqReplyUnavailable)

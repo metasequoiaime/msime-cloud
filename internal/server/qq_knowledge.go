@@ -498,10 +498,16 @@ func qqSplitMarkdown(name, markdown string) []qqSection {
 		}
 		sections = append(sections, qqSection{Title: title, Text: text})
 	}
-	for line := range strings.SplitAfterSeq(markdown, "\n") {
-		if before, ended := strings.CutSuffix(line, "\n"); ended {
+	for offset := 0; offset < len(markdown); {
+		lineEnd := strings.IndexByte(markdown[offset:], '\n')
+		nextOffset := len(markdown)
+		line := markdown[offset:]
+		if lineEnd >= 0 {
+			lineEnd += offset
+			nextOffset = lineEnd + 1
+			line = markdown[offset:lineEnd]
 			// 只处理有 LF 的行，保留文件末尾未组成 CRLF 的孤立回车。
-			line = strings.TrimSuffix(before, "\r")
+			line = strings.TrimSuffix(line, "\r")
 		}
 		// 代码块检测与段落开头裁剪复用前导空白扫描，后续正文仍保留缩进。
 		leading := qqMarkdownLeadingSpace(line)
@@ -519,6 +525,7 @@ func qqSplitMarkdown(name, markdown string) []qqSection {
 			heading := strings.Clone(m[2])
 			if level == 1 {
 				doc, titles, intro = heading, nil, true
+				offset = nextOffset
 				continue
 			}
 			// 二级标题是第一层，更深的标题接在上一层后面。
@@ -527,11 +534,13 @@ func qqSplitMarkdown(name, markdown string) []qqSection {
 				depth = len(titles)
 			}
 			titles = append(titles[:depth], heading)
+			offset = nextOffset
 			continue
 		}
 		if len(titles) > 0 || intro {
 			appendBody(line, leading)
 		}
+		offset = nextOffset
 	}
 	flush()
 	for i := range sections {

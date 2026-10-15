@@ -356,22 +356,34 @@ func TestNoticePublishOverwritesDraftAndDiscard(t *testing.T) {
 	}
 }
 
-func TestAdminNoticesKeepsLiveNoticesAheadOfArchived(t *testing.T) {
+func TestAdminNoticesBoundsEachStatusSeparately(t *testing.T) {
 	a, db := noticeTestService(t)
 	owner := adminTestContext(context.Background(), "legacy-token")
 	ctx := context.Background()
 	if _, err := db.pool.Exec(ctx, `INSERT INTO admin_notices(title,targets,channels,status,created_by,published_at,updated_at) VALUES('仍在展示','{all}','{site}','live','legacy-token',now()-interval '30 days',now()-interval '30 days')`); err != nil {
 		t.Fatal(err)
 	}
-	// More newer archived notices than one page holds must not push the live notice out of the console.
+	// 新草稿和归档各自超过一页时，都不能把仍公开展示的公告挤出后台。
 	if _, err := db.pool.Exec(ctx, `INSERT INTO admin_notices(title,targets,channels,status,created_by,published_at) SELECT 'archived '||g,'{all}','{site}','archived','legacy-token',now() FROM generate_series(1,$1) g`, noticeAdminLimit+5); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := db.pool.Exec(ctx, `INSERT INTO admin_notices(title,targets,channels,status,created_by) SELECT 'draft '||g,'{all}','{site}','draft','legacy-token' FROM generate_series(1,$1) g`, noticeAdminLimit+5); err != nil {
+		t.Fatal(err)
+	}
+	public := httptest.NewRecorder()
+	a.PublicNotices(public, jsonRequest("GET", NoticesPath, "", ""))
+	var feed struct {
+		Items []publicNotice `json:"items"`
+	}
+	if public.Code != 200 || json.Unmarshal(public.Body.Bytes(), &feed) != nil || len(feed.Items) != 1 || feed.Items[0].Title != "仍在展示" {
+		t.Fatal("公开公告列表", public.Code, public.Body.String())
 	}
 	r := jsonRequest("GET", "/api/notices", "", "")
 	w := httptest.NewRecorder()
 	a.AdminHTTP(w, r.WithContext(owner))
 	var list struct {
 		Items []struct {
+			ID     string `json:"id"`
 			Title  string `json:"title"`
 			Status string `json:"status"`
 		} `json:"items"`
@@ -379,16 +391,23 @@ func TestAdminNoticesKeepsLiveNoticesAheadOfArchived(t *testing.T) {
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &list) != nil {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	archived, live := 0, 0
+	archived, drafts, live := 0, 0, 0
+	liveID := ""
 	for _, n := range list.Items {
 		if n.Status == "archived" {
 			archived++
+		} else if n.Status == "draft" {
+			drafts++
 		} else if n.Title == "仍在展示" {
 			live++
+			liveID = n.ID
 		}
 	}
-	if archived != noticeAdminLimit || live != 1 || list.Items[len(list.Items)-1].Title != "仍在展示" {
-		t.Fatal(archived, live, len(list.Items))
+	if archived != noticeAdminLimit || drafts != noticeAdminLimit || live != 1 || list.Items[len(list.Items)-1].Title != "仍在展示" {
+		t.Fatal("归档、草稿、已发布和总数", archived, drafts, live, len(list.Items))
+	}
+	if status, out := noticeAction(t, a, owner, `{"action":"archive_notice","id":"`+liveID+`"}`); status != 200 {
+		t.Fatal("无法用列表中的编号归档仍展示的公告", status, out)
 	}
 }
 

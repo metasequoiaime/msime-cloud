@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -98,7 +99,8 @@ func decodeDictionarySnapshot(reader io.Reader, stage func(snapshotRecord) error
 			if err := strictSnapshotJSON(record.Data, &e); err != nil {
 				return errInvalidSnapshot
 			}
-			if !dictionaryKind(e.Kind) {
+			// 覆盖记录可以没有源 ID，但 ID 会先进入 jsonb 暂存，不能包含 PostgreSQL 不支持的 NUL。
+			if !dictionaryKind(e.Kind) || strings.ContainsRune(e.ID, '\x00') {
 				return errInvalidSnapshot
 			}
 			if !validPositionText(e.Code, 512) || !validPositionText(e.Word, 2048) || e.Revision < 1 || e.Revision > revision || e.UpdatedAt.IsZero() {

@@ -16,6 +16,28 @@ func signedSnapshot(lines ...string) []byte {
 	footer, _ := json.Marshal(map[string]any{"type": "footer", "records": len(lines), "sha256": hex.EncodeToString(hash[:])})
 	return append([]byte(body), append(footer, '\n')...)
 }
+
+func TestSnapshotDecoderOverlayIDs(t *testing.T) {
+	header := `{"type":"header","format":"msime-dictionary-snapshot","version":1,"revision":1}`
+	overlay := `{"type":"overlay","deleted":true,"data":{"id":"","kind":"pinyin","code":"ni'hao","word":"你好","weight":0,"revision":1,"updated_at":"2026-09-08T00:00:00Z","user_inserted":false}}`
+	for _, id := range []string{"", "synthetic-source-id", `synthetic\u0000source-id`, "synthetic\x00source-id"} {
+		t.Run(id, func(t *testing.T) {
+			encoded, err := json.Marshal(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw := signedSnapshot(header, strings.Replace(overlay, `"id":""`, `"id":`+string(encoded), 1))
+			err = decodeDictionarySnapshot(bytes.NewReader(raw), func(snapshotRecord) error { return nil })
+			if strings.ContainsRune(id, '\x00') {
+				if !errors.Is(err, errInvalidSnapshot) {
+					t.Fatalf("包含 NUL 的覆盖记录 ID 没有被判为无效快照：%v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("合法覆盖记录 ID 被拒绝：%v", err)
+			}
+		})
+	}
+}
 func TestSnapshotDecoderRejectsCorruptionAndAmbiguity(t *testing.T) {
 	header := `{"type":"header","format":"msime-dictionary-snapshot","version":1,"revision":2}`
 	entry := `{"type":"entry","data":{"id":"test-id","kind":"pinyin","code":"ni'hao","word":"你好","weight":10,"revision":1,"updated_at":"2026-09-08T00:00:00Z"}}`

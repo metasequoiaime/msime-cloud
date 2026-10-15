@@ -51,7 +51,7 @@ for key,op in spec['operations'].items():
     paths[op['path']]={op['method'].lower():operation}
 for key,op in spec['websocket_operations'].items():
     paths[op['path']]={'get':{'operationId':key,'summary':'实时语音 WebSocket（仅文档）','tags':['实时语音'],'description':op['protocol']+'\n\nSwagger UI 不支持 WebSocket 二进制会话。使用 WSS 客户端携带设备 Bearer 令牌建立连接。'+op['close_policy']+f' 单消息最多 {limits["stream_message_bytes"]} 字节，每方向每会话最多 {limits["stream_session_bytes"]} 字节。','x-websocket':True,'responses':{'101':{'description':'WebSocket 升级成功；后续为豆包 ASR v1 二进制消息'},'400':{'description':'需要 WebSocket Upgrade'},'401':{'description':'设备令牌无效'},'503':{'description':'功能未启用或服务繁忙'}}}}
-result={'openapi':'3.0.3','info':{'title':'水杉输入法后端 API','version':spec['version'],'description':'水杉输入法共通后端。点击 Authorize 填写设备令牌（不含 Bearer 前缀）。功能是否启用请查询 capabilities。JSON 请求最多 64 KiB，multipart 总体最多 16 MiB。服务不保存输入和音频。'},'servers':[{'url':'/'}],'security':[{'deviceToken':[]}],'paths':paths,'components':{'securitySchemes':{'deviceToken':{'type':'http','scheme':'bearer','description':'管理员发放的设备令牌；不是供应商密钥。'}},'schemas':{'Error':infer(spec['error_response'])}}}
+result={'openapi':'3.0.3','info':{'title':'水杉输入法后端 API','version':spec['version'],'description':'水杉输入法共通后端。点击 Authorize 填写设备令牌（不含 Bearer 前缀）。功能是否启用请查询 capabilities。默认 JSON 请求最多 64 KiB、multipart 总体最多 16 MiB；小牛媒体上传单个文件最多 64 MiB，其他例外见具体接口。服务不保存输入和音频。'},'servers':[{'url':'/'}],'security':[{'deviceToken':[]}],'paths':paths,'components':{'securitySchemes':{'deviceToken':{'type':'http','scheme':'bearer','description':'管理员发放的设备令牌；不是供应商密钥。'}},'schemas':{'Error':infer(spec['error_response'])}}}
 # 用户体系独立于 Engine 输入协议，避免修改客户端共通契约。
 user=obj({'id':string(),'display_name':string(),'created_at':string(format='date-time'),'email':string(format='email',description='已绑定 Google 身份的已验证邮箱，仅返回给用户本人；没有时省略。'),'avatar_url':string(format='uri',description='头像地址：上传的自定义头像优先，其次是 Google 头像；都没有时省略，客户端显示昵称首字。')},['id','display_name','created_at'])
 tokens=obj({'access_token':string(),'refresh_token':string(),'token_type':string(enum=['Bearer']),'expires_in':{'type':'integer'},'user':user})
@@ -84,6 +84,29 @@ paths['/v1/users/me/avatar']['put']={'summary':'上传自定义头像','tags':['
 result['security']=[{'deviceToken':[]},{'userSession':[]}]
 result['components']['securitySchemes']['userSession']={'type':'http','scheme':'bearer','description':'登录返回的 access_token，不是 refresh_token 或供应商密钥。'}
 result['info']['description']+=' 用户接口详见用户体系标签；登录成功后也可使用用户 access_token 调用在线输入接口。'
+# 小牛异步媒体接口独立于 Engine 契约，供 Swagger 和命令行共用。
+niutrans_field=string(minLength=1,description='非空，最多 256 UTF-8 字节，不得含 CR 或 LF。')
+niutrans_upload=obj({'file':string(format='binary',description='非空文件，最多 64 MiB。'),'from':niutrans_field,'to':niutrans_field,**{name:niutrans_field for name in ['realmCode','termId','memoryId','processingMode','translationEngine']}},['file','from','to'])
+niutrans_file={'name':'file_no','in':'path','required':True,'schema':string(minLength=1,description='小牛返回的任务编号，最多 256 UTF-8 字节，不得含 /、反斜杠、CR 或 LF。')}
+niutrans_json={'description':'成功转发小牛 JSON，最多 1 MiB；业务状态由上游 JSON 表示。','content':{'application/json':{'schema':{}}}}
+niutrans_errors={code:{'description':description,'content':{'application/json':{'schema':{'$ref':'#/components/schemas/Error'}}}} for code,description in [('400','请求参数无效'),('401','需要有效设备令牌或用户 access_token'),('403','来源不被允许或账号已封禁'),('429','请求过于频繁或并发已满'),('502','上游不可用、响应不是有效 JSON 或超过响应上限'),('503','niutrans_api_not_configured：该小牛接口未配置，或服务不可用')]}
+for kind,title in [('documents','文档'),('images','图片'),('voice','语音')]:
+    base='/v1/niutrans/'+kind
+    paths[base]={'post':{'summary':'创建小牛'+title+'翻译任务','tags':['小牛媒体翻译'],'description':'multipart/form-data 上传 file、from、to，支持领域、术语、记忆、处理模式和翻译引擎参数。单个文件最多 64 MiB，请求体最多 65 MiB，最多 32 个部件；字段名不得为空或重复，非文件字段非空、最多 256 字节且不得含 CR/LF。未列出的字段不会转发。服务端签名请求，客户端不提供供应商凭据。','requestBody':{'required':True,'content':{'multipart/form-data':{'schema':niutrans_upload}}},'responses':{'200':niutrans_json,**niutrans_errors,'413':{'description':'file_too_large_or_empty 或 too_many_parts：文件为空、超过 64 MiB 或部件超过 32 个'},'415':{'description':'multipart_required：需要 multipart/form-data'}}}}
+    for suffix,method,action in [('', 'get','查询状态'),('/interrupt','put','终止任务'),('/download','get','下载结果')]:
+        download=suffix=='/download'
+        description='使用小牛返回的 file_no 操作'+title+'翻译任务；不需要请求体。'
+        response=niutrans_json
+        parameters=[niutrans_file]
+        errors=dict(niutrans_errors)
+        if download:
+            description+=' type 取 0..5，省略或为空时使用 1。最多流式转发 64 MiB，Content-Type 沿用上游，缺失时使用 application/octet-stream。已发送响应后遇到超限或读取失败会中断连接，不追加 JSON；调用方应将残缺下载视为失败。'
+            parameters.append({'name':'type','in':'query','schema':string(enum=['0','1','2','3','4','5'],default='1')})
+            response={'description':'小牛返回的文件，最多 64 MiB。','content':{'*/*':{'schema':string(format='binary')}}}
+            errors['502']={'description':'上游不可用，或在发送文件前发现响应超过 64 MiB。','content':{'application/json':{'schema':{'$ref':'#/components/schemas/Error'}}}}
+        paths.setdefault(base+'/{file_no}'+suffix,{})[method]={'summary':'小牛'+title+'翻译：'+action,'tags':['小牛媒体翻译'],'description':description,'parameters':parameters,'responses':{'200':response,**errors}}
+paths['/v1/niutrans/documents/{file_no}']['delete']={'summary':'删除小牛文档翻译任务','tags':['小牛媒体翻译'],'description':'使用小牛返回的 file_no 删除文档任务；不需要请求体。','parameters':[niutrans_file],'responses':{'200':niutrans_json,**niutrans_errors}}
+paths['/v1/niutrans/resources']={'get':{'summary':'查询小牛资源','tags':['小牛媒体翻译'],'description':'调用已配置的小牛资源管理动作。仅使用 action 查询参数生成签名请求，其他查询参数不会转发；不需要请求体。','parameters':[{'name':'action','in':'query','required':True,'schema':string(minLength=1,description='资源管理动作，最多 64 UTF-8 字节，不得含 /、反斜杠、CR 或 LF。')}],'responses':{'200':niutrans_json,**niutrans_errors}}}
 # 跨端用户数据不属于 Engine 在线输入契约。
 preference_fields=json.loads((root/'internal/account/preferences_fields.json').read_text())
 settings=obj(preference_fields,strict=True)

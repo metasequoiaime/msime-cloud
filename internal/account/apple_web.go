@@ -124,32 +124,19 @@ func (s *Store) dropPendingAppleWebChallenge(ctx context.Context, idHash string)
 
 // grantAppleWeb 把回调校验过的身份写到挑战行上并签发授权码：库里只存授权码的 SHA-256，挑战的有效期改成签发后 appleWebGrantTTL。一条挑战只能签发一次。
 func (s *Store) grantAppleWeb(ctx context.Context, idHash string, c appleWebChallenge, grantHash string) error {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	var locked string
-	err = tx.QueryRow(ctx, `SELECT id_hash FROM auth_challenges WHERE id_hash=$1 AND provider='apple_web' FOR UPDATE`, idHash).Scan(&locked)
+	// 先物化锁定的挑战行，再用实际时钟和锁后的签发状态校验，避免等待期间过期或重复签发。
+	var updated string
+	err := s.pool.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+ SELECT id_hash,expires_at,granted_at FROM auth_challenges WHERE id_hash=$1 AND provider='apple_web' FOR UPDATE
+)
+UPDATE auth_challenges c SET verified_subject=$2,verified_email=$3,verified_email_verified=$4,verified_name=$5,
+ grant_hash=$6,granted_at=clock_timestamp(),expires_at=clock_timestamp()+$7::interval
+FROM locked l WHERE c.id_hash=l.id_hash AND l.expires_at>clock_timestamp() AND l.granted_at IS NULL
+RETURNING c.id_hash`, idHash, c.Subject, c.Email, c.EmailVerified, c.Name, grantHash, appleWebGrantTTL.String()).Scan(&updated)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrInvalid
 	}
-	if err != nil {
-		return err
-	}
-	// 先取得行锁，再用实际时钟复查，避免等待期间过期的挑战仍按事务开始时间通过。
-	var valid bool
-	if err = tx.QueryRow(ctx, `SELECT expires_at>clock_timestamp() AND granted_at IS NULL FROM auth_challenges WHERE id_hash=$1`, idHash).Scan(&valid); err != nil {
-		return err
-	}
-	if !valid {
-		return ErrInvalid
-	}
-	if _, err = tx.Exec(ctx, `UPDATE auth_challenges SET verified_subject=$2,verified_email=$3,verified_email_verified=$4,verified_name=$5,grant_hash=$6,granted_at=clock_timestamp(),expires_at=clock_timestamp()+$7::interval
-WHERE id_hash=$1 AND provider='apple_web'`, idHash, c.Subject, c.Email, c.EmailVerified, c.Name, grantHash, appleWebGrantTTL.String()); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
+	return err
 }
 
 // redeemAppleWeb 按授权码的哈希原子地取出挑战并清空 grant_hash，同一个授权码只能兑换一次，校验失败也不能再试。超过 appleWebGrantTTL 的授权码不再有效。

@@ -68,12 +68,16 @@ func TestMergeResourceDictionaryBatch(t *testing.T) {
 		if counted.queries != queries {
 			t.Fatalf("词条数 %d：数据库查询 %d 次，期望 %d 次", len(pack), counted.queries, queries)
 		}
+		var wrongTime bool
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM user_dictionary_entries WHERE user_id=$1 AND revision>$2 AND updated_at<>now())`, user, expected).Scan(&wrongTime); err != nil || wrongTime {
+			t.Fatal("合并词条没有使用事务中的数据库时间", wrongTime, err)
+		}
 		if err = tx.Commit(ctx); err != nil {
 			t.Fatal(err)
 		}
 		return revision
 	}
-	revision := apply(3, 127, 3)
+	revision := apply(3, 127, 2)
 	changes, more, err := s.DictionaryChanges(ctx, user, 3, 200)
 	if err != nil || more || len(changes) != 127 {
 		t.Fatal(len(changes), more, err)
@@ -108,7 +112,11 @@ func TestMergeResourceDictionaryBatch(t *testing.T) {
 	apply(revision, 0, 1)
 	pack = pack[:1]
 	pack[0].Weight++
-	apply(revision, 1, 3)
+	revision = apply(revision, 1, 2)
+	pack = nil
+	apply(revision, 0, 1)
+	pack = []SharedWord{{"quick", "only-new", "仅新增", 8}}
+	apply(revision, 1, 2)
 }
 
 func TestMergeResourceDictionaryCapacity(t *testing.T) {

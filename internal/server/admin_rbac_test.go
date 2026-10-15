@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/sha256"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -15,7 +16,7 @@ import (
 func adminRBACFixture(t *testing.T) (*Server, *adminMemoryStore) {
 	t.Helper()
 	s := fixture(t, nil)
-	s.config.Admin = AdminConfig{Enabled: true, Host: "admin.msime.app", token: strings.Repeat("a", 40), Google: AdminGoogleConfig{AllowedEmails: []string{"owner@example.test"}}}
+	s.config.Admin = AdminConfig{Enabled: true, Host: "admin.msime.app", token: strings.Repeat("a", 40), tokenHash: sha256.Sum256([]byte(strings.Repeat("a", 40))), Google: AdminGoogleConfig{AllowedEmails: []string{"owner@example.test"}}}
 	s.adminGoogle = &adminGoogleAuth{}
 	store := &adminMemoryStore{
 		sessions: map[string]account.AdminIdentity{

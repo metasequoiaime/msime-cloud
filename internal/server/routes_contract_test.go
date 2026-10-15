@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"go/ast"
 	"go/parser"
@@ -118,7 +119,7 @@ func TestEveryAdminRouteAuthenticationAndOrigin(t *testing.T) {
 	for _, path := range []string{"overview", "users", "users/example", "downloads", "crashes", "skins", "skins/example", "candidate-skins", "candidate-skins/example", "plugins", "plugins/example", "dictionaries", "dictionaries/example", "replies", "replies/example", "audit", "admins", "actions", "system", "site-settings"} {
 		t.Run(path, func(t *testing.T) {
 			s := fixture(t, nil)
-			s.config.Admin = AdminConfig{Enabled: true, Host: "admin.msime.app", token: strings.Repeat("a", 40)}
+			s.config.Admin = AdminConfig{Enabled: true, Host: "admin.msime.app", token: strings.Repeat("a", 40), tokenHash: sha256.Sum256([]byte(strings.Repeat("a", 40)))}
 			method := "GET"
 			if path == "actions" {
 				method = "POST"

@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"io"
 	"log"
@@ -109,7 +110,7 @@ func TestRequestLogFields(t *testing.T) {
 
 func TestRequestLogRoutesAndLevels(t *testing.T) {
 	s := fixture(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(500) })
-	s.config.Admin = AdminConfig{Enabled: true, Host: "admin.msime.app", token: strings.Repeat("a", 40)}
+	s.config.Admin = AdminConfig{Enabled: true, Host: "admin.msime.app", token: strings.Repeat("a", 40), tokenHash: sha256.Sum256([]byte(strings.Repeat("a", 40)))}
 	s.config.Admin.Logs = AdminLogsConfig{LokiURL: "http://loki.example.test", Selector: defaultLogSelector}
 	logs := captureLogs(t)
 	serve := func(r *http.Request) {

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/sha256"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,7 +10,7 @@ import (
 
 func TestAdminHostAuthAndIsolation(t *testing.T) {
 	s := fixture(t, func(http.ResponseWriter, *http.Request) {})
-	s.config.Admin = AdminConfig{Enabled: true, Host: "admin.msime.app", token: strings.Repeat("a", 40)}
+	s.config.Admin = AdminConfig{Enabled: true, Host: "admin.msime.app", token: strings.Repeat("a", 40), tokenHash: sha256.Sum256([]byte(strings.Repeat("a", 40)))}
 	for _, tc := range []struct {
 		host, path, token, origin string
 		status                    int
@@ -77,7 +78,7 @@ func TestAdminConfigValidation(t *testing.T) {
 
 func TestAdminAuthEndpointMethodsAndLocalSession(t *testing.T) {
 	s := fixture(t, nil)
-	s.config.Admin = AdminConfig{Enabled: true, Host: "admin.localhost", token: strings.Repeat("a", 40)}
+	s.config.Admin = AdminConfig{Enabled: true, Host: "admin.localhost", token: strings.Repeat("a", 40), tokenHash: sha256.Sum256([]byte(strings.Repeat("a", 40)))}
 	for _, tc := range []struct {
 		method, path, token string
 		status              int

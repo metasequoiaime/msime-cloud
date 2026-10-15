@@ -39,6 +39,8 @@ ALTER TABLE auth_identities ADD COLUMN IF NOT EXISTS email_verified boolean NOT 
 ALTER TABLE auth_identities ADD COLUMN IF NOT EXISTS name text NOT NULL DEFAULT '';
 ALTER TABLE auth_identities ADD COLUMN IF NOT EXISTS picture text NOT NULL DEFAULT '';
 ALTER TABLE auth_identities ADD COLUMN IF NOT EXISTS updated_at timestamptz;
+-- 登录、刷新和资料读取按更新时间选取 Google 邮箱与头像，索引让 LIMIT 1 找到有效身份后直接停止。
+CREATE INDEX IF NOT EXISTS auth_identities_google_profile ON auth_identities(user_id,updated_at DESC NULLS LAST) WHERE provider='google';
 ALTER TABLE auth_challenges ADD COLUMN IF NOT EXISTS code_verifier text NOT NULL DEFAULT '';
 -- Object key of the user's uploaded avatar in the avatar bucket; '' when they have none.
 ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS avatar_key text NOT NULL DEFAULT '';

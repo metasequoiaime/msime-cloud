@@ -184,7 +184,7 @@ func qqRuneEnd(text string, limit int) int {
 }
 
 // qqContentHash 分块计算以 NUL 分隔的原始字节哈希，避免拼接和转换时复制完整正文。
-func qqContentHash(parts ...string) string {
+func qqContentHashSum(parts ...string) (sum [sha256.Size]byte) {
 	h := sha256.New()
 	var buf [1024]byte
 	used := 0
@@ -208,13 +208,22 @@ func qqContentHash(parts ...string) string {
 		}
 	}
 	h.Write(buf[:used])
-	var sum [sha256.Size]byte
-	return hex.EncodeToString(h.Sum(sum[:0]))
+	h.Sum(sum[:0])
+	return sum
+}
+
+func qqContentHash(parts ...string) string {
+	sum := qqContentHashSum(parts...)
+	return hex.EncodeToString(sum[:])
 }
 
 // qqDocID 是文档段落在向量索引里的 id：按文档名和标题，内容变了 id 不变。
 func qqDocID(section qqSection) string {
-	return "doc:" + qqContentHash(section.Doc, section.Title)[:24]
+	sum := qqContentHashSum(section.Doc, section.Title)
+	var id [len("doc:") + 24]byte
+	copy(id[:], "doc:")
+	hex.Encode(id[len("doc:"):], sum[:12])
+	return string(id[:])
 }
 
 // qqVectorJob 是同步向量索引的后台任务，运行到 s.lifetime 结束。

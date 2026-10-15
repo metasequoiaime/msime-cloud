@@ -371,19 +371,14 @@ func (a *Service) LockCrashGroupIssue(ctx context.Context, signature string) (fu
 	}, nil
 }
 
-// SetCrashGroupIssue records the GitHub issue opened for a crash group, marks the group known and audits both in one transaction. Call it only after the issue was created.
+// SetCrashGroupIssue 用一条原子语句登记崩溃分组的 GitHub issue、将分组标记为 `known` 并记录审计。只在 issue 创建成功后调用。
 func (a *Service) SetCrashGroupIssue(ctx context.Context, signature, repo string, number int64, url string) error {
-	tx, err := a.store.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
 	detail, err := auditDetail(map[string]any{"repo": repo, "number": number, "issue_url": url, "to": "known"})
 	if err != nil {
 		return err
 	}
 	var previous string
-	err = tx.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+	err = a.store.pool.QueryRow(ctx, `WITH locked AS MATERIALIZED (
  SELECT status FROM admin_crash_groups WHERE signature=$1 FOR UPDATE
 ), updated AS (
  UPDATE admin_crash_groups g SET status='known',issue_url=$2
@@ -398,10 +393,7 @@ SELECT status FROM locked`, signature, url, adminActor(ctx), detail).Scan(&previ
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrCrashGroupNotFound
 	}
-	if err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
+	return err
 }
 
 // Crash spikes: a new group (first seen within 7 days), or a group whose last 7 days exceed the 7 days before by more than 20% with at least crashSpikeMinimum crashes so a jump from one report to two does not alert anyone, notifies the console at most once per crashSpikeQuiet. This matches the console's 崩溃告警 preference: 新增崩溃分组或崩溃率上升超过 20%.

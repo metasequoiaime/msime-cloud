@@ -108,13 +108,7 @@ func (a *Service) adminPermissionsAction(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	ctx := r.Context()
-	tx, err := a.store.pool.Begin(ctx)
-	if err != nil {
-		a.error(w, err)
-		return
-	}
-	defer tx.Rollback(ctx)
-	// 先取得角色锁，再用新快照修改权限和有条件审计；同一批次发送保持往返次数不变。
+	// 批次的隐式事务先取得角色锁，再用独立语句的新快照修改权限和有条件审计。
 	detail, err := auditDetail(map[string]any{"role": v.Role, "role_name": "", "permission": v.Permission})
 	if err != nil {
 		a.error(w, err)
@@ -142,13 +136,10 @@ func (a *Service) adminPermissionsAction(w http.ResponseWriter, r *http.Request,
 SELECT name,(SELECT count(*) FROM changed) FROM locked`, v.Role, v.Permission, action, adminActor(ctx), detail).QueryRow(func(row pgx.Row) error {
 		return row.Scan(&name, &affected)
 	})
-	err = tx.SendBatch(ctx, batch).Close()
+	err = a.store.pool.SendBatch(ctx, batch).Close()
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, 404, "not_found")
 		return
-	}
-	if err == nil {
-		err = tx.Commit(ctx)
 	}
 	if err != nil {
 		a.error(w, err)

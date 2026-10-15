@@ -182,7 +182,7 @@ func TestAdminCrashIssue(t *testing.T) {
 	}
 
 	// While another request holds the group's issue lock, a second request is refused without calling GitHub.
-	release, err := s.accounts.LockCrashGroupIssue(ctx, ios)
+	locked, err := s.accounts.LockCrashGroupIssue(ctx, ios)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestAdminCrashIssue(t *testing.T) {
 	if w, _ := call("POST", ios); w.Code != 409 || !strings.Contains(w.Body.String(), "issue_in_progress") || fake.calls("POST /repos/metasequoiaime/msime-ios/issues") != before {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	release()
+	locked.Release()
 
 	w, body := call("POST", ios)
 	if w.Code != 200 || body["issue_url"] != "https://github.com/metasequoiaime/msime-ios/issues/7" || body["status"] != "known" || body["number"] != float64(7) {

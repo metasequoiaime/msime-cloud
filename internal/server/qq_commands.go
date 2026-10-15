@@ -111,6 +111,10 @@ func qqCompactCanReuse(text string) bool {
 
 // qqIssueRef 匹配「#编号」查进度的命令（qqIssueRefPattern），先把全角折成半角；不是这个命令时返回 nil。
 func qqIssueRef(text string) []string {
+	// issue 命令必须含有半角或全角井号；普通消息无需折叠全角和执行正则。
+	if strings.IndexByte(text, '#') < 0 && !strings.Contains(text, "＃") {
+		return nil
+	}
 	return qqIssueRefPattern.FindStringSubmatch(strings.TrimSpace(qqFoldWidth(text)))
 }
 

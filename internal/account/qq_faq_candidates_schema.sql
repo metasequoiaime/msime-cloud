@@ -18,3 +18,4 @@ BEGIN
  END IF;
 END $$;
 CREATE INDEX IF NOT EXISTS qq_faq_candidates_open ON qq_faq_candidates(created_at) WHERE state='open';
+CREATE INDEX IF NOT EXISTS qq_faq_candidates_writing_claimed ON qq_faq_candidates(claimed_at,created_at,id) WHERE state='writing';

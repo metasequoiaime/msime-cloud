@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
@@ -105,6 +106,7 @@ func (f githubFile) text() (string, bool) {
 	// 解码器会忽略 CR/LF；只按实际编码字节数预留缓冲，避免为空行分配内存。
 	content := f.Content
 	encodedSize := len(content)
+	var cleaned []byte
 	for i := 0; i < len(content); i++ {
 		c := content[i]
 		if c == '\r' || c == '\n' {
@@ -112,14 +114,40 @@ func (f githubFile) text() (string, bool) {
 			continue
 		}
 		if c >= utf8.RuneSelf || c <= ' ' {
-			// 其他空白及非 ASCII 输入沿用原有清理规则。
-			content = strings.Join(strings.Fields(content), "")
-			encodedSize = len(content)
+			// 其他空白及非 ASCII 输入沿用原有清理规则，但直接扫描写入缓冲，避免 FieldsFunc 为每个短字段分配元数据。
+			cleaned = make([]byte, len(content))
+			written := 0
+			for i := 0; i < len(content); {
+				c := content[i]
+				if c < utf8.RuneSelf {
+					// unicode.IsSpace 对 ASCII 空白的判断固定为这六个字节；内联可避免逐字节调用 Unicode 判断。
+					switch c {
+					case '\t', '\n', '\v', '\f', '\r', ' ':
+						i++
+						continue
+					}
+					cleaned[written] = c
+					written++
+					i++
+					continue
+				}
+				r, size := utf8.DecodeRuneInString(content[i:])
+				if !unicode.IsSpace(r) {
+					written += copy(cleaned[written:], content[i:i+size])
+				}
+				i += size
+			}
+			encodedSize = written
+			cleaned = cleaned[:written]
 			break
 		}
 	}
+	encoded := cleaned
+	if encoded == nil {
+		encoded = []byte(content)
+	}
 	raw := make([]byte, base64.StdEncoding.DecodedLen(encodedSize))
-	n, err := base64.StdEncoding.Decode(raw, []byte(content))
+	n, err := base64.StdEncoding.Decode(raw, encoded)
 	raw = raw[:n]
 	return string(raw), err == nil && utf8.Valid(raw)
 }

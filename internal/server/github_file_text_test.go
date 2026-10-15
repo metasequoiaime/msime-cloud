@@ -117,3 +117,18 @@ func BenchmarkGitHubFileText(b *testing.B) {
 		})
 	}
 }
+
+func TestGitHubFileTextUnicodeSpaceAllocationBudget(t *testing.T) {
+	encoded := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("a", 256<<10)))
+	file := githubFile{Type: "file", Encoding: "base64", SHA: "synthetic-sha", Content: wrapGitHubBase64(encoded, "\u3000")}
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			if _, ok := file.text(); !ok {
+				t.Fatal("Unicode 空白分隔的 Base64 解码失败")
+			}
+		}
+	})
+	if allocated := result.AllocedBytesPerOp(); allocated > 1<<20 {
+		t.Fatalf("Unicode 空白解码分配 %d 字节，超过 1 MiB 预算", allocated)
+	}
+}

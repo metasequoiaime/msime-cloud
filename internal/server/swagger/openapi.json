@@ -18189,7 +18189,7 @@
                     "resource_saves": {
                       "type": "integer",
                       "minimum": 0,
-                      "description": "词库与回复模板收藏人次（按账号和作品去重）"
+                      "description": "未下架词库与回复模板收藏人次（含待审核作品，按账号和作品去重）"
                     },
                     "generated_at": {
                       "type": "string",

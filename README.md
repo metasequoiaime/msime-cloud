@@ -77,6 +77,7 @@ curl -G -H "Authorization: Bearer $MSIME_CLIENT_TOKEN" \
 
 服务可以在同一个 PostgreSQL 后面运行多个副本（例如 k8s 多副本经 Cloudflare Tunnel 轮询转发、无粘性会话）。多副本部署必须启用用户体系和数据库（`auth.enabled`）：没有数据库时，本该经数据库共享的限流、AI 插画任务等状态只能退回各进程内存，副本之间互不可见，所以 `replicas` 大于 1 而未启用 `auth.enabled` 时服务拒绝启动。顶层 `replicas` 填实际副本数。
 
+- 小牛媒体上传的临时文件只属于当前请求，无需跨副本共享。每个副本需为 `max_concurrent` 个任务各预留最多 64 MiB 文件及 multipart 头部的临时空间（默认 32 个任务，文件内容合计约 2 GiB）。临时目录需可写；若目录位于 tmpfs，文件空间仍计入内存，要降低容器内存压力应使用磁盘临时目录并设置 `TMPDIR`。
 - 经 PostgreSQL 共享：账号、会话和社区数据；`auth_rates` 上的数据库限流（登录、社区接口、官网词条投稿、管理后台的 `admin`/`admin-auth`/`admin-login` 三项限额等，固定一分钟窗口）；共享译文缓存；遥测和管理后台数据；AI 插画任务存在 `skin_jobs` 表，任何副本都能轮询和取消，每主体与全局上限按整个部署计算（见[皮肤社区](docs/skin-community.md)）；官网词条投稿写 GitHub 前取跨副本的 advisory lock，同一时刻只有一个副本改滚动分支；系统状态由持有 advisory lock 的一个主副本汇总所有副本的分钟计数后统一判定（见[管理后台](docs/admin.md)「系统状态的多副本行为」）；数据库迁移在 advisory lock 下串行执行，多个副本同时启动也只会建一次表。
 - 社区性能索引：`Ready` 检查资源收藏的用户索引、资源作者索引、下载和评分的账号外键索引、举报的账号外键索引及按内容和时间查询最新举报的索引；缺任一个时启动走迁移，同时删除冗余的 `community_skins_owner`（皮肤作者筛选由原有 `UNIQUE(owner_id,id)` 支持）。运行角色只有 DML 权限时，先用有 DDL 权限的账号执行新版本的 `-migrate-users`，再滚动更新；没有新表或配置字段，不需要额外 DML 授权，旧版本副本可继续读写。迁移使用普通 `CREATE INDEX`，建索引期间会阻塞目标表的写入；数据量大时应在低峰期提前迁移，避免在副本启动时等待建索引。
 - 刷新历史会话索引：`auth_used_refresh_session` 加速过期会话清理和账号注销的级联删除，旧库缺索引时 `Ready` 会触发迁移。只有 DML 权限的运行角色须先由 DDL 账号执行新版本的 `-migrate-users`，再滚动更新；无需新表、配置或额外 DML 授权。普通建索引期间会阻塞刷新历史表的写入，历史较多时应在低峰期提前迁移。
@@ -174,7 +175,7 @@ WAV 上传现在校验 RIFF 文件长度、分块边界、fmt/data 必需块和�
 
 文档、图片和语音接口使用同样的 NiuTrans v2 异步文件协议。服务端负责签名、上传和状态查询，客户端只看到 MSIME 设备令牌。对应 API 应用分别由 `MSIME_NIUTRANS_DOC_APP_ID`、`MSIME_NIUTRANS_IMAGE_APP_ID`、`MSIME_NIUTRANS_VOICE_APP_ID` 注入，并共用 `MSIME_NIUTRANS_APIKEY`。资源管理路由使用 `MSIME_NIUTRANS_RESOURCE_APP_ID`；`action` 只允许单段路径，服务端不会接受任意上游 URL。未配置某项 API 时，该项返回 503，不影响其他功能启动。
 
-文件上传和结果下载各限 64 MiB；状态查询等 JSON 响应限 1 MiB。下载按固定大小缓冲区流式转发，不将整个结果保存在内存里。上游声明的下载长度超过上限时返回 502；传输中才发现超限、文件截断或读取失败时中断连接，客户端必须把不完整响应视为下载失败。下载沿用 `timeout_seconds` 的请求时限。
+文件上传和结果下载各限 64 MiB；状态查询等 JSON 响应限 1 MiB。上传在请求期间使用系统临时目录（Unix 可由 `TMPDIR` 指定；Windows 使用 `TMP` / `TEMP`）中的私有临时文件构造 multipart，再按固定 `Content-Length` 流式发送；Unix 权限为 `0600`，Windows 由目录 ACL 决定。正常完成、请求被拒绝、上游失败或取消时都会关闭并删除临时文件，不长期保存上传内容。临时目录不可写或写入失败时返回 503 `upload_storage_unavailable`。下载按固定大小缓冲区流式转发，不将整个结果保存在内存里。上游声明的下载长度超过上限时返回 502；传输中才发现超限、文件截断或读取失败时中断连接，客户端必须把不完整响应视为下载失败。下载沿用 `timeout_seconds` 的请求时限。
 
 ### 共享译文缓存
 

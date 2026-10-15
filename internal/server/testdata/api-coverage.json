@@ -547,7 +547,11 @@
     ],
     "POST /v1/niutrans/documents": [
       "internal/server/niutrans_media_test.go::TestNiuTransDocumentUploadAndStatus",
-      "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes"
+      "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes",
+      "internal/server/niutrans_upload_memory_test.go::TestNiuTransUploadTempFileLifecycle",
+      "internal/server/niutrans_upload_memory_test.go::TestNiuTransLargeUploadUsesBoundedMemory",
+      "internal/server/niutrans_upload_memory_test.go::TestNiuTransUploadUnavailableTempStorage",
+      "internal/server/niutrans_upload_memory_test.go::TestNiuTransUploadRejectsOversizeAndRemovesTempFile"
     ],
     "GET /v1/niutrans/documents/{file_no}": [
       "internal/server/niutrans_media_test.go::TestNiuTransDocumentUploadAndStatus",
@@ -561,7 +565,8 @@
       "internal/server/niutrans_media_test.go::TestNiuTransDownloadsAboveJSONLimit"
     ],
     "POST /v1/niutrans/images": [
-      "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes"
+      "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes",
+      "internal/server/niutrans_upload_memory_test.go::TestNiuTransUploadTempFileLifecycle"
     ],
     "GET /v1/niutrans/images/{file_no}": [
       "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes"
@@ -574,7 +579,8 @@
       "internal/server/niutrans_media_test.go::TestNiuTransDownloadsAboveJSONLimit"
     ],
     "POST /v1/niutrans/voice": [
-      "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes"
+      "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes",
+      "internal/server/niutrans_upload_memory_test.go::TestNiuTransUploadTempFileLifecycle"
     ],
     "GET /v1/niutrans/voice/{file_no}": [
       "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes"

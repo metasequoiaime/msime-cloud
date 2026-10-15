@@ -5,7 +5,6 @@ package server
 // token so clients never receive an API key or an upstream URL.
 
 import (
-	"bytes"
 	"crypto/md5" // #nosec G501 -- required by the NiuTrans protocol.
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +13,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -75,7 +75,9 @@ func (s *Server) niuTransUpload(w http.ResponseWriter, r *http.Request, e NiuTra
 		fail(w, http.StatusUnsupportedMediaType, "multipart_required")
 		return
 	}
-	var file []byte
+	var body *os.File
+	var mw *multipart.Writer
+	var fileSize int64
 	filename := "upload.bin"
 	fields := map[string]string{}
 	seen := map[string]bool{}
@@ -104,8 +106,27 @@ func (s *Server) niuTransUpload(w http.ResponseWriter, r *http.Request, e NiuTra
 			if part.FileName() != "" {
 				filename = part.FileName()
 			}
-			file, err = io.ReadAll(io.LimitReader(part, niuTransFileBytes+1))
-			if err != nil || len(file) == 0 || len(file) > niuTransFileBytes {
+			// 先在私有临时文件中构造 multipart，后续字段仍可参与签名，不在内存中保留整个上传。
+			body, err = os.CreateTemp("", "msime-niutrans-*")
+			if err != nil {
+				fail(w, http.StatusServiceUnavailable, "upload_storage_unavailable")
+				return
+			}
+			defer os.Remove(body.Name())
+			defer body.Close()
+			mw = multipart.NewWriter(body)
+			file, createErr := mw.CreateFormFile("file", filename)
+			if createErr != nil {
+				fail(w, http.StatusServiceUnavailable, "upload_storage_unavailable")
+				return
+			}
+			fileSize, err = io.Copy(file, io.LimitReader(part, niuTransFileBytes+1))
+			var storageErr *os.PathError
+			if errors.As(err, &storageErr) {
+				fail(w, http.StatusServiceUnavailable, "upload_storage_unavailable")
+				return
+			}
+			if err != nil || fileSize == 0 || fileSize > niuTransFileBytes {
 				fail(w, http.StatusRequestEntityTooLarge, "file_too_large_or_empty")
 				return
 			}
@@ -119,7 +140,7 @@ func (s *Server) niuTransUpload(w http.ResponseWriter, r *http.Request, e NiuTra
 		}
 		_ = part.Close()
 	}
-	if len(file) == 0 || fields["from"] == "" || fields["to"] == "" {
+	if body == nil || fields["from"] == "" || fields["to"] == "" {
 		fail(w, http.StatusBadRequest, "file_from_to_required")
 		return
 	}
@@ -133,30 +154,34 @@ func (s *Server) niuTransUpload(w http.ResponseWriter, r *http.Request, e NiuTra
 		}
 	}
 	params["authStr"] = niuTransAuth(params, e.apiKey)
-	var body bytes.Buffer
-	mw := multipart.NewWriter(&body)
-	part, err := mw.CreateFormFile("file", filename)
-	if err != nil {
-		upstreamError(w, r, err)
-		return
-	}
-	_, _ = part.Write(file)
 	for key, value := range params {
 		if key != "authStr" && value != "" {
-			_ = mw.WriteField(key, value)
+			if err := mw.WriteField(key, value); err != nil {
+				fail(w, http.StatusServiceUnavailable, "upload_storage_unavailable")
+				return
+			}
 		}
 	}
-	_ = mw.WriteField("authStr", params["authStr"])
-	_ = mw.Close()
+	if err := mw.WriteField("authStr", params["authStr"]); err != nil {
+		fail(w, http.StatusServiceUnavailable, "upload_storage_unavailable")
+		return
+	}
+	if err := mw.Close(); err != nil {
+		fail(w, http.StatusServiceUnavailable, "upload_storage_unavailable")
+		return
+	}
+	if _, err := body.Seek(0, io.SeekStart); err != nil {
+		fail(w, http.StatusServiceUnavailable, "upload_storage_unavailable")
+		return
+	}
 	mr, call := metered(r, "niutrans_"+kind, 0)
-	b, err := s.niuTransRequest(mr, e.URL, http.MethodPost, mw.FormDataContentType(), &body)
+	b, err := s.niuTransRequest(mr, e.URL, http.MethodPost, mw.FormDataContentType(), body)
 	s.settleMeter(call, json.Valid(b))
 	if err != nil {
 		upstreamError(w, r, err)
 		return
 	}
 	niuTransJSON(w, r, b)
-	_ = kind // retained for route-specific documentation and future limits.
 }
 
 func (s *Server) niuTransDocumentUpload(w http.ResponseWriter, r *http.Request) {
@@ -350,6 +375,14 @@ func (s *Server) sendNiuTrans(r *http.Request, target, method, contentType strin
 	}
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
+	}
+	// 上传文件已完整写入并回到开头，显式保留固定长度，兼容不接受 chunked 的上游。
+	if file, ok := body.(*os.File); ok {
+		info, statErr := file.Stat()
+		if statErr != nil {
+			return nil, "", statErr
+		}
+		req.ContentLength = info.Size()
 	}
 	resp, err := s.client.Do(req)
 	if err != nil {

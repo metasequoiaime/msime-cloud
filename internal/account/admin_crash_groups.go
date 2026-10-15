@@ -61,7 +61,7 @@ func ValidCrashSignature(s string) bool { return crashSignaturePattern.MatchStri
 // crashGroupStatuses are the states a crash group can be in.
 var crashGroupStatuses = map[string]bool{"open": true, "known": true, "fixed": true}
 
-// actionCrashGroupStatus sets the status in value (open, known or fixed) on the crash group id. The response carries the previous status so the console can undo.
+// actionCrashGroupStatus 设置崩溃分组状态，在同一条语句内锁定并返回旧状态，供控制台撤销。
 func actionCrashGroupStatus(a *Service, ctx context.Context, tx pgx.Tx, v actionRequest) (actionResult, error) {
 	if !ValidCrashSignature(v.ID) {
 		return actionResult{}, actionFail(400, "invalid_id")
@@ -71,14 +71,13 @@ func actionCrashGroupStatus(a *Service, ctx context.Context, tx pgx.Tx, v action
 		return actionResult{}, actionFail(400, "invalid_value")
 	}
 	var previous string
-	err := tx.QueryRow(ctx, `SELECT status FROM admin_crash_groups WHERE signature=$1 FOR UPDATE`, v.ID).Scan(&previous)
+	err := tx.QueryRow(ctx, `UPDATE admin_crash_groups g SET status=$2
+FROM (SELECT signature,status FROM admin_crash_groups WHERE signature=$1 FOR UPDATE) locked
+WHERE g.signature=locked.signature RETURNING locked.status`, v.ID, status).Scan(&previous)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return actionResult{}, actionFail(404, "not_found")
 	}
 	if err != nil {
-		return actionResult{}, err
-	}
-	if _, err = tx.Exec(ctx, `UPDATE admin_crash_groups SET status=$2 WHERE signature=$1`, v.ID, status); err != nil {
 		return actionResult{}, err
 	}
 	detail := map[string]any{"from": previous, "to": status}

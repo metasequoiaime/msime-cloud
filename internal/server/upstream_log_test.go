@@ -259,7 +259,7 @@ func TestNiuTransTransportFailureDoesNotLogSignedURL(t *testing.T) {
 	})
 	s.config.NiuTrans.Document = NiuTransEndpoint{URL: s.config.Chat.URL + "/v2/doc/translate/upload", appID: "synthetic-private-app", apiKey: "synthetic-key"}
 	logs := captureLogs(t)
-	w := call(s, http.MethodGet, "/v1/niutrans/documents/synthetic-private-file", "")
+	w := call(s, http.MethodGet, "/v1/niutrans/documents/"+niuTransTestTask(s, "documents", "synthetic-private-file"), "")
 	if w.Code != http.StatusBadGateway {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}

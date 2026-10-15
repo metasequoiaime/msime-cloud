@@ -45,7 +45,7 @@ func TestNiuTransFileOperationsPreserveTaskIdentifier(t *testing.T) {
 					})
 					e := NiuTransEndpoint{URL: s.config.Chat.URL + "/v2/media/upload", appID: "synthetic-app", apiKey: "synthetic-key"}
 					s.config.NiuTrans.Document, s.config.NiuTrans.Image, s.config.NiuTrans.Voice = e, e, e
-					path := "/v1/niutrans/" + kind + "/" + url.PathEscape(fileNo) + operation.suffix
+					path := "/v1/niutrans/" + kind + "/" + url.PathEscape(niuTransTestTask(s, kind, fileNo)) + operation.suffix
 					w := call(s, operation.method, path, "")
 					var gotPath string
 					select {

@@ -87,26 +87,29 @@ result['info']['description']+=' 用户接口详见用户体系标签；登录�
 # 小牛异步媒体接口独立于 Engine 契约，供 Swagger 和命令行共用。
 niutrans_field=string(minLength=1,description='非空，最多 256 UTF-8 字节，不得含 CR 或 LF。')
 niutrans_upload=obj({'file':string(format='binary',description='非空文件，最多 64 MiB。'),'from':niutrans_field,'to':niutrans_field,**{name:niutrans_field for name in ['realmCode','termId','memoryId','processingMode','translationEngine']}},['file','from','to'])
-niutrans_file={'name':'file_no','in':'path','required':True,'schema':string(minLength=1,description='小牛返回的任务编号，最多 256 UTF-8 字节，不得含 /、反斜杠、CR 或 LF。调用方对路径段进行一次 URL 编码；服务端按编号原文转发，编号中的百分号序列不再作为路径分隔符解码。')}
+niutrans_file={'name':'file_no','in':'path','required':True,'schema':string(minLength=1,description='本服务上传响应 data.fileNo 中的加签任务编号，最多 512 字节；只允许上传身份用于同类媒体。请原样保存并对路径段进行一次 URL 编码，不能使用上游原始编号。')}
 niutrans_json={'description':'成功转发小牛 JSON，最多 1 MiB；业务状态由上游 JSON 表示。','content':{'application/json':{'schema':{}}}}
 niutrans_errors={code:{'description':description,'content':{'application/json':{'schema':{'$ref':'#/components/schemas/Error'}}}} for code,description in [('400','请求参数无效'),('401','需要有效设备令牌或用户 access_token'),('403','来源不被允许或账号已封禁'),('429','请求过于频繁或并发已满'),('502','上游不可用、响应不是有效 JSON 或超过响应上限'),('503','niutrans_api_not_configured：该小牛接口未配置，或服务不可用')]}
 for kind,title in [('documents','文档'),('images','图片'),('voice','语音')]:
     base='/v1/niutrans/'+kind
     paths[base]={'post':{'summary':'创建小牛'+title+'翻译任务','tags':['小牛媒体翻译'],'description':'multipart/form-data 上传 file、from、to，支持领域、术语、记忆、处理模式和翻译引擎参数。单个文件最多 64 MiB，请求体最多 65 MiB，最多 32 个部件；字段名不得为空或重复，非文件字段非空、最多 256 字节且不得含 CR/LF。未列出的字段不会转发。服务端签名请求，客户端不提供供应商凭据。请求期间使用系统临时目录中的私有临时文件，以固定 Content-Length 流式发送；完成、拒绝、上游失败或取消后关闭并删除，不长期保存文件。','requestBody':{'required':True,'content':{'multipart/form-data':{'schema':niutrans_upload}}},'responses':{'200':niutrans_json,**niutrans_errors,'413':{'description':'file_too_large_or_empty 或 too_many_parts：文件为空、超过 64 MiB 或部件超过 32 个'},'415':{'description':'multipart_required：需要 multipart/form-data'}}}}
     paths[base]['post']['responses']['503']={**niutrans_errors['503'],'description':'niutrans_api_not_configured：该小牛接口未配置；upload_storage_unavailable：临时目录不可用或写入失败；或服务不可用。'}
+    paths[base]['post']['responses']['200']={**niutrans_json,'description':'小牛上传响应；成功时 data.fileNo 替换为本服务加签编号，绑定上传身份和媒体类型，其他业务字段保留。code 为 200 却缺少有效 fileNo 时返回 502。'}
     for suffix,method,action in [('', 'get','查询状态'),('/interrupt','put','终止任务'),('/download','get','下载结果')]:
         download=suffix=='/download'
-        description='使用小牛返回的 file_no 操作'+title+'翻译任务；不需要请求体。'
+        description='使用本服务上传响应中的 data.fileNo 操作'+title+'翻译任务；不需要请求体。'
         response=niutrans_json
         parameters=[niutrans_file]
         errors=dict(niutrans_errors)
+        errors['404']={'description':'niutrans_task_not_found：编号未加签、已被篡改、属于其他身份或媒体类型，或上游应用/密钥已更换。','content':{'application/json':{'schema':{'$ref':'#/components/schemas/Error'}}}}
         if download:
             description+=' type 取 0..5，省略或为空时使用 1。最多流式转发 64 MiB，Content-Type 沿用上游，缺失时使用 application/octet-stream。已发送响应后遇到超限或读取失败会中断连接，不追加 JSON；调用方应将残缺下载视为失败。'
             parameters.append({'name':'type','in':'query','schema':string(enum=['0','1','2','3','4','5'],default='1')})
             response={'description':'小牛返回的文件，最多 64 MiB。','content':{'*/*':{'schema':string(format='binary')}}}
             errors['502']={'description':'上游不可用，或在发送文件前发现响应超过 64 MiB。','content':{'application/json':{'schema':{'$ref':'#/components/schemas/Error'}}}}
         paths.setdefault(base+'/{file_no}'+suffix,{})[method]={'summary':'小牛'+title+'翻译：'+action,'tags':['小牛媒体翻译'],'description':description,'parameters':parameters,'responses':{'200':response,**errors}}
-paths['/v1/niutrans/documents/{file_no}']['delete']={'summary':'删除小牛文档翻译任务','tags':['小牛媒体翻译'],'description':'使用小牛返回的 file_no 删除文档任务；不需要请求体。','parameters':[niutrans_file],'responses':{'200':niutrans_json,**niutrans_errors}}
+paths['/v1/niutrans/documents/{file_no}']['delete']={'summary':'删除小牛文档翻译任务','tags':['小牛媒体翻译'],'description':'使用本服务上传响应中的 data.fileNo 删除文档任务；不需要请求体。','parameters':[niutrans_file],'responses':{'200':niutrans_json,**niutrans_errors}}
+paths['/v1/niutrans/documents/{file_no}']['delete']['responses']['404']=paths['/v1/niutrans/documents/{file_no}']['get']['responses']['404']
 paths['/v1/niutrans/resources']={'get':{'summary':'查询小牛资源','tags':['小牛媒体翻译'],'description':'调用已配置的小牛资源管理动作。仅使用 action 查询参数生成签名请求，其他查询参数不会转发；不需要请求体。','parameters':[{'name':'action','in':'query','required':True,'schema':string(minLength=1,description='资源管理动作，最多 64 UTF-8 字节，不得含 /、反斜杠、CR 或 LF。')}],'responses':{'200':niutrans_json,**niutrans_errors}}}
 # 跨端用户数据不属于 Engine 在线输入契约。
 preference_fields=json.loads((root/'internal/account/preferences_fields.json').read_text())

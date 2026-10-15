@@ -53,10 +53,10 @@ func TestNiuTransDocumentUploadAndStatus(t *testing.T) {
 	_, _ = file.Write([]byte("synthetic document"))
 	_ = mw.Close()
 	w := callMultipart(s, http.MethodPost, "/v1/niutrans/documents", mw.FormDataContentType(), body.Bytes())
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "file-1") {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), niuTransTestTask(s, "documents", "file-1")) {
 		t.Fatalf("upload status=%d body=%s", w.Code, w.Body.String())
 	}
-	w = call(s, http.MethodGet, "/v1/niutrans/documents/file-1", "")
+	w = call(s, http.MethodGet, "/v1/niutrans/documents/"+niuTransTestTask(s, "documents", "file-1"), "")
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "105") {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
@@ -113,6 +113,7 @@ func TestNiuTransAllMediaRoutes(t *testing.T) {
 		"/v1/niutrans/voice/media-1/interrupt",
 		"/v1/niutrans/voice/media-1/download?type=1",
 	} {
+		route = strings.Replace(route, "media-1", niuTransTestTask(s, strings.Split(route, "/")[3], "media-1"), 1)
 		method := http.MethodGet
 		if strings.HasSuffix(route, "/interrupt") {
 			method = http.MethodPut
@@ -122,14 +123,14 @@ func TestNiuTransAllMediaRoutes(t *testing.T) {
 			t.Fatalf("%s %s: %d %s", method, route, w.Code, w.Body.String())
 		}
 	}
-	if w := call(s, http.MethodDelete, "/v1/niutrans/documents/media-1", ""); w.Code != http.StatusOK {
+	if w := call(s, http.MethodDelete, "/v1/niutrans/documents/"+niuTransTestTask(s, "documents", "media-1"), ""); w.Code != http.StatusOK {
 		t.Fatalf("DELETE document: %d %s", w.Code, w.Body.String())
 	}
 	w := call(s, http.MethodGet, "/v1/niutrans/resources?action=dictionary", "")
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "code") {
 		t.Fatalf("resource: %d %s", w.Code, w.Body.String())
 	}
-	if w := call(s, http.MethodGet, "/v1/niutrans/documents/media-1/download", ""); w.Code != http.StatusOK {
+	if w := call(s, http.MethodGet, "/v1/niutrans/documents/"+niuTransTestTask(s, "documents", "media-1")+"/download", ""); w.Code != http.StatusOK {
 		t.Fatalf("default download type: %d", w.Code)
 	}
 }
@@ -144,7 +145,7 @@ func TestNiuTransDownloadsAboveJSONLimit(t *testing.T) {
 	s.config.NiuTrans.Document, s.config.NiuTrans.Image, s.config.NiuTrans.Voice = e, e, e
 	for _, kind := range []string{"documents", "images", "voice"} {
 		t.Run(kind, func(t *testing.T) {
-			w := call(s, http.MethodGet, "/v1/niutrans/"+kind+"/file/download", "")
+			w := call(s, http.MethodGet, "/v1/niutrans/"+kind+"/"+niuTransTestTask(s, kind, "file")+"/download", "")
 			if w.Code != http.StatusOK || !bytes.Equal(w.Body.Bytes(), data) {
 				t.Fatalf("status=%d bytes=%d want=%d", w.Code, w.Body.Len(), len(data))
 			}
@@ -167,7 +168,7 @@ func TestNiuTransMediaValidationFailures(t *testing.T) {
 	}{
 		{http.MethodPost, "/v1/niutrans/documents", "{}", http.StatusUnsupportedMediaType},
 		{http.MethodGet, "/v1/niutrans/documents/bad/file", "", http.StatusNotFound},
-		{http.MethodGet, "/v1/niutrans/documents/file/download?type=99", "", http.StatusBadRequest},
+		{http.MethodGet, "/v1/niutrans/documents/" + niuTransTestTask(s, "documents", "file") + "/download?type=99", "", http.StatusBadRequest},
 	} {
 		if w := call(s, tc.method, tc.path, tc.body); w.Code != tc.status {
 			t.Fatalf("%s %s: got %d want %d", tc.method, tc.path, w.Code, tc.status)
@@ -204,7 +205,7 @@ func TestNiuTransMediaUpstreamAndRequestErrors(t *testing.T) {
 	s.config.NiuTrans.Document = e
 	for _, value := range []string{"status", "invalid", "large"} {
 		response = value
-		w := call(s, http.MethodGet, "/v1/niutrans/documents/file", "")
+		w := call(s, http.MethodGet, "/v1/niutrans/documents/"+niuTransTestTask(s, "documents", "file"), "")
 		if w.Code != http.StatusBadGateway {
 			t.Fatalf("%s: %d %s", value, w.Code, w.Body.String())
 		}
@@ -222,11 +223,11 @@ func TestNiuTransMediaUpstreamAndRequestErrors(t *testing.T) {
 		t.Fatalf("upload upstream error: %d", w.Code)
 	}
 	s.config.NiuTrans.Document.URL = "https://[invalid"
-	if w := call(s, http.MethodGet, "/v1/niutrans/documents/file", ""); w.Code != http.StatusBadGateway {
+	if w := call(s, http.MethodGet, "/v1/niutrans/documents/"+niuTransTestTask(s, "documents", "file"), ""); w.Code != http.StatusBadGateway {
 		t.Fatalf("invalid URL: %d", w.Code)
 	}
 	s.config.NiuTrans.Document.URL = "http://127.0.0.1:1/v2/doc/translate/upload"
-	if w := call(s, http.MethodGet, "/v1/niutrans/documents/file", ""); w.Code != http.StatusBadGateway {
+	if w := call(s, http.MethodGet, "/v1/niutrans/documents/"+niuTransTestTask(s, "documents", "file"), ""); w.Code != http.StatusBadGateway {
 		t.Fatalf("network error: %d", w.Code)
 	}
 	s.config.NiuTrans.Resource = NiuTransEndpoint{URL: s.config.Chat.URL + "/v2/resource", appID: "app", apiKey: "key"}

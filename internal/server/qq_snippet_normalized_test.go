@@ -13,6 +13,8 @@ func BenchmarkQQSnippetNormalized(b *testing.B) {
 		{"many_words", strings.Repeat("水杉 ", 32768)},
 		{"long_field", strings.Repeat("水", 65536)},
 		{"markdown_noise", strings.Repeat("水杉 `代码` ", 32768)},
+		{"markdown_link", "水杉 [链接](" + strings.Repeat("a", 1<<18) + ") 后文"},
+		{"unclosed_links", strings.Repeat("](", 32768)},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()
@@ -24,19 +26,57 @@ func BenchmarkQQSnippetNormalized(b *testing.B) {
 }
 
 func TestQQSnippetNormalizedUsesBoundedMemory(t *testing.T) {
-	input := strings.Repeat("水杉 ", 32768)
-	want := qqTruncate(strings.Join(strings.Fields(input), " "), qqSnippetRunes)
-	runtime.GC()
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	got := qqSnippet(input)
-	runtime.ReadMemStats(&after)
-	if got != want {
-		t.Fatalf("摘要结果不正确：结果=%q，预期=%q", got, want)
+	for _, tc := range []struct{ name, input string }{
+		{"many_words", strings.Repeat("水杉 ", 32768)},
+		{"markdown_noise", strings.Repeat("水杉 `代码` ", 32768)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want := qqTruncate(strings.Join(strings.Fields(qqMarkdownNoise.ReplaceAllString(tc.input, " ")), " "), qqSnippetRunes)
+			runtime.GC()
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			got := qqSnippet(tc.input)
+			runtime.ReadMemStats(&after)
+			if got != want {
+				t.Fatalf("摘要结果不正确：结果=%q，预期=%q", got, want)
+			}
+			// 最终摘要只有 50 字，不应为整段正文创建清理缓冲或字段切片。
+			if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 64<<10 {
+				t.Fatalf("摘要分配 %d 字节，超过 64 KiB 预算", allocated)
+			}
+		})
 	}
-	// 最终摘要只有 50 字，不应为整段正文创建字段切片和拼接缓冲。
-	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 64<<10 {
-		t.Fatalf("摘要分配 %d 字节，超过 64 KiB 预算", allocated)
+}
+
+func TestQQSnippetMarkdownKeepsPreviousOutput(t *testing.T) {
+	texts := []string{
+		"`代码`_强调_>引用#标题[文字|表格*",
+		"[链接](https://example.test/甲(乙)丙) 尾部",
+		"]([](目标)尾部", "]()", "](未闭合[链接`内容", "](甲\n乙\xff)尾部",
+		strings.Repeat("](", 32768), strings.Repeat("](", 32768) + ")",
+		"](" + strings.Repeat("地址", 32768) + ")正文",
+	}
+	for _, count := range []int{qqSnippetRunes - 1, qqSnippetRunes, qqSnippetRunes + 1} {
+		for _, tail := range []string{"[尾](目标)", "](目标)", "](未闭合", "` \xff", "|"} {
+			texts = append(texts, strings.Repeat("水", count)+tail)
+		}
+	}
+	random := rand.New(rand.NewSource(31))
+	units := []string{"水", "😀", "a", " ", "\t", "\r\n", "\u3000", "\xff", "\xe4\xb8", "`", "#", "_", "*", ">", "[", "](", ")", "|"}
+	for range 500 {
+		var input strings.Builder
+		for range 100 {
+			input.WriteString(units[random.Intn(len(units))])
+		}
+		texts = append(texts, input.String())
+	}
+	for _, input := range texts {
+		// 加粗及列表选择保持原样，此处只比较正文清理和前缀规范化的组合结果。
+		want := qqTruncate(strings.Join(strings.Fields(qqMarkdownNoise.ReplaceAllString(input, " ")), " "), qqSnippetRunes)
+		got := qqTruncate(qqSnippetNormalizedPrefix(input, true), qqSnippetRunes)
+		if got != want {
+			t.Fatalf("Markdown 摘要不兼容：输入=%q，结果=%q，预期=%q", input, got, want)
+		}
 	}
 }
 

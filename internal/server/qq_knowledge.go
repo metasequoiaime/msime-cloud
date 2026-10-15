@@ -236,7 +236,7 @@ var (
 // qqSnippet 是目录里段落标题后面的摘要：有加粗词时列出加粗词；没有加粗词、但有两个以上「- 标签：说明」这样的列表项时列出标签（见 qqListLabels）；都没有时取正文开头，最多 qqSnippetRunes 字。
 func qqSnippet(text string) string {
 	if !qqSnippetNeedsStructuredScan(text) {
-		return qqTruncate(qqSnippetNormalizedPrefix(text), qqSnippetRunes)
+		return qqTruncate(qqSnippetNormalizedPrefix(text, false), qqSnippetRunes)
 	}
 	var snippet string
 	if bold := qqBoldPattern.FindAllStringSubmatch(text, -1); len(bold) > 0 {
@@ -250,19 +250,35 @@ func qqSnippet(text string) string {
 	} else if labels := qqListLabels(text); len(labels) >= 2 {
 		snippet = strings.Join(labels, "、")
 	} else {
-		snippet = qqSnippetNormalizedPrefix(qqMarkdownNoise.ReplaceAllString(text, " "))
+		snippet = qqSnippetNormalizedPrefix(text, true)
 	}
 	return qqTruncate(snippet, qqSnippetRunes)
 }
 
-// qqSnippetNormalizedPrefix 合并词间空白，只构建摘要所需的前缀；多留一字供 qqTruncate 判断省略号。
-func qqSnippetNormalizedPrefix(text string) string {
+// qqSnippetNormalizedPrefix 合并词间空白，按需沿用 qqMarkdownNoise 的清理规则，只构建摘要所需的前缀；多留一字供 qqTruncate 判断省略号。
+func qqSnippetNormalizedPrefix(text string, stripMarkdown bool) string {
 	const limit = qqSnippetRunes + 1
 	var out strings.Builder
 	count := 0
 	pendingSpace := false
+	noClosingLink := false
 	for offset := 0; offset < len(text) && count < limit; {
 		r, size := utf8.DecodeRuneInString(text[offset:])
+		if stripMarkdown {
+			switch r {
+			case '`', '*', '_', '>', '#', '[', '|':
+				r = ' '
+			case ']':
+				if !noClosingLink && offset+1 < len(text) && text[offset+1] == '(' {
+					if end := strings.IndexByte(text[offset+2:], ')'); end >= 0 {
+						r, size = ' ', end+3
+					} else {
+						// 后面没有右括号，后续候选也不会闭合，避免重复扫描剩余正文。
+						noClosingLink = true
+					}
+				}
+			}
+		}
 		if unicode.IsSpace(r) {
 			pendingSpace = count > 0
 			offset += size

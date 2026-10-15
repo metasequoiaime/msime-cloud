@@ -46,6 +46,9 @@ func TestTelemetryConcurrentRetriesGroupOnlyInsertedEvent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	resetCrashTables(t, &Service{store: db})
+	if _, err := db.pool.Exec(ctx, `DELETE FROM auth_rates WHERE key LIKE 'telemetry-crash:%'`); err != nil {
+		t.Fatal(err)
+	}
 	release := make(chan struct{})
 	trace := &telemetryLookupBarrier{arrived: make(chan struct{}, 2), release: release}
 	cfg := db.pool.Config()
@@ -91,6 +94,13 @@ func TestTelemetryConcurrentRetriesGroupOnlyInsertedEvent(t *testing.T) {
 	}
 	if count := clipboardTestCount(t, db, `SELECT count(*) FROM admin_crash_groups`); count != 1 {
 		t.Fatal("未写入的重试事件仍产生了分组", count)
+	}
+	var charged int
+	if err := db.pool.QueryRow(ctx, `SELECT COALESCE(sum(count),0) FROM auth_rates WHERE key LIKE 'telemetry-crash:%'`).Scan(&charged); err != nil {
+		t.Fatal(err)
+	}
+	if charged != 1 {
+		t.Fatalf("同一崩溃的并发重试消耗了 %d 次每日额度", charged)
 	}
 	var matched bool
 	if err := db.pool.QueryRow(ctx, `SELECT g.platform=e.platform AND g.version=e.version AND g.title=e.message

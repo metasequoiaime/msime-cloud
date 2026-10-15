@@ -290,6 +290,8 @@ on:
 
 GitHub 读请求在内存中缓存 60 秒，并使用 ETag 条件请求，以免耗尽每小时 5000 次的配额。几个平台共用一个仓库时，GitHub 的 latest 是整个仓库的：撤回某个平台的最新版后，该平台的上一个正式版会成为整个仓库的 latest，可能盖过另一个平台更新的版本。所以下载站应按 `tag_prefix` 自行挑选每个平台的版本并跳过 prerelease，不要直接读 `/releases/latest`。
 
+发布检查清单按每页 100 条读取检查结果，最多 1000 条，汇总全部分页中的 CI 和 `sign` 状态。超过上限、任一页读取失败、分页期间总数变化或返回行数不完整时，CI 显示 `unknown`，不会把只读到的部分检查显示为全部通过。
+
 `admin.github` 与官网词库投稿使用的 `word_submissions.github` 是两个独立配置，可以用同一个 App，也可以分开，但两者指向的词库仓库必须相同（见上表 `dictionary_repo`）。
 
 ### `admin.services`

@@ -71,7 +71,7 @@ func (a *Service) adminOverview(w http.ResponseWriter, r *http.Request, _ string
    'crashes',crash_counts.crashes,
    'open_crashes',crash_counts.open_crashes,
    'skins',(SELECT count(*) FROM community_skins WHERE moderation<>'removed'),
-   'skin_downloads',(SELECT count(*) FROM community_skin_downloads),
+   'skin_downloads',(`+communitySkinDownloadsQuery+`),
    'plugins',(SELECT count(*) FROM community_plugins WHERE moderation<>'removed'),
    'plugin_downloads',(SELECT count(*) FROM community_plugin_downloads),
    'dictionaries',resource_counts.dictionaries,

@@ -21,10 +21,13 @@ const communityResourceCountsQuery = `SELECT
  count(*) FILTER (WHERE kind='reply') AS replies
  FROM community_resources WHERE kind IN ('dictionary','reply') AND moderation<>'removed'`
 
+// communitySkinDownloadsQuery 由公共统计和后台概览共用，只统计未下架皮肤的去重下载记录。
+const communitySkinDownloadsQuery = `SELECT count(*) FROM community_skin_downloads d JOIN community_skins s ON s.id=d.skin_id WHERE s.moderation<>'removed'`
+
 // 公共统计与后台概览保持相同的社区计数口径。
 const communityStatsQuery = `SELECT
  (SELECT count(*) FROM community_skins WHERE moderation<>'removed'),
- (SELECT count(*) FROM community_skin_downloads d JOIN community_skins s ON s.id=d.skin_id WHERE s.moderation<>'removed'),
+ (` + communitySkinDownloadsQuery + `),
  resource_counts.dictionaries,resource_counts.replies,
  (SELECT count(*) FROM community_resource_saves),
  now() FROM (` + communityResourceCountsQuery + `) resource_counts`

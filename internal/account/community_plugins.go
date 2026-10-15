@@ -338,20 +338,19 @@ func (a *Service) communityPluginPublish(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	digest := pluginRequestDigest(input.Name, input.Description, input.Kind, input.PluginID, input.Version, input.Archive)
-	// A retry of a publication that already committed is answered before the archive is inflated or the hourly rate is charged, so a lost response can never turn into 429. The locked probe in the transaction stays authoritative.
-	var existingOwner, existingDigest string
-	e := a.store.pool.QueryRow(r.Context(), `SELECT owner_id,request_sha256 FROM community_plugins WHERE id=$1`, input.ID).Scan(&existingOwner, &existingDigest)
+	// 已提交的重试先在同一快照中校验作者、摘要并读取响应，不解压归档或扣减额度；事务内探测仍为最终依据。
+	row, e := a.store.communityPublishedItem(r.Context(), "community_plugins", communityPluginSelect(false)+`WHERE p.id=(SELECT id FROM publish_match)`, p.UserID, input.ID, digest)
 	if e == nil {
-		if existingOwner != p.UserID || existingDigest != digest {
-			writeError(w, 409, "plugin_id_conflict")
-			return
-		}
-		v, e := scanCommunityPlugin(a.store.pool.QueryRow(r.Context(), communityPluginSelect(false)+`WHERE p.id=$2`, p.UserID, input.ID))
+		v, e := scanCommunityPlugin(row)
 		if e != nil {
 			a.error(w, e)
 			return
 		}
 		write(w, 200, v)
+		return
+	}
+	if errors.Is(e, errCommunityPublishConflict) {
+		writeError(w, 409, "plugin_id_conflict")
 		return
 	}
 	if !errors.Is(e, pgx.ErrNoRows) {
@@ -381,6 +380,7 @@ func (a *Service) communityPluginPublish(w http.ResponseWriter, r *http.Request)
 	}
 	defer tx.Rollback(r.Context())
 	// 事务内合并 ID 冲突检查、账号配额检查和首发写入，避免锁定用户后再为两步各往返一次。
+	var existingOwner, existingDigest string
 	var identical, exists, withinCount, withinStorage, inserted bool
 	if e = tx.QueryRow(r.Context(), `WITH existing AS MATERIALIZED (
  SELECT owner_id,request_sha256,request_sha256=$11 AS identical

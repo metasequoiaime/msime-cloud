@@ -559,20 +559,19 @@ func (a *Service) communityCandidatePublish(w http.ResponseWriter, r *http.Reque
 		writeError(w, 400, code)
 		return
 	}
-	// A retry of a publication that already committed is answered before the hourly rate is charged, so a lost response can never turn into 429. The locked probe in the transaction stays authoritative.
-	var existingOwner, existingDigest string
-	e := a.store.pool.QueryRow(r.Context(), `SELECT owner_id,request_sha256 FROM community_candidate_skins WHERE id=$1`, input.ID).Scan(&existingOwner, &existingDigest)
+	// 已提交的重试先在同一快照中校验作者、摘要并读取响应，不扣减额度；事务内探测仍为最终依据。
+	row, e := a.store.communityPublishedItem(r.Context(), "community_candidate_skins", candidateSkinSelect(false)+`WHERE s.id=(SELECT id FROM publish_match)`, p.UserID, input.ID, digest)
 	if e == nil {
-		if existingOwner != p.UserID || existingDigest != digest {
-			writeError(w, 409, "candidate_skin_id_conflict")
-			return
-		}
-		v, e := scanCandidateSkin(a.store.pool.QueryRow(r.Context(), candidateSkinSelect(false)+`WHERE s.id=$2`, p.UserID, input.ID))
+		v, e := scanCandidateSkin(row)
 		if e != nil {
 			a.error(w, e)
 			return
 		}
 		respond(200, v)
+		return
+	}
+	if errors.Is(e, errCommunityPublishConflict) {
+		writeError(w, 409, "candidate_skin_id_conflict")
 		return
 	}
 	if !errors.Is(e, pgx.ErrNoRows) {
@@ -605,6 +604,7 @@ func (a *Service) communityCandidatePublish(w http.ResponseWriter, r *http.Reque
 	license := candidatePackageLicense(pkg)
 	publicLimit := a.candidatePublicLimit(p.UserID)
 	// 事务内合并 ID 冲突、账号配额检查和首发写入，避免锁定用户后再为两步各往返一次。
+	var existingOwner, existingDigest string
 	var identical, exists, withinTotal, withinPublic, inserted bool
 	if e = tx.QueryRow(r.Context(), `WITH existing AS MATERIALIZED (
  SELECT owner_id,request_sha256,request_sha256=$12 AS identical

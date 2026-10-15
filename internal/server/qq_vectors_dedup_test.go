@@ -103,6 +103,24 @@ func TestQQDocVectorsDuplicateUpdatesKeepPreviousSemantics(t *testing.T) {
 	}
 }
 
+func TestQQDocVectorsDistinctPlanningAllocationBudget(t *testing.T) {
+	sections := make([]qqSection, 8192)
+	for i := range sections {
+		sections[i] = qqSection{Doc: "合成文档", Title: fmt.Sprintf("标题%d", i), Text: "合成正文"}
+	}
+	s := qqVectorPlanningServer(sections)
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			if _, err := s.syncQQDocVectors(context.Background()); err == nil {
+				t.Fatal("合成 embedding 应失败")
+			}
+		}
+	})
+	if allocated := result.AllocedBytesPerOp(); allocated > 8<<20 {
+		t.Fatalf("不同段落准备分配 %d 字节，超过 8 MiB 预算", allocated)
+	}
+}
+
 func BenchmarkQQDocVectorPlanning(b *testing.B) {
 	for _, count := range []int{256, 2048, 8192} {
 		b.Run(fmt.Sprintf("distinct_%d", count), func(b *testing.B) {

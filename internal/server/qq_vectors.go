@@ -286,9 +286,9 @@ func (s *Server) syncQQDocVectors(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	var items []account.QQKnowledgeItem
-	var texts []string
-	pending := map[string]bool{}
+	items := make([]account.QQKnowledgeItem, 0, len(idCache))
+	texts := make([]string, 0, len(idCache))
+	pending := make(map[string]bool, len(idCache))
 	for i, section := range sections {
 		// 只对本轮已经选中更新的 ID 去重，未变化的段落不能遮住后续同 ID 的更新。
 		if pending[ids[i]] {

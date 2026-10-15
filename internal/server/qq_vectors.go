@@ -148,19 +148,28 @@ func qqTruncate(text string, limit int) string {
 	if limit < 0 {
 		panic("negative truncate limit")
 	}
+	end := qqRuneEnd(text, limit)
+	if end == len(text) {
+		return text
+	}
+	prefix := text[:end]
+	if !utf8.ValidString(prefix) {
+		// 沿用截断时的 rune 转换语义，每个无效字节分别替换为 U+FFFD。
+		prefix = string([]rune(prefix))
+	}
+	return prefix + "…"
+}
+
+// qqRuneEnd 返回保留 limit 个 Unicode 标量时的结束字节位置，不足时返回全文长度。
+func qqRuneEnd(text string, limit int) int {
 	count := 0
 	for i := range text {
 		if count == limit {
-			prefix := text[:i]
-			if !utf8.ValidString(prefix) {
-				// 沿用截断时的 rune 转换语义，每个无效字节分别替换为 U+FFFD。
-				prefix = string([]rune(prefix))
-			}
-			return prefix + "…"
+			return i
 		}
 		count++
 	}
-	return text
+	return len(text)
 }
 
 func qqContentHash(parts ...string) string {

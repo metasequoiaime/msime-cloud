@@ -649,15 +649,16 @@ func (s *Store) Refresh(ctx context.Context, token string) (Tokens, error) {
 	}
 	defer tx.Rollback(ctx)
 	var sid, uid string
-	var revoked, banned bool
-	// 使用 clock_timestamp 而不是 now()：事务可能在等待会话行锁时跨过 expires_at，不能让事务开始时的时间把已过期会话放行。
-	e = tx.QueryRow(ctx, `SELECT s.id,s.user_id,s.revoked,u.banned_at IS NOT NULL FROM auth_sessions s JOIN auth_users u ON u.id=s.user_id WHERE s.refresh_hash=$1 AND s.expires_at>clock_timestamp() FOR UPDATE OF s`, hash(token)).Scan(&sid, &uid, &revoked, &banned)
-	if e == nil {
-		// WHERE 在等待 FOR UPDATE 前可能已经通过了时间条件；再次读取是在锁拿到后执行，避免锁等待跨过 expires_at 仍继续轮换。
-		var valid bool
-		if e = tx.QueryRow(ctx, "SELECT expires_at>clock_timestamp() FROM auth_sessions WHERE id=$1", sid).Scan(&valid); e == nil && !valid {
-			e = pgx.ErrNoRows
-		}
+	var revoked, banned, valid bool
+	// 先物化锁定的会话，再按实际时钟复查锁后有效期，避免等待期间过期的会话继续轮换。
+	e = tx.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+ SELECT s.id,s.user_id,s.revoked,u.banned_at IS NOT NULL AS banned,s.expires_at
+ FROM auth_sessions s JOIN auth_users u ON u.id=s.user_id
+ WHERE s.refresh_hash=$1 AND s.expires_at>clock_timestamp() FOR UPDATE OF s
+)
+SELECT id,user_id,revoked,banned,expires_at>clock_timestamp() FROM locked`, hash(token)).Scan(&sid, &uid, &revoked, &banned, &valid)
+	if e == nil && !valid {
+		e = pgx.ErrNoRows
 	}
 	if e == nil && banned {
 		// The ban revoked this session; the client learns why instead of being sent back to a login that would fail the same way.

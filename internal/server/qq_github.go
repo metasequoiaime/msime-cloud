@@ -308,8 +308,12 @@ func qqReleaseNotes(body string) string {
 			fenced = !fenced
 			continue
 		}
+		// 在纯文本转换前跳过代码块内容，避免逐行分配后再丢弃。
+		if fenced {
+			continue
+		}
 		text := strings.TrimRight(qqPlainText(trimmed), "。；;：: ")
-		if fenced || text == "" {
+		if text == "" {
 			continue
 		}
 		if b.Len() > 0 && !heading {

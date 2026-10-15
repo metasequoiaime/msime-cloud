@@ -94,6 +94,7 @@ func (a *Service) downloadsSummary(ctx context.Context, now time.Time) (download
 	// 平台别名（win、darwin、harmonyos 等）归到规范 ID 下，所以同一平台在每个版本、安装包和渠道下只占一行。
 	var telemetryToday, telemetryWeek, telemetryMirrorWeek int64
 	var telemetryChannelReported bool
+	var github []downloadsRow
 	batch := &pgx.Batch{}
 	batch.Queue(`WITH grouped AS (
  SELECT `+canonicalPlatformSQL("platform")+` AS p,version,artifact,channel,
@@ -122,6 +123,11 @@ SELECT p,version,artifact,channel,today,week,
 	batch.Queue(`SELECT to_char(max(day),'YYYY-MM-DD') FROM release_asset_snapshots`).QueryRow(func(row pgx.Row) error {
 		return row.Scan(&summary.SnapshotDay)
 	})
+	batch.Queue(githubReleaseDownloadsQuery, weekStart, today).Query(func(rows pgx.Rows) error {
+		var err error
+		github, err = collectGitHubReleaseDownloads(rows, &summary)
+		return err
+	})
 	if err = tx.SendBatch(ctx, batch).Close(); err != nil {
 		return summary, err
 	}
@@ -132,10 +138,6 @@ SELECT p,version,artifact,channel,today,week,
 	summary.Totals.MirrorWeek = telemetryMirrorWeek
 	summary.ChannelReported = telemetryChannelReported
 
-	github, err := githubReleaseDownloads(ctx, tx, weekStart, today, &summary)
-	if err != nil {
-		return summary, err
-	}
 	summary.Rows = append(summary.Rows, github...)
 	summary.Totals.Today = telemetryToday + summary.Totals.GitHubToday
 	summary.Totals.Week = telemetryWeek + summary.Totals.GitHubWeek
@@ -152,10 +154,8 @@ SELECT p,version,artifact,channel,today,week,
 	return summary, nil
 }
 
-// githubReleaseDownloads turns the asset snapshots into per-asset downloads: each snapshot day counts the difference to the asset's previous snapshot, which may be older than the window, and an asset's first snapshot counts nothing because its downloads cannot be dated. Assets without downloads in the window and release metadata files are left out. It adds every asset to the summary's GitHub totals, including assets beyond the row cap, which set Truncated.
-func githubReleaseDownloads(ctx context.Context, tx pgx.Tx, weekStart, today time.Time, summary *downloadsSummary) ([]downloadsRow, error) {
-	// 只为本周出现的资产读取最近一条历史基线，避免遍历所有历史快照；本周快照供基线选择和差分共用。
-	rows, err := tx.Query(ctx, `WITH recent AS MATERIALIZED (
+// githubReleaseDownloadsQuery 只为本周出现的资产补一条最近的历史基线，本周快照供基线选择和差分共用，避免遍历全部历史。
+const githubReleaseDownloadsQuery = `WITH recent AS MATERIALIZED (
  SELECT repo,tag,asset,day,download_count FROM release_asset_snapshots WHERE day>=$1 AND day<=$2
 ), base AS (
  SELECT a.repo,a.tag,a.asset,p.day,p.download_count
@@ -171,17 +171,17 @@ func githubReleaseDownloads(ctx context.Context, tx pgx.Tx, weekStart, today tim
 )
 SELECT repo,tag,asset,COALESCE(sum(delta) FILTER (WHERE day=$2),0),sum(delta)
  FROM deltas WHERE day>=$1 GROUP BY repo,tag,asset HAVING sum(delta)>0
- ORDER BY sum(delta) DESC,repo,tag,asset`, weekStart, today)
-	if err != nil {
-		return nil, err
-	}
+ ORDER BY sum(delta) DESC,repo,tag,asset`
+
+// collectGitHubReleaseDownloads 读取快照差分，首次快照没有可比较的基线，不计下载；元数据文件也不计入，超过行数上限的资产仍计入总数并设置截断标记。
+func collectGitHubReleaseDownloads(rows pgx.Rows, summary *downloadsSummary) ([]downloadsRow, error) {
 	defer rows.Close()
 	channel := "github"
 	result := []downloadsRow{}
 	for rows.Next() {
 		row := downloadsRow{Source: downloadsSourceGitHub, Channel: &channel}
 		var asset string
-		if err = rows.Scan(&row.Repo, &row.Tag, &asset, &row.Today, &row.Week); err != nil {
+		if err := rows.Scan(&row.Repo, &row.Tag, &asset, &row.Today, &row.Week); err != nil {
 			return nil, err
 		}
 		if releaseMetadataAsset(asset) {

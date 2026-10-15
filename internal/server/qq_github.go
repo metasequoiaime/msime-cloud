@@ -302,7 +302,7 @@ const qqReleaseNoteRunes = 300
 func qqReleaseNotes(body string) string {
 	var b strings.Builder
 	fenced, heading := false, false
-	for line := range strings.SplitSeq(qqImagePattern.ReplaceAllString(body, " "), "\n") {
+	for line := range strings.SplitSeq(qqStripImagesAndHTML(body), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "```") {
 			fenced = !fenced

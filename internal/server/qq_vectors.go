@@ -243,12 +243,18 @@ func (s *Server) syncQQDocVectors(ctx context.Context) (int, error) {
 	}
 	var items []account.QQKnowledgeItem
 	var texts []string
+	pending := map[string]bool{}
 	for i, section := range sections {
-		text := "[" + section.Doc + "] " + section.Title + "\n" + qqTruncate(section.Text, qqEmbedRunes)
-		h := qqContentHash(text)
-		if hashes[ids[i]] == h || slices.ContainsFunc(items, func(it account.QQKnowledgeItem) bool { return it.ID == ids[i] }) {
+		// 只对本轮已经选中更新的 ID 去重，未变化的段落不能遮住后续同 ID 的更新。
+		if pending[ids[i]] {
 			continue
 		}
+		text := "[" + section.Doc + "] " + section.Title + "\n" + qqTruncate(section.Text, qqEmbedRunes)
+		h := qqContentHash(text)
+		if hashes[ids[i]] == h {
+			continue
+		}
+		pending[ids[i]] = true
 		items = append(items, account.QQKnowledgeItem{ID: ids[i], Kind: "doc", Title: section.Doc + " · " + section.Title, Summary: qqTruncate(section.Text, qqHistorySummaryRunes), ContentHash: h, UpdatedAt: s.qq.now()})
 		texts = append(texts, text)
 	}

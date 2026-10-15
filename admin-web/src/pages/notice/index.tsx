@@ -84,12 +84,12 @@ export default function NoticePage() {
     mutationFn: (id: string) => api.action({ action: "archive_notice", id }),
     onSettled: refresh,
   });
-  const busy = save.isPending || publish.isPending;
+  const busy = save.isPending || publish.isPending || archive.isPending;
 
-  // Global search and notifications link here with ?focus=<id>: a draft opens in the editor, any other notice is expanded in the list.
+  // 搜索和通知通过 ?focus=<id> 打开草稿或展开公告；等待当前写入完成后再切换编辑器。
   const handledFocus = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (!focus || !items || handledFocus.current === focus) return;
+    if (busy || !focus || !items || handledFocus.current === focus) return;
     handledFocus.current = focus;
     const notice = items.find(n => n.id === focus);
     if (!notice) return;
@@ -97,7 +97,7 @@ export default function NoticePage() {
     setFilter(notice.status === "archived" ? "archived" : "current");
     setExpanded(notice.id);
     window.requestAnimationFrame(() => document.getElementById(`notice-${notice.id}`)?.scrollIntoView({ block: "center" }));
-  }, [focus, items]);
+  }, [busy, focus, items]);
 
   const counts = useMemo(() => ({
     current: items?.filter(n => n.status !== "archived").length ?? 0,
@@ -186,7 +186,7 @@ export default function NoticePage() {
   let list = <ul className="m-0 list-none p-0">
     {visible?.map(n => <NoticeRow key={n.id} notice={n} open={expanded === n.id} editing={form.id === n.id}
       onToggle={() => setExpanded(expanded === n.id ? null : n.id)} onEdit={() => void edit(n)}
-      onArchive={() => onArchive(n)} canArchive={canPublish} busy={archive.isPending} />)}
+      onArchive={() => onArchive(n)} canArchive={canPublish} busy={busy} />)}
   </ul>;
   if (query.isPending) list = <SkeletonRows rows={4} />;
   else if (query.isError) list = <ErrorState className="m-4" error={query.error} onRetry={() => query.refetch()} />;
@@ -198,16 +198,18 @@ export default function NoticePage() {
     <PageIntro page="notice" />
     <div className="grid items-start gap-3.5 min-[1100px]:grid-cols-2">
       <Card>
-        <CardHeader title={form.id ? "编辑草稿" : "新建公告"}
-          actions={form.id ? <Button size="sm" variant="ghost" onClick={() => setForm(emptyForm)}>取消编辑</Button> : undefined} />
-        <NoticeFields form={form} onChange={setForm} telegram={telegram} />
-        <div className="mt-5 flex flex-wrap justify-end gap-2">
-          <Button size="lg" variant="outline" disabled={busy} onClick={onDraft}>{save.isPending ? "保存中…" : "存为草稿"}</Button>
-          <Button size="lg" variant="primary" className={cn(titleEmpty && "opacity-45")} aria-disabled={titleEmpty}
-            disabled={busy || !canPublish} title={canPublish ? undefined : noPermissionHint} onClick={onPublish}>
-            {publish.isPending ? "发布中…" : "发布"}
-          </Button>
-        </div>
+        <fieldset disabled={busy} aria-label="编辑公告" className="m-0 min-w-0 border-0 p-0">
+          <CardHeader title={form.id ? "编辑草稿" : "新建公告"}
+            actions={form.id ? <Button size="sm" variant="ghost" onClick={() => setForm(emptyForm)}>取消编辑</Button> : undefined} />
+          <NoticeFields form={form} onChange={setForm} telegram={telegram} />
+          <div className="mt-5 flex flex-wrap justify-end gap-2">
+            <Button size="lg" variant="outline" disabled={busy} onClick={onDraft}>{save.isPending ? "保存中…" : "存为草稿"}</Button>
+            <Button size="lg" variant="primary" className={cn(titleEmpty && "opacity-45")} aria-disabled={titleEmpty}
+              disabled={busy || !canPublish} title={canPublish ? undefined : noPermissionHint} onClick={onPublish}>
+              {publish.isPending ? "发布中…" : "发布"}
+            </Button>
+          </div>
+        </fieldset>
       </Card>
 
       <Card className="p-0">
@@ -235,7 +237,7 @@ function NoticeRow({ notice, open, editing, onToggle, onEdit, onArchive, canArch
     {open && <div className="mt-2.5 grid gap-2.5">
       <p className="m-0 whitespace-pre-wrap rounded-[10px] bg-panel-2 px-3 py-2.5 text-[13.5px] leading-[1.7] text-body [overflow-wrap:anywhere]">{notice.body || "（无正文）"}</p>
       {notice.status !== "archived" && <div className="flex flex-wrap justify-end gap-2">
-        {notice.status === "draft" && <Button size="sm" onClick={onEdit}>编辑</Button>}
+        {notice.status === "draft" && <Button size="sm" disabled={busy} onClick={onEdit}>编辑</Button>}
         <Button size="sm" variant="danger-outline" disabled={busy || !canArchive} title={canArchive ? undefined : noPermissionHint} onClick={onArchive}>
           {notice.status === "draft" ? "丢弃" : "归档"}
         </Button>

@@ -440,7 +440,13 @@ var qqSpaceRuns = regexp.MustCompile(`[ \t]{2,}`)
 
 // qqStripLinks 删掉链接并合并留下的连续空格。
 func qqStripLinks(text string) string {
-	return strings.TrimSpace(qqSpaceRuns.ReplaceAllString(qqLinkPattern.ReplaceAllString(text, ""), " "))
+	if strings.Contains(text, "://") {
+		text = qqLinkPattern.ReplaceAllString(text, "")
+	}
+	if qqSpaceRuns.MatchString(text) {
+		text = qqSpaceRuns.ReplaceAllString(text, " ")
+	}
+	return strings.TrimSpace(text)
 }
 
 // qqMarkdownLink 匹配 Markdown 链接和图片，第 1 组是链接文字。qqLinkPattern 的 [!-~]* 会连右括号一起吞掉，`[#730](https://…)，` 只用 qqStripLinks 会剩下「[#730](，」。
@@ -518,8 +524,14 @@ func qqPlainText(md string) string {
 			text = body.String()
 		}
 	}
-	text = qqStripLinks(qqMarkdownLink.ReplaceAllString(text, "$1"))
-	text = qqPlainTextReplacer.Replace(text)
+	// 缺少规则所需的字面字符时直接跳过，避免无匹配的替换复制全文。
+	if strings.Contains(text, "](") {
+		text = qqMarkdownLink.ReplaceAllString(text, "$1")
+	}
+	text = qqStripLinks(text)
+	if strings.Contains(text, "**") || strings.Contains(text, "__") || strings.ContainsRune(text, '`') {
+		text = qqPlainTextReplacer.Replace(text)
+	}
 	lines := strings.Split(text, "\n")
 	kept := lines[:0]
 	for _, line := range lines {

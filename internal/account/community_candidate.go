@@ -602,10 +602,32 @@ func (a *Service) communityCandidatePublish(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	defer tx.Rollback(r.Context())
-	// The client UUID makes a publication retry safe and never overwrites someone else's work.
-	e = tx.QueryRow(r.Context(), `SELECT owner_id,request_sha256 FROM community_candidate_skins WHERE id=$1`, input.ID).Scan(&existingOwner, &existingDigest)
-	if e == nil {
-		if existingOwner != p.UserID || existingDigest != digest {
+	license := candidatePackageLicense(pkg)
+	publicLimit := a.candidatePublicLimit(p.UserID)
+	// 事务内合并 ID 冲突、账号配额检查和首发写入，避免锁定用户后再为两步各往返一次。
+	var identical, exists, withinTotal, withinPublic, inserted bool
+	if e = tx.QueryRow(r.Context(), `WITH existing AS MATERIALIZED (
+ SELECT owner_id,request_sha256,request_sha256=$12 AS identical
+ FROM community_candidate_skins WHERE id=$1
+), quota AS MATERIALIZED (
+ SELECT count(*) AS total_count,count(*) FILTER (WHERE visibility='public') AS public_count
+ FROM community_candidate_skins WHERE owner_id=$2
+), inserted AS (
+ INSERT INTO community_candidate_skins(id,owner_id,package_id,name,description,version,license_code,license_assets,license_source,manifest,preview_path,request_sha256,visibility,moderation,moderation_reason,category)
+ SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending',$14,$15 FROM quota
+ WHERE NOT EXISTS(SELECT 1 FROM existing) AND total_count<$16 AND ($13<>'public' OR public_count<$17)
+ ON CONFLICT(id) DO NOTHING
+ RETURNING id
+)
+	SELECT COALESCE((SELECT owner_id FROM existing),''),COALESCE((SELECT request_sha256 FROM existing),''),
+ COALESCE((SELECT identical FROM existing),false),EXISTS(SELECT 1 FROM existing),
+ (SELECT total_count<$16 FROM quota),(SELECT $13<>'public' OR public_count<$17 FROM quota),EXISTS(SELECT 1 FROM inserted)`,
+		input.ID, p.UserID, pkg.ID, input.Name, input.Description, pkg.Version, license.Code, license.Assets, license.Source, []byte(input.Manifest), pkg.Preview, digest, visibility, flag, category, maxCandidateLibraryRows, publicLimit).Scan(&existingOwner, &existingDigest, &identical, &exists, &withinTotal, &withinPublic, &inserted); e != nil {
+		a.error(w, e)
+		return
+	}
+	if exists {
+		if existingOwner != p.UserID || !identical {
 			writeError(w, 409, "candidate_skin_id_conflict")
 			return
 		}
@@ -615,28 +637,6 @@ func (a *Service) communityCandidatePublish(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		respond(200, v)
-		return
-	}
-	if !errors.Is(e, pgx.ErrNoRows) {
-		a.error(w, e)
-		return
-	}
-	license := candidatePackageLicense(pkg)
-	publicLimit := a.candidatePublicLimit(p.UserID)
-	var withinTotal, withinPublic, inserted bool
-	if e = tx.QueryRow(r.Context(), `WITH quota AS MATERIALIZED (
- SELECT count(*) AS total_count,count(*) FILTER (WHERE visibility='public') AS public_count
- FROM community_candidate_skins WHERE owner_id=$2
-), inserted AS (
- INSERT INTO community_candidate_skins(id,owner_id,package_id,name,description,version,license_code,license_assets,license_source,manifest,preview_path,request_sha256,visibility,moderation,moderation_reason,category)
- SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending',$14,$15 FROM quota
- WHERE total_count<$16 AND ($13<>'public' OR public_count<$17)
- ON CONFLICT(id) DO NOTHING
- RETURNING id
-)
-SELECT (SELECT total_count<$16 FROM quota),(SELECT $13<>'public' OR public_count<$17 FROM quota),EXISTS(SELECT 1 FROM inserted)`,
-		input.ID, p.UserID, pkg.ID, input.Name, input.Description, pkg.Version, license.Code, license.Assets, license.Source, []byte(input.Manifest), pkg.Preview, digest, visibility, flag, category, maxCandidateLibraryRows, publicLimit).Scan(&withinTotal, &withinPublic, &inserted); e != nil {
-		a.error(w, e)
 		return
 	}
 	if !withinTotal {

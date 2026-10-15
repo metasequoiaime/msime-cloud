@@ -707,7 +707,10 @@ func (s *Server) adminLogsStream(w http.ResponseWriter, r *http.Request) {
 	} else {
 		start := now.Add(-since).UnixNano()
 		t.cursor, t.floor = now.UnixNano(), start-1
-		if backfill > 0 {
+		if backfill == 0 {
+			// 不回填时，轮询回看也不能补发连接建立之前的日志。
+			t.floor = t.cursor - 1
+		} else {
 			entries, err := s.lokiQueryRange(ctx, t.query, start, now.UnixNano(), backfill, "backward")
 			if err != nil {
 				if ctx.Err() != nil || !lokiFailed(err) {

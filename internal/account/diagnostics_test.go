@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 const diagnosticsPath = "/v1/users/me/diagnostics"
@@ -127,6 +128,29 @@ func TestRecordDiagnosticAccessPreservesIncompatibleArguments(t *testing.T) {
 		quoted, _ := json.Marshal(original)
 		if len(quoted) > diagnosticAccessArgumentBytes || !strings.HasPrefix(strings.ReplaceAll(raw, "\x00", `\u0000`), original) || original == "" {
 			t.Fatalf("审计参数原文或大小错误: %s", stored)
+		}
+	}
+}
+
+func TestDiagnosticArgumentsReplaceInvalidUTF8(t *testing.T) {
+	for _, tc := range []struct {
+		raw, want string
+		truncated bool
+	}{
+		{"{\"kind\":\"before\xffafter\"}", `{"kind":"before�after"}`, false},
+		{"before\xc0\xafafter", "before�after", false},
+		{"before\xffafter" + strings.Repeat("水", 600), "before�after", true},
+	} {
+		bounded := boundedDiagnosticArguments(json.RawMessage(tc.raw))
+		var text string
+		if !utf8.Valid(bounded) || len(bounded) > diagnosticAccessArgumentBytes || json.Unmarshal(bounded, &text) != nil {
+			t.Fatalf("无效 UTF-8 参数未转为有界字符串: %q", bounded)
+		}
+		if !tc.truncated && text != tc.want {
+			t.Fatalf("无效字节之后的内容丢失: got %q want %q", text, tc.want)
+		}
+		if tc.truncated && (!strings.HasPrefix(text, tc.want) || len(text) < 900) {
+			t.Fatalf("超长参数在无效字节处提前截断: %q", text)
 		}
 	}
 }

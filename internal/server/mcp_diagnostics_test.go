@@ -60,6 +60,7 @@ func TestDiagnosticsMCPAuditsJSONBIncompatibleArguments(t *testing.T) {
 		{"high surrogate", `{"kind":"\ud800"}`, true},
 		{"low surrogate", `{"kind":"\udc00"}`, true},
 		{"numeric underflow", `{"limit":1e-20000}`, true},
+		{"invalid UTF-8", "{\"kind\":\"before\xffafter\"}", true},
 		{"literal escape", `{"kind":"\\u0000"}`, false},
 		{"surrogate pair", `{"kind":"\ud83d\ude00"}`, false},
 	} {
@@ -80,7 +81,7 @@ func TestDiagnosticsMCPAuditsJSONBIncompatibleArguments(t *testing.T) {
 			}
 			if tc.quoted {
 				var original string
-				if json.Unmarshal(raw, &original) != nil || original != tc.arguments {
+				if json.Unmarshal(raw, &original) != nil || original != strings.ToValidUTF8(tc.arguments, "\ufffd") {
 					t.Fatalf("参数原文没有保留: %s", raw)
 				}
 			} else {
@@ -92,14 +93,14 @@ func TestDiagnosticsMCPAuditsJSONBIncompatibleArguments(t *testing.T) {
 		})
 	}
 	var count int
-	if err := admin.QueryRow(t.Context(), "SELECT count(*) FROM "+pgx.Identifier{schema, "diagnostic_accesses"}.Sanitize()+" WHERE snapshot_id=$1", snapshot.ID).Scan(&count); err != nil || count != 6 {
+	if err := admin.QueryRow(t.Context(), "SELECT count(*) FROM "+pgx.Identifier{schema, "diagnostic_accesses"}.Sanitize()+" WHERE snapshot_id=$1", snapshot.ID).Scan(&count); err != nil || count != 7 {
 		t.Fatalf("访问记录数: %d %v", count, err)
 	}
 	// 无论直接写入还是转为原文后写入失败，都必须阻止读取结果返回。
 	if _, err := admin.Exec(t.Context(), "ALTER TABLE "+pgx.Identifier{schema, "diagnostic_accesses"}.Sanitize()+" ADD CONSTRAINT reject_access CHECK(result_count<0) NOT VALID"); err != nil {
 		t.Fatal(err)
 	}
-	for _, arguments := range []string{`{}`, `{"kind":"\u0000"}`} {
+	for _, arguments := range []string{`{}`, `{"kind":"\u0000"}`, "{\"kind\":\"before\xffafter\"}"} {
 		w := request("/mcp/s/"+snapshot.ID, snapshot.Token, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_input_events","arguments":`+arguments+`}}`)
 		if w.Code != 200 || !strings.Contains(w.Body.String(), `"isError":true`) || !strings.Contains(w.Body.String(), "access log unavailable") || strings.Contains(w.Body.String(), "structuredContent") || strings.Contains(w.Body.String(), "t_ms") {
 			t.Fatalf("审计失败后仍返回了读取结果: %d %s", w.Code, w.Body.String())

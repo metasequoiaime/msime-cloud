@@ -84,14 +84,20 @@ func (a *Service) AdminMembersHTTP(w http.ResponseWriter, r *http.Request, owner
 	var detail map[string]any
 	if v.Action == "set_role" {
 		var previous string
-		err = tx.QueryRow(r.Context(), `SELECT role FROM admin_members WHERE email=$1 FOR UPDATE`, v.Email).Scan(&previous)
+		// 旧角色取自锁后的成员行；角色相同时不写入，也不改变更新时间或新增审计。
+		err = tx.QueryRow(r.Context(), `WITH locked AS MATERIALIZED (
+ SELECT role FROM admin_members WHERE email=$1 FOR UPDATE
+), changed AS (
+ UPDATE admin_members SET role=$2,updated_at=now()
+ FROM locked WHERE email=$1 AND locked.role<>$2
+ RETURNING 1
+)
+SELECT role,(SELECT count(*) FROM changed) FROM locked`, v.Email, v.Role).Scan(&previous, &affected)
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeError(w, 404, "not_found")
 			return
 		}
-		if err == nil && previous != v.Role {
-			_, err = tx.Exec(r.Context(), `UPDATE admin_members SET role=$2,updated_at=now() WHERE email=$1`, v.Email, v.Role)
-			affected = 1
+		if err == nil && affected > 0 {
 			detail = map[string]any{"from": previous, "to": v.Role}
 		}
 		if err == nil && affected == 0 {

@@ -192,6 +192,7 @@ for path,method,title,body,response,status,description in dictionary_ops:
     operation={'summary':title,'tags':['用户词库'],'security':[{'userSession':[]}],'description':description+' 原生校验沿用公共 Engine 规则；快捷短语最多 199 个 UTF-16 单元。设备令牌不能访问用户词库。','responses':responses,'parameters':parameters}
     if body: operation['requestBody']={'required':True,'content':{'application/json':{'schema':body}}}
     if path.endswith('/snapshot') and method=='put':
+        operation['description']+=' 词条与覆盖记录的源 ID 不能包含 NUL；覆盖记录的源 ID 允许为空。'
         operation['requestBody']['content']={'application/x-ndjson':{'schema':body}}
         operation['responses']['415']={'description':'需要 application/x-ndjson'}
         operation['responses']['503']={'description':'恢复忙碌或用户数据服务不可用；忙碌时返回 Retry-After: 5'}

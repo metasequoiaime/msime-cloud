@@ -13,29 +13,53 @@ import (
 // userDataTransaction 的用户锁并核对词库版本，使预加载与写入期间没有并发编辑。
 func mergeResourceDictionary(ctx context.Context, tx pgx.Tx, user string, revision int64, entries []SharedWord) (int64, int, error) {
 	kinds, codes, words := make([]string, len(entries)), make([]string, len(entries)), make([]string, len(entries))
+	weights := make([]int64, len(entries))
 	for i, e := range entries {
 		kinds[i], codes[i], words[i] = e.Kind, e.Code, e.Word
+		weights[i] = e.Weight
 	}
 	type key struct{ kind, code, word string }
 	existing := make(map[key]*DictionaryEntry, len(entries))
-	rows, err := tx.Query(ctx, `SELECT e.id,e.kind,e.code,e.word,e.weight,e.revision,e.updated_at
+	var count int
+	var updatedAt time.Time
+	// 匹配词条与汇总共用一次请求；汇总只返回一行，且无新增或版本溢出时跳过容量扫描。
+	rows, err := tx.Query(ctx, `WITH wanted AS MATERIALIZED (
+ SELECT * FROM unnest($2::text[],$3::text[],$4::text[],$5::bigint[]) AS w(kind,code,word,weight)
+), matched AS MATERIALIZED (
+ SELECT e.id,e.kind,e.code,e.word,e.weight,e.revision,e.updated_at
 FROM user_dictionary_entries e
-JOIN unnest($2::text[],$3::text[],$4::text[]) AS wanted(kind,code,word)
- ON wanted.kind=e.kind AND wanted.code=e.code AND wanted.word=e.word
-WHERE e.user_id=$1`, user, kinds, codes, words)
+JOIN wanted USING(kind,code,word)
+WHERE e.user_id=$1
+), summary AS (
+ SELECT count(*) FILTER (WHERE e.id IS NULL) AS added,
+ count(*) FILTER (WHERE e.id IS NULL OR e.weight<>w.weight) AS changed
+ FROM wanted w LEFT JOIN matched e USING(kind,code,word)
+)
+SELECT false,id,kind,code,word,weight,revision,updated_at,0::bigint FROM matched
+UNION ALL
+SELECT true,'','','','',0,0,now(),
+ CASE WHEN added>0 AND $6::bigint<=9223372036854775807::bigint-changed
+ THEN (SELECT count(*) FROM user_dictionary_entries WHERE user_id=$1) ELSE 0 END
+FROM summary`, user, kinds, codes, words, weights, revision)
 	if err != nil {
 		return 0, 0, err
 	}
-	previous, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (*DictionaryEntry, error) {
-		e := new(DictionaryEntry)
-		err := row.Scan(&e.ID, &e.Kind, &e.Code, &e.Word, &e.Weight, &e.Revision, &e.UpdatedAt)
-		return e, err
-	})
-	if err != nil {
-		return 0, 0, err
+	defer rows.Close()
+	for rows.Next() {
+		var summary bool
+		var total int
+		var e DictionaryEntry
+		if err := rows.Scan(&summary, &e.ID, &e.Kind, &e.Code, &e.Word, &e.Weight, &e.Revision, &e.UpdatedAt, &total); err != nil {
+			return 0, 0, err
+		}
+		if summary {
+			count, updatedAt = total, e.UpdatedAt
+		} else {
+			existing[key{e.Kind, e.Code, e.Word}] = &e
+		}
 	}
-	for _, e := range previous {
-		existing[key{e.Kind, e.Code, e.Word}] = e
+	if err = rows.Err(); err != nil {
+		return 0, 0, err
 	}
 	changes := make([]DictionaryChange, 0, len(entries))
 	for _, e := range entries {
@@ -58,17 +82,8 @@ WHERE e.user_id=$1`, user, kinds, codes, words)
 		return revision, 0, nil
 	}
 	newEntries := len(entries) - len(existing)
-	var updatedAt time.Time
-	if newEntries > 0 {
-		var count int
-		if err = tx.QueryRow(ctx, `SELECT count(*),now() FROM user_dictionary_entries WHERE user_id=$1`, user).Scan(&count, &updatedAt); err != nil {
-			return 0, 0, err
-		}
-		if count+newEntries > 100000 {
-			return 0, 0, errDictionaryLimit
-		}
-	} else if err = tx.QueryRow(ctx, `SELECT now()`).Scan(&updatedAt); err != nil {
-		return 0, 0, err
+	if newEntries > 0 && count+newEntries > 100000 {
+		return 0, 0, errDictionaryLimit
 	}
 	for i := range changes {
 		changes[i].Replacement.UpdatedAt = updatedAt

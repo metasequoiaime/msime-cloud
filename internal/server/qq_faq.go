@@ -337,9 +337,8 @@ func (s *Server) writeQQFAQ(ctx context.Context, text, drafted string, reply fun
 	return pull.Number
 }
 
-// qqOpenFAQPull 在知识库仓库开着的 PR 里找「记录答案」开的（分支以 qq-faq/ 开头）、标题含同一个问题的，返回它的编号，没有时返回 0。只看最近的 100 个开着的 PR；列不出来时只记日志、返回 0，照常开 PR：重复的 PR 合并前还有人工核对，不值得因此拦下这次记录。
+// qqOpenFAQPull 在知识库仓库开着的 PR 里找「记录答案」开的（分支以 qq-faq/ 开头）、标题含同一个问题的，返回它的编号，没有时返回 0。按页查找全部开放 PR；列不出来时只记日志、返回 0，照常开 PR：重复的 PR 合并前还有人工核对，不值得因此拦下这次记录。
 func (s *Server) qqOpenFAQPull(ctx context.Context, token, repo, question string) int64 {
-	r, err := s.adminGitHub.Do(ctx, token, "GET", "/repos/"+repo+"/pulls?state=open&per_page=100", nil)
 	var pulls []struct {
 		Number int64  `json:"number"`
 		Title  string `json:"title"`
@@ -347,15 +346,22 @@ func (s *Server) qqOpenFAQPull(ctx context.Context, token, repo, question string
 			Ref string `json:"ref"`
 		} `json:"head"`
 	}
-	if err != nil || !r.OK() || r.Decode(&pulls) != nil {
-		slog.Warn("qq bot: open faq pulls unavailable", "reason", githubFailure("pulls", r, err).Error())
-		return 0
-	}
 	title := "「" + githubReferenceBreaker.Replace(question) + "」"
-	for _, pull := range pulls {
-		if strings.HasPrefix(pull.Head.Ref, "qq-faq/") && strings.Contains(pull.Title, title) {
-			return pull.Number
+	for page := 1; ; page++ {
+		path := "/repos/" + repo + "/pulls?state=open&per_page=100&page=" + strconv.Itoa(page)
+		r, err := s.adminGitHub.Do(ctx, token, "GET", path, nil)
+		pulls = nil
+		if err != nil || !r.OK() || r.Decode(&pulls) != nil {
+			slog.Warn("qq bot: open faq pulls unavailable", "reason", githubFailure("pulls", r, err).Error())
+			return 0
+		}
+		for _, pull := range pulls {
+			if strings.HasPrefix(pull.Head.Ref, "qq-faq/") && strings.Contains(pull.Title, title) {
+				return pull.Number
+			}
+		}
+		if len(pulls) < 100 {
+			return 0
 		}
 	}
-	return 0
 }

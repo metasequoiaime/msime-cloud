@@ -609,7 +609,7 @@ func (c cli) logout(args []string) error {
 	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusNoContent && response.StatusCode != http.StatusUnauthorized {
 		return statusError{response.Status}
 	}
-	if err = sessions.forget(server, strings.TrimPrefix(response.Request.Header.Get("Authorization"), "Bearer ")); err != nil {
+	if err = sessions.forgetLogin(server, current.loginID()); err != nil {
 		return err
 	}
 	fmt.Fprintln(c.stderr, "msime-cloud: signed out of "+server)

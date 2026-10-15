@@ -99,15 +99,24 @@ func (s *Store) SetClipboardEnabled(ctx context.Context, user string, enabled bo
 
 // SetClipboardRetention 写入保留天数，不改变同步开关；超过保留期的条目由 Store.Prune 删除。
 func (s *Store) SetClipboardRetention(ctx context.Context, user string, days int) error {
-	tx, e := s.userDataTransaction(ctx, user)
-	if e != nil {
-		return e
+	var banned bool
+	// 锁定用户后复查封禁；冲突时仅更新保留天数，保留等待期间提交的同步开关和密钥。
+	err := s.pool.QueryRow(ctx, `WITH locked_user AS MATERIALIZED (
+ SELECT id,banned_at IS NOT NULL AS banned FROM auth_users WHERE id=$1 FOR UPDATE
+), updated AS (
+ INSERT INTO user_clipboard_settings(user_id,retention_days)
+ SELECT id,$2 FROM locked_user WHERE NOT banned
+ ON CONFLICT(user_id) DO UPDATE SET retention_days=excluded.retention_days
+ RETURNING user_id
+)
+SELECT banned FROM locked_user`, user, days).Scan(&banned)
+	if err != nil {
+		return err
 	}
-	defer tx.Rollback(ctx)
-	if _, e = tx.Exec(ctx, "INSERT INTO user_clipboard_settings(user_id,retention_days) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET retention_days=excluded.retention_days", user, days); e != nil {
-		return e
+	if banned {
+		return ErrBanned
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 // PinClipboard 置顶或取消置顶本人的一条剪贴板条目；不是本人的或不存在时返回 errDataNotFound。

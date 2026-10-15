@@ -40,6 +40,23 @@ func TestQQNormalizeAnswerConditionalRules(t *testing.T) {
 	}
 }
 
+func TestQQPromptLeakCandidate(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  bool
+	}{
+		{"普通回答", false},
+		{"资料里写着", true},
+		{"文档说明", true},
+		{"已截断", true},
+		{"资料之外的内容", true},
+	} {
+		if got := qqPromptLeakCandidate(tc.input); got != tc.want {
+			t.Errorf("qqPromptLeakCandidate(%q) = %v，预期 %v", tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestQQNormalizeAnswerNoopAllocationBudget(t *testing.T) {
 	for _, tc := range []struct{ name, input string }{
 		{"single_line", strings.Repeat("水", 32768)},

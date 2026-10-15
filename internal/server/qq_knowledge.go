@@ -727,10 +727,17 @@ var (
 	qqPromptLeak = regexp.MustCompile(`资料|文档里|截断`)
 )
 
+// qqPromptLeakCandidate 判断答案是否含有提示词泄漏规则可能命中的字面字符；没有候选字符时跳过正则扫描。
+func qqPromptLeakCandidate(answer string) bool {
+	return strings.ContainsAny(answer, "资料文档里截断")
+}
+
 // qqNormalizeAnswer 统一答案的格式：模型偶尔不照提示词写，同一个群里一会儿“”一会儿「」，或者冒出 **、## 和字面的 \t，读起来不像同一个助手说的。引号换成「」『』，字面的 \t 和制表符换成空格，删掉 **、__，去掉行首的 #（「#123」这种 issue 编号不动），行首的「- 」保留，三个以上的连续换行压成两个。
 func qqNormalizeAnswer(answer string) string {
-	if word := qqPromptLeak.FindString(answer); word != "" {
-		slog.Info("qq bot: prompt leak", "word", word)
+	if qqPromptLeakCandidate(answer) {
+		if word := qqPromptLeak.FindString(answer); word != "" {
+			slog.Info("qq bot: prompt leak", "word", word)
+		}
 	}
 	// 无匹配时正则替换仍会复制正文，先确认有英文单词里的弯撇号。
 	if strings.ContainsRune(answer, '’') && qqApostrophe.MatchString(answer) {

@@ -129,6 +129,7 @@ func (a *Service) Telemetry(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	signature := ""
+	var releaseCrashRate func() error
 	if v.Kind == "crash" {
 		// 已记录的 ID 是客户端重试（例如上次的 202 在网络中丢失），直接按重复事件返回 202，不再占用当天的崩溃额度；否则同一条崩溃重试几次就会挤掉其他崩溃。
 		var seen bool
@@ -148,6 +149,11 @@ func (a *Service) Telemetry(w http.ResponseWriter, r *http.Request) {
 			a.error(w, err)
 			return
 		}
+		releaseCrashRate = func() error {
+			releaseCtx, cancelRelease := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+			defer cancelRelease()
+			return a.ReleaseRateLimit(releaseCtx, "telemetry-crash", a.clientAddress(r))
+		}
 		signature = crashSignature(v.Platform, v.Message, v.Stack)
 	}
 	// 只为本次真正插入的崩溃事件更新分组，避免并发重试刷新或创建分组。
@@ -165,13 +171,14 @@ SELECT signature,$11,version,$12 FROM inserted WHERE signature IS NOT NULL
 	SELECT EXISTS(SELECT 1 FROM inserted)`,
 		v.ID, v.Kind, v.Platform, v.Version, v.Message, v.Stack, telemetryNull(v.Artifact), telemetryNull(v.Channel), telemetryNull(v.InstallID), telemetryNull(signature), crashPlatform(v.Platform), crashGroupTitle(v.Message)).Scan(&inserted)
 	if err != nil {
+		if releaseCrashRate != nil {
+			_ = releaseCrashRate()
+		}
 		a.error(w, err)
 		return
 	}
-	if v.Kind == "crash" && !inserted {
-		releaseCtx, cancelRelease := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-		defer cancelRelease()
-		if err := a.ReleaseRateLimit(releaseCtx, "telemetry-crash", a.clientAddress(r)); err != nil {
+	if releaseCrashRate != nil && !inserted {
+		if err := releaseCrashRate(); err != nil {
 			a.error(w, err)
 			return
 		}

@@ -215,6 +215,40 @@ func (s *Store) ListClipboard(ctx context.Context, user, key string) ([]Clipboar
 	}
 	return items, rows.Err()
 }
+
+// ClipboardSnapshot 在同一数据库快照里读取设置、当前密钥和最多五十条条目，避免轮询时的两次往返。
+func (s *Store) ClipboardSnapshot(ctx context.Context, user string) (ClipboardSettings, []ClipboardItem, error) {
+	var settings ClipboardSettings
+	items := []ClipboardItem{}
+	rows, err := s.pool.Query(ctx, `SELECT s.enabled,s.retention_days,s.key_id,c.id,
+ COALESCE(c.ciphertext,''),COALESCE(c.key_id,''),c.updated_at,COALESCE(c.pinned,false),COALESCE(c.device,'')
+FROM (SELECT COALESCE(bool_or(enabled),false) AS enabled,COALESCE(max(retention_days),0) AS retention_days,max(key_id) AS key_id
+ FROM user_clipboard_settings WHERE user_id=$1) s
+LEFT JOIN LATERAL (
+ SELECT id,ciphertext,key_id,updated_at,pinned,device,sequence FROM user_clipboard
+ WHERE s.key_id IS NOT NULL AND user_id=$1 AND ciphertext<>'' AND key_id=s.key_id
+ ORDER BY pinned DESC,sequence DESC LIMIT 50
+) c ON true
+ORDER BY c.pinned DESC,c.sequence DESC`, user)
+	if err != nil {
+		return settings, nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item ClipboardItem
+		var id *string
+		var updatedAt *time.Time
+		if err = rows.Scan(&settings.Enabled, &settings.RetentionDays, &settings.KeyID, &id, &item.Ciphertext, &item.KeyID, &updatedAt, &item.Pinned, &item.Device); err != nil {
+			return settings, nil, err
+		}
+		if id != nil {
+			item.ID, item.UpdatedAt = *id, *updatedAt
+			items = append(items, item)
+		}
+	}
+	return settings, items, rows.Err()
+}
+
 func (s *Store) DeleteClipboard(ctx context.Context, user, id string) error {
 	tx, e := s.userDataTransaction(ctx, user)
 	if e != nil {
@@ -259,17 +293,10 @@ func (a *Service) clipboard(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "GET":
 		// 服务端看不到明文，不再支持搜索：查询参数 q 被忽略，由客户端解密后自己搜索。
-		settings, e := a.store.ClipboardSettings(r.Context(), p.UserID)
+		settings, items, e := a.store.ClipboardSnapshot(r.Context(), p.UserID)
 		if e != nil {
 			a.error(w, e)
 			return
-		}
-		items := []ClipboardItem{}
-		if settings.KeyID != nil {
-			if items, e = a.store.ListClipboard(r.Context(), p.UserID, *settings.KeyID); e != nil {
-				a.error(w, e)
-				return
-			}
 		}
 		write(w, 200, map[string]any{"enabled": settings.Enabled, "retention_days": settings.RetentionDays, "key_id": settings.KeyID, "items": items})
 	case "POST":

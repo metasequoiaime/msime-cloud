@@ -314,8 +314,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		supplied := sha256.Sum256([]byte(strings.TrimPrefix(auth, "Bearer ")))
 		for i := range s.config.Clients {
 			c := &s.config.Clients[i]
-			expected := sha256.Sum256([]byte(c.token))
-			if subtle.ConstantTimeCompare(supplied[:], expected[:]) == 1 && strings.HasPrefix(auth, "Bearer ") {
+			if subtle.ConstantTimeCompare(supplied[:], c.tokenHash[:]) == 1 && strings.HasPrefix(auth, "Bearer ") {
 				principal = c
 			}
 		}

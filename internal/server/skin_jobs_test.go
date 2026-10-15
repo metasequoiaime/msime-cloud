@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"image"
@@ -51,7 +52,7 @@ func TestSkinJobReturnsBeforeUpstreamAndBindsOwner(t *testing.T) {
 	if w := call(s, "GET", path, ""); w.Code != 200 || !bytes.Contains(w.Body.Bytes(), []byte(`"running"`)) {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	s.config.Clients = append(s.config.Clients, Client{ID: "other", token: "other-token", RequestsPerMinute: 100})
+	s.config.Clients = append(s.config.Clients, Client{ID: "other", tokenHash: sha256.Sum256([]byte("other-token")), RequestsPerMinute: 100})
 	for _, method := range []string{"GET", "DELETE"} {
 		r := httptest.NewRequest(method, path, nil)
 		r.Header.Set("Authorization", "Bearer other-token")

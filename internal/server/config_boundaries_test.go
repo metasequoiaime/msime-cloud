@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -154,7 +155,7 @@ func TestLoadConfigStrictJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(c.Clients) != 1 || c.Clients[0].token != os.Getenv("CONFIG_TEST_TOKEN") {
+	if len(c.Clients) != 1 || c.Clients[0].tokenHash != sha256.Sum256([]byte(os.Getenv("CONFIG_TEST_TOKEN"))) {
 		t.Fatal("credentials not loaded")
 	}
 }

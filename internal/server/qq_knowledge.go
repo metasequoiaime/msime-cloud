@@ -446,8 +446,41 @@ func qqStripLinks(text string) string {
 // qqMarkdownLink 匹配 Markdown 链接和图片，第 1 组是链接文字。qqLinkPattern 的 [!-~]* 会连右括号一起吞掉，`[#730](https://…)，` 只用 qqStripLinks 会剩下「[#730](，」。
 var qqMarkdownLink = regexp.MustCompile(`!?\[([^\]]*)\]\([^)]*\)`)
 
-// qqLineMarker 匹配行首的 Markdown 标记：标题、引用、列表符号和列表编号。
-var qqLineMarker = regexp.MustCompile(`^(?:#{1,6}\s|>\s?|[-*+]\s|\d+\.\s)`)
+// qqLineMarkerEnd 返回行首 Markdown 标记的字节长度；沿用原正则的 ASCII 数字及空白规则。
+func qqLineMarkerEnd(line string) int {
+	if line == "" {
+		return 0
+	}
+	end := 1
+	switch line[0] {
+	case '#':
+		for end < len(line) && end < 7 && line[end] == '#' {
+			end++
+		}
+		if end > 6 {
+			return 0
+		}
+	case '>', '-', '*', '+':
+	default:
+		if line[0] < '0' || line[0] > '9' {
+			return 0
+		}
+		for end < len(line) && line[end] >= '0' && line[end] <= '9' {
+			end++
+		}
+		if end == len(line) || line[end] != '.' {
+			return 0
+		}
+		end++
+	}
+	if end < len(line) && strings.IndexByte(" \t\n\f\r", line[end]) >= 0 {
+		return end + 1
+	}
+	if line[0] == '>' {
+		return 1
+	}
+	return 0
+}
 
 // qqPlainTextReplacer 并发复用固定的行内标记规则，避免每次转换都重建替换器。
 var qqPlainTextReplacer = strings.NewReplacer("**", "", "__", "", "`", "")
@@ -474,9 +507,13 @@ func qqPlainText(md string) string {
 		if strings.HasPrefix(line, "|") {
 			continue
 		}
-		// 「> - 第一条」这类叠在一起的标记一层层去掉；每次至少去掉一个字符，循环必然结束。
-		for qqLineMarker.MatchString(line) {
-			line = strings.TrimSpace(qqLineMarker.ReplaceAllString(line, ""))
+		// 「> - 第一条」这类标记只匹配并切掉前缀，避免逐层复制剩余整行。
+		for {
+			end := qqLineMarkerEnd(line)
+			if end == 0 {
+				break
+			}
+			line = strings.TrimSpace(line[end:])
 		}
 		kept = append(kept, line)
 	}

@@ -536,22 +536,17 @@ func (s *Store) completeWith(ctx context.Context, c Challenge, identity Identity
 	}
 	defer tx.Rollback(ctx)
 	var id string
-	e = tx.QueryRow(ctx, `SELECT id_hash FROM auth_challenges WHERE id_hash=$1 FOR UPDATE`, c.IDHash).Scan(&id)
+	// 先物化锁定的挑战，再按数据库实时时钟校验并消费；锁等待期间过期的挑战不会被删除。
+	e = tx.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+ SELECT id_hash,expires_at FROM auth_challenges WHERE id_hash=$1 FOR UPDATE
+)
+DELETE FROM auth_challenges c USING locked
+WHERE c.id_hash=locked.id_hash AND locked.expires_at>clock_timestamp()
+RETURNING c.id_hash`, c.IDHash).Scan(&id)
 	if errors.Is(e, pgx.ErrNoRows) {
 		return Tokens{}, ErrInvalid
 	}
 	if e != nil {
-		return Tokens{}, e
-	}
-	// 行锁可能等待到挑战过期；锁定后再用数据库实时时钟检查，不能把事务开始时的 now() 当成有效期。
-	var valid bool
-	if e = tx.QueryRow(ctx, `SELECT expires_at>clock_timestamp() FROM auth_challenges WHERE id_hash=$1`, c.IDHash).Scan(&valid); e != nil {
-		return Tokens{}, e
-	}
-	if !valid {
-		return Tokens{}, ErrInvalid
-	}
-	if _, e = tx.Exec(ctx, `DELETE FROM auth_challenges WHERE id_hash=$1`, c.IDHash); e != nil {
 		return Tokens{}, e
 	}
 	// 同一身份的首次注册与绑定串行化，避免创建重复用户。

@@ -124,17 +124,13 @@ func actionBanUser(a *Service, ctx context.Context, tx pgx.Tx, v actionRequest) 
 	if banned {
 		return actionResult{}, actionFail(409, "already_banned")
 	}
-	actor := adminActor(ctx)
-	if _, err = tx.Exec(ctx, `UPDATE auth_users SET banned_at=now(),ban_reason=$2,banned_by=$3 WHERE id=$1`, v.ID, reason, actor); err != nil {
-		return actionResult{}, err
-	}
-	sessions, err := tx.Exec(ctx, `UPDATE auth_sessions SET revoked=true WHERE user_id=$1 AND NOT revoked`, v.ID)
-	if err != nil {
-		return actionResult{}, err
-	}
-	// 四张表的封禁更新互不依赖，一次 CTE 完成并汇总影响行数，避免每个内容表各占一次数据库往返。
-	var removed int64
-	if err = tx.QueryRow(ctx, `WITH skins AS (
+	// 用户行锁与状态检查完成后，一条语句更新账号、会话和四张社区表，返回实际撤销、移除数量。
+	var sessions, removed int64
+	if err = tx.QueryRow(ctx, `WITH banned_user AS (
+ UPDATE auth_users SET banned_at=now(),ban_reason=$3,banned_by=$4 WHERE id=$1
+), sessions AS (
+ UPDATE auth_sessions SET revoked=true WHERE user_id=$1 AND NOT revoked RETURNING 1
+), skins AS (
  UPDATE community_skins SET previous_moderation=moderation,moderation='removed',moderation_reason=$2 WHERE owner_id=$1 AND moderation<>'removed' RETURNING 1
 ), resources AS (
  UPDATE community_resources SET previous_moderation=moderation,moderation='removed',moderation_reason=$2 WHERE owner_id=$1 AND moderation<>'removed' RETURNING 1
@@ -143,13 +139,14 @@ func actionBanUser(a *Service, ctx context.Context, tx pgx.Tx, v actionRequest) 
 ), plugins AS (
  UPDATE community_plugins SET previous_moderation=moderation,moderation='removed',moderation_reason=$2 WHERE owner_id=$1 AND moderation<>'removed' RETURNING 1
 )
-SELECT (SELECT count(*) FROM skins)+(SELECT count(*) FROM resources)+(SELECT count(*) FROM candidate_skins)+(SELECT count(*) FROM plugins)`, v.ID, banModerationReason).Scan(&removed); err != nil {
+SELECT (SELECT count(*) FROM sessions),
+ (SELECT count(*) FROM skins)+(SELECT count(*) FROM resources)+(SELECT count(*) FROM candidate_skins)+(SELECT count(*) FROM plugins)`, v.ID, banModerationReason, reason, adminActor(ctx)).Scan(&sessions, &removed); err != nil {
 		return actionResult{}, err
 	}
 	return actionResult{
 		Affected: 1,
-		Detail:   map[string]any{"name": name, "reason": reason, "sessions": sessions.RowsAffected(), "removed": removed},
-		Extra:    map[string]any{"sessions": sessions.RowsAffected(), "removed": removed},
+		Detail:   map[string]any{"name": name, "reason": reason, "sessions": sessions, "removed": removed},
+		Extra:    map[string]any{"sessions": sessions, "removed": removed},
 	}, nil
 }
 
@@ -165,13 +162,12 @@ func actionUnbanUser(a *Service, ctx context.Context, tx pgx.Tx, v actionRequest
 	if !banned {
 		return actionResult{}, actionFail(409, "not_banned")
 	}
-	if _, err = tx.Exec(ctx, `UPDATE auth_users SET banned_at=NULL,ban_reason=NULL,banned_by=NULL WHERE id=$1`, v.ID); err != nil {
-		return actionResult{}, err
-	}
 	var restored int64
 	restoredIDs := map[string][]string{}
-	// 四张表的解封更新一起返回表名和 ID，减少固定的四次数据库往返；后续重筛查仍按表分别处理这些 ID。
-	rows, err := tx.Query(ctx, `WITH skins AS (
+	// 清除账号封禁与恢复社区内容共用一次写入；后续重筛查仍在下一条语句中读取更新后的状态。
+	rows, err := tx.Query(ctx, `WITH unbanned_user AS (
+ UPDATE auth_users SET banned_at=NULL,ban_reason=NULL,banned_by=NULL WHERE id=$1
+), skins AS (
  UPDATE community_skins SET moderation=COALESCE(previous_moderation,'approved'),previous_moderation=NULL,moderation_reason=NULL
  WHERE owner_id=$1 AND moderation='removed' AND moderation_reason=$2 RETURNING id
 ), resources AS (

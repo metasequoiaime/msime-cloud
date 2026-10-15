@@ -74,3 +74,48 @@ func TestActionUnbanUserBatchesCommunityUpdates(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestActionUnbanUserUsesTwoQueriesWithoutContent(t *testing.T) {
+	db := testStore(t)
+	ctx := t.Context()
+	user := complete(t, db, Identity{"email", "unban-empty@example.test"})
+	if _, err := db.pool.Exec(ctx, `UPDATE auth_users SET banned_at=now(),ban_reason='合成原因',banned_by='owner@example.test' WHERE id=$1`, user.User.ID); err != nil {
+		t.Fatal(err)
+	}
+	cfg := db.pool.Config()
+	trace := &statementCancellation{}
+	cfg.ConnConfig.Tracer = trace
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	trace.mu.Lock()
+	trace.seen, trace.statements = 0, nil
+	trace.mu.Unlock()
+	result, err := actionUnbanUser(&Service{store: &Store{pool: pool}}, ctx, tx, actionRequest{ID: user.User.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trace.mu.Lock()
+	queries := trace.seen
+	trace.mu.Unlock()
+	if queries != 2 {
+		t.Errorf("无社区内容的解封用了 %d 次数据库调用，期望 2 次（不含外层事务与审计）", queries)
+	}
+	if result.Affected != 1 || result.Detail["restored"] != int64(0) || result.Extra["restored"] != int64(0) {
+		t.Fatal("空内容解封的影响数量不正确")
+	}
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var cleared bool
+	if err = db.pool.QueryRow(ctx, `SELECT banned_at IS NULL AND ban_reason IS NULL AND banned_by IS NULL FROM auth_users WHERE id=$1`, user.User.ID).Scan(&cleared); err != nil || !cleared {
+		t.Fatal("解封没有清空账号封禁状态", err)
+	}
+}

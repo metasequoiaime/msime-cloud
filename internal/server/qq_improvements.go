@@ -261,6 +261,7 @@ func (s *Server) fileQQImprovementReport(ctx context.Context, from, to time.Time
 	if err != nil || !r.OK() || r.Decode(&created) != nil || created.Number <= 0 {
 		return 0, false, githubFailure("improvement report", r, err)
 	}
+	client.Invalidate("/repos/" + repo + "/issues")
 	slog.Info("qq bot: improvement report filed", "repo", repo, "number", created.Number)
 	return created.Number, true, nil
 }

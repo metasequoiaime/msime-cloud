@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
@@ -9,6 +10,34 @@ import (
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
+
+func TestQQImprovementReportInvalidatesIssueCache(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	fake.openIssues = `[]`
+	s.qq.config.ImprovementRepo = "o/r"
+	store := &memoryImprovements{events: []account.QQImprovementEvent{{Kind: "unknown", Topic: "鸿蒙版怎么下载", Detail: "docs"}}}
+	s.qqImprovements = store
+	ctx := context.Background()
+	token, err := s.adminGitHub.Token(ctx, "o/r", issueTokenPerms)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/repos/o/r/issues?state=open"
+	if response, err := s.adminGitHub.Get(ctx, token, path); err != nil || !response.OK() {
+		t.Fatalf("预热 issue 缓存失败：状态=%d，错误=%v", response.Status, err)
+	}
+	if _, filed, err := s.fileQQImprovementReport(ctx, time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC), nil); err != nil || !filed {
+		t.Fatalf("创建改进依据 issue 失败：filed=%v，错误=%v", filed, err)
+	}
+	response, err := s.adminGitHub.Get(ctx, token, path)
+	if err != nil || !response.OK() {
+		t.Fatalf("读取 issue 列表失败：状态=%d，错误=%v", response.Status, err)
+	}
+	var issues []json.RawMessage
+	if err := response.Decode(&issues); err != nil || fake.openIssueCalls != 2 {
+		t.Fatalf("创建 issue 后缓存未失效：请求次数=%d，解码错误=%v", fake.openIssueCalls, err)
+	}
+}
 
 type memoryImprovements struct {
 	mu     sync.Mutex

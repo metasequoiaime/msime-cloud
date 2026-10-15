@@ -72,6 +72,40 @@ func TestQQNormalizePinyinReusesRules(t *testing.T) {
 	}
 }
 
+func TestQQNormalizePinyinPlainAllocationBudget(t *testing.T) {
+	const input = "shui shan shu ru fa"
+	var got string
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			got = qqNormalizePinyin(input)
+		}
+	})
+	if got != "shui'shan'shu'ru'fa" {
+		t.Fatalf("普通拼音规范化结果发生变化：%q", got)
+	}
+	if allocated := result.AllocedBytesPerOp(); allocated > 64 {
+		t.Fatalf("普通拼音规范化分配 %d 字节，超过 64 字节预算", allocated)
+	}
+}
+
+func TestQQNormalizePinyinPlainMatchesPrevious(t *testing.T) {
+	inputs := []string{"", "   ", "'''", "a", "shui'shan", "  shui  ' shan '' ", "shui\tshan", "shui\nshan", "SHUI SHAN", "shui-shan"}
+	random := rand.New(rand.NewSource(61))
+	const alphabet = "abcdefghijklmnopqrstuvwxyz '"
+	for range 500 {
+		var input strings.Builder
+		for range random.Intn(200) {
+			input.WriteByte(alphabet[random.Intn(len(alphabet))])
+		}
+		inputs = append(inputs, input.String())
+	}
+	for _, input := range inputs {
+		if got, want := qqNormalizePinyin(input), previousQQNormalizePinyin(input); got != want {
+			t.Fatalf("普通拼音规范化不兼容：输入=%q，结果=%q，期望=%q", input, got, want)
+		}
+	}
+}
+
 func BenchmarkQQPinyinNormalize(b *testing.B) {
 	for _, tc := range []struct{ name, input string }{
 		{"plain", "shui shan shu ru fa"},

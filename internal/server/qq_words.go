@@ -47,6 +47,21 @@ var (
 
 // qqNormalizePinyin 把群友写的拼音规范成投稿用的格式：小写，去掉声调和括号，音节之间用 ' 分隔，ü 写作 v。
 func qqNormalizePinyin(raw string) string {
+	// 普通小写拼音只需合并分隔符，跳过声调和标点替换及临时切片。
+	if strings.IndexFunc(raw, func(r rune) bool {
+		return (r < 'a' || r > 'z') && r != ' ' && r != '\''
+	}) < 0 {
+		var out strings.Builder
+		for part := range strings.FieldsFuncSeq(raw, func(r rune) bool { return r == ' ' || r == '\'' }) {
+			if out.Len() == 0 {
+				out.Grow(len(raw))
+			} else {
+				out.WriteByte('\'')
+			}
+			out.WriteString(part)
+		}
+		return out.String()
+	}
 	raw = strings.Map(func(r rune) rune {
 		if plain, ok := qqToneless[r]; ok {
 			return plain

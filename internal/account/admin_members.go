@@ -99,8 +99,20 @@ func (a *Service) AdminMembersHTTP(w http.ResponseWriter, r *http.Request, owner
 			return
 		}
 	} else if v.Action == "add" {
+		role := v.Role
+		if role == "" {
+			role = RoleMaintainer
+		}
 		var count int
-		if err = tx.QueryRow(r.Context(), `SELECT count(*) FROM admin_members`).Scan(&count); err != nil {
+		if err = tx.QueryRow(r.Context(), `WITH member_count AS MATERIALIZED (
+			SELECT count(*) AS n FROM admin_members
+		), added AS (
+			INSERT INTO admin_members(email,role)
+			SELECT $1,$2 FROM member_count WHERE n<100
+			ON CONFLICT DO NOTHING
+			RETURNING 1
+		)
+		SELECT n,(SELECT count(*) FROM added) FROM member_count`, v.Email, role).Scan(&count, &affected); err != nil {
 			a.error(w, err)
 			return
 		}
@@ -108,13 +120,6 @@ func (a *Service) AdminMembersHTTP(w http.ResponseWriter, r *http.Request, owner
 			writeError(w, 409, "admin_limit")
 			return
 		}
-		role := v.Role
-		if role == "" {
-			role = RoleMaintainer
-		}
-		tag, e := tx.Exec(r.Context(), `INSERT INTO admin_members(email,role) VALUES($1,$2) ON CONFLICT DO NOTHING`, v.Email, role)
-		err = e
-		affected = tag.RowsAffected()
 		detail = map[string]any{"role": role}
 	} else {
 		tag, e := tx.Exec(r.Context(), `UPDATE admin_members SET enabled=CASE WHEN $2='revoke' THEN enabled ELSE $2='enable' END,updated_at=now() WHERE email=$1`, v.Email, v.Action)

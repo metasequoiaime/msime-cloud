@@ -114,4 +114,7 @@ func TestAdminMemberLifecycle(t *testing.T) {
 	if w := call("add", "overflow@example.test"); w.Code != 409 {
 		t.Fatal(w.Code, w.Body.String())
 	}
+	if w := call("add", "admin@example.test"); w.Code != 409 || !strings.Contains(w.Body.String(), "admin_limit") {
+		t.Fatal("人数已满时应优先返回容量错误", w.Code, w.Body.String())
+	}
 }

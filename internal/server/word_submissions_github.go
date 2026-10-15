@@ -102,8 +102,25 @@ func (f githubFile) text() (string, bool) {
 	if f.Type != "file" || f.Encoding != "base64" || f.SHA == "" {
 		return "", false
 	}
-	// The Contents API wraps its base64 every 60 characters.
-	raw, err := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(f.Content), ""))
+	// 解码器会忽略 CR/LF；只按实际编码字节数预留缓冲，避免为空行分配内存。
+	content := f.Content
+	encodedSize := len(content)
+	for i := 0; i < len(content); i++ {
+		c := content[i]
+		if c == '\r' || c == '\n' {
+			encodedSize--
+			continue
+		}
+		if c >= utf8.RuneSelf || c <= ' ' {
+			// 其他空白及非 ASCII 输入沿用原有清理规则。
+			content = strings.Join(strings.Fields(content), "")
+			encodedSize = len(content)
+			break
+		}
+	}
+	raw := make([]byte, base64.StdEncoding.DecodedLen(encodedSize))
+	n, err := base64.StdEncoding.Decode(raw, []byte(content))
+	raw = raw[:n]
 	return string(raw), err == nil && utf8.Valid(raw)
 }
 

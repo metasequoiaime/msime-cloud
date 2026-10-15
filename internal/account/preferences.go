@@ -8,7 +8,6 @@ import (
 	"errors"
 	"net/http"
 	"strings"
-	"unicode/utf8"
 )
 
 // 共享设置与平台专属设置的字段类型；不接受本机路径或凭据。
@@ -61,8 +60,7 @@ func validPreference(key string, raw json.RawMessage) bool {
 		}
 		return json.Unmarshal(raw, &v) == nil && v >= low && v <= high
 	case "number":
-		var v float64
-		return json.Unmarshal(raw, &v) == nil && v >= 0 && v <= 1000000
+		return validPreferenceNumber(raw)
 	case "string":
 		var v string
 		max := 1024
@@ -72,7 +70,7 @@ func validPreference(key string, raw json.RawMessage) bool {
 		if strings.Contains(key, "prompt") {
 			max = 8192
 		}
-		return json.Unmarshal(raw, &v) == nil && utf8.ValidString(v) && len(v) <= max && !strings.ContainsRune(v, 0)
+		return json.Unmarshal(raw, &v) == nil && len(v) <= max && !strings.ContainsRune(v, 0) && validPreferenceUnicode(raw)
 	}
 	return false
 }

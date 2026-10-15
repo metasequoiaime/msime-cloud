@@ -77,21 +77,37 @@ func clipboardState(ctx context.Context, tx pgx.Tx, user string) (bool, *string,
 
 // SetClipboardEnabled 打开或关闭云剪贴板。关闭时在同一个事务里删除全部条目、当前密钥、封装和设备登记，再次打开时由第一台设备重新生成密钥。
 func (s *Store) SetClipboardEnabled(ctx context.Context, user string, enabled bool) error {
+	if enabled {
+		var banned bool
+		// 开启时在用户行锁内复查封禁，冲突更新只改开关，保留最新的密钥和保留期。
+		err := s.pool.QueryRow(ctx, `WITH locked_user AS MATERIALIZED (
+ SELECT id,banned_at IS NOT NULL AS banned FROM auth_users WHERE id=$1 FOR UPDATE
+), updated AS (
+ INSERT INTO user_clipboard_settings(user_id,enabled)
+ SELECT id,true FROM locked_user WHERE NOT banned
+ ON CONFLICT(user_id) DO UPDATE SET enabled=true
+ RETURNING user_id
+)
+SELECT banned FROM locked_user`, user).Scan(&banned)
+		if err != nil {
+			return err
+		}
+		if banned {
+			return ErrBanned
+		}
+		return nil
+	}
 	tx, e := s.userDataTransaction(ctx, user)
 	if e != nil {
 		return e
 	}
 	defer tx.Rollback(ctx)
 	// 撤销同步时清空云端历史和密钥材料；不会操作用户设备的系统剪贴板。封装随设备的外键一起删除。
-	if !enabled {
-		batch := &pgx.Batch{}
-		batch.Queue("INSERT INTO user_clipboard_settings(user_id,enabled) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET enabled=excluded.enabled,key_id=CASE WHEN excluded.enabled THEN user_clipboard_settings.key_id END", user, enabled)
-		batch.Queue("DELETE FROM user_clipboard WHERE user_id=$1", user)
-		batch.Queue("DELETE FROM user_clipboard_devices WHERE user_id=$1", user)
-		if e = tx.SendBatch(ctx, batch).Close(); e != nil {
-			return e
-		}
-	} else if _, e = tx.Exec(ctx, "INSERT INTO user_clipboard_settings(user_id,enabled) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET enabled=excluded.enabled,key_id=CASE WHEN excluded.enabled THEN user_clipboard_settings.key_id END", user, enabled); e != nil {
+	batch := &pgx.Batch{}
+	batch.Queue("INSERT INTO user_clipboard_settings(user_id,enabled) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET enabled=excluded.enabled,key_id=CASE WHEN excluded.enabled THEN user_clipboard_settings.key_id END", user, enabled)
+	batch.Queue("DELETE FROM user_clipboard WHERE user_id=$1", user)
+	batch.Queue("DELETE FROM user_clipboard_devices WHERE user_id=$1", user)
+	if e = tx.SendBatch(ctx, batch).Close(); e != nil {
 		return e
 	}
 	return tx.Commit(ctx)

@@ -44,7 +44,7 @@ const (
 	candidateOfficialWritesPerHour = 200
 )
 
-// candidateImageSlots bounds concurrent image decoding per process, because /v1/community routes bypass the server's MaxConcurrent limit and a package can decode up to 8 MP.
+// candidateImageSlots 限制每个进程的图片解码并发：候选窗皮肤、反馈截图与头像共用两个槽，因为这些账号路由绕过服务器的 MaxConcurrent，单张头像解码就可能占用 128 MiB 像素缓冲。
 var candidateImageSlots = make(chan struct{}, 2)
 
 // candidatePublishTimeout is how long one publish may take end to end: up to 3.2 MB of upload, then decoding and re-encoding up to 8 MP. The default 15 s route context and the server's read deadline would cut a slow uplink off mid-upload; the client waits 90 s.

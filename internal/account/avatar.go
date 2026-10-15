@@ -105,7 +105,11 @@ func (a *Service) putAvatar(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 413, "avatar_too_large")
 		return
 	}
-	normalized, e := normalizeAvatar(data)
+	var normalized []byte
+	if !withCandidateImageSlot(r.Context(), func() { normalized, e = normalizeAvatar(data) }) {
+		writeError(w, 503, "server_busy")
+		return
+	}
 	if e != nil {
 		writeError(w, 400, "invalid_avatar")
 		return

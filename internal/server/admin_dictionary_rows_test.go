@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/csv"
+	"fmt"
 	"math/rand"
 	"reflect"
 	"strings"
@@ -79,19 +80,45 @@ func TestDictionaryRowsLineScanMatchesPrevious(t *testing.T) {
 }
 
 func TestDictionaryRowsLineScanAllocationBudget(t *testing.T) {
-	text := strings.Repeat("水杉\tshui'shan\t100\n", 50000)
-	var rows []dictionaryRow
-	total := 0
-	result := testing.Benchmark(func(b *testing.B) {
-		for b.Loop() {
-			rows, total = dictionaryRows("custom/words.txt", text, "水杉", 2)
-		}
-	})
-	if total != 50000 || len(rows) != 100 || rows[0].Line != 101 || rows[99].Line != 200 {
-		t.Fatal("大词库预览的行号、分页或总数发生变化")
+	for _, tc := range []struct{ name, line, query string }{
+		{"matching", "水杉\tshui'shan\t100\n", "水杉"},
+		{"uppercase_preview", "SYNTHETIC\tWORD\t100\n", ""},
+		{"unicode_preview", "水杉İΣ\tABC\t100\n", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			text := strings.Repeat(tc.line, 50000)
+			var rows []dictionaryRow
+			total := 0
+			result := testing.Benchmark(func(b *testing.B) {
+				for b.Loop() {
+					rows, total = dictionaryRows("custom/words.txt", text, tc.query, 2)
+				}
+			})
+			if total != 50000 || len(rows) != 100 || rows[0].Line != 101 || rows[99].Line != 200 {
+				t.Fatal("大词库预览的行号、分页或总数发生变化")
+			}
+			if allocated := result.AllocedBytesPerOp(); allocated > 64<<10 {
+				t.Fatalf("五万行词库预览分配 %d 字节，超过 64 KiB 预算", allocated)
+			}
+		})
 	}
-	if allocated := result.AllocedBytesPerOp(); allocated > 64<<10 {
-		t.Fatalf("五万行词库预览分配 %d 字节，超过 64 KiB 预算", allocated)
+}
+
+func BenchmarkDictionaryRowsEmptyQuery(b *testing.B) {
+	for _, tc := range []struct{ name, line string }{
+		{"ascii", "SYNTHETIC\tWORD\t100\n"},
+		{"unicode", "水杉İΣ\tABC\t100\n"},
+	} {
+		for _, size := range []int{100, 50000} {
+			b.Run(fmt.Sprintf("%s/%d", tc.name, size), func(b *testing.B) {
+				text := strings.Repeat(tc.line, size)
+				b.ReportAllocs()
+				b.ResetTimer()
+				for b.Loop() {
+					_, _ = dictionaryRows("custom/words.txt", text, "", 1)
+				}
+			})
+		}
 	}
 }
 

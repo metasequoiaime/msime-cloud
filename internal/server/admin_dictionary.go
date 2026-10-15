@@ -277,7 +277,7 @@ func dictionaryRows(name, text, query string, page int) ([]dictionaryRow, int) {
 			}
 			continue
 		}
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "//") || !strings.Contains(strings.ToLower(line), q) {
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "//") || (q != "" && !strings.Contains(strings.ToLower(line), q)) {
 			continue
 		}
 		total++

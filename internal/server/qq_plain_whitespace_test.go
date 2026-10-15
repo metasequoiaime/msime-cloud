@@ -71,3 +71,21 @@ func BenchmarkQQPlainTextWhitespace(b *testing.B) {
 		})
 	}
 }
+
+func TestQQPlainTextFormattedMarkersAllocationBudget(t *testing.T) {
+	input := strings.Repeat("> - **词** \t `词`\n", 1024)
+	want := strings.TrimSpace(strings.Repeat("词 词 ", 1024))
+	var got string
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			got = qqPlainText(input)
+		}
+	})
+	if got != want {
+		t.Fatal("格式标记清理结果发生变化")
+	}
+	// 预算包含去标记正文和最终字段结果，排除替换器的额外输出副本。
+	if allocated := result.AllocedBytesPerOp(); allocated > 28<<10 {
+		t.Fatalf("格式标记清理分配 %d 字节，超过 28 KiB 预算", allocated)
+	}
+}

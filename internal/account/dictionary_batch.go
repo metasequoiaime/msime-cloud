@@ -28,21 +28,22 @@ func importDictionaryBatch(ctx context.Context, tx pgx.Tx, user, kind string, en
 		codes[i], words[i] = e.Code, e.Word
 	}
 	var duplicate bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS(
+	var count int
+	var revision int64
+	var updatedAt time.Time
+	// 查重与容量、版本共用一次读取；发现重复后跳过总量扫描，仍优先返回重复错误。
+	if err := tx.QueryRow(ctx, `WITH duplicate AS MATERIALIZED (SELECT EXISTS(
 SELECT 1 FROM user_dictionary_entries e
 JOIN unnest($3::text[],$4::text[]) AS wanted(code,word) ON wanted.code=e.code AND wanted.word=e.word
-WHERE e.user_id=$1 AND e.kind=$2)`, user, kind, codes, words).Scan(&duplicate); err != nil {
+WHERE e.user_id=$1 AND e.kind=$2) AS found)
+SELECT found,
+ CASE WHEN found THEN 0 ELSE (SELECT count(*) FROM user_dictionary_entries WHERE user_id=$1) END,
+ COALESCE((SELECT revision FROM user_dictionary_state WHERE user_id=$1),0),now()
+FROM duplicate`, user, kind, codes, words).Scan(&duplicate, &count, &revision, &updatedAt); err != nil {
 		return 0, err
 	}
 	if duplicate {
 		return 0, errDictionaryDuplicate
-	}
-	var count int
-	var revision int64
-	var updatedAt time.Time
-	if err := tx.QueryRow(ctx, `SELECT count(*),COALESCE((SELECT revision FROM user_dictionary_state WHERE user_id=$1),0),now()
-FROM user_dictionary_entries WHERE user_id=$1`, user).Scan(&count, &revision, &updatedAt); err != nil {
-		return 0, err
 	}
 	if count+len(entries) > 100000 {
 		return 0, errDictionaryLimit

@@ -188,13 +188,14 @@ INSERT INTO admin_incidents(service,title) VALUES('translation','翻译超时'),
 	}
 }
 
-// The overview's community counters leave out removed content, so they agree with the public community statistics.
+// 后台概览的社区作品和下载计数排除已下架内容，与公共社区统计保持一致。
 func TestOverviewCommunityCountersSkipRemoved(t *testing.T) {
 	a := overviewTestService(t)
 	ctx := context.Background()
 	user := complete(t, a.store, Identity{"email", "overview-owner@example.test"})
 	for _, statement := range []string{
 		`INSERT INTO community_skins(id,owner_id,name,design,moderation) VALUES('overview-skin-1',$1,'A','{}','approved'),('overview-skin-2',$1,'B','{}','removed')`,
+		`INSERT INTO community_skin_downloads(skin_id,user_id) VALUES('overview-skin-1',$1),('overview-skin-2',$1)`,
 		`INSERT INTO community_resources(id,owner_id,kind,name,content,moderation) VALUES('overview-dict-1',$1,'dictionary','D','{"entries":[]}','approved'),('overview-reply-1',$1,'reply','R','{"prompt":"hi"}','removed')`,
 	} {
 		if _, err := a.store.pool.Exec(ctx, statement, user.User.ID); err != nil {
@@ -202,9 +203,10 @@ func TestOverviewCommunityCountersSkipRemoved(t *testing.T) {
 		}
 	}
 	var counts struct {
-		Skins        int `json:"skins"`
-		Dictionaries int `json:"dictionaries"`
-		Replies      int `json:"replies"`
+		Skins         int `json:"skins"`
+		SkinDownloads int `json:"skin_downloads"`
+		Dictionaries  int `json:"dictionaries"`
+		Replies       int `json:"replies"`
 	}
 	r := httptest.NewRequest("GET", "/api/overview", nil)
 	r = r.WithContext(adminTestContext(r.Context(), "legacy-token"))
@@ -217,7 +219,7 @@ func TestOverviewCommunityCountersSkipRemoved(t *testing.T) {
 	if err := a.store.pool.QueryRow(ctx, communityStatsQuery).Scan(&stats.Skins, &stats.SkinDownloads, &stats.Dictionaries, &stats.Replies, &stats.ResourceSaves, &stats.GeneratedAt); err != nil {
 		t.Fatal(err)
 	}
-	if counts.Skins != int(stats.Skins) || counts.Dictionaries != int(stats.Dictionaries) || counts.Replies != int(stats.Replies) || counts.Skins != 1 || counts.Dictionaries != 1 || counts.Replies != 0 {
+	if counts.Skins != int(stats.Skins) || counts.SkinDownloads != int(stats.SkinDownloads) || counts.Dictionaries != int(stats.Dictionaries) || counts.Replies != int(stats.Replies) || counts.Skins != 1 || counts.SkinDownloads != 1 || counts.Dictionaries != 1 || counts.Replies != 0 {
 		t.Fatalf("overview %+v stats %+v", counts, stats)
 	}
 }

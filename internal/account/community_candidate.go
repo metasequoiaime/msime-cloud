@@ -966,7 +966,7 @@ func (a *Service) communityCandidateReplace(w http.ResponseWriter, r *http.Reque
 	}
 	license := candidatePackageLicense(pkg)
 	batch := &pgx.Batch{}
-	batch.Queue(`UPDATE community_candidate_skins SET name=$2,description=$3,version=$4,license_code=$5,license_assets=$6,license_source=$7,manifest=$8,preview_path=$9,request_sha256=$10,updated_at=now(),`+reviewAgain("$11")+` WHERE id=$1`,
+	batch.Queue(`UPDATE community_candidate_skins SET name=$2,description=$3,version=$4,license_code=$5,license_assets=$6,license_source=$7,manifest=$8,preview_path=$9,request_sha256=$10,updated_at=clock_timestamp(),`+reviewAgain("$11")+` WHERE id=$1`,
 		id, input.Name, input.Description, pkg.Version, license.Code, license.Assets, license.Source, []byte(input.Manifest), pkg.Preview, digest, flag)
 	batch.Queue(`DELETE FROM community_candidate_skin_files WHERE skin_id=$1`, id)
 	query, args := candidateFilesInsertQuery(id, clean)
@@ -1067,7 +1067,7 @@ FROM community_candidate_skins s WHERE s.id=$1 AND s.owner_id=$2 FOR UPDATE`, id
 		if categoryChanged {
 			nextCategory = *input.Category
 		}
-		if _, e = tx.Exec(r.Context(), `UPDATE community_candidate_skins SET visibility=COALESCE($2::text,visibility),category=COALESCE($3::text,category),updated_at=CASE WHEN $2::text IS NOT NULL AND visibility<>$2::text THEN now() ELSE updated_at END,moderation=CASE WHEN $2::text='public' AND visibility<>'public' AND moderation='approved' THEN 'pending' ELSE moderation END WHERE id=$1`, id, nextVisibility, nextCategory); e != nil {
+		if _, e = tx.Exec(r.Context(), `UPDATE community_candidate_skins SET visibility=COALESCE($2::text,visibility),category=COALESCE($3::text,category),updated_at=CASE WHEN $2::text IS NOT NULL AND visibility<>$2::text THEN clock_timestamp() ELSE updated_at END,moderation=CASE WHEN $2::text='public' AND visibility<>'public' AND moderation='approved' THEN 'pending' ELSE moderation END WHERE id=$1`, id, nextVisibility, nextCategory); e != nil {
 			a.error(w, e)
 			return
 		}

@@ -54,7 +54,7 @@ func qqMediaURL(raw string, hosts []string) (string, error) {
 		return "", errors.New("invalid attachment url")
 	}
 	if !qqMediaHostAllowed(u.Hostname(), hosts) {
-		return "", fmt.Errorf("attachment host %s not allowed", u.Hostname())
+		return "", errors.New("attachment host not allowed")
 	}
 	return u.String(), nil
 }

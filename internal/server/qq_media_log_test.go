@@ -28,3 +28,28 @@ func TestQQMediaStorageErrorsDoNotLogPrivateDetails(t *testing.T) {
 		t.Fatal("未记录附件存储失败", logs.String())
 	}
 }
+
+func TestQQMediaRejectedHostsDoNotLogPrivateDetails(t *testing.T) {
+	for _, flow := range []string{"publish", "describe"} {
+		t.Run(flow, func(t *testing.T) {
+			s, _, _ := qqServer(t)
+			s.media = &fakeMedia{}
+			logs := captureLogs(t)
+			attachments := []qqAttachment{{ContentType: "image/png", URL: "https://synthetic-private-attachment-host.example.test/synthetic-private-path?signature=synthetic-private-signature"}}
+			if flow == "publish" {
+				stored, failed := s.publishQQMedia(t.Context(), attachments)
+				if len(stored) != 0 || failed != 1 {
+					t.Fatal("被拒绝的附件未计入失败", len(stored), failed)
+				}
+			} else if got := s.qqDescribeImages(t.Context(), attachments); got != "" {
+				t.Fatal("被拒绝的截图仍生成描述", got)
+			}
+			if strings.Contains(logs.String(), "synthetic-private-") {
+				t.Fatal("附件拒绝日志包含请求地址中的隐私信息", logs.String())
+			}
+			if !strings.Contains(logs.String(), "attachment host not allowed") {
+				t.Fatal("附件拒绝日志缺少固定原因", logs.String())
+			}
+		})
+	}
+}

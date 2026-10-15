@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -256,6 +257,15 @@ func (s *Server) writeQQFAQ(ctx context.Context, text, drafted string, reply fun
 		reply("没看出要记录的问题和答案，请写成「记录答案 问：… 答：…」。")
 		return 0
 	}
+	// 查找开放 PR 到创建 PR 是一个跨副本的读改写过程，必须串行化，否则两个副本都查不到时会各自开一条重复 PR。
+	if s.qqLocks != nil {
+		release, err := s.qqLocks.WaitLock(ctx, "qq-faq:"+repo, 15*time.Second)
+		if err != nil {
+			fail("lock", err)
+			return 0
+		}
+		defer release()
+	}
 	// 同一问题已经有还没合并的 PR 时不再新开，返回那个 PR 的编号（从文档候选、差评写进来的照样标成已处理）：原来只看默认分支的 FAQ，前一个 PR 还没合并时再记一次、或者两个管理员同时写同一条，都会多开一个内容相同的 PR。
 	if number := s.qqOpenFAQPull(ctx, token, repo, entry.Question); number > 0 {
 		_, short, _ := strings.Cut(repo, "/")
@@ -328,6 +338,7 @@ func (s *Server) writeQQFAQ(ctx context.Context, text, drafted string, reply fun
 		fail("pull", githubFailure("pull", r, err))
 		return 0
 	}
+	client.Invalidate("/repos/" + repo + "/pulls")
 	// 写进 FAQ 的问题和答案记成一道自测题，之后改提示词、换模型时同一个问题答错了自测能发现。
 	if drafted == "" {
 		s.learnQQSelfTestCase(ctx, entry.Question, entry.Answer)

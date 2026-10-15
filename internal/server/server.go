@@ -53,7 +53,7 @@ type Server struct {
 	media mediaPublisher
 	// qqHistory 是 QQ 群答疑接上追问用的最近问答（account.Service）；没有数据库时为 nil。
 	qqHistory qqConversationStore
-	// qqLocks 是新建汇总 issue 时用的跨副本锁（account.Service.WaitLock）；没有数据库时为 nil。
+	// qqLocks 是 QQ 机器人查重后创建 issue、FAQ PR 等操作用的跨副本锁（account.Service.WaitLock）；没有数据库时为 nil。
 	qqLocks sharedLocker
 	// qqVectors 是答疑的向量索引（account.Service，见 qq_vectors.go）；没有数据库时为 nil。
 	qqVectors qqVectorStore

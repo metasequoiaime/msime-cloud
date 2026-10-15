@@ -8,10 +8,18 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // TelemetryPath 是服务端经 Route 挂载的匿名事件接口；IsPath 让它绕过 Bearer 中间件，accountRouteRate 按这个路由给它独立的额度，所以服务端必须原样挂载在这个路径上。
 const TelemetryPath = "/v1/telemetry/events"
+
+// telemetryWriteDefinitelyRejected 只把数据库明确返回的语句错误视为未写入。连接中断、超时等错误的结果可能未知，不能退款后让已写入的事件逃过额度。
+func telemetryWriteDefinitelyRejected(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr)
+}
 
 const (
 	// telemetryRateLimit 是遥测事件按地址每分钟的上限，单独一份额度，上报不会挤占登录和社区接口的每分钟 120 次。客户端每次启动只发几条事件，60 次足够补发离线队列。
@@ -171,7 +179,7 @@ SELECT signature,$11,version,$12 FROM inserted WHERE signature IS NOT NULL
 	SELECT EXISTS(SELECT 1 FROM inserted)`,
 		v.ID, v.Kind, v.Platform, v.Version, v.Message, v.Stack, telemetryNull(v.Artifact), telemetryNull(v.Channel), telemetryNull(v.InstallID), telemetryNull(signature), crashPlatform(v.Platform), crashGroupTitle(v.Message)).Scan(&inserted)
 	if err != nil {
-		if releaseCrashRate != nil {
+		if releaseCrashRate != nil && telemetryWriteDefinitelyRejected(err) {
 			_ = releaseCrashRate()
 		}
 		a.error(w, err)

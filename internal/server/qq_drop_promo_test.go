@@ -6,6 +6,22 @@ import (
 	"testing"
 )
 
+func TestQQPromoSentenceCandidate(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  bool
+	}{
+		{"普通回答。", false},
+		{"加群 12345678", true},
+		{"微信号 abc12", true},
+		{"visit v.example", true},
+	} {
+		if got := qqPromoSentenceCandidate(tc.input); got != tc.want {
+			t.Errorf("qqPromoSentenceCandidate(%q) = %v，预期 %v", tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestQQDropPromoSentencesKeepsRules(t *testing.T) {
 	for _, tc := range []struct{ name, input, want string }{
 		{"plain", "普通回答。", "普通回答。"},

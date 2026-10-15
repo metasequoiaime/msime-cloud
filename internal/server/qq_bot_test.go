@@ -305,6 +305,10 @@ type qqFake struct {
 // qqFAQHead 是测试里知识库默认分支当前的提交。
 const qqFAQHead = "head-sha"
 
+type qqTestTransport func(*http.Request) (*http.Response, error)
+
+func (f qqTestTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
 func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -2023,9 +2027,32 @@ func TestQQBotFallbackModel(t *testing.T) {
 	defer func(timeout time.Duration) { qqPrimaryModelTimeout = timeout }(qqPrimaryModelTimeout)
 	qqPrimaryModelTimeout = 50 * time.Millisecond
 	fake.chatStatus, fake.hangModel, fake.models = 0, "claude-haiku-5-5", nil
+	transport := s.client.Transport
+	var attemptedModels []string
+	// 在传输入口记录尝试并等主模型取消，避免把 TLS 建连是否赶在截止时间前完成当成重试次数。
+	s.client.Transport = qqTestTransport(func(r *http.Request) (*http.Response, error) {
+		if r.URL.String() == s.config.Chat.URL {
+			body, err := r.GetBody()
+			if err != nil {
+				return nil, err
+			}
+			defer body.Close()
+			var request chatRequest
+			if err := json.NewDecoder(body).Decode(&request); err != nil {
+				return nil, err
+			}
+			attemptedModels = append(attemptedModels, request.Model)
+			if request.Model == fake.hangModel {
+				<-r.Context().Done()
+				return nil, r.Context().Err()
+			}
+		}
+		return transport.RoundTrip(r)
+	})
 	qqDeliver(t, s, "m-primary-hangs", "五笔怎么切换")
-	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "在设置的「输入方案」里选五笔。" || strings.Join(fake.models, ",") != "claude-haiku-5-5,fallback-model,claude-haiku-5-5,fallback-model" {
-		t.Fatal(last, fake.models)
+	s.client.Transport = transport
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "在设置的「输入方案」里选五笔。" || strings.Join(attemptedModels, ",") != "claude-haiku-5-5,fallback-model,claude-haiku-5-5,fallback-model" || strings.Join(fake.models, ",") != "fallback-model,fallback-model" {
+		t.Fatal(last, attemptedModels, fake.models)
 	}
 	fake.hangModel, fake.chatStatus = "", 502
 	s.qq.config.FallbackModel, fake.models = "", nil

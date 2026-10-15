@@ -119,10 +119,18 @@ func (s *Server) qqEmbedItems(ctx context.Context, items []account.QQKnowledgeIt
 	results := make([][][]float32, (len(texts)+qqEmbedBatch-1)/qqEmbedBatch)
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.SetLimit(qqEmbedParallel)
+	scheduled := false
 	for batch, start := 0, 0; start < len(texts); batch, start = batch+1, start+qqEmbedBatch {
+		if err := groupCtx.Err(); err != nil {
+			break
+		}
 		batch, start := batch, start
 		end := min(start+qqEmbedBatch, len(texts))
+		scheduled = true
 		group.Go(func() error {
+			if err := groupCtx.Err(); err != nil {
+				return err
+			}
 			vectors, err := s.qqEmbed(groupCtx, texts[start:end])
 			if err != nil {
 				return err
@@ -133,6 +141,9 @@ func (s *Server) qqEmbedItems(ctx context.Context, items []account.QQKnowledgeIt
 	}
 	if err := group.Wait(); err != nil {
 		return err
+	}
+	if !scheduled && ctx.Err() != nil {
+		return ctx.Err()
 	}
 	for batch, vectors := range results {
 		start := batch * qqEmbedBatch

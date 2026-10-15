@@ -1,33 +1,13 @@
 package account
 
 import (
-	"context"
-	"strings"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type skinJobHeartbeatBatchTrace struct {
-	mu      sync.Mutex
-	queries int
-}
-
-func (t *skinJobHeartbeatBatchTrace) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	if strings.Contains(data.SQL, "skin_jobs") {
-		t.mu.Lock()
-		t.queries++
-		t.mu.Unlock()
-	}
-	return ctx
-}
-
-func (*skinJobHeartbeatBatchTrace) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
-
-func TestSkinJobHeartbeatUsesOneDatabaseStatement(t *testing.T) {
+func TestSkinJobHeartbeatUsesOneDatabaseCall(t *testing.T) {
 	db := testStore(t)
 	ctx := t.Context()
 	if _, err := db.pool.Exec(ctx, `TRUNCATE skin_jobs`); err != nil {
@@ -39,22 +19,40 @@ func TestSkinJobHeartbeatUsesOneDatabaseStatement(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := db.pool.Config()
-	trace := &skinJobHeartbeatBatchTrace{}
+	trace := &statementCancellation{}
 	cfg.ConnConfig.Tracer = trace
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
+	if err := pool.Ping(ctx); err != nil {
+		t.Fatal(err)
+	}
+	trace.mu.Lock()
+	trace.seen, trace.statements = 0, nil
+	trace.mu.Unlock()
 	traced := &Service{store: &Store{pool: pool}}
 	alive, err := traced.SkinJobHeartbeat(ctx, jobID)
 	if err != nil || !alive {
 		t.Fatal(alive, err)
 	}
 	trace.mu.Lock()
-	queries := trace.queries
+	queries := trace.seen
 	trace.mu.Unlock()
 	if queries != 1 {
-		t.Fatalf("皮肤任务心跳使用了 %d 条数据库语句，期望 1 条", queries)
+		t.Errorf("皮肤任务心跳使用了 %d 次数据库调用，期望 1 次", queries)
+	}
+	trace.mu.Lock()
+	trace.seen, trace.statements = 0, nil
+	trace.mu.Unlock()
+	if alive, err := traced.SkinJobHeartbeat(ctx, skinJobID('z')); err != nil || alive {
+		t.Fatal("不存在的任务仍允许继续执行", alive, err)
+	}
+	trace.mu.Lock()
+	queries = trace.seen
+	trace.mu.Unlock()
+	if queries != 1 {
+		t.Errorf("不存在任务的心跳使用了 %d 次数据库调用，期望 1 次", queries)
 	}
 }

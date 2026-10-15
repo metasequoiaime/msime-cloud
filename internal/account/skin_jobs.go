@@ -93,14 +93,9 @@ func (a *Service) GetSkinJob(ctx context.Context, id, owner string) (SkinJob, er
 
 // DeleteSkinJob removes owner's job. A finished job (or one whose worker died) is deleted at once; a running one is flagged cancelled and the worker executing it, on whichever replica, stops the upstream call and deletes the row. Either way the job is gone for GET immediately.
 func (a *Service) DeleteSkinJob(ctx context.Context, id, owner string) error {
-	tx, err := a.store.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
 	// 在一条语句里锁定并重新计算任务状态，再按心跳状态取消或删除。锁等待可能跨过 TTL，所以不能复用锁前的时间判断。
 	var outcome string
-	err = tx.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+	err := a.store.pool.QueryRow(ctx, `WITH locked AS MATERIALIZED (
 	 SELECT id,state,heartbeat_at,expires_at
 	 FROM skin_jobs WHERE id=$1 AND owner=$2 AND NOT cancelled FOR UPDATE
 ), classified AS MATERIALIZED (
@@ -123,19 +118,14 @@ SELECT COALESCE((SELECT outcome FROM removed),(SELECT outcome FROM cancelled),CA
 	if outcome == "expired" || outcome == "missing" {
 		return ErrSkinJobNotFound
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 // SkinJobHeartbeat refreshes a running job's heartbeat and reports whether its worker should keep going. It returns false once the job was cancelled by a DELETE on any replica, has expired, or already went stale (other replicas report it failed, so a late result must not revive it).
 func (a *Service) SkinJobHeartbeat(ctx context.Context, id string) (bool, error) {
-	tx, err := a.store.pool.Begin(ctx)
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback(ctx)
 	var live bool
 	// 先锁定任务行，再在独立的物化 CTE 中计算锁后的有效期和心跳状态；一次语句完成读取与心跳更新。
-	err = tx.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+	err := a.store.pool.QueryRow(ctx, `WITH locked AS MATERIALIZED (
  SELECT id,cancelled,state,heartbeat_at,expires_at
  FROM skin_jobs WHERE id=$1 FOR UPDATE
 ), classified AS MATERIALIZED (
@@ -151,19 +141,14 @@ SELECT COALESCE((SELECT live FROM classified),false)`, id).Scan(&live)
 	if err != nil {
 		return false, err
 	}
-	return live, tx.Commit(ctx)
+	return live, nil
 }
 
 // FinishSkinJob 记录执行者的成功插画或失败原因；任务已取消（此处删除记录）、心跳失效或过期时不写入结果并返回 false。
 func (a *Service) FinishSkinJob(ctx context.Context, id, state, reason string, artwork []byte) (bool, error) {
-	tx, err := a.store.pool.Begin(ctx)
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback(ctx)
 	// 先锁定任务行，再在独立的物化 CTE 中计算锁后的有效期和心跳状态；一次语句完成读取、结果更新和取消任务删除。
 	var recorded bool
-	err = tx.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+	err := a.store.pool.QueryRow(ctx, `WITH locked AS MATERIALIZED (
  SELECT id,cancelled,state,heartbeat_at,expires_at
  FROM skin_jobs WHERE id=$1 FOR UPDATE
 ), classified AS MATERIALIZED (
@@ -186,7 +171,7 @@ SELECT EXISTS(SELECT 1 FROM updated)`, id, state, reason, artwork).Scan(&recorde
 	if err != nil {
 		return false, err
 	}
-	return recorded, tx.Commit(ctx)
+	return recorded, nil
 }
 
 // DropSkinJob deletes a job that was recorded but never started, for a replica that began shutting down between the insert and starting its worker.

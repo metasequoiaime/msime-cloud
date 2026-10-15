@@ -1,33 +1,14 @@
 package account
 
 import (
-	"context"
-	"strings"
-	"sync"
+	"errors"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type skinJobDeleteBatchTrace struct {
-	mu      sync.Mutex
-	queries int
-}
-
-func (t *skinJobDeleteBatchTrace) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	if strings.Contains(data.SQL, "skin_jobs") {
-		t.mu.Lock()
-		t.queries++
-		t.mu.Unlock()
-	}
-	return ctx
-}
-
-func (*skinJobDeleteBatchTrace) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
-
-func TestDeleteSkinJobUsesOneDatabaseStatement(t *testing.T) {
+func TestDeleteSkinJobUsesOneDatabaseCall(t *testing.T) {
 	db := testStore(t)
 	ctx := t.Context()
 	if _, err := db.pool.Exec(ctx, `TRUNCATE skin_jobs`); err != nil {
@@ -39,21 +20,39 @@ func TestDeleteSkinJobUsesOneDatabaseStatement(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := db.pool.Config()
-	trace := &skinJobDeleteBatchTrace{}
+	trace := &statementCancellation{}
 	cfg.ConnConfig.Tracer = trace
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
+	if err := pool.Ping(ctx); err != nil {
+		t.Fatal(err)
+	}
+	trace.mu.Lock()
+	trace.seen, trace.statements = 0, nil
+	trace.mu.Unlock()
 	traced := &Service{store: &Store{pool: pool}}
 	if err := traced.DeleteSkinJob(ctx, jobID, "owner"); err != nil {
 		t.Fatal(err)
 	}
 	trace.mu.Lock()
-	queries := trace.queries
+	queries := trace.seen
 	trace.mu.Unlock()
 	if queries != 1 {
-		t.Fatalf("删除皮肤任务使用了 %d 条数据库语句，期望 1 条", queries)
+		t.Errorf("删除皮肤任务使用了 %d 次数据库调用，期望 1 次", queries)
+	}
+	trace.mu.Lock()
+	trace.seen, trace.statements = 0, nil
+	trace.mu.Unlock()
+	if err := traced.DeleteSkinJob(ctx, jobID, "owner"); !errors.Is(err, ErrSkinJobNotFound) {
+		t.Fatal("重复删除未返回任务不存在", err)
+	}
+	trace.mu.Lock()
+	queries = trace.seen
+	trace.mu.Unlock()
+	if queries != 1 {
+		t.Errorf("重复删除任务使用了 %d 次数据库调用，期望 1 次", queries)
 	}
 }

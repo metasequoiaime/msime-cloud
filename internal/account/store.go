@@ -392,50 +392,35 @@ SELECT id,pattern,is_regex,category,level,created_by,created_at FROM admin_sensi
 SELECT word_id,day,count FROM admin_sensitive_hits WHERE false`); e != nil {
 		return e
 	}
-	// The telemetry kinds live in a CHECK constraint, which no SELECT can probe.
-	var current bool
-	if e := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='admin_events'::regclass AND conname='admin_events_kind_check' AND pg_get_constraintdef(oid) LIKE '%session_crash%')`).Scan(&current); e != nil {
-		return e
+	// 元数据检查按原顺序批量发送；先取得迁移共享锁，避免跨查询持有的锁与自动迁移冲突。
+	batch := &pgx.Batch{}
+	batch.Queue(`SELECT pg_advisory_xact_lock_shared(8372419)`)
+	for _, check := range []struct{ query, missing string }{
+		// 遥测种类由 CHECK 约束限定，普通列探测无法发现旧约束。
+		{`SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='admin_events'::regclass AND conname='admin_events_kind_check' AND pg_get_constraintdef(oid) LIKE '%session_crash%')`, "admin_events kind constraint predates the active and session kinds"},
+		// 权限键约束需要支持 view_logs。
+		{`SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='admin_role_permissions'::regclass AND conname='admin_role_permissions_permission_check' AND pg_get_constraintdef(oid) LIKE '%view_logs%')`, "admin_role_permissions permission constraint predates view_logs"},
+		// 插件种类约束需要支持 wordbook。
+		{`SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='community_plugins'::regclass AND conname='community_plugins_kind_known' AND pg_get_constraintdef(oid) LIKE '%wordbook%')`, "community_plugins kind constraint predates the helpcode, symbol_set, phrase_table and wordbook kinds"},
+		// 下载快照需要日期索引。
+		{`SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass('release_asset_snapshots') AND c.relname='release_asset_snapshots_day')`, "release snapshot day index missing"},
+		// 通知查重和崩溃通知需要目标时间索引。
+		{`SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass('admin_notifications') AND c.relname='admin_notifications_target')`, "notification target index missing"},
+		// 审计列表需要时间和 ID 索引。
+		{`SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass('admin_audit') AND c.relname='admin_audit_time')`, "audit time index missing"},
+	} {
+		batch.Queue(check.query).QueryRow(func(row pgx.Row) error {
+			var current bool
+			if err := row.Scan(&current); err != nil {
+				return err
+			}
+			if !current {
+				return errors.New(check.missing)
+			}
+			return nil
+		})
 	}
-	if !current {
-		return errors.New("admin_events kind constraint predates the active and session kinds")
-	}
-	// 权限键同样在 CHECK 约束里；旧约束会让授予 view_logs 失败。
-	if e := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='admin_role_permissions'::regclass AND conname='admin_role_permissions_permission_check' AND pg_get_constraintdef(oid) LIKE '%view_logs%')`).Scan(&current); e != nil {
-		return e
-	}
-	if !current {
-		return errors.New("admin_role_permissions permission constraint predates view_logs")
-	}
-	// 插件类型也在 CHECK 约束里：旧约束会让新类型的发布在插入时失败，所以约束不含 wordbook 时启动要走迁移。
-	if e := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='community_plugins'::regclass AND conname='community_plugins_kind_known' AND pg_get_constraintdef(oid) LIKE '%wordbook%')`).Scan(&current); e != nil {
-		return e
-	}
-	if !current {
-		return errors.New("community_plugins kind constraint predates the helpcode, symbol_set, phrase_table and wordbook kinds")
-	}
-	// 下载快照的日期索引单独加入，需按实际表探测，避免旧库仅因表和列齐全而跳过迁移。
-	if e := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass('release_asset_snapshots') AND c.relname='release_asset_snapshots_day')`).Scan(&current); e != nil {
-		return e
-	}
-	if !current {
-		return errors.New("release snapshot day index missing")
-	}
-	// 通知查重和崩溃通知静默期共用目标索引，旧库缺少时需要在启动阶段补建。
-	if e := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass('admin_notifications') AND c.relname='admin_notifications_target')`).Scan(&current); e != nil {
-		return e
-	}
-	if !current {
-		return errors.New("notification target index missing")
-	}
-	// 审计列表的选页依赖时间和 ID 索引，按实际业务表探测缺失以触发旧库迁移。
-	if e := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass('admin_audit') AND c.relname='admin_audit_time')`).Scan(&current); e != nil {
-		return e
-	}
-	if !current {
-		return errors.New("audit time index missing")
-	}
-	return nil
+	return s.pool.SendBatch(ctx, batch).Close()
 }
 func (s *Store) Rate(ctx context.Context, key string, limit int, window time.Duration) error {
 	return rateTx(ctx, s.pool, key, limit, window)

@@ -34,8 +34,8 @@ func TestReadyCombinesConsecutiveSchemaProbes(t *testing.T) {
 	trace.mu.Lock()
 	calls := trace.seen
 	trace.mu.Unlock()
-	if calls != 16 {
-		t.Fatalf("启动探测用了 %d 次数据库调用，期望 16 次", calls)
+	if calls != 11 {
+		t.Fatalf("启动探测用了 %d 次数据库调用，期望 11 次", calls)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 	"github.com/metasequoiaime/MSIME-Backend/internal/skins"
 	"io"
 	"log/slog"
@@ -406,24 +407,9 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	return decodeSized(w, r, v, contract.JsonBodyBytes)
 }
 
-// decodeSized is decode with a request body limit of maxBytes instead of the API-wide 64 KiB.
+// decodeSized 使用调用方指定的请求体上限，替代接口默认的 64 KiB。
 func decodeSized(w http.ResponseWriter, r *http.Request, v any, maxBytes int64) bool {
-	if ct := strings.Split(r.Header.Get("Content-Type"), ";")[0]; ct != "application/json" {
-		fail(w, 415, "json_required")
-		return false
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
-	d := json.NewDecoder(r.Body)
-	d.DisallowUnknownFields()
-	if err := d.Decode(v); err != nil {
-		fail(w, 400, "invalid_json")
-		return false
-	}
-	if d.Decode(new(any)) != io.EOF {
-		fail(w, 400, "invalid_json")
-		return false
-	}
-	return true
+	return httpjson.Decode(w, r, v, maxBytes, fail)
 }
 func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 	respond(w, 200, map[string]any{"api_version": contract.APIVersion, "cloud": s.config.Cloud.URL != "", "chat": s.config.Chat.URL != "", "translation": s.config.Translation.URL != "", "transcription": s.config.Transcription.URL != "", "streaming_transcription": s.config.Streaming.URL != ""})

@@ -60,7 +60,7 @@ func TestNiuTransLargeUploadUsesBoundedMemory(t *testing.T) {
 		if received != fileSize || fields["from"] != "zh" || fields["to"] != "en" || fields["authStr"] != niuTransAuth(fields, "synthetic-key") {
 			t.Errorf("received %d bytes, fields=%v", received, fields)
 		}
-		_, _ = io.WriteString(w, `{"code":200}`)
+		_, _ = io.WriteString(w, `{"code":200,"data":{"fileNo":"synthetic-task"}}`)
 	})
 	s.config.NiuTrans.Document = NiuTransEndpoint{URL: s.config.Chat.URL + "/upload", appID: "synthetic-app", apiKey: "synthetic-key"}
 	body, contentType := niuTransStreamingUpload(t, fileSize)
@@ -136,7 +136,7 @@ func TestNiuTransUploadTempFileLifecycle(t *testing.T) {
 					w.WriteHeader(http.StatusBadGateway)
 					return
 				}
-				_, _ = io.WriteString(w, `{"code":200}`)
+				_, _ = io.WriteString(w, `{"code":200,"data":{"fileNo":"synthetic-task"}}`)
 			})
 			e := NiuTransEndpoint{URL: s.config.Chat.URL + "/upload", appID: "synthetic-app", apiKey: "synthetic-key"}
 			s.config.NiuTrans.Document, s.config.NiuTrans.Image, s.config.NiuTrans.Voice = e, e, e

@@ -35,7 +35,7 @@ func TestNiuTransDownloadStreamsBeforeUpstreamFinishes(t *testing.T) {
 	t.Cleanup(release)
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/v1/niutrans/documents/file/download", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/v1/niutrans/documents/"+niuTransTestTask(s, "documents", "file")+"/download", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,10 @@ func TestNiuTransDownloadBoundsAndFailures(t *testing.T) {
 			var aborted any
 			func() {
 				defer func() { aborted = recover() }()
-				s.niuTransFileRequest(w, httptest.NewRequest(http.MethodGet, "/", nil), NiuTransEndpoint{URL: "https://example.test/upload", appID: "synthetic-app", apiKey: "synthetic-key"}, "niutrans_document", "download", "file")
+				e := NiuTransEndpoint{URL: "https://example.test/upload", appID: "synthetic-app", apiKey: "synthetic-key"}
+				r := httptest.NewRequest(http.MethodGet, "/", nil)
+				r = r.WithContext(context.WithValue(r.Context(), skinJobOwnerKey{}, "test"))
+				s.niuTransFileRequest(w, r, e, "niutrans_document", "download", niuTransTaskID(e, "niutrans_document", "test", "file"))
 			}()
 			if (aborted != nil) != tc.wantAbort || (aborted != nil && aborted != http.ErrAbortHandler) {
 				t.Fatalf("panic=%v wantAbort=%v", aborted, tc.wantAbort)
@@ -178,7 +181,7 @@ func TestNiuTransTruncatedDownloadIsIncompleteOverHTTP(t *testing.T) {
 	s.config.NiuTrans.Document = NiuTransEndpoint{URL: s.config.Chat.URL + "/upload", appID: "synthetic-app", apiKey: "synthetic-key"}
 	server := httptest.NewServer(s)
 	t.Cleanup(server.Close)
-	req, err := http.NewRequest(http.MethodGet, server.URL+"/v1/niutrans/documents/file/download", nil)
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/v1/niutrans/documents/"+niuTransTestTask(s, "documents", "file")+"/download", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

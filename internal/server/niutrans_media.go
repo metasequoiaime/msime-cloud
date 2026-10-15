@@ -176,7 +176,10 @@ func (s *Server) niuTransUpload(w http.ResponseWriter, r *http.Request, e NiuTra
 	}
 	mr, call := metered(r, "niutrans_"+kind, 0)
 	b, err := s.niuTransRequest(mr, e.URL, http.MethodPost, mw.FormDataContentType(), body)
-	s.settleMeter(call, json.Valid(b))
+	if err == nil {
+		b, err = niuTransUploadResult(r, e, "niutrans_"+kind, b)
+	}
+	s.settleMeter(call, err == nil)
 	if err != nil {
 		upstreamError(w, r, err)
 		return
@@ -199,8 +202,15 @@ func (s *Server) niuTransFileRequest(w http.ResponseWriter, r *http.Request, e N
 	if !s.niuTransEndpoint(w, e) {
 		return
 	}
-	if fileNo == "" || len(fileNo) > 256 || strings.ContainsAny(fileNo, "/\\\r\n") {
+	if fileNo == "" || len(fileNo) > 512 || (!strings.HasPrefix(fileNo, niuTransTaskPrefix) && len(fileNo) > 256) || strings.ContainsAny(fileNo, "/\\\x00\r\n") {
 		fail(w, http.StatusBadRequest, "invalid_file_no")
+		return
+	}
+	task := fileNo
+	owner, _ := r.Context().Value(skinJobOwnerKey{}).(string)
+	fileNo, ok := niuTransTaskFileNo(e, service, owner, fileNo)
+	if !ok {
+		fail(w, http.StatusNotFound, "niutrans_task_not_found")
 		return
 	}
 	params := map[string]string{"appId": e.appID, "timestamp": strconv.FormatInt(time.Now().UnixMilli(), 10)}
@@ -234,7 +244,10 @@ func (s *Server) niuTransFileRequest(w http.ResponseWriter, r *http.Request, e N
 		return
 	}
 	b, err := s.niuTransRequest(mr, base.String(), r.Method, "", nil)
-	s.settleMeter(call, json.Valid(b))
+	if err == nil {
+		b, err = niuTransFileResult(b, task)
+	}
+	s.settleMeter(call, err == nil)
 	if err != nil {
 		upstreamError(w, r, err)
 		return

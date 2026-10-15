@@ -307,19 +307,30 @@ func (s *Server) translateEndpoint(w http.ResponseWriter, r *http.Request, v tra
 	if e.Provider == "deepl" {
 		return s.translateDeepL(w, r, v, e, budget)
 	}
+	if e.Provider == "niutrans" {
+		return s.translateNiuTrans(w, r, v, e, budget)
+	}
 	requests := len(v.list())
 	if budget != nil && !budget.take(time.Now(), requests) {
 		return false
 	}
 	if len(v.Texts) > 0 {
-		s.translateEach(w, r, v, e)
+		if texts, ok := s.translateEach(w, r, v, e); ok {
+			respondTranslations(w, v, texts)
+		}
 		return true
 	}
+	s.translateSingle(w, r, v, e)
+	return true
+}
+
+// translateSingle 为一条已按上游限制拆好的文本执行实际 HTTP 调用。
+func (s *Server) translateSingle(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint) {
 	switch e.Provider {
 	case "openai":
 		s.translateOpenAI(w, r, v, e)
 	case "niutrans":
-		s.translateNiuTrans(w, r, v, e)
+		s.translateNiuTransUpstream(w, r, v, e)
 	default:
 		v.Source, v.Target = strings.ToUpper(v.Source), strings.ToUpper(v.Target)
 		payload, _ := json.Marshal(v)
@@ -330,11 +341,10 @@ func (s *Server) translateEndpoint(w http.ResponseWriter, r *http.Request, v tra
 		}
 		if err != nil || json.Unmarshal(b, &result) != nil || (result.Code != 0 && result.Code != 200) || !bounded(result.Data, contract.OutputTextBytes) {
 			upstreamError(w, r, err)
-			return true
+			return
 		}
 		respond(w, 200, map[string]any{"code": 200, "data": result.Data})
 	}
-	return true
 }
 
 // 拆开批量时同时在途的上游请求数。一次批量只占一个 max_concurrent 名额,这里再限住它对上游的并发,
@@ -342,10 +352,10 @@ func (s *Server) translateEndpoint(w http.ResponseWriter, r *http.Request, v tra
 const translationSplitConcurrency = 4
 
 // 给一条一请求的翻译服务回答批量:把 texts 拆成单条,按 translationSplitConcurrency 并发走单条路径,
-// 再按原顺序拼回 {"code":200,"data":[…]}。客户端按页批量请求;拒绝批量会让它们退回逐词请求,一页十几个
+// 返回原序译文，由调用方按请求形状或分段关系组装。客户端按页批量请求;拒绝批量会让它们退回逐词请求,一页十几个
 // 并发请求正是 max_concurrent 会挡掉的那种(#3864)。任何一条失败,整次调用就按那条的状态返回:5xx 让
 // 外层改试下一个翻译服务,4xx 原样交给客户端,不会出现一半有译文一半没有的结果。
-func (s *Server) translateEach(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint) {
+func (s *Server) translateEach(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint) ([]string, bool) {
 	results := make([]*httptest.ResponseRecorder, len(v.Texts))
 	slots := make(chan struct{}, translationSplitConcurrency)
 	var wg sync.WaitGroup
@@ -359,7 +369,7 @@ func (s *Server) translateEach(w http.ResponseWriter, r *http.Request, v transla
 			// 每条单独计量:外层 translate 打在请求上的计量只能记一次上游调用,几条并发写它会互相覆盖。
 			// 这里的计量把外层的遮住,外层因此看不到上游调用、什么也不记,用量按条记下。
 			mr, call := metered(r, "translation", textChars([]string{text}))
-			s.translateEndpoint(rr, mr, translationRequest{Text: text, Source: v.Source, Target: v.Target}, e, nil)
+			s.translateSingle(rr, mr, translationRequest{Text: text, Source: v.Source, Target: v.Target}, e)
 			s.settleMeter(call, rr.Code < 500)
 			results[i] = rr
 		}()
@@ -372,11 +382,11 @@ func (s *Server) translateEach(w http.ResponseWriter, r *http.Request, v transla
 		}
 		if rr.Code != 200 || json.Unmarshal(rr.Body.Bytes(), &result) != nil {
 			copyResponse(w, rr)
-			return
+			return nil, false
 		}
 		texts[i] = result.Data
 	}
-	respondTranslations(w, v, texts)
+	return texts, true
 }
 
 func copyResponse(w http.ResponseWriter, r *httptest.ResponseRecorder) {

@@ -1,31 +1,9 @@
 package account
 
 import (
-	"context"
 	"errors"
-	"sync"
 	"testing"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-type sessionRevocationWriteTrace struct {
-	mu   sync.Mutex
-	rows int64
-}
-
-func (*sessionRevocationWriteTrace) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
-	return ctx
-}
-
-func (trace *sessionRevocationWriteTrace) TraceQueryEnd(_ context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
-	if data.CommandTag.Update() {
-		trace.mu.Lock()
-		trace.rows += data.CommandTag.RowsAffected()
-		trace.mu.Unlock()
-	}
-}
 
 func TestSessionRevocationsSkipAlreadyRevokedRows(t *testing.T) {
 	for _, operation := range []string{"logout_all", "logout_current", "refresh_replay"} {
@@ -55,36 +33,49 @@ FROM generate_series(1,4) n`, first.User.ID); err != nil {
 					t.Fatal(err)
 				}
 			}
-			trace := &sessionRevocationWriteTrace{}
-			cfg := db.pool.Config()
-			cfg.ConnConfig.Tracer = trace
-			pool, err := pgxpool.NewWithConfig(ctx, cfg)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer pool.Close()
-			store := &Store{pool: pool}
-			for attempt := range 2 {
-				trace.mu.Lock()
-				trace.rows = 0
-				trace.mu.Unlock()
-				if operation == "refresh_replay" {
-					if _, err := store.Refresh(ctx, first.RefreshToken); !errors.Is(err, ErrInvalid) {
-						t.Fatal("重放令牌未被拒绝", err)
-					}
-				} else if err := store.Logout(ctx, principal, operation == "logout_all"); err != nil {
+			// 对比实际行版本，兼容独立 UPDATE 和数据修改 CTE，并捕获重复写入。
+			versions := func() map[string]string {
+				t.Helper()
+				rows, err := db.pool.Query(ctx, `SELECT id,xmin::text FROM auth_sessions`)
+				if err != nil {
 					t.Fatal(err)
 				}
-				want := int64(0)
+				defer rows.Close()
+				result := map[string]string{}
+				for rows.Next() {
+					var id, version string
+					if err := rows.Scan(&id, &version); err != nil {
+						t.Fatal(err)
+					}
+					result[id] = version
+				}
+				if err := rows.Err(); err != nil {
+					t.Fatal(err)
+				}
+				return result
+			}
+			for attempt := range 2 {
+				before := versions()
+				if operation == "refresh_replay" {
+					if _, err := db.Refresh(ctx, first.RefreshToken); !errors.Is(err, ErrInvalid) {
+						t.Fatal("重放令牌未被拒绝", err)
+					}
+				} else if err := db.Logout(ctx, principal, operation == "logout_all"); err != nil {
+					t.Fatal(err)
+				}
+				want := 0
 				if attempt == 0 {
 					want = 1
 					if operation == "logout_all" {
 						want = 3
 					}
 				}
-				trace.mu.Lock()
-				updated := trace.rows
-				trace.mu.Unlock()
+				updated := 0
+				for id, version := range versions() {
+					if before[id] != version {
+						updated++
+					}
+				}
 				if updated != want {
 					t.Errorf("第 %d 次撤销更新了 %d 行，期望 %d 行", attempt+1, updated, want)
 				}

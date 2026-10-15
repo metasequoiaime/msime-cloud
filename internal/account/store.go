@@ -626,17 +626,21 @@ SELECT id,user_id,revoked,banned,expires_at>clock_timestamp() FROM locked`, hash
 	if errors.Is(e, pgx.ErrNoRows) {
 		// 刚被轮换的令牌再次出现，多半是并发刷新（官网 BFF、多个标签页）输掉了竞争：会话仍有效时返回 ErrRefreshSuperseded，不撤销。另一次刷新持有会话行锁时，上面的查询会等它提交，所以这里能读到它写入的 used_at。
 		var superseded bool
-		e = tx.QueryRow(ctx, "SELECT COALESCE(u.used_at>clock_timestamp()-interval '"+refreshSupersededGrace+"',false) AND NOT s.revoked AND s.expires_at>clock_timestamp() FROM auth_used_refresh u JOIN auth_sessions s ON s.id=u.session_id WHERE u.hash=$1", hash(token)).Scan(&superseded)
-		if e != nil && !errors.Is(e, pgx.ErrNoRows) {
+		// 物化一次宽限期判断，并在同一查询中撤销会话族；UPDATE 仍复查目标行的撤销状态，避免锁等待后重复写入。
+		e = tx.QueryRow(ctx, `WITH replay AS MATERIALIZED (
+ SELECT s.id,COALESCE(u.used_at>clock_timestamp()-interval '`+refreshSupersededGrace+`',false)
+ AND NOT s.revoked AND s.expires_at>clock_timestamp() AS superseded
+ FROM auth_used_refresh u JOIN auth_sessions s ON s.id=u.session_id WHERE u.hash=$1
+), revoked AS (
+ UPDATE auth_sessions s SET revoked=true FROM replay r
+ WHERE s.id=r.id AND NOT s.revoked AND NOT r.superseded
+)
+SELECT COALESCE((SELECT superseded FROM replay),false)`, hash(token)).Scan(&superseded)
+		if e != nil {
 			return Tokens{}, e
 		}
 		if superseded {
 			return Tokens{}, ErrRefreshSuperseded
-		}
-		// 已轮换令牌被重放时撤销该会话族，已签发的新 access_token 也立即失效。
-		_, e = tx.Exec(ctx, "UPDATE auth_sessions SET revoked=true WHERE id=(SELECT session_id FROM auth_used_refresh WHERE hash=$1) AND NOT revoked", hash(token))
-		if e != nil {
-			return Tokens{}, e
 		}
 		if e = tx.Commit(ctx); e != nil {
 			return Tokens{}, e

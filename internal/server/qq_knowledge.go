@@ -286,11 +286,44 @@ func qqSplitMarkdown(name, markdown string) []qqSection {
 	var sections []qqSection
 	var titles []string
 	var body strings.Builder
+	bodyRunes, bodyTruncated := 0, false
 	fenced, intro := false, false
+	appendBody := func(line string) {
+		if bodyTruncated {
+			return
+		}
+		if bodyRunes == 0 {
+			line = strings.TrimLeftFunc(line, unicode.IsSpace)
+		}
+		end := 0
+		if bodyRunes < qqSectionRunes {
+			end = len(line)
+			for i := range line {
+				if bodyRunes == qqSectionRunes {
+					end = i
+					break
+				}
+				bodyRunes++
+			}
+			body.WriteString(line[:end])
+		}
+		// 上限之后只有空白时，仍需按未截断正文去掉尾部空白。
+		if strings.TrimSpace(line[end:]) != "" {
+			bodyTruncated = true
+		}
+		if bodyRunes > 0 && bodyRunes < qqSectionRunes {
+			body.WriteByte('\n')
+			bodyRunes++
+		}
+	}
 	flush := func() {
 		capacity := body.Cap()
-		text := strings.TrimSpace(body.String())
+		text, truncated := body.String(), bodyTruncated
+		if !truncated {
+			text = strings.TrimSpace(text)
+		}
 		body.Reset()
+		bodyRunes, bodyTruncated = 0, false
 		title := strings.Join(titles, " > ")
 		if len(titles) == 0 && intro {
 			title = "概述"
@@ -298,14 +331,9 @@ func qqSplitMarkdown(name, markdown string) []qqSection {
 		if text == "" || title == "" {
 			return
 		}
-		if end := qqRuneEnd(text, qqSectionRunes); end < len(text) {
-			text = text[:end]
-			if utf8.ValidString(text) {
-				// 段落会进入缓存，复制前缀以释放完整正文占用的底层内存。
-				text = strings.Clone(text)
-			} else {
-				text = string([]rune(text))
-			}
+		if truncated && !utf8.ValidString(text) {
+			// 沿用截断正文的编码语义，未截断正文仍保留原始字节。
+			text = string([]rune(text))
 		} else if capacity > qqSectionRunes*utf8.UTFMax && len(text) < capacity/2 {
 			// 缓冲超过段落允许的最大字节数且大半为空白时，复制正文释放空白。
 			text = strings.Clone(text)
@@ -320,7 +348,11 @@ func qqSplitMarkdown(name, markdown string) []qqSection {
 		if strings.HasPrefix(strings.TrimSpace(line), "```") {
 			fenced = !fenced
 		}
-		if m := qqHeadingPattern.FindStringSubmatch(line); m != nil && !fenced {
+		var m []string
+		if !fenced && strings.HasPrefix(line, "#") {
+			m = qqHeadingPattern.FindStringSubmatch(line)
+		}
+		if m != nil {
 			flush()
 			level := len(m[1])
 			// 标题随段落进入缓存，复制捕获结果以免引用整份 Markdown 的底层内存。
@@ -337,8 +369,9 @@ func qqSplitMarkdown(name, markdown string) []qqSection {
 			titles = append(titles[:depth], heading)
 			continue
 		}
-		body.WriteString(line)
-		body.WriteByte('\n')
+		if len(titles) > 0 || intro {
+			appendBody(line)
+		}
 	}
 	flush()
 	for i := range sections {

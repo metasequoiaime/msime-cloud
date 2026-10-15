@@ -45,7 +45,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE msime_migrator IN SCHEMA public GRANT USAGE, S
 3. 使用 `Authorization: Bearer <access_token>` 调用在线输入接口及 `GET /v1/users/me`。访问令牌有效期 15 分钟，会话最长 30 天。
 4. `POST /v1/auth/refresh`：提交 refresh_token，原访问令牌和刷新令牌立即失效。客户端应串行刷新。旧刷新令牌在被轮换后 30 秒内再次提交时，视为并发刷新输掉了竞争（官网 BFF、多个浏览器标签页同时刷新），返回 409 `refresh_superseded`，会话不撤销，调用方应改用并发请求已经拿到的新令牌，而不是重新登录；超过 30 秒的重放仍会撤销该会话，返回 401，需重新登录。会话已退出或已撤销时，30 秒内的旧令牌同样返回 401。令牌应存于操作系统安全存储，不放入 URL。轮换时间记在 `auth_used_refresh.used_at`，加列之前已轮换的令牌按超过 30 秒处理。
 5. `POST /v1/auth/logout`：`{"all":false}` 退出当前会话，true 退出此用户所有会话。
-6. `PATCH /v1/users/me`：`{"display_name":"昵称"}`，最长 64 字符。在用户行锁内重新检查封禁；封禁先提交时返回 403 `account_banned`，原昵称保持不变，包括重置昵称的请求。
+6. `PATCH /v1/users/me`：`{"display_name":"昵称"}`，去除首尾空白后最长 64 字符，不能含 NUL，否则返回 400 `invalid_display_name`；空昵称重置为默认昵称。在用户行锁内重新检查封禁；封禁先提交时返回 403 `account_banned`，原昵称保持不变，包括重置昵称的请求。
 7. 绑定其他身份：创建挑战时使用 `purpose: link`，创建和验证均携带同一用户的访问令牌。绑定与 `DELETE /v1/users/me` 注销操作均要求最近 10 分钟内重新登录。注销删除用户、身份、会话及关联挑战。
 
 ## 我的设备

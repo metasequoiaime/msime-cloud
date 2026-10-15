@@ -278,18 +278,35 @@ func (a *Service) adminMeAction(w http.ResponseWriter, r *http.Request, _ string
 	out := map[string]any{"ok": true}
 	switch v.Action {
 	case "set_pref":
-		if _, err = tx.Exec(ctx, `INSERT INTO admin_preferences(email,prefs) VALUES($1,jsonb_build_object($2::text,$3::boolean)) ON CONFLICT(email) DO UPDATE SET prefs=admin_preferences.prefs||EXCLUDED.prefs`, access.Email, v.Key, *v.Value); err == nil {
-			err = auditTx(ctx, tx, "admin_pref_set", v.Key, map[string]any{"key": v.Key, "value": *v.Value})
+		detail, e := auditDetail(map[string]any{"key": v.Key, "value": *v.Value})
+		if e != nil {
+			err = e
+			break
 		}
+		err = tx.QueryRow(ctx, `WITH written AS (
+ INSERT INTO admin_preferences(email,prefs) VALUES($1,jsonb_build_object($2::text,$3::boolean))
+ ON CONFLICT(email) DO UPDATE SET prefs=admin_preferences.prefs||EXCLUDED.prefs
+ RETURNING 1
+), audited AS (
+ INSERT INTO admin_audit(action,target,actor,detail)
+ SELECT 'admin_pref_set',$2,$4,$5::jsonb FROM written
+ RETURNING 1
+)
+SELECT 1 FROM audited`, access.Email, v.Key, *v.Value, adminActor(ctx), detail).Scan(new(int))
 		out["key"], out["value"] = v.Key, *v.Value
 	case "revoke_session":
-		tag, e := tx.Exec(ctx, `DELETE FROM admin_sessions WHERE id=$1 AND email=$2`, v.ID, access.Email)
-		if err = e; err == nil && tag.RowsAffected() == 0 {
+		var affected int64
+		err = tx.QueryRow(ctx, `WITH revoked AS (
+ DELETE FROM admin_sessions WHERE id=$1 AND email=$2 RETURNING id
+), audited AS (
+ INSERT INTO admin_audit(action,target,actor,detail)
+ SELECT 'admin_session_revoke',$1,$3,'{}'::jsonb FROM revoked
+ RETURNING 1
+)
+SELECT count(*) FROM revoked`, v.ID, access.Email, adminActor(ctx)).Scan(&affected)
+		if err == nil && affected == 0 {
 			writeError(w, 404, "not_found")
 			return
-		}
-		if err == nil {
-			err = auditTx(ctx, tx, "admin_session_revoke", v.ID, nil)
 		}
 	case "regenerate_token":
 		var token string

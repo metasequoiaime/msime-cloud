@@ -2,36 +2,28 @@ package account
 
 import (
 	"context"
-	"sync"
+	"errors"
+	"strings"
 	"testing"
+	"time"
 
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-type adminSessionCreateTrace struct {
-	mu      sync.Mutex
-	queries int
-}
-
-func (t *adminSessionCreateTrace) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
-	t.mu.Lock()
-	t.queries++
-	t.mu.Unlock()
-	return ctx
-}
-
-func (*adminSessionCreateTrace) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
 func TestCreateAdminSessionChecksMembershipAndInsertsInOneQuery(t *testing.T) {
 	db := testStore(t)
 	ctx := t.Context()
-	email := "session-batch-" + randomToken()[:8] + "@example.test"
-	if _, err := db.pool.Exec(ctx, `INSERT INTO admin_members(email,role) VALUES($1,'reviewer')`, email); err != nil {
+	if _, err := db.pool.Exec(ctx, `ALTER TABLE admin_sessions ADD CONSTRAINT admin_session_create_test_reject CHECK(subject<>'synthetic-rejected') NOT VALID`); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if _, err := db.pool.Exec(context.Background(), `ALTER TABLE admin_sessions DROP CONSTRAINT IF EXISTS admin_session_create_test_reject`); err != nil {
+			t.Error(err)
+		}
+	})
 	cfg := db.pool.Config()
-	trace := &adminSessionCreateTrace{}
+	trace := &statementCancellation{}
 	cfg.ConnConfig.Tracer = trace
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
@@ -41,17 +33,118 @@ func TestCreateAdminSessionChecksMembershipAndInsertsInOneQuery(t *testing.T) {
 	if err = pool.Ping(ctx); err != nil {
 		t.Fatal(err)
 	}
-	trace.mu.Lock()
-	trace.queries = 0
-	trace.mu.Unlock()
-	_, err = (&Service{store: &Store{pool: pool}}).CreateAdminSession(ctx, AdminIdentity{Subject: "session-batch", Email: email, Name: "管理员"})
-	if err != nil {
-		t.Fatal(err)
+	a := &Service{store: &Store{pool: pool}}
+	for _, tc := range []struct {
+		name                       string
+		member, disabled, rejected bool
+	}{
+		{name: "没有成员记录的账号"},
+		{name: "已启用成员", member: true},
+		{name: "已禁用成员", member: true, disabled: true},
+		{name: "写入失败", rejected: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			email := "session-create-" + randomToken()[:8] + "@example.test"
+			if tc.member {
+				if _, err := db.pool.Exec(ctx, `INSERT INTO admin_members(email,role,enabled) VALUES($1,'reviewer',$2)`, email, !tc.disabled); err != nil {
+					t.Fatal(err)
+				}
+			}
+			identity := AdminIdentity{Subject: "synthetic-subject", Email: strings.ToUpper(email), Name: "管理员\x00", UserAgent: "synthetic-agent\n"}
+			if tc.rejected {
+				identity.Subject = "synthetic-rejected"
+			}
+			trace.mu.Lock()
+			trace.seen, trace.statements = 0, nil
+			trace.mu.Unlock()
+			token, err := a.CreateAdminSession(ctx, identity)
+			trace.mu.Lock()
+			calls := trace.seen
+			trace.mu.Unlock()
+			if calls != 1 {
+				t.Errorf("管理员会话创建用了 %d 次数据库调用，期望 1 次", calls)
+			}
+			if tc.rejected {
+				var failure *pgconn.PgError
+				if !errors.As(err, &failure) || failure.Code != "23514" || token != "" {
+					t.Fatal("写入失败未拒绝签发会话", err)
+				}
+			} else if tc.disabled {
+				if !errors.Is(err, ErrInvalid) || token != "" {
+					t.Fatal("禁用成员仍可签发会话", err)
+				}
+			} else if err != nil || len(token) != 64 {
+				t.Fatal("会话签发失败", err)
+			}
+			var count int
+			if err := db.pool.QueryRow(ctx, `SELECT count(*) FROM admin_sessions WHERE email=$1`, email).Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			if tc.disabled || tc.rejected {
+				if count != 0 {
+					t.Fatal("拒绝签发后仍留下了会话", count)
+				}
+			} else {
+				var valid bool
+				if err := db.pool.QueryRow(ctx, `SELECT token_hash<>$2 AND subject=$3 AND email=$4 AND name='管理员' AND user_agent='synthetic-agent' AND expires_at>clock_timestamp() FROM admin_sessions WHERE token_hash=$1`, hash(token), token, identity.Subject, email).Scan(&valid); err != nil || !valid || count != 1 {
+					t.Fatal("会话字段、哈希存储或有效期不正确", valid, count, err)
+				}
+			}
+		})
 	}
-	trace.mu.Lock()
-	queries := trace.queries
-	trace.mu.Unlock()
-	if queries != 3 {
-		t.Fatalf("管理员会话创建使用了 %d 条数据库语句，期望事务、合并检查写入、提交共 3 条", queries)
+}
+
+func TestCreateAdminSessionUsesMembershipCommittedDuringLockWait(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		name := "等待期间禁用"
+		if enabled {
+			name = "等待期间启用"
+		}
+		t.Run(name, func(t *testing.T) {
+			db := testStore(t)
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			email := "session-lock-" + randomToken()[:8] + "@example.test"
+			if _, err := db.pool.Exec(ctx, `INSERT INTO admin_members(email,role,enabled) VALUES($1,'reviewer',$2)`, email, !enabled); err != nil {
+				t.Fatal(err)
+			}
+			blocker, err := db.pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer blocker.Rollback(context.Background())
+			if _, err := blocker.Exec(ctx, `SELECT email FROM admin_members WHERE email=$1 FOR UPDATE`, email); err != nil {
+				t.Fatal(err)
+			}
+			type result struct {
+				token string
+				err   error
+			}
+			done := make(chan result, 1)
+			go func() {
+				token, err := (&Service{store: db}).CreateAdminSession(ctx, AdminIdentity{Subject: "synthetic-subject", Email: email})
+				done <- result{token, err}
+			}()
+			waitForAdminDatabaseLock(t, db, blocker.Conn().PgConn().PID())
+			if _, err := blocker.Exec(ctx, `UPDATE admin_members SET enabled=$2 WHERE email=$1`, email, enabled); err != nil {
+				t.Fatal(err)
+			}
+			if err := blocker.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			got := <-done
+			if enabled {
+				if got.err != nil || len(got.token) != 64 {
+					t.Fatal("未按锁后启用状态签发会话", got.err)
+				}
+			} else if !errors.Is(got.err, ErrInvalid) || got.token != "" {
+				t.Fatal("等待期间已禁用的成员仍可签发会话", got.err)
+			}
+			var count int
+			if err := db.pool.QueryRow(ctx, `SELECT count(*) FROM admin_sessions WHERE email=$1`, email).Scan(&count); err != nil || enabled && count != 1 || !enabled && count != 0 {
+				t.Fatal("会话记录与锁后成员状态不一致", count, err)
+			}
+		})
 	}
 }

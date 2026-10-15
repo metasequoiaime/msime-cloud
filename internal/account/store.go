@@ -477,7 +477,11 @@ func rateTx(ctx context.Context, q interface {
 
 // ReleaseRate 把 key 在当前窗口里的计数减一，最少减到 0；窗口已经过期的不动，下次 Rate 会重新开窗口。
 func (s *Store) ReleaseRate(ctx context.Context, key string) error {
-	_, e := s.pool.Exec(ctx, `UPDATE auth_rates SET count=greatest(count-1,0) WHERE key=$1 AND expires_at>now()`, key)
+	_, e := s.pool.Exec(ctx, `WITH locked AS MATERIALIZED (
+		SELECT key,expires_at FROM auth_rates WHERE key=$1 FOR UPDATE
+	)
+	UPDATE auth_rates a SET count=greatest(a.count-1,0)
+	FROM locked l WHERE a.key=l.key AND l.expires_at>clock_timestamp()`, key)
 	return e
 }
 
@@ -485,9 +489,9 @@ func (s *Store) ReleaseRate(ctx context.Context, key string) error {
 func (s *Store) RateUntil(ctx context.Context, key string, limit int, window time.Duration) (time.Duration, error) {
 	var n int
 	var expires, now time.Time
-	e := s.pool.QueryRow(ctx, `INSERT INTO auth_rates(key,count,expires_at) VALUES($1,1,now()+$2::interval)
- ON CONFLICT(key) DO UPDATE SET count=CASE WHEN auth_rates.expires_at<=now() THEN 1 ELSE least(auth_rates.count+1,$3+1) END,
- expires_at=CASE WHEN auth_rates.expires_at<=now() THEN excluded.expires_at ELSE auth_rates.expires_at END RETURNING count,expires_at,now()`, key, window.String(), limit).Scan(&n, &expires, &now)
+	e := s.pool.QueryRow(ctx, `INSERT INTO auth_rates(key,count,expires_at) VALUES($1,1,clock_timestamp()+$2::interval)
+	ON CONFLICT(key) DO UPDATE SET count=CASE WHEN auth_rates.expires_at<=clock_timestamp() THEN 1 ELSE least(auth_rates.count+1,$3+1) END,
+	 expires_at=CASE WHEN auth_rates.expires_at<=clock_timestamp() THEN excluded.expires_at ELSE auth_rates.expires_at END RETURNING count,expires_at,clock_timestamp()`, key, window.String(), limit).Scan(&n, &expires, &now)
 	if e != nil {
 		return 0, e
 	}

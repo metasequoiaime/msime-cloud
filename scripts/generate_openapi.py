@@ -123,7 +123,7 @@ shared_operations=[
  ('/v1/users/me/preferences','put','替换跨端偏好',preferences,preferences,200,'请求最多 1 MiB；revision 必须匹配当前版本，否则返回 409。成功后版本加一；未提交的字段被移除。字符串必须使用有效 UTF-8，Unicode 代理转义必须成对，且不能包含 NUL。number 字段按十进制精确限制在 0..1000000，展开指数后的小数位最多 16383 位；数值超出数据库存储范围或字符串编码无效时返回 400 invalid_preference_field。'),
  ('/v1/users/me/preferences/schema','get','查询可同步偏好字段',None,obj({'fields':obj({},strict=False),'maximum_bytes':{'type':'integer'},'update_mode':string(enum=['replace']),'revision_required':{'type':'boolean'}}),200,'返回允许同步的字段及类型；不包含本机配置值。'),
  ('/v1/users/me/clipboard','get','查询云端剪贴板',None,obj({'enabled':{'type':'boolean'},'key_id':dict(clipboard_key_id,nullable=True,description='当前密钥编号，还没有密钥时为 null。'),'items':{'type':'array','maxItems':50,'items':clipboard_item}}),200,'按最近添加顺序返回当前密钥加密的最多 50 条。服务端看不到明文，不支持搜索：查询参数 q 被忽略，由客户端解密后搜索。'),
- ('/v1/users/me/clipboard','post','添加云端剪贴板条目',obj({'ciphertext':clipboard_ciphertext,'key_id':clipboard_key_id,'dedup':string(pattern='^[0-9a-f]{64}$',description='hex(HMAC-SHA256(dedup_key, 明文))，用于去重。'),'text':string(description='只为识别旧版本客户端保留：非空时返回 400 clipboard_e2e_required。')},['ciphertext','key_id','dedup'],True),clipboard_item,200,'必须显式开启同步，否则返回 403 clipboard_sync_disabled。请求最多 32 KiB。带非空 text 返回 400 clipboard_e2e_required；密文或去重标签格式不对返回 400 invalid_clipboard_ciphertext；key_id 不是当前密钥（包括还没有密钥）返回 409 clipboard_key_conflict。dedup 相同的条目保留 ID、换成新密文并移动到最前；超过 50 条移除最旧条目。'),
+ ('/v1/users/me/clipboard','post','添加云端剪贴板条目',obj({'ciphertext':clipboard_ciphertext,'key_id':clipboard_key_id,'dedup':string(pattern='^[0-9a-f]{64}$',description='hex(HMAC-SHA256(dedup_key, 明文))，用于去重。'),'text':string(description='只为识别旧版本客户端保留：非空时返回 400 clipboard_e2e_required。')},['ciphertext','key_id','dedup'],True),clipboard_item,200,'必须显式开启同步，否则返回 403 clipboard_sync_disabled。请求最多 32 KiB。带非空 text 返回 400 clipboard_e2e_required；密文或去重标签格式不对返回 400 invalid_clipboard_ciphertext；key_id 不是当前密钥（包括还没有密钥）返回 409 clipboard_key_conflict。dedup 相同的条目保留 ID 和置顶状态、换成新密文并移动到最前；超过 50 条移除最旧的未置顶条目。已有 50 条且全部置顶时，上传新 dedup 返回 409 clipboard_limit，原条目不变；更新已有 dedup 仍可成功。'),
  ('/v1/users/me/clipboard','delete','清空云端剪贴板',None,None,204,'只清空当前用户云端记录，不操作客户端系统剪贴板。'),
  ('/v1/users/me/clipboard/{id}','delete','删除云端剪贴板条目',None,None,204,'条目不存在或属于其他用户均返回 404。'),
  ('/v1/users/me/clipboard/settings','put','开启或关闭云端剪贴板',obj({'enabled':{'type':'boolean'}},['enabled'],True),obj({'enabled':{'type':'boolean'}}),200,'默认关闭，必须由用户显式开启；关闭会删除该用户全部云端剪贴板记录，以及剪贴板密钥、封装和全部设备登记。请求最多 16 KiB。'),
@@ -137,7 +137,7 @@ for path,method,title,body,response,status,description in shared_operations:
     if body: op['requestBody']={'required':True,'content':{'application/json':{'schema':body}}}
     if '{id}' in path: op['parameters']=[{'name':'id','in':'path','required':True,'schema':string()}]
     if method=='get' and path.endswith('/clipboard'): op['parameters']=[{'name':'q','in':'query','schema':string(),'description':'已忽略，保留只为兼容旧客户端。'}]
-    if method=='post' and path.endswith('/clipboard'): responses['409']=dict(responses['409'],description='clipboard_key_conflict：key_id 不是当前密钥')
+    if method=='post' and path.endswith('/clipboard'): responses['409']=dict(responses['409'],description='clipboard_key_conflict：key_id 不是当前密钥；clipboard_limit：已有 50 条且全部置顶，不能新增条目')
     paths.setdefault(path,{})[method]=op
 result['info']['description']=result['info']['description'].replace('服务不保存输入和音频。','在线输入接口不持久保存输入和音频；小牛媒体上传仅在请求期间使用私有临时文件；用户同步接口按用户操作保存偏好及显式上传的数据。')
 # 无状态 Engine 查询；算法及发布词库由原生公共库提供。

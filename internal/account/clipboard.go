@@ -10,6 +10,7 @@ import (
 )
 
 var errClipboardDisabled = errors.New("clipboard_sync_disabled")
+var errClipboardLimit = errors.New("clipboard_limit")
 var errDataNotFound = errors.New("user_data_not_found")
 
 // ClipboardItem 是云剪贴板里的一条密文条目。服务端看不到明文，`Ciphertext` 由客户端用 `KeyID` 对应的剪贴板密钥加密。
@@ -163,7 +164,7 @@ FROM user_clipboard_settings cs WHERE cs.user_id=$1`, user, session).Scan(&enabl
 	return enabled, key, device, err
 }
 
-// AddClipboard 写入一条密文条目并记下写入设备（会话的设备名）。云剪贴板关闭时返回 errClipboardDisabled，`KeyID` 不是当前密钥（包括还没有密钥）时返回 errClipboardKeyConflict。`Dedup` 相同的条目只保留一条，移到最前并换成新的密文和设备名。
+// AddClipboard 写入一条密文条目并记下写入设备（会话的设备名）。云剪贴板关闭时返回 errClipboardDisabled，`KeyID` 不是当前密钥（包括还没有密钥）时返回 errClipboardKeyConflict。`Dedup` 相同的条目只保留一条，移到最前并换成新的密文和设备名；五十条全部置顶时，新增条目返回 errClipboardLimit。
 func (s *Store) AddClipboard(ctx context.Context, user, device string, v ClipboardUpload) (ClipboardItem, error) {
 	tx, e := s.userDataTransaction(ctx, user)
 	if e != nil {
@@ -208,7 +209,11 @@ func (s *Store) addClipboardTx(ctx context.Context, tx pgx.Tx, user, device stri
 	batch := &pgx.Batch{}
 	batch.Queue("DELETE FROM user_clipboard WHERE user_id=$1 AND (ciphertext='' OR key_id<>$2)", user, v.KeyID)
 	var item ClipboardItem
-	batch.Queue(`INSERT INTO user_clipboard(id,user_id,text,text_hash,ciphertext,key_id,sequence,device) VALUES($1,$2,'',$3,$4,$5,(SELECT COALESCE(max(sequence),0)+1 FROM user_clipboard WHERE user_id=$2),$6)
+	// 在同一用户行锁内判断容量，全部置顶时只允许更新已有条目，避免新增条目立即被裁剪却返回成功。
+	batch.Queue(`INSERT INTO user_clipboard(id,user_id,text,text_hash,ciphertext,key_id,sequence,device)
+ SELECT $1,$2,'',$3,$4,$5,(SELECT COALESCE(max(sequence),0)+1 FROM user_clipboard WHERE user_id=$2),$6
+ WHERE (SELECT count(*) FROM user_clipboard WHERE user_id=$2 AND pinned)<50
+ OR EXISTS(SELECT 1 FROM user_clipboard WHERE user_id=$2 AND text_hash=$3)
  ON CONFLICT(user_id,text_hash) DO UPDATE SET sequence=excluded.sequence,updated_at=now(),device=excluded.device,ciphertext=excluded.ciphertext,key_id=excluded.key_id
  RETURNING id,ciphertext,key_id,updated_at,pinned,device`, randomToken(), user, v.Dedup, v.Ciphertext, v.KeyID, device).QueryRow(func(row pgx.Row) error {
 		return row.Scan(&item.ID, &item.Ciphertext, &item.KeyID, &item.UpdatedAt, &item.Pinned, &item.Device)
@@ -217,6 +222,9 @@ func (s *Store) addClipboardTx(ctx context.Context, tx pgx.Tx, user, device stri
  (SELECT id FROM user_clipboard WHERE user_id=$1 ORDER BY pinned DESC,sequence DESC LIMIT 50)`, user)
 	// 批量发送保持先清旧密钥、再写入、最后裁剪容量的顺序，各条语句可见前面语句的结果。
 	if err := tx.SendBatch(ctx, batch).Close(); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ClipboardItem{}, errClipboardLimit
+		}
 		return item, err
 	}
 	return item, tx.Commit(ctx)

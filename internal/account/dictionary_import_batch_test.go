@@ -46,8 +46,8 @@ func TestImportDictionaryBatchQueriesAndChanges(t *testing.T) {
 	trace.mu.Lock()
 	queries := trace.seen
 	trace.mu.Unlock()
-	if queries != 6 {
-		t.Fatalf("500 条导入用了 %d 次数据库调用，期望 6 次（含事务和用户锁）", queries)
+	if queries != 5 {
+		t.Fatalf("500 条导入用了 %d 次数据库调用，期望 5 次（含事务和用户锁）", queries)
 	}
 	t.Logf("500 条导入：%d 次数据库调用（含事务和用户锁）", queries)
 	changes, more, err := db.DictionaryChanges(ctx, user, 1, 501)
@@ -121,6 +121,9 @@ SELECT $1||'-'||n,$1,'quick','code-'||n,'合成词-'||n,1,0 FROM generate_series
 	if _, err := db.ImportDictionary(ctx, user, "quick", pack[1:]); !errors.Is(err, errDictionaryLimit) {
 		t.Fatal(err)
 	}
+	if _, err := db.ImportDictionary(ctx, user, "quick", pack); !errors.Is(err, errDictionaryDuplicate) {
+		t.Fatal("容量已满时仍应优先返回重复词条错误", err)
+	}
 	var count int
 	if err := db.pool.QueryRow(ctx, `SELECT count(*) FROM user_dictionary_entries WHERE user_id=$1`, user).Scan(&count); err != nil || count != 100000 {
 		t.Fatal(count, err)
@@ -138,6 +141,9 @@ SELECT $1||'-'||n,$1,'quick','code-'||n,'合成词-'||n,1,0 FROM generate_series
 	}
 	if _, err := db.ImportDictionary(ctx, other, "quick", pack[1:]); err == nil {
 		t.Fatal("最大版本仍然导入新词")
+	}
+	if _, err := db.ImportDictionary(ctx, other, "quick", pack); !errors.Is(err, errDictionaryDuplicate) {
+		t.Fatal("版本已满时仍应优先返回重复词条错误", err)
 	}
 	if err := db.pool.QueryRow(ctx, `SELECT count(*) FROM user_dictionary_entries WHERE user_id=$1`, other).Scan(&count); err != nil || count != 1 {
 		t.Fatal("溢出导入留下词条", count, err)

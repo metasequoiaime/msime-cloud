@@ -505,8 +505,40 @@ func qqLineMarkerEnd(line string) int {
 // qqPlainTextReplacer 并发复用固定的行内标记规则，避免每次转换都重建替换器。
 var qqPlainTextReplacer = strings.NewReplacer("**", "", "__", "", "`", "")
 
+// qqPlainTextCanReuse 判断正文是否已经是 qqPlainText 的输出格式，可以直接复用输入字符串。
+func qqPlainTextCanReuse(md string) bool {
+	if md == "" {
+		return true
+	}
+	// 这些字面量可能触发行内 Markdown、链接或裸链接转换；保守地交给完整转换器处理。
+	if strings.Contains(md, "](") || strings.Contains(md, "://") || strings.Contains(md, "**") || strings.Contains(md, "__") || strings.ContainsRune(md, '`') {
+		return false
+	}
+	if md[0] == '|' || qqLineMarkerEnd(md) != 0 {
+		return false
+	}
+	previousSpace := false
+	for offset := 0; offset < len(md); {
+		r, size := utf8.DecodeRuneInString(md[offset:])
+		if unicode.IsSpace(r) {
+			// 输出只保留词间的单个 ASCII 空格。
+			if r != ' ' || previousSpace || offset == 0 || offset+size == len(md) {
+				return false
+			}
+			previousSpace = true
+		} else {
+			previousSpace = false
+		}
+		offset += size
+	}
+	return true
+}
+
 // qqPlainText 把 GitHub 上的 Markdown（维护者评论、issue 正文）变成一行纯文本，直接发到群里或交给模型都不再带 **、反引号、## 和半截链接：去掉代码块，链接只留文字，删掉裸链接和加粗、代码的符号，逐行去掉行首的标题、引用、列表标记，丢掉表格行，最后合并空白。图片和 HTML 标签由调用方先用 qqStripImagesAndHTML 去掉。
 func qqPlainText(md string) string {
+	if qqPlainTextCanReuse(md) {
+		return md
+	}
 	text := md
 	if strings.Contains(md, "```") {
 		var body strings.Builder

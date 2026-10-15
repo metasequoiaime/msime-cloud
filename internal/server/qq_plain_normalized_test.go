@@ -5,6 +5,27 @@ import (
 	"testing"
 )
 
+func TestQQPlainTextReuseCandidate(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  bool
+	}{
+		{"普通正文", true},
+		{"第一词 第二词", true},
+		{"", true},
+		{" 需要裁剪", false},
+		{"有  两个空格", false},
+		{"甲\n乙", false},
+		{"**加粗**", false},
+		{"[链接](https://example.test)", false},
+		{"甲\u3000乙", false},
+	} {
+		if got := qqPlainTextCanReuse(tc.input); got != tc.want {
+			t.Errorf("qqPlainTextCanReuse(%q) = %v，预期 %v", tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestQQPlainTextNormalizedKeepsRules(t *testing.T) {
 	for _, tc := range []struct{ name, input, want string }{
 		{"plain", "甲 乙", "甲 乙"},

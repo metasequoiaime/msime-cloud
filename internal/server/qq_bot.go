@@ -1334,7 +1334,81 @@ func qqFeedbackText(content string) string {
 	if !qqFeedbackMarkupCandidate(content) {
 		return strings.TrimSpace(content)
 	}
-	return strings.TrimSpace(qqMarkupPattern.ReplaceAllString(content, ""))
+	var out strings.Builder
+	start := 0
+	for search := 0; search < len(content); {
+		i := strings.IndexByte(content[search:], '<')
+		if i < 0 {
+			break
+		}
+		i += search
+		end := qqFeedbackMarkupEnd(content, i)
+		if end < 0 {
+			search = i + 1
+			continue
+		}
+		if start == 0 {
+			out.Grow(len(content))
+		}
+		out.WriteString(content[start:i])
+		start, search = end, end
+	}
+	if start == 0 {
+		return strings.TrimSpace(content)
+	}
+	out.WriteString(content[start:])
+	return strings.TrimSpace(out.String())
+}
+
+// qqFeedbackMarkupEnd 返回 qqMarkupPattern 在 start 处的匹配终点；普通尖括号不匹配。
+func qqFeedbackMarkupEnd(content string, start int) int {
+	rest := content[start:]
+	for _, prefix := range []string{"<@", "<#", "<emoji:"} {
+		if !strings.HasPrefix(rest, prefix) {
+			continue
+		}
+		pos := start + len(prefix)
+		count := 0
+		for pos < len(content) && content[pos] != '>' && content[pos] != '<' && content[pos] != ' ' && content[pos] != '\t' && content[pos] != '\n' && content[pos] != '\r' && content[pos] != '\f' {
+			_, size := utf8.DecodeRuneInString(content[pos:])
+			pos += size
+			count++
+		}
+		if count >= 1 && count <= 200 && pos < len(content) && content[pos] == '>' {
+			return pos + 1
+		}
+		return -1
+	}
+	for _, prefix := range []string{"<qqbot-at-user", "<qqbot-at-everyone"} {
+		if !strings.HasPrefix(rest, prefix) {
+			continue
+		}
+		pos := start + len(prefix)
+		count := 0
+		for pos < len(content) && content[pos] != '>' && content[pos] != '<' && content[pos] != '\n' {
+			_, size := utf8.DecodeRuneInString(content[pos:])
+			pos += size
+			count++
+		}
+		if pos < len(content) && content[pos] == '>' && count <= 180 {
+			return pos + 1
+		}
+		return -1
+	}
+	const prefix = "<faceType="
+	if strings.HasPrefix(rest, prefix) {
+		pos := start + len(prefix)
+		count := 0
+		for pos < len(content) && content[pos] != '>' && content[pos] != '<' && content[pos] != '\n' {
+			_, size := utf8.DecodeRuneInString(content[pos:])
+			pos += size
+			count++
+		}
+		if pos < len(content) && content[pos] == '>' && count <= 191 {
+			return pos + 1
+		}
+	}
+	return -1
 }
 
 // qqFeedbackMarkupCandidate 判断消息是否可能含有尖括号标签；普通消息跳过标签正则扫描。

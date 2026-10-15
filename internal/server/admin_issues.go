@@ -534,7 +534,7 @@ func (s *Server) rememberIssues(ctx context.Context, items []issueRow, openOnly,
 		}
 	}
 	m.mu.Unlock()
-	// An issue is marked seen before it is announced, so the announcement must not die with the request that happened to list it.
+	// 通知不随触发轮询的请求取消；写入失败时清除预占标记，让后续轮询重试。
 	ctx = context.WithoutCancel(ctx)
 	for _, row := range announce {
 		title := "#" + strconv.Itoa(row.Number) + " " + row.Title
@@ -543,6 +543,9 @@ func (s *Server) rememberIssues(ctx context.Context, items []issueRow, openOnly,
 		}
 		key := issueRef{Repo: row.Repo, N: row.Number}.key()
 		if err := s.accounts.NotifyOnce(ctx, account.Notification{Kind: account.NotifyIssue, Title: title, TargetPage: "issues", TargetID: key}); err != nil {
+			m.mu.Lock()
+			delete(m.seen, key)
+			m.mu.Unlock()
 			slog.Error("issues: notification failed", "issue", key, "reason", err.Error())
 		}
 	}

@@ -548,6 +548,68 @@ def check_profile_rollback(context, base: str, problems: list[str]):
             page.close()
 
 
+def check_dictionary_editor_actions(context, base: str, problems: list[str]):
+    # 保存必须包含仍在输入的单元格，校验失败不能提交旧草稿；放弃也必须清理输入缓冲。
+    for formula in (False, True):
+        for keyboard in (False, True):
+            page = context.new_page()
+            page.on("pageerror", lambda error: problems.append(f"词库当前输入测试页面异常：{error}"))
+            pending = []
+            page.route("**/api/auth/session", lambda route: route.fulfill(json=FIXTURES["/api/auth/session"]))
+            page.route("**/api/dictionary/changes", lambda route: pending.append(route))
+            try:
+                page.goto(base + "/dictionary")
+                page.get_by_role("radio", name=re.compile("专题词包")).click()
+                table = page.get_by_role("grid", name="词条电子表格")
+                weight = table.locator('[data-cell="C1"]')
+                weight.click()
+                weight.get_by_role("textbox").fill("250")
+                weight.get_by_role("textbox").press("Enter")
+                word = table.locator('[data-cell="A1"]')
+                word.click()
+                editor = page.get_by_role("textbox", name="单元格内容", exact=True) if formula else word.get_by_role("textbox")
+                oversized = "x" * 1001
+                editor.fill(oversized)
+
+                def save():
+                    if keyboard:
+                        editor.press("Control+s")
+                    else:
+                        page.get_by_role("button", name="保存变更（1）", exact=True).click()
+
+                save()
+                expect(page.get_by_role("alert")).to_contain_text("单元格最多 1000 字节")
+                expect(editor).to_have_value(oversized)
+                expect(table).to_have_attribute("aria-readonly", "false")
+                assert not pending, "当前输入校验失败时不能只提交此前暂存的草稿"
+                expect(page.get_by_text("已创建 PR #42。", exact=False)).to_have_count(0)
+                editor.fill("修正词条")
+                with page.expect_request("**/api/dictionary/changes") as sent:
+                    save()
+                assert sent.value.post_data_json["changes"] == [{"operation": "replace", "line": 1, "columns": ["修正词条", "shi'li", "250"]}]
+                pending.pop().fulfill(json=FIXTURES["/api/dictionary/changes"])
+                expect(page.get_by_text("已创建 PR #42。", exact=False)).to_be_visible()
+                expect(page.get_by_text("待保存变更", exact=False)).to_have_count(0)
+                word.click()
+                editor = page.get_by_role("textbox", name="单元格内容", exact=True) if formula else word.get_by_role("textbox")
+                editor.fill(oversized)
+                page.get_by_role("button", name="放弃草稿", exact=True).click()
+                expect(editor).to_have_value("示例")
+                expect(page.get_by_role("alert")).to_have_count(0)
+                expect(page.get_by_text("待保存变更", exact=False)).to_have_count(0)
+                expect(page.get_by_role("button", name="保存变更", exact=True)).to_be_disabled()
+                page.get_by_role("radio", name=re.compile("自定义词库")).click()
+                expect(page.get_by_text("当前文件有待提交变更", exact=False)).to_have_count(0)
+                expect(page.get_by_role("grid", name="词条电子表格").locator('[data-cell="A1"]').get_by_role("textbox")).to_have_value("水杉")
+                assert not pending, "放弃输入不应发送保存请求"
+                problems.extend(f"词库当前输入测试 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+            finally:
+                for route in pending:
+                    route.abort()
+                page.unroute_all(behavior="ignoreErrors")
+                page.close()
+
+
 def check_preferences_pending(context, base: str, problems: list[str]):
     # 同一资料缓存不能并发乐观更新；切走再返回也要等原请求及确认刷新完成。
     for switching in (False, True):
@@ -1566,6 +1628,7 @@ def main() -> int:
                 check_auth_logout(context, base, problems)
                 check_auth_logout_flush(context, base, problems)
                 check_profile_rollback(context, base, problems)
+                check_dictionary_editor_actions(context, base, problems)
                 check_preferences_pending(context, base, problems)
                 check_notice_pending(context, base, problems)
                 check_notice_pending_focus(context, base, problems)

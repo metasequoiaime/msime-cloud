@@ -775,6 +775,58 @@ def check_issue_reply_draft_switch(context, base: str, problems: list[str]):
                 page.close()
 
 
+def check_release_pending(context, base: str, problems: list[str]):
+    # 挂起发布操作，提交期间锁定正文；失败后保留原文并允许修改后重试。
+    cases = (
+        ("trigger", "版本号", "触发发布", "**/api/releases/windows/trigger", "version", "v0.5.5", "v0.5.6"),
+        ("notes", "发布说明", "保存说明", "**/api/releases/windows/windows-v0.5.4/notes", "body", "### 修复\n- 已提交内容", "### 修复\n- 修改后重试"),
+    )
+    for kind, label, button, endpoint, key, draft, retry in cases:
+        for status in (200, 500):
+            page = context.new_page()
+            page.on("pageerror", lambda error: problems.append(f"发布等待请求测试页面异常：{error}"))
+            pending = []
+            page.route("**/api/auth/session", lambda route: route.fulfill(json=FIXTURES["/api/auth/session"]))
+            page.route("**/api/shell", lambda route: route.fulfill(json={**FIXTURES["/api/shell"], "me": {**FIXTURES["/api/shell"]["me"], "permissions": ["trigger_release"]}}))
+            page.route(endpoint, lambda route: pending.append(route))
+            try:
+                page.goto(base + "/release?platform=windows")
+                page.get_by_role("button", name="触发发布" if kind == "trigger" else "编辑说明", exact=True).click()
+                dialog = page.get_by_role("dialog")
+                field = dialog.get_by_role("textbox", name=label, exact=True)
+                field.fill(draft)
+                with page.expect_request(lambda request: request.method == "POST") as sent:
+                    dialog.get_by_role("button", name=button, exact=True).click()
+                assert sent.value.post_data_json == {key: draft}
+                expect(field).to_be_disabled()
+                expect(field).to_have_value(draft)
+                expect(dialog.get_by_role("button", name="提交中…", exact=True)).to_be_disabled()
+                expect(dialog.get_by_role("button", name="取消", exact=True)).to_be_disabled()
+                page.keyboard.press("Escape")
+                expect(dialog).to_be_visible()
+                pending.pop().fulfill(status=status, json={"ok": True} if status == 200 else {"error": "admin_auth_unavailable"})
+                if status != 200:
+                    expect(page.get_by_text(re.compile(r"^操作失败："))).to_be_visible()
+                    expect(field).to_be_enabled()
+                    expect(field).to_have_value(draft)
+                    expect(dialog.get_by_role("button", name="取消", exact=True)).to_be_enabled()
+                    field.fill(retry)
+                    with page.expect_request(lambda request: request.method == "POST") as resent:
+                        dialog.get_by_role("button", name=button, exact=True).click()
+                    assert resent.value.post_data_json == {key: retry}
+                    expect(field).to_be_disabled()
+                    pending.pop().fulfill(json={"ok": True})
+                expect(dialog).to_have_count(0)
+                success = f"Windows {retry if status != 200 else draft} 发布流水线已触发" if kind == "trigger" else "Windows v0.5.4 的发布说明已更新"
+                expect(page.get_by_text(success, exact=True)).to_be_visible()
+                problems.extend(f"发布等待请求测试 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+            finally:
+                for route in pending:
+                    route.abort()
+                page.unroute_all(behavior="ignoreErrors")
+                page.close()
+
+
 def main() -> int:
     if not (DIST / "index.html").is_file():
         raise SystemExit("admin-web/dist is missing; run pnpm build first")
@@ -1373,6 +1425,7 @@ def main() -> int:
                 check_notice_pending(context, base, problems)
                 check_notice_pending_focus(context, base, problems)
                 check_mirror_pending(context, base, problems)
+                check_release_pending(context, base, problems)
                 check_pending_form_drafts(context, base, problems)
                 check_issue_reply_draft_switch(context, base, problems)
             finally:

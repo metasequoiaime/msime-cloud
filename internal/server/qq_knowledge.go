@@ -528,7 +528,10 @@ func qqPlainText(md string) string {
 	if strings.Contains(text, "](") {
 		text = qqMarkdownLink.ReplaceAllString(text, "$1")
 	}
-	text = qqStripLinks(text)
+	// 这里仅删除裸链接；末尾的逐行裁剪和字段合并会统一处理空白，避免提前复制全文。
+	if strings.Contains(text, "://") {
+		text = qqLinkPattern.ReplaceAllString(text, "")
+	}
 	if strings.Contains(text, "**") || strings.Contains(text, "__") || strings.ContainsRune(text, '`') {
 		text = qqPlainTextReplacer.Replace(text)
 	}

@@ -645,6 +645,11 @@ func (s *Server) editReleaseNotes(w http.ResponseWriter, r *http.Request, gh *gi
 		return
 	}
 	ctx := r.Context()
+	unlock, ok := s.lockReleaseWrite(w, ctx, p)
+	if !ok {
+		return
+	}
+	defer unlock()
 	releases, i, ok := findRelease(w, ctx, gh, p, tag)
 	if !ok {
 		return
@@ -658,6 +663,8 @@ func (s *Server) editReleaseNotes(w http.ResponseWriter, r *http.Request, gh *gi
 		return
 	}
 	gh.Invalidate("/repos/" + p.Repo + "/")
+	// GitHub 读写已经完成，先释放锁占用的连接，再写入数据库审计。
+	unlock()
 	s.releaseAudit(ctx, "release_notes", tag, map[string]any{"platform": p.Name, "version": releaseVersion(p, tag)})
 	respond(w, 200, map[string]any{"ok": true})
 }
@@ -665,6 +672,11 @@ func (s *Server) editReleaseNotes(w http.ResponseWriter, r *http.Request, gh *gi
 // withdrawRelease serves POST /api/releases/{platform}/{tag}/withdraw: the release becomes a prerelease with the withdrawal block on top, and when it was the repository's latest release the platform's previous published release becomes latest again so the download page falls back to it.
 func (s *Server) withdrawRelease(w http.ResponseWriter, r *http.Request, gh *githubapp.Client, p AdminPlatformConfig, tag string) {
 	ctx := r.Context()
+	unlock, ok := s.lockReleaseWrite(w, ctx, p)
+	if !ok {
+		return
+	}
+	defer unlock()
 	releases, i, ok := findRelease(w, ctx, gh, p, tag)
 	if !ok {
 		return
@@ -719,9 +731,25 @@ func (s *Server) withdrawRelease(w http.ResponseWriter, r *http.Request, gh *git
 			gh.Invalidate("/repos/" + p.Repo + "/")
 		}
 	}
+	unlock()
 	s.releaseAudit(ctx, "release_withdraw", tag, detail)
 	s.releaseNotify(ctx, p, p.Name+" "+releaseVersion(p, tag)+" 已撤回", p.ID)
 	respond(w, 200, result)
+}
+
+// lockReleaseWrite 在读取发布状态之前锁定仓库，覆盖正文修改和 latest 恢复，避免多副本或共享仓库的平台互相覆盖。
+func (s *Server) lockReleaseWrite(w http.ResponseWriter, ctx context.Context, p AdminPlatformConfig) (func(), bool) {
+	unlock, err := s.accounts.WaitLock(ctx, "admin-releases:"+strings.ToLower(p.Repo), 0)
+	if errors.Is(err, account.ErrLockBusy) {
+		w.Header().Set("Retry-After", "1")
+		fail(w, 503, "server_busy")
+		return nil, false
+	}
+	if err != nil {
+		fail(w, 503, "auth_unavailable")
+		return nil, false
+	}
+	return sync.OnceFunc(unlock), true
 }
 
 func (s *Server) patchRelease(w http.ResponseWriter, ctx context.Context, gh *githubapp.Client, p AdminPlatformConfig, id int64, patch map[string]any) bool {

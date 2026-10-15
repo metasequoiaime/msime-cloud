@@ -141,6 +141,29 @@ func TestSensitiveRegexLiteralPrefixSafety(t *testing.T) {
 	}
 }
 
+func TestSensitiveRegexLiteralPrefixPreservesUnicodeCaseFolding(t *testing.T) {
+	for _, tc := range []struct {
+		pattern, text string
+	}{
+		{"σ", "ς"},
+		{"s", "ſ"},
+	} {
+		re, err := compileSensitiveRegex(tc.pattern)
+		if err != nil {
+			t.Fatal(err)
+		}
+		a := cachedSensitiveService([]sensitiveWord{{
+			hit:     SensitiveHit{WordID: 1, Pattern: tc.pattern},
+			re:      re,
+			literal: sensitiveRegexLiteral(tc.pattern),
+		}})
+		hits, err := a.SensitivePreview().Match(t.Context(), tc.text)
+		if err != nil || len(hits) != 1 {
+			t.Fatalf("正则 %q 应匹配 %q，得到 %v/%v（字面量 %q）", tc.pattern, tc.text, hits, err, sensitiveRegexLiteral(tc.pattern))
+		}
+	}
+}
+
 func BenchmarkSensitiveMatcherNormalization(b *testing.B) {
 	text := strings.Repeat("正常内容 ABC　\u200b", 10000)
 	for _, kind := range []string{"plain", "regex", "mixed"} {

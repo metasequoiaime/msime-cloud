@@ -288,12 +288,12 @@ func qqSplitMarkdown(name, markdown string) []qqSection {
 	var body strings.Builder
 	bodyRunes, bodyTruncated := 0, false
 	fenced, intro := false, false
-	appendBody := func(line string) {
+	appendBody := func(line, leading string) {
 		if bodyTruncated {
 			return
 		}
 		if bodyRunes == 0 {
-			line = strings.TrimLeftFunc(line, unicode.IsSpace)
+			line = leading
 		}
 		end := 0
 		if bodyRunes < qqSectionRunes {
@@ -345,7 +345,9 @@ func qqSplitMarkdown(name, markdown string) []qqSection {
 			// 只处理有 LF 的行，保留文件末尾未组成 CRLF 的孤立回车。
 			line = strings.TrimSuffix(before, "\r")
 		}
-		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+		// 代码块检测与段落开头裁剪复用前导空白扫描，后续正文仍保留缩进。
+		leading := strings.TrimLeftFunc(line, unicode.IsSpace)
+		if strings.HasPrefix(leading, "```") {
 			fenced = !fenced
 		}
 		var m []string
@@ -370,7 +372,7 @@ func qqSplitMarkdown(name, markdown string) []qqSection {
 			continue
 		}
 		if len(titles) > 0 || intro {
-			appendBody(line)
+			appendBody(line, leading)
 		}
 	}
 	flush()

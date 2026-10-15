@@ -227,9 +227,6 @@ var qqPlatformList = func() string {
 	return strings.Join(platforms, "、")
 }()
 
-// qqMarkdownNoise 匹配列表标签里需要清理的 Markdown 符号和链接地址。
-var qqMarkdownNoise = regexp.MustCompile("\\]\\([^)]*\\)|[`*_>#\\[|]")
-
 // qqSnippet 是目录里段落标题后面的摘要：有加粗词时列出加粗词；没有加粗词、但有两个以上「- 标签：说明」这样的列表项时列出标签（见 qqListLabels）；都没有时取正文开头，最多 qqSnippetRunes 字。
 func qqSnippet(text string) string {
 	if !qqSnippetNeedsStructuredScan(text) {
@@ -290,7 +287,7 @@ func qqBoldSnippetPrefix(text string) (string, bool) {
 	return out.String(), count > 0
 }
 
-// qqSnippetNormalizedPrefix 合并词间空白，按需沿用 qqMarkdownNoise 的清理规则，只构建摘要所需的前缀；多留一字供 qqTruncate 判断省略号。
+// qqSnippetNormalizedPrefix 合并词间空白，按需清理 Markdown，只构建摘要所需的前缀；多留一字供 qqTruncate 判断省略号。
 func qqSnippetNormalizedPrefix(text string, stripMarkdown bool) string {
 	const limit = qqSnippetRunes + 1
 	var out strings.Builder
@@ -350,6 +347,7 @@ const qqListLabelRunes = 12
 func qqListLabels(text string) []string {
 	var labels []string
 	summaryRunes := 0
+	var scratch [qqListLabelRunes * utf8.UTFMax]byte
 	for line := range strings.SplitSeq(text, "\n") {
 		line = strings.TrimSpace(line)
 		rest, ok := strings.CutPrefix(line, "- ")
@@ -364,20 +362,63 @@ func qqListLabels(text string) []string {
 		if i < 0 || i >= qqListLabelRunes || (i+1 < len(runes) && runes[i+1] == '/') {
 			continue
 		}
-		label := strings.Join(strings.Fields(qqMarkdownNoise.ReplaceAllString(string(runes[:i]), " ")), " ")
-		if label != "" && !slices.Contains(labels, label) {
-			if len(labels) > 0 {
-				summaryRunes++
-			}
-			labels = append(labels, label)
-			summaryRunes += utf8.RuneCountInString(label)
-			// 连同分隔符超过摘要长度后，后续标签不会影响截断结果。
-			if summaryRunes > qqSnippetRunes {
+		labelBytes := qqNormalizeListLabel(runes[:i], scratch[:0])
+		if len(labelBytes) == 0 {
+			continue
+		}
+		duplicate := false
+		// 直接在比较表达式中转换，避免为重复标签分配临时字符串。
+		for _, label := range labels {
+			if label == string(labelBytes) {
+				duplicate = true
 				break
 			}
 		}
+		if duplicate {
+			continue
+		}
+		if len(labels) > 0 {
+			summaryRunes++
+		}
+		// 只为首次保留的标签复制字符串，下一行可继续覆盖清理缓冲。
+		label := string(labelBytes)
+		labels = append(labels, label)
+		summaryRunes += utf8.RuneCountInString(label)
+		// 连同分隔符超过摘要长度后，后续标签不会影响截断结果。
+		if summaryRunes > qqSnippetRunes {
+			break
+		}
 	}
 	return labels
+}
+
+// qqNormalizeListLabel 在可复用缓冲中清理短标签的 Markdown 并合并空白；输入已按原有规则转换为 rune。
+func qqNormalizeListLabel(runes []rune, buf []byte) []byte {
+	pendingSpace := false
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		switch r {
+		case '`', '*', '_', '>', '#', '[', '|':
+			r = ' '
+		case ']':
+			if i+1 < len(runes) && runes[i+1] == '(' {
+				if end := slices.Index(runes[i+2:], ')'); end >= 0 {
+					r = ' '
+					i += end + 2
+				}
+			}
+		}
+		if unicode.IsSpace(r) {
+			pendingSpace = len(buf) > 0
+			continue
+		}
+		if pendingSpace {
+			buf = append(buf, ' ')
+			pendingSpace = false
+		}
+		buf = utf8.AppendRune(buf, r)
+	}
+	return buf
 }
 
 // qqMarkdownLeadingSpace 先用 ASCII 快路径裁剪行首空白；剩余部分以 Unicode 空白开头时才回退到完整的 Unicode 扫描。

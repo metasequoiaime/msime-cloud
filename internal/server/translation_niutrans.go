@@ -48,7 +48,42 @@ func niutransError(raw json.RawMessage) error {
 	return errors.New("niutrans error " + code)
 }
 
-func (s *Server) translateNiuTrans(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint) {
+// 小牛 v2 文本接口每次最多 5000 字符；补充平面字符保守按两个 UTF-16 码元计数。
+const niutransTextCharacters = 5000
+
+// translateNiuTrans 先预留所有实际分段的额度，再用现有并发上限翻译，全部成功后恢复原条目。
+func (s *Server) translateNiuTrans(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint, budget *providerBudget) bool {
+	parts := translationParts(v.list(), niutransTextCharacters)
+	texts := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part.text != "" {
+			texts = append(texts, part.text)
+		}
+	}
+	if budget != nil && !budget.take(time.Now(), len(texts)) {
+		return false
+	}
+	translated, ok := s.translateEach(w, r, translationRequest{Texts: texts, Source: v.Source, Target: v.Target}, e)
+	if !ok {
+		return true
+	}
+	next := 0
+	for i := range parts {
+		if parts[i].text != "" {
+			parts[i].translated = translated[next]
+			next++
+		}
+	}
+	joined, ok := joinTranslationParts(parts, len(v.list()))
+	if !ok {
+		upstreamError(w, r, nil)
+		return true
+	}
+	respondTranslations(w, v, joined)
+	return true
+}
+
+func (s *Server) translateNiuTransUpstream(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint) {
 	source, target := niutransLanguage(v.Source), niutransLanguage(v.Target)
 	timestamp := strconv.FormatInt(time.Now().UnixMilli(), 10)
 	form := url.Values{

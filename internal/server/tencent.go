@@ -68,15 +68,10 @@ func (s *Server) translateTencent(w http.ResponseWriter, r *http.Request, v tran
 				parts[index].translated = translated[i]
 			}
 		}
-		fresh = make([]string, len(missing))
-		for _, part := range parts {
-			fresh[part.index] += part.prefix + part.translated + part.suffix
-		}
-		for _, text := range fresh {
-			if !bounded(text, contract.OutputTextBytes) {
-				upstreamError(w, r, nil)
-				return true
-			}
+		var ok bool
+		if fresh, ok = joinTranslationParts(parts, len(missing)); !ok {
+			upstreamError(w, r, nil)
+			return true
 		}
 		s.storeTranslations(r.Context(), source, target, missing, fresh)
 	}

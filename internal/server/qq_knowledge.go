@@ -935,8 +935,6 @@ var (
 	qqApostrophe = regexp.MustCompile(`([A-Za-z])’([A-Za-z])`)
 	// qqWindowsPath 匹配 Windows 路径（C:\、%APPDATA%\）：答案里有路径时，字面的 \t 多半是 \temp 这类路径的一部分，不换成空格。
 	qqWindowsPath = regexp.MustCompile(`[A-Za-z]:\\|%\\`)
-	// qqAnswerHeading 匹配行首的 Markdown 标题符号。
-	qqAnswerHeading = regexp.MustCompile(`^#{1,6}\s*`)
 	// qqBlankLines 匹配三个及以上连续的换行。
 	qqBlankLines = regexp.MustCompile(`\n{3,}`)
 	// qqPromptLeak 匹配提示词禁止出现在答案里的说法（「资料」是模型内部看的材料），只记日志作为提示词回归的信号，不在代码里删词。
@@ -946,6 +944,52 @@ var (
 // qqPromptLeakCandidate 判断答案是否含有提示词泄漏规则可能命中的字面字符；没有候选字符时跳过正则扫描。
 func qqPromptLeakCandidate(answer string) bool {
 	return strings.ContainsAny(answer, "资料文档里截断")
+}
+
+// qqStripAnswerHeadings 沿用原正则的井号数量和 ASCII 空白规则，只在确需移除行首标记时构建正文。
+func qqStripAnswerHeadings(answer string) string {
+	if !strings.HasPrefix(answer, "#") && !strings.Contains(answer, "\n#") {
+		return answer
+	}
+	headings := func(yield func(start, end int) bool) {
+		offset := 0
+		for line := range strings.SplitSeq(answer, "\n") {
+			if strings.HasPrefix(line, "#") {
+				end := 1
+				for end < len(line) && end < 6 && line[end] == '#' {
+					end++
+				}
+				hashes := end
+				for end < len(line) && strings.IndexByte(" \t\r\f", line[end]) >= 0 {
+					end++
+				}
+				// 没有分隔空白且后接数字时是 issue 编号，保持原样。
+				if end != hashes || end == len(line) || line[end] < '0' || line[end] > '9' {
+					if !yield(offset, offset+end) {
+						return
+					}
+				}
+			}
+			offset += len(line) + 1
+		}
+	}
+	// 先计算实际输出长度，避免大量标题空白被删掉后，短结果仍持有输入大小的缓冲。
+	size := len(answer)
+	for start, end := range headings {
+		size -= end - start
+	}
+	if size == len(answer) {
+		return answer
+	}
+	var out strings.Builder
+	out.Grow(size)
+	copied := 0
+	for start, end := range headings {
+		out.WriteString(answer[copied:start])
+		copied = end
+	}
+	out.WriteString(answer[copied:])
+	return out.String()
 }
 
 // qqNormalizeAnswer 统一答案的格式：模型偶尔不照提示词写，同一个群里一会儿“”一会儿「」，或者冒出 **、## 和字面的 \t，读起来不像同一个助手说的。引号换成「」『』，字面的 \t 和制表符换成空格，删掉 **、__，去掉行首的 #（「#123」这种 issue 编号不动），行首的「- 」保留，三个以上的连续换行压成两个。
@@ -966,22 +1010,7 @@ func qqNormalizeAnswer(answer string) string {
 	if strings.Contains(answer, `\t`) && !qqWindowsPath.MatchString(answer) {
 		answer = strings.ReplaceAll(answer, `\t`, " ")
 	}
-	// 原规则只处理行首的 #；没有候选标题时无需拆行后重建正文。
-	if strings.HasPrefix(answer, "#") || strings.Contains(answer, "\n#") {
-		lines := strings.Split(answer, "\n")
-		for i, line := range lines {
-			heading := qqAnswerHeading.FindString(line)
-			if heading == "" {
-				continue
-			}
-			// 「#123」是 issue 编号，不是标题。
-			if rest := line[len(heading):]; strings.TrimRight(heading, "#") == "" && rest != "" && rest[0] >= '0' && rest[0] <= '9' {
-				continue
-			}
-			lines[i] = line[len(heading):]
-		}
-		answer = strings.Join(lines, "\n")
-	}
+	answer = qqStripAnswerHeadings(answer)
 	if strings.Contains(answer, "\n\n\n") {
 		answer = qqBlankLines.ReplaceAllString(answer, "\n\n")
 	}

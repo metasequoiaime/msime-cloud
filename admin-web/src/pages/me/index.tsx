@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { differenceInCalendarDays, format } from "date-fns";
 import { Copy } from "lucide-react";
 import { useAuth } from "../../auth";
@@ -97,7 +97,10 @@ function Preferences({ me }: { me: Me }) {
   const client = useQueryClient();
   const toast = useToast();
   const run = useMeAction();
+  const mutationKey = keys.page("me", "preferences", me.email);
+  const pending = useIsMutating({ mutationKey, exact: true }) > 0;
   const save = useMutation({
+    mutationKey,
     mutationFn: (v: { key: string; value: boolean }) => run({ action: "set_pref", ...v }),
     onMutate: async v => {
       const query = client.getQueryCache().find({ queryKey: meKey, exact: true });
@@ -123,7 +126,10 @@ function Preferences({ me }: { me: Me }) {
         <span className="flex flex-wrap items-center gap-2 text-ink">{row.name}{!row.available && <Pill tone="mute">未接入</Pill>}</span>
         <span className="mt-0.5 block text-xs text-muted">{row.available ? row.description : `${row.description}；服务端尚未实现发送，暂不可开启`}</span>
       </span>
-      <Switch label={row.name} checked={row.available && (me.prefs[row.key] ?? false)} disabled={!row.available} onCheckedChange={value => save.mutate({ key: row.key, value })} />
+      <Switch label={row.name} checked={row.available && (me.prefs[row.key] ?? false)} disabled={!row.available || pending} onCheckedChange={value => {
+        // 共享资料缓存只允许一项偏好保存，切换页面后返回也等待原写入与刷新结束。
+        if (!client.isMutating({ mutationKey, exact: true })) save.mutate({ key: row.key, value });
+      }} />
     </label>))}
   </SectionCard>;
 }

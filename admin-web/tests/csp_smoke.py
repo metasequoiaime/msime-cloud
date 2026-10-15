@@ -548,6 +548,79 @@ def check_profile_rollback(context, base: str, problems: list[str]):
             page.close()
 
 
+def check_preferences_pending(context, base: str, problems: list[str]):
+    # 同一资料缓存不能并发乐观更新；切走再返回也要等原请求及确认刷新完成。
+    for switching in (False, True):
+        for status in (200, 500):
+            page = context.new_page()
+            page.on("pageerror", lambda error: problems.append(f"通知偏好等待请求测试页面异常：{error}"))
+            profile = {**FIXTURES["/api/me"], "prefs": dict(FIXTURES["/api/me"]["prefs"])}
+            pending, refresh = [], []
+            hold_refresh = False
+
+            def me(route):
+                if route.request.method == "POST":
+                    pending.append(route)
+                elif hold_refresh:
+                    refresh.append(route)
+                else:
+                    route.fulfill(json=profile)
+
+            page.route("**/api/auth/session", lambda route: route.fulfill(json=FIXTURES["/api/auth/session"]))
+            page.route("**/api/me", me)
+            try:
+                page.goto(base + "/me")
+                preference = page.get_by_role("switch", name="词库 PR 提醒", exact=True)
+                names = ("词库 PR 提醒", "社区举报提醒", "崩溃告警")
+                expect(preference).to_be_checked()
+                for name in names:
+                    expect(page.get_by_role("switch", name=name, exact=True)).to_be_enabled()
+                with page.expect_request(lambda request: request.method == "POST" and request.url.endswith("/api/me")) as sent:
+                    preference.click()
+                assert sent.value.post_data_json == {"action": "set_pref", "key": "notify_dict_pr", "value": False}
+                expect(preference).not_to_be_checked()
+                if switching:
+                    page.get_by_role("link", name="数据概览", exact=True).click()
+                    expect(page.get_by_role("heading", name="数据概览", exact=True)).to_be_visible()
+                    page.locator('a[title="个人中心"]').click()
+                for name in names:
+                    expect(page.get_by_role("switch", name=name, exact=True)).to_be_disabled()
+                # 标签关联的开关已禁用，仍发送指针点击以确认浏览器不会触发新的写入。
+                page.get_by_text("词库 PR 提醒", exact=True).click(force=True)
+                page.get_by_text("社区举报提醒", exact=True).click(force=True)
+                assert len(pending) == 1, "保存期间不应发起另一次偏好写入"
+                hold_refresh = True
+                if status == 200:
+                    profile["prefs"]["notify_dict_pr"] = False
+                with page.expect_request(lambda request: request.method == "GET" and request.url.endswith("/api/me")):
+                    pending.pop().fulfill(status=status, json={"ok": True} if status == 200 else {"error": "admin_auth_unavailable"})
+                expect(preference).to_be_disabled()
+                if status != 200:
+                    expect(page.get_by_text(re.compile(r"^操作失败："))).to_be_visible()
+                    expect(preference).to_be_checked()
+                hold_refresh = False
+                for route in refresh:
+                    route.fulfill(json=profile)
+                refresh.clear()
+                expect(preference).to_be_enabled()
+                expect(preference).to_be_checked(checked=status != 200)
+                with page.expect_request(lambda request: request.method == "POST" and request.url.endswith("/api/me")) as resent:
+                    preference.click()
+                value = status == 200
+                assert resent.value.post_data_json == {"action": "set_pref", "key": "notify_dict_pr", "value": value}
+                profile["prefs"]["notify_dict_pr"] = value
+                pending.pop().fulfill(json={"ok": True})
+                expect(preference).to_be_enabled()
+                expect(preference).to_be_checked(checked=value)
+                expect(page.get_by_role("switch", name="每周摘要邮件", exact=True)).to_be_disabled()
+                problems.extend(f"通知偏好等待请求测试 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+            finally:
+                for route in pending + refresh:
+                    route.abort()
+                page.unroute_all(behavior="ignoreErrors")
+                page.close()
+
+
 def check_notice_pending(context, base: str, problems: list[str]):
     # 显式挂起请求，验证保存、发布和归档期间不能改写或切换编辑器；失败后仍保留原文。
     for action in ("save_notice_draft", "publish_notice", "archive_notice"):
@@ -1493,6 +1566,7 @@ def main() -> int:
                 check_auth_logout(context, base, problems)
                 check_auth_logout_flush(context, base, problems)
                 check_profile_rollback(context, base, problems)
+                check_preferences_pending(context, base, problems)
                 check_notice_pending(context, base, problems)
                 check_notice_pending_focus(context, base, problems)
                 check_mirror_pending(context, base, problems)

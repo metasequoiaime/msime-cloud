@@ -43,17 +43,21 @@ func qqQuoteOf(raw json.RawMessage, m qqGroupMessage) qqQuote {
 		Attachments []qqAttachment `json:"attachments"`
 	}
 	if json.Unmarshal(fields.MsgElements, &elements) == nil {
-		own := map[string]bool{}
-		for _, a := range m.Attachments {
-			own[a.URL] = true
+		var own map[string]bool
+		if len(m.Attachments) > 0 {
+			own = make(map[string]bool, len(m.Attachments))
+			for _, a := range m.Attachments {
+				own[a.URL] = true
+			}
 		}
+		ownText := qqFeedbackText(m.Content)
 		var texts []string
 		for _, e := range elements {
-			if text := qqFeedbackText(e.Content); text != "" && text != qqFeedbackText(m.Content) {
+			if text := qqFeedbackText(e.Content); text != "" && text != ownText {
 				texts = append(texts, text)
 			}
 			for _, a := range e.Attachments {
-				if !own[a.URL] && qqHasImages([]qqAttachment{a}) {
+				if !own[a.URL] && strings.HasPrefix(strings.ToLower(a.ContentType), "image/") {
 					q.Images = append(q.Images, a)
 				}
 			}

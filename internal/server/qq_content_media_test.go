@@ -2,9 +2,25 @@ package server
 
 import (
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
+
+func TestQQReleaseNotesVisibleSegments(t *testing.T) {
+	input := "前![截图](\nhttps://example.test/a.png\n)\n```text\n<tag synthetic\n```\n后<b>尾词</b>"
+	var got []string
+	qqReleaseNotesVisibleSegments(input, func(segment string) {
+		got = append(got, segment)
+	})
+	want := []string{
+		"前![截图](\nhttps://example.test/a.png\n)\n",
+		"后<b>尾词</b>",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("围栏外片段错误：结果=%q，预期=%q", got, want)
+	}
+}
 
 func TestQQReleaseNotesMediaKeepsRules(t *testing.T) {
 	for _, tc := range []struct{ name, body, want string }{

@@ -176,7 +176,12 @@ func qqWordsQuestion(content string, glued bool) bool {
 // qqCommandArg 判断 text 是不是以某个命令词开头、后面跟着分隔符（qqLooseCommands 和以 ASCII 字母结尾的命令词不要求），返回去掉命令词后的参数；「查不到词库怎么办」这类以同一个字开头的普通提问不算命令。
 func qqCommandArg(text string, words ...string) (string, bool) {
 	trimmed := strings.TrimSpace(text)
-	lower := strings.ToLower(trimmed)
+	maxBytes := 0
+	for _, word := range words {
+		maxBytes = max(maxBytes, len(word))
+	}
+	// 每个字符转小写后至少占一个字节，取 maxBytes 个字符足以比较所有命令，且不会复制参数正文。
+	lower := strings.ToLower(trimmed[:qqRuneEnd(trimmed, maxBytes)])
 	for _, word := range words {
 		if !strings.HasPrefix(lower, word) {
 			continue

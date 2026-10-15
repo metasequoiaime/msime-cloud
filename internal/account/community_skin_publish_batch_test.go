@@ -53,7 +53,7 @@ func TestCommunitySkinPublishQuotaInsertUsesOneDatabaseRoundTrip(t *testing.T) {
 	trace.mu.Lock()
 	queries := trace.queries
 	trace.mu.Unlock()
-	if queries != 8 {
-		t.Fatalf("皮肤首发应使用 8 条语句，实际为 %d", queries)
+	if queries != 7 {
+		t.Fatalf("皮肤首发应使用 7 条语句，实际为 %d", queries)
 	}
 }

@@ -457,30 +457,30 @@ func (a *Service) communityPublish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
-	e = tx.QueryRow(r.Context(), `SELECT owner_id, name=$2 AND description=$3 AND design=$4::jsonb FROM community_skins WHERE id=$1`, input.ID, input.Name, input.Description, raw).Scan(&existingOwner, &identical)
-	if e == nil {
+	// 事务内合并 ID 冲突检查、作者额度检查和首发写入，避免锁定用户后再为两步各往返一次。
+	var exists bool
+	var inserted bool
+	if e = tx.QueryRow(r.Context(), `WITH existing AS MATERIALIZED (
+ SELECT owner_id,name=$3 AND description=$4 AND design=$5::jsonb AS identical
+ FROM community_skins WHERE id=$1
+), inserted AS (
+ INSERT INTO community_skins(id,owner_id,name,description,design,moderation,moderation_reason,category)
+ SELECT $1,$2,$3,$4,$5,'pending',$6,$7
+ WHERE NOT EXISTS(SELECT 1 FROM existing)
+   AND (SELECT count(*) FROM community_skins WHERE owner_id=$2) < 50
+ RETURNING id
+)
+SELECT COALESCE((SELECT owner_id FROM existing),''),COALESCE((SELECT identical FROM existing),false),
+ EXISTS(SELECT 1 FROM existing),EXISTS(SELECT 1 FROM inserted)`, input.ID, p.UserID, input.Name, input.Description, raw, flag, category).Scan(&existingOwner, &identical, &exists, &inserted); e != nil {
+		a.error(w, e)
+		return
+	}
+	if exists {
 		if existingOwner != p.UserID || !identical {
 			writeError(w, 409, "skin_id_conflict")
 			return
 		}
 		write(w, 200, map[string]string{"id": input.ID})
-		return
-	}
-	if !errors.Is(e, pgx.ErrNoRows) {
-		a.error(w, e)
-		return
-	}
-	var inserted bool
-	if e = tx.QueryRow(r.Context(), `WITH owned AS (
- SELECT count(*) AS n FROM community_skins WHERE owner_id=$2
-), inserted AS (
- INSERT INTO community_skins(id,owner_id,name,description,design,moderation,moderation_reason,category)
- SELECT $1,$2,$3,$4,$5,'pending',$6,$7
- WHERE (SELECT n FROM owned) < 50
- RETURNING id
-)
-SELECT EXISTS(SELECT 1 FROM inserted)`, input.ID, p.UserID, input.Name, input.Description, raw, flag, category).Scan(&inserted); e != nil {
-		a.error(w, e)
 		return
 	}
 	if !inserted {

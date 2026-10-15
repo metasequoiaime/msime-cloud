@@ -4,7 +4,28 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode"
 )
+
+func TestQQMarkdownLeadingSpaceFastPathMatchesUnicodeTrim(t *testing.T) {
+	for _, tc := range []struct {
+		name, input string
+	}{
+		{"plain", "普通正文"},
+		{"ascii", " \t\r\n\f\v普通正文"},
+		{"unicode", "\u3000\u0085\u00a0普通正文"},
+		{"invalid_utf8", " \xff正文"},
+		{"all_space", " \t\u3000"},
+		{"empty", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want := strings.TrimLeftFunc(tc.input, unicode.IsSpace)
+			if got := qqMarkdownLeadingSpace(tc.input); got != want {
+				t.Fatalf("行首空白裁剪不兼容：结果=%q，预期=%q", got, want)
+			}
+		})
+	}
+}
 
 func TestQQMarkdownLeadingSpaceKeepsIndentation(t *testing.T) {
 	for _, prefix := range []string{"", " ", "\t", "\r", "\u0085", "\u00a0", "\u1680", "\u2000", "\u200a", "\u2028", "\u2029", "\u202f", "\u205f", "\u3000", "\u200b", "\ufeff", "\xff"} {

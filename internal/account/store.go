@@ -876,7 +876,7 @@ func (s *Store) Prune(ctx context.Context) {
 // voiceContributionRetentionDays 是语音贡献的保留期，到期由 Store.Prune 删除。
 const voiceContributionRetentionDays = 180
 
-// VoiceContribution 是用户自愿上传的一条语音样本：音频已由调用方校验为 WAV 或 Ogg、不超过 60 秒。
+// VoiceContribution 是用户自愿上传的一条语音样本：调用方已校验音频格式为 WAV 或 Ogg、大小不超过 2 MiB，并检查客户端声明的 `DurationMS` 在 1–60000 范围内；实际音频时长未在服务端解析。
 type VoiceContribution struct {
 	Language, Provider, Transcript, AppVersion, AudioMime string
 	DurationMS                                            int

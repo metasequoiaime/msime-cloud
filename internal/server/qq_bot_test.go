@@ -5607,6 +5607,64 @@ func TestQQBotFeatureVoteDoesNotReleaseLimitAfterLostGitHubWriteResponse(t *test
 	}
 }
 
+// GitHub 已经写入但响应在传输层丢失时，后续读取不能继续使用写入前的评论缓存。
+func TestQQAddVoteInvalidatesCommentCacheWhenWriteResultIsUncertain(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	token, err := s.adminGitHub.Token(context.Background(), "o/r", issueTokenPerms)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/repos/o/r/issues/7/comments?per_page=100&page=1"
+	fake.issueComments = map[string]string{path: `[{"id":55,"body":"` + strings.ReplaceAll(qqVoteBody(1), `"`, `\"`) + `",` + qqAppAuthor + `}]`}
+	if _, err := s.adminGitHub.Get(context.Background(), token, path); err != nil {
+		t.Fatal("预热评论缓存失败：", err)
+	}
+	client := *s.adminGitHub.HTTP
+	transport := client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	patchStarted := make(chan struct{})
+	allowPatchResponse := make(chan struct{})
+	client.Transport = qqTestTransport(func(r *http.Request) (*http.Response, error) {
+		response, err := transport.RoundTrip(r)
+		if err == nil && r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/issues/comments/") {
+			close(patchStarted)
+			<-allowPatchResponse
+			return response, errors.New("synthetic connection reset after GitHub write")
+		}
+		return response, err
+	})
+	s.adminGitHub.HTTP = &client
+	voteDone := make(chan error, 1)
+	go func() {
+		_, err := s.qqAddVote(context.Background(), token, "o/r", 7)
+		voteDone <- err
+	}()
+	<-patchStarted
+	if response, err := s.adminGitHub.Get(context.Background(), token, path); err != nil {
+		t.Fatal("写入进行中读取评论失败：", err)
+	} else if !strings.Contains(string(response.Body), qqVoteBody(1)) {
+		t.Fatalf("写入进行中应读到写入前的远端状态：%s", response.Body)
+	}
+	close(allowPatchResponse)
+	if err := <-voteDone; err == nil {
+		t.Fatal("不确定的 GitHub 写入应返回错误")
+	}
+	fake.issueComments[path] = `[{"id":55,"body":"` + strings.ReplaceAll(qqVoteBody(2), `"`, `\"`) + `",` + qqAppAuthor + `}]`
+	response, err := s.adminGitHub.Get(context.Background(), token, path)
+	if err != nil {
+		t.Fatal("读取评论失败：", err)
+	}
+	var comments []map[string]any
+	if err := response.Decode(&comments); err != nil {
+		t.Fatal(err)
+	}
+	if len(comments) != 1 || comments[0]["body"] != qqVoteBody(2) {
+		t.Fatalf("写入结果不确定时仍返回旧缓存：%v", comments)
+	}
+}
+
 // memoryFAQCandidates 是测试用的文档候选存储。state 为空是还没处理，"writing" 是认领了正在写进 FAQ，处理过的是「状态:PR」。
 type memoryFAQCandidates struct {
 	mu       sync.Mutex

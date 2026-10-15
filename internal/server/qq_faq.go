@@ -330,7 +330,10 @@ func (s *Server) writeQQFAQ(ctx context.Context, text, drafted string, reply fun
 	} else {
 		body += "\n\n现有繁体译文与简体原文不同步（或读取失败），这次只改了简体，`" + twPath + "` 和 `" + sourcesPath + "` 需要另行同步。"
 	}
+	client.Invalidate("/repos/" + repo + "/pulls")
+	defer client.Invalidate("/repos/" + repo + "/pulls")
 	r, err = client.Do(ctx, token, "POST", "/repos/"+repo+"/pulls", map[string]any{"title": "docs(faq): add 「" + githubReferenceBreaker.Replace(entry.Question) + "」", "head": branch, "base": base, "body": body})
+	client.Invalidate("/repos/" + repo + "/pulls")
 	var pull struct {
 		Number int64 `json:"number"`
 	}

@@ -254,14 +254,16 @@ func (s *Server) fileQQImprovementReport(ctx context.Context, from, to time.Time
 	if slices.Contains(s.qqRepoLabels(ctx, client, token, repo), qqImprovementLabel) {
 		labels = []string{qqImprovementLabel}
 	}
+	client.Invalidate("/repos/" + repo + "/issues")
+	defer client.Invalidate("/repos/" + repo + "/issues")
 	r, err := client.Do(ctx, token, "POST", "/repos/"+repo+"/issues", map[string]any{"title": title, "body": body, "labels": labels})
+	client.Invalidate("/repos/" + repo + "/issues")
 	var created struct {
 		Number int64 `json:"number"`
 	}
 	if err != nil || !r.OK() || r.Decode(&created) != nil || created.Number <= 0 {
 		return 0, false, githubFailure("improvement report", r, err)
 	}
-	client.Invalidate("/repos/" + repo + "/issues")
 	slog.Info("qq bot: improvement report filed", "repo", repo, "number", created.Number)
 	return created.Number, true, nil
 }

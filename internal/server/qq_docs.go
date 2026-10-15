@@ -143,13 +143,16 @@ func (s *Server) fileQQDocs(ctx context.Context, subject, text string, admin boo
 		if request.Suggestion != "" {
 			body += "\n\n建议：" + qqPublic(request.Suggestion)
 		}
+		// 写入结果可能在响应返回前丢失；先失效缓存，避免不确定时继续读到旧 issue。
+		client.Invalidate("/repos/" + repo + "/issues")
+		defer client.Invalidate("/repos/" + repo + "/issues")
 		r, err := client.Do(ctx, token, "POST", "/repos/"+repo+"/issues/"+strconv.FormatInt(duplicate, 10)+"/comments", map[string]string{"body": body + qqIssueFooter})
+		client.Invalidate("/repos/" + repo + "/issues")
 		if err != nil || !r.OK() {
 			slog.Warn("qq bot: docs issue failed", "reason", githubFailure("docs comment", r, err).Error())
 			reply(qqReplyUnavailable)
 			return
 		}
-		client.Invalidate("/repos/" + repo + "/issues")
 		reply("这处文档已经有人反馈过，已补充到 " + qqIssueNumberText(repo, duplicate) + "。")
 		return
 	}
@@ -161,7 +164,10 @@ func (s *Server) fileQQDocs(ctx context.Context, subject, text string, admin boo
 			labels = append(labels, repoLabels[i])
 		}
 	}
+	client.Invalidate("/repos/" + repo + "/issues")
+	defer client.Invalidate("/repos/" + repo + "/issues")
 	r, err := client.Do(ctx, token, "POST", "/repos/"+repo+"/issues", map[string]any{"title": "[文档]: " + githubReferenceBreaker.Replace(request.Title), "body": qqDocsIssueBody(request), "labels": labels})
+	client.Invalidate("/repos/" + repo + "/issues")
 	var created struct {
 		Number int64 `json:"number"`
 	}
@@ -170,6 +176,5 @@ func (s *Server) fileQQDocs(ctx context.Context, subject, text string, admin boo
 		reply(qqReplyUnavailable)
 		return
 	}
-	client.Invalidate("/repos/" + repo + "/issues")
 	reply("已记录为 " + qqIssueNumberText(repo, created.Number) + "，管理员会据此更新文档。" + qqReplyPublic)
 }

@@ -124,6 +124,22 @@ func TestSensitiveMatcherNormalizationPreservesHits(t *testing.T) {
 	}
 }
 
+func TestSensitiveMatcherNoopNormalizationAllocationBudget(t *testing.T) {
+	matcher := cachedSensitiveService([]sensitiveWord{{plain: "never-match"}}).SensitivePreview()
+	text := strings.Repeat("normalasciitext", 10000)
+	var hits []SensitiveHit
+	var matchErr error
+	allocations := testing.AllocsPerRun(20, func() {
+		hits, matchErr = matcher.Match(t.Context(), text)
+	})
+	if matchErr != nil || hits != nil {
+		t.Fatalf("普通文本匹配结果错误：hits=%v，err=%v", hits, matchErr)
+	}
+	if allocations != 0 {
+		t.Fatalf("无需折叠的敏感词匹配分配 %.0f 次，期望零分配", allocations)
+	}
+}
+
 func TestSensitiveRegexLiteralPrefixSafety(t *testing.T) {
 	for _, tc := range []struct {
 		pattern, want string

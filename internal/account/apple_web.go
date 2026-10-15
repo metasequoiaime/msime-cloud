@@ -124,23 +124,67 @@ func (s *Store) dropPendingAppleWebChallenge(ctx context.Context, idHash string)
 
 // grantAppleWeb 把回调校验过的身份写到挑战行上并签发授权码：库里只存授权码的 SHA-256，挑战的有效期改成签发后 appleWebGrantTTL。一条挑战只能签发一次。
 func (s *Store) grantAppleWeb(ctx context.Context, idHash string, c appleWebChallenge, grantHash string) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE auth_challenges SET verified_subject=$2,verified_email=$3,verified_email_verified=$4,verified_name=$5,grant_hash=$6,granted_at=now(),expires_at=now()+$7::interval
- WHERE id_hash=$1 AND provider='apple_web' AND expires_at>now() AND granted_at IS NULL`, idHash, c.Subject, c.Email, c.EmailVerified, c.Name, grantHash, appleWebGrantTTL.String())
-	if err == nil && tag.RowsAffected() == 0 {
-		err = ErrInvalid
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
 	}
-	return err
+	defer tx.Rollback(ctx)
+	var locked string
+	err = tx.QueryRow(ctx, `SELECT id_hash FROM auth_challenges WHERE id_hash=$1 AND provider='apple_web' FOR UPDATE`, idHash).Scan(&locked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrInvalid
+	}
+	if err != nil {
+		return err
+	}
+	// 先取得行锁，再用实际时钟复查，避免等待期间过期的挑战仍按事务开始时间通过。
+	var valid bool
+	if err = tx.QueryRow(ctx, `SELECT expires_at>clock_timestamp() AND granted_at IS NULL FROM auth_challenges WHERE id_hash=$1`, idHash).Scan(&valid); err != nil {
+		return err
+	}
+	if !valid {
+		return ErrInvalid
+	}
+	if _, err = tx.Exec(ctx, `UPDATE auth_challenges SET verified_subject=$2,verified_email=$3,verified_email_verified=$4,verified_name=$5,grant_hash=$6,granted_at=clock_timestamp(),expires_at=clock_timestamp()+$7::interval
+WHERE id_hash=$1 AND provider='apple_web'`, idHash, c.Subject, c.Email, c.EmailVerified, c.Name, grantHash, appleWebGrantTTL.String()); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // redeemAppleWeb 按授权码的哈希原子地取出挑战并清空 grant_hash，同一个授权码只能兑换一次，校验失败也不能再试。超过 appleWebGrantTTL 的授权码不再有效。
 func (s *Store) redeemAppleWeb(ctx context.Context, grantHash string) (appleWebChallenge, error) {
 	var c appleWebChallenge
-	err := s.pool.QueryRow(ctx, `UPDATE auth_challenges SET grant_hash='' WHERE grant_hash=$1 AND provider='apple_web' AND expires_at>now() AND granted_at>now()-$2::interval
- RETURNING id_hash,COALESCE(link_user,''),redirect_uri,code_challenge,verified_subject,verified_email,verified_email_verified,verified_name`, grantHash, appleWebGrantTTL.String()).Scan(&c.IDHash, &c.LinkUser, &c.App, &c.CodeChallenge, &c.Subject, &c.Email, &c.EmailVerified, &c.Name)
-	if errors.Is(err, pgx.ErrNoRows) {
-		err = ErrInvalid
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return c, err
 	}
-	return c, err
+	defer tx.Rollback(ctx)
+	var idHash string
+	err = tx.QueryRow(ctx, `SELECT id_hash FROM auth_challenges WHERE grant_hash=$1 AND provider='apple_web' FOR UPDATE`, grantHash).Scan(&idHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return c, ErrInvalid
+	}
+	if err != nil {
+		return c, err
+	}
+	// 有效期检查必须在取得行锁后执行，now() 不会随锁等待推进。
+	var valid bool
+	if err = tx.QueryRow(ctx, `SELECT expires_at>clock_timestamp() AND granted_at>clock_timestamp()-$2::interval FROM auth_challenges WHERE id_hash=$1`, idHash, appleWebGrantTTL.String()).Scan(&valid); err != nil {
+		return c, err
+	}
+	if !valid {
+		return c, ErrInvalid
+	}
+	err = tx.QueryRow(ctx, `UPDATE auth_challenges SET grant_hash='' WHERE id_hash=$1
+ RETURNING id_hash,COALESCE(link_user,''),redirect_uri,code_challenge,verified_subject,verified_email,verified_email_verified,verified_name`, idHash).Scan(&c.IDHash, &c.LinkUser, &c.App, &c.CodeChallenge, &c.Subject, &c.Email, &c.EmailVerified, &c.Name)
+	if err != nil {
+		return c, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return c, err
+	}
+	return c, nil
 }
 
 // appleWebBegin 处理 POST /v1/auth/apple/web：登记客户端的 PKCE code_challenge，返回 Apple 的授权地址。state 是挑战 ID，nonce 由服务端生成并绑定到 ID Token。

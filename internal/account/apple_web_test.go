@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -45,6 +46,92 @@ func TestPKCEValidation(t *testing.T) {
 	}
 	if !base64URLToken(pkceChallenge(verifier), 32) || base64URLToken("short", 32) || base64URLToken(pkceChallenge(verifier)+"=", 32) {
 		t.Fatal("challenge shape")
+	}
+}
+
+func TestAppleWebGrantRejectsChallengeExpiredWhileWaitingForLock(t *testing.T) {
+	db := testStore(t)
+	ctx := t.Context()
+	idHash := hash(randomToken())
+	if _, err := db.pool.Exec(ctx, `INSERT INTO auth_challenges(id_hash,provider,nonce,redirect_uri,code_challenge,expires_at) VALUES($1,'apple_web','nonce','app.msime.android','challenge',clock_timestamp()+interval '1 second')`, idHash); err != nil {
+		t.Fatal(err)
+	}
+	blocker, err := db.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Rollback(context.Background())
+	if _, err = blocker.Exec(ctx, `SELECT id_hash FROM auth_challenges WHERE id_hash=$1 FOR UPDATE`, idHash); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- (&Store{pool: db.pool}).grantAppleWeb(ctx, idHash, appleWebChallenge{Subject: "apple-subject", App: "app.msime.android"}, hash(randomToken()))
+	}()
+	waitForAdminDatabaseLock(t, db, blocker.Conn().PgConn().PID())
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var expired bool
+		if err := db.pool.QueryRow(ctx, `SELECT expires_at<=clock_timestamp() FROM auth_challenges WHERE id_hash=$1`, idHash).Scan(&expired); err != nil {
+			t.Fatal(err)
+		}
+		if expired {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("挑战未按时过期")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := blocker.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, ErrInvalid) {
+		t.Fatalf("等待行锁期间已过期的挑战仍被签发，错误 = %v", err)
+	}
+}
+
+func TestAppleWebRedeemRejectsGrantExpiredWhileWaitingForLock(t *testing.T) {
+	db := testStore(t)
+	ctx := t.Context()
+	grantHash := hash(randomToken())
+	idHash := hash(randomToken())
+	if _, err := db.pool.Exec(ctx, `INSERT INTO auth_challenges(id_hash,provider,nonce,redirect_uri,code_challenge,grant_hash,granted_at,expires_at) VALUES($1,'apple_web','nonce','app.msime.android','challenge',$2,clock_timestamp(),clock_timestamp()+interval '1 second')`, idHash, grantHash); err != nil {
+		t.Fatal(err)
+	}
+	blocker, err := db.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Rollback(context.Background())
+	if _, err = blocker.Exec(ctx, `SELECT id_hash FROM auth_challenges WHERE id_hash=$1 FOR UPDATE`, idHash); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := (&Store{pool: db.pool}).redeemAppleWeb(ctx, grantHash)
+		done <- err
+	}()
+	waitForAdminDatabaseLock(t, db, blocker.Conn().PgConn().PID())
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var expired bool
+		if err := db.pool.QueryRow(ctx, `SELECT expires_at<=clock_timestamp() FROM auth_challenges WHERE id_hash=$1`, idHash).Scan(&expired); err != nil {
+			t.Fatal(err)
+		}
+		if expired {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("授权码未按时过期")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := blocker.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, ErrInvalid) {
+		t.Fatalf("等待行锁期间已过期的授权码仍被兑换，错误 = %v", err)
 	}
 }
 

@@ -79,7 +79,24 @@ func qqCompact(text string) string {
 	if qqCompactCanReuse(text) {
 		return text
 	}
-	compact := strings.TrimPrefix(strings.ToLower(strings.Join(strings.Fields(qqFoldWidth(text)), "")), "/")
+	var compactBuilder strings.Builder
+	compactBuilder.Grow(len(text))
+	for len(text) > 0 {
+		r, size := utf8.DecodeRuneInString(text)
+		text = text[size:]
+		if unicode.IsSpace(r) {
+			continue
+		}
+		if r == utf8.RuneError && size == 1 {
+			compactBuilder.WriteRune(r)
+			continue
+		}
+		if r >= 0xFF01 && r <= 0xFF5E {
+			r -= 0xFEE0
+		}
+		compactBuilder.WriteRune(unicode.ToLower(r))
+	}
+	compact := strings.TrimPrefix(compactBuilder.String(), "/")
 	return qqTrimCommandTrailing(compact)
 }
 

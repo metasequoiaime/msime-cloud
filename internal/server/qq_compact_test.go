@@ -1,6 +1,7 @@
 package server
 
 import (
+	"math/rand"
 	"runtime"
 	"strconv"
 	"strings"
@@ -8,6 +9,28 @@ import (
 	"unicode"
 	"unicode/utf8"
 )
+
+func TestQQCompactMatchesPreviousImplementation(t *testing.T) {
+	previous := func(text string) string {
+		if qqCompactCanReuse(text) {
+			return text
+		}
+		compact := strings.TrimPrefix(strings.ToLower(strings.Join(strings.Fields(qqFoldWidth(text)), "")), "/")
+		return qqTrimCommandTrailing(compact)
+	}
+	random := rand.New(rand.NewSource(13))
+	units := []string{"", "a", "A", "1", "/", "?", "！", "🙏", "\u200d", "\u3000", "\t", "\n", "水", "Ｈ", "é", "\xff", "\u0085"}
+	for range 4000 {
+		var text strings.Builder
+		for range random.Intn(100) {
+			text.WriteString(units[random.Intn(len(units))])
+		}
+		input := text.String()
+		if got, want := qqCompact(input), previous(input); got != want {
+			t.Fatalf("命令规范化不兼容：输入=%q，结果=%q，预期=%q", input, got, want)
+		}
+	}
+}
 
 func TestQQCompactConditionalRules(t *testing.T) {
 	for _, tc := range []struct{ name, input, want string }{

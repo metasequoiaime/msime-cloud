@@ -77,13 +77,16 @@ func (a *Service) CreateAdminSession(ctx context.Context, identity AdminIdentity
 	token := randomToken()
 	var inserted bool
 	email := strings.ToLower(identity.Email)
-	// 成员行锁和条件插入在同一条语句的隐式事务内完成，禁用或写入失败都不会留下会话。
+	// 成员行锁和条件插入在同一条语句的隐式事务内完成，禁用或写入失败都不会留下会话；时间从锁后实际写入时开始计算。
 	err := a.store.pool.QueryRow(ctx, `WITH member AS MATERIALIZED (
  SELECT enabled FROM admin_members WHERE email=$3 FOR UPDATE
-), inserted AS (
- INSERT INTO admin_sessions(token_hash,subject,email,name,user_agent)
- SELECT $1,$2,$3,$4,$5
+), issued AS MATERIALIZED (
+ SELECT clock_timestamp() AS issued_at
  WHERE NOT EXISTS (SELECT 1 FROM member) OR (SELECT enabled FROM member)
+), inserted AS (
+	INSERT INTO admin_sessions(token_hash,subject,email,name,user_agent,created_at,expires_at)
+	SELECT $1,$2,$3,$4,$5,issued_at,issued_at+interval '8 hours'
+	FROM issued
  RETURNING token_hash
 )
 SELECT EXISTS(SELECT 1 FROM inserted)`, hash(token), identity.Subject, email, adminProfileText(identity.Name, 200), adminProfileText(identity.UserAgent, 256)).Scan(&inserted)

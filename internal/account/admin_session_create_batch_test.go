@@ -148,3 +148,47 @@ func TestCreateAdminSessionUsesMembershipCommittedDuringLockWait(t *testing.T) {
 		})
 	}
 }
+
+func TestCreateAdminSessionStartsLifetimeAfterMembershipLock(t *testing.T) {
+	db := testStore(t)
+	ctx := t.Context()
+	email := "session-lifetime-" + randomToken()[:8] + "@example.test"
+	if _, err := db.pool.Exec(ctx, `INSERT INTO admin_members(email,role,enabled) VALUES($1,'reviewer',true)`, email); err != nil {
+		t.Fatal(err)
+	}
+	blocker, err := db.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Rollback(context.Background())
+	if _, err := blocker.Exec(ctx, `SELECT email FROM admin_members WHERE email=$1 FOR UPDATE`, email); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct {
+		token string
+		err   error
+	}, 1)
+	go func() {
+		token, err := (&Service{store: db}).CreateAdminSession(ctx, AdminIdentity{Subject: "synthetic-subject", Email: email})
+		done <- struct {
+			token string
+			err   error
+		}{token, err}
+	}()
+	waitForAdminDatabaseLock(t, db, blocker.Conn().PgConn().PID())
+	time.Sleep(3 * time.Second)
+	if err := blocker.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := <-done
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	var expires time.Time
+	if err := db.pool.QueryRow(ctx, `SELECT expires_at FROM admin_sessions WHERE token_hash=$1`, hash(got.token)).Scan(&expires); err != nil {
+		t.Fatal(err)
+	}
+	if remaining := time.Until(expires); remaining < 8*time.Hour-1500*time.Millisecond {
+		t.Fatalf("管理员会话有效期从锁等待前开始，剩余 %s，预期接近 %s", remaining, 8*time.Hour)
+	}
+}

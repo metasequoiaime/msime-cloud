@@ -116,8 +116,16 @@ func TestQQDocVectorsDistinctPlanningAllocationBudget(t *testing.T) {
 			}
 		}
 	})
-	if allocated := result.AllocedBytesPerOp(); allocated > 8<<20 {
-		t.Fatalf("不同段落准备分配 %d 字节，超过 8 MiB 预算", allocated)
+	if allocated := result.AllocedBytesPerOp(); allocated > 5<<20 {
+		t.Fatalf("不同段落准备分配 %d 字节，超过 5 MiB 预算", allocated)
+	}
+}
+
+func TestQQDocIDMatchesContentHashPrefix(t *testing.T) {
+	section := qqSection{Doc: "合成文档", Title: "设置"}
+	want := "doc:" + qqContentHash(section.Doc, section.Title)[:24]
+	if got := qqDocID(section); got != want {
+		t.Fatalf("文档 ID 不兼容：结果=%q，期望=%q", got, want)
 	}
 }
 

@@ -308,6 +308,7 @@ func (s *Server) qqSelfTestAlert(ctx context.Context, results []qqSelfTestResult
 		slog.Warn("qq bot: selftest alert not filed", "reason", githubFailure("selftest alert", r, err).Error())
 		return
 	}
+	client.Invalidate("/repos/" + repo + "/issues")
 	slog.Info("qq bot: selftest alert filed", "repo", repo, "version", version)
 }
 

@@ -60,3 +60,23 @@ func TestDoRetriesZeroRetryAfterOnce(t *testing.T) {
 		t.Fatalf("status=%d calls=%d", response.StatusCode, calls.Load())
 	}
 }
+
+func TestDoDoesNotRetryPostAfterRateLimit(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Retry-After", "0")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+	var stderr bytes.Buffer
+	c := cli{client: server.Client(), stderr: &stderr}
+	response, err := c.do(server.URL, request{method: http.MethodPost, path: "/", body: []byte(`{}`)}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusTooManyRequests || calls.Load() != 1 || stderr.Len() != 0 {
+		t.Fatalf("status=%d calls=%d stderr=%q", response.StatusCode, calls.Load(), stderr.String())
+	}
+}

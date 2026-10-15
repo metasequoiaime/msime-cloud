@@ -392,10 +392,10 @@ func (c cli) refresh(server string, used session) (session, error) {
 	return next, sessions.putLocked(server, &next)
 }
 
-// do 发送请求，429 要求的等待不超过 maxRetryWait 时重试一次；请求正文保存在内存中。
+// do 发送请求；GET、HEAD、OPTIONS 收到 429 且等待不超过 maxRetryWait 时重试一次。
 func (c cli) do(server string, r request, token string) (*http.Response, error) {
 	response, err := c.doOnce(server, r, token)
-	if err != nil || response.StatusCode != http.StatusTooManyRequests {
+	if err != nil || response.StatusCode != http.StatusTooManyRequests || (r.method != http.MethodGet && r.method != http.MethodHead && r.method != http.MethodOptions) {
 		return response, err
 	}
 	seconds, parseErr := strconv.Atoi(strings.TrimSpace(response.Header.Get("Retry-After")))

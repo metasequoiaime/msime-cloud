@@ -455,10 +455,17 @@ SELECT word_id,day,count FROM admin_sensitive_hits WHERE false`); e != nil {
 	return nil
 }
 func (s *Store) Rate(ctx context.Context, key string, limit int, window time.Duration) error {
+	return rateTx(ctx, s.pool, key, limit, window)
+}
+
+// rateTx 在调用方已经持有事务连接时记录限流，避免再从同一连接池申请连接。
+func rateTx(ctx context.Context, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, key string, limit int, window time.Duration) error {
 	var n int
-	e := s.pool.QueryRow(ctx, `INSERT INTO auth_rates(key,count,expires_at) VALUES($1,1,now()+$2::interval)
- ON CONFLICT(key) DO UPDATE SET count=CASE WHEN auth_rates.expires_at<=now() THEN 1 ELSE least(auth_rates.count+1,$3+1) END,
- expires_at=CASE WHEN auth_rates.expires_at<=now() THEN excluded.expires_at ELSE auth_rates.expires_at END RETURNING count`, key, window.String(), limit).Scan(&n)
+	e := q.QueryRow(ctx, `INSERT INTO auth_rates(key,count,expires_at) VALUES($1,1,clock_timestamp()+$2::interval)
+	ON CONFLICT(key) DO UPDATE SET count=CASE WHEN auth_rates.expires_at<=clock_timestamp() THEN 1 ELSE least(auth_rates.count+1,$3+1) END,
+	expires_at=CASE WHEN auth_rates.expires_at<=clock_timestamp() THEN excluded.expires_at ELSE auth_rates.expires_at END RETURNING count`, key, window.String(), limit).Scan(&n)
 	if e != nil {
 		return e
 	}

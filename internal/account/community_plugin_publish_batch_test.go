@@ -54,7 +54,7 @@ func TestCommunityPluginPublishQuotaInsertUsesOneDatabaseRoundTrip(t *testing.T)
 	trace.mu.Lock()
 	queries := trace.queries
 	trace.mu.Unlock()
-	if queries != 10 {
-		t.Fatalf("插件首发应使用 10 条语句，实际为 %d", queries)
+	if queries != 9 {
+		t.Fatalf("插件首发应使用 9 条语句，实际为 %d", queries)
 	}
 }

@@ -380,9 +380,29 @@ func (a *Service) communityPluginPublish(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	defer tx.Rollback(r.Context())
-	e = tx.QueryRow(r.Context(), `SELECT owner_id,request_sha256 FROM community_plugins WHERE id=$1`, input.ID).Scan(&existingOwner, &existingDigest)
-	if e == nil {
-		if existingOwner != p.UserID || existingDigest != digest {
+	// 事务内合并 ID 冲突检查、账号配额检查和首发写入，避免锁定用户后再为两步各往返一次。
+	var identical, exists, withinCount, withinStorage, inserted bool
+	if e = tx.QueryRow(r.Context(), `WITH existing AS MATERIALIZED (
+ SELECT owner_id,request_sha256,request_sha256=$11 AS identical
+ FROM community_plugins WHERE id=$1
+), quota AS MATERIALIZED (
+ SELECT count(*) AS count,COALESCE(sum(size),0)::bigint AS stored FROM community_plugins WHERE owner_id=$2
+), inserted AS (
+ INSERT INTO community_plugins(id,owner_id,kind,plugin_id,name,description,version,license,manifest,archive,request_sha256,moderation,moderation_reason)
+ SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12 FROM quota
+ WHERE NOT EXISTS(SELECT 1 FROM existing) AND count<$13 AND stored+$14<=$15
+ ON CONFLICT(id) DO NOTHING
+ RETURNING id
+)
+	SELECT COALESCE((SELECT owner_id FROM existing),''),COALESCE((SELECT request_sha256 FROM existing),''),
+ COALESCE((SELECT identical FROM existing),false),EXISTS(SELECT 1 FROM existing),
+ (SELECT count<$13 FROM quota),(SELECT stored+$14<=$15 FROM quota),EXISTS(SELECT 1 FROM inserted)`,
+		input.ID, p.UserID, pack.Kind, pack.ID, input.Name, input.Description, pack.Version, pack.License, pack.Manifest, input.Archive, digest, flag, maxPluginsPerUser, int64(len(input.Archive)), maxPluginBytesPerUser).Scan(&existingOwner, &existingDigest, &identical, &exists, &withinCount, &withinStorage, &inserted); e != nil {
+		a.error(w, e)
+		return
+	}
+	if exists {
+		if existingOwner != p.UserID || !identical {
 			writeError(w, 409, "plugin_id_conflict")
 			return
 		}
@@ -392,25 +412,6 @@ func (a *Service) communityPluginPublish(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		write(w, 200, v)
-		return
-	}
-	if !errors.Is(e, pgx.ErrNoRows) {
-		a.error(w, e)
-		return
-	}
-	var withinCount, withinStorage, inserted bool
-	if e = tx.QueryRow(r.Context(), `WITH quota AS MATERIALIZED (
- SELECT count(*) AS count,COALESCE(sum(size),0)::bigint AS stored FROM community_plugins WHERE owner_id=$2
-), inserted AS (
- INSERT INTO community_plugins(id,owner_id,kind,plugin_id,name,description,version,license,manifest,archive,request_sha256,moderation,moderation_reason)
- SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12 FROM quota
- WHERE count<$13 AND stored+$14<=$15
- ON CONFLICT(id) DO NOTHING
- RETURNING id
-)
-SELECT (SELECT count<$13 FROM quota),(SELECT stored+$14<=$15 FROM quota),EXISTS(SELECT 1 FROM inserted)`,
-		input.ID, p.UserID, pack.Kind, pack.ID, input.Name, input.Description, pack.Version, pack.License, pack.Manifest, input.Archive, digest, flag, maxPluginsPerUser, int64(len(input.Archive)), maxPluginBytesPerUser).Scan(&withinCount, &withinStorage, &inserted); e != nil {
-		a.error(w, e)
 		return
 	}
 	if !withinCount {

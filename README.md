@@ -172,6 +172,8 @@ WAV 上传现在校验 RIFF 文件长度、分块边界、fmt/data 必需块和�
 
 文档、图片和语音接口使用同样的 NiuTrans v2 异步文件协议。服务端负责签名、上传和状态查询，客户端只看到 MSIME 设备令牌。对应 API 应用分别由 `MSIME_NIUTRANS_DOC_APP_ID`、`MSIME_NIUTRANS_IMAGE_APP_ID`、`MSIME_NIUTRANS_VOICE_APP_ID` 注入，并共用 `MSIME_NIUTRANS_APIKEY`。资源管理路由使用 `MSIME_NIUTRANS_RESOURCE_APP_ID`；`action` 只允许单段路径，服务端不会接受任意上游 URL。未配置某项 API 时，该项返回 503，不影响其他功能启动。
 
+文件上传和结果下载各限 64 MiB；状态查询等 JSON 响应限 1 MiB。下载按固定大小缓冲区流式转发，不将整个结果保存在内存里。上游声明的下载长度超过上限时返回 502；传输中才发现超限、文件截断或读取失败时中断连接，客户端必须把不完整响应视为下载失败。下载沿用 `timeout_seconds` 的请求时限。
+
 ### 共享译文缓存
 
 启用用户体系（PostgreSQL）时，腾讯 TMT 路径自动带上 `translation_cache` 表：命中的文本直接返回，只有未命中的才送上游，整批命中就完全不调用腾讯。候选释义一页九个词两种语言，重复率很高，这一层直接省掉对应的调用量。

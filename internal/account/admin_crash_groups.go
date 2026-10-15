@@ -613,7 +613,7 @@ func crashGroupTitle(message string) string {
 	return line
 }
 
-// Backfill bounds: each batch is one transaction, and one startup handles at most crashBackfillBatches of them so a large history cannot hold up startup; the rest continues at the next start.
+// 回填每批独立读取，事件签名与分组写入同一隐式事务；每次启动最多处理 crashBackfillBatches 批，剩余历史留到下次启动，避免阻塞过久。
 const (
 	crashBackfillBatch   = 500
 	crashBackfillBatches = 40
@@ -642,12 +642,7 @@ type crashBackfillGroup struct {
 
 // backfillCrashBatch signs the next batch of unsigned crashes after the cursor and reports whether more may follow, with the new cursor.
 func (a *Service) backfillCrashBatch(ctx context.Context, afterTime time.Time, afterID string) (bool, time.Time, string, error) {
-	tx, err := a.store.pool.Begin(ctx)
-	if err != nil {
-		return false, afterTime, afterID, err
-	}
-	defer tx.Rollback(ctx)
-	rows, err := tx.Query(ctx, `SELECT id,platform,version,message,stack,created_at FROM admin_events
+	rows, err := a.store.pool.Query(ctx, `SELECT id,platform,version,message,stack,created_at FROM admin_events
 WHERE kind='crash' AND signature IS NULL AND (created_at,id)>($1,$2) ORDER BY created_at,id LIMIT $3`, afterTime, afterID, crashBackfillBatch)
 	if err != nil {
 		return false, afterTime, afterID, err
@@ -680,27 +675,24 @@ WHERE kind='crash' AND signature IS NULL AND (created_at,id)>($1,$2) ORDER BY cr
 		group.version, group.last = e.version, e.created
 	}
 	if len(ids) > 0 {
-		if _, err = tx.Exec(ctx, `UPDATE admin_events e SET signature=v.signature FROM unnest($1::text[],$2::text[]) v(id,signature) WHERE e.id=v.id AND e.signature IS NULL`, ids, signatures); err != nil {
-			return false, afterTime, afterID, err
-		}
+		batch := &pgx.Batch{}
+		batch.Queue(`UPDATE admin_events e SET signature=v.signature FROM unnest($1::text[],$2::text[]) v(id,signature) WHERE e.id=v.id AND e.signature IS NULL`, ids, signatures)
 		var keys, platforms, versions, titles []string
 		var firsts, lasts []time.Time
-		// A fixed order keeps two replicas backfilling at once from deadlocking on the group rows.
+		// 按固定顺序更新分组，避免两个副本同时回填时争用分组行而死锁。
 		for _, signature := range slices.Sorted(maps.Keys(groups)) {
 			group := groups[signature]
 			keys, platforms, versions, titles = append(keys, signature), append(platforms, group.platform), append(versions, group.version), append(titles, group.title)
 			firsts, lasts = append(firsts, group.first), append(lasts, group.last)
 		}
-		if _, err = tx.Exec(ctx, `INSERT INTO admin_crash_groups(signature,platform,version,title,first_seen,last_seen)
+		batch.Queue(`INSERT INTO admin_crash_groups(signature,platform,version,title,first_seen,last_seen)
 SELECT * FROM unnest($1::text[],$2::text[],$3::text[],$4::text[],$5::timestamptz[],$6::timestamptz[])
 ON CONFLICT(signature) DO UPDATE SET first_seen=LEAST(admin_crash_groups.first_seen,EXCLUDED.first_seen),
  last_seen=GREATEST(admin_crash_groups.last_seen,EXCLUDED.last_seen),
- version=CASE WHEN EXCLUDED.last_seen>admin_crash_groups.last_seen THEN EXCLUDED.version ELSE admin_crash_groups.version END`, keys, platforms, versions, titles, firsts, lasts); err != nil {
+ version=CASE WHEN EXCLUDED.last_seen>admin_crash_groups.last_seen THEN EXCLUDED.version ELSE admin_crash_groups.version END`, keys, platforms, versions, titles, firsts, lasts)
+		if err = a.store.pool.SendBatch(ctx, batch).Close(); err != nil {
 			return false, afterTime, afterID, err
 		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return false, afterTime, afterID, err
 	}
 	last := events[len(events)-1]
 	return len(events) == crashBackfillBatch, last.created, last.id, nil

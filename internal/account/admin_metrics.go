@@ -64,17 +64,9 @@ ON CONFLICT(service,hour) DO UPDATE SET calls=m.calls+EXCLUDED.calls, errors=m.e
 const mergeLatencyBuckets = `(SELECT COALESCE(jsonb_object_agg(k,COALESCE((m.latency_buckets->>k)::bigint,0)+COALESCE((EXCLUDED.latency_buckets->>k)::bigint,0)),'{}'::jsonb)
   FROM (SELECT jsonb_object_keys(m.latency_buckets) UNION SELECT jsonb_object_keys(EXCLUDED.latency_buckets)) AS keys(k))`
 
-// sendBatchTx runs batch in one transaction.
+// sendBatchTx 用批次的隐式事务原子执行全部语句，关闭结果时返回执行或提交错误。
 func (a *Service) sendBatchTx(ctx context.Context, batch *pgx.Batch) error {
-	tx, err := a.store.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	if err = tx.SendBatch(ctx, batch).Close(); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
+	return a.store.pool.SendBatch(ctx, batch).Close()
 }
 
 // latencyJSON is the jsonb form of a latency histogram; nil is the empty object.
@@ -254,12 +246,7 @@ func (a *Service) RecordServiceVerdicts(ctx context.Context, minute time.Time, v
 INSERT INTO admin_service_daily AS d(service,day,ok_minutes,total_minutes,degraded,p95_ms) SELECT service,$11::date,$12::int,1,$13::boolean,$14::int FROM v
 `+dailyRollupConflict, minute, v.Service, v.State, v.Calls, v.Errors, v.P95MS, v.BadRuns, v.GoodRuns, v.Incident, v.CheckedAt.UTC(), day, ok, v.Daily.Degraded, v.Daily.P95MS)
 	}
-	tx, err := a.store.pool.Begin(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback(ctx)
-	results := tx.SendBatch(ctx, batch)
+	results := a.store.pool.SendBatch(ctx, batch)
 	recorded := 0
 	for range verdicts {
 		tag, err := results.Exec()
@@ -269,10 +256,10 @@ INSERT INTO admin_service_daily AS d(service,day,ok_minutes,total_minutes,degrad
 		}
 		recorded += int(tag.RowsAffected())
 	}
-	if err = results.Close(); err != nil {
+	if err := results.Close(); err != nil {
 		return 0, err
 	}
-	return recorded, tx.Commit(ctx)
+	return recorded, nil
 }
 
 const verdictColumns = `service,state,calls,errors,p95_ms,bad_runs,good_runs,incident,checked_at`
@@ -430,18 +417,13 @@ func (a *Service) OpenAutoIncident(ctx context.Context, service, title, descript
 	if !serviceKeyPattern.MatchString(service) || !resourceText(title, 1, 200, false) || !resourceText(description, 0, 5000, true) {
 		return false, ErrInvalid
 	}
-	tx, err := a.store.pool.Begin(ctx)
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback(ctx)
 	n, err := normalizeNotification(Notification{Kind: NotifyIncident, Title: title, TargetPage: "status"})
 	if err != nil {
 		return false, err
 	}
 	var id int64
 	// incident 写入和通知写入共用一条数据修改 CTE，避免创建自动事件时往返两次。
-	err = tx.QueryRow(ctx, `WITH incident AS (
+	err = a.store.pool.QueryRow(ctx, `WITH incident AS (
  INSERT INTO admin_incidents(service,title,description,auto) VALUES($1,$2,$3,true)
  ON CONFLICT(service) WHERE state='open' AND auto DO NOTHING
  RETURNING id
@@ -457,7 +439,7 @@ SELECT id FROM incident`, service, title, description, n.Kind, n.Title, n.Target
 	if err != nil {
 		return false, err
 	}
-	return true, tx.Commit(ctx)
+	return true, nil
 }
 
 // ResolveAutoIncident resolves the probe's open incident for service and reports whether there was one.

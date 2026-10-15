@@ -733,6 +733,40 @@ func TestAdminLogsStream(t *testing.T) {
 	})
 }
 
+func TestAdminLogsStreamZeroBackfillStartsAtConnection(t *testing.T) {
+	s, loki := adminLogsFixture(t)
+	s.logPoll = 20 * time.Millisecond
+	loki.add(logEntryAt(time.Now().Add(-time.Second), "p-a", "INFO", "before connection"))
+	_, events, _ := openLogStream(t, s, "?backfill=0", nil)
+	nextEvent(t, events, "pods")
+	queries := loki.seen()
+	if len(queries) == 0 || queries[0].Get("_path") != "/loki/api/v1/query" {
+		t.Fatal("zero backfill must skip the historical query", queries)
+	}
+	connectedAt, err := strconv.ParseInt(queries[0].Get("time"), 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := logEntryAt(time.Now(), "p-a", "INFO", "after connection")
+	loki.add(fresh)
+	if lines := streamLines(t, nextEvent(t, events, "lines")); len(lines) != 1 || lines[0].Message != "after connection" {
+		t.Fatalf("zero backfill returned historical lines: %+v", lines)
+	}
+	// 连接后的晚到日志仍在回看窗口内；时间戳相同但内容不同也应补发。
+	loki.add(lokiEntry{ns: fresh.ns, pod: fresh.pod, line: "late after connection"})
+	if lines := streamLines(t, nextEvent(t, events, "lines")); len(lines) != 1 || lines[0].Message != "late after connection" {
+		t.Fatalf("late log was lost or duplicated: %+v", lines)
+	}
+	for _, query := range loki.seen() {
+		if query.Get("_path") == "/loki/api/v1/query_range" {
+			start, err := strconv.ParseInt(query.Get("start"), 10, 64)
+			if err != nil || start < connectedAt {
+				t.Fatal("zero backfill queried before the connection", query, connectedAt)
+			}
+		}
+	}
+}
+
 func TestAdminLogsStreamResumeAndLimits(t *testing.T) {
 	s, loki := adminLogsFixture(t)
 	s.logPoll = 20 * time.Millisecond

@@ -51,7 +51,11 @@ func TestReleaseDownloadsBaselineLimitsHistoricalRows(t *testing.T) {
 	}
 	defer tx.Rollback(ctx)
 	var summary downloadsSummary
-	rows, err := githubReleaseDownloads(ctx, tx, today.AddDate(0, 0, -6), today, &summary)
+	dbRows, err := tx.Query(ctx, githubReleaseDownloadsQuery, today.AddDate(0, 0, -6), today)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := collectGitHubReleaseDownloads(dbRows, &summary)
 	if err != nil {
 		t.Fatal(err)
 	}

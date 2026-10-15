@@ -72,10 +72,12 @@ func (s *Store) DeleteUserData(ctx context.Context, user string, sections map[st
 	defer tx.Rollback(ctx)
 	var statements []string
 	if sections["preferences"] {
-		statements = append(statements, `UPDATE user_preferences SET settings='{}'::jsonb,revision=revision+1 WHERE user_id=$1`)
+		statements = append(statements, `INSERT INTO user_preferences(user_id,revision,settings) VALUES($1,1,'{}'::jsonb)
+ ON CONFLICT(user_id) DO UPDATE SET settings='{}'::jsonb,revision=user_preferences.revision+1`)
 	}
 	if sections["phrases"] {
-		statements = append(statements, `UPDATE user_phrases SET phrases='[]'::jsonb,revision=revision+1 WHERE user_id=$1`)
+		statements = append(statements, `INSERT INTO user_phrases(user_id,revision,phrases) VALUES($1,1,'[]'::jsonb)
+ ON CONFLICT(user_id) DO UPDATE SET phrases='[]'::jsonb,revision=user_phrases.revision+1`)
 	}
 	if sections["clipboard"] {
 		// 除了条目，还删除当前密钥编号、封装和全部设备登记（设备名、公钥、登记时间是服务端看得到的元数据）；封装随设备的外键一起删除。同步开关和保留天数不变，开着同步的设备会重新登记，由第一台设备重新生成密钥。

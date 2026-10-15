@@ -59,6 +59,18 @@ func TestQQContentHashUsesBoundedMemory(t *testing.T) {
 	}
 }
 
+func TestQQContentHashShortAllocationBudget(t *testing.T) {
+	parts := []string{"合成指南", "安装 > 设置"}
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			_ = qqContentHash(parts...)
+		}
+	})
+	if allocated := result.AllocedBytesPerOp(); allocated > sha256.Size*2 {
+		t.Fatalf("短内容哈希分配 %d 字节，超过一个哈希字符串预算", allocated)
+	}
+}
+
 func BenchmarkQQContentHash(b *testing.B) {
 	for _, tc := range []struct {
 		name  string

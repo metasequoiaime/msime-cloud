@@ -10,6 +10,7 @@ import { PageIntro } from "../../shell/page-intro";
 import { Button, buttonVariants } from "../../ui/button";
 import { Banner, Card, CardHeader } from "../../ui/card";
 import { cn } from "../../ui/cn";
+import { splitBytes } from "../../utils/bytes";
 import { FilterChips } from "../../ui/filter-chips";
 import { Empty, ErrorState, SkeletonRows } from "../../ui/states";
 import { FileDetail } from "./detail";
@@ -18,9 +19,8 @@ import { DictionarySearch } from "./search";
 type Selection = { section: Section; path?: string; query?: string; version?: string };
 const sectionOrder: Section[] = ["custom", "packs", "sources"];
 export function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  const { value, unit } = splitBytes(bytes);
+  return unit === "B" ? `${value} B` : `${value.toFixed(1)} ${unit}`;
 }
 export function fileName(path: string): string { return path.slice(path.lastIndexOf("/") + 1); }
 

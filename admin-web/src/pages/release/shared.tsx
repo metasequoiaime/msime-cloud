@@ -1,5 +1,6 @@
 import { format } from "date-fns";
 import { codeMessage } from "../../api/client";
+import { splitBytes } from "../../utils/bytes";
 import type { Release, ReleaseStatus } from "../../api/release";
 import type { Tone } from "../../ui/pill";
 
@@ -29,9 +30,12 @@ export function repoShortName(repo: string): string {
 }
 
 export function formatSize(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${bytes} B`;
+  // 原有发布页将非数值视为未达到任何单位阈值，保留 B 文案。
+  if (Number.isNaN(bytes)) return `${bytes} B`;
+  const { value, unit } = splitBytes(bytes);
+  if (unit === "MB") return `${value.toFixed(1)} MB`;
+  if (unit === "KB") return `${Math.round(value)} KB`;
+  return `${value} B`;
 }
 
 export function formatCount(n: number): string {

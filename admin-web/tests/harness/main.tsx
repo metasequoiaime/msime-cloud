@@ -22,6 +22,9 @@ import { StatGrid, StatTile } from "../../src/ui/stat-tile";
 import { Switch } from "../../src/ui/switch";
 import { ToastProvider, useToast } from "../../src/ui/toast";
 import { useDebounced } from "../../src/hooks/use-debounced";
+import { formatBytes as dictionaryBytes } from "../../src/pages/dictionary";
+import { formatBytes as communityBytes } from "../../src/pages/community/format";
+import { formatSize as releaseBytes } from "../../src/pages/release/shared";
 import "./harness.css";
 
 type Row = { id: string; title: string; state: "open" | "closed" };
@@ -34,6 +37,13 @@ const series = Array.from({ length: 30 }, (_, index) => ({ day: `09-${String(ind
 const skin = { background: 0xf5faf6, keyBackground: 0xffffff, keyForeground: 0x0f2419, accent: 0x1e8e4e, actionBackground: 0x1e8e4e, cornerRadius: 8, borderWidth: 1, shadow: 0.1, pattern: 1, monospaced: false };
 
 const authClient = new QueryClient();
+const byteCases = [0, 1.5, 1023, 1024, 1536, 10239, 10240, 1048575, 1048576, 1610612736, -1, NaN, Infinity, -Infinity];
+
+function BytesHarness() {
+  return <table aria-label="字节格式化"><tbody>{byteCases.map(bytes => <tr key={String(bytes)} data-testid="byte-case">
+    <td>{String(bytes)}</td><td>{dictionaryBytes(bytes)}</td><td>{communityBytes(bytes)}</td><td>{releaseBytes(bytes)}</td>
+  </tr>)}</tbody></table>;
+}
 
 function AuthHarness() {
   const auth = useAuth();
@@ -103,6 +113,7 @@ function Harness() {
       <span data-testid="committed">{committed}</span>
     </div>
     <Banner>说明横幅</Banner>
+    <BytesHarness />
     <DataTable ariaLabel="测试表格" data={filter === "all" ? rows : rows.filter(row => row.state === "open")} columns={columns} getRowId={row => row.id} selectable searchText={row => row.title}
       toolbar={<FilterChips label="状态" value={filter} onChange={setFilter} options={[{ key: "all", label: "全部", count: 3 }, { key: "open", label: "待处理", count: 2 }]} />}
       onRowClick={() => setDrawer(true)}

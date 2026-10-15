@@ -730,8 +730,35 @@ func qqLineMarkerEnd(line string) int {
 	return 0
 }
 
-// qqPlainTextReplacer 并发复用固定的行内标记规则，避免每次转换都重建替换器。
-var qqPlainTextReplacer = strings.NewReplacer("**", "", "__", "", "`", "")
+// qqPlainInlineText 按原替换器的非重叠规则删除行内标记，只为保留的正文分配一次。
+func qqPlainInlineText(text string) string {
+	size := len(text) - 2*strings.Count(text, "**") - 2*strings.Count(text, "__") - strings.Count(text, "`")
+	if size == len(text) {
+		return text
+	}
+	var plain strings.Builder
+	plain.Grow(size)
+	start := 0
+	for i := 0; i < len(text); {
+		end := i
+		switch text[i] {
+		case '`':
+			end++
+		case '*', '_':
+			if i+1 < len(text) && text[i+1] == text[i] {
+				end += 2
+			}
+		}
+		if end == i {
+			i++
+			continue
+		}
+		plain.WriteString(text[start:i])
+		start, i = end, end
+	}
+	plain.WriteString(text[start:])
+	return plain.String()
+}
 
 // qqPlainTextCanReuse 判断正文是否已经是 qqPlainText 的输出格式，可以直接复用输入字符串。
 func qqPlainTextCanReuse(md string) bool {
@@ -807,7 +834,7 @@ func qqPlainText(md string) string {
 		text = qqLinkPattern.ReplaceAllString(text, "")
 	}
 	if strings.Contains(text, "**") || strings.Contains(text, "__") || strings.ContainsRune(text, '`') {
-		text = qqPlainTextReplacer.Replace(text)
+		text = qqPlainInlineText(text)
 	}
 	fields := func(yield func(string) bool) {
 		for remaining := text; remaining != ""; {

@@ -1,9 +1,44 @@
 package server
 
 import (
+	"math/rand"
 	"strings"
 	"testing"
 )
+
+func TestQQPlainTextInlineMarkersMatchPrevious(t *testing.T) {
+	previous := strings.NewReplacer("**", "", "__", "", "`", "")
+	random := rand.New(rand.NewSource(23))
+	units := []string{"水", "😀", " ", "\t", "\u3000", "*", "_", "`", "\xff", "\xe4\xb8"}
+	for range 1000 {
+		var input strings.Builder
+		// 固定普通正文前缀，单独验证行内替换，不触发行首标记或代码围栏。
+		input.WriteString("正文 ")
+		for range random.Intn(200) {
+			input.WriteString(units[random.Intn(len(units))])
+		}
+		text := input.String()
+		want := strings.Join(strings.Fields(previous.Replace(text)), " ")
+		if got := qqPlainText(text); got != want {
+			t.Fatalf("行内标记替换不兼容：输入=%q，结果=%q，预期=%q", text, got, want)
+		}
+	}
+}
+
+func TestQQPlainInlineTextMatchesPrevious(t *testing.T) {
+	previous := strings.NewReplacer("**", "", "__", "", "`", "")
+	units := []string{"", "*", "_", "`", "***", "___", "*`*", "_`_", "水", "\xff", "\n"}
+	for _, a := range units {
+		for _, b := range units {
+			for _, c := range units {
+				text := a + b + c
+				if got, want := qqPlainInlineText(text), previous.Replace(text); got != want {
+					t.Fatalf("行内删除规则不兼容：输入=%q，结果=%q，预期=%q", text, got, want)
+				}
+			}
+		}
+	}
+}
 
 func TestQQPlainTextInlineMarkers(t *testing.T) {
 	for _, tc := range []struct{ name, input, want string }{

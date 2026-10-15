@@ -277,20 +277,14 @@ func applyDictionaryChanges(name, text string, changes []dictionaryEdit) (string
 	// 翻译允许覆盖同一源词，其他文件按前两列去重。
 	seen := map[string]int{}
 	oldCounts := map[string]int{}
-	key := func(line string) string {
-		cols := strings.Split(strings.TrimSuffix(line, "\r"), "\t")
-		if len(cols) < 2 {
-			return ""
-		}
-		return strings.Join(cols[:2], "\t")
-	}
+
 	for _, line := range lines {
-		if k := key(line); k != "" {
+		if k := dictionaryEntryKey(line); k != "" {
 			oldCounts[k]++
 		}
 	}
 	for _, line := range strings.Split(result, "\n") {
-		k := key(line)
+		k := dictionaryEntryKey(line)
 		if k == "" {
 			continue
 		}
@@ -300,6 +294,17 @@ func applyDictionaryChanges(name, text string, changes []dictionaryEdit) (string
 		}
 	}
 	return result, nil
+}
+
+// dictionaryEntryKey 从原行截取前两列作为去重键，避免拆分再拼接。
+func dictionaryEntryKey(line string) string {
+	line = strings.TrimSuffix(line, "\r")
+	first, rest, ok := strings.Cut(line, "\t")
+	if !ok {
+		return ""
+	}
+	second, _, _ := strings.Cut(rest, "\t")
+	return line[:len(first)+1+len(second)]
 }
 
 // dictionaryColumnValidator 在单次变更中复用原词库的权重范围，避免每条新增词条都重扫文件。

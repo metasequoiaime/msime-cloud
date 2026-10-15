@@ -100,19 +100,11 @@ func (a *Service) NotifyOnce(ctx context.Context, n Notification) error {
 	if err != nil {
 		return err
 	}
-	tx, err := a.store.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	// The check runs as its own statement after the lock, so its snapshot sees a row another caller committed while this one waited.
-	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('admin_notifications:'||$1||':'||$2,0))`, n.Kind, n.TargetID); err != nil {
-		return err
-	}
-	if _, err = tx.Exec(ctx, `INSERT INTO admin_notifications(kind,title,target_page,target_id,created_at) SELECT $1,$2,$3,$4,clock_timestamp() WHERE NOT EXISTS(SELECT 1 FROM admin_notifications WHERE kind=$1 AND target_id=$4)`, n.Kind, n.Title, n.TargetPage, n.TargetID); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
+	// 批次的隐式事务先锁定通知目标，再用独立语句检查，读取等待期间其他副本提交的通知。
+	batch := &pgx.Batch{}
+	batch.Queue(`SELECT pg_advisory_xact_lock(hashtextextended('admin_notifications:'||$1||':'||$2,0))`, n.Kind, n.TargetID)
+	batch.Queue(`INSERT INTO admin_notifications(kind,title,target_page,target_id,created_at) SELECT $1,$2,$3,$4,clock_timestamp() WHERE NOT EXISTS(SELECT 1 FROM admin_notifications WHERE kind=$1 AND target_id=$4)`, n.Kind, n.Title, n.TargetPage, n.TargetID)
+	return a.store.pool.SendBatch(ctx, batch).Close()
 }
 
 // notificationVisible is the condition shared by the list and the unread count, with $1 the admin's email: a kind is hidden when the admin switched off its personal preference (the admin_preferences.prefs key "notify_"+kind that POST /api/me set_pref writes, see adminPrefDefaults; a missing key means on). Kinds without a preference are always shown.

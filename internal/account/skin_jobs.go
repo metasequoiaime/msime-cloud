@@ -76,8 +76,9 @@ func (a *Service) CreateSkinJob(ctx context.Context, id, owner string, perOwner,
 	// 两条语句批量发送，保留执行顺序；达到容量上限时回滚，清理也不会单独提交。
 	batch := &pgx.Batch{}
 	batch.Queue(`DELETE FROM skin_jobs WHERE expires_at<=clock_timestamp() OR (cancelled AND NOT (` + skinJobLive + `))`)
-	batch.Queue(`INSERT INTO skin_jobs(id,owner,expires_at)
-SELECT $1,$2,clock_timestamp()+make_interval(secs=>$3)
+	// 初始心跳必须取锁后的实际时间；默认 now() 固定为事务开始时间，长锁等待会让新任务立即失效。
+	batch.Queue(`INSERT INTO skin_jobs(id,owner,expires_at,heartbeat_at)
+SELECT $1,$2,clock_timestamp()+make_interval(secs=>$3),clock_timestamp()
 FROM (SELECT count(*) AS total_count,count(*) FILTER (WHERE owner=$2) AS owner_count
  FROM skin_jobs WHERE state<>'running' OR `+skinJobLive+`) counts
 WHERE owner_count<$4 AND total_count<$5

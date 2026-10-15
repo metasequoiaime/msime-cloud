@@ -301,7 +301,7 @@ func (s *Server) translationBudget(e TranslationEndpoint) *providerBudget {
 // translateEndpoint 执行一次翻译；额度不足时返回 false，未写响应，由调用方尝试后备。
 func (s *Server) translateEndpoint(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint, budget *providerBudget) bool {
 	if e.Provider == "tencent" {
-		// 腾讯先查缓存，只有仍需调用上游时才预留一次请求额度。
+		// 腾讯先查缓存，再按未命中文本实际分组数预留请求额度。
 		return s.translateTencent(w, r, v, e, budget)
 	}
 	if e.Provider == "deepl" {

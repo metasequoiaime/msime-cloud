@@ -52,12 +52,31 @@ func (s *Server) translateTencent(w http.ResponseWriter, r *http.Request, v tran
 	missing := missingTexts(wanted, cached)
 	var fresh []string
 	if len(missing) > 0 {
-		if budget != nil && !budget.take(time.Now(), 1) {
+		parts, batches := tencentTranslationBatches(missing)
+		if budget != nil && !budget.take(time.Now(), len(batches)) {
 			return false
 		}
-		var ok bool
-		if fresh, ok = s.translateTencentUpstream(w, r, source, target, missing, e); !ok {
-			return true
+		for _, batch := range batches {
+			// 逐个实际 HTTP 请求计量；外层未发送请求，不会重复记录。
+			mr, call := metered(r, "translation", textChars(batch.texts))
+			translated, ok := s.translateTencentUpstream(w, mr, source, target, batch.texts, e)
+			s.settleMeter(call, ok)
+			if !ok {
+				return true
+			}
+			for i, index := range batch.parts {
+				parts[index].translated = translated[i]
+			}
+		}
+		fresh = make([]string, len(missing))
+		for _, part := range parts {
+			fresh[part.index] += part.prefix + part.translated + part.suffix
+		}
+		for _, text := range fresh {
+			if !bounded(text, contract.OutputTextBytes) {
+				upstreamError(w, r, nil)
+				return true
+			}
 		}
 		s.storeTranslations(r.Context(), source, target, missing, fresh)
 	}
@@ -79,7 +98,7 @@ func (s *Server) translateTencentUpstream(w http.ResponseWriter, r *http.Request
 		return nil, false
 	}
 	signTencent(req, payload, e, time.Now())
-	// Only the cache misses sent here are metered; translate settles the call from the response it writes.
+	// 只计入本次实际发送的缓存未命中分段，调用方验证后结算本组。
 	meterUsage(r, textChars(texts))
 	body, err := s.doUpstream(req)
 	var result struct {

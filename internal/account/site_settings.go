@@ -122,20 +122,14 @@ func (a *Service) adminSiteSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor := adminActor(r.Context())
-	tx, err := a.store.pool.Begin(r.Context())
-	if err != nil {
-		a.error(w, err)
-		return
-	}
-	defer tx.Rollback(r.Context())
 	action, target := "set_lanzou_url", value
 	if value == "" {
 		action, target = "clear_lanzou_url", lanzouURLKey
 	}
 	var s SiteSettings
 	var at time.Time
-	// 设置写入和审计记录共用一条数据修改 CTE，确保同一事务内少一次往返。
-	if err = tx.QueryRow(r.Context(), `WITH written AS (
+	// 设置写入、审计和响应共用一条原子语句，省去单独开启和提交事务的往返。
+	if err := a.store.pool.QueryRow(r.Context(), `WITH written AS (
  INSERT INTO site_settings(key,value,updated_by) VALUES($1,$2,$3)
  ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=now(),updated_by=excluded.updated_by
 	 RETURNING value,updated_at,updated_by
@@ -144,10 +138,6 @@ func (a *Service) adminSiteSettings(w http.ResponseWriter, r *http.Request) {
  RETURNING 1
 )
 SELECT w.value,w.updated_at,w.updated_by FROM written w CROSS JOIN audited`, lanzouURLKey, value, actor, action, target).Scan(&s.LanzouURL, &at, &s.UpdatedBy); err != nil {
-		a.error(w, err)
-		return
-	}
-	if err = tx.Commit(r.Context()); err != nil {
 		a.error(w, err)
 		return
 	}

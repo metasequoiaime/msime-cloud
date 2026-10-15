@@ -487,21 +487,41 @@ var qqPlainTextReplacer = strings.NewReplacer("**", "", "__", "", "`", "")
 
 // qqPlainText 把 GitHub 上的 Markdown（维护者评论、issue 正文）变成一行纯文本，直接发到群里或交给模型都不再带 **、反引号、## 和半截链接：去掉代码块，链接只留文字，删掉裸链接和加粗、代码的符号，逐行去掉行首的标题、引用、列表标记，丢掉表格行，最后合并空白。图片和 HTML 标签由调用方先用 qqImagePattern 去掉。
 func qqPlainText(md string) string {
-	var kept []string
-	fenced := false
-	for line := range strings.SplitSeq(md, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "```") {
-			fenced = !fenced
-			continue
+	text := md
+	if strings.Contains(md, "```") {
+		var body strings.Builder
+		fenced, filtered := false, false
+		separator, offset := "", 0
+		for line := range strings.SplitSeq(md, "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "```") {
+				if !filtered {
+					filtered = true
+					if offset > 0 {
+						// 发现首个围栏才构建结果；之前的换行由后续行的分隔符补回。
+						body.WriteString(md[:offset-1])
+						separator = "\n"
+					}
+				}
+				fenced = !fenced
+			} else if filtered && !fenced {
+				// 沿用按保留行连接的换行规则，空行也占一个位置。
+				body.WriteString(separator)
+				body.WriteString(line)
+				separator = "\n"
+			}
+			offset += len(line)
+			if offset < len(md) {
+				offset++
+			}
 		}
-		if !fenced {
-			kept = append(kept, line)
+		if filtered {
+			text = body.String()
 		}
 	}
-	text := qqStripLinks(qqMarkdownLink.ReplaceAllString(strings.Join(kept, "\n"), "$1"))
+	text = qqStripLinks(qqMarkdownLink.ReplaceAllString(text, "$1"))
 	text = qqPlainTextReplacer.Replace(text)
 	lines := strings.Split(text, "\n")
-	kept = lines[:0]
+	kept := lines[:0]
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "|") {

@@ -532,24 +532,56 @@ func qqPlainText(md string) string {
 	if strings.Contains(text, "**") || strings.Contains(text, "__") || strings.ContainsRune(text, '`') {
 		text = qqPlainTextReplacer.Replace(text)
 	}
-	lines := strings.Split(text, "\n")
-	kept := lines[:0]
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "|") {
-			continue
-		}
-		// 「> - 第一条」这类标记只匹配并切掉前缀，避免逐层复制剩余整行。
-		for {
-			end := qqLineMarkerEnd(line)
-			if end == 0 {
-				break
+	fields := func(yield func(string) bool) {
+		for remaining := text; remaining != ""; {
+			var line string
+			line, remaining, _ = strings.Cut(remaining, "\n")
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "|") {
+				continue
 			}
-			line = strings.TrimSpace(line[end:])
+			// 「> - 第一条」这类标记只匹配并切掉前缀，避免逐层复制剩余整行。
+			for {
+				end := qqLineMarkerEnd(line)
+				if end == 0 {
+					break
+				}
+				line = strings.TrimSpace(line[end:])
+			}
+			for field := range strings.FieldsSeq(line) {
+				if !yield(field) {
+					return
+				}
+			}
 		}
-		kept = append(kept, line)
 	}
-	return strings.Join(strings.Fields(strings.Join(kept, " ")), " ")
+	// 每遍重新扫描行和字段，先精确计算结果大小，避免保留中间切片或反复扩容。
+	size, count := 0, 0
+	var single string
+	for field := range fields {
+		if size > 0 {
+			size++
+		}
+		size += len(field)
+		count++
+		single = field
+	}
+	if count < 2 {
+		if count == 1 && len(single) < len(md) {
+			// 内容缩短时复制唯一字段，让短结果释放原输入中被丢弃的大段内容。
+			return strings.Clone(single)
+		}
+		return single
+	}
+	var out strings.Builder
+	out.Grow(size)
+	for field := range fields {
+		if out.Len() > 0 {
+			out.WriteByte(' ')
+		}
+		out.WriteString(field)
+	}
+	return out.String()
 }
 
 // qqSentenceBreaks 是 qqTruncateSentence 可以截断的地方：句末标点和换行。

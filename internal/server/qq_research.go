@@ -34,7 +34,7 @@ const (
 	qqResearchTimeout = 100 * time.Second
 	qqResearchWrapUp  = 20 * time.Second
 	qqResearchOrg     = "metasequoiaime"
-	// qqResearchVisibilityTTL 是仓库是否公开的检查结果在本副本缓存的时间，见 qqResearchPublic。
+	// qqResearchVisibilityTTL 是非公开仓库的拒绝结果在本副本缓存的时间；公开状态不缓存。
 	qqResearchVisibilityTTL = time.Hour
 )
 
@@ -229,26 +229,29 @@ func (s *Server) qqResearchCall(ctx context.Context, call qqResearchToolCall) st
 		slog.Warn("qq bot: research call skipped", "reason", err.Error())
 		return "查询失败。"
 	}
-	// 只查公开仓库：App 装在组织的全部仓库上，令牌能读私有仓库，查到的内容会被转述进千人群。提示词里「公开信息」的要求只约束得了模型，所以在发请求前由代码检查；/orgs、/users 和搜索用的是 defaultRepo 的令牌，不会读到别的仓库，不用检查。
-	if strings.HasPrefix(path, "/repos/") {
-		public, err := s.qqResearchPublic(ctx, token, repo)
-		if err != nil {
-			slog.Warn("qq bot: research visibility check failed", "repo", repo, "reason", err.Error())
-			return "确认不了这个仓库是否公开，不能查。"
-		}
-		if !public {
-			return "这个仓库不公开，不能查。"
+	userPath, _, _ := strings.Cut(path, "?")
+	checkVisibility := !qqResearchUserPath.MatchString(userPath)
+	// 仓库、组织和搜索请求都可能读到令牌所辖仓库的私有内容；用户公开资料不读取仓库。
+	if checkVisibility {
+		if refusal := s.qqResearchAccess(ctx, token, repo, path); refusal != "" {
+			return refusal
 		}
 	}
 	r, err := client.Get(ctx, token, path)
 	if err != nil || !r.OK() {
 		return "查询失败：" + githubFailure("research", r, err).Error()
 	}
+	// 请求在途时仓库可能转为私有；返回模型前再次确认，拒绝时也移除本次读取的缓存。
+	if checkVisibility {
+		if refusal := s.qqResearchAccess(ctx, token, repo, path); refusal != "" {
+			return refusal
+		}
+	}
 	var data any
 	if json.Unmarshal(r.Body, &data) != nil {
 		return "返回的不是 JSON。"
 	}
-	if userPath, _, _ := strings.Cut(path, "?"); qqResearchUserPath.MatchString(userPath) {
+	if qqResearchUserPath.MatchString(userPath) {
 		data = qqResearchUserWhitelist(data)
 	}
 	// 单个 Release 的发布说明多留一些，见 qqResearchReleaseBodyRunes。
@@ -262,16 +265,30 @@ func (s *Server) qqResearchCall(ctx context.Context, call qqResearchToolCall) st
 	return qqTruncate(string(compact), qqResearchResultRunes)
 }
 
-// qqResearchPublic 用查询用的令牌 GET /repos/{repo}，返回它是不是公开仓库：private 为 false 且 visibility 是 public 才算公开，两个字段缺一个都不算。结果按仓库缓存 qqResearchVisibilityTTL；查询失败时返回错误、不缓存，调用方按不公开处理（fail closed）。
+// qqResearchAccess 拒绝非公开或无法确认可见性的仓库范围，并清理当前路径的内容缓存。
+func (s *Server) qqResearchAccess(ctx context.Context, token, repo, path string) string {
+	public, err := s.qqResearchPublic(ctx, token, repo)
+	if err == nil && public {
+		return ""
+	}
+	s.adminGitHub.Invalidate(path)
+	if err != nil {
+		slog.Warn("qq bot: research visibility check failed", "repo", repo, "reason", err.Error())
+		return "确认不了这个仓库是否公开，不能查。"
+	}
+	return "这个仓库不公开，不能查。"
+}
+
+// qqResearchPublic 用查询令牌 GET /repos/{repo}，private 为 false 且 visibility 是 public 才放行。只缓存非公开结果；公开状态每次重新确认，检查失败时拒绝读取。
 func (s *Server) qqResearchPublic(ctx context.Context, token, repo string) (bool, error) {
 	b := s.qq
 	b.mu.Lock()
 	cached, ok := b.repoVisibility[repo]
 	b.mu.Unlock()
-	if ok && b.now().Sub(cached.at) < qqResearchVisibilityTTL {
+	if ok && !cached.public && b.now().Sub(cached.at) < qqResearchVisibilityTTL {
 		return cached.public, nil
 	}
-	// 用 Do 不用 Get：缓存只按上面的 qqResearchVisibilityTTL 算，不再叠一层读缓存。
+	// 绕过内容读取缓存，不能用过期的公开状态授权后续请求。
 	r, err := s.adminGitHub.Do(ctx, token, "GET", "/repos/"+repo, nil)
 	if err != nil || !r.OK() {
 		return false, githubFailure("visibility", r, err)
@@ -288,7 +305,11 @@ func (s *Server) qqResearchPublic(ctx context.Context, token, repo string) (bool
 	if b.repoVisibility == nil {
 		b.repoVisibility = map[string]qqRepoVisibility{}
 	}
-	b.repoVisibility[repo] = qqRepoVisibility{public: public, at: b.now()}
+	if public {
+		delete(b.repoVisibility, repo)
+	} else {
+		b.repoVisibility[repo] = qqRepoVisibility{public: false, at: b.now()}
+	}
 	b.mu.Unlock()
 	return public, nil
 }

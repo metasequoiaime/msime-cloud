@@ -271,7 +271,7 @@ type qqBot struct {
 	// stats 是缓存的仓库统计和统计的时间，见 qqRepoStats；由 mu 保护。
 	stats   string
 	statsAt time.Time
-	// repoVisibility 缓存现查时各仓库是否公开，见 qqResearchPublic；由 mu 保护。
+	// repoVisibility 缓存现查时非公开仓库的拒绝结果，见 qqResearchPublic；由 mu 保护。
 	repoVisibility map[string]qqRepoVisibility
 	// appLogin 是管理后台 GitHub App 的 bot 账号「<slug>[bot]」，取到后不再变，见 qqAppLogin；由 mu 保护。
 	appLogin string

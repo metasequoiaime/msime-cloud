@@ -3883,7 +3883,7 @@ func qqTestGitHubGet(path string) qqResearchToolCall {
 	return call
 }
 
-// 现查只读公开仓库：私有仓库、不是 public 的仓库、检查失败时都不发出子路径的请求（假 GitHub 收到没配置的子路径会报 unexpected upstream call）；检查结果按仓库缓存一小时，失败不缓存。
+// 现查只读公开仓库：私有仓库、不是 public 的仓库、检查失败时都不发出子路径请求；只缓存非公开的拒绝结果，公开状态和检查失败不缓存。
 func TestQQResearchRefusesPrivateRepos(t *testing.T) {
 	s, fake, _ := qqServer(t)
 	now := time.Date(2026, 10, 12, 10, 0, 0, 0, time.UTC)
@@ -3911,21 +3911,24 @@ func TestQQResearchRefusesPrivateRepos(t *testing.T) {
 	if got := strings.Join(fake.repoChecks, ","); got != "metasequoiaime/secret,metasequoiaime/internal,metasequoiaime/odd,metasequoiaime/broken,metasequoiaime/broken" {
 		t.Fatal(got)
 	}
-	// 公开仓库照常查；/users、/orgs 和搜索不检查。
+	// 公开仓库在读取前后都检查；只读公开用户资料时不检查仓库。
 	if got := s.qqResearchCall(context.Background(), qqTestGitHubGet("/repos/metasequoiaime/msime/contents/README.md")); got != `{"content":"aGVsbG8=","name":"README.md"}` {
 		t.Fatal(got)
 	}
 	fake.extraGitHub["/users/houko"] = `{"login":"houko"}`
-	if got := s.qqResearchCall(context.Background(), qqTestGitHubGet("/users/houko")); got != `{"login":"houko"}` || len(fake.repoChecks) != 6 || fake.repoChecks[5] != "metasequoiaime/msime" {
+	if got := s.qqResearchCall(context.Background(), qqTestGitHubGet("/users/houko")); got != `{"login":"houko"}` || len(fake.repoChecks) != 7 || fake.repoChecks[5] != "metasequoiaime/msime" || fake.repoChecks[6] != "metasequoiaime/msime" {
 		t.Fatal(got, fake.repoChecks)
 	}
-	// 一小时内用缓存，过了一小时重新查：仓库改成私有后不再能查。
+	// 仓库转为私有时立即拒绝，之后一小时内复用拒绝结果。
 	fake.repoVisibility["metasequoiaime/msime"] = `{"private":true,"visibility":"private"}`
-	if got := s.qqResearchCall(context.Background(), qqTestGitHubGet("/repos/metasequoiaime/msime/contents/README.md")); got != `{"content":"aGVsbG8=","name":"README.md"}` || len(fake.repoChecks) != 6 {
+	if got := s.qqResearchCall(context.Background(), qqTestGitHubGet("/repos/metasequoiaime/msime/contents/README.md")); got != "这个仓库不公开，不能查。" || len(fake.repoChecks) != 8 {
+		t.Fatal(got, fake.repoChecks)
+	}
+	if got := s.qqResearchCall(context.Background(), qqTestGitHubGet("/repos/metasequoiaime/msime/contents/README.md")); got != "这个仓库不公开，不能查。" || len(fake.repoChecks) != 8 {
 		t.Fatal(got, fake.repoChecks)
 	}
 	now = now.Add(qqResearchVisibilityTTL)
-	if got := s.qqResearchCall(context.Background(), qqTestGitHubGet("/repos/metasequoiaime/msime/contents/README.md")); got != "这个仓库不公开，不能查。" || len(fake.repoChecks) != 7 {
+	if got := s.qqResearchCall(context.Background(), qqTestGitHubGet("/repos/metasequoiaime/msime/contents/README.md")); got != "这个仓库不公开，不能查。" || len(fake.repoChecks) != 9 {
 		t.Fatal(got, fake.repoChecks)
 	}
 }

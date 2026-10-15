@@ -124,6 +124,23 @@ func TestSensitiveMatcherNormalizationPreservesHits(t *testing.T) {
 	}
 }
 
+func TestSensitiveRegexLiteralPrefixSafety(t *testing.T) {
+	for _, tc := range []struct {
+		pattern, want string
+	}{
+		{"never-match", "never-match"},
+		{`never\.match`, "never.match"},
+		{"ABC", ""},
+		{`[a-z]+`, ""},
+		{"ＱＱ", ""},
+		{"好友", "好友"},
+	} {
+		if got := sensitiveRegexLiteral(tc.pattern); got != tc.want {
+			t.Errorf("sensitiveRegexLiteral(%q) = %q, want %q", tc.pattern, got, tc.want)
+		}
+	}
+}
+
 func BenchmarkSensitiveMatcherNormalization(b *testing.B) {
 	text := strings.Repeat("正常内容 ABC　\u200b", 10000)
 	for _, kind := range []string{"plain", "regex", "mixed"} {
@@ -131,13 +148,14 @@ func BenchmarkSensitiveMatcherNormalization(b *testing.B) {
 			var words []sensitiveWord
 			for i := range 20 {
 				pattern := fmt.Sprintf("never-match-%d", i)
-				w := sensitiveWord{plain: pattern}
+				w := sensitiveWord{hit: SensitiveHit{Pattern: pattern}, plain: pattern}
 				if kind == "regex" || (kind == "mixed" && i%2 == 0) {
 					var err error
 					w.re, err = compileSensitiveRegex(pattern)
 					if err != nil {
 						b.Fatal(err)
 					}
+					w.literal = sensitiveRegexLiteral(pattern)
 				}
 				words = append(words, w)
 			}

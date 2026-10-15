@@ -57,7 +57,7 @@ var usersList = adminList{
 	filters: []listFilter{{param: "role", field: "role", max: 32}},
 }
 
-// actionRevokeSession revokes one session (id) of one user (user_id).
+// actionRevokeSession 撤销指定用户的一条会话，重复撤销保留原响应且不重写会话。
 func actionRevokeSession(a *Service, ctx context.Context, tx pgx.Tx, v actionRequest) (actionResult, error) {
 	if err := requireActionID(v); err != nil {
 		return actionResult{}, err
@@ -65,36 +65,47 @@ func actionRevokeSession(a *Service, ctx context.Context, tx pgx.Tx, v actionReq
 	if !resourceText(v.UserID, 1, 128, false) {
 		return actionResult{}, actionFail(400, "invalid_user_id")
 	}
-	tag, err := tx.Exec(ctx, `UPDATE auth_sessions SET revoked=true WHERE id=$1 AND user_id=$2`, v.ID, v.UserID)
+	// 按锁后的状态跳过已撤销行，响应仍统计匹配会话，兼容重复请求。
+	var affected int64
+	err := tx.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+ SELECT id,revoked FROM auth_sessions WHERE id=$1 AND user_id=$2 FOR NO KEY UPDATE
+), revoked AS (
+ UPDATE auth_sessions s SET revoked=true FROM locked l WHERE s.id=l.id AND NOT l.revoked RETURNING 1
+)
+SELECT (SELECT count(*) FROM locked WHERE revoked)+(SELECT count(*) FROM revoked)`, v.ID, v.UserID).Scan(&affected)
 	if err != nil {
 		return actionResult{}, err
 	}
-	if tag.RowsAffected() == 0 {
+	if affected == 0 {
 		return actionResult{}, actionFail(404, "not_found")
 	}
-	return actionResult{Affected: tag.RowsAffected()}, nil
+	return actionResult{Affected: affected}, nil
 }
 
-// actionRevokeSessions revokes every session of the user id.
+// actionRevokeSessions 撤销用户的全部会话，已有用户无会话时仍幂等成功。
 func actionRevokeSessions(a *Service, ctx context.Context, tx pgx.Tx, v actionRequest) (actionResult, error) {
 	if err := requireActionID(v); err != nil {
 		return actionResult{}, err
 	}
-	tag, err := tx.Exec(ctx, `UPDATE auth_sessions SET revoked=true WHERE user_id=$1`, v.ID)
+	// 只改未撤销会话，保留原有匹配数量；无匹配时在同一次查询中检查用户，避免空集多一次往返。
+	// 空集检查对用户取键共享锁，复查等待期间的删除，避免普通快照将已删除用户判为存在。
+	var affected int64
+	var exists bool
+	err := tx.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+ SELECT id,revoked FROM auth_sessions WHERE user_id=$1 FOR NO KEY UPDATE
+), revoked AS (
+ UPDATE auth_sessions s SET revoked=true FROM locked l WHERE s.id=l.id AND s.user_id=$1 AND NOT l.revoked RETURNING 1
+), matched AS MATERIALIZED (
+ SELECT (SELECT count(*) FROM locked WHERE revoked)+(SELECT count(*) FROM revoked) AS affected
+)
+SELECT affected,CASE WHEN affected>0 THEN true ELSE EXISTS(SELECT 1 FROM auth_users WHERE id=$1 FOR KEY SHARE) END FROM matched`, v.ID).Scan(&affected, &exists)
 	if err != nil {
 		return actionResult{}, err
 	}
-	if tag.RowsAffected() == 0 {
-		// Revoking an existing user's already-empty session set is idempotent, but a missing user must not create a misleading audit record.
-		var exists bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM auth_users WHERE id=$1)`, v.ID).Scan(&exists); err != nil {
-			return actionResult{}, err
-		}
-		if !exists {
-			return actionResult{}, actionFail(404, "not_found")
-		}
+	if !exists {
+		return actionResult{}, actionFail(404, "not_found")
 	}
-	return actionResult{Affected: tag.RowsAffected()}, nil
+	return actionResult{Affected: affected}, nil
 }
 
 // lockUserForBan locks the user row and returns its display name (the default name when unset) and whether it is banned; a missing user is 404 not_found.

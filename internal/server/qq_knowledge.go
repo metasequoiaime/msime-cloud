@@ -440,10 +440,16 @@ var qqSpaceRuns = regexp.MustCompile(`[ \t]{2,}`)
 
 // qqStripLinks 删掉链接并合并留下的连续空格。
 func qqStripLinks(text string) string {
-	if strings.Contains(text, "://") {
+	hadLink := strings.Contains(text, "://")
+	if hadLink {
 		text = qqLinkPattern.ReplaceAllString(text, "")
 	}
-	if qqSpaceRuns.MatchString(text) {
+	// 连续 ASCII 空白之外，正则不会改变正文；没有候选时只需裁掉首尾空白。
+	if !hadLink && !strings.Contains(text, "  ") && !strings.ContainsRune(text, '\t') {
+		return strings.TrimSpace(text)
+	}
+	// 已知有两个连续空格时直接替换，避免先用正则重复扫描一次。
+	if strings.Contains(text, "  ") || qqSpaceRuns.MatchString(text) {
 		text = qqSpaceRuns.ReplaceAllString(text, " ")
 	}
 	return strings.TrimSpace(text)

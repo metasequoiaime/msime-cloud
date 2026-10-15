@@ -346,9 +346,10 @@ func qqSnippetNeedsStructuredScan(text string) bool {
 // qqListLabelRunes 是列表项里标签的冒号最晚出现的位置（按字数，从列表符号后面算起）：再往后的冒号多半是句子里的，不是标签。
 const qqListLabelRunes = 12
 
-// qqListLabels 逐行找「- 标签：说明」「* 标签: 说明」这样的列表项，返回去掉 Markdown 符号、去重后的标签。安卓指南「常用操作」一段把换皮肤、删除、隐私写在列表里，原来摘要只取正文前 50 字，目录里只露出「选择候选：…」，问「安卓版能换皮肤吗」挑不中这一段。冒号后面紧跟「/」的是链接（https://），不算标签。
+// qqListLabels 逐行找「- 标签：说明」「* 标签: 说明」这样的列表项，返回去掉 Markdown 符号、去重后的摘要标签前缀。安卓指南「常用操作」一段把换皮肤、删除、隐私写在列表里，原来摘要只取正文前 50 字，目录里只露出「选择候选：…」，问「安卓版能换皮肤吗」挑不中这一段。冒号后面紧跟「/」的是链接（https://），不算标签。
 func qqListLabels(text string) []string {
 	var labels []string
+	summaryRunes := 0
 	for line := range strings.SplitSeq(text, "\n") {
 		line = strings.TrimSpace(line)
 		rest, ok := strings.CutPrefix(line, "- ")
@@ -365,7 +366,15 @@ func qqListLabels(text string) []string {
 		}
 		label := strings.Join(strings.Fields(qqMarkdownNoise.ReplaceAllString(string(runes[:i]), " ")), " ")
 		if label != "" && !slices.Contains(labels, label) {
+			if len(labels) > 0 {
+				summaryRunes++
+			}
 			labels = append(labels, label)
+			summaryRunes += utf8.RuneCountInString(label)
+			// 连同分隔符超过摘要长度后，后续标签不会影响截断结果。
+			if summaryRunes > qqSnippetRunes {
+				break
+			}
 		}
 	}
 	return labels

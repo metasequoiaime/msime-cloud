@@ -9,6 +9,8 @@ import (
 	"unicode"
 	"unicode/utf16"
 	"unicode/utf8"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // 无编码常用语的整列表同步，与偏好同一套 revision CAS：PUT 整份替换，revision 不符返回 409 revision_conflict。
@@ -83,7 +85,10 @@ func validPhrases(list []Phrase) bool {
 func (s *Store) Phrases(ctx context.Context, user string) (Phrases, error) {
 	out := Phrases{Phrases: []Phrase{}}
 	var raw []byte
-	e := s.pool.QueryRow(ctx, `SELECT COALESCE((SELECT revision FROM user_phrases WHERE user_id=$1),0),COALESCE((SELECT phrases FROM user_phrases WHERE user_id=$1),'[]'::jsonb)`, user).Scan(&out.Revision, &raw)
+	e := s.pool.QueryRow(ctx, `SELECT revision,phrases FROM user_phrases WHERE user_id=$1`, user).Scan(&out.Revision, &raw)
+	if errors.Is(e, pgx.ErrNoRows) {
+		return out, nil
+	}
 	if e == nil {
 		e = json.Unmarshal(raw, &out.Phrases)
 	}

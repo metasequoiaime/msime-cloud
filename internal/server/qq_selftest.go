@@ -303,12 +303,14 @@ func (s *Server) qqSelfTestAlert(ctx context.Context, results []qqSelfTestResult
 	if slices.Contains(s.qqRepoLabels(ctx, client, token, repo), qqImprovementLabel) {
 		labels = []string{qqImprovementLabel}
 	}
+	client.Invalidate("/repos/" + repo + "/issues")
+	defer client.Invalidate("/repos/" + repo + "/issues")
 	r, err := client.Do(ctx, token, "POST", "/repos/"+repo+"/issues", map[string]any{"title": "QQ 机器人自测掉分：" + version + "，" + strings.TrimPrefix(score, "自测 "), "body": b.String(), "labels": labels})
+	client.Invalidate("/repos/" + repo + "/issues")
 	if err != nil || !r.OK() {
 		slog.Warn("qq bot: selftest alert not filed", "reason", githubFailure("selftest alert", r, err).Error())
 		return
 	}
-	client.Invalidate("/repos/" + repo + "/issues")
 	slog.Info("qq bot: selftest alert filed", "repo", repo, "version", version)
 }
 

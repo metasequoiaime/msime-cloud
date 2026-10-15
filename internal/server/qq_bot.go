@@ -1804,11 +1804,14 @@ func (s *Server) fileQQReport(ctx context.Context, repo, platformLabel string, r
 		return 0, false, err
 	}
 	if duplicate > 0 {
+		// 写入结果可能在响应返回前丢失；先失效缓存，避免不确定时继续读到旧 issue。
+		client.Invalidate("/repos/" + repo + "/issues")
+		defer client.Invalidate("/repos/" + repo + "/issues")
 		r, err := client.Do(ctx, token, "POST", "/repos/"+repo+"/issues/"+strconv.FormatInt(duplicate, 10)+"/comments", map[string]string{"body": qqCommentBody(report, mediaSection, published)})
+		client.Invalidate("/repos/" + repo + "/issues")
 		if err != nil || !r.OK() {
 			return 0, false, githubFailure("comment", r, err)
 		}
-		client.Invalidate("/repos/" + repo + "/issues")
 		return duplicate, true, nil
 	}
 	// 新 issue 的标签：类型、平台和配置的标签，加上模型从仓库分类标签里挑的，以及维护者标注对应的标签；仓库没有对应标签的标注写进正文。
@@ -1818,7 +1821,10 @@ func (s *Server) fileQQReport(ctx context.Context, repo, platformLabel string, r
 	noteLabels, noteSection := qqNoteLabels(repoLabels, notes)
 	labels = append(labels, noteLabels...)
 	request := map[string]any{"title": qqIssueTitle(report), "body": qqIssueBody(report, noteSection+mediaSection, published), "labels": labels}
+	client.Invalidate("/repos/" + repo + "/issues")
+	defer client.Invalidate("/repos/" + repo + "/issues")
 	r, err := client.Do(ctx, token, "POST", "/repos/"+repo+"/issues", request)
+	client.Invalidate("/repos/" + repo + "/issues")
 	if err != nil || !r.OK() {
 		return 0, false, githubFailure("create", r, err)
 	}
@@ -1828,7 +1834,6 @@ func (s *Server) fileQQReport(ctx context.Context, repo, platformLabel string, r
 	if r.Decode(&created) != nil || created.Number <= 0 {
 		return 0, false, errors.New("create: invalid response")
 	}
-	client.Invalidate("/repos/" + repo + "/issues")
 	return created.Number, false, nil
 }
 

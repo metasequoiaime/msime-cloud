@@ -766,17 +766,21 @@ func submissionCommitMessage(sub submission) string {
 	return b.String()
 }
 
-// wordWeightRange is the lowest and highest weight of the entries in words.txt, which the msime-dictionary check-words gate requires every added entry to stay within; ok is false when the file has none. Lines are read as the dictionary build reads them: stripped, blank and # lines skipped, word<TAB>pinyin<TAB>weight.
+// wordWeightRange 返回 words.txt 的最小与最大有效权重，供新增中文词条限制范围；没有有效权重时 ok 为 false。按词库构建规则去掉行首尾空白，跳过空行和 # 注释，并只接受三列。
 func wordWeightRange(content string) (low, high int, ok bool) {
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		if line = strings.TrimSpace(line); line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		fields := strings.Split(line, "\t")
-		if len(fields) != 3 {
+		_, rest, found := strings.Cut(line, "\t")
+		if !found {
 			continue
 		}
-		weight, err := strconv.Atoi(strings.TrimSpace(fields[2]))
+		_, weightField, found := strings.Cut(rest, "\t")
+		if !found || strings.Contains(weightField, "\t") {
+			continue
+		}
+		weight, err := strconv.Atoi(strings.TrimSpace(weightField))
 		if err != nil || weight < 1 {
 			continue
 		}

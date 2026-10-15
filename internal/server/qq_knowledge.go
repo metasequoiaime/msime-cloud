@@ -258,7 +258,7 @@ const qqListLabelRunes = 12
 // qqListLabels 逐行找「- 标签：说明」「* 标签: 说明」这样的列表项，返回去掉 Markdown 符号、去重后的标签。安卓指南「常用操作」一段把换皮肤、删除、隐私写在列表里，原来摘要只取正文前 50 字，目录里只露出「选择候选：…」，问「安卓版能换皮肤吗」挑不中这一段。冒号后面紧跟「/」的是链接（https://），不算标签。
 func qqListLabels(text string) []string {
 	var labels []string
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		line = strings.TrimSpace(line)
 		rest, ok := strings.CutPrefix(line, "- ")
 		if !ok {
@@ -266,7 +266,8 @@ func qqListLabels(text string) []string {
 				continue
 			}
 		}
-		runes := []rune(rest)
+		// 多保留冒号后的一个字，以便排除边界位置上的链接。
+		runes := []rune(rest[:qqRuneEnd(rest, qqListLabelRunes+1)])
 		i := slices.IndexFunc(runes, func(r rune) bool { return r == '：' || r == ':' })
 		if i < 0 || i >= qqListLabelRunes || (i+1 < len(runes) && runes[i+1] == '/') {
 			continue

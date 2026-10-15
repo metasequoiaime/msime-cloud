@@ -192,7 +192,14 @@ func sensitiveRegexLiteral(pattern string) string {
 		if unicode.Is(unicode.Cf, r) || r >= '！' && r <= '～' {
 			return ""
 		}
-		literal[i] = unicode.ToLower(r)
+		lower := unicode.ToLower(r)
+		// RE2 的大小写折叠还包括某些不能由 ToLower 归一到同一个字符的等价字母（例如 σ/ς、s/ſ）。这些字符在规范化文本里仍然不同，不能用字面量前置检查跳过正则。
+		for folded := unicode.SimpleFold(r); folded != r; folded = unicode.SimpleFold(folded) {
+			if unicode.ToLower(folded) != lower {
+				return ""
+			}
+		}
+		literal[i] = lower
 	}
 	return string(literal)
 }

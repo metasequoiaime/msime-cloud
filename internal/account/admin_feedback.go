@@ -58,14 +58,21 @@ func setFeedbackStatus(status string) adminActionFunc {
 		if err := requireActionID(v); err != nil {
 			return actionResult{}, err
 		}
-		tag, err := tx.Exec(ctx, `UPDATE feedback SET status=$2 WHERE id=$1`, v.ID, status)
+		var affected int64
+		// 锁内读取命中数，仅在状态变化时写入；重复操作仍成功并由调用方记录审计。
+		err := tx.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+ SELECT id,status FROM feedback WHERE id=$1 FOR NO KEY UPDATE
+), updated AS (
+ UPDATE feedback f SET status=$2 FROM locked l WHERE f.id=l.id AND l.status<>$2
+)
+SELECT count(*) FROM locked`, v.ID, status).Scan(&affected)
 		if err != nil {
 			return actionResult{}, err
 		}
-		if tag.RowsAffected() == 0 {
+		if affected == 0 {
 			return actionResult{}, actionFail(404, "not_found")
 		}
-		return actionResult{Affected: tag.RowsAffected()}, nil
+		return actionResult{Affected: affected}, nil
 	}
 }
 

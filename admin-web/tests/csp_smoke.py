@@ -548,6 +548,98 @@ def check_profile_rollback(context, base: str, problems: list[str]):
             page.close()
 
 
+def check_notice_pending(context, base: str, problems: list[str]):
+    # 显式挂起请求，验证保存、发布和归档期间不能改写或切换编辑器；失败后仍保留原文。
+    for action in ("save_notice_draft", "publish_notice", "archive_notice"):
+        for status in (200, 500):
+            page = context.new_page()
+            page.on("pageerror", lambda error: problems.append(f"公告等待请求测试页面异常：{error}"))
+            pending = []
+            page.route("**/api/auth/session", lambda route: route.fulfill(json=FIXTURES["/api/auth/session"]))
+            page.route("**/api/shell", lambda route: route.fulfill(json={**FIXTURES["/api/shell"], "me": {**FIXTURES["/api/shell"]["me"], "permissions": ["publish_notices"]}}))
+            page.route("**/api/actions", lambda route: pending.append(route))
+            try:
+                page.goto(base + "/notice?focus=3")
+                title = page.get_by_role("textbox", name="标题", exact=True)
+                body = page.get_by_role("textbox", name="内容", exact=True)
+                expect(title).to_have_value(FIXTURES["/api/notices"]["items"][1]["title"])
+                title.fill("等待请求期间保留的标题")
+                body.fill("等待请求期间保留的正文")
+                live = page.locator("#notice-2")
+                draft = page.locator("#notice-3")
+                if action == "archive_notice":
+                    draft.get_by_role("button", name="丢弃", exact=True).click()
+                    trigger = page.get_by_role("dialog").get_by_role("button", name="丢弃", exact=True)
+                else:
+                    trigger = page.get_by_role("button", name="存为草稿" if action == "save_notice_draft" else "发布", exact=True)
+                with page.expect_request(lambda request: request.url.endswith("/api/actions")) as sent:
+                    trigger.click()
+                assert sent.value.post_data_json["action"] == action
+                assert sent.value.post_data_json["id"] == "3"
+                expect(title).to_be_disabled()
+                expect(body).to_be_disabled()
+                expect(page.get_by_role("button", name="全部平台", exact=True)).to_be_disabled()
+                expect(page.get_by_role("button", name="官网横幅", exact=True)).to_be_disabled()
+                expect(page.get_by_role("button", name="取消编辑", exact=True)).to_be_disabled()
+                expect(draft.get_by_role("button", name="编辑", exact=True)).to_be_disabled()
+                expect(draft.get_by_role("button", name="丢弃", exact=True)).to_be_disabled()
+                live.get_by_role("button").first.click()
+                expect(live.get_by_role("button", name="归档", exact=True)).to_be_disabled()
+                expect(title).to_have_value("等待请求期间保留的标题")
+                expect(body).to_have_value("等待请求期间保留的正文")
+                pending.pop().fulfill(status=status, json={"ok": True, "affected": 1} if status == 200 else {"error": "admin_auth_unavailable"})
+                expect(title).to_be_enabled()
+                expect(body).to_be_enabled()
+                expect(live.get_by_role("button", name="归档", exact=True)).to_be_enabled()
+                if status == 200:
+                    expect(title).to_have_value("")
+                    expect(body).to_have_value("")
+                else:
+                    expect(page.get_by_text(re.compile(r"^操作失败："))).to_be_visible()
+                    expect(title).to_have_value("等待请求期间保留的标题")
+                    expect(body).to_have_value("等待请求期间保留的正文")
+                    expect(page.get_by_role("button", name="取消编辑", exact=True)).to_be_enabled()
+                problems.extend(f"公告等待请求测试 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+            finally:
+                for route in pending:
+                    route.abort()
+                page.unroute_all(behavior="ignoreErrors")
+                page.close()
+
+
+def check_notice_pending_focus(context, base: str, problems: list[str]):
+    # 全局搜索仍可使用，但不能让旧请求完成后的重置清空刚打开的另一条草稿。
+    page = context.new_page()
+    page.on("pageerror", lambda error: problems.append(f"公告延迟跳转测试页面异常：{error}"))
+    pending = []
+    other = {**FIXTURES["/api/notices"]["items"][1], "id": "4", "title": "另一条草稿", "body": "另一条正文"}
+    page.route("**/api/auth/session", lambda route: route.fulfill(json=FIXTURES["/api/auth/session"]))
+    page.route("**/api/notices", lambda route: route.fulfill(json={**FIXTURES["/api/notices"], "items": [*FIXTURES["/api/notices"]["items"], other]}))
+    page.route("**/api/search?*", lambda route: route.fulfill(json={"items": [{"kind": "notice", "id": "4", "title": other["title"], "where": "公告", "target": "notice"}]}))
+    page.route("**/api/actions", lambda route: pending.append(route))
+    try:
+        page.goto(base + "/notice?focus=3")
+        title = page.get_by_role("textbox", name="标题", exact=True)
+        expect(title).to_have_value(FIXTURES["/api/notices"]["items"][1]["title"])
+        with page.expect_request(lambda request: request.url.endswith("/api/actions")):
+            page.get_by_role("button", name="存为草稿", exact=True).click()
+        expect(title).to_be_disabled()
+        page.get_by_role("combobox", name="全局搜索").fill("另一条草稿")
+        page.get_by_role("option", name="另一条草稿 公告", exact=True).click()
+        expect(page).to_have_url(base + "/notice?focus=%224%22")
+        expect(title).to_have_value(FIXTURES["/api/notices"]["items"][1]["title"])
+        pending.pop().fulfill(json={"ok": True, "affected": 1})
+        expect(title).to_be_enabled()
+        expect(title).to_have_value(other["title"])
+        expect(page.get_by_role("textbox", name="内容", exact=True)).to_have_value(other["body"])
+        problems.extend(f"公告延迟跳转测试 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+    finally:
+        for route in pending:
+            route.abort()
+        page.unroute_all(behavior="ignoreErrors")
+        page.close()
+
+
 def main() -> int:
     if not (DIST / "index.html").is_file():
         raise SystemExit("admin-web/dist is missing; run pnpm build first")
@@ -1143,6 +1235,8 @@ def main() -> int:
                 check_auth_logout(context, base, problems)
                 check_auth_logout_flush(context, base, problems)
                 check_profile_rollback(context, base, problems)
+                check_notice_pending(context, base, problems)
+                check_notice_pending_focus(context, base, problems)
             finally:
                 browser.close()
     finally:

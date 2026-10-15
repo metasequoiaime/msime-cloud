@@ -487,3 +487,58 @@ func TestR2StorageRequests(t *testing.T) {
 		t.Fatal("a refused put reported success")
 	}
 }
+
+// avatarCancelReader 在上传读完后取消请求，确保鉴权与限流已完成。
+type avatarCancelReader struct {
+	io.Reader
+	cancel context.CancelFunc
+}
+
+func (r avatarCancelReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if err == io.EOF {
+		r.cancel()
+	}
+	return n, err
+}
+
+func TestAvatarUploadImageSlots(t *testing.T) {
+	db := testStore(t)
+	storage := newMemoryAvatars()
+	a := &Service{store: db, avatars: storage, config: Config{Avatars: AvatarConfig{PublicBaseURL: "https://media.example.test"}}}
+	handler := http.NewServeMux()
+	Mount(handler, a)
+	user := complete(t, db, Identity{"email", "avatar-slots@example.test"})
+	valid := encodedImage(t, "png", 32, 32, color.White)
+	for range cap(candidateImageSlots) {
+		candidateImageSlots <- struct{}{}
+	}
+	t.Cleanup(func() {
+		for len(candidateImageSlots) > 0 {
+			<-candidateImageSlots
+		}
+	})
+	for _, data := range [][]byte{[]byte("invalid image"), valid} {
+		ctx, cancel := context.WithCancel(t.Context())
+		r := httptest.NewRequest("PUT", "/v1/users/me/avatar", avatarCancelReader{bytes.NewReader(data), cancel}).WithContext(ctx)
+		r.Header.Set("Content-Type", "image/png")
+		r.Header.Set("Authorization", "Bearer "+user.AccessToken)
+		w := httptest.NewRecorder()
+		a.putAvatar(w, r)
+		cancel()
+		if w.Code != 503 || !strings.Contains(w.Body.String(), "server_busy") {
+			t.Fatalf("图片槽已满时仍处理头像：%d %s", w.Code, w.Body.String())
+		}
+		if len(storage.keys()) != 0 || meUser(t, handler, user.AccessToken).AvatarURL != "" {
+			t.Fatal("等待图片槽时取消的上传修改了头像")
+		}
+	}
+	for range cap(candidateImageSlots) {
+		<-candidateImageSlots
+	}
+	avatarUpload(t, handler, "image/png", []byte("invalid image"), user.AccessToken, 400)
+	avatarUpload(t, handler, "image/png", valid, user.AccessToken, 200)
+	if len(candidateImageSlots) != 0 || len(storage.keys()) != 1 {
+		t.Fatal("头像处理后未释放图片槽或未保存头像")
+	}
+}

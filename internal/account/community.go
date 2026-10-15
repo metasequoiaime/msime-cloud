@@ -459,19 +459,21 @@ func (a *Service) communityPublish(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(r.Context())
 	// 事务内合并 ID 冲突检查、作者额度检查和首发写入，避免锁定用户后再为两步各往返一次。
 	var exists bool
-	var inserted bool
+	var withinCount, inserted bool
 	if e = tx.QueryRow(r.Context(), `WITH existing AS MATERIALIZED (
  SELECT owner_id,name=$3 AND description=$4 AND design=$5::jsonb AS identical
  FROM community_skins WHERE id=$1
+), quota AS MATERIALIZED (
+ SELECT count(*)<50 AS available FROM community_skins WHERE owner_id=$2
 ), inserted AS (
  INSERT INTO community_skins(id,owner_id,name,description,design,moderation,moderation_reason,category)
- SELECT $1,$2,$3,$4,$5,'pending',$6,$7
- WHERE NOT EXISTS(SELECT 1 FROM existing)
-   AND (SELECT count(*) FROM community_skins WHERE owner_id=$2) < 50
+ SELECT $1,$2,$3,$4,$5,'pending',$6,$7 FROM quota
+ WHERE NOT EXISTS(SELECT 1 FROM existing) AND available
+ ON CONFLICT(id) DO NOTHING
  RETURNING id
 )
 SELECT COALESCE((SELECT owner_id FROM existing),''),COALESCE((SELECT identical FROM existing),false),
- EXISTS(SELECT 1 FROM existing),EXISTS(SELECT 1 FROM inserted)`, input.ID, p.UserID, input.Name, input.Description, raw, flag, category).Scan(&existingOwner, &identical, &exists, &inserted); e != nil {
+ EXISTS(SELECT 1 FROM existing),(SELECT available FROM quota),EXISTS(SELECT 1 FROM inserted)`, input.ID, p.UserID, input.Name, input.Description, raw, flag, category).Scan(&existingOwner, &identical, &exists, &withinCount, &inserted); e != nil {
 		a.error(w, e)
 		return
 	}
@@ -483,8 +485,13 @@ SELECT COALESCE((SELECT owner_id FROM existing),''),COALESCE((SELECT identical F
 		write(w, 200, map[string]string{"id": input.ID})
 		return
 	}
-	if !inserted {
+	if !withinCount {
 		writeError(w, 409, "skin_publish_limit")
+		return
+	}
+	// 用户行锁不阻止其他账号抢先提交相同 ID；插入等待结束后仍按 ID 冲突返回，不能误报额度用尽。
+	if !inserted {
+		writeError(w, 409, "skin_id_conflict")
 		return
 	}
 	if e == nil {

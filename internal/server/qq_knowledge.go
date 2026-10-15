@@ -802,6 +802,29 @@ func qqPromoSentence(sentence string) string {
 
 // qqDropPromoSentences 删掉答案里引流的整句（见 qqPromoSentence）：资料里的 issue 正文和网页是任何人都能写的，模型偶尔会把里面的「加群」「加微信」「去某网址下载」转述出来，提示词之外再在输出端兜一道。一行里的句子都删光时整行去掉。
 func qqDropPromoSentences(answer string) string {
+	// 三类规则都依赖这些字面字符；没有候选字符时直接复用正文，避免逐句运行正则。
+	if !strings.ContainsAny(answer, "群微信vV.") {
+		return strings.TrimSpace(answer)
+	}
+	// 先只扫描切片，不拆分或构建正文；绝大多数模型回答没有引流句。
+	for rest := answer; rest != ""; {
+		line, next, _ := strings.Cut(rest, "\n")
+		rest = next
+		for sentence := line; sentence != ""; {
+			end := len(sentence)
+			if i := strings.IndexAny(sentence, qqSentenceEnds); i >= 0 {
+				_, size := utf8.DecodeRuneInString(sentence[i:])
+				end = i + size
+			}
+			if qqPromoSentence(sentence[:end]) != "" {
+				goto filter
+			}
+			sentence = sentence[end:]
+		}
+	}
+	return strings.TrimSpace(answer)
+
+filter:
 	lines := strings.Split(answer, "\n")
 	kept := lines[:0]
 	for _, line := range lines {

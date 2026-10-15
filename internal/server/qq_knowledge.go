@@ -288,6 +288,19 @@ func qqListLabels(text string) []string {
 	return labels
 }
 
+// qqMarkdownLeadingSpace 先用 ASCII 快路径裁剪行首空白；剩余部分以 Unicode 空白开头时才回退到完整的 Unicode 扫描。
+func qqMarkdownLeadingSpace(line string) string {
+	trimmed := strings.TrimLeft(line, " \t\n\f\r\v")
+	if trimmed == "" || trimmed[0] < utf8.RuneSelf {
+		return trimmed
+	}
+	r, _ := utf8.DecodeRuneInString(trimmed)
+	if !unicode.IsSpace(r) {
+		return trimmed
+	}
+	return strings.TrimLeftFunc(trimmed, unicode.IsSpace)
+}
+
 // qqSplitMarkdown 按标题把一个 Markdown 文档切成段落。文档名取第一个一级标题，没有时用文件名；一级标题下、第一个二级标题之前的导语成为「概述」一段（适用的版本、系统要求常常只写在这里），文档开头、任何标题之前的文字不收；代码块里以 # 开头的行不算标题；没有正文的标题不成段，过长的正文截断到 qqSectionRunes。
 func qqSplitMarkdown(name, markdown string) []qqSection {
 	doc := name
@@ -354,7 +367,7 @@ func qqSplitMarkdown(name, markdown string) []qqSection {
 			line = strings.TrimSuffix(before, "\r")
 		}
 		// 代码块检测与段落开头裁剪复用前导空白扫描，后续正文仍保留缩进。
-		leading := strings.TrimLeftFunc(line, unicode.IsSpace)
+		leading := qqMarkdownLeadingSpace(line)
 		if strings.HasPrefix(leading, "```") {
 			fenced = !fenced
 		}

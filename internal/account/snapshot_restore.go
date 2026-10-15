@@ -114,8 +114,9 @@ func (s *Store) RestoreDictionarySnapshot(ctx context.Context, user string, expe
 	if revision <= current {
 		return 0, errInvalidSnapshot
 	}
-	// 四张相互独立的用户表一起清理，恢复大词库时少占三次数据库往返；它们都只按 user_id 删除，没有依赖执行顺序。
-	if _, err = tx.Exec(ctx, `WITH deleted_entries AS (
+	// 验证通过后按原顺序批量清理和重建词库，各语句仍能读取前序语句写入的新状态；任何写入失败都回滚整个恢复事务。
+	batch := &pgx.Batch{}
+	batch.Queue(`WITH deleted_entries AS (
  DELETE FROM user_dictionary_entries WHERE user_id=$1
 ), deleted_overlay AS (
  DELETE FROM user_dictionary_overlay WHERE user_id=$1
@@ -124,36 +125,20 @@ func (s *Store) RestoreDictionarySnapshot(ctx context.Context, user string, expe
 ), deleted_selections AS (
  DELETE FROM user_candidate_selections WHERE user_id=$1
 )
-SELECT 1`, user); err != nil {
-		return 0, err
-	}
-	// Entries and their overlay share a new revision. Source IDs are replaced to
-	// prevent collisions across accounts; clients reload after the reset event.
-	if _, err = tx.Exec(ctx, `INSERT INTO user_dictionary_entries(id,user_id,kind,code,word,weight,revision,updated_at)
+SELECT 1`, user)
+	// 词条与覆盖记录共用新版本；替换来源 ID 以避免跨账号冲突，客户端收到重置事件后重新加载。
+	batch.Queue(`INSERT INTO user_dictionary_entries(id,user_id,kind,code,word,weight,revision,updated_at)
  SELECT e.data->'data'->>'id',$1,e.data->'data'->>'kind',e.data->'data'->>'code',e.data->'data'->>'word',(e.data->'data'->>'weight')::bigint,$2::bigint+1+o.seq,now()
- FROM msime_restore_stage e JOIN msime_restore_stage o ON o.data->>'type'='overlay' AND e.data->'data'->>'kind'=o.data->'data'->>'kind' AND e.data->'data'->>'code'=o.data->'data'->>'code' AND e.data->'data'->>'word'=o.data->'data'->>'word' WHERE e.data->>'type'='entry'`, user, current); err != nil {
-		return 0, err
-	}
-	if _, err = tx.Exec(ctx, `UPDATE msime_restore_stage o SET data=jsonb_set(o.data,'{data}',(o.data->'data')||jsonb_build_object('id',COALESCE((SELECT id FROM user_dictionary_entries e WHERE e.user_id=$1 AND e.kind=o.data->'data'->>'kind' AND e.code=o.data->'data'->>'code' AND e.word=o.data->'data'->>'word'),''),'revision',$2::bigint+1+o.seq,'updated_at',now())) WHERE o.data->>'type'='overlay'`, user, current); err != nil {
-		return 0, err
-	}
-	if _, err = tx.Exec(ctx, `INSERT INTO user_dictionary_overlay(user_id,kind,code,word,entry,deleted) SELECT $1,data->'data'->>'kind',data->'data'->>'code',data->'data'->>'word',data->'data',(data->>'deleted')::boolean FROM msime_restore_stage WHERE data->>'type'='overlay'`, user); err != nil {
-		return 0, err
-	}
-	if _, err = tx.Exec(ctx, `INSERT INTO user_candidate_positions(user_id,context,code,word,position) SELECT $1,data->'data'->>'context',data->'data'->>'code',data->'data'->>'word',(data->'data'->>'position')::integer FROM msime_restore_stage WHERE data->>'type'='position'`, user); err != nil {
-		return 0, err
-	}
-	if _, err = tx.Exec(ctx, `INSERT INTO user_candidate_selections(user_id,context,code,word,count) SELECT $1,data->'data'->>'context',data->'data'->>'code',data->'data'->>'word',(data->'data'->>'count')::integer FROM msime_restore_stage WHERE data->>'type'='selection'`, user); err != nil {
-		return 0, err
-	}
-	if _, err = tx.Exec(ctx, `INSERT INTO user_dictionary_changes(user_id,revision,change) VALUES($1,$2::bigint+1,jsonb_build_object('revision',$2::bigint+1,'reset',true))`, user, current); err != nil {
-		return 0, err
-	}
-	if _, err = tx.Exec(ctx, `INSERT INTO user_dictionary_changes(user_id,revision,change)
- SELECT $1,$2::bigint+1+seq,jsonb_build_object('revision',$2::bigint+1+seq)||CASE data->>'type' WHEN 'overlay' THEN CASE WHEN (data->>'deleted')::boolean THEN jsonb_build_object('previous',data->'data','replacement',null) ELSE jsonb_build_object('previous',null,'replacement',data->'data') END WHEN 'position' THEN jsonb_build_object('position',data->'data') WHEN 'selection' THEN jsonb_build_object('selection',data->'data') END FROM msime_restore_stage WHERE data->>'type' IN ('overlay','position','selection')`, user, current); err != nil {
-		return 0, err
-	}
-	if _, err = tx.Exec(ctx, `INSERT INTO user_dictionary_state(user_id,revision) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET revision=excluded.revision`, user, revision); err != nil {
+ FROM msime_restore_stage e JOIN msime_restore_stage o ON o.data->>'type'='overlay' AND e.data->'data'->>'kind'=o.data->'data'->>'kind' AND e.data->'data'->>'code'=o.data->'data'->>'code' AND e.data->'data'->>'word'=o.data->'data'->>'word' WHERE e.data->>'type'='entry'`, user, current)
+	batch.Queue(`UPDATE msime_restore_stage o SET data=jsonb_set(o.data,'{data}',(o.data->'data')||jsonb_build_object('id',COALESCE((SELECT id FROM user_dictionary_entries e WHERE e.user_id=$1 AND e.kind=o.data->'data'->>'kind' AND e.code=o.data->'data'->>'code' AND e.word=o.data->'data'->>'word'),''),'revision',$2::bigint+1+o.seq,'updated_at',now())) WHERE o.data->>'type'='overlay'`, user, current)
+	batch.Queue(`INSERT INTO user_dictionary_overlay(user_id,kind,code,word,entry,deleted) SELECT $1,data->'data'->>'kind',data->'data'->>'code',data->'data'->>'word',data->'data',(data->>'deleted')::boolean FROM msime_restore_stage WHERE data->>'type'='overlay'`, user)
+	batch.Queue(`INSERT INTO user_candidate_positions(user_id,context,code,word,position) SELECT $1,data->'data'->>'context',data->'data'->>'code',data->'data'->>'word',(data->'data'->>'position')::integer FROM msime_restore_stage WHERE data->>'type'='position'`, user)
+	batch.Queue(`INSERT INTO user_candidate_selections(user_id,context,code,word,count) SELECT $1,data->'data'->>'context',data->'data'->>'code',data->'data'->>'word',(data->'data'->>'count')::integer FROM msime_restore_stage WHERE data->>'type'='selection'`, user)
+	batch.Queue(`INSERT INTO user_dictionary_changes(user_id,revision,change) VALUES($1,$2::bigint+1,jsonb_build_object('revision',$2::bigint+1,'reset',true))`, user, current)
+	batch.Queue(`INSERT INTO user_dictionary_changes(user_id,revision,change)
+ SELECT $1,$2::bigint+1+seq,jsonb_build_object('revision',$2::bigint+1+seq)||CASE data->>'type' WHEN 'overlay' THEN CASE WHEN (data->>'deleted')::boolean THEN jsonb_build_object('previous',data->'data','replacement',null) ELSE jsonb_build_object('previous',null,'replacement',data->'data') END WHEN 'position' THEN jsonb_build_object('position',data->'data') WHEN 'selection' THEN jsonb_build_object('selection',data->'data') END FROM msime_restore_stage WHERE data->>'type' IN ('overlay','position','selection')`, user, current)
+	batch.Queue(`INSERT INTO user_dictionary_state(user_id,revision) VALUES($1,$2) ON CONFLICT(user_id) DO UPDATE SET revision=excluded.revision`, user, revision)
+	if err = tx.SendBatch(ctx, batch).Close(); err != nil {
 		return 0, err
 	}
 	return revision, tx.Commit(ctx)

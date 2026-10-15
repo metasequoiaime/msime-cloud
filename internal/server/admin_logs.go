@@ -326,7 +326,15 @@ func (s *Server) lokiQueryRange(ctx context.Context, query string, start, end in
 	if body.Status != "success" || body.Data.ResultType != "streams" {
 		return nil, errLoki{"unexpected result"}
 	}
+	// Loki 已返回所有流，先统计总行数，避免展开结果时反复扩容。
+	count := 0
+	for _, stream := range body.Data.Result {
+		count += len(stream.Values)
+	}
 	var entries []lokiEntry
+	if count > 0 {
+		entries = make([]lokiEntry, 0, count)
+	}
 	for _, stream := range body.Data.Result {
 		for _, value := range stream.Values {
 			ns, err := strconv.ParseInt(value[0], 10, 64)

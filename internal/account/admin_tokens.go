@@ -63,9 +63,11 @@ func issueAdminToken(ctx context.Context, tx pgx.Tx, email string) (string, admi
  SELECT 1 FROM source WHERE expires_at>clock_timestamp()
 ), removed AS (
  DELETE FROM admin_tokens WHERE email=$2 AND EXISTS(SELECT 1 FROM valid)
+), issued AS MATERIALIZED (
+ SELECT clock_timestamp() AS issued_at FROM valid
 ), written AS (
- INSERT INTO admin_tokens(hash,email,last4,expires_at)
- SELECT $1,$2,$3,now()+make_interval(secs=>$4) FROM valid
+ INSERT INTO admin_tokens(hash,email,last4,created_at,expires_at)
+ SELECT $1,$2,$3,issued_at,issued_at+make_interval(secs=>$4) FROM issued
  RETURNING created_at,expires_at
 )
 SELECT EXISTS(SELECT 1 FROM valid),(SELECT created_at FROM written),(SELECT expires_at FROM written)`, hash(token), email, info.Last4, adminTokenLifetime.Seconds(), sessionHash, adminActor(ctx)).Scan(&valid, &createdAt, &expiresAt)

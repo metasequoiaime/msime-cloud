@@ -34,13 +34,16 @@ func (t *clipboardKeysBatchTrace) TraceQueryStart(ctx context.Context, _ *pgx.Co
 }
 func (*clipboardKeysBatchTrace) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
-func TestClipboardKeysBatchesSnapshotReads(t *testing.T) {
+func TestClipboardKeysUsesOneSnapshotQuery(t *testing.T) {
 	db := testStore(t)
 	ctx := t.Context()
 	user := complete(t, db, Identity{"email", "clipboard-keys-batch@example.test"}).User.ID
 	key, device := clipboardTestReady(t, db, user, "batch-keys")
+	if _, err := db.pool.Exec(ctx, `UPDATE user_clipboard_devices SET last_seen='2020-01-01' WHERE user_id=$1`, user); err != nil {
+		t.Fatal(err)
+	}
 	cfg := db.pool.Config()
-	trace := &clipboardKeysBatchTrace{}
+	trace := &statementCancellation{}
 	cfg.ConnConfig.Tracer = trace
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
@@ -50,6 +53,9 @@ func TestClipboardKeysBatchesSnapshotReads(t *testing.T) {
 	if err = pool.Ping(ctx); err != nil {
 		t.Fatal(err)
 	}
+	trace.mu.Lock()
+	trace.seen, trace.statements = 0, nil
+	trace.mu.Unlock()
 	store := &Store{pool: pool}
 	keys, err := store.ClipboardKeys(ctx, user, device)
 	if err != nil {
@@ -59,9 +65,12 @@ func TestClipboardKeysBatchesSnapshotReads(t *testing.T) {
 		t.Fatalf("剪贴板密钥读取结果=%+v", keys)
 	}
 	trace.mu.Lock()
-	batches, queries := trace.batches, trace.queries
+	queries := trace.seen
 	trace.mu.Unlock()
-	if batches != 1 || queries != 3 {
-		t.Fatalf("剪贴板密钥快照读取使用了 %d 次批量请求、%d 条语句，期望 1、3", batches, queries)
+	if queries != 1 {
+		t.Fatalf("剪贴板密钥快照读取使用了 %d 次数据库调用，期望 1 次", queries)
+	}
+	if n := clipboardTestCount(t, db, `SELECT count(*) FROM user_clipboard_devices WHERE user_id=$1 AND device_id=$2 AND last_seen>'2020-01-01'`, user, device); n != 1 {
+		t.Fatal("读取密钥未刷新请求设备的访问时间", n)
 	}
 }

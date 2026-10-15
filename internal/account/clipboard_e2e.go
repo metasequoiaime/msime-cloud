@@ -152,43 +152,35 @@ func validClipboardKeyChange(c ClipboardKeyChange) bool {
 	return true
 }
 
-// ClipboardKeys 返回当前密钥编号、给 device 的封装和全部登记设备，并记下 device 最近一次来取的时间。几次读取在同一个可重复读的只读事务里完成，看到的是同一时刻的状态。
+// ClipboardKeys 用一条语句返回同一快照中的当前密钥、给 device 的封装和全部设备，并刷新该设备的访问时间。
 func (s *Store) ClipboardKeys(ctx context.Context, user, device string) (ClipboardKeys, error) {
-	if _, e := s.pool.Exec(ctx, "UPDATE user_clipboard_devices SET last_seen=now() WHERE user_id=$1 AND device_id=$2", user, device); e != nil {
-		return ClipboardKeys{}, e
-	}
-	tx, e := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
-	if e != nil {
-		return ClipboardKeys{}, e
-	}
-	defer tx.Rollback(ctx)
 	v := ClipboardKeys{Devices: []ClipboardDevice{}}
-	batch := &pgx.Batch{}
-	batch.Queue("SELECT COALESCE(bool_or(enabled),false),max(key_id) FROM user_clipboard_settings WHERE user_id=$1", user).QueryRow(func(row pgx.Row) error {
-		return row.Scan(&v.Enabled, &v.KeyID)
-	})
-	batch.Queue("SELECT max(wrap) FROM user_clipboard_wraps w JOIN user_clipboard_settings cs ON cs.user_id=w.user_id AND cs.key_id=w.key_id WHERE w.user_id=$1 AND w.device_id=$2", user, device).QueryRow(func(row pgx.Row) error {
-		return row.Scan(&v.Wrap)
-	})
-	batch.Queue(`SELECT d.device_id,d.public_key,d.name,d.created_at,w.device_id IS NOT NULL FROM user_clipboard_devices d
- LEFT JOIN user_clipboard_settings cs ON cs.user_id=d.user_id
- LEFT JOIN user_clipboard_wraps w ON w.user_id=d.user_id AND w.device_id=d.device_id AND w.key_id=cs.key_id
-	 WHERE d.user_id=$1 ORDER BY d.created_at,d.device_id`, user).Query(func(rows pgx.Rows) error {
-		var err error
-		v.Devices, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (ClipboardDevice, error) {
-			var d ClipboardDevice
-			return d, row.Scan(&d.DeviceID, &d.PublicKey, &d.Name, &d.CreatedAt, &d.Approved)
-		})
-		if v.Devices == nil {
-			v.Devices = []ClipboardDevice{}
-		}
-		return err
-	})
-	// 三次只读查询共享同一个可重复读快照，批量发送把三次往返合成一次。
-	if e = tx.SendBatch(ctx, batch).Close(); e != nil {
-		return v, e
+	rows, err := s.pool.Query(ctx, `WITH seen AS (
+ UPDATE user_clipboard_devices SET last_seen=now() WHERE user_id=$1 AND device_id=$2
+)
+SELECT s.enabled,s.key_id,requested.wrap,d.device_id,COALESCE(d.public_key,''),COALESCE(d.name,''),d.created_at,w.device_id IS NOT NULL
+FROM (SELECT COALESCE(bool_or(enabled),false) AS enabled,max(key_id) AS key_id FROM user_clipboard_settings WHERE user_id=$1) s
+LEFT JOIN user_clipboard_wraps requested ON requested.user_id=$1 AND requested.device_id=$2 AND requested.key_id=s.key_id
+LEFT JOIN user_clipboard_devices d ON d.user_id=$1
+LEFT JOIN user_clipboard_wraps w ON w.user_id=d.user_id AND w.device_id=d.device_id AND w.key_id=s.key_id
+ORDER BY d.created_at,d.device_id`, user, device)
+	if err != nil {
+		return v, err
 	}
-	return v, tx.Commit(ctx)
+	defer rows.Close()
+	for rows.Next() {
+		var d ClipboardDevice
+		var id *string
+		var created *time.Time
+		if err := rows.Scan(&v.Enabled, &v.KeyID, &v.Wrap, &id, &d.PublicKey, &d.Name, &created, &d.Approved); err != nil {
+			return v, err
+		}
+		if id != nil {
+			d.DeviceID, d.CreatedAt = *id, *created
+			v.Devices = append(v.Devices, d)
+		}
+	}
+	return v, rows.Err()
 }
 
 // PutClipboardDevice 登记一台设备；已登记时只更新名称。满 20 台时先淘汰最早登记、尚未批准的一台，都已批准时返回 errClipboardDeviceLimit。

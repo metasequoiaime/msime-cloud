@@ -1791,11 +1791,12 @@ func (s *Server) qqDuplicate(ctx context.Context, client *githubapp.Client, toke
 			continue
 		}
 		numbers[issue.Number] = true
-		body := []rune(issue.Body)
-		if len(body) > qqBotCandidateRunes {
-			body = body[:qqBotCandidateRunes]
+		// 只扫描交给模型的前缀，避免为长 issue 正文分配全文 rune 切片。
+		body := issue.Body[:qqRuneEnd(issue.Body, qqBotCandidateRunes)]
+		if !utf8.ValidString(body) {
+			body = string([]rune(body))
 		}
-		fmt.Fprintf(&candidates, "\n\n#%d %s\n%s", issue.Number, issue.Title, string(body))
+		fmt.Fprintf(&candidates, "\n\n#%d %s\n%s", issue.Number, issue.Title, body)
 	}
 	if len(numbers) == 0 {
 		return 0, nil

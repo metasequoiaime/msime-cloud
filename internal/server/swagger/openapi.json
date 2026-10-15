@@ -2232,7 +2232,9 @@
                 "properties": {
                   "display_name": {
                     "type": "string",
-                    "maxLength": 64
+                    "maxLength": 64,
+                    "pattern": "^[^\\u0000]*$",
+                    "description": "最长 64 字符，不能含 NUL；首尾空白会去除，空昵称重置为默认昵称。"
                   }
                 },
                 "required": [

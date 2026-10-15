@@ -25,6 +25,36 @@ func apiRequest(t *testing.T, handler http.Handler, method, path, body, token st
 	return w
 }
 
+func TestAccountHTTPProfileRejectsNULName(t *testing.T) {
+	db := testStore(t)
+	mux := http.NewServeMux()
+	Mount(mux, &Service{store: db})
+	user := complete(t, db, Identity{"email", "profile-nul@example.test"})
+	apiRequest(t, mux, "PATCH", "/v1/users/me", `{"display_name":"原有昵称"}`, user.AccessToken, 204)
+	for _, name := range []string{"\x00", "before\x00after", " \x00 "} {
+		t.Run(fmt.Sprintf("%q", name), func(t *testing.T) {
+			body, err := json.Marshal(map[string]string{"display_name": name})
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := apiRequest(t, mux, "PATCH", "/v1/users/me", string(body), user.AccessToken, 400)
+			if !strings.Contains(w.Body.String(), `"code":"invalid_display_name"`) {
+				t.Fatal(w.Body.String())
+			}
+		})
+	}
+	got, _, err := db.Me(t.Context(), user.User.ID)
+	if err != nil || got.DisplayName != "原有昵称" {
+		t.Fatalf("非法昵称修改了已有资料: %q %v", got.DisplayName, err)
+	}
+	// 可见的反斜线转义文本不含实际 NUL，仍可作为昵称保存。
+	apiRequest(t, mux, "PATCH", "/v1/users/me", `{"display_name":"\\u0000"}`, user.AccessToken, 204)
+	got, _, err = db.Me(t.Context(), user.User.ID)
+	if err != nil || got.DisplayName != `\u0000` {
+		t.Fatalf("合法转义文本未保存: %q %v", got.DisplayName, err)
+	}
+}
+
 func TestAccountHTTPProfileRefreshLogoutDelete(t *testing.T) {
 	db := testStore(t)
 	a := &Service{store: db}

@@ -63,7 +63,7 @@ auth_operations=[
  ('/v1/auth/refresh','post','轮换用户会话令牌',obj({'refresh_token':string()},['refresh_token'],True),tokens,False,200),
  ('/v1/auth/logout','post','退出当前或全部会话',obj({'all':{'type':'boolean','default':False}},strict=True),None,True,204),
  ('/v1/users/me','get','查询当前用户和已绑定身份',None,obj({'user':user,'identities':{'type':'array','items':obj({'provider':provider,'subject':string()})}}),True,200),
- ('/v1/users/me','patch','修改当前用户昵称',obj({'display_name':string(maxLength=64)},['display_name'],True),None,True,204),
+ ('/v1/users/me','patch','修改当前用户昵称',obj({'display_name':string(maxLength=64,pattern=r'^[^\u0000]*$',description='最长 64 字符，不能含 NUL；首尾空白会去除，空昵称重置为默认昵称。')},['display_name'],True),None,True,204),
  ('/v1/users/me','delete','注销当前用户',None,None,True,204),
  ('/v1/users/me/avatar','delete','删除自定义头像',None,None,True,204),
 ]

@@ -4435,14 +4435,18 @@ func (m *memoryDrafts) unclaimed(id int64) bool {
 	d := m.drafts[id-1]
 	return !d.Filed || account.QQDraftClaimStale(d, time.Now())
 }
-func (m *memoryDrafts) UpdateQQDraft(_ context.Context, id int64, original, report string) (bool, error) {
+func (m *memoryDrafts) UpdateQQDraft(_ context.Context, previous account.QQDraft, original, report string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.updateErr != nil {
 		return false, m.updateErr
 	}
+	id := previous.ID
 	if !m.unclaimed(id) {
 		return false, nil
+	}
+	if current := m.drafts[id-1]; current.Original != previous.Original || current.Report != previous.Report {
+		return false, account.ErrQQDraftChanged
 	}
 	m.drafts[id-1].Original, m.drafts[id-1].Report, m.drafts[id-1].UpdatedAt = original, report, time.Now()
 	return true, nil

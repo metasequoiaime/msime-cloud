@@ -32,7 +32,7 @@ func TestQQDraftSubmissionUsesClaimedContent(t *testing.T) {
 				t.Fatal(err)
 			}
 			// 管理员已读到旧草稿，群友在认领之前完成补充；不依赖 goroutine 调度或延时。
-			if ok, err := drafts.UpdateQQDraft(ctx, id, "补充后的原话", test.after); err != nil || !ok {
+			if ok, err := drafts.UpdateQQDraft(ctx, stale, "补充后的原话", test.after); err != nil || !ok {
 				t.Fatal(ok, err)
 			}
 			var replies []string

@@ -846,9 +846,15 @@ func qqPlainText(md string) string {
 		text = qqPlainInlineText(text)
 	}
 	fields := func(yield func(string) bool) {
-		for remaining := text; remaining != ""; {
-			var line string
-			line, remaining, _ = strings.Cut(remaining, "\n")
+		for offset := 0; offset < len(text); {
+			lineEnd := strings.IndexByte(text[offset:], '\n')
+			if lineEnd < 0 {
+				lineEnd = len(text)
+			} else {
+				lineEnd += offset
+			}
+			line := text[offset:lineEnd]
+			offset = lineEnd + 1
 			line = strings.TrimSpace(line)
 			if strings.HasPrefix(line, "|") {
 				continue

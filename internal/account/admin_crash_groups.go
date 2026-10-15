@@ -120,9 +120,10 @@ const crashGroupCountsBase = `SELECT signature,
 // crashGroupCounts 为所有平台或单个签名统计，供详情和崩溃增长检测共用。
 const crashGroupCounts = crashGroupCountsBase + ` GROUP BY signature`
 
-func scanCrashGroup(row pgx.Row) (crashGroupRow, error) {
+func scanCrashGroup(row pgx.Row, extraDest ...any) (crashGroupRow, error) {
 	var g crashGroupRow
-	err := row.Scan(&g.Signature, &g.Platform, &g.Version, &g.Title, &g.Status, &g.IssueURL, &g.FirstSeen, &g.LastSeen, &g.Count7d, &g.CountPrev7d, &g.Devices7d, &g.New)
+	dest := []any{&g.Signature, &g.Platform, &g.Version, &g.Title, &g.Status, &g.IssueURL, &g.FirstSeen, &g.LastSeen, &g.Count7d, &g.CountPrev7d, &g.Devices7d, &g.New}
+	err := row.Scan(append(dest, extraDest...)...)
 	return g, err
 }
 
@@ -239,33 +240,43 @@ type crashSample struct {
 // crashGroupSamples is how many of the latest crashes the group view shows.
 const crashGroupSamples = 5
 
-// crashGroup reads one group with its counts and latest samples; a missing group is pgx.ErrNoRows.
+// crashGroup 在同一条查询的快照中读取分组、统计和最新样本；分组不存在时返回 pgx.ErrNoRows。
 func (a *Service) crashGroup(ctx context.Context, signature string, samples int) (crashGroupRow, []crashSample, error) {
-	tx, err := a.store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	rows, err := a.store.pool.Query(ctx, `WITH c AS (`+crashGroupCounts+`)
+SELECT `+crashGroupColumns+`,
+ s.id IS NOT NULL,COALESCE(s.id,''),COALESCE(s.platform,''),COALESCE(s.version,''),
+ COALESCE(s.message,''),COALESCE(s.stack,''),COALESCE(s.resolved,false),COALESCE(s.created_at,g.last_seen)
+FROM admin_crash_groups g LEFT JOIN c USING(signature)
+LEFT JOIN LATERAL (
+ SELECT id,platform,version,message,stack,resolved,created_at FROM admin_events
+ WHERE kind='crash' AND signature=$1 ORDER BY created_at DESC,id DESC LIMIT $2
+) s ON true
+WHERE g.signature=$1 ORDER BY s.created_at DESC,s.id DESC`, signature, samples)
 	if err != nil {
 		return crashGroupRow{}, nil, err
 	}
-	defer tx.Rollback(ctx)
+	defer rows.Close()
 	var group crashGroupRow
-	var items []crashSample
-	batch := &pgx.Batch{}
-	batch.Queue(`WITH c AS (`+crashGroupCounts+`)
-	SELECT `+crashGroupColumns+` FROM admin_crash_groups g LEFT JOIN c USING(signature) WHERE g.signature=$1`, signature).QueryRow(func(row pgx.Row) error {
-		var err error
-		group, err = scanCrashGroup(row)
-		return err
-	})
-	batch.Queue(`SELECT id,platform,version,message,stack,resolved,created_at FROM admin_events WHERE kind='crash' AND signature=$1 ORDER BY created_at DESC,id DESC LIMIT $2`, signature, samples).Query(func(rows pgx.Rows) error {
-		defer rows.Close()
-		var err error
-		items, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (crashSample, error) {
-			var s crashSample
-			return s, row.Scan(&s.ID, &s.Platform, &s.Version, &s.Message, &s.Stack, &s.Resolved, &s.CreatedAt)
-		})
-		return err
-	})
-	if err := tx.SendBatch(ctx, batch).Close(); err != nil {
+	items := []crashSample{}
+	found := false
+	// 左连接保留无样本的分组；只有实际事件行才加入样本数组。
+	for rows.Next() {
+		var sample crashSample
+		var present bool
+		group, err = scanCrashGroup(rows, &present, &sample.ID, &sample.Platform, &sample.Version, &sample.Message, &sample.Stack, &sample.Resolved, &sample.CreatedAt)
+		if err != nil {
+			return crashGroupRow{}, nil, err
+		}
+		found = true
+		if present {
+			items = append(items, sample)
+		}
+	}
+	if err := rows.Err(); err != nil {
 		return crashGroupRow{}, nil, err
+	}
+	if !found {
+		return crashGroupRow{}, nil, pgx.ErrNoRows
 	}
 	return group, items, nil
 }

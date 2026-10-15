@@ -122,6 +122,15 @@ func (s *Server) fileQQDocs(ctx context.Context, subject, text string, admin boo
 		reply(qqReplyUnavailable)
 		return
 	}
+	release, err := s.qqIssueLock(ctx, repo)
+	if err != nil {
+		slog.Warn("qq bot: docs issue failed", "reason", err.Error())
+		reply(qqReplyUnavailable)
+		return
+	}
+	if release != nil {
+		defer release()
+	}
 	// 查重沿用 issue 的做法：按关键词搜开启的 issue，由模型判断是不是同一件事。
 	duplicate, err := s.qqDuplicate(ctx, client, token, repo, qqReport{Title: request.Title, Problem: request.Problem, Proposal: request.Suggestion, Keywords: request.Keywords})
 	if err != nil {

@@ -1718,6 +1718,13 @@ func (s *Server) fileQQReport(ctx context.Context, repo, platformLabel string, r
 	if err != nil {
 		return 0, false, err
 	}
+	release, err := s.qqIssueLock(ctx, repo)
+	if err != nil {
+		return 0, false, err
+	}
+	if release != nil {
+		defer release()
+	}
 	duplicate, err := s.qqDuplicate(ctx, client, token, repo, report)
 	if err != nil {
 		return 0, false, err
@@ -1748,6 +1755,14 @@ func (s *Server) fileQQReport(ctx context.Context, repo, platformLabel string, r
 	}
 	client.Invalidate("/repos/" + repo + "/issues")
 	return created.Number, false, nil
+}
+
+// qqIssueLock 串行化同一仓库里查重后新建 issue 的读改写过程，避免两个副本都没搜到时各自创建一条重复 issue。
+func (s *Server) qqIssueLock(ctx context.Context, repo string) (func(), error) {
+	if s.qqLocks == nil {
+		return nil, nil
+	}
+	return s.qqLocks.WaitLock(ctx, "qq-issue:"+repo, 15*time.Second)
 }
 
 func githubFailure(phase string, r githubapp.Response, err error) error {

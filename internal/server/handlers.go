@@ -220,14 +220,17 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request) {
 		if e.URL == "" {
 			continue
 		}
-		// 还有后备服务商时，本副本这一秒的额度不够就直接交给下一家，不发注定被服务商限流拒绝的请求；最后一家照常调用。
-		if b := s.translationBudget(e); b != nil && hasTranslationEndpoint(endpoints[i+1:]) && !b.take(time.Now(), len(v.list())) {
-			continue
+		// 还有后备服务商时预留实际的上游请求额度；最后一家照常调用。
+		var budget *providerBudget
+		if hasTranslationEndpoint(endpoints[i+1:]) {
+			budget = s.translationBudget(e)
 		}
 		rr := httptest.NewRecorder()
 		// Every provider answers 502/504 through upstreamError when it rejects the upstream response, so the recorder's status settles the call.
 		mr, call := metered(r, "translation", textChars(v.list()))
-		s.translateEndpoint(rr, mr, v, e)
+		if !s.translateEndpoint(rr, mr, v, e, budget) {
+			continue
+		}
 		s.settleMeter(call, rr.Code < 500)
 		last = rr
 		if rr.Code < 500 {
@@ -295,18 +298,28 @@ func (s *Server) translationBudget(e TranslationEndpoint) *providerBudget {
 	return b
 }
 
-func (s *Server) translateEndpoint(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint) {
-	if len(v.Texts) > 0 && e.Provider != "tencent" && e.Provider != "deepl" {
+// translateEndpoint 执行一次翻译；额度不足时返回 false，未写响应，由调用方尝试后备。
+func (s *Server) translateEndpoint(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint, budget *providerBudget) bool {
+	if e.Provider == "tencent" {
+		// 腾讯先查缓存，只有仍需调用上游时才预留一次请求额度。
+		return s.translateTencent(w, r, v, e, budget)
+	}
+	requests := len(v.list())
+	if e.Provider == "deepl" {
+		requests = 1
+	}
+	if budget != nil && !budget.take(time.Now(), requests) {
+		return false
+	}
+	if len(v.Texts) > 0 && e.Provider != "deepl" {
 		s.translateEach(w, r, v, e)
-		return
+		return true
 	}
 	switch e.Provider {
 	case "openai":
 		s.translateOpenAI(w, r, v, e)
 	case "deepl":
 		s.translateDeepL(w, r, v, e)
-	case "tencent":
-		s.translateTencent(w, r, v, e)
 	case "niutrans":
 		s.translateNiuTrans(w, r, v, e)
 	default:
@@ -319,10 +332,11 @@ func (s *Server) translateEndpoint(w http.ResponseWriter, r *http.Request, v tra
 		}
 		if err != nil || json.Unmarshal(b, &result) != nil || (result.Code != 0 && result.Code != 200) || !bounded(result.Data, contract.OutputTextBytes) {
 			upstreamError(w, r, err)
-			return
+			return true
 		}
 		respond(w, 200, map[string]any{"code": 200, "data": result.Data})
 	}
+	return true
 }
 
 // 拆开批量时同时在途的上游请求数。一次批量只占一个 max_concurrent 名额,这里再限住它对上游的并发,
@@ -347,7 +361,7 @@ func (s *Server) translateEach(w http.ResponseWriter, r *http.Request, v transla
 			// 每条单独计量:外层 translate 打在请求上的计量只能记一次上游调用,几条并发写它会互相覆盖。
 			// 这里的计量把外层的遮住,外层因此看不到上游调用、什么也不记,用量按条记下。
 			mr, call := metered(r, "translation", textChars([]string{text}))
-			s.translateEndpoint(rr, mr, translationRequest{Text: text, Source: v.Source, Target: v.Target}, e)
+			s.translateEndpoint(rr, mr, translationRequest{Text: text, Source: v.Source, Target: v.Target}, e, nil)
 			s.settleMeter(call, rr.Code < 500)
 			results[i] = rr
 		}()

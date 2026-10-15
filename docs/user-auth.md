@@ -76,7 +76,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE msime_migrator IN SCHEMA public GRANT USAGE, S
 
 - `GET /v1/users/me/data` 返回 `{"bytes","sections":[{"id","bytes","items"}]}`，分区依次为 `preferences`、`dictionary`、`phrases`、`clipboard`、`community`、`voice`、`avatar`。大小由一条 SQL 用 `pg_column_size` / `octet_length` 汇总，是统计信息而不是磁盘占用；头像在对象存储里，只报告有没有。
 - `GET /v1/users/me/data/export` 流式返回 `msime-data-<日期>.zip`：`profile.json`（ID、昵称、创建时间、只含 provider 名的身份列表）、`preferences.json`、`dictionary.ndjson`（与词库快照同一格式）、`phrases.json`、`clipboard.json`（云剪贴板的密文和登记设备）、`community.json`（作品元数据）、`sessions.json`（设备信息与时间，不含令牌摘要）。每个用户每天 3 次（`auth_rates` 键 `export:<uid 摘要>`），超出 429 带 `Retry-After`；路由时限 2 分钟。除词库外的 6 个 JSON 文件先一次批量读取，全部成功后才开始发送 ZIP，词库仍流式写入。开始传输后出错只能中断连接，客户端拿到的是不完整的 zip。导出内容不写日志。
-- `DELETE /v1/users/me/data {"sections":[…]}` 要求最近登录，分区取 `preferences`、`dictionary`、`phrases`、`clipboard`、`voice`，至少一个、不能重复，返回 204。一个事务内完成：偏好和常用语清空并推进 `revision`，从未同步过的分区也会创建 `revision=1` 的空文档，重复清空继续推进版本号；其他设备拿旧 `revision`（包括首次同步前的 `0`）写入会 409 并拉到空文档；词库删除条目、覆盖层、位置和选择次数，写一条 `reset` 变更并推进 revision，开着同步的设备会整份重载，而不是把旧数据推回来；剪贴板删除条目、当前密钥、封装和全部设备登记（设备名、公钥、登记时间），保留同步开关和保留天数，开着同步的设备之后重新登记，由第一台设备重新生成密钥。账号、会话和社区作品不在其中，分别走注销账号、我的设备和作品管理。
+- `DELETE /v1/users/me/data {"sections":[…]}` 要求最近登录，分区取 `preferences`、`dictionary`、`phrases`、`clipboard`、`voice`，至少一个、不能重复，返回 204。一个事务内完成：偏好和常用语清空并推进 `revision`，从未同步过的分区也会创建 `revision=1` 的空文档，重复清空继续推进版本号；其他设备拿旧 `revision`（包括首次同步前的 `0`）写入会 409 并拉到空文档；词库删除条目、覆盖层、位置、选择次数和包含词条原文的历史变更，只保留本次新写入的 `reset` 变更并推进 `revision`，旧游标会直接读到它，开着同步的设备会整份重载，而不是把旧数据推回来；剪贴板删除条目、当前密钥、封装和全部设备登记（设备名、公钥、登记时间），保留同步开关和保留天数，开着同步的设备之后重新登记，由第一台设备重新生成密钥。账号、会话和社区作品不在其中，分别走注销账号、我的设备和作品管理。
 
 ## 发送下载链接
 

@@ -80,7 +80,12 @@ func qqCompact(text string) string {
 		return text
 	}
 	compact := strings.TrimPrefix(strings.ToLower(strings.Join(strings.Fields(qqFoldWidth(text)), "")), "/")
-	for utf8.RuneCountInString(compact) > 1 {
+	return qqTrimCommandTrailing(compact)
+}
+
+// qqTrimCommandTrailing 只统计一次字符数，逐个移除尾部标点和表情，同时至少保留一个字符。
+func qqTrimCommandTrailing(compact string) string {
+	for count := utf8.RuneCountInString(compact); count > 1; count-- {
 		r, size := utf8.DecodeLastRuneInString(compact)
 		if !strings.ContainsRune(qqCommandTrailing, r) && !unicode.In(r, unicode.So, unicode.Sk) && r != 0xFE0F && r != 0x200D {
 			break

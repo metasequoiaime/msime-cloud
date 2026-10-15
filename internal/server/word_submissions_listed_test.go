@@ -50,6 +50,8 @@ func TestListedLinesMatchesPrevious(t *testing.T) {
 		{"a\t\t3\nonly\n\tword\t1\n", []string{"a\t", "word\t1", "only"}},
 		{"b\tB\t1\na\tA\t2\na\tA\t3\n", []string{"a\tA", "b\tB", "a\tA"}},
 		{"\u2003a \t b\u2003\t1\r\n", []string{"a\tb"}},
+		{"a\tb\t" + strings.Repeat("ignored\t", 1000) + "\r\n", []string{"a\tb", "a\tb\tignored"}},
+		{"a\t" + strings.Repeat("合成", 64) + "\t1\nb\tB\t2\n", []string{"a\t" + strings.Repeat("合成", 64), "b\tB"}},
 		{oversized + "\na\tA\t1\n", []string{"a\tA"}},
 		{"a\tA\t1\n" + oversized + "\nb\tB\t1", []string{"a\tA", "b\tB"}},
 		{"a\tA\t1\n" + oversized, []string{"a\tA", "a\tA"}},
@@ -100,8 +102,8 @@ func TestListedLinesMemoryBudget(t *testing.T) {
 	if got != nil {
 		t.Fatalf("不存在的词条被标为已有：%v", got)
 	}
-	if bytes := result.AllocedBytesPerOp(); bytes > 600<<10 {
-		t.Fatalf("扫描五千行词库分配 %d 字节，超过 600 KiB 预算", bytes)
+	if bytes := result.AllocedBytesPerOp(); bytes > 240<<10 {
+		t.Fatalf("扫描五千行词库分配 %d 字节，超过 240 KiB 预算", bytes)
 	}
 }
 
@@ -115,6 +117,27 @@ func TestListedLinesEarlyMatchAllocationBudget(t *testing.T) {
 	}
 	if allocations > 20 {
 		t.Fatalf("首行已命中全部待查键，仍分配 %.0f 次，超过 20 次预算", allocations)
+	}
+}
+
+func TestListedLinesLongFieldsMemoryBudget(t *testing.T) {
+	var text strings.Builder
+	for i := range 5000 {
+		fmt.Fprintf(&text, "synthetic%04d\t%s%d\t1\n", i, strings.Repeat("合成", 20), i)
+	}
+	content := text.String()
+	lines := []submissionLine{{key: "missing\tMissing"}}
+	var got alreadyListedError
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			got = listedLines(content, lines)
+		}
+	})
+	if got != nil {
+		t.Fatalf("不存在的词条被标为已有：%v", got)
+	}
+	if bytes := result.AllocedBytesPerOp(); bytes > 1<<20 {
+		t.Fatalf("扫描五千行长词条分配 %d 字节，超过 1 MiB 预算", bytes)
 	}
 }
 

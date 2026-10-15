@@ -613,16 +613,6 @@ func crashGroupTitle(message string) string {
 	return line
 }
 
-// upsertCrashGroup records a crash with a non-empty signature in its group, inside the telemetry insert's transaction: a new group starts open with the crash's canonical platform, an existing one moves its last sighting and version forward. The platform is part of the signature, so it is never updated.
-func (a *Service) upsertCrashGroup(ctx context.Context, tx pgx.Tx, signature, platform, version, title string) error {
-	if signature == "" {
-		return nil
-	}
-	_, err := tx.Exec(ctx, `INSERT INTO admin_crash_groups(signature,platform,version,title) VALUES($1,$2,$3,$4)
-ON CONFLICT(signature) DO UPDATE SET version=EXCLUDED.version,last_seen=GREATEST(admin_crash_groups.last_seen,EXCLUDED.last_seen)`, signature, crashPlatform(platform), version, title)
-	return err
-}
-
 // Backfill bounds: each batch is one transaction, and one startup handles at most crashBackfillBatches of them so a large history cannot hold up startup; the rest continues at the next start.
 const (
 	crashBackfillBatch   = 500

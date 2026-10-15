@@ -109,7 +109,7 @@ func truncateStack(stack string, limit int) string {
 	return head
 }
 
-// Telemetry 处理 `POST /v1/telemetry/events`，不需要认证：它经 Route 挂载，计入按地址的遥测额度；带了 `Authorization` 头也被忽略，所以没有账号的客户端和仍带令牌的旧客户端都能上报。crash 事件另外计入按地址的每日上限。事件写入和（需要分组的崩溃的）分组更新在同一个事务里。
+// Telemetry 处理 `POST /v1/telemetry/events`，不需要认证：它经 `Route` 挂载，计入按地址的遥测额度；带了 `Authorization` 头也被忽略，所以没有账号的客户端和仍带令牌的旧客户端都能上报。`crash` 事件另外计入按地址的每日上限。事件和崩溃分组通过单条语句原子写入。
 func (a *Service) Telemetry(w http.ResponseWriter, r *http.Request) {
 	if a == nil {
 		writeError(w, 503, "user_auth_disabled")
@@ -149,26 +149,17 @@ func (a *Service) Telemetry(w http.ResponseWriter, r *http.Request) {
 		}
 		signature = crashSignature(v.Platform, v.Message, v.Stack)
 	}
-	tx, err := a.store.pool.Begin(ctx)
+	// 只为本次真正插入的崩溃事件更新分组，避免并发重试刷新或创建分组。
+	_, err := a.store.pool.Exec(ctx, `WITH inserted AS (
+ INSERT INTO admin_events(id,kind,platform,version,message,stack,artifact,channel,install_id,signature)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(id) DO NOTHING
+ RETURNING signature,version
+)
+INSERT INTO admin_crash_groups(signature,platform,version,title)
+SELECT signature,$11,version,$12 FROM inserted WHERE signature IS NOT NULL
+ON CONFLICT(signature) DO UPDATE SET version=EXCLUDED.version,last_seen=GREATEST(admin_crash_groups.last_seen,EXCLUDED.last_seen)`,
+		v.ID, v.Kind, v.Platform, v.Version, v.Message, v.Stack, telemetryNull(v.Artifact), telemetryNull(v.Channel), telemetryNull(v.InstallID), telemetryNull(signature), crashPlatform(v.Platform), crashGroupTitle(v.Message))
 	if err != nil {
-		a.error(w, err)
-		return
-	}
-	defer tx.Rollback(ctx)
-	tag, err := tx.Exec(ctx, `INSERT INTO admin_events(id,kind,platform,version,message,stack,artifact,channel,install_id,signature) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(id) DO NOTHING`,
-		v.ID, v.Kind, v.Platform, v.Version, v.Message, v.Stack, telemetryNull(v.Artifact), telemetryNull(v.Channel), telemetryNull(v.InstallID), telemetryNull(signature))
-	if err != nil {
-		a.error(w, err)
-		return
-	}
-	// A retried event is already counted in its group, so only a fresh insert touches the crash group.
-	if signature != "" && tag.RowsAffected() == 1 {
-		if err = a.upsertCrashGroup(ctx, tx, signature, v.Platform, v.Version, crashGroupTitle(v.Message)); err != nil {
-			a.error(w, err)
-			return
-		}
-	}
-	if err = tx.Commit(ctx); err != nil {
 		a.error(w, err)
 		return
 	}

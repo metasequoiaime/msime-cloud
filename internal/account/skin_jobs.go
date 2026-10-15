@@ -95,31 +95,30 @@ func (a *Service) DeleteSkinJob(ctx context.Context, id, owner string) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	// FOR UPDATE orders this against the worker's final write: either the worker recorded its result first and the row is deleted here, or the flag is set first and the worker's write finds it and deletes the row instead.
-	var live, valid bool
-	err = tx.QueryRow(ctx, `SELECT `+skinJobLive+` FROM skin_jobs WHERE id=$1 AND owner=$2 AND NOT cancelled FOR UPDATE`, id, owner).Scan(&live)
-	if err == nil {
-		// WHERE 中的时间条件不能在拿到行锁后自动重算；锁等待可能已经跨过任务 TTL。
-		if err = tx.QueryRow(ctx, `SELECT expires_at>clock_timestamp(), (`+skinJobLive+`) FROM skin_jobs WHERE id=$1`, id).Scan(&valid, &live); err != nil {
-			return err
-		}
-		if !valid {
-			return ErrSkinJobNotFound
-		}
+	// 在一条语句里锁定并重新计算任务状态，再按心跳状态取消或删除。锁等待可能跨过 TTL，所以不能复用锁前的时间判断。
+	var outcome string
+	err = tx.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+	 SELECT id,state,heartbeat_at,expires_at
+	 FROM skin_jobs WHERE id=$1 AND owner=$2 AND NOT cancelled FOR UPDATE
+), classified AS MATERIALIZED (
+	 SELECT id,expires_at>clock_timestamp() AS valid,
+		(state='running' AND heartbeat_at>=clock_timestamp()-make_interval(secs=>`+strconv.Itoa(int(SkinJobStaleAfter/time.Second))+`)) AS live
+	 FROM locked
+), removed AS (
+	 DELETE FROM skin_jobs s USING classified l
+ WHERE s.id=l.id AND l.valid AND NOT l.live
+ RETURNING 'deleted'::text AS outcome
+), cancelled AS (
+	 UPDATE skin_jobs s SET cancelled=true FROM classified l
+ WHERE s.id=l.id AND l.valid AND l.live
+ RETURNING 'cancelled'::text AS outcome
+)
+SELECT COALESCE((SELECT outcome FROM removed),(SELECT outcome FROM cancelled),CASE WHEN EXISTS(SELECT 1 FROM locked) THEN 'expired' ELSE 'missing' END)`, id, owner).Scan(&outcome)
+	if err != nil {
+		return err
 	}
-	if errors.Is(err, pgx.ErrNoRows) {
+	if outcome == "expired" || outcome == "missing" {
 		return ErrSkinJobNotFound
-	}
-	if err != nil {
-		return err
-	}
-	if live {
-		_, err = tx.Exec(ctx, `UPDATE skin_jobs SET cancelled=true WHERE id=$1`, id)
-	} else {
-		_, err = tx.Exec(ctx, `DELETE FROM skin_jobs WHERE id=$1`, id)
-	}
-	if err != nil {
-		return err
 	}
 	return tx.Commit(ctx)
 }

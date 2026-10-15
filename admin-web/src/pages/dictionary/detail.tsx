@@ -63,6 +63,11 @@ export function FileDetail({ path, initialQuery = "", onDirty, focused, onToggle
     if (invalidRows.length) { setSaveError(`${invalidRows.length} 行尚未填写完整或权重无效，请修正后保存。`); return; }
     mutation.mutate(next);
   };
+  const changeView = (nextPage: number, nextQuery = query) => {
+    // 搜索和翻页会重建表格，当前输入校验失败时必须留在原视图。
+    if (sheet.current?.commit() === null) return false;
+    setPage(nextPage); setQuery(nextQuery); return true;
+  };
   const discard = () => { sheet.current?.discard(); setHistory(emptyHistory); setSHA(""); setUncertain(false); setSaveError(""); mutation.reset(); };
   const pullURL = mutation.data?.url ?? (mutation.error instanceof APIError && typeof mutation.error.details.pull_url === "string" ? mutation.error.details.pull_url : undefined);
   return <Card>
@@ -72,9 +77,9 @@ export function FileDetail({ path, initialQuery = "", onDirty, focused, onToggle
       {data?.url && <a href={data.url} target="_blank" rel="noreferrer" className={buttonVariants({ size: "sm", variant: "outline" })}><ExternalLink size={14} aria-hidden="true" />源文件</a>}
       {editable && <Button size="sm" variant="primary" disabled={locked || (!drafts.length && !editing) || (Boolean(invalid.length) && !editing)} onPointerDown={event => event.preventDefault()} onClick={() => { const next = sheet.current?.commit(); if (next) save(next); }}>{mutation.isPending ? "正在保存…" : `保存变更${drafts.length ? `（${drafts.length}）` : ""}`}</Button>}
     </>} />
-    <form aria-label="当前词库词条搜索" onSubmit={event => { event.preventDefault(); setQuery(search.trim()); setPage(1); }} className="mb-3 flex flex-wrap items-center gap-2 rounded-xl bg-panel-2 p-2 text-muted">
+    <form aria-label="当前词库词条搜索" onSubmit={event => { event.preventDefault(); changeView(1, search.trim()); }} className="mb-3 flex flex-wrap items-center gap-2 rounded-xl bg-panel-2 p-2 text-muted">
       <Search size={16} aria-hidden="true" /><input value={search} maxLength={100} onChange={event => setSearch(event.target.value)} placeholder="搜索当前词库中的词条、编码或译文" aria-label="搜索当前文件词条" className="h-9 min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-muted" />
-      {search && <Button size="icon" variant="ghost" aria-label="清空词条搜索" onClick={() => { setSearch(""); setQuery(""); setPage(1); }}><X size={14} aria-hidden="true" /></Button>}<Button type="submit" variant="outline">搜索词条</Button>
+      {search && <Button size="icon" variant="ghost" aria-label="清空词条搜索" onPointerDown={event => event.preventDefault()} onClick={() => { if (changeView(1, "")) setSearch(""); }}><X size={14} aria-hidden="true" /></Button>}<Button type="submit" variant="outline" onPointerDown={event => event.preventDefault()}>搜索词条</Button>
     </form>
     {blocker.status === "blocked" && <Banner tone="warn" className="mb-3"><div className="flex flex-wrap items-center justify-between gap-2"><span>离开页面会放弃未提交的词条变更。</span><div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => blocker.reset()}>留在此页</Button><Button size="sm" variant="danger-outline" onClick={() => blocker.proceed()}>放弃并离开</Button></div></div></Banner>}
     {mutation.isSuccess && <Banner tone="ok" className="mb-3">已创建 PR #{mutation.data.number}。<a href={mutation.data.url} target="_blank" rel="noreferrer">查看并审核变更</a>，合入后生效。</Banner>}
@@ -88,7 +93,7 @@ export function FileDetail({ path, initialQuery = "", onDirty, focused, onToggle
       <DictionarySheet ref={sheet} key={`${page}:${query}`} path={path} originals={data.rows} labels={labels} defaults={defaults} drafts={drafts} editable={editable} locked={locked} hasMore={data.has_more} focused={focused}
         canUndo={Boolean(history.past.length)} canRedo={Boolean(history.future.length)} onChange={change} onEditing={setEditing}
         onUndo={() => { setHistory(undoHistory); mutation.reset(); }} onRedo={() => { setHistory(redoHistory); mutation.reset(); }} onSave={save} />
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[12px] text-muted"><span>第 {page} / {Math.max(1, Math.ceil(data.total / 100))} 页 · 每页 100 条</span><div className="flex gap-2"><Button size="sm" variant="outline" disabled={page <= 1 || mutation.isPending} onClick={() => setPage(value => value - 1)}>上一页</Button><Button size="sm" variant="outline" disabled={!data.has_more || mutation.isPending} onClick={() => setPage(value => value + 1)}>下一页</Button></div></div>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[12px] text-muted"><span>第 {page} / {Math.max(1, Math.ceil(data.total / 100))} 页 · 每页 100 条</span><div className="flex gap-2"><Button size="sm" variant="outline" disabled={page <= 1 || mutation.isPending} onPointerDown={event => event.preventDefault()} onClick={() => changeView(page - 1)}>上一页</Button><Button size="sm" variant="outline" disabled={!data.has_more || mutation.isPending} onPointerDown={event => event.preventDefault()} onClick={() => changeView(page + 1)}>下一页</Button></div></div>
     </> : null}
     {drafts.length > 0 && <details className="mt-3 rounded-xl bg-panel-2 p-3 text-[12.5px] text-body"><summary className="cursor-pointer font-medium">查看全部 {drafts.length} 项变更{invalid.length ? ` · ${invalid.length} 行需修正` : ""}</summary><ul className="mb-0 mt-2 grid list-none gap-2 p-0">{drafts.map(draft => <li key={draft.id} className="flex items-center gap-2"><Pill tone={draftError(path, draft) ? "bad" : draft.operation === "delete" ? "bad" : "ok"}>{changeLabels[draft.operation]}</Pill><span className="min-w-0 flex-1 break-all">{draft.line || draft.sourceLine ? `第 ${draft.sourceLine ?? draft.line} 行 · ` : ""}{draft.columns.join(" · ")}{draftError(path, draft) ? `（${draftError(path, draft)}）` : ""}</span><Button size="sm" variant="ghost" disabled={locked} onClick={() => change(drafts.filter(value => value.id !== draft.id))}>撤销此行</Button></li>)}</ul></details>}
     {/* 按钮直接处理输入缓冲，保留焦点以免失焦校验插入提示后移走点击目标。 */}

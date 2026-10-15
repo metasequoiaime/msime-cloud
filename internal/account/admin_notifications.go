@@ -222,15 +222,15 @@ func (a *Service) adminNotificationsRead(w http.ResponseWriter, r *http.Request,
 	ctx := r.Context()
 	var err error
 	if v.All {
-		err = pgx.BeginFunc(ctx, a.store.pool, func(tx pgx.Tx) error {
-			// An up_to_id that no longer exists gives a NULL watermark, which GREATEST ignores, so the call changes nothing.
-			if _, err := tx.Exec(ctx, `INSERT INTO admin_preferences(email,read_all_before) VALUES($1,CASE WHEN $2::bigint IS NULL THEN now() ELSE (SELECT created_at FROM admin_notifications WHERE id=$2) END) ON CONFLICT(email) DO UPDATE SET read_all_before=GREATEST(admin_preferences.read_all_before,EXCLUDED.read_all_before)`, email, upTo); err != nil {
-				return err
-			}
-			// Individual markers at or before the new watermark are redundant now.
-			_, err := tx.Exec(ctx, `DELETE FROM admin_notification_reads r USING admin_notifications n WHERE r.email=$1 AND n.id=r.notification_id AND n.created_at<=(SELECT read_all_before FROM admin_preferences WHERE email=$1)`, email)
-			return err
-		})
+		// 用写入返回的水位清理冗余标记，避免读取同语句快照中的旧值；缺失目标产生的 NULL 不回退既有水位。
+		_, err = a.store.pool.Exec(ctx, `WITH advanced AS (
+ INSERT INTO admin_preferences(email,read_all_before)
+ VALUES($1,CASE WHEN $2::bigint IS NULL THEN now() ELSE (SELECT created_at FROM admin_notifications WHERE id=$2) END)
+ ON CONFLICT(email) DO UPDATE SET read_all_before=GREATEST(admin_preferences.read_all_before,EXCLUDED.read_all_before)
+ RETURNING email,read_all_before
+)
+DELETE FROM admin_notification_reads r USING admin_notifications n,advanced p
+WHERE r.email=p.email AND n.id=r.notification_id AND n.created_at<=p.read_all_before`, email, upTo)
 	} else {
 		_, err = a.store.pool.Exec(ctx, `INSERT INTO admin_notification_reads(email,notification_id) SELECT $1,n.id FROM admin_notifications n WHERE n.id=ANY($2) ON CONFLICT DO NOTHING`, email, ids)
 	}

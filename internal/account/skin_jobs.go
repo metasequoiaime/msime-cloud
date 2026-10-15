@@ -59,18 +59,21 @@ func (a *Service) CreateSkinJob(ctx context.Context, id, owner string, perOwner,
 	if _, err = tx.Exec(ctx, skinJobsLock); err != nil {
 		return expires, err
 	}
-	// Expired drafts can hold up to ~12 MB each; dropping them here keeps the table small between the hourly prunes. A cancelled job whose worker went stale is dropped too: it is invisible to GET and DELETE and the worker that would have deleted it is gone, so nothing else ever would before it expires.
-	if _, err = tx.Exec(ctx, `DELETE FROM skin_jobs WHERE expires_at<=clock_timestamp() OR (cancelled AND NOT (`+skinJobLive+`))`); err != nil {
-		return expires, err
-	}
-	var all, own int
-	if err = tx.QueryRow(ctx, `SELECT count(*),count(*) FILTER (WHERE owner=$1) FROM skin_jobs WHERE state<>'running' OR `+skinJobLive, owner).Scan(&all, &own); err != nil {
-		return expires, err
-	}
-	if all >= total || own >= perOwner {
+	// 先清理过期任务和失去工作进程的已取消任务，再基于清理后的快照判断容量并插入。
+	// 两条语句批量发送，保留执行顺序；达到容量上限时回滚，清理也不会单独提交。
+	batch := &pgx.Batch{}
+	batch.Queue(`DELETE FROM skin_jobs WHERE expires_at<=clock_timestamp() OR (cancelled AND NOT (` + skinJobLive + `))`)
+	batch.Queue(`INSERT INTO skin_jobs(id,owner,expires_at)
+SELECT $1,$2,clock_timestamp()+make_interval(secs=>$3)
+FROM (SELECT count(*) AS total_count,count(*) FILTER (WHERE owner=$2) AS owner_count
+ FROM skin_jobs WHERE state<>'running' OR `+skinJobLive+`) counts
+WHERE owner_count<$4 AND total_count<$5
+RETURNING expires_at`, id, owner, ttl.Seconds(), perOwner, total).QueryRow(func(row pgx.Row) error {
+		return row.Scan(&expires)
+	})
+	if err = tx.SendBatch(ctx, batch).Close(); errors.Is(err, pgx.ErrNoRows) {
 		return expires, ErrSkinJobsBusy
-	}
-	if err = tx.QueryRow(ctx, `INSERT INTO skin_jobs(id,owner,expires_at) VALUES($1,$2,clock_timestamp()+make_interval(secs=>$3)) RETURNING expires_at`, id, owner, ttl.Seconds()).Scan(&expires); err != nil {
+	} else if err != nil {
 		return expires, err
 	}
 	return expires, tx.Commit(ctx)

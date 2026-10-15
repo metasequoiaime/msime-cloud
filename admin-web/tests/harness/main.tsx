@@ -33,7 +33,7 @@ const columns: Column<Row>[] = [
   { id: "title", header: "标题", width: "minmax(200px,2fr)", cell: row => <CellText title={row.title} sub={row.id} /> },
   { id: "state", header: "状态", width: "90px", cell: row => <Pill tone={row.state === "open" ? "warn" : "mute"}>{row.state}</Pill> },
 ];
-const series = Array.from({ length: 30 }, (_, index) => ({ day: `09-${String(index + 1).padStart(2, "0")}`, a: 100 + index * 3, b: 50 + (index % 7) * 9 }));
+const series = Array.from({ length: 30 }, (_, index) => ({ day: `09-${String(index + 1).padStart(2, "0")}`, a: 1100 + index * 30, b: 50 + (index % 7) * 9 }));
 const skin = { background: 0xf5faf6, keyBackground: 0xffffff, keyForeground: 0x0f2419, accent: 0x1e8e4e, actionBackground: 0x1e8e4e, cornerRadius: 8, borderWidth: 1, shadow: 0.1, pattern: 1, monospaced: false };
 
 const authClient = new QueryClient();
@@ -98,7 +98,7 @@ function Harness() {
     <DebounceHarness />
     <StatGrid kpi><StatTile size="kpi" label="KPI" value="1,234" delta="+12%" sub="较上月" /><StatTile label="Stat" value={7} delta="-3" /></StatGrid>
     <Card><CardHeader title="图表" actions={<ChartLegend series={[{ key: "a", label: "A" }, { key: "b", label: "B" }]} />} />
-      <AreaChart data={series} xKey="day" series={[{ key: "a", label: "A" }, { key: "b", label: "B" }]} ariaLabel="面积图" />
+      <AreaChart data={series} xKey="day" series={[{ key: "a", label: "A" }, { key: "b", label: "B" }]} showYAxis yDomain={[0, 2000]} ariaLabel="面积图" />
       <AreaChart data={series} xKey="day" filled={false} series={[{ key: "a", label: "A" }]} ariaLabel="折线图" />
       <Sparkline data={series.map(point => point.a)} ariaLabel="迷你图" />
       <ProgressBar value={40} label="进度" />

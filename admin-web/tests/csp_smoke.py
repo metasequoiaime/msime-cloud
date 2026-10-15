@@ -1341,6 +1341,9 @@ def main() -> int:
                 page.goto(base + "/harness/")
                 expect(page.get_by_role("table", name="测试表格")).to_be_visible()
                 expect(page.locator(".recharts-surface").first).to_be_visible()
+                # 默认刻度格式保留千分位，图表传入的下标不会被当成语言参数。
+                chart = page.get_by_role("img", name="面积图", exact=True)
+                expect(chart.get_by_text("2,000", exact=True)).to_be_visible()
                 page.get_by_role("checkbox", name="全选").check()
                 expect(page.get_by_text("已选 3 项")).to_be_visible()
                 page.get_by_role("button", name="批量驳回").click()

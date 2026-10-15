@@ -1,3 +1,4 @@
+import { formatNumber } from "../../utils/number";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -173,7 +174,7 @@ export default function WordsPage() {
           <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-panel-2" aria-hidden="true">
             <div className="h-full rounded-full bg-warn" style={{ width: `${Math.min(word.hits_7d / maxHits, 1) * 100}%` }} />
           </div>
-          <span className="min-w-10 text-right text-[12.5px] text-body tabular-nums">{word.hits_7d.toLocaleString("zh-CN")}</span>
+          <span className="min-w-10 text-right text-[12.5px] text-body tabular-nums">{formatNumber(word.hits_7d)}</span>
         </div>,
       },
       {
@@ -215,7 +216,7 @@ export default function WordsPage() {
     <Button size="sm" variant="outline" onClick={() => setSearch({ focus: undefined })}>显示全部</Button>
   </div>;
 
-  const stat = (value: number) => query.data ? value.toLocaleString("zh-CN") : "—";
+  const stat = (value: number) => query.data ? formatNumber(value) : "—";
   const editTitle = canEdit ? undefined : noPermissionHint;
 
   return <div>

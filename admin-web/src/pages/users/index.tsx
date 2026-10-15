@@ -1,3 +1,4 @@
+import { formatNumber } from "../../utils/number";
 import { useCallback, useMemo } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useAPI } from "../../api/client";
@@ -21,8 +22,6 @@ import { UserDrawer } from "./user-drawer";
 // The design's chips are 全部 / 维护者 / 审核志愿者 / 普通用户; operator and read-only members get a chip only when such accounts exist.
 const baseRoles = ["maintainer", "reviewer", "user"] as const;
 const optionalRoles = ["operator", "readonly"] as const;
-
-const number = (value: number) => value.toLocaleString("zh-CN");
 
 export default function UsersPage() {
   const api = useAPI();
@@ -78,10 +77,10 @@ export default function UsersPage() {
   return <>
     <PageIntro page="users" />
     <StatGrid className="mb-4">
-      <StatTile label="注册账号" value={s ? number(s.total) : "—"} />
-      <StatTile label="本周新增" value={s ? `+${number(s.new_7d)}` : "—"} sub="近 7 天注册" />
+      <StatTile label="注册账号" value={s ? formatNumber(s.total) : "—"} />
+      <StatTile label="本周新增" value={s ? `+${formatNumber(s.new_7d)}` : "—"} sub="近 7 天注册" />
       <StatTile label="开启设置同步" value={s ? `${Math.round(s.sync_ratio * 100)}%` : "—"} sub="上传过设置的账号占比" />
-      <StatTile label="已封禁" value={s ? number(s.banned) : "—"} />
+      <StatTile label="已封禁" value={s ? formatNumber(s.banned) : "—"} />
     </StatGrid>
     <DataTable
       ariaLabel="用户列表"

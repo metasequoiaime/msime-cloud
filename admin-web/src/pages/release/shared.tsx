@@ -37,7 +37,3 @@ export function formatSize(bytes: number): string {
   if (unit === "KB") return `${Math.round(value)} KB`;
   return `${value} B`;
 }
-
-export function formatCount(n: number): string {
-  return n.toLocaleString("en-US");
-}

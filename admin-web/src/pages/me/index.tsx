@@ -1,3 +1,4 @@
+import { formatNumber } from "../../utils/number";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { differenceInCalendarDays, format } from "date-fns";
@@ -86,9 +87,9 @@ function Profile({ me }: { me: Me }) {
 function Stats({ me }: { me: Me }) {
   const hours = me.stats.avg_handle_hours;
   return <StatGrid>
-    <StatTile label="本月审核词库 PR" value={me.stats.dict_prs_month.toLocaleString("zh-CN")} />
-    <StatTile label="本月审核社区内容" value={me.stats.community_month.toLocaleString("zh-CN")} />
-    <StatTile label="本月分诊 Issue" value={me.stats.issues_month.toLocaleString("zh-CN")} />
+    <StatTile label="本月审核词库 PR" value={formatNumber(me.stats.dict_prs_month)} />
+    <StatTile label="本月审核社区内容" value={formatNumber(me.stats.community_month)} />
+    <StatTile label="本月分诊 Issue" value={formatNumber(me.stats.issues_month)} />
     <StatTile label="平均处理时长" value={hours === null ? "—" : `${hours < 10 ? hours.toFixed(1) : Math.round(hours)} 小时`} sub="本月社区内容，从提交到处理" />
   </StatGrid>;
 }

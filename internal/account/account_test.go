@@ -310,6 +310,10 @@ func TestCompleteRejectsChallengeThatExpiresWhileWaitingForLock(t *testing.T) {
 	if err := <-result; !errors.Is(err, ErrInvalid) {
 		t.Fatalf("锁等待期间过期的挑战不应签发会话，返回 %v", err)
 	}
+	var challenges, users, sessions int
+	if err := s.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM auth_challenges WHERE id_hash=$1),(SELECT count(*) FROM auth_users),(SELECT count(*) FROM auth_sessions)`, c.IDHash).Scan(&challenges, &users, &sessions); err != nil || challenges != 1 || users != 0 || sessions != 0 {
+		t.Fatal("过期挑战被消费或留下了账号、会话", challenges, users, sessions, err)
+	}
 }
 func TestRateIsSharedAndBounded(t *testing.T) {
 	s := testStore(t)

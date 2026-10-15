@@ -22,6 +22,7 @@ import (
 
 const (
 	niuTransFileBytes     = 64 << 20
+	niuTransDownloadBytes = 64 << 20
 	niuTransResponseBytes = 1 << 20
 	// 单次上传只需要文件、语言和少量可选参数，限制部件数避免大量小字段耗尽内存。
 	niuTransMaxParts = 32
@@ -168,7 +169,7 @@ func (s *Server) niuTransVoiceUpload(w http.ResponseWriter, r *http.Request) {
 	s.niuTransUpload(w, r, s.config.NiuTrans.Voice, "voice")
 }
 
-// niuTransFileRequest forwards a status, interrupt, delete or download call for fileNo; service is the metrics key the call is recorded under.
+// niuTransFileRequest 转发文件任务的状态、终止、删除或下载请求，按 service 记录服务指标。
 func (s *Server) niuTransFileRequest(w http.ResponseWriter, r *http.Request, e NiuTransEndpoint, service, operation, fileNo string) {
 	if !s.niuTransEndpoint(w, e) {
 		return
@@ -202,22 +203,66 @@ func (s *Server) niuTransFileRequest(w http.ResponseWriter, r *http.Request, e N
 	}
 	base.RawQuery = query.Encode()
 	mr, call := metered(r, service, 0)
-	b, contentType, err := s.niuTransRequestWithType(mr, base.String(), r.Method, "", nil)
-	s.settleMeter(call, operation == "download" || json.Valid(b))
+	if operation == "download" {
+		s.niuTransDownload(w, mr, base.String(), call)
+		return
+	}
+	b, err := s.niuTransRequest(mr, base.String(), r.Method, "", nil)
+	s.settleMeter(call, json.Valid(b))
 	if err != nil {
 		upstreamError(w, r, err)
 		return
 	}
-	if operation == "download" {
-		if contentType == "" {
-			contentType = "application/octet-stream"
-		}
-		w.Header().Set("Content-Type", contentType)
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(b)
+	niuTransJSON(w, r, b)
+}
+
+// niuTransDownload 以固定大小缓冲区转发文件，下载上限独立于 JSON 响应上限。
+func (s *Server) niuTransDownload(w http.ResponseWriter, r *http.Request, target string, call *meterCall) {
+	started := time.Now()
+	var err error
+	defer func() {
+		captureMeter(r.Context(), started, err)
+		s.settleMeter(call, err == nil)
+	}()
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, target, nil)
+	if err != nil {
+		upstreamError(w, r, err)
 		return
 	}
-	niuTransJSON(w, r, b)
+	resp, err := s.client.Do(req)
+	if err != nil {
+		upstreamError(w, r, err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		err = io.ErrUnexpectedEOF
+	} else if resp.ContentLength > niuTransDownloadBytes {
+		err = errors.New("upstream response too large")
+	}
+	if err != nil {
+		upstreamError(w, r, err)
+		return
+	}
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.WriteHeader(http.StatusOK)
+	_, err = io.Copy(w, io.LimitReader(resp.Body, niuTransDownloadBytes))
+	if err == nil {
+		// 再读一个字节区分恰好达到上限与超限，额外字节不发送给客户端。
+		var extra int64
+		extra, err = io.Copy(io.Discard, io.LimitReader(resp.Body, 1))
+		if err == nil && extra != 0 {
+			err = errors.New("upstream response too large")
+		}
+	}
+	if err != nil {
+		// 已发送文件响应时中断连接，避免残缺文件被当作完整下载，也不追加 JSON。
+		panic(http.ErrAbortHandler)
+	}
 }
 
 func (s *Server) niuTransDocumentStatus(w http.ResponseWriter, r *http.Request) {

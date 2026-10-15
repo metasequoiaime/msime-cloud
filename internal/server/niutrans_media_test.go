@@ -134,6 +134,27 @@ func TestNiuTransAllMediaRoutes(t *testing.T) {
 	}
 }
 
+func TestNiuTransDownloadsAboveJSONLimit(t *testing.T) {
+	data := bytes.Repeat([]byte("synthetic-result\n"), (2<<20)/17+1)
+	s := fixture(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write(data)
+	})
+	e := NiuTransEndpoint{URL: s.config.Chat.URL + "/upload", appID: "synthetic-app", apiKey: "synthetic-key"}
+	s.config.NiuTrans.Document, s.config.NiuTrans.Image, s.config.NiuTrans.Voice = e, e, e
+	for _, kind := range []string{"documents", "images", "voice"} {
+		t.Run(kind, func(t *testing.T) {
+			w := call(s, http.MethodGet, "/v1/niutrans/"+kind+"/file/download", "")
+			if w.Code != http.StatusOK || !bytes.Equal(w.Body.Bytes(), data) {
+				t.Fatalf("status=%d bytes=%d want=%d", w.Code, w.Body.Len(), len(data))
+			}
+			if got := w.Header().Get("Content-Type"); got != "application/octet-stream" {
+				t.Fatalf("Content-Type=%q", got)
+			}
+		})
+	}
+}
+
 func TestNiuTransMediaValidationFailures(t *testing.T) {
 	s := fixture(t, func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "not-json") })
 	if w := call(s, http.MethodGet, "/v1/niutrans/resources", ""); w.Code != http.StatusServiceUnavailable {

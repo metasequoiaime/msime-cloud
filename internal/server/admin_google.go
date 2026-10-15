@@ -147,10 +147,12 @@ func (s *Server) adminCookie(w http.ResponseWriter, value string, flow bool, max
 	http.SetCookie(w, &http.Cookie{Name: name, Value: value, Path: "/", HttpOnly: true, Secure: strings.HasPrefix(name, "__Host-"), SameSite: http.SameSiteLaxMode, MaxAge: maxAge})
 }
 func (s *Server) adminBearer(r *http.Request) bool {
-	auth := r.Header.Get("Authorization")
-	supplied := sha256.Sum256([]byte(strings.TrimPrefix(auth, "Bearer ")))
-	expected := sha256.Sum256([]byte(s.config.Admin.token))
-	return s.config.Admin.token != "" && strings.HasPrefix(auth, "Bearer ") && subtle.ConstantTimeCompare(supplied[:], expected[:]) == 1
+	token, bearer := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if s.config.Admin.token == "" || !bearer {
+		return false
+	}
+	supplied := sha256.Sum256([]byte(token))
+	return subtle.ConstantTimeCompare(supplied[:], s.config.Admin.tokenHash[:]) == 1
 }
 
 // adminSessionToken is the session a request carries: the command line's Authorization header, which wins when present, or the browser's cookie.

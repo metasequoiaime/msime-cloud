@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"net/http"
 	"os"
@@ -27,6 +28,8 @@ type AdminConfig struct {
 	Telegram    AdminTelegramConfig  `json:"telegram"`
 	Logs        AdminLogsConfig      `json:"logs"`
 	token       string
+	// tokenHash 在校验时计算，请求复用固定摘要，避免重复散列旧管理员密钥。
+	tokenHash [sha256.Size]byte
 }
 
 func (c *AdminConfig) validate(authEnabled bool, clients []Client) error {
@@ -60,6 +63,7 @@ func (c *AdminConfig) validate(authEnabled bool, clients []Client) error {
 			return errors.New("admin token must differ from client tokens")
 		}
 	}
+	c.tokenHash = sha256.Sum256([]byte(c.token))
 	return c.validateConsole()
 }
 

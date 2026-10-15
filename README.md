@@ -49,9 +49,11 @@ curl -G -H "Authorization: Bearer $MSIME_CLIENT_TOKEN" \
 | GET `/v1/niutrans/documents/{file_no}/download` | `type=0..5` | 下载文档结果 |
 | POST `/v1/niutrans/images` | multipart `file`、`from`、`to` | 小牛图片翻译任务 |
 | GET `/v1/niutrans/images/{file_no}` | 小牛图片任务编号 | 查询图片翻译状态 |
+| PUT `/v1/niutrans/images/{file_no}/interrupt` | 小牛图片任务编号 | 终止图片翻译任务 |
 | GET `/v1/niutrans/images/{file_no}/download` | `type=0..5` | 下载图片结果 |
 | POST `/v1/niutrans/voice` | multipart `file`、`from`、`to` | 小牛语音翻译任务 |
 | GET `/v1/niutrans/voice/{file_no}` | 小牛语音任务编号 | 查询语音翻译状态 |
+| PUT `/v1/niutrans/voice/{file_no}/interrupt` | 小牛语音任务编号 | 终止语音翻译任务 |
 | GET `/v1/niutrans/voice/{file_no}/download` | `type=0..5` | 下载语音结果 |
 | GET `/v1/niutrans/resources` | `action` | 调用已配置的小牛资源管理动作 |
 

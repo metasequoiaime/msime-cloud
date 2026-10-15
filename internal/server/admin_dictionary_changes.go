@@ -248,8 +248,31 @@ func applyDictionaryChanges(name, text string, changes []dictionaryEdit) (string
 			updates[edit.Line] = &value
 		}
 	}
+	// 按删改后的字节数预留空间，追加前可能需要补一个换行。
+	outputBytes := len(text)
+	for line, value := range updates {
+		original := lines[line-1]
+		if value == nil {
+			outputBytes -= len(original)
+			if line < len(lines) {
+				outputBytes--
+			}
+		} else {
+			outputBytes += len(*value) - len(original)
+			if strings.HasSuffix(original, "\r") {
+				outputBytes++
+			}
+		}
+	}
+	if outputBytes > 0 && len(additions) > 0 {
+		outputBytes += len(newline)
+	}
+	for _, value := range additions {
+		outputBytes += len(value) + len(newline)
+	}
 	// 保留未修改行的每一个字节及换行风格，仅修改目标行。
 	var out strings.Builder
+	out.Grow(outputBytes)
 	for i, original := range lines {
 		value, changed := updates[i+1]
 		if changed && value == nil {
@@ -267,13 +290,16 @@ func applyDictionaryChanges(name, text string, changes []dictionaryEdit) (string
 			out.WriteByte('\n')
 		}
 	}
-	result := out.String()
 	if len(additions) > 0 {
-		if result != "" && !strings.HasSuffix(result, "\n") {
-			result += newline
+		if out.Len() > 0 && !strings.HasSuffix(out.String(), "\n") {
+			out.WriteString(newline)
 		}
-		result += strings.Join(additions, newline) + newline
+		for _, value := range additions {
+			out.WriteString(value)
+			out.WriteString(newline)
+		}
 	}
+	result := out.String()
 	// 翻译允许覆盖同一源词，其他文件按前两列去重。
 	remaining := map[string]int{}
 

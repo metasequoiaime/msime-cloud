@@ -111,6 +111,20 @@ func (s store) forget(server, accessToken string) error {
 	return s.putLocked(server, nil)
 }
 
+// forgetLogin 清理已退出的用户登录及其刷新结果，保留等待期间完成的另一次登录。
+func (s store) forgetLogin(server, loginID string) error {
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	current, ok, err := s.get(server)
+	if err != nil || !ok || current.loginID() != loginID {
+		return err
+	}
+	return s.putLocked(server, nil)
+}
+
 // putLocked 由已经持锁的调用方使用；原子替换文件，读者不会看到半份凭据。
 func (s store) putLocked(server string, value *session) error {
 	sessions, err := s.load()

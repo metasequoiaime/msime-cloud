@@ -131,20 +131,22 @@ func (a *Service) SkinJobHeartbeat(ctx context.Context, id string) (bool, error)
 	}
 	defer tx.Rollback(ctx)
 	var live bool
-	err = tx.QueryRow(ctx, `SELECT NOT cancelled FROM skin_jobs WHERE id=$1 FOR UPDATE`, id).Scan(&live)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return false, tx.Commit(ctx)
-	}
+	// 先锁定任务行，再在独立的物化 CTE 中计算锁后的有效期和心跳状态；一次语句完成读取与心跳更新。
+	err = tx.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+ SELECT id,cancelled,state,heartbeat_at,expires_at
+ FROM skin_jobs WHERE id=$1 FOR UPDATE
+), classified AS MATERIALIZED (
+ SELECT id,NOT cancelled AND expires_at>clock_timestamp() AND
+	(state='running' AND heartbeat_at>=clock_timestamp()-make_interval(secs=>`+strconv.Itoa(int(SkinJobStaleAfter/time.Second))+`)) AS live
+ FROM locked
+), updated AS (
+ UPDATE skin_jobs s SET heartbeat_at=clock_timestamp()
+ FROM classified c WHERE s.id=c.id AND c.live
+ RETURNING 1
+)
+SELECT COALESCE((SELECT live FROM classified),false)`, id).Scan(&live)
 	if err != nil {
 		return false, err
-	}
-	if err = tx.QueryRow(ctx, `SELECT NOT cancelled AND expires_at>clock_timestamp() AND (`+skinJobLive+`) FROM skin_jobs WHERE id=$1`, id).Scan(&live); err != nil {
-		return false, err
-	}
-	if live {
-		if _, err = tx.Exec(ctx, `UPDATE skin_jobs SET heartbeat_at=clock_timestamp() WHERE id=$1`, id); err != nil {
-			return false, err
-		}
 	}
 	return live, tx.Commit(ctx)
 }

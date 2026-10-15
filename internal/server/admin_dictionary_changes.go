@@ -308,7 +308,7 @@ func applyDictionaryChanges(name, text string, changes []dictionaryEdit) (string
 			remaining[k]++
 		}
 	}
-	for _, line := range strings.Split(result, "\n") {
+	for line := range strings.SplitSeq(result, "\n") {
 		k := dictionaryEntryKey(line)
 		if k == "" {
 			continue

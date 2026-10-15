@@ -114,7 +114,7 @@ func (a *Service) adminPermissionsAction(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	defer tx.Rollback(ctx)
-	// 锁定角色、修改权限和有条件审计合并为一条语句，重复授予/撤销仍不产生审计。
+	// 先取得角色锁，再用新快照修改权限和有条件审计；同一批次发送保持往返次数不变。
 	detail, err := auditDetail(map[string]any{"role": v.Role, "role_name": "", "permission": v.Permission})
 	if err != nil {
 		a.error(w, err)
@@ -127,8 +127,10 @@ func (a *Service) adminPermissionsAction(w http.ResponseWriter, r *http.Request,
 	action := "permission_" + v.Action
 	var name string
 	var affected int64
-	err = tx.QueryRow(ctx, `WITH locked AS MATERIALIZED (
- SELECT name FROM admin_roles WHERE key=$1 FOR UPDATE
+	batch := &pgx.Batch{}
+	batch.Queue(`SELECT key FROM admin_roles WHERE key=$1 FOR UPDATE`, v.Role)
+	batch.Queue(`WITH locked AS MATERIALIZED (
+ SELECT name FROM admin_roles WHERE key=$1
 ), changed AS (
  `+query+` RETURNING 1
 ), audited AS (
@@ -137,7 +139,10 @@ func (a *Service) adminPermissionsAction(w http.ResponseWriter, r *http.Request,
  FROM locked l CROSS JOIN changed
  RETURNING 1
 )
-SELECT name,(SELECT count(*) FROM changed) FROM locked`, v.Role, v.Permission, action, adminActor(ctx), detail).Scan(&name, &affected)
+SELECT name,(SELECT count(*) FROM changed) FROM locked`, v.Role, v.Permission, action, adminActor(ctx), detail).QueryRow(func(row pgx.Row) error {
+		return row.Scan(&name, &affected)
+	})
+	err = tx.SendBatch(ctx, batch).Close()
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, 404, "not_found")
 		return

@@ -15,11 +15,14 @@ type CommunityStats struct {
 	GeneratedAt   time.Time `json:"generated_at"`
 }
 
-// 公共统计和后台概览共用一次资源表聚合；短语包与已移除资源不计入词包、回复总数。
-const communityResourceCountsQuery = `SELECT
+// 公共统计和后台概览共用未下架词库与回复模板的计数及收藏人次，资源表只扫描一次。
+const communityResourceCountsQuery = `WITH resources AS MATERIALIZED (
+ SELECT id,kind FROM community_resources WHERE kind IN ('dictionary','reply') AND moderation<>'removed'
+) SELECT
  count(*) FILTER (WHERE kind='dictionary') AS dictionaries,
- count(*) FILTER (WHERE kind='reply') AS replies
- FROM community_resources WHERE kind IN ('dictionary','reply') AND moderation<>'removed'`
+ count(*) FILTER (WHERE kind='reply') AS replies,
+ (SELECT count(*) FROM community_resource_saves s JOIN resources r ON r.id=s.resource_id) AS resource_saves
+ FROM resources`
 
 // communitySkinDownloadsQuery 由公共统计和后台概览共用，只统计未下架皮肤的去重下载记录。
 const communitySkinDownloadsQuery = `SELECT count(*) FROM community_skin_downloads d JOIN community_skins s ON s.id=d.skin_id WHERE s.moderation<>'removed'`
@@ -29,7 +32,7 @@ const communityStatsQuery = `SELECT
  (SELECT count(*) FROM community_skins WHERE moderation<>'removed'),
  (` + communitySkinDownloadsQuery + `),
  resource_counts.dictionaries,resource_counts.replies,
- (SELECT count(*) FROM community_resource_saves),
+ resource_counts.resource_saves,
  now() FROM (` + communityResourceCountsQuery + `) resource_counts`
 
 func (a *Service) communityStats(w http.ResponseWriter, r *http.Request) {

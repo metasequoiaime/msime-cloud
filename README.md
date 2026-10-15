@@ -378,7 +378,7 @@ issue 和评论只包含模型转述的内容，不含群友的原话、昵称�
 
 用户还可以分享客户端插件包（音效包、音乐包、指令表、特效包、辅助码表、符号集、短语表和单词本，zip 内含 plugin.toml、音频或数据文件和说明），服务器只校验和原样分发、从不执行。旧客户端不认识的后四种类型只返回给用 `kinds` 参数声明支持它们的客户端；升级时迁移会替换 `community_plugins` 的类型约束，上线顺序是先发容忍未知类型的客户端、再部署服务端、最后发布新类型的客户端。接口 `/v1/community/plugins`、包校验规则、配额与部署说明见 [插件社区](docs/plugin-community.md)。
 
-`GET /v1/community/stats` 公开返回社区内容总量 `{skins,skin_downloads,dictionaries,replies,resource_saves,generated_at}`，供官网服务端拉取后自行缓存。下载与收藏按账号去重，注销账号的作品和互动随之移除；不含用户数和安装包上报（这两项只在管理后台概览提供）。与其他社区接口一样免令牌、按 IP 每分钟 120 次限流、响应禁用缓存，用户体系未启用时返回 503。
+`GET /v1/community/stats` 公开返回社区内容总量 `{skins,skin_downloads,dictionaries,replies,resource_saves,generated_at}`，供官网服务端拉取后自行缓存。下载与收藏按账号和作品去重，其中 `resource_saves` 只统计未下架词库与回复模板的收藏（含待审核作品，不含短语包）。注销账号的作品和互动随之移除；统计不含用户数和安装包上报（这两项只在管理后台概览提供）。与其他社区接口一样免令牌、按 IP 每分钟 120 次限流、响应禁用缓存，用户体系未启用时返回 503。
 
 `GET /v1/site/download-mirrors` 公开返回官网下载页使用的镜像链接 `{lanzou_url,updated_at}`（未设置时均为空字符串），由管理员在后台「站点设置」中修改。同样免令牌，但与 `GET /v1/notices` 共用另一份按 IP 每分钟 1200 次的限流（不占用其他用户接口的 120 次），成功响应允许 60 秒公共缓存；详见 [管理后台](docs/admin.md)。
 

@@ -1,6 +1,7 @@
 package account
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"regexp"
@@ -150,18 +151,30 @@ func (a *Service) Telemetry(w http.ResponseWriter, r *http.Request) {
 		signature = crashSignature(v.Platform, v.Message, v.Stack)
 	}
 	// 只为本次真正插入的崩溃事件更新分组，避免并发重试刷新或创建分组。
-	_, err := a.store.pool.Exec(ctx, `WITH inserted AS (
+	var inserted bool
+	// id 检查和每日额度扣除之间存在并发窗口；若另一个请求先写入，退回本次预留的额度。
+	err := a.store.pool.QueryRow(ctx, `WITH inserted AS (
  INSERT INTO admin_events(id,kind,platform,version,message,stack,artifact,channel,install_id,signature)
  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(id) DO NOTHING
  RETURNING signature,version
-)
-INSERT INTO admin_crash_groups(signature,platform,version,title)
+	), grouped AS (
+	 INSERT INTO admin_crash_groups(signature,platform,version,title)
 SELECT signature,$11,version,$12 FROM inserted WHERE signature IS NOT NULL
-ON CONFLICT(signature) DO UPDATE SET version=EXCLUDED.version,last_seen=GREATEST(admin_crash_groups.last_seen,EXCLUDED.last_seen)`,
-		v.ID, v.Kind, v.Platform, v.Version, v.Message, v.Stack, telemetryNull(v.Artifact), telemetryNull(v.Channel), telemetryNull(v.InstallID), telemetryNull(signature), crashPlatform(v.Platform), crashGroupTitle(v.Message))
+	ON CONFLICT(signature) DO UPDATE SET version=EXCLUDED.version,last_seen=GREATEST(admin_crash_groups.last_seen,EXCLUDED.last_seen)
+	)
+	SELECT EXISTS(SELECT 1 FROM inserted)`,
+		v.ID, v.Kind, v.Platform, v.Version, v.Message, v.Stack, telemetryNull(v.Artifact), telemetryNull(v.Channel), telemetryNull(v.InstallID), telemetryNull(signature), crashPlatform(v.Platform), crashGroupTitle(v.Message)).Scan(&inserted)
 	if err != nil {
 		a.error(w, err)
 		return
+	}
+	if v.Kind == "crash" && !inserted {
+		releaseCtx, cancelRelease := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		defer cancelRelease()
+		if err := a.ReleaseRateLimit(releaseCtx, "telemetry-crash", a.clientAddress(r)); err != nil {
+			a.error(w, err)
+			return
+		}
 	}
 	write(w, 202, map[string]bool{"accepted": true})
 }

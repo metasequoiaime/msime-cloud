@@ -68,20 +68,22 @@ func (a *Service) resourceApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
-	// Keep this exact publication alive and unchanged until the import commits.
-	err = tx.QueryRow(r.Context(), `SELECT revision FROM community_resources WHERE id=$1 AND (moderation<>'removed' OR owner_id=$2) FOR SHARE`, id, p.UserID).Scan(&version)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && version != *input.ResourceRevision) {
-		writeError(w, 409, "resource_revision_conflict")
-		return
-	}
-	if err != nil {
-		a.error(w, err)
-		return
-	}
+	// 锁定资源后同时读取个人词库版本，避免事务内为两个版本检查分别往返。
 	var revision int64
-	err = tx.QueryRow(r.Context(), `SELECT COALESCE((SELECT revision FROM user_dictionary_state WHERE user_id=$1),0)`, p.UserID).Scan(&revision)
+	var resourceExists bool
+	err = tx.QueryRow(r.Context(), `WITH resource AS MATERIALIZED (
+ SELECT revision FROM community_resources
+ WHERE id=$1 AND (moderation<>'removed' OR owner_id=$2) FOR SHARE
+)
+SELECT COALESCE((SELECT revision FROM resource),0),
+ COALESCE((SELECT revision FROM user_dictionary_state WHERE user_id=$2),0),
+ EXISTS(SELECT 1 FROM resource)`, id, p.UserID).Scan(&version, &revision, &resourceExists)
 	if err != nil {
 		a.error(w, err)
+		return
+	}
+	if !resourceExists || version != *input.ResourceRevision {
+		writeError(w, 409, "resource_revision_conflict")
 		return
 	}
 	if revision != *input.DictionaryRevision {

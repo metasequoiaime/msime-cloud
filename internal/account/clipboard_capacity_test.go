@@ -19,6 +19,15 @@ func clipboardTestFillPinned(t *testing.T, db *Store, user, key string) {
 	}
 }
 
+func clipboardTestSameItem(got, want ClipboardItem) bool {
+	// JSON 和数据库可能为同一时刻使用不同的时区对象，应按时刻比较。
+	if !got.UpdatedAt.Equal(want.UpdatedAt) {
+		return false
+	}
+	got.UpdatedAt = want.UpdatedAt
+	return got == want
+}
+
 func TestClipboardUploadAtPinnedCapacity(t *testing.T) {
 	db := testStore(t)
 	ctx := t.Context()
@@ -54,7 +63,7 @@ func TestClipboardUploadAtPinnedCapacity(t *testing.T) {
 		t.Fatalf("去重更新未保留条目：%+v", updated)
 	}
 	after, err = db.ListClipboard(ctx, uid, key)
-	if err != nil || len(after) != 50 || after[0] != updated {
+	if err != nil || len(after) != 50 || !clipboardTestSameItem(after[0], updated) {
 		t.Fatalf("去重更新未保存或改变了容量：%+v %v", after, err)
 	}
 	// 取消一条置顶后，新内容应真正保留，原未置顶条目被容量清理。
@@ -66,7 +75,7 @@ func TestClipboardUploadAtPinnedCapacity(t *testing.T) {
 		t.Fatal(err)
 	}
 	after, err = db.ListClipboard(ctx, uid, key)
-	if err != nil || len(after) != 50 || after[49] != added {
+	if err != nil || len(after) != 50 || !clipboardTestSameItem(after[49], added) {
 		t.Fatalf("上传成功的条目未保存：%+v %v", after, err)
 	}
 	if n := clipboardTestCount(t, db, `SELECT count(*) FROM user_clipboard WHERE user_id=$1 AND id=$2`, uid, replaced); n != 0 {
@@ -88,7 +97,7 @@ func TestClipboardPinnedCapacityIgnoresStaleKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	items, err := db.ListClipboard(ctx, uid, key)
-	if err != nil || len(items) != 50 || items[49] != item {
+	if err != nil || len(items) != 50 || !clipboardTestSameItem(items[49], item) {
 		t.Fatalf("旧密钥的置顶条目占用了容量：%+v %v", items, err)
 	}
 }

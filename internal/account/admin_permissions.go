@@ -114,23 +114,33 @@ func (a *Service) adminPermissionsAction(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	defer tx.Rollback(ctx)
-	var name string
-	// Locking the role row serializes concurrent edits of the same role.
-	if err = tx.QueryRow(ctx, `SELECT name FROM admin_roles WHERE key=$1 FOR UPDATE`, v.Role).Scan(&name); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, 404, "not_found")
-			return
-		}
+	// 锁定角色、修改权限和有条件审计合并为一条语句，重复授予/撤销仍不产生审计。
+	detail, err := auditDetail(map[string]any{"role": v.Role, "role_name": "", "permission": v.Permission})
+	if err != nil {
 		a.error(w, err)
 		return
 	}
-	query := `INSERT INTO admin_role_permissions(role,permission) VALUES($1,$2) ON CONFLICT DO NOTHING`
+	query := `INSERT INTO admin_role_permissions(role,permission) SELECT $1,$2 FROM locked ON CONFLICT DO NOTHING`
 	if v.Action == "revoke" {
-		query = `DELETE FROM admin_role_permissions WHERE role=$1 AND permission=$2`
+		query = `DELETE FROM admin_role_permissions p USING locked WHERE p.role=$1 AND p.permission=$2`
 	}
-	tag, err := tx.Exec(ctx, query, v.Role, v.Permission)
-	if err == nil && tag.RowsAffected() > 0 {
-		err = auditTx(ctx, tx, "permission_"+v.Action, v.Role, map[string]any{"role": v.Role, "role_name": name, "permission": v.Permission})
+	action := "permission_" + v.Action
+	var name string
+	var affected int64
+	err = tx.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+ SELECT name FROM admin_roles WHERE key=$1 FOR UPDATE
+), changed AS (
+ `+query+` RETURNING 1
+), audited AS (
+ INSERT INTO admin_audit(action,target,actor,detail)
+ SELECT $3,$1,$4,jsonb_set($5::jsonb,'{role_name}',to_jsonb(l.name))
+ FROM locked l CROSS JOIN changed
+ RETURNING 1
+)
+SELECT name,(SELECT count(*) FROM changed) FROM locked`, v.Role, v.Permission, action, adminActor(ctx), detail).Scan(&name, &affected)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, 404, "not_found")
+		return
 	}
 	if err == nil {
 		err = tx.Commit(ctx)
@@ -139,5 +149,5 @@ func (a *Service) adminPermissionsAction(w http.ResponseWriter, r *http.Request,
 		a.error(w, err)
 		return
 	}
-	write(w, 200, map[string]any{"ok": true, "affected": tag.RowsAffected()})
+	write(w, 200, map[string]any{"ok": true, "affected": affected})
 }

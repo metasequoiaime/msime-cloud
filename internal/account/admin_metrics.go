@@ -569,25 +569,30 @@ SELECT id FROM incident`, *value.Service, *value.Title, description, n.Kind, n.T
 	return actionResult{Affected: 1, Target: target, Detail: detail, Extra: map[string]any{"id": id}}, nil
 }
 
-// actionResolveIncident resolves the incident id.
+// actionResolveIncident 解决指定事件，锁定后的状态判断和更新共用一条语句。
 func actionResolveIncident(a *Service, ctx context.Context, tx pgx.Tx, v actionRequest) (actionResult, error) {
 	id, err := incidentID(v)
 	if err != nil {
 		return actionResult{}, err
 	}
-	var service, title, state string
-	err = tx.QueryRow(ctx, `SELECT service,title,state FROM admin_incidents WHERE id=$1 FOR UPDATE`, id).Scan(&service, &title, &state)
+	var service, title string
+	var updated bool
+	err = tx.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+ SELECT id,service,title,state FROM admin_incidents WHERE id=$1 FOR UPDATE
+), updated AS (
+ UPDATE admin_incidents i SET state='resolved',resolved_at=now()
+ FROM locked WHERE i.id=locked.id AND locked.state='open'
+ RETURNING i.id
+)
+SELECT service,title,EXISTS(SELECT 1 FROM updated) FROM locked`, id).Scan(&service, &title, &updated)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return actionResult{}, actionFail(404, "not_found")
 	}
 	if err != nil {
 		return actionResult{}, err
 	}
-	if state == "resolved" {
+	if !updated {
 		return actionResult{}, actionFail(409, "already_resolved")
-	}
-	if _, err = tx.Exec(ctx, `UPDATE admin_incidents SET state='resolved',resolved_at=now() WHERE id=$1`, id); err != nil {
-		return actionResult{}, err
 	}
 	detail := map[string]any{"service": service, "title": title}
 	if v.Reason != "" {

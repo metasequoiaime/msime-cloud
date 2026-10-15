@@ -3509,11 +3509,25 @@ func TestQQBotRepoStats(t *testing.T) {
 	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "msime 现在开着 120 个 issue。" {
 		t.Fatal(last)
 	}
-	// 5 分钟内再问用缓存，不再打搜索接口。
-	searches := len(fake.searchQueries)
+	// 只统计成功仓库：失败仓库中已取消的请求仍可能延后到达假服务，不能把它们误判为缓存未命中。
+	searches := func() int {
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		count := 0
+		for _, query := range fake.searchQueries {
+			if strings.HasPrefix(query, "repo:o/r ") {
+				count++
+			}
+		}
+		return count
+	}
+	if got := searches(); got != 9 {
+		t.Fatalf("成功仓库的统计查询数 = %d，期望 9", got)
+	}
+	// 5 分钟内再问用缓存，不再查询已成功统计的仓库。
 	qqDeliver(t, s, "m-stats-2", "今天处理了多少issue")
-	if len(fake.searchQueries) != searches || !strings.Contains(fake.answerSystem, want) {
-		t.Fatal(len(fake.searchQueries), searches)
+	if got := searches(); got != 9 || !strings.Contains(fake.answerSystem, want) {
+		t.Fatal(got, fake.answerSystem)
 	}
 }
 

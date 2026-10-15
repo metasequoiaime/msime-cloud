@@ -630,13 +630,61 @@ func qqCollapseSpaceRuns(text string) string {
 func qqStripLinks(text string) string {
 	hadLink := strings.Contains(text, "://")
 	if hadLink {
-		text = qqLinkPattern.ReplaceAllString(text, "")
+		text = qqRemoveLinks(text)
 	}
 	// 没有链接和连续 ASCII 空白的候选时，只需裁掉首尾空白。
 	if !hadLink && !strings.Contains(text, "  ") && !strings.ContainsRune(text, '\t') {
 		return strings.TrimSpace(text)
 	}
 	return strings.TrimSpace(qqCollapseSpaceRuns(text))
+}
+
+// qqRemoveLinks 按 qqLinkPattern 的规则扫描链接，避免正则替换为长正文建立中间副本。
+func qqRemoveLinks(text string) string {
+	var out strings.Builder
+	initialized := false
+	start := 0
+	for search := 0; ; {
+		i := strings.Index(text[search:], "://")
+		if i < 0 {
+			break
+		}
+		i += search
+		begin := i
+		for begin > 0 && qqURLSchemeByte(text[begin-1]) {
+			begin--
+		}
+		for begin < i && !qqURLSchemeLetter(text[begin]) {
+			begin++
+		}
+		if begin == i {
+			search = i + 3
+			continue
+		}
+		if !initialized {
+			out.Grow(len(text))
+			initialized = true
+		}
+		end := i + 3
+		for end < len(text) && text[end] >= '!' && text[end] <= '~' {
+			end++
+		}
+		out.WriteString(text[start:begin])
+		start, search = end, end
+	}
+	if start == 0 {
+		return text
+	}
+	out.WriteString(text[start:])
+	return out.String()
+}
+
+func qqURLSchemeByte(c byte) bool {
+	return qqURLSchemeLetter(c) || c >= '0' && c <= '9' || c == '+' || c == '-' || c == '.'
+}
+
+func qqURLSchemeLetter(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
 // qqMarkdownLink 匹配 Markdown 链接和图片，第 1 组是链接文字。qqLinkPattern 的 [!-~]* 会连右括号一起吞掉，`[#730](https://…)，` 只用 qqStripLinks 会剩下「[#730](，」。

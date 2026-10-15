@@ -827,6 +827,77 @@ def check_release_pending(context, base: str, problems: list[str]):
                 page.close()
 
 
+def check_dictpr_trim_pending(context, base: str, problems: list[str]):
+    # 修剪期间固定提交的选择；切换 PR 再返回时仍应等待原请求，其他 PR 可继续审核。
+    for switching in (False, True):
+        for status in (200, 502):
+            page = context.new_page()
+            page.on("pageerror", lambda error: problems.append(f"词库修剪等待请求测试页面异常：{error}"))
+            pending = []
+            original = FIXTURES["/api/dict-prs/9"]
+            detail = {**original, "pull": dict(original["pull"])}
+            other = {**original, "head_sha": "head11", "pull": {**original["pull"], "number": 11, "title": "另一份投稿", "url": "https://github.com/metasequoiaime/msime-dictionary/pull/11"}}
+            page.route("**/api/auth/session", lambda route: route.fulfill(json=FIXTURES["/api/auth/session"]))
+            page.route("**/api/shell", lambda route: route.fulfill(json={**FIXTURES["/api/shell"], "me": {**FIXTURES["/api/shell"]["me"], "permissions": ["review_dict_pr"]}}))
+            page.route("**/api/dict-prs", lambda route: route.fulfill(json={"repo": original["repo"], "counts": {"open": 2, "merged": 0, "closed": 0, "all": 2}, "items": [detail["pull"], other["pull"]]}))
+            page.route("**/api/dict-prs/9", lambda route: route.fulfill(json=detail))
+            page.route("**/api/dict-prs/11", lambda route: route.fulfill(json=other))
+            page.route("**/api/dict-prs/9/trim", lambda route: pending.append(route))
+            try:
+                page.goto(base + "/dictpr?focus=9")
+                first = page.get_by_role("checkbox", name="收录「江汉油田」", exact=True)
+                second = page.get_by_role("checkbox", name="收录「潜江」", exact=True)
+                first.uncheck()
+                second.check()
+                with page.expect_request("**/api/dict-prs/9/trim") as sent:
+                    page.get_by_role("button", name="仅保留勾选项", exact=True).click()
+                assert sent.value.post_data_json == {"keep": [1], "head_sha": "head9"}
+                if switching:
+                    pulls = page.get_by_role("list", name="词库 PR 列表", exact=True)
+                    pulls.get_by_role("button").filter(has_text="#11").click()
+                    expect(page.get_by_role("list", name="#11 的词条", exact=True)).to_be_visible()
+                    expect(first).to_be_enabled()
+                    expect(page.get_by_role("button", name="仅保留勾选项", exact=True)).to_be_enabled()
+                    pulls.get_by_role("button").filter(has_text="#9").click()
+                    expect(page.get_by_role("list", name="#9 的词条", exact=True)).to_be_visible()
+                expect(first).to_be_disabled()
+                expect(second).to_be_disabled()
+                expect(first).not_to_be_checked()
+                expect(second).to_be_checked()
+                expect(page.get_by_role("button", name="正在推送…", exact=True)).to_be_disabled()
+                expect(page.get_by_role("button", name="驳回", exact=True)).to_be_disabled()
+                expect(page.get_by_role("button", name="审核通过并合并", exact=True)).to_be_disabled()
+                page.get_by_role("list", name="词库 PR 列表", exact=True).get_by_role("button").filter(has_text="#9").focus()
+                page.keyboard.press("a")
+                expect(page.get_by_text("#9 已通过（1 条）", exact=True)).to_have_count(0)
+                expect(second).to_be_disabled()
+                page.keyboard.press("r")
+                expect(page.get_by_role("dialog")).to_have_count(0)
+                if status == 200:
+                    detail["entries"] = [{**original["entries"][1], "index": 0}]
+                    detail["head_sha"] = "head10"
+                    detail["pull"]["counts"] = {"total": 1, "new": 0, "dup": 1, "flagged": 0}
+                pending.pop().fulfill(status=status, json=FIXTURES["/api/dict-prs/9/trim"] if status == 200 else {"error": "github_unavailable"})
+                expect(second).to_be_enabled()
+                expect(second).to_be_checked()
+                if status == 200:
+                    expect(first).to_have_count(0)
+                    expect(page.get_by_text("已在 #9 推送修改：只保留勾选的 1 条", exact=True)).to_be_visible()
+                    expect(page.get_by_role("button", name="仅保留勾选项", exact=True)).to_be_disabled()
+                else:
+                    expect(page.get_by_text(re.compile(r"^操作失败："))).to_be_visible()
+                    expect(first).not_to_be_checked()
+                    first.check()
+                    second.uncheck()
+                    expect(page.get_by_role("button", name="仅保留勾选项", exact=True)).to_be_enabled()
+                problems.extend(f"词库修剪等待请求测试 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+            finally:
+                for route in pending:
+                    route.abort()
+                page.unroute_all(behavior="ignoreErrors")
+                page.close()
+
+
 def main() -> int:
     if not (DIST / "index.html").is_file():
         raise SystemExit("admin-web/dist is missing; run pnpm build first")
@@ -1426,6 +1497,7 @@ def main() -> int:
                 check_notice_pending_focus(context, base, problems)
                 check_mirror_pending(context, base, problems)
                 check_release_pending(context, base, problems)
+                check_dictpr_trim_pending(context, base, problems)
                 check_pending_form_drafts(context, base, problems)
                 check_issue_reply_draft_switch(context, base, problems)
             finally:

@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { errorMessage, useAPI } from "../../api/client";
 import type { Entry, PRState, PRSummary } from "../../api/dictpr";
@@ -56,9 +56,11 @@ export function PRDetailCard({ pr, repo, overrides, setOverrides, onNext, onPrev
   const counts = data?.pull.counts ?? { total: entries.length, new: 0, dup: 0, flagged: 0 };
 
   const refresh = () => Promise.all([client.invalidateQueries({ queryKey: keys.page("dictpr") }), client.invalidateQueries({ queryKey: keys.shell })]);
-  const toggle = (entry: Entry) => setOverrides(previous => ({ ...previous, [overrideKey]: { ...previous[overrideKey], [entry.index]: !isChecked(entry) } }));
+  const trimKey = keys.page("dictpr", "trim", number);
+  const pendingTrims = useIsMutating({ mutationKey: trimKey, exact: true });
 
   const trim = useMutation({
+    mutationKey: trimKey,
     mutationFn: (body: { keep: number[]; head_sha: string }) => api.post(`dict-prs/${number}/trim`, trimSchema, body),
     onSuccess: result => {
       // Every entry the trimmed branch still adds is one the reviewer kept, so they stay checked on the new head even where the check result alone would leave them unchecked (a duplicate the reviewer chose to keep).
@@ -68,6 +70,12 @@ export function PRDetailCard({ pr, repo, overrides, setOverrides, onNext, onPrev
     onError: error => toast(`操作失败：${errorMessage(error)}`),
     onSettled: refresh,
   });
+  // 按 PR 读取未完成的修剪请求，切换详情再返回时也不能更改选择或重复提交。
+  const trimming = trim.isPending || pendingTrims > 0;
+  const toggle = (entry: Entry) => {
+    if (!open || trimming) return;
+    setOverrides(previous => ({ ...previous, [overrideKey]: { ...previous[overrideKey], [entry.index]: !isChecked(entry) } }));
+  };
   // Merging and rejecting cannot be taken back on GitHub, so both wait 4s behind the toast's 撤销 before the request is sent.
   const delayed = (label: string, next: PRState, send: (keepalive: boolean) => Promise<unknown>) => {
     markOptimistic(number, next);
@@ -84,7 +92,7 @@ export function PRDetailCard({ pr, repo, overrides, setOverrides, onNext, onPrev
   };
 
   const approve = () => {
-    if (!data || !open || !allowed || trim.isPending) return;
+    if (!data || !open || !allowed || trimming) return;
     if (keep.length === 0) {
       toast("至少勾选一条词条才能通过");
       return;
@@ -94,7 +102,7 @@ export function PRDetailCard({ pr, repo, overrides, setOverrides, onNext, onPrev
   };
 
   const reject = async () => {
-    if (!data || !open || !allowed || trim.isPending) return;
+    if (!data || !open || !allowed || trimming) return;
     const reason = await confirm({ title: `驳回 #${number}？`, description: "提交者会收到驳回通知，PR 将被关闭。", okLabel: "驳回", reasons: rejectReasons });
     if (reason === null) return;
     // The head the reviewer saw: a submission that lands on the rolling branch meanwhile makes the server answer pr_changed instead of rejecting it unseen.
@@ -102,7 +110,7 @@ export function PRDetailCard({ pr, repo, overrides, setOverrides, onNext, onPrev
     delayed(`#${number} 已驳回：${reason}`, "closed", keepalive => api.post(`dict-prs/${number}/reject`, rejectSchema, body, { keepalive }));
   };
 
-  const canTrim = open && allowed && keep.length > 0 && keep.length < entries.length && !trim.isPending;
+  const canTrim = open && allowed && keep.length > 0 && keep.length < entries.length && !trimming;
 
   usePageHotkeys("dictpr", { j: onNext, k: onPrevious, a: approve, r: () => void reject() });
 
@@ -145,8 +153,8 @@ export function PRDetailCard({ pr, repo, overrides, setOverrides, onNext, onPrev
               {entries.map(entry => {
                 const checked = isChecked(entry);
                 return <li key={entry.index} className="border-b border-hair last:border-b-0">
-                  <label className={cn("grid cursor-pointer items-center gap-3 py-2.5 transition", entryColumns, open && !checked && "opacity-55", !open && "cursor-default")}>
-                    <input type="checkbox" className="h-4 w-4 accent-accent" checked={checked} disabled={!open} onChange={() => toggle(entry)} aria-label={`收录「${entry.word}」`} />
+                  <label className={cn("grid cursor-pointer items-center gap-3 py-2.5 transition", entryColumns, open && !checked && "opacity-55", (!open || trimming) && "cursor-default")}>
+                    <input type="checkbox" className="h-4 w-4 accent-accent" checked={checked} disabled={!open || trimming} onChange={() => toggle(entry)} aria-label={`收录「${entry.word}」`} />
                     <span className="text-[15px] font-medium text-ink [overflow-wrap:anywhere]">{entry.word}</span>
                     <span className={cn("text-[13px] text-body [overflow-wrap:anywhere]", entry.kind === "words" && "font-mono")}>{entry.pinyin || "—"}</span>
                     <span className="text-[12.5px] text-muted">{kindLabels[entry.kind]}</span>
@@ -172,9 +180,9 @@ export function PRDetailCard({ pr, repo, overrides, setOverrides, onNext, onPrev
     <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-hair px-[22px] py-4">
       <p className="m-0 min-w-0 flex-1 basis-[220px] text-[13px] text-muted">已勾选 {keep.length} / {entries.length} 条 · 未勾选的词条会在合并前从 PR 中移除</p>
       <div className="flex flex-wrap gap-2">
-        <Button size="lg" variant="danger-outline" disabled={!data || !open || !allowed || trim.isPending} title={writeTitle} onClick={() => void reject()}>驳回</Button>
-        <Button size="lg" variant="outline" disabled={!canTrim} title={writeTitle} onClick={() => data && trim.mutate({ keep, head_sha: data.head_sha })}>{trim.isPending ? "正在推送…" : "仅保留勾选项"}</Button>
-        <Button size="lg" variant="primary" disabled={!data || !open || !allowed || keep.length === 0 || trim.isPending} title={writeTitle} onClick={approve}>审核通过并合并</Button>
+        <Button size="lg" variant="danger-outline" disabled={!data || !open || !allowed || trimming} title={writeTitle} onClick={() => void reject()}>驳回</Button>
+        <Button size="lg" variant="outline" disabled={!canTrim} title={writeTitle} onClick={() => data && trim.mutate({ keep, head_sha: data.head_sha })}>{trimming ? "正在推送…" : "仅保留勾选项"}</Button>
+        <Button size="lg" variant="primary" disabled={!data || !open || !allowed || keep.length === 0 || trimming} title={writeTitle} onClick={approve}>审核通过并合并</Button>
       </div>
     </div>
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 px-[22px] pb-4 text-xs text-muted max-[759px]:hidden">

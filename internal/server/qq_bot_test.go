@@ -5564,6 +5564,49 @@ func TestQQBotFeatureVotes(t *testing.T) {
 	}
 }
 
+func TestQQBotFeatureVoteDoesNotReleaseLimitAfterLostGitHubWriteResponse(t *testing.T) {
+	s, fake, limiter := qqServer(t)
+	s.qqDrafts = &memoryDrafts{}
+	s.qq.config.Admins = nil
+	s.config.Admin.GitHub.Platforms = nil
+	fake.answer = `{"type":"answered","answer":"现在还不支持。","escalate":true,"topic":"希望支持候选框透明度"}`
+	fake.summary = `{"kind":"feature","title":"候选框支持透明度","proposal":"候选框背景可以调透明度","keywords":"候选框 透明度"}`
+	fake.searchItems = []map[string]any{{"number": 7, "title": "候选框透明度", "body": "希望能调透明度"}}
+	fake.duplicate = `{"duplicate":7}`
+	fake.issueComments = map[string]string{
+		"/repos/o/r/issues/7/comments": `[{"id":55,"body":"` + strings.ReplaceAll(qqVoteBody(1), `"`, `\"`) + `",` + qqAppAuthor + `}]`,
+	}
+	loseResponse := true
+	client := *s.adminGitHub.HTTP
+	transport := client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	client.Transport = qqTestTransport(func(r *http.Request) (*http.Response, error) {
+		response, err := transport.RoundTrip(r)
+		if err == nil && loseResponse && r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/issues/comments/") {
+			loseResponse = false
+			return response, errors.New("synthetic connection reset after GitHub write")
+		}
+		return response, err
+	})
+	s.adminGitHub.HTTP = &client
+	deliver := func(id string) {
+		t.Helper()
+		qqPost(t, s, qqMessageFrom(id, "MEMBER8", "候选框透明度再加一"))
+		s.qqWorkers.Wait()
+	}
+	deliver("m-vote-lost-response")
+	if fake.patched["/repos/o/r/issues/comments/55"]["body"] != qqVoteBody(2) || slices.Contains(limiter.released, "qq-bot-vote|GROUP1/MEMBER8|o/r#7") {
+		t.Fatalf("GitHub 已写入但限额被退回：patched=%v released=%v", fake.patched, limiter.released)
+	}
+	fake.issueComments["/repos/o/r/issues/7/comments"] = `[{"id":55,"body":"` + strings.ReplaceAll(qqVoteBody(2), `"`, `\"`) + `",` + qqAppAuthor + `}]`
+	deliver("m-vote-lost-response-retry")
+	if got := fake.patched["/repos/o/r/issues/comments/55"]["body"]; got != qqVoteBody(2) {
+		t.Fatalf("重试不应再次计票：%v", got)
+	}
+}
+
 // memoryFAQCandidates 是测试用的文档候选存储。state 为空是还没处理，"writing" 是认领了正在写进 FAQ，处理过的是「状态:PR」。
 type memoryFAQCandidates struct {
 	mu       sync.Mutex

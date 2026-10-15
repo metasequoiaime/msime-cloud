@@ -50,26 +50,34 @@ func issueAdminToken(ctx context.Context, tx pgx.Tx, email string) (string, admi
 	if sessionHash == "" {
 		return "", info, ErrInvalid
 	}
-	// Without this lock two concurrent regenerations each delete only committed rows and both insert, leaving an older token valid but hidden from the personal page. Owners have no admin_members row to lock, so the lock is keyed by email.
+	// 邮箱锁独立于后续查询获取，使等待期间提交的旧令牌也能被新快照看到并撤销；所有者可能没有可锁定的成员行。
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('admin_tokens:'||$1,0))`, email); err != nil {
 		return "", info, err
 	}
-	// 先锁住来源会话，再用数据库实时时钟检查有效期，保证等待期间的撤销或过期不能被旧鉴权结果绕过。
+	// 先锁住来源会话，再用数据库实时时钟检查有效期；只有校验通过才撤销旧令牌并写入新令牌。
 	var valid bool
+	var createdAt, expiresAt *time.Time
 	err := tx.QueryRow(ctx, `WITH source AS MATERIALIZED (
- SELECT expires_at FROM admin_sessions WHERE token_hash=$1 AND email=$2 AND ('google:'||subject||':'||email)=$3 FOR UPDATE
+ SELECT expires_at FROM admin_sessions WHERE token_hash=$5 AND email=$2 AND ('google:'||subject||':'||email)=$6 FOR UPDATE
+), valid AS MATERIALIZED (
+ SELECT 1 FROM source WHERE expires_at>clock_timestamp()
+), removed AS (
+ DELETE FROM admin_tokens WHERE email=$2 AND EXISTS(SELECT 1 FROM valid)
+), written AS (
+ INSERT INTO admin_tokens(hash,email,last4,expires_at)
+ SELECT $1,$2,$3,now()+make_interval(secs=>$4) FROM valid
+ RETURNING created_at,expires_at
 )
-SELECT expires_at>clock_timestamp() FROM source`, sessionHash, email, adminActor(ctx)).Scan(&valid)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !valid) {
-		return "", info, ErrInvalid
-	}
+SELECT EXISTS(SELECT 1 FROM valid),(SELECT created_at FROM written),(SELECT expires_at FROM written)`, hash(token), email, info.Last4, adminTokenLifetime.Seconds(), sessionHash, adminActor(ctx)).Scan(&valid, &createdAt, &expiresAt)
 	if err != nil {
 		return "", info, err
 	}
-	// 邮箱锁与来源会话校验后，一次请求撤销旧令牌并写入新令牌，任意失败均随外层事务回滚。
-	err = tx.QueryRow(ctx, `WITH removed AS (
- DELETE FROM admin_tokens WHERE email=$2
-)
-INSERT INTO admin_tokens(hash,email,last4,expires_at) VALUES($1,$2,$3,now()+make_interval(secs=>$4)) RETURNING created_at,expires_at`, hash(token), email, info.Last4, adminTokenLifetime.Seconds()).Scan(&info.CreatedAt, &info.ExpiresAt)
-	return token, info, err
+	if !valid {
+		return "", info, ErrInvalid
+	}
+	if createdAt == nil || expiresAt == nil {
+		return "", info, pgx.ErrNoRows
+	}
+	info.CreatedAt, info.ExpiresAt = *createdAt, *expiresAt
+	return token, info, nil
 }

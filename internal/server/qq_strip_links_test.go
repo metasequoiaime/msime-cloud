@@ -99,6 +99,18 @@ func TestQQStripLinksSpaceRunAllocationBudget(t *testing.T) {
 	}
 }
 
+func TestQQStripLinksLinkAllocationBudget(t *testing.T) {
+	input := strings.Repeat("普通回答。 ", 1024) + "https://example.com 结尾"
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			_ = qqStripLinks(input)
+		}
+	})
+	if allocated := result.AllocedBytesPerOp(); allocated > 24<<10 {
+		t.Fatalf("带链接正文分配 %d 字节，超过 24 KiB 预算", allocated)
+	}
+}
+
 func TestQQStripLinksSpaceRunsMatchPreviousPattern(t *testing.T) {
 	previous := regexp.MustCompile(`[ \t]{2,}`)
 	units := []string{"", " ", "  ", "\t", "\t\t", " \t ", "\n", "\r", "\v", "\f", "\u3000", "\u0085", "甲", "\xff", "https://example.test", "7://"}

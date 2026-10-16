@@ -148,7 +148,8 @@ func (a *Service) Telemetry(w http.ResponseWriter, r *http.Request) {
 			write(w, 202, map[string]bool{"accepted": true})
 			return
 		}
-		if err := a.RateLimit(ctx, "telemetry-crash", a.clientAddress(r), telemetryCrashDailyLimit, 24*time.Hour); errors.Is(err, ErrLimited) {
+		refund, _, err := a.ReserveRateLimit(ctx, "telemetry-crash", a.clientAddress(r), telemetryCrashDailyLimit, 24*time.Hour)
+		if errors.Is(err, ErrLimited) {
 			// 每日窗口不会在一分钟内重开，所以让客户端把排队的崩溃留一小时再发，而不是每分钟重试。
 			w.Header().Set("Retry-After", "3600")
 			writeError(w, 429, "rate_limit_exceeded")
@@ -160,7 +161,7 @@ func (a *Service) Telemetry(w http.ResponseWriter, r *http.Request) {
 		releaseCrashRate = func() error {
 			releaseCtx, cancelRelease := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 			defer cancelRelease()
-			return a.ReleaseRateLimit(releaseCtx, "telemetry-crash", a.clientAddress(r))
+			return refund(releaseCtx)
 		}
 		signature = crashSignature(v.Platform, v.Message, v.Stack)
 	}

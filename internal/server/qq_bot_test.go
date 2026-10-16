@@ -148,6 +148,31 @@ func (l *qqLimiter) RateLimit(_ context.Context, scope, subject string, limit in
 	return nil
 }
 
+func (l *qqLimiter) ReserveRateLimit(ctx context.Context, scope, subject string, limit int, window time.Duration) (func(context.Context) error, time.Duration, error) {
+	l.mu.Lock()
+	if err := l.err[scope]; err != nil {
+		l.mu.Unlock()
+		return nil, 0, err
+	}
+	key := scope + "|" + subject
+	if l.counts[key] >= limit {
+		wait := cmp.Or(l.wait, 24*time.Hour)
+		l.mu.Unlock()
+		return nil, wait, account.ErrLimited
+	}
+	if l.counts == nil {
+		l.counts = map[string]int{}
+	}
+	l.counts[key]++
+	l.mu.Unlock()
+	var once sync.Once
+	var err error
+	return func(ctx context.Context) error {
+		once.Do(func() { err = l.ReleaseRateLimit(ctx, scope, subject) })
+		return err
+	}, 0, nil
+}
+
 func (l *qqLimiter) RateLimitUntil(ctx context.Context, scope, subject string, limit int, window time.Duration) (time.Duration, error) {
 	err := l.RateLimit(ctx, scope, subject, limit, window)
 	if !errors.Is(err, account.ErrLimited) {
@@ -6937,7 +6962,7 @@ func TestQQBotReleasesLimitsWhenItFails(t *testing.T) {
 	// 群额度用完（limited_group）：个人额度已经计上、群额度没计上，都不退。
 	limiter.counts["qq-bot-group|GROUP1"] = qqBotGroupDaily
 	deliver("m-release-limited", "MEMBER1", "五笔怎么切换")
-	if last() != qqGroupLimitedReply(24*time.Hour) || limiter.counts["qq-bot-member|GROUP1/MEMBER1"] != 2 || limiter.counts["qq-bot-group|GROUP1"] != qqBotGroupDaily+1 || released("qq-bot-member|GROUP1/MEMBER1") != 2 || released("qq-bot-group|GROUP1") != 2 {
+	if last() != qqGroupLimitedReply(24*time.Hour) || limiter.counts["qq-bot-member|GROUP1/MEMBER1"] != 2 || limiter.counts["qq-bot-group|GROUP1"] != qqBotGroupDaily || released("qq-bot-member|GROUP1/MEMBER1") != 2 || released("qq-bot-group|GROUP1") != 2 {
 		t.Fatal(last(), limiter.counts, limiter.released)
 	}
 	// 管理员的消息处理失败（admin_failed）：退回管理员自己的额度。

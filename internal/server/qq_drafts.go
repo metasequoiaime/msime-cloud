@@ -81,7 +81,8 @@ func (s *Server) qqDraftReport(ctx context.Context, subject, text string, histor
 	if s.qqDrafts == nil {
 		return qqDraftResult{}
 	}
-	switch err := s.limits.RateLimit(ctx, "qq-bot-drafts", subject, qqDraftsDaily, 24*time.Hour); {
+	refund, _, err := s.reserveRateLimit(ctx, "qq-bot-drafts", subject, qqDraftsDaily, 24*time.Hour)
+	switch {
 	case errors.Is(err, account.ErrLimited):
 		return qqDraftResult{}
 	case err != nil:
@@ -92,7 +93,7 @@ func (s *Server) qqDraftReport(ctx context.Context, subject, text string, histor
 	releaseDraftSlot := func() {
 		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 		defer cancel()
-		if err := s.limits.ReleaseRateLimit(rctx, "qq-bot-drafts", subject); err != nil {
+		if err := refund(rctx); err != nil {
 			slog.Warn("qq bot: draft slot not released", "reason", err.Error())
 		}
 	}

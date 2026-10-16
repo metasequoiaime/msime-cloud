@@ -94,7 +94,8 @@ func (s *Server) fileQQDocs(ctx context.Context, subject, text string, admin boo
 	}
 	if !admin {
 		// 名额在整理之后才扣：没看出是文档反馈的消息不占名额。
-		switch err := s.limits.RateLimit(ctx, "qq-bot-docs-member", subject, qqDocsMemberDaily, 24*time.Hour); {
+		refund, _, err := s.reserveRateLimit(ctx, "qq-bot-docs-member", subject, qqDocsMemberDaily, 24*time.Hour)
+		switch {
 		case errors.Is(err, account.ErrLimited):
 			reply("今天已经记了几条了，明天再提，或者请管理员用「提文档」提交。")
 			return
@@ -108,7 +109,7 @@ func (s *Server) fileQQDocs(ctx context.Context, subject, text string, admin boo
 			return
 		}
 		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-		if err := s.limits.ReleaseRateLimit(rctx, "qq-bot-docs-member", subject); err != nil {
+		if err := refund(rctx); err != nil {
 			slog.Warn("qq bot: docs member slot not released", "reason", err.Error())
 		}
 		cancel()

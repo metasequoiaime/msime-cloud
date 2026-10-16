@@ -147,10 +147,18 @@ func (a *Service) adminList(w http.ResponseWriter, r *http.Request, list adminLi
 			// 筛选字段均为文本或布尔值，直接转文本保留原有比较语义，并让文本条件使用已有索引。
 			filterValue = "x." + f.field + "::text"
 		}
+		predicate := filterValue + "=" + n
 		if f.contains {
-			conditions += "\n AND (" + n + "='' OR " + filterValue + " ILIKE '%'||" + n + "||'%')"
+			predicate = filterValue + " ILIKE '%'||" + n + "||'%'"
+		}
+		if search != "" {
+			conditions += "\n AND (" + n + "='' OR " + predicate + ")"
+		} else if value == "" {
+			// 空筛选只绑定参数，避免通用计划逐行判断不会使用的字段。
+			conditions += "\n AND " + n + "::text=''"
 		} else {
-			conditions += "\n AND (" + n + "='' OR " + filterValue + "=" + n + ")"
+			// 非空筛选直接比较，让通用计划能够按实际筛选字段估算和选择索引。
+			conditions += "\n AND " + predicate
 		}
 	}
 	for param := range adminListFilterParams() {

@@ -58,12 +58,10 @@ func TestOpenRejectsNonUTF8Database(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 建库和清理各自使用独立期限，避免一个慢操作取消后续编码用例。
 	defer admin.Close(context.Background())
 	for _, encoding := range []string{"SQL_ASCII", "LATIN1"} {
 		t.Run(encoding, func(t *testing.T) {
-			// 每次建库独立计时，避免上一轮清理等待 checkpoint 耗尽下一轮的期限。
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer cancel()
 			name := "msime_auth_test_encoding_" + randomToken()[:12]
 			quoted := pgx.Identifier{name}.Sanitize()
 			// 编码来自上面的固定列表，库名独立生成并引用，只清理本测试创建的库。

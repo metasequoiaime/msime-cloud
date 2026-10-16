@@ -99,55 +99,98 @@ type githubFile struct {
 	Content  string `json:"content"`
 }
 
+func decodeGitHubBase64(content string, raw []byte) (int, error) {
+	const blockSize = 4096
+	var block [blockSize]byte
+	blockLen, written := 0, 0
+	finished := false
+	flush := func() error {
+		n, err := base64.StdEncoding.Decode(raw[written:], block[:blockLen])
+		written += n
+		if err != nil {
+			return err
+		}
+		for _, c := range block[:blockLen] {
+			if c == '=' {
+				finished = true
+				break
+			}
+		}
+		blockLen = 0
+		return nil
+	}
+	for i := 0; i < len(content); {
+		c := content[i]
+		if c < utf8.RuneSelf {
+			i++
+			switch c {
+			case '\t', '\n', '\v', '\f', '\r', ' ':
+				continue
+			}
+		} else {
+			runeValue, size := utf8.DecodeRuneInString(content[i:])
+			if unicode.IsSpace(runeValue) {
+				i += size
+				continue
+			}
+			i++
+		}
+		if finished {
+			return written, errors.New("trailing base64 data")
+		}
+		block[blockLen] = c
+		blockLen++
+		if blockLen == blockSize {
+			if err := flush(); err != nil {
+				return written, err
+			}
+		}
+	}
+	if blockLen > 0 {
+		if err := flush(); err != nil {
+			return written, err
+		}
+	}
+	return written, nil
+}
+
 func (f githubFile) text() (string, bool) {
 	if f.Type != "file" || f.Encoding != "base64" || f.SHA == "" {
 		return "", false
 	}
 	// 解码器会忽略 CR/LF；只按实际编码字节数预留缓冲，避免为空行分配内存。
 	content := f.Content
-	encodedSize := len(content)
-	var cleaned []byte
-	for i := 0; i < len(content); i++ {
+	encodedSize := 0
+	needsFilter := false
+	for i := 0; i < len(content); {
 		c := content[i]
-		if c == '\r' || c == '\n' {
-			encodedSize--
+		if c < utf8.RuneSelf {
+			i++
+			switch c {
+			case '\r', '\n':
+				continue
+			case '\t', '\v', '\f', ' ':
+				needsFilter = true
+				continue
+			}
+			encodedSize++
 			continue
 		}
-		if c >= utf8.RuneSelf || c <= ' ' {
-			// 其他空白及非 ASCII 输入沿用原有清理规则，但直接扫描写入缓冲，避免 FieldsFunc 为每个短字段分配元数据。
-			cleaned = make([]byte, len(content))
-			written := 0
-			for i := 0; i < len(content); {
-				c := content[i]
-				if c < utf8.RuneSelf {
-					// unicode.IsSpace 对 ASCII 空白的判断固定为这六个字节；内联可避免逐字节调用 Unicode 判断。
-					switch c {
-					case '\t', '\n', '\v', '\f', '\r', ' ':
-						i++
-						continue
-					}
-					cleaned[written] = c
-					written++
-					i++
-					continue
-				}
-				r, size := utf8.DecodeRuneInString(content[i:])
-				if !unicode.IsSpace(r) {
-					written += copy(cleaned[written:], content[i:i+size])
-				}
-				i += size
-			}
-			encodedSize = written
-			cleaned = cleaned[:written]
-			break
+		runeValue, size := utf8.DecodeRuneInString(content[i:])
+		i += size
+		needsFilter = true
+		if !unicode.IsSpace(runeValue) {
+			encodedSize += size
 		}
 	}
-	encoded := cleaned
-	if encoded == nil {
-		encoded = []byte(content)
-	}
 	raw := make([]byte, base64.StdEncoding.DecodedLen(encodedSize))
-	n, err := base64.StdEncoding.Decode(raw, encoded)
+	var n int
+	var err error
+	if needsFilter {
+		n, err = decodeGitHubBase64(content, raw)
+	} else {
+		n, err = base64.StdEncoding.Decode(raw, []byte(content))
+	}
 	raw = raw[:n]
 	return string(raw), err == nil && utf8.Valid(raw)
 }

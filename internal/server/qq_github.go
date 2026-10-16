@@ -217,6 +217,8 @@ type qqRelease struct {
 	Prerelease  bool   `json:"prerelease"`
 	PublishedAt string `json:"published_at"`
 	Body        string `json:"body"`
+	notes       string
+	notesReady  bool
 }
 
 // qqPlatformRelease 是一个平台的最新版本：Stable 是 Repo 里前缀为 Prefix 的最新正式版，Preview 是比它更晚发布的预发布版；NextGen 是平台仓库不是 qq_bot.repo 时，在 qq_bot.repo（NextGenRepo）里按 NextGenPrefix（「平台 id-v」）找到的新实现，依次是它的最新正式版和更晚的预发布版。三样都可能为空。
@@ -380,7 +382,10 @@ func qqReleasesMaterial(list []qqPlatformRelease, notes func(qqPlatformRelease) 
 		}
 		fmt.Fprintf(&b, "- %s（%s 仓库）：%s\n", p.Name, name, strings.Join(parts, "；"))
 		if p.Stable != nil && (notes == nil || notes(p)) {
-			if text := qqReleaseNotes(p.Stable.Body); text != "" {
+			if !p.Stable.notesReady {
+				p.Stable.notes, p.Stable.notesReady = qqReleaseNotes(p.Stable.Body), true
+			}
+			if text := p.Stable.notes; text != "" {
 				b.WriteString("  更新内容：" + text + "\n")
 			}
 		}

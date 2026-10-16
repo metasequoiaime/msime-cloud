@@ -1,3 +1,4 @@
+import { parsePage } from "../../utils/pagination";
 import { formatNumber } from "../../utils/number";
 import { useCallback, useMemo } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
@@ -30,7 +31,7 @@ export default function UsersPage() {
   const actions = useUserActions();
   const { role = "all", page: rawPage, focus } = usePageSearch();
   const setSearch = useSetPageSearch();
-  const page = Math.max(1, Math.min(10000, Number.parseInt(rawPage ?? "1", 10) || 1));
+  const page = parsePage(rawPage);
 
   const stats = useQuery({
     queryKey: keys.page("users", "stats"),

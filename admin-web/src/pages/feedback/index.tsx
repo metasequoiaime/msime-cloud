@@ -1,3 +1,4 @@
+import { parsePage } from "../../utils/pagination";
 import { useCallback, useMemo } from "react";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { errorMessage, useAPI } from "../../api/client";
@@ -31,7 +32,7 @@ export default function FeedbackPage() {
   const canTriage = can("triage_issues");
   const { type = ALL, status = ALL, platform = ALL, page: rawPage, focus } = usePageSearch();
   const setSearch = useSetPageSearch();
-  const page = Math.max(1, Math.min(10000, Number.parseInt(rawPage ?? "1", 10) || 1));
+  const page = parsePage(rawPage);
 
   const list = useQuery({
     queryKey: keys.page("feedback", "list", { type, status, platform, page }),

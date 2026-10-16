@@ -121,7 +121,7 @@ func (s *Server) qqGapsIssue(ctx context.Context, token string) (int64, error) {
 			return 0, githubFailure("gaps list", r, err)
 		}
 		var issues []qqIssue
-		if r.Decode(&issues) != nil {
+		if r.Decode(&issues) != nil || issues == nil {
 			return 0, errors.New("gaps list: invalid response")
 		}
 		for _, issue := range issues {

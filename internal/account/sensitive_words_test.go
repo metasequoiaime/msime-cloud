@@ -296,7 +296,7 @@ func TestSensitiveMatcherCacheAndFlush(t *testing.T) {
 		t.Fatal("the cached list must be served within the refresh interval", hits)
 	}
 	now := time.Now().Add(sensitiveRefresh + time.Second)
-	words, err := a.sensitive.list(ctx, db, now)
+	words, _, err := a.sensitive.list(ctx, db, now)
 	if err != nil || len(words) != 1 || words[0].hit.WordID != id {
 		t.Fatal(words, err)
 	}
@@ -317,7 +317,7 @@ func TestSensitiveMatcherCacheAndFlush(t *testing.T) {
 	broken.sensitive.words, broken.sensitive.loaded = words, now
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
-	if served, err := broken.sensitive.list(cancelled, db, now.Add(2*sensitiveRefresh)); err != nil || len(served) != 1 {
+	if served, _, err := broken.sensitive.list(cancelled, db, now.Add(2*sensitiveRefresh)); err != nil || len(served) != 1 {
 		t.Fatal(served, err)
 	}
 	if _, err := (&Service{store: db}).Sensitive().Match(cancelled, "x"); err == nil {
@@ -386,7 +386,7 @@ func TestSensitiveMatcherFolding(t *testing.T) {
 	if _, err := a.store.pool.Exec(ctx, `INSERT INTO admin_sensitive_words(pattern,is_regex,category,level,created_by) VALUES('代购',false,'ad','review','t')`); err != nil {
 		t.Fatal(err)
 	}
-	words, err := a.sensitive.list(ctx, a.store, time.Now().Add(2*sensitiveEditRefresh))
+	words, _, err := a.sensitive.list(ctx, a.store, time.Now().Add(2*sensitiveEditRefresh))
 	if err != nil || len(words) != 3 {
 		t.Fatal(words, err)
 	}

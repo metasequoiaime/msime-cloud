@@ -68,6 +68,7 @@ type sensitiveWords struct {
 	// mu guards the fields below; it is never held across a database call.
 	mu      sync.Mutex
 	words   []sensitiveWord
+	plain   *sensitivePlainIndex
 	loaded  time.Time
 	edited  time.Time
 	pending map[sensitiveHitKey]int64
@@ -87,38 +88,42 @@ func (s *sensitiveWords) invalidate() {
 	s.mu.Unlock()
 }
 
-// list returns the cached words, reloading them when the cache is older than sensitiveRefresh. A failed reload keeps serving the previous list and is only an error before the first successful load.
-func (s *sensitiveWords) list(ctx context.Context, store *Store, now time.Time) ([]sensitiveWord, error) {
-	fresh := func() ([]sensitiveWord, bool) {
+// list 在同一把锁下读取规则与索引快照；缓存过期才重新加载，失败时保留上一份完整快照。
+func (s *sensitiveWords) list(ctx context.Context, store *Store, now time.Time) ([]sensitiveWord, *sensitivePlainIndex, error) {
+	fresh := func() ([]sensitiveWord, *sensitivePlainIndex, bool) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		maxAge := sensitiveRefresh
 		if !s.edited.IsZero() && now.Sub(s.edited) < sensitiveEditWindow {
 			maxAge = sensitiveEditRefresh
 		}
-		return s.words, !s.loaded.IsZero() && now.Sub(s.loaded) < maxAge
+		return s.words, s.plain, !s.loaded.IsZero() && now.Sub(s.loaded) < maxAge
 	}
-	if words, ok := fresh(); ok {
-		return words, nil
+	if words, plain, ok := fresh(); ok {
+		return words, plain, nil
 	}
 	s.reload.Lock()
 	defer s.reload.Unlock()
-	words, ok := fresh()
+	words, plain, ok := fresh()
 	if ok {
-		return words, nil
+		return words, plain, nil
 	}
 	loaded, err := loadSensitiveWords(ctx, store)
+	var loadedPlain *sensitivePlainIndex
+	if err == nil {
+		loadedPlain, err = newSensitivePlainIndex(ctx, loaded)
+	}
 	if err != nil {
 		if words != nil {
 			slog.Warn("sensitive words: reload failed, serving the cached list", "reason", err.Error())
-			return words, nil
+			return words, plain, nil
 		}
-		return nil, err
+		return nil, nil, err
 	}
 	s.mu.Lock()
-	s.words, s.loaded = loaded, now
+	s.words, s.plain, s.loaded = loaded, loadedPlain, now
 	s.mu.Unlock()
-	return loaded, nil
+	return loaded, loadedPlain, nil
 }
 
 // loadSensitiveWords 读取并编译完整规则表，缓存按拦截优先、同级 ID 递增排列；无效的已存正则仅警告并跳过。
@@ -352,7 +357,7 @@ type sensitiveMatcher struct {
 // Match reports every word text hits, block hits first, at most once per word, and counts each hit unless the matcher is a preview. Plain words match a case-insensitive substring of the text with white space and format characters removed; regexes match case-insensitively against the text with white space kept, either with full-width ASCII folded to half-width or as written. Format characters are ignored for both.
 func (m sensitiveMatcher) Match(ctx context.Context, text string) ([]SensitiveHit, error) {
 	now := time.Now()
-	words, err := m.a.sensitive.list(ctx, m.a.store, now)
+	words, plain, err := m.a.sensitive.list(ctx, m.a.store, now)
 	if err != nil {
 		return nil, err
 	}
@@ -361,9 +366,11 @@ func (m sensitiveMatcher) Match(ctx context.Context, text string) ([]SensitiveHi
 	}
 	var compact, spaced, visible string
 	var compactReady, spacedReady, visibleReady bool
+	var indexed sensitivePlainMatches
+	var usePlainIndex bool
 	var hits []SensitiveHit
-	for _, w := range words {
-		// A single match cannot be interrupted, but a request that timed out or was abandoned stops before the next word.
+	for i, w := range words {
+		// 单条正则匹配不能中断；每条规则前检查取消，普通词索引还会在扫描中分块检查。
 		if err = ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -372,8 +379,19 @@ func (m sensitiveMatcher) Match(ctx context.Context, text string) ([]SensitiveHi
 		if w.re == nil {
 			if !compactReady {
 				compact, compactReady = foldSensitive(text, true), true
+				usePlainIndex = plain != nil && len(compact) >= minSensitivePlainText
+				if usePlainIndex {
+					indexed, err = plain.match(ctx, compact)
+					if err != nil {
+						return nil, err
+					}
+				}
 			}
-			matched = strings.Contains(compact, w.plain)
+			if usePlainIndex && w.plain != "" {
+				matched = indexed.contains(i)
+			} else {
+				matched = strings.Contains(compact, w.plain)
+			}
 		} else {
 			if !spacedReady {
 				spaced, spacedReady = foldSensitive(text, false), true

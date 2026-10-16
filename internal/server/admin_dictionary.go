@@ -111,7 +111,7 @@ func (s *Server) dictionaryTree(w http.ResponseWriter, r *http.Request, gh *gith
 	counts := map[string]int{"custom": 0, "packs": 0, "sources": 0}
 	var bytes int64
 	for _, item := range files {
-		prefix := strings.SplitN(item.Path, "/", 2)[0]
+		prefix, _, _ := strings.Cut(item.Path, "/")
 		counts[prefix]++
 		bytes += item.Size
 	}
@@ -216,30 +216,34 @@ func dictionaryTextPath(name string) bool {
 	if name == "" || path.IsAbs(name) || path.Clean(name) != name || strings.ContainsAny(name, "\\\r\n\t") {
 		return false
 	}
-	parts := strings.Split(name, "/")
-	if parts[0] == "custom" {
+	prefix, rest, _ := strings.Cut(name, "/")
+	if prefix == "custom" {
 		return slices.Contains([]string{"custom/words.txt", "custom/english.txt", "custom/translations.txt", "custom/names.txt"}, name)
 	}
-	if parts[0] == "packs" {
+	if prefix == "packs" {
 		return dictionaryEditablePath(name)
 	}
-	if parts[0] != "sources" || len(parts) != 3 {
+	if prefix != "sources" {
 		return false
 	}
-	base := strings.ToLower(parts[2])
-	stem := strings.SplitN(base, ".", 2)[0]
+	source, file, ok := strings.Cut(rest, "/")
+	if !ok || strings.Contains(file, "/") {
+		return false
+	}
+	base := strings.ToLower(file)
+	stem, _, _ := strings.Cut(base, ".")
 	if slices.Contains([]string{"readme", "license", "licence", "notice", "changelog", "agents"}, stem) {
 		return false
 	}
 	// 日文目录同时包含连接代价矩阵、词性编号和过滤规则，仅展示实际词条表。
-	if parts[1] == "japanese" {
-		if slices.Contains([]string{"aux_dictionary.tsv", "places.tsv", "words.tsv"}, parts[2]) {
+	if source == "japanese" {
+		if slices.Contains([]string{"aux_dictionary.tsv", "places.tsv", "words.tsv"}, file) {
 			return true
 		}
-		return len(parts[2]) == len("dictionary00.txt") && strings.HasPrefix(parts[2], "dictionary") &&
-			parts[2][10] >= '0' && parts[2][10] <= '9' && parts[2][11] >= '0' && parts[2][11] <= '9' && strings.HasSuffix(parts[2], ".txt")
+		return len(file) == len("dictionary00.txt") && strings.HasPrefix(file, "dictionary") &&
+			file[10] >= '0' && file[10] <= '9' && file[11] >= '0' && file[11] <= '9' && strings.HasSuffix(file, ".txt")
 	}
-	ext := strings.ToLower(path.Ext(name))
+	ext := path.Ext(base)
 	return ext == ".txt" || ext == ".tsv" || ext == ".csv" || ext == ".occ" || strings.HasSuffix(base, ".dict.yaml")
 }
 
@@ -424,6 +428,10 @@ func dictionaryEditablePath(name string) bool {
 	if slices.Contains([]string{"custom/words.txt", "custom/english.txt", "custom/translations.txt"}, name) {
 		return true
 	}
-	parts := strings.Split(name, "/")
-	return len(parts) == 3 && parts[0] == "packs" && adminPackName.MatchString(parts[1]) && slices.Contains([]string{"quanpin.txt", "english.txt", "translations.txt"}, parts[2])
+	prefix, rest, ok := strings.Cut(name, "/")
+	if !ok || prefix != "packs" {
+		return false
+	}
+	pack, file, ok := strings.Cut(rest, "/")
+	return ok && !strings.Contains(file, "/") && adminPackName.MatchString(pack) && slices.Contains([]string{"quanpin.txt", "english.txt", "translations.txt"}, file)
 }

@@ -1400,6 +1400,36 @@ const qqThirdPartyHeading = "### 以下是第三方内容\n\n"
 // qqKnowledgeDown 是知识库读不到或挑段落失败、带着空段落答疑时放在资料开头的说明，见 qqKnowledgeMaterial。
 const qqKnowledgeDown = "### 注意\n文档暂时读不到。水杉输入法本身的事实不要编，答不上就用 unknown；常识和闲聊照常回答。\n\n"
 
+// qqAppendKnowledgeSections 按原顺序保留预算内的段落，先计算容量再直接写入字段，返回最终资料字数。
+func qqAppendKnowledgeSections(material *strings.Builder, sections []qqSection, selected []int) int {
+	const markupSize = len("### [") + len("] ") + len("\n") + len("\n\n")
+	used := utf8.RuneCountInString(material.String())
+	outputBytes, kept := 0, 0
+	for _, i := range selected {
+		section := sections[i]
+		// 固定标记都是 ASCII，字段之间不会把无效 UTF-8 字节拼成新字符，字数可以相加。
+		count := markupSize + utf8.RuneCountInString(section.Doc) + utf8.RuneCountInString(section.Title) + utf8.RuneCountInString(section.Text)
+		if count > qqAnswerContextRunes-used {
+			break
+		}
+		used += count
+		outputBytes += markupSize + len(section.Doc) + len(section.Title) + len(section.Text)
+		kept++
+	}
+	material.Grow(outputBytes)
+	for _, i := range selected[:kept] {
+		section := sections[i]
+		material.WriteString("### [")
+		material.WriteString(section.Doc)
+		material.WriteString("] ")
+		material.WriteString(section.Title)
+		material.WriteByte('\n')
+		material.WriteString(section.Text)
+		material.WriteString("\n\n")
+	}
+	return used
+}
+
 // qqKnowledgeMaterial 按目录让模型挑出与问题相关的段落，返回交给模型的资料；github 为 true 时还按模型的要求附上 GitHub 上的相关 issue，并总是附上各平台最新版本。没有挑出任何内容时返回空字符串。现查过时置位 ask.researched。
 //
 // 答疑时（github 为 true）知识库读不到或挑段落的模型出错，记一条 Warn 后带着空段落继续：照常查用户提到的 issue、搜 issue，资料开头加 qqKnowledgeDown，回答一律用 strong_model。曾经直接返回错误，连「在吗」都只得到「暂时处理不了」，而回答的模型本来就能答常识和闲聊。时间用完（qqOutOfTime）或 ctx 已经取消时仍返回错误，再调一次模型也来不及。提 issue 前的对照（github 为 false）照旧返回错误：没有文档就没法判断是不是已有功能，调用方会照常提交。
@@ -1464,14 +1494,7 @@ func (s *Server) qqKnowledgeMaterial(ctx context.Context, question string, ask *
 		}
 	}
 	// 模型挑出的段落在前，向量召回的接在后面。
-	for _, i := range qqMergeSections(valid, recall.docs, qqSelectedSections+qqVectorDocHits) {
-		section := sections[i]
-		entry := "### [" + section.Doc + "] " + section.Title + "\n" + section.Text + "\n\n"
-		if utf8.RuneCountInString(material.String())+utf8.RuneCountInString(entry) > qqAnswerContextRunes {
-			break
-		}
-		material.WriteString(entry)
-	}
+	materialRunes := qqAppendKnowledgeSections(&material, sections, qqMergeSections(valid, recall.docs, qqSelectedSections+qqVectorDocHits))
 	if !github {
 		return material.String(), s.qqAnswerModel(picked.Chat, picked.Strong), nil
 	}
@@ -1539,7 +1562,7 @@ func (s *Server) qqKnowledgeMaterial(ctx context.Context, question string, ask *
 	if len(releases) > 0 {
 		// 每个平台的最新正式版都附上更新内容；附上后资料总长超过 qqAnswerContextRunes 时，只给用户提到的平台附。
 		list := qqReleasesMaterial(releases, nil)
-		if utf8.RuneCountInString(material.String())+utf8.RuneCountInString(third.String())+utf8.RuneCountInString(list) > qqAnswerContextRunes {
+		if materialRunes+utf8.RuneCountInString(third.String())+utf8.RuneCountInString(list) > qqAnswerContextRunes {
 			list = qqReleasesMaterial(releases, func(p qqPlatformRelease) bool { return qqMentionsPlatform(question, p) })
 		}
 		third.WriteString("### 各平台最新版本（GitHub Release）\n" + list + "\n")

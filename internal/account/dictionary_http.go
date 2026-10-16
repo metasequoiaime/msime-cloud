@@ -183,9 +183,8 @@ func (a *Service) dictionaryImport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_dictionary_format")
 		return
 	}
-	lines := strings.Split(strings.ReplaceAll(strings.TrimPrefix(input.Text, "\ufeff"), "\r\n", "\n"), "\n")
 	entries := []DictionaryEntry{}
-	for _, line := range lines {
+	for line := range strings.SplitSeq(strings.ReplaceAll(strings.TrimPrefix(input.Text, "\ufeff"), "\r\n", "\n"), "\n") {
 		if line == "" {
 			continue
 		}
@@ -308,7 +307,7 @@ func (a *Service) dictionaryImportHans(w http.ResponseWriter, r *http.Request) {
 		weight = *input.Weight
 	}
 	words := []string{}
-	for _, line := range strings.Split(strings.ReplaceAll(strings.TrimPrefix(input.Text, "\ufeff"), "\r\n", "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.ReplaceAll(strings.TrimPrefix(input.Text, "\ufeff"), "\r\n", "\n"), "\n") {
 		word := strings.TrimSpace(line)
 		if word == "" {
 			continue

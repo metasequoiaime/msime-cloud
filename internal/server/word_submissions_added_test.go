@@ -175,6 +175,21 @@ func TestAddedLinesAppendAllocationBudget(t *testing.T) {
 	}
 }
 
+func TestAddedLinesSameLengthSparseChangeAllocationBudget(t *testing.T) {
+	var text strings.Builder
+	for i := range 5000 {
+		fmt.Fprintf(&text, "synthetic%04d\tDisplay%04d\t1\n", i, i)
+	}
+	base := text.String()
+	head := base[:len(base)-2] + "2\n"
+	if got := addedLines(base, head); got != 1 {
+		t.Fatalf("同长度修改新增数 got=%d want=1", got)
+	}
+	if allocations := testing.AllocsPerRun(3, func() { _ = addedLines(base, head) }); allocations > 4 {
+		t.Fatalf("同长度少量修改分配 %.0f 次，超过 4 次预算", allocations)
+	}
+}
+
 func BenchmarkAddedLines(b *testing.B) {
 	var distinct strings.Builder
 	for i := range 5000 {

@@ -12,6 +12,11 @@ import (
 
 func cachedSensitiveService(words []sensitiveWord) *Service {
 	a := &Service{}
+	// 模拟加载完成后的缓存顺序，克隆后排序以免改变调用方保留的原始规则。
+	words = slices.Clone(words)
+	slices.SortStableFunc(words, func(x, y sensitiveWord) int {
+		return sensitiveLevelRank(x.hit.Level) - sensitiveLevelRank(y.hit.Level)
+	})
 	// 测试和基准只测已缓存规则，避免长基准进入数据库刷新路径。
 	a.sensitive.words, a.sensitive.loaded = words, time.Now().AddDate(100, 0, 0)
 	return a

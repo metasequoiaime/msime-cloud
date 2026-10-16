@@ -1,3 +1,4 @@
+import { formatNumber } from "../../utils/number";
 import { useQuery } from "@tanstack/react-query";
 import { isGithubDisabled, useAPI } from "../../api/client";
 import { keys } from "../../api/keys";
@@ -8,7 +9,6 @@ import { noPermissionHint } from "../../shell/permissions";
 import { DetailDrawer } from "../../ui/drawer";
 import type { DrawerAction, DrawerField } from "../../ui/drawer";
 import { ErrorState, SkeletonRows } from "../../ui/states";
-import { formatCount } from "./actions";
 
 export type CrashDrawerProps = {
   signature: string | null;
@@ -51,9 +51,9 @@ export function CrashDrawer({ signature, override, issueURL, canTriage, onClose,
   const fields: DrawerField[] = group ? [
     { label: "签名", value: group.signature, mono: true },
     { label: "平台 / 最新版本", value: `${platformName(group.platform)} · ${group.version}` },
-    { label: "近 7 天", value: `${formatCount(group.count_7d)} 次` },
-    { label: "前 7 天", value: `${formatCount(group.count_prev_7d)} 次（${crashTrend(group).text}）` },
-    { label: "影响设备", value: group.devices_7d === null ? "客户端未上报" : `${formatCount(group.devices_7d)} 台` },
+    { label: "近 7 天", value: `${formatNumber(group.count_7d)} 次` },
+    { label: "前 7 天", value: `${formatNumber(group.count_prev_7d)} 次（${crashTrend(group).text}）` },
+    { label: "影响设备", value: group.devices_7d === null ? "客户端未上报" : `${formatNumber(group.devices_7d)} 台` },
     { label: "Issue 仓库", value: repoText, mono: Boolean(repo) },
     { label: "首次出现", value: formatDateTime(group.first_seen) },
     { label: "最近出现", value: `${formatDateTime(group.last_seen)}（${relativeTime(group.last_seen)}）` },

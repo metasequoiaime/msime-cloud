@@ -1,3 +1,4 @@
+import { formatNumber } from "../../utils/number";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
@@ -150,7 +151,7 @@ export default function CommunityPage() {
     {list.isError && list.data && <ErrorState error={list.error} onRetry={() => list.refetch()} className="mt-3.5" />}
     {total > PAGE_SIZE && <nav aria-label="分页" className="mt-4 flex flex-wrap items-center justify-center gap-3 text-[13px] text-muted">
       <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setSearch({ page: page > 2 ? String(page - 1) : undefined })}>上一页</Button>
-      <span className="tabular-nums">第 {page} / {pages} 页 · 共 {total.toLocaleString("zh-CN")} 项</span>
+      <span className="tabular-nums">第 {page} / {pages} 页 · 共 {formatNumber(total)} 项</span>
       <Button size="sm" variant="outline" disabled={!list.data?.has_more} onClick={() => setSearch({ page: String(page + 1) })}>下一页</Button>
     </nav>}
 

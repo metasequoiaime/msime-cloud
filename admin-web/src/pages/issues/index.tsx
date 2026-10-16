@@ -1,3 +1,4 @@
+import { formatNumber } from "../../utils/number";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -277,9 +278,9 @@ export default function IssuesPage() {
       {data && data.unavailable.length > 0 && <Banner tone="warn">以下仓库暂时无法从 GitHub 读取，列表和统计不含它们：<span className="font-mono text-[12.5px]">{data.unavailable.join("、")}</span></Banner>}
       <StatGrid>
         {stats ? <>
-          <StatTile label="待分诊" value={stats.pending.toLocaleString("zh-CN")} />
-          <StatTile label="已分类待处理" value={stats.triaged.toLocaleString("zh-CN")} />
-          <StatTile label="本周新增" value={stats.new_this_week.toLocaleString("zh-CN")} />
+          <StatTile label="待分诊" value={formatNumber(stats.pending)} />
+          <StatTile label="已分类待处理" value={formatNumber(stats.triaged)} />
+          <StatTile label="本周新增" value={formatNumber(stats.new_this_week)} />
           <StatTile label="平均首次响应" value={formatHours(stats.first_response_hours)} sub={stats.first_response_samples ? `近 30 天 · ${stats.first_response_samples} 个 Issue` : "近 30 天暂无维护者回复"} />
         </> : ["a", "b", "c", "d"].map(key => <Skeleton key={key} className="h-[76px] rounded-2xl" />)}
       </StatGrid>

@@ -1,3 +1,4 @@
+import { formatNumber } from "../../utils/number";
 import { useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, ExternalLink } from "lucide-react";
 import type { Release, ReleaseHistory, ReleasePlatform } from "../../api/release";
@@ -9,7 +10,7 @@ import { Pill } from "../../ui/pill";
 import { Segmented } from "../../ui/segmented";
 import { StatGrid, StatTile } from "../../ui/stat-tile";
 import { Empty, ErrorState, SkeletonRows } from "../../ui/states";
-import { formatCount, formatSize, noteKindClass, releaseDate, statusLabel, statusTone } from "./shared";
+import { formatSize, noteKindClass, releaseDate, statusLabel, statusTone } from "./shared";
 
 export type DetailHandlers = {
   canTrigger: boolean;
@@ -52,7 +53,7 @@ export function DetailBody({ platform, history, loading, error, onRetry, focusTa
       <StatTile label="当前版本" value={<span className="font-mono">{current?.version ?? "—"}</span>} />
       <StatTile label="历史版本" value={history ? releases.length : "—"} />
       <StatTile label="正式发布" value={history ? published : "—"} />
-      <StatTile label="累计下载" value={history ? formatCount(downloads) : "—"} sub="GitHub Release 资产下载次数" />
+      <StatTile label="累计下载" value={history ? formatNumber(downloads, "en-US") : "—"} sub="GitHub Release 资产下载次数" />
     </StatGrid>
     <Card className="overflow-hidden p-0">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-hair px-5 py-3">
@@ -87,7 +88,7 @@ function HistoryRow({ release, focused, open, onToggle, canTrigger, onEditNotes,
       </span>
       <span className="text-[13px] text-muted max-[819px]:pl-6">{releaseDate(release)}</span>
       <span className="truncate text-[13px] text-body max-[819px]:pl-6">{release.author ? `@${release.author}` : "—"}</span>
-      <span className="text-[13px] text-muted tabular-nums max-[819px]:pl-6">{release.assets.length ? `下载 ${formatCount(release.downloads)}` : "—"}</span>
+      <span className="text-[13px] text-muted tabular-nums max-[819px]:pl-6">{release.assets.length ? `下载 ${formatNumber(release.downloads, "en-US")}` : "—"}</span>
     </button>
     {open && <div id={bodyID} className="px-5 pt-0.5 pb-[18px] min-[760px]:pl-11">
       {release.notes.length === 0 ? <p className="m-0 py-1 text-[13px] text-muted">发布说明为空。</p> : release.notes.map((note, index) => (
@@ -98,7 +99,7 @@ function HistoryRow({ release, focused, open, onToggle, canTrigger, onEditNotes,
         </div>
       ))}
       {release.assets.length > 0 && <div className="mt-3 flex flex-wrap gap-2">
-        {release.assets.map(asset => <a key={asset.name} href={asset.url || undefined} target="_blank" rel="noopener noreferrer" title={`下载 ${formatCount(asset.downloads)} 次`}
+        {release.assets.map(asset => <a key={asset.name} href={asset.url || undefined} target="_blank" rel="noopener noreferrer" title={`下载 ${formatNumber(asset.downloads, "en-US")} 次`}
           className="inline-flex h-[30px] max-w-full items-center gap-2 rounded-lg bg-panel-2 px-2.5 text-[12.5px] text-ink no-underline hover:ring-1 hover:ring-hair-2">
           <span className="truncate font-mono">{asset.name}</span>
           <span className="shrink-0 text-muted">{formatSize(asset.size)}</span>

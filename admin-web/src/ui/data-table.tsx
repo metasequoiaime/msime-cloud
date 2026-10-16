@@ -1,3 +1,4 @@
+import { formatNumber } from "../utils/number";
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { createColumnHelper, rowSelectionFeature, tableFeatures, useTable } from "@tanstack/react-table";
@@ -153,7 +154,7 @@ export function DataTable<T extends RowData>({ data, columns, getRowId, selectab
       <div className="min-w-0 grow basis-[260px] max-[759px]:basis-full">{toolbar}</div>
       {searchText && <input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="在本页筛选…" aria-label="在本页筛选"
         className="h-[30px] w-[180px] rounded-lg bg-panel-2 px-2.5 text-[13px] text-ink outline-none placeholder:text-muted focus:ring-[1.5px] focus:ring-accent" />}
-      <span className="text-[12.5px] whitespace-nowrap text-muted tabular-nums">共 {total.toLocaleString("zh-CN")} 条</span>
+      <span className="text-[12.5px] whitespace-nowrap text-muted tabular-nums">共 {formatNumber(total)} 条</span>
     </div>}
     {selectable && selectedCount > 0 && <div className="sticky top-16 z-10 flex flex-wrap items-center gap-2 bg-accent-soft px-4 py-2.5 backdrop-blur-sm" role="toolbar" aria-label="批量操作">
       <span className="mr-1 text-[13px] font-semibold text-accent-ink">已选 {selectedCount} 项</span>

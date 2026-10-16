@@ -1,3 +1,4 @@
+import { formatNumber } from "../../utils/number";
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { formatDateTime } from "../../utils/time";
 import { useDebounced } from "../../hooks/use-debounced";
@@ -300,6 +301,6 @@ function LiveLogs({ token, onUnauthorized }: { token: string; onUnauthorized: ()
       </div>
       {!stuck && rows.length > 0 && <Button size="sm" variant="primary" className="absolute right-4 bottom-4 shadow-[var(--shadow)]" onClick={toBottom}>回到最新</Button>}
     </div>
-    <p className="m-0 mt-2 text-xs text-muted tabular-nums">显示 {lineCount.toLocaleString("zh-CN")} 行，最多保留最近 {maxRows.toLocaleString("zh-CN")} 行 · 级别为 WARN 或 ERROR 时，无法识别级别的行（如 panic）也会显示</p>
+    <p className="m-0 mt-2 text-xs text-muted tabular-nums">显示 {formatNumber(lineCount)} 行，最多保留最近 {formatNumber(maxRows)} 行 · 级别为 WARN 或 ERROR 时，无法识别级别的行（如 panic）也会显示</p>
   </>;
 }

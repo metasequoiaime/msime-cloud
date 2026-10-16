@@ -1,3 +1,4 @@
+import { formatNumber } from "../../utils/number";
 import type { Tone } from "../../ui/pill";
 import { relativeTime } from "../../utils/time";
 import type { UserHistory, UserRow, UserWork } from "../../api/users";
@@ -56,7 +57,7 @@ export function workText(work: UserWork): string {
 }
 
 export function workMeta(work: UserWork): string {
-  const usage = work.section === "dictionaries" || work.section === "replies" || work.section === "phrases" ? `收藏 ${work.saves.toLocaleString("zh-CN")}` : `下载 ${work.downloads.toLocaleString("zh-CN")}`;
+  const usage = work.section === "dictionaries" || work.section === "replies" || work.section === "phrases" ? `收藏 ${formatNumber(work.saves)}` : `下载 ${formatNumber(work.downloads)}`;
   let state: string = moderationLabels[work.moderation];
   if (work.moderation === "removed" && work.moderation_reason === "owner_banned") state = "已下架（账号封禁）";
   else if (work.moderation === "removed" && work.moderation_reason) state = `已下架（${work.moderation_reason}）`;

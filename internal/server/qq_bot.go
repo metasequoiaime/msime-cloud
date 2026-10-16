@@ -746,13 +746,17 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		daily          int
 		text           func(wait time.Duration) string
 	}
-	var charged []qqLimit
+	type qqCharge struct {
+		scope  string
+		refund func(context.Context) error
+	}
+	var charged []qqCharge
 	defer func() {
 		// 机器人自己出错（failed、timeout、reply_failed，管理员的 admin_failed 也算，见 qqOutcomeKind）或者被副本关停打断时，退回这条消息计过的额度：回复会请群友再发一次，不退的话每重发一次就再扣一次个人和群的额度，上游一抖或赶上发布时群额度白白耗掉。超限（limited_*）的那一项没计上，不在 charged 里。这个 defer 最先登记、最后执行，outcome 已经按 reply_failed、timeout 改写过。ctx 这时可能已经取消，退额度用单独的时限，写法照 qq_words.go 退加词名额。
 		if kind := qqOutcomeKind(outcome); kind == "failed" || kind == "reply_failed" || errors.Is(ctx.Err(), context.Canceled) {
 			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 			for _, limit := range charged {
-				if err := s.limits.ReleaseRateLimit(rctx, limit.scope, limit.subject); err != nil {
+				if err := limit.refund(rctx); err != nil {
 					slog.Warn("qq bot: message slot not released", "scope", limit.scope, "reason", err.Error())
 				}
 			}
@@ -901,7 +905,8 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 		limits = []qqLimit{{"qq-bot-member", m.GroupOpenID + "/" + m.Author.MemberOpenID, qqBotMemberDaily, qqLimitedReply}, {"qq-bot-group", m.GroupOpenID, qqBotGroupDaily, qqGroupLimitedReply}}
 	}
 	for _, limit := range limits {
-		switch wait, err := s.limits.RateLimitUntil(ctx, limit.scope, limit.subject, limit.daily, 24*time.Hour); {
+		refund, wait, err := s.reserveRateLimit(ctx, limit.scope, limit.subject, limit.daily, 24*time.Hour)
+		switch {
 		case errors.Is(err, account.ErrLimited):
 			reply(limit.text(wait))
 			outcome = "limited_" + strings.TrimPrefix(limit.scope, "qq-bot-")
@@ -911,7 +916,7 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 			reply(qqReplyUnavailable)
 			return
 		}
-		charged = append(charged, limit)
+		charged = append(charged, qqCharge{limit.scope, refund})
 	}
 	if imageOnly {
 		progress(qqReplyShot)

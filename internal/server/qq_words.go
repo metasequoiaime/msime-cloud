@@ -221,12 +221,13 @@ func (s *Server) qqAddWords(ctx context.Context, subject, content string, reply 
 	var number int
 	if err == nil {
 		// 每天提交成功的次数排在校验、敏感词检查和查重之后计：原来在函数开头就扣，群友写错拼音改几次，当天额度就用完了，一个词都没交上。
-		switch err := s.limits.RateLimit(ctx, "qq-bot-words", subject, qqWordsDaily, 24*time.Hour); {
-		case errors.Is(err, account.ErrLimited):
+		refund, _, rateErr := s.reserveRateLimit(ctx, "qq-bot-words", subject, qqWordsDaily, 24*time.Hour)
+		switch {
+		case errors.Is(rateErr, account.ErrLimited):
 			reply("你今天加词的次数用完了，明天再来吧。")
 			return
-		case err != nil:
-			slog.Error("qq bot: words limit unavailable", "reason", err.Error())
+		case rateErr != nil:
+			slog.Error("qq bot: words limit unavailable", "reason", rateErr.Error())
 			reply(qqReplyUnavailable)
 			return
 		}
@@ -234,7 +235,7 @@ func (s *Server) qqAddWords(ctx context.Context, subject, content string, reply 
 		// 确定没写进去时退回这次的名额；确认不了结果（errWordsUncertain）时不退，免得重复提交。
 		if err != nil && !errors.Is(err, errWordsUncertain) {
 			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-			if err := s.limits.ReleaseRateLimit(rctx, "qq-bot-words", subject); err != nil {
+			if err := refund(rctx); err != nil {
 				slog.Warn("qq bot: words slot not released", "reason", err.Error())
 			}
 			cancel()

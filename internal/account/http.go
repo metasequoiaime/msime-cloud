@@ -179,7 +179,7 @@ func (a *Service) RateLimit(ctx context.Context, scope, subject string, limit in
 	return a.store.Rate(ctx, scope+":"+hash(subject), limit, window)
 }
 
-// ReleaseRateLimit 退回 RateLimit 为 subject 计过的一次：调用方先占了名额、后面的事没做成时用它，例如 QQ 机器人的去重名额（同一个问题 7 天只记一次）写 GitHub 失败后要退回，否则之后同一个问题会被说成「已经记下来了」。计数已经过期或不存在时什么也不做。
+// ReleaseRateLimit 是按当前窗口退回计数的旧接口，无法关联原请求。可退款业务应使用 ReserveRateLimit 返回的退款函数；写入去重应使用 AcquireRateLease 和 ReleaseRateLease。
 func (a *Service) ReleaseRateLimit(ctx context.Context, scope, subject string) error {
 	return a.store.ReleaseRate(ctx, scope+":"+hash(subject))
 }

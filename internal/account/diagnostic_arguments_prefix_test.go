@@ -13,7 +13,7 @@ import (
 func TestQuotedDiagnosticArgumentsCompatibility(t *testing.T) {
 	check := func(t *testing.T, text string) {
 		t.Helper()
-		got, want := quotedDiagnosticArguments(text), quotedDiagnosticArgumentsBeforePrefix(text)
+		got, want := quotedDiagnosticArguments([]byte(text)), quotedDiagnosticArgumentsBeforePrefix(text)
 		if !bytes.Equal(got, want) {
 			t.Fatalf("截断后的 JSON 不一致：实际 %q，期望 %q", got, want)
 		}
@@ -59,9 +59,10 @@ func TestQuotedDiagnosticArgumentsAllocationBudget(t *testing.T) {
 		{"nul", strings.Repeat("\x00", 1024)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			raw := []byte(tc.text)
 			var got json.RawMessage
 			allocations := testing.AllocsPerRun(10, func() {
-				got = quotedDiagnosticArguments(tc.text)
+				got = quotedDiagnosticArguments(raw)
 			})
 			if len(got) > diagnosticAccessArgumentBytes || !json.Valid(got) {
 				t.Fatalf("结果不是上限内的 JSON：%q", got)
@@ -74,7 +75,7 @@ func TestQuotedDiagnosticArgumentsAllocationBudget(t *testing.T) {
 }
 
 func TestQuotedDiagnosticArgumentsLongTailMemoryBudget(t *testing.T) {
-	text := strings.Repeat("a", 1<<20) + "\xff\x00tail"
+	text := []byte(strings.Repeat("a", 1<<20) + "\xff\x00tail")
 	if got := quotedDiagnosticArguments(text); len(got) != diagnosticAccessArgumentBytes || !json.Valid(got) {
 		t.Fatal("长尾输入没有返回预期大小的 JSON 字符串")
 	}
@@ -98,17 +99,19 @@ func BenchmarkQuotedDiagnosticArguments(b *testing.B) {
 		{"unicode", strings.Repeat("水😀\u2028", 150)},
 		{"long_dirty_tail", strings.Repeat("a", 1<<20) + "\xff\x00tail"},
 	} {
+		// 输入预先准备为字节切片，旧实现的适配同时计入原调用方的字符串转换。
+		raw := []byte(tc.text)
 		for _, implementation := range []struct {
 			name  string
-			quote func(string) json.RawMessage
+			quote func([]byte) json.RawMessage
 		}{
-			{"before", quotedDiagnosticArgumentsBeforePrefix},
+			{"before", func(raw []byte) json.RawMessage { return quotedDiagnosticArgumentsBeforePrefix(string(raw)) }},
 			{"after", quotedDiagnosticArguments},
 		} {
 			b.Run(tc.name+"/"+implementation.name, func(b *testing.B) {
 				b.ReportAllocs()
 				for b.Loop() {
-					implementation.quote(tc.text)
+					implementation.quote(raw)
 				}
 			})
 		}

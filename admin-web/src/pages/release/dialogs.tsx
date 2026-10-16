@@ -1,10 +1,9 @@
 import { useState } from "react";
 import type { FormEvent, ReactNode } from "react";
-import { Dialog } from "radix-ui";
 import { Button } from "../../ui/button";
-import { keepOpenForToast, useRegisterOverlay } from "../../ui/overlay";
+import { ModalFrame, ModalHeading } from "../../ui/modal";
 
-// FormDialog is the release page's modal form (trigger version, notes editor). Like the shared confirm dialog it has no Dialog.Overlay, whose scroll lock injects a <style> element the admin CSP blocks.
+// 发布页的表单弹窗，提交期间禁止关闭或重复提交。
 function FormDialog({ title, description, okLabel, okDisabled, pending, onClose, onSubmit, wide, children }: {
   title: string;
   okDisabled?: boolean;
@@ -16,28 +15,20 @@ function FormDialog({ title, description, okLabel, okDisabled, pending, onClose,
   wide?: boolean;
   children: ReactNode;
 }) {
-  useRegisterOverlay(true, () => { if (!pending) onClose(); });
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (!pending && !okDisabled) onSubmit();
   };
-  return <Dialog.Root open onOpenChange={open => { if (!open && !pending) onClose(); }}>
-    <Dialog.Portal>
-      <div className="fixed inset-0 z-70 grid place-items-center bg-[rgba(10,20,14,.38)] p-5">
-        <Dialog.Content onInteractOutside={keepOpenForToast} className={`w-full animate-pop-in rounded-[18px] bg-panel px-6 py-[22px] shadow-dialog outline-none ${wide ? "max-w-[640px]" : "max-w-[400px]"}`}>
-          <form onSubmit={submit}>
-            <Dialog.Title className="m-0 text-[17px] font-bold text-ink">{title}</Dialog.Title>
-            {description ? <Dialog.Description className="m-0 mt-2 text-sm leading-[1.8] text-body">{description}</Dialog.Description> : <Dialog.Description className="sr-only">{title}</Dialog.Description>}
-            <div className="mt-4">{children}</div>
-            <div className="mt-5 flex justify-end gap-2">
-              <Button variant="outline" onClick={onClose} disabled={pending}>取消</Button>
-              <Button type="submit" variant="primary" disabled={pending || okDisabled}>{pending ? "提交中…" : okLabel}</Button>
-            </div>
-          </form>
-        </Dialog.Content>
+  return <ModalFrame wide={wide} onClose={() => { if (!pending) onClose(); }}>
+    <form onSubmit={submit}>
+      <ModalHeading title={title} description={description} />
+      <div className="mt-4">{children}</div>
+      <div className="mt-5 flex justify-end gap-2">
+        <Button variant="outline" onClick={onClose} disabled={pending}>取消</Button>
+        <Button type="submit" variant="primary" disabled={pending || okDisabled}>{pending ? "提交中…" : okLabel}</Button>
       </div>
-    </Dialog.Portal>
-  </Dialog.Root>;
+    </form>
+  </ModalFrame>;
 }
 
 const versionPattern = /^v?[0-9][0-9A-Za-z.+-]{0,62}$/;

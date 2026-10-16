@@ -3,6 +3,7 @@ package account
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -24,7 +25,7 @@ func TestCommunityCandidateDownloadWithoutLogin(t *testing.T) {
 			t.Fatalf("downloads = %d, want %d: %v", got, want, err)
 		}
 	}
-	for _, token := range []string{"", "expired-synthetic-token", reader.AccessToken} {
+	for _, token := range []string{"", "expired-synthetic-token", strings.Repeat("a", 64), reader.AccessToken} {
 		got := apiRequest(t, mux, "POST", path+"/download", "", token, 200).Body.String()
 		if got != want {
 			t.Fatal("匿名下载改变了清单或图片")
@@ -35,7 +36,7 @@ func TestCommunityCandidateDownloadWithoutLogin(t *testing.T) {
 		if _, err := db.pool.Exec(t.Context(), `UPDATE community_candidate_skins SET visibility=$2,moderation=$3 WHERE id=$1`, id, state.visibility, state.moderation); err != nil {
 			t.Fatal(err)
 		}
-		for _, token := range []string{"", "expired-synthetic-token", reader.AccessToken} {
+		for _, token := range []string{"", "expired-synthetic-token", strings.Repeat("a", 64), reader.AccessToken} {
 			w := apiRequest(t, mux, "POST", path+"/download", "", token, 404)
 			var body map[string]any
 			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body["manifest"] != nil || body["files"] != nil {

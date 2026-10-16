@@ -720,7 +720,16 @@ SELECT $1,files.path,files.bytes
 FROM unnest($2::text[],$3::bytea[]) AS files(path,bytes)`, []any{id, paths, contents}
 }
 func (a *Service) communityCandidateDownload(w http.ResponseWriter, r *http.Request) {
-	viewer := a.communityViewer(r)
+	p, authErr := a.Authenticate(r.Context(), strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+	// 无有效凭据时允许匿名下载；查询失败或取消不能伪装成未登录。
+	if authErr != nil && !errors.Is(authErr, ErrInvalid) && !errors.Is(authErr, ErrBanned) {
+		a.error(w, authErr)
+		return
+	}
+	viewer := ""
+	if authErr == nil {
+		viewer = p.UserID
+	}
 	var tx pgx.Tx
 	var e error
 	if viewer == "" {

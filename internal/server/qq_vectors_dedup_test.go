@@ -126,8 +126,8 @@ func TestQQDocVectorsDistinctPlanningAllocationBudget(t *testing.T) {
 			}
 		}
 	})
-	if allocated := result.AllocedBytesPerOp(); allocated > 4<<20 {
-		t.Fatalf("不同段落准备分配 %d 字节，超过 4 MiB 预算", allocated)
+	if allocated := result.AllocedBytesPerOp(); allocated > 7<<19 {
+		t.Fatalf("不同段落准备分配 %d 字节，超过 3.5 MiB 预算", allocated)
 	}
 }
 

@@ -341,7 +341,7 @@ func (s *Server) syncQQDocVectors(ctx context.Context) (int, error) {
 			continue
 		}
 		if pending == nil {
-			pending = make(map[string]struct{})
+			pending = make(map[string]struct{}, uniqueEstimate)
 		}
 		pending[ids[i]] = struct{}{}
 		items = append(items, account.QQKnowledgeItem{ID: ids[i], Kind: "doc", Title: section.Doc + " · " + section.Title, Summary: qqTruncate(section.Text, qqHistorySummaryRunes), ContentHash: h, UpdatedAt: s.qq.now()})

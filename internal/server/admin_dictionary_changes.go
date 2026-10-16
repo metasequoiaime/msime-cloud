@@ -207,8 +207,33 @@ func applyDictionaryChanges(name, text string, changes []dictionaryEdit) (string
 	if !dictionaryEditablePath(name) || !utf8.ValidString(text) {
 		return "", dictionaryChangeFail(400, "dictionary_readonly")
 	}
-	lines := strings.Split(text, "\n")
-	validator := dictionaryColumnValidator{name: name, lines: lines}
+	lineCount := strings.Count(text, "\n") + 1
+	// 只索引本次删改涉及的原行，追加词条时无需保存整份词库的行切片。
+	type originalLine struct {
+		text   string
+		offset int
+	}
+	originals := map[int]originalLine{}
+	for _, edit := range changes {
+		if (edit.Operation == "replace" || edit.Operation == "delete") && edit.Line >= 1 && edit.Line <= lineCount {
+			originals[edit.Line] = originalLine{}
+		}
+	}
+	if len(originals) > 0 {
+		lineNumber, offset, remaining := 0, 0, len(originals)
+		for line := range strings.SplitSeq(text, "\n") {
+			lineNumber++
+			if _, needed := originals[lineNumber]; needed {
+				originals[lineNumber] = originalLine{text: line, offset: offset}
+				remaining--
+				if remaining == 0 {
+					break
+				}
+			}
+			offset += len(line) + 1
+		}
+	}
+	validator := dictionaryColumnValidator{name: name, text: text}
 	newline := "\n"
 	if strings.Contains(text, "\r\n") {
 		newline = "\r\n"
@@ -224,7 +249,8 @@ func applyDictionaryChanges(name, text string, changes []dictionaryEdit) (string
 				return "", dictionaryChangeFail(400, "invalid_dictionary_changes")
 			}
 		} else {
-			if edit.Line < 1 || edit.Line > len(lines) || strings.TrimSpace(lines[edit.Line-1]) == "" || strings.HasPrefix(strings.TrimSpace(lines[edit.Line-1]), "#") {
+			original := strings.TrimSpace(originals[edit.Line].text)
+			if edit.Line < 1 || edit.Line > lineCount || original == "" || strings.HasPrefix(original, "#") {
 				return "", dictionaryChangeFail(400, "invalid_dictionary_changes")
 			}
 			if _, exists := updates[edit.Line]; exists {
@@ -251,10 +277,10 @@ func applyDictionaryChanges(name, text string, changes []dictionaryEdit) (string
 	// 按删改后的字节数预留空间，追加前可能需要补一个换行。
 	outputBytes := len(text)
 	for line, value := range updates {
-		original := lines[line-1]
+		original := originals[line].text
 		if value == nil {
 			outputBytes -= len(original)
-			if line < len(lines) {
+			if line < lineCount {
 				outputBytes--
 			}
 		} else {
@@ -273,23 +299,26 @@ func applyDictionaryChanges(name, text string, changes []dictionaryEdit) (string
 	// 保留未修改行的每一个字节及换行风格，仅修改目标行。
 	var out strings.Builder
 	out.Grow(outputBytes)
-	for i, original := range lines {
-		value, changed := updates[i+1]
-		if changed && value == nil {
-			continue
-		}
-		if changed {
+	editedLines := make([]int, 0, len(updates))
+	for line := range updates {
+		editedLines = append(editedLines, line)
+	}
+	slices.Sort(editedLines)
+	offset := 0
+	for _, line := range editedLines {
+		original := originals[line]
+		out.WriteString(text[offset:original.offset])
+		offset = original.offset + len(original.text)
+		if value := updates[line]; value != nil {
 			out.WriteString(*value)
-			if strings.HasSuffix(original, "\r") {
+			if strings.HasSuffix(original.text, "\r") {
 				out.WriteByte('\r')
 			}
-		} else {
-			out.WriteString(original)
-		}
-		if i < len(lines)-1 {
-			out.WriteByte('\n')
+		} else if line < lineCount {
+			offset++
 		}
 	}
+	out.WriteString(text[offset:])
 	if len(additions) > 0 {
 		if out.Len() > 0 && !strings.HasSuffix(out.String(), "\n") {
 			out.WriteString(newline)
@@ -303,7 +332,7 @@ func applyDictionaryChanges(name, text string, changes []dictionaryEdit) (string
 	// 翻译允许覆盖同一源词，其他文件按前两列去重。
 	remaining := map[string]int{}
 
-	for _, line := range lines {
+	for line := range strings.SplitSeq(text, "\n") {
 		if k := dictionaryEntryKey(line); k != "" {
 			remaining[k]++
 		}
@@ -339,7 +368,7 @@ func dictionaryEntryKey(line string) string {
 // dictionaryColumnValidator 在单次变更中复用原词库的权重范围，避免每条新增词条都重扫文件。
 type dictionaryColumnValidator struct {
 	name        string
-	lines       []string
+	text        string
 	weightsRead bool
 	minimum     int64
 	maximum     int64
@@ -384,7 +413,7 @@ func (v *dictionaryColumnValidator) validate(cols []string) error {
 	}
 	if strings.HasPrefix(name, "custom/") {
 		if !v.weightsRead {
-			for _, line := range v.lines {
+			for line := range strings.SplitSeq(v.text, "\n") {
 				first, rest, ok := strings.Cut(strings.TrimSpace(line), "\t")
 				if !ok || strings.HasPrefix(first, "#") {
 					continue

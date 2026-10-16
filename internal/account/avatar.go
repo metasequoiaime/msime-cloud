@@ -88,7 +88,8 @@ func (a *Service) putAvatar(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 503, "avatar_upload_disabled")
 		return
 	}
-	if mediaType := strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]); mediaType != "image/png" && mediaType != "image/jpeg" {
+	mediaType, _, _ := strings.Cut(r.Header.Get("Content-Type"), ";")
+	if mediaType = strings.TrimSpace(mediaType); mediaType != "image/png" && mediaType != "image/jpeg" {
 		writeError(w, 415, "unsupported_media_type")
 		return
 	}

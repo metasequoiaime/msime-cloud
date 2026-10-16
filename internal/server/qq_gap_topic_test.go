@@ -69,6 +69,42 @@ func TestQQGapTopicMatchesPrevious(t *testing.T) {
 	}
 }
 
+func TestQQGapTopicBoundedContactSemantics(t *testing.T) {
+	cases := []struct {
+		name  string
+		text  string
+		check func(t *testing.T, got string)
+	}{
+		{
+			name: "联系方式在摘要前",
+			text: "reader@example.test " + strings.Repeat("字", qqGapRunes),
+			check: func(t *testing.T, got string) {
+				if strings.Contains(got, "reader@example.test") {
+					t.Fatal("摘要前的联系方式未脱敏")
+				}
+				if got != previousQQGapTopic("reader@example.test "+strings.Repeat("字", qqGapRunes)) {
+					t.Fatal("摘要前的联系方式改变了摘要结果")
+				}
+			},
+		},
+		{
+			name: "联系方式在摘要后",
+			text: strings.Repeat("字", qqGapRunes+20) + " reader@example.test",
+			check: func(t *testing.T, got string) {
+				want := previousQQGapTopic(strings.Repeat("字", qqGapRunes+20) + " reader@example.test")
+				if got != want {
+					t.Fatal("摘要后的联系方式改变了摘要结果")
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.check(t, qqGapTopic(tc.text))
+		})
+	}
+}
+
 func TestQQGapTopicRateLimitSubject(t *testing.T) {
 	s, fake, limiter := qqServer(t)
 	s.qq.config.GapsRepo = "o/docs"
@@ -90,6 +126,7 @@ func qqGapTopicAllocationCases() []struct {
 		budget     int64
 	}{
 		{"长正文", strings.Repeat("普通正文", 20000), 64 << 10},
+		{"末尾联系方式", strings.Repeat("普通正文", 20000) + " reader@example.test", 512 << 10},
 		{"密集空白", strings.Repeat("普通 \t正文\u3000", 10000), (140 << 10) + (64 << 10)},
 		{"大量首尾空白", strings.Repeat(" ", 1<<20) + "普通问题" + strings.Repeat("\u3000", 1<<18), 64 << 10},
 		{"全部空白", strings.Repeat(" \t\u3000", 10000), 0},

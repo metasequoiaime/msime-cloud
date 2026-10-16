@@ -52,9 +52,84 @@ func qqRedactContacts(text string) string {
 	return text
 }
 
+// qqRedactContactsBefore 只处理摘要前的联系方式；摘要后的匹配不会影响结果，可以跳过整段正文的复制。
+func qqRedactContactsBefore(text string, maxRunes int) string {
+	end := qqRuneEnd(text, maxRunes)
+	if end == len(text) {
+		return qqRedactContacts(text)
+	}
+	var skipped uint8
+	for i, pattern := range qqContactPatterns {
+		match := pattern.FindStringIndex(text)
+		if match == nil {
+			continue
+		}
+		for j := 0; j < i; j++ {
+			if skipped&(1<<j) == 0 || !qqContactPatternsOverlap(text, qqContactPatterns[j], pattern) {
+				continue
+			}
+			text = qqContactPatterns[j].ReplaceAllString(text, qqContactRedacted)
+			skipped &^= 1 << j
+			end = qqRuneEnd(text, maxRunes)
+			match = pattern.FindStringIndex(text)
+			if match == nil {
+				break
+			}
+		}
+		if match[0] >= end {
+			skipped |= 1 << i
+			continue
+		}
+		text = pattern.ReplaceAllString(text, qqContactRedacted)
+		end = qqRuneEnd(text, maxRunes)
+	}
+	// 前面的替换可能缩短正文，使原本在摘要后的匹配移到摘要内；再检查一次以保持完整脱敏的结果。
+	for i, pattern := range qqContactPatterns {
+		if skipped&(1<<i) == 0 {
+			continue
+		}
+		match := pattern.FindStringIndex(text)
+		if match == nil || match[0] >= end {
+			continue
+		}
+		text = pattern.ReplaceAllString(text, qqContactRedacted)
+		end = qqRuneEnd(text, maxRunes)
+	}
+	return text
+}
+
+// qqContactPatternsOverlap 判断两个正则的任意匹配是否重叠，避免后一个正则的全局替换吞掉前一个待处理的匹配。
+func qqContactPatternsOverlap(text string, first, second *regexp.Regexp) bool {
+	firstStart, secondStart := 0, 0
+	for firstStart < len(text) && secondStart < len(text) {
+		firstMatch := first.FindStringIndex(text[firstStart:])
+		if firstMatch == nil {
+			return false
+		}
+		firstMatch[0] += firstStart
+		firstMatch[1] += firstStart
+		secondMatch := second.FindStringIndex(text[secondStart:])
+		if secondMatch == nil {
+			return false
+		}
+		secondMatch[0] += secondStart
+		secondMatch[1] += secondStart
+		if firstMatch[1] <= secondMatch[0] {
+			firstStart = firstMatch[1]
+			continue
+		}
+		if secondMatch[1] <= firstMatch[0] {
+			secondStart = secondMatch[1]
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 // qqGapTopic 先合并空白并完整脱敏，再截取概括前缀，保持去重键和公开评论正文一致。
 func qqGapTopic(topic string) string {
-	topic = qqRedactContacts(qqNormalizeWhitespace(topic))
+	topic = qqRedactContactsBefore(qqNormalizeWhitespace(topic), qqGapRunes)
 	end := qqRuneEnd(topic, qqGapRunes)
 	if end == len(topic) {
 		// 合并空白也可能只返回长输入中的短子串，短概括同样需要独立保存。

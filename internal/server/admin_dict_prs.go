@@ -727,17 +727,65 @@ func (s *Server) trimFiles(ctx context.Context, gh *githubapp.Client, token stri
 
 // trimDictionaryContent 删除指定物理行并保留其余行之间的原始换行语义，不构造整份行切片。
 func trimDictionaryContent(content string, drop map[int]bool) string {
-	var kept strings.Builder
-	kept.Grow(len(content))
-	first := true
-	line := 0
+	// 只保存少量连续保留片段；超出固定容量时仍按行重建，不为整份词库建立行索引。
+	var chunks [16]string
+	chunkCount, start, end, offset := 0, -1, 0, 0
+	resumeOffset, resumeLine := 0, 0
+	saveChunk := func() {
+		if chunkCount < len(chunks) {
+			chunks[chunkCount] = content[start:end]
+		}
+		chunkCount++
+		start = -1
+	}
+	// 容量只计保留行及它们之间的分隔符，避免空结果仍持有整份输入大小的缓冲区。
+	outputBytes, keptLines, line := 0, 0, 0
 	for part := range strings.SplitSeq(content, "\n") {
 		if !drop[line] {
-			if !first {
-				kept.WriteByte('\n')
+			outputBytes += len(part)
+			keptLines++
+			if start == -1 {
+				start = offset
+				if chunkCount == len(chunks) {
+					resumeOffset, resumeLine = offset, line
+				}
 			}
+			end = offset + len(part)
+		} else if start != -1 {
+			saveChunk()
+		}
+		line++
+		offset += len(part) + 1
+	}
+	if start != -1 {
+		saveChunk()
+	}
+	if keptLines > 0 {
+		outputBytes += keptLines - 1
+	}
+	if outputBytes == 0 {
+		return ""
+	}
+	if outputBytes == len(content) {
+		return content
+	}
+	var kept strings.Builder
+	kept.Grow(outputBytes)
+	for i, chunk := range chunks[:min(chunkCount, len(chunks))] {
+		if i > 0 {
+			kept.WriteByte('\n')
+		}
+		kept.WriteString(chunk)
+	}
+	if chunkCount <= len(chunks) {
+		return kept.String()
+	}
+	// 片段过多时从第一个未缓存片段继续，避免重新扫描已复制的长前缀。
+	line = resumeLine
+	for part := range strings.SplitSeq(content[resumeOffset:], "\n") {
+		if !drop[line] {
+			kept.WriteByte('\n')
 			kept.WriteString(part)
-			first = false
 		}
 		line++
 	}

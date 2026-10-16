@@ -257,9 +257,9 @@ func qqCommandArg(text string, words ...string) (string, bool) {
 		maxBytes = max(maxBytes, len(word))
 	}
 	// 每个字符转小写后至少占一个字节，取 maxBytes 个字符足以比较所有命令，且不会复制参数正文。
-	lower := strings.ToLower(trimmed[:qqRuneEnd(trimmed, maxBytes)])
+	prefix := trimmed[:qqRuneEnd(trimmed, maxBytes)]
 	for _, word := range words {
-		if !strings.HasPrefix(lower, word) {
+		if !qqCommandPrefixEqualFold(prefix, word) {
 			continue
 		}
 		rest := trimmed[len(word):]
@@ -273,6 +273,27 @@ func qqCommandArg(text string, words ...string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// qqCommandPrefixEqualFold 按原有 strings.ToLower 规则逐个比较前缀，避免为命令判断构造小写副本。
+func qqCommandPrefixEqualFold(prefix, word string) bool {
+	wordOffset := 0
+	for prefixOffset := 0; prefixOffset < len(prefix) && wordOffset < len(word); {
+		r, size := utf8.DecodeRuneInString(prefix[prefixOffset:])
+		var lower [utf8.UTFMax]byte
+		lowerSize := utf8.EncodeRune(lower[:], unicode.ToLower(r))
+		if wordOffset+lowerSize > len(word) {
+			return false
+		}
+		for i := range lowerSize {
+			if lower[i] != word[wordOffset+i] {
+				return false
+			}
+		}
+		prefixOffset += size
+		wordOffset += lowerSize
+	}
+	return wordOffset == len(word)
 }
 
 // qqCommand 处理群里的命令，返回处理结果的名字（写进每条消息的处理日志，见 handleQQFeedback），不是命令时返回空字符串。progress 发过渡语，同一条消息只发一句（见 handleQQFeedback）。

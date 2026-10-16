@@ -52,9 +52,9 @@ func requireOpenEncodingError(t *testing.T, dsn string) {
 
 func TestOpenRejectsNonUTF8Database(t *testing.T) {
 	target := encodingTestURL(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	admin, err := pgx.Connect(ctx, target.String())
+	connectCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	admin, err := pgx.Connect(connectCtx, target.String())
+	cancel()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,10 @@ func TestOpenRejectsNonUTF8Database(t *testing.T) {
 			name := "msime_auth_test_encoding_" + randomToken()[:12]
 			quoted := pgx.Identifier{name}.Sanitize()
 			// 编码来自上面的固定列表，库名独立生成并引用，只清理本测试创建的库。
-			if _, err := admin.Exec(ctx, "CREATE DATABASE "+quoted+" TEMPLATE template0 ENCODING '"+encoding+"' LC_COLLATE 'C' LC_CTYPE 'C'"); err != nil {
+			createCtx, createCancel := context.WithTimeout(context.Background(), 15*time.Second)
+			_, err := admin.Exec(createCtx, "CREATE DATABASE "+quoted+" TEMPLATE template0 ENCODING '"+encoding+"' LC_COLLATE 'C' LC_CTYPE 'C'")
+			createCancel()
+			if err != nil {
 				t.Fatal(err)
 			}
 			defer func() {

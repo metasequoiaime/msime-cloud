@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
@@ -39,7 +40,12 @@ func (s *Server) createSharedSkinJob(w http.ResponseWriter, r *http.Request, id,
 		s.skinJobsBusy(w)
 		return
 	}
-	expires, err := s.accounts.CreateSkinJob(r.Context(), id, owner, skinJobsPerOwner, skinJobCap(s.config), skinJobTTL)
+	expires, wait, err := s.accounts.CreateSkinJob(r.Context(), id, owner, skinJobsPerOwner, skinJobCap(s.config), skinJobsPerDay, skinJobTTL)
+	if errors.Is(err, account.ErrLimited) {
+		w.Header().Set("Retry-After", strconv.Itoa(int((wait+time.Second-1)/time.Second)))
+		fail(w, 429, "rate_limit_exceeded")
+		return
+	}
 	if errors.Is(err, account.ErrSkinJobsBusy) {
 		s.skinJobsBusy(w)
 		return

@@ -32,12 +32,14 @@ type SkinJob struct {
 	Artwork []byte
 }
 
-// CreateSkinJob records a new running job for owner unless owner already holds perOwner unexpired jobs or the deployment holds total. Jobs a DELETE cancelled still count until their worker has stopped, as the in-process implementation counted them until the upstream call returned. A running job whose worker stopped heartbeating does not count: its replica died (or lost the database for longer than SkinJobStaleAfter, after which its worker is told to stop), and in the in-process implementation a dead replica freed its slots with it. Without this a crashed replica's orphaned jobs, which no client may ever delete, would hold the caps until they expire. It returns the job's expiry.
-func (a *Service) CreateSkinJob(ctx context.Context, id, owner string, perOwner, total int, ttl time.Duration) (time.Time, error) {
+// CreateSkinJob 在同一事务中检查主体与全局容量、记录任务并扣除每日额度；任何一步失败都会回滚。
+// 返回任务到期时间；每日额度用尽时返回剩余等待时长与 ErrLimited。
+// 已取消但工作进程尚未停止的任务仍占容量；失去心跳的任务不占容量。
+func (a *Service) CreateSkinJob(ctx context.Context, id, owner string, perOwner, total, perDay int, ttl time.Duration) (time.Time, time.Duration, error) {
 	var expires time.Time
 	tx, err := a.store.pool.Begin(ctx)
 	if err != nil {
-		return expires, err
+		return expires, 0, err
 	}
 	defer tx.Rollback(ctx)
 	// 保活设置与首个锁请求批量发送，仍在取锁前启用，避免持锁副本失联后长时间阻塞其他副本。
@@ -64,16 +66,16 @@ func (a *Service) CreateSkinJob(ctx context.Context, id, owner string, perOwner,
 		setup.Queue(skinJobsLock)
 	}
 	if err = tx.SendBatch(ctx, setup).Close(); err != nil {
-		return expires, err
+		return expires, 0, err
 	}
 	if userOwner {
 		// 先确认账号有效再等待全局锁；后续容量读取使用取锁后的独立语句快照。
 		if _, err = tx.Exec(ctx, skinJobsLock); err != nil {
-			return expires, err
+			return expires, 0, err
 		}
 	}
 	// 先清理过期任务和失去工作进程的已取消任务，再基于清理后的快照判断容量并插入。
-	// 两条语句批量发送，保留执行顺序；达到容量上限时回滚，清理也不会单独提交。
+	// 清理、插入和每日额度批量发送，保留执行顺序；达到任一上限时回滚，清理和扣额也不会单独提交。
 	batch := &pgx.Batch{}
 	batch.Queue(`DELETE FROM skin_jobs WHERE expires_at<=clock_timestamp() OR (cancelled AND NOT (` + skinJobLive + `))`)
 	// 初始心跳必须取锁后的实际时间；默认 now() 固定为事务开始时间，长锁等待会让新任务立即失效。
@@ -85,12 +87,25 @@ WHERE owner_count<$4 AND total_count<$5
 RETURNING expires_at`, id, owner, ttl.Seconds(), perOwner, total).QueryRow(func(row pgx.Row) error {
 		return row.Scan(&expires)
 	})
+	var wait time.Duration
+	batch.Queue(rateUntilSQL, "skin-art-day:"+hash(owner), (24 * time.Hour).String(), perDay).QueryRow(func(row pgx.Row) error {
+		var used int
+		var until, now time.Time
+		if err := row.Scan(&used, &until, &now); err != nil {
+			return err
+		}
+		if used > perDay {
+			wait = max(until.Sub(now), time.Second)
+			return ErrLimited
+		}
+		return nil
+	})
 	if err = tx.SendBatch(ctx, batch).Close(); errors.Is(err, pgx.ErrNoRows) {
-		return expires, ErrSkinJobsBusy
+		return expires, 0, ErrSkinJobsBusy
 	} else if err != nil {
-		return expires, err
+		return expires, wait, err
 	}
-	return expires, tx.Commit(ctx)
+	return expires, 0, tx.Commit(ctx)
 }
 
 // GetSkinJob returns owner's unexpired, undeleted job.

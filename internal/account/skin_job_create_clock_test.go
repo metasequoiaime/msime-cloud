@@ -37,7 +37,7 @@ func TestCreateSkinJobInitialHeartbeatUsesTimeAfterLockWait(t *testing.T) {
 			done := make(chan error, 1)
 			a := &Service{store: db}
 			id := skinJobID('a')
-			go func() { _, err := a.CreateSkinJob(ctx, id, owner, 1, 1, time.Minute); done <- err }()
+			go func() { _, _, err := a.CreateSkinJob(ctx, id, owner, 1, 1, 10, time.Minute); done <- err }()
 			waitForAdminDatabaseLock(t, db, blocker.Conn().PgConn().PID())
 			// 只在创建事务确实等待后记录数据库时间，心跳必须从后续插入开始计算。
 			var releasedAfter time.Time

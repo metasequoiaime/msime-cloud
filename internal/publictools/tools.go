@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -42,9 +43,9 @@ type Result struct {
 // Definitions 每次返回独立的 schema，调用方不能修改其它入口的工具定义。
 func Definitions() []*mcp.Tool {
 	return []*mcp.Tool{
-		tool("lookup_dictionary", "查询水杉发布词库与固定输入数据，不读取个人词库。默认 candidates 按编码查候选；annotate 查汉字注音，gloss 查离线释义，helpcode 查辅助码。候选列表有限，没出现不等于整份词库没有该词。", map[string]any{
+		tool("lookup_dictionary", "查询水杉发布词库与固定输入数据，不读取个人词库。listed 按 1～7 个汉字的词语精确检查发布拼音词库收录状态，返回 word、code、listed；默认 candidates 按编码查候选，收到纯汉字且方案为默认或 pinyin 时自动改为 listed。annotate 查汉字注音（注音成功不等于收录），gloss 查离线释义，helpcode 查辅助码。候选列表有限，没出现不等于整份词库没有该词。", map[string]any{
 			"text":      field("string", "要查询的编码或文本"),
-			"operation": choice("查询类型，默认 candidates", "candidates", "jianpin", "english", "japanese", "quick", "annotate", "gloss", "helpcode", "segmentation", "emoji", "kaomoji", "unicode", "romaji", "convert", "datetime"),
+			"operation": choice("查询类型，默认 candidates；查汉字词语是否收录用 listed", "candidates", "listed", "jianpin", "english", "japanese", "quick", "annotate", "gloss", "helpcode", "segmentation", "emoji", "kaomoji", "unicode", "romaji", "convert", "datetime"),
 			"scheme":    choice("输入方案", "pinyin", "shuangpin", "wubi"),
 			"profile":   choice("双拼方案", "xiaohe", "ziranma", "shoudao", "microsoft"),
 			"limit":     number("最多返回的候选数，默认 20", 1, 50),
@@ -196,7 +197,7 @@ func build(name string, arguments json.RawMessage) (Request, error) {
 	case "lookup_dictionary":
 		var in struct {
 			Text      string `json:"text"`
-			Operation string `json:"operation"`
+			Operation string `json:"operation,omitempty"`
 			Scheme    string `json:"scheme,omitempty"`
 			Profile   string `json:"profile,omitempty"`
 			Limit     int    `json:"limit,omitempty"`
@@ -211,15 +212,20 @@ func build(name string, arguments json.RawMessage) (Request, error) {
 		if in.Operation == "" {
 			in.Operation = "candidates"
 		}
-		if !slices.Contains([]string{"candidates", "jianpin", "english", "japanese", "quick", "annotate", "gloss", "helpcode", "segmentation", "emoji", "kaomoji", "unicode", "romaji", "convert", "datetime"}, in.Operation) || in.Text == "" || len(in.Text) > 8192 || in.Limit < 0 || in.Limit > 50 {
+		if in.Operation == "candidates" && pureHan(in.Text) && (in.Scheme == "" || in.Scheme == "pinyin") {
+			in.Operation = "listed"
+		}
+		if in.Operation == "listed" && (in.Scheme == "" || in.Scheme == "pinyin") {
+			in.Scheme, in.Profile = "", ""
+		}
+		if !slices.Contains([]string{"candidates", "listed", "jianpin", "english", "japanese", "quick", "annotate", "gloss", "helpcode", "segmentation", "emoji", "kaomoji", "unicode", "romaji", "convert", "datetime"}, in.Operation) || in.Text == "" || len(in.Text) > 8192 || in.Limit < 0 || in.Limit > 50 {
 			return Request{}, errors.New("invalid_dictionary_query")
 		}
+		// `operation` 仅用于已校验的路由，不写入输入接口的请求体。
+		operation := in.Operation
+		in.Operation = ""
 		body, _ := json.Marshal(in)
-		var values map[string]json.RawMessage
-		_ = json.Unmarshal(body, &values)
-		delete(values, "operation")
-		body, _ = json.Marshal(values)
-		return Request{Method: http.MethodPost, Path: "/v1/input/" + in.Operation, Body: body, NeedsToken: true}, nil
+		return Request{Method: http.MethodPost, Path: "/v1/input/" + operation, Body: body, NeedsToken: true}, nil
 	case "browse_input_catalog":
 		var in struct {
 			Kind     string `json:"kind"`
@@ -244,6 +250,19 @@ func build(name string, arguments json.RawMessage) (Request, error) {
 	default:
 		return Request{}, errors.New("unknown_tool")
 	}
+}
+
+// pureHan 与公共注音接口支持的汉字范围一致，只为默认拼音查询选择词语检查入口。
+func pureHan(text string) bool {
+	if text == "" || !utf8.ValidString(text) {
+		return false
+	}
+	for _, ch := range text {
+		if ch < 0x4e00 || ch > 0x9fff {
+			return false
+		}
+	}
+	return true
 }
 
 var publicID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)

@@ -359,7 +359,9 @@ func (s *Server) submitWords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mediaType, _, _ := strings.Cut(r.Header.Get("Content-Type"), ";")
-	if strings.TrimSpace(mediaType) != "application/json" {
+	mediaType = strings.Trim(mediaType, " \t")
+	// 先比较字节长度，避免 Unicode 大小写折叠将非 ASCII 类型名当作 JSON。
+	if len(mediaType) != len("application/json") || !strings.EqualFold(mediaType, "application/json") {
 		wordsFail(w, 415, "json_required", "请求格式不正确。")
 		return
 	}

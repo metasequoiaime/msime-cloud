@@ -92,7 +92,11 @@ func (a *Service) putAvatar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mediaType, _, _ := strings.Cut(r.Header.Get("Content-Type"), ";")
-	if mediaType = strings.TrimSpace(mediaType); mediaType != "image/png" && mediaType != "image/jpeg" {
+	mediaType = strings.Trim(mediaType, " \t")
+	// 仅按 ASCII 忽略大小写匹配类型名，避免接受 Unicode 空白或折叠后的非 ASCII 字符。
+	isPNG := len(mediaType) == len("image/png") && strings.EqualFold(mediaType, "image/png")
+	isJPEG := len(mediaType) == len("image/jpeg") && strings.EqualFold(mediaType, "image/jpeg")
+	if !isPNG && !isJPEG {
 		writeError(w, 415, "unsupported_media_type")
 		return
 	}

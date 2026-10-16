@@ -26,18 +26,25 @@ func TestWordSubmissionContentType(t *testing.T) {
 	}{
 		{"application/json", 400, "invalid_json"},
 		{" application/json \t; charset=utf-8", 400, "invalid_json"},
-		{"\u2003application/json\u2003;;;ignored", 400, "invalid_json"},
+		{"\u2003application/json\u2003;;;ignored", 415, "json_required"},
 		{"application/json; text/plain", 400, "invalid_json"},
-		{"Application/JSON", 415, "json_required"},
+		{"Application/JSON", 400, "invalid_json"},
+		{" \tAPPLICATION/JSON\t ; charset=utf-8", 400, "invalid_json"},
+		{"\u00a0application/json\u00a0", 415, "json_required"},
+		{"\vapplication/json\v", 415, "json_required"},
+		{"\fapplication/json\f", 415, "json_required"},
+		{"application/jſon", 415, "json_required"},
 		{"text/plain; application/json", 415, "json_required"},
 		{";application/json", 415, "json_required"},
 		{";;;;", 415, "json_required"},
 		{"", 415, "json_required"},
 	} {
-		w := submissionContentTypeResponse(s, tc.contentType)
-		if w.Code != tc.status || decodeBody(t, w)["code"] != tc.code {
-			t.Fatalf("类型=%q status=%d body=%q", tc.contentType, w.Code, w.Body.String())
-		}
+		t.Run(tc.contentType, func(t *testing.T) {
+			w := submissionContentTypeResponse(s, tc.contentType)
+			if w.Code != tc.status || decodeBody(t, w)["code"] != tc.code {
+				t.Fatalf("类型=%q status=%d body=%q", tc.contentType, w.Code, w.Body.String())
+			}
+		})
 	}
 }
 

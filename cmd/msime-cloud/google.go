@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -34,7 +33,7 @@ func (c cli) postJSON(server, path string, body any, v any) error {
 	if err != nil {
 		return err
 	}
-	data, err = io.ReadAll(response.Body)
+	data, err = readCLIResponse(response.Body)
 	response.Body.Close()
 	if err != nil {
 		return err

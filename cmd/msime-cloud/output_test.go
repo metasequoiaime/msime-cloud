@@ -82,6 +82,16 @@ func TestDownloadOutputPreservesFilesUntilResponseIsComplete(t *testing.T) {
 	}
 }
 
+func TestInlineResponseIsBounded(t *testing.T) {
+	var stdout bytes.Buffer
+	c := cli{stdout: &stdout}
+	body := strings.NewReader(strings.Repeat("x", maxCLIResponseBytes+1))
+	err := c.print(&http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(body), Header: make(http.Header)}, "")
+	if err == nil || !strings.Contains(err.Error(), "response exceeds") || stdout.Len() != 0 {
+		t.Fatalf("超大控制响应未被拒绝：错误=%v，输出=%q", err, stdout.String())
+	}
+}
+
 func TestDownloadOutputReplacementFailureCleansTemporaryFile(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "existing-directory")

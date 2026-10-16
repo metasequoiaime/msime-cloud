@@ -732,6 +732,10 @@ func addedLines(base, head string) int {
 	if head == "" || base == head {
 		return 0
 	}
+	// 行数相同且只有少数行发生变化时，只把不同位置放进计数表，避免为整份未改词库建立映射。
+	if added, handled := addedLinesSameLayout(base, head); handled {
+		return added
+	}
 	entries := func(content string, visit func(string)) {
 		for line := range strings.SplitSeq(content, "\n") {
 			if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
@@ -758,6 +762,61 @@ func addedLines(base, head string) int {
 		}
 	})
 	return added
+}
+
+func addedLinesSameLayout(base, head string) (int, bool) {
+	if len(base) != len(head) || strings.Count(base, "\n") != strings.Count(head, "\n") {
+		return 0, false
+	}
+	entry := func(line string) string {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			return ""
+		}
+		return line
+	}
+	nextLine := func(text string, offset int) (string, int) {
+		if offset > len(text) {
+			return "", offset
+		}
+		if end := strings.IndexByte(text[offset:], '\n'); end >= 0 {
+			return text[offset : offset+end], offset + end + 1
+		}
+		return text[offset:], len(text) + 1
+	}
+	remaining := map[string]int(nil)
+	for baseOffset, headOffset := 0, 0; baseOffset <= len(base) && headOffset <= len(head); {
+		baseLine, nextBase := nextLine(base, baseOffset)
+		headLine, nextHead := nextLine(head, headOffset)
+		baseEntry, headEntry := entry(baseLine), entry(headLine)
+		if baseEntry != headEntry {
+			if remaining == nil {
+				remaining = make(map[string]int)
+			}
+			if baseEntry != "" {
+				remaining[baseEntry]++
+			}
+		}
+		baseOffset, headOffset = nextBase, nextHead
+	}
+	if remaining == nil {
+		return 0, true
+	}
+	added := 0
+	for baseOffset, headOffset := 0, 0; baseOffset <= len(base) && headOffset <= len(head); {
+		baseLine, nextBase := nextLine(base, baseOffset)
+		headLine, nextHead := nextLine(head, headOffset)
+		baseEntry, headEntry := entry(baseLine), entry(headLine)
+		if baseEntry != headEntry && headEntry != "" {
+			if remaining[headEntry] > 0 {
+				remaining[headEntry]--
+			} else {
+				added++
+			}
+		}
+		baseOffset, headOffset = nextBase, nextHead
+	}
+	return added, true
 }
 
 // Commit messages and titles are public. Contributed text is flattened by validation; this breaks every @ (mention), # and GH- (issue references, including closing keywords) and :// (autolinks) with a zero-width space so a submission cannot ping people, touch issues or plant links.

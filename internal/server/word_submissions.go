@@ -729,7 +729,6 @@ func addedLines(base, head string) int {
 	if head == "" || base == head {
 		return 0
 	}
-	remaining := map[string]int{}
 	entries := func(content string, visit func(string)) {
 		for line := range strings.SplitSeq(content, "\n") {
 			if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
@@ -737,6 +736,15 @@ func addedLines(base, head string) int {
 			}
 		}
 	}
+	// 原文完整保留且追加从新行开始时，原有次数全部抵扣，只需统计追加部分。
+	if len(head) > len(base) && (base == "" || strings.HasSuffix(base, "\n") || head[len(base)] == '\n') {
+		if suffix, ok := strings.CutPrefix(head, base); ok {
+			added := 0
+			entries(suffix, func(string) { added++ })
+			return added
+		}
+	}
+	remaining := map[string]int{}
 	entries(base, func(line string) { remaining[line]++ })
 	added := 0
 	entries(head, func(line string) {

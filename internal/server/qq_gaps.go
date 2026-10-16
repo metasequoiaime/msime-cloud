@@ -26,6 +26,8 @@ const (
 	qqGapsIssueTTL = time.Hour
 	// qqGapRecordTimeout 是记一条汇总的时限（见 recordQQGapIn）。要拿令牌、查汇总 issue、可能新建、再评论，几次 GitHub 调用，3 秒不够；也不能长：副本关停时 Close 等满 qqCloseGrace 取消 lifetime 之后还要等它，preStop、HTTP 关停、qqCloseGrace 加上它要落在部署的 terminationGracePeriodSeconds（100 秒）以内。
 	qqGapRecordTimeout = 10 * time.Second
+	// qqGapsIssuePages 是查找汇总 issue 时最多读取的页面数；超过后无法确认没有旧 issue。
+	qqGapsIssuePages = 20
 )
 
 // qqContactPatterns 是写进汇总 issue 前要删掉的联系方式：手机号（可带 +86）、邮箱，以及「QQ / 群 / 微信」后面跟着的号码。概括是模型对群友原话的转述，提示词要求不写个人信息，但代码以前不检查：群友不小心带上的手机号会被照抄出去，「提文档 FAQ 应写上官方售后 QQ 12345678」这类话也会把联系方式发到公开仓库。微信号可以是字母开头的串，只在写明「微信号」或带冒号时才删，免得把「微信 windows版」这类正常说法删掉。
@@ -136,7 +138,8 @@ func (s *Server) qqGapsIssue(ctx context.Context, token string) (int64, error) {
 	}
 	client, repo := s.adminGitHub, s.qq.config.GapsRepo
 	unknown := false
-	for page := 1; ; page++ {
+	complete := false
+	for page := 1; page <= qqGapsIssuePages; page++ {
 		r, err := client.Do(ctx, token, "GET", "/repos/"+repo+"/issues?state=open&per_page=100&page="+strconv.Itoa(page), nil)
 		if err != nil || !r.OK() {
 			return 0, githubFailure("gaps list", r, err)
@@ -158,8 +161,12 @@ func (s *Server) qqGapsIssue(ctx context.Context, token string) (int64, error) {
 		}
 		// 一页写满时继续查找，避免长期保留的汇总被后来的 Issue 挤出第一页后重复新建。
 		if number > 0 || len(issues) < 100 {
+			complete = true
 			break
 		}
+	}
+	if !complete && number == 0 && !unknown {
+		return 0, errors.New("gaps list exceeds page limit")
 	}
 	if number == 0 && unknown {
 		return 0, errors.New("gaps list: app login unavailable")

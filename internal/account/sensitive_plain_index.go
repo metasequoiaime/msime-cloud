@@ -2,6 +2,7 @@ package account
 
 import (
 	"context"
+	"slices"
 	"strings"
 )
 
@@ -54,7 +55,34 @@ func newSensitivePlainIndex(ctx context.Context, words []sensitiveWord) (*sensit
 	if count < minSensitivePlainRules {
 		return nil, nil
 	}
-	index := &sensitivePlainIndex{nodes: make([]sensitivePlainNode, 1), aliases: make([]int, len(words)), count: count}
+	// 按字典序计算去重后的前缀节点数，避免构造过程中反复扩容节点切片。
+	plainWords := make([]string, 0, count)
+	for i, word := range words {
+		if i&4095 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
+		if word.re == nil && word.plain != "" {
+			plainWords = append(plainWords, word.plain)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	slices.Sort(plainWords)
+	nodeCapacity := 1
+	for i, word := range plainWords {
+		common := 0
+		if i > 0 {
+			previous := plainWords[i-1]
+			for common < len(previous) && common < len(word) && previous[common] == word[common] {
+				common++
+			}
+		}
+		nodeCapacity += len(word) - common
+	}
+	index := &sensitivePlainIndex{nodes: make([]sensitivePlainNode, 1, nodeCapacity), aliases: make([]int, len(words)), count: count}
 	for i, word := range words {
 		if i&255 == 0 {
 			if err := ctx.Err(); err != nil {

@@ -134,7 +134,7 @@ func (s *Server) qqSearchIssuesFor(ctx context.Context, repos []string, terms, s
 			var found struct {
 				Items []hit `json:"items"`
 			}
-			if r.Decode(&found) != nil {
+			if r.Decode(&found) != nil || found.Items == nil {
 				failed[i] = true
 				return nil
 			}

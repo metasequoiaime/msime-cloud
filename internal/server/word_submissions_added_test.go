@@ -42,6 +42,7 @@ func TestAddedLinesValues(t *testing.T) {
 		{"a\na\n", "a\na\na\n", 1},
 		{"a\nb\n", "a\nc\nc\n", 2},
 		{"a\na\nb\n", "b\na\na\n", 0},
+		{"a\na\nb\n", "a\na\nb\n", 0},
 		{" \u2003a\tA\r\n\t b \n# comment\n", "b\r\n\u2003a\tA \n # ignored\n\n", 0},
 		{"\xff\n\x00\n", "\xff\n\x00\nnew", 1},
 		{long + "\nlast", long + "\nlast\nnew", 1},
@@ -91,6 +92,33 @@ func TestAddedLinesRepeatedMemoryBudget(t *testing.T) {
 	}
 }
 
+func TestAddedLinesUnchangedAllocationBudget(t *testing.T) {
+	var text strings.Builder
+	for i := range 5000 {
+		fmt.Fprintf(&text, "synthetic%04d\tDisplay%04d\t1\n", i, i)
+	}
+	base := text.String()
+	for _, tc := range []struct {
+		name string
+		head string
+	}{
+		{"相同字符串", base},
+		{"相同内容独立副本", strings.Clone(base)},
+		{"全部删除", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got int
+			allocations := testing.AllocsPerRun(3, func() { got = addedLines(base, tc.head) })
+			if got != 0 {
+				t.Fatalf("无新增词条时 got=%d want=0", got)
+			}
+			if allocations > 4 {
+				t.Fatalf("无新增词条仍分配 %.0f 次，超过 4 次预算", allocations)
+			}
+		})
+	}
+}
+
 func BenchmarkAddedLines(b *testing.B) {
 	var distinct strings.Builder
 	for i := range 5000 {
@@ -105,6 +133,9 @@ func BenchmarkAddedLines(b *testing.B) {
 		{"distinct", distinct.String(), distinct.String() + "new\tNew\t1\n", 1},
 		{"repeated", strings.Repeat("合成\tpinyin\t1\n", 5000), strings.Repeat("合成\tpinyin\t1\n", 5003), 3},
 		{"empty", "", "", 0},
+		{"unchanged", distinct.String(), distinct.String(), 0},
+		{"unchanged_copy", distinct.String(), strings.Clone(distinct.String()), 0},
+		{"deleted", distinct.String(), "", 0},
 	} {
 		for _, impl := range []struct {
 			name string

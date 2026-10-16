@@ -267,7 +267,12 @@ func (s *Server) writeQQFAQ(ctx context.Context, text, drafted string, reply fun
 		defer release()
 	}
 	// 同一问题已经有还没合并的 PR 时不再新开，返回那个 PR 的编号（从文档候选、差评写进来的照样标成已处理）：原来只看默认分支的 FAQ，前一个 PR 还没合并时再记一次、或者两个管理员同时写同一条，都会多开一个内容相同的 PR。
-	if number := s.qqOpenFAQPull(ctx, token, repo, entry.Question); number > 0 {
+	number, err := s.qqOpenFAQPull(ctx, token, repo, entry.Question)
+	if err != nil {
+		fail("pull search", err)
+		return 0
+	}
+	if number > 0 {
 		_, short, _ := strings.Cut(repo, "/")
 		reply("「" + entry.Question + "」已有 PR " + short + " #" + strconv.FormatInt(number, 10) + "，还没合并，不再新开。")
 		return number
@@ -351,8 +356,8 @@ func (s *Server) writeQQFAQ(ctx context.Context, text, drafted string, reply fun
 	return pull.Number
 }
 
-// qqOpenFAQPull 在知识库仓库开着的 PR 里找「记录答案」开的（分支以 qq-faq/ 开头）、标题含同一个问题的，返回它的编号，没有时返回 0。按页查找全部开放 PR；列不出来时只记日志、返回 0，照常开 PR：重复的 PR 合并前还有人工核对，不值得因此拦下这次记录。
-func (s *Server) qqOpenFAQPull(ctx context.Context, token, repo, question string) int64 {
+// qqOpenFAQPull 按页查找知识库仓库中分支以 qq-faq/ 开头、标题含同一个问题的开放 PR。查完没有时返回 0；任意一页读取失败时返回错误，避免把未知结果当成没有重复项。
+func (s *Server) qqOpenFAQPull(ctx context.Context, token, repo, question string) (int64, error) {
 	var pulls []struct {
 		Number int64  `json:"number"`
 		Title  string `json:"title"`
@@ -365,17 +370,22 @@ func (s *Server) qqOpenFAQPull(ctx context.Context, token, repo, question string
 		path := "/repos/" + repo + "/pulls?state=open&per_page=100&page=" + strconv.Itoa(page)
 		r, err := s.adminGitHub.Do(ctx, token, "GET", path, nil)
 		pulls = nil
-		if err != nil || !r.OK() || r.Decode(&pulls) != nil {
-			slog.Warn("qq bot: open faq pulls unavailable", "reason", githubFailure("pulls", r, err).Error())
-			return 0
+		if err != nil || !r.OK() {
+			return 0, githubFailure("pulls", r, err)
+		}
+		if err := r.Decode(&pulls); err != nil {
+			return 0, err
+		}
+		if pulls == nil {
+			return 0, errors.New("invalid GitHub pull list")
 		}
 		for _, pull := range pulls {
 			if strings.HasPrefix(pull.Head.Ref, "qq-faq/") && strings.Contains(pull.Title, title) {
-				return pull.Number
+				return pull.Number, nil
 			}
 		}
 		if len(pulls) < 100 {
-			return 0
+			return 0, nil
 		}
 	}
 }

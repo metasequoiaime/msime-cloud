@@ -37,6 +37,8 @@ const (
 	issueResponseWindow = 30 * 24 * time.Hour
 	// issueFetchParallel bounds the repositories read at the same time.
 	issueFetchParallel = 4
+	// issueNotificationBudget 限制整批通知的数据库写入时间，避免通知锁阻塞列表和外壳请求。
+	issueNotificationBudget = 3 * time.Second
 )
 
 // issueTokenPerms is the scope of every installation token minted here: reading and writing the issues of one repository.
@@ -534,8 +536,9 @@ func (s *Server) rememberIssues(ctx context.Context, items []issueRow, openOnly,
 		}
 	}
 	m.mu.Unlock()
-	// 通知不随触发轮询的请求取消；写入失败时清除预占标记，让后续轮询重试。
-	ctx = context.WithoutCancel(ctx)
+	// 通知不随触发轮询的请求取消，但整批写入共用有限预算；失败时清除预占标记，让后续轮询重试。
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), issueNotificationBudget)
+	defer cancel()
 	for _, row := range announce {
 		title := "#" + strconv.Itoa(row.Number) + " " + row.Title
 		if utf8.RuneCountInString(title) > 300 {

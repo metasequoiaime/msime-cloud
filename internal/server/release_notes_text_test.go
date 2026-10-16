@@ -56,6 +56,26 @@ func TestReleaseNotesLongLineAllocationBudget(t *testing.T) {
 	}
 }
 
+func TestReleaseNotesLeadingCommentAllocationBudget(t *testing.T) {
+	for _, tc := range []struct{ name, prefix string }{{"无前缀", ""}, {"空白前缀", " \n\t"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := tc.prefix + "<!--隐藏-->" + strings.Repeat("普通说明", 50000)
+			var got []releaseNote
+			result := testing.Benchmark(func(b *testing.B) {
+				for b.Loop() {
+					got = parseReleaseNotes(body)
+				}
+			})
+			if !reflect.DeepEqual(got, previousParseReleaseNotes(body)) {
+				t.Fatal("开头注释后的说明结果变化")
+			}
+			if allocated := result.AllocedBytesPerOp(); allocated > 64<<10 {
+				t.Fatalf("开头注释后的长正文分配 %d 字节，超过 64 KiB 预算", allocated)
+			}
+		})
+	}
+}
+
 func TestReleaseNotesIgnoredTailAllocationBudget(t *testing.T) {
 	prefix := strings.Repeat("正常说明\n", maxReleaseNoteLines)
 	body := prefix + strings.Repeat("不应解析\n", 50000)

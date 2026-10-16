@@ -193,19 +193,36 @@ func pluginNestedArchive(name string, head []byte) bool {
 	return len(head) >= 262 && string(head[257:262]) == "ustar"
 }
 
-// pluginArchivePath splits a member name into components and reports whether it names a directory. ok is false for an absolute, drive-qualified, backslashed or traversing path, or one with control characters.
-func pluginArchivePath(name string) (parts []string, dir bool, ok bool) {
+type pluginArchivePathInfo struct {
+	base   string
+	depth  int
+	hidden bool
+	dir    bool
+}
+
+// pluginArchivePath 检查成员路径并收集遍历所需的信息，不为路径段分配切片。
+// 绝对路径、盘符、反斜杠、控制字符、空段及 .、.. 段均拒绝；隐藏成员同样检查完整路径。
+func pluginArchivePath(name string) (pluginArchivePathInfo, bool) {
 	if name == "" || !utf8.ValidString(name) || strings.HasPrefix(name, "/") || strings.ContainsAny(name, "\\:") || strings.ContainsFunc(name, unicode.IsControl) {
-		return nil, false, false
+		return pluginArchivePathInfo{}, false
 	}
-	dir = strings.HasSuffix(name, "/")
-	parts = strings.Split(strings.TrimSuffix(name, "/"), "/")
-	for _, part := range parts {
+	info := pluginArchivePathInfo{dir: strings.HasSuffix(name, "/")}
+	remaining := strings.TrimSuffix(name, "/")
+	for {
+		part, rest, more := strings.Cut(remaining, "/")
 		if part == "" || part == "." || part == ".." {
-			return nil, false, false
+			return pluginArchivePathInfo{}, false
 		}
+		if strings.HasPrefix(part, ".") || info.depth == 0 && part == "__MACOSX" {
+			info.hidden = true
+		}
+		info.base = part
+		info.depth++
+		if !more {
+			return info, true
+		}
+		remaining = rest
 	}
-	return parts, dir, true
 }
 
 // pluginMember is one pack file after the archive walk: its bytes are read only as far as the checks need, the manifest in full.
@@ -253,13 +270,9 @@ func readPluginArchive(archive []byte) (map[string]pluginMember, string) {
 		return nil, "plugin_too_large"
 	}
 	directory.remaining = -1
-	type entry struct {
-		parts []string
-		file  *zip.File
-	}
-	entries := []entry{}
+	entries := []*zip.File{}
 	for _, f := range reader.File {
-		parts, dir, ok := pluginArchivePath(f.Name)
+		path, ok := pluginArchivePath(f.Name)
 		if !ok {
 			return nil, "invalid_plugin_archive"
 		}
@@ -267,24 +280,27 @@ func readPluginArchive(archive []byte) (map[string]pluginMember, string) {
 		if mode&fs.ModeSymlink != 0 || mode.Type()&^fs.ModeDir != 0 || f.Flags&0x1 != 0 {
 			return nil, "invalid_plugin_archive"
 		}
-		if pluginNestedArchive(parts[len(parts)-1], nil) {
+		if pluginNestedArchive(path.base, nil) {
 			return nil, "invalid_plugin_archive"
 		}
-		if parts[0] == "__MACOSX" || slices.ContainsFunc(parts, func(part string) bool { return strings.HasPrefix(part, ".") }) {
+		if path.hidden {
 			continue
 		}
-		if dir || mode.IsDir() {
-			if len(parts) > 1 {
+		if path.dir || mode.IsDir() {
+			if path.depth > 1 {
 				return nil, "invalid_plugin_archive"
 			}
 			continue
 		}
-		entries = append(entries, entry{parts, f})
+		entries = append(entries, f)
 	}
-	// Files sit at the top level or inside one wrapper folder, decided by the first file as the client does.
+	// 与客户端一致，由第一个文件决定是否使用单个外层文件夹。
 	wrapper := ""
-	if len(entries) > 0 && len(entries[0].parts) == 2 {
-		wrapper = entries[0].parts[0]
+	if len(entries) > 0 {
+		parent, base, wrapped := strings.Cut(entries[0].Name, "/")
+		if wrapped && !strings.Contains(base, "/") {
+			wrapper = parent
+		}
 	}
 	if len(entries) > maxPluginPackFiles {
 		return nil, "plugin_too_large"
@@ -292,13 +308,12 @@ func readPluginArchive(archive []byte) (map[string]pluginMember, string) {
 	members := map[string]pluginMember{}
 	lowered := map[string]bool{}
 	var declared uint64
-	for _, e := range entries {
-		var name string
+	for _, file := range entries {
+		parent, name, wrapped := strings.Cut(file.Name, "/")
 		switch {
-		case wrapper == "" && len(e.parts) == 1:
-			name = e.parts[0]
-		case wrapper != "" && len(e.parts) == 2 && e.parts[0] == wrapper:
-			name = e.parts[1]
+		case wrapper == "" && !wrapped:
+			name = parent
+		case wrapper != "" && wrapped && parent == wrapper && !strings.Contains(name, "/"):
 		default:
 			return nil, "invalid_plugin_archive"
 		}
@@ -311,20 +326,20 @@ func readPluginArchive(archive []byte) (map[string]pluginMember, string) {
 			return nil, "invalid_plugin_archive"
 		}
 		lowered[loweredName] = true
-		if e.file.Method != zip.Store && e.file.Method != zip.Deflate {
+		if file.Method != zip.Store && file.Method != zip.Deflate {
 			return nil, "invalid_plugin_archive"
 		}
-		size := e.file.UncompressedSize64
+		size := file.UncompressedSize64
 		declared += size
 		if size > maxPluginFileBytes || declared > maxPluginUnpackedBytes || declared > pluginInflateAllowance+maxPluginInflateRatio*uint64(len(archive)) {
 			return nil, "plugin_too_large"
 		}
 		members[name] = pluginMember{size: int(size)}
 	}
-	for _, e := range entries {
-		name := e.parts[len(e.parts)-1]
+	for _, file := range entries {
+		name := file.Name[strings.LastIndexByte(file.Name, '/')+1:]
 		m := members[name]
-		r, err := e.file.Open()
+		r, err := file.Open()
 		if err != nil {
 			return nil, "invalid_plugin_archive"
 		}

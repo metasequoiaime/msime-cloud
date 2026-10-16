@@ -57,6 +57,8 @@ const (
 	defaultServer      = "https://api.msime.app"
 	defaultAdminServer = "https://admin.msime.app"
 	requestTimeout     = 5 * time.Minute
+	// 需要在内存中解析或打印的控制响应上限；下载到 -o 的正文仍然流式写入，不受此限制。
+	maxCLIResponseBytes = 16 << 20
 	// 自动等待 Retry-After 的最长时长；超过上限时直接返回响应。
 	maxRetryWait = time.Minute
 )
@@ -79,6 +81,17 @@ type cli struct {
 	now    func() time.Time
 	// browse opens a URL in the user's browser.
 	browse func(string) error
+}
+
+func readCLIResponse(body io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(body, maxCLIResponseBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxCLIResponseBytes {
+		return nil, fmt.Errorf("response exceeds %d bytes", maxCLIResponseBytes)
+	}
+	return data, nil
 }
 
 func main() {
@@ -372,7 +385,7 @@ func (c cli) refresh(server string, used session) (session, error) {
 		return session{}, err
 	}
 	defer response.Body.Close()
-	data, err := io.ReadAll(response.Body)
+	data, err := readCLIResponse(response.Body)
 	if err != nil {
 		return session{}, err
 	}
@@ -470,7 +483,7 @@ func (c cli) print(response *http.Response, output string) error {
 		_, err = fmt.Fprintln(c.stdout, string(saved))
 		return err
 	}
-	data, err := io.ReadAll(response.Body)
+	data, err := readCLIResponse(response.Body)
 	if err != nil {
 		return err
 	}
@@ -561,7 +574,7 @@ func (c cli) signIn(server, challenge, credential string) error {
 		return err
 	}
 	defer response.Body.Close()
-	data, err := io.ReadAll(response.Body)
+	data, err := readCLIResponse(response.Body)
 	if err != nil {
 		return err
 	}

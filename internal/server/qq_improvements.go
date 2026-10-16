@@ -102,7 +102,7 @@ func qqCountTopics(topics []string) []qqImprovementCounted {
 	indexes := map[string]int{}
 	out := []qqImprovementCounted{}
 	for _, t := range topics {
-		key := strings.ToLower(strings.Join(strings.Fields(t), ""))
+		key := qqCompactLower(t)
 		if key == "" {
 			key, t = "（没有概括）", "（没有概括）"
 		}

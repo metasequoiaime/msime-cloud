@@ -31,7 +31,7 @@ func TestQQIssueIntentCompactMatchesPrevious(t *testing.T) {
 		texts = append(texts, text.String())
 	}
 	for _, text := range texts {
-		if got, want := qqIssueIntentCompact(text), strings.ToLower(strings.Join(strings.Fields(text), "")); got != want {
+		if got, want := qqCompactLower(text), strings.ToLower(strings.Join(strings.Fields(text), "")); got != want {
 			t.Fatalf("意图文本规范化变化：输入=%q，结果=%q，期望=%q", text, got, want)
 		}
 		if got, want := qqIssueIntent(text), previousQQIssueIntent(text); got != want {

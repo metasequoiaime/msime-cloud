@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -27,9 +26,6 @@ const (
 
 // errQQFAQTooShort 表示模型整理出的答案太短，要请管理员补充。
 var errQQFAQTooShort = errors.New("model answer too short")
-
-// qqCodeBlockPattern 匹配 Markdown 代码块；官网测试要求繁体译文的代码块与简体原文逐字相同。
-var qqCodeBlockPattern = regexp.MustCompile("```[^\n]*\n[\\s\\S]*?```")
 
 var qqFAQPerms = map[string]string{"contents": "write", "pull_requests": "write", "metadata": "read"}
 
@@ -161,13 +157,47 @@ func (s *Server) qqSummariseFAQ(ctx context.Context, text string, categories []s
 			}
 		}
 	}
-	if strings.Join(qqCodeBlockPattern.FindAllString(entry.Answer, -1), "\n") != strings.Join(qqCodeBlockPattern.FindAllString(entry.AnswerTW, -1), "\n") {
+	if !qqSameCodeBlocks(entry.Answer, entry.AnswerTW) {
 		return entry, errors.New("model translation changed code blocks")
 	}
 	if utf8.RuneCountInString(entry.Answer) < qqFAQAnswerRunes || utf8.RuneCountInString(entry.AnswerTW) < qqFAQAnswerRunes {
 		return entry, errQQFAQTooShort
 	}
 	return entry, nil
+}
+
+// qqSameCodeBlocks 保证简繁答案的代码块逐字相同，逐块比较原文片段，避免为列表和拼接结果分配内存。
+func qqSameCodeBlocks(a, b string) bool {
+	for {
+		var first, second string
+		first, a = qqNextCodeBlock(a)
+		second, b = qqNextCodeBlock(b)
+		if first != second {
+			return false
+		}
+		if first == "" {
+			return true
+		}
+	}
+}
+
+// qqNextCodeBlock 保留原正则的语义：开头不要求位于行首，首个换行前都是头部，正文遇到首组三反引号结束。
+func qqNextCodeBlock(text string) (block, rest string) {
+	start := strings.Index(text, "```")
+	if start < 0 {
+		return "", ""
+	}
+	newline := strings.IndexByte(text[start+3:], '\n')
+	if newline < 0 {
+		return "", ""
+	}
+	body := start + 3 + newline + 1
+	close := strings.Index(text[body:], "```")
+	if close < 0 {
+		return "", ""
+	}
+	end := body + close + 3
+	return text[start:end], text[end:]
 }
 
 // qqRepoFile 读仓库 ref 上的一个文本文件。

@@ -46,6 +46,13 @@ func TestAddedLinesValues(t *testing.T) {
 		{" \u2003a\tA\r\n\t b \n# comment\n", "b\r\n\u2003a\tA \n # ignored\n\n", 0},
 		{"\xff\n\x00\n", "\xff\n\x00\nnew", 1},
 		{long + "\nlast", long + "\nlast\nnew", 1},
+		{"a\na\n", "a\na\na\na\n", 2},
+		{"a", "a\na\nnew\n", 2},
+		{"a\r", "a\r\nnew\n", 1},
+		{"a", "a\tA\n", 1},
+		{"a", "aSuffix\n", 1},
+		{"a\n# ignored", "a\n# ignored more\nnew", 1},
+		{"a\n", "a\n# ignored\n\u2003\n", 0},
 	} {
 		if got := addedLines(tc.base, tc.head); got != tc.want {
 			t.Fatalf("base字节数=%d head字节数=%d got=%d want=%d", len(tc.base), len(tc.head), got, tc.want)
@@ -119,6 +126,55 @@ func TestAddedLinesUnchangedAllocationBudget(t *testing.T) {
 	}
 }
 
+func TestAddedLinesAppendMatchesPrevious(t *testing.T) {
+	random := rand.New(rand.NewSource(1571))
+	fragments := []string{"", "a", "a\tA", "# ignored", " \u2003", "\n", "\r\n", "\t", "\xff"}
+	content := func() string {
+		var text strings.Builder
+		for range random.Intn(30) {
+			text.WriteString(fragments[random.Intn(len(fragments))])
+		}
+		return text.String()
+	}
+	for sample := range 500 {
+		base := content()
+		head := base + content()
+		if got, want := addedLines(base, head), previousAddedLines(base, head); got != want {
+			t.Fatalf("sample=%d base=%q head=%q got=%d want=%d", sample, base, head, got, want)
+		}
+	}
+}
+
+func TestAddedLinesAppendAllocationBudget(t *testing.T) {
+	var text strings.Builder
+	for i := range 5000 {
+		fmt.Fprintf(&text, "synthetic%04d\tDisplay%04d\t1\n", i, i)
+	}
+	base := text.String()
+	for _, tc := range []struct {
+		name string
+		base string
+		head string
+		want int
+	}{
+		{"追加新词", base, base + "new\tNew\t1\n", 1},
+		{"追加已有词", base, base + "synthetic0000\tDisplay0000\t1\n", 1},
+		{"只追加注释与空白", base, base + "# ignored\n\u2003\n", 0},
+		{"原文缺少末尾换行", strings.TrimSuffix(base, "\n"), base + "new\tNew\t1\n", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got int
+			allocations := testing.AllocsPerRun(3, func() { got = addedLines(tc.base, tc.head) })
+			if got != tc.want {
+				t.Fatalf("got=%d want=%d", got, tc.want)
+			}
+			if allocations > 4 {
+				t.Fatalf("仅追加词条仍分配 %.0f 次，超过 4 次预算", allocations)
+			}
+		})
+	}
+}
+
 func BenchmarkAddedLines(b *testing.B) {
 	var distinct strings.Builder
 	for i := range 5000 {
@@ -136,6 +192,8 @@ func BenchmarkAddedLines(b *testing.B) {
 		{"unchanged", distinct.String(), distinct.String(), 0},
 		{"unchanged_copy", distinct.String(), strings.Clone(distinct.String()), 0},
 		{"deleted", distinct.String(), "", 0},
+		{"append_missing_newline", strings.TrimSuffix(distinct.String(), "\n"), distinct.String() + "new\tNew\t1\n", 1},
+		{"same_length_changed", distinct.String(), distinct.String()[:distinct.Len()-2] + "2\n", 1},
 	} {
 		for _, impl := range []struct {
 			name string

@@ -151,10 +151,9 @@ func TestApplyDictionaryWeightValidationMatchesPrevious(t *testing.T) {
 
 func TestDictionaryWeightScanAllocationBudget(t *testing.T) {
 	text, edits := dictionaryWeightBatchFixture(5000, 1)
-	lines := strings.Split(text, "\n")
 	var err error
 	allocations := testing.AllocsPerRun(3, func() {
-		validator := dictionaryColumnValidator{name: "custom/english.txt", lines: lines}
+		validator := dictionaryColumnValidator{name: "custom/english.txt", text: text}
 		err = validator.validate(edits[0].Columns)
 	})
 	if err != nil {
@@ -190,7 +189,7 @@ func TestDictionaryWeightFieldScanMatchesPrevious(t *testing.T) {
 		texts = append(texts, text.String())
 	}
 	for _, text := range texts {
-		validator := dictionaryColumnValidator{name: "custom/english.txt", lines: strings.Split(text, "\n")}
+		validator := dictionaryColumnValidator{name: "custom/english.txt", text: text}
 		for _, weight := range []string{"1", "3", "5", "6", "10000"} {
 			cols := []string{"synthetic", "Synthetic", weight}
 			got := validator.validate(cols)

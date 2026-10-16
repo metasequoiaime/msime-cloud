@@ -796,26 +796,25 @@ func validPluginWordbook(table map[string]any, m pluginManifest) (map[string]int
 	return map[string]int{*m.Wordbook.File: maxWordbookBytes}, true
 }
 
-// pluginDataLines 把数据文件拆成行：必须是 UTF-8，可带 BOM，行尾为 LF 或 CRLF（只去掉行尾的一个 `\r`，其他位置的 `\r` 留给逐行规则当作控制字符拒绝）。
-func pluginDataLines(raw []byte) ([]string, bool) {
+// pluginDataText 校验完整文件为 UTF-8，并剥除开头可选的 BOM，供逐行校验使用。
+func pluginDataText(raw []byte) (string, bool) {
 	if !utf8.Valid(raw) {
-		return nil, false
+		return "", false
 	}
-	lines := strings.Split(strings.TrimPrefix(string(raw), "\uFEFF"), "\n")
-	for i, line := range lines {
-		lines[i] = strings.TrimSuffix(line, "\r")
-	}
-	return lines, true
+	return strings.TrimPrefix(string(raw), "\uFEFF"), true
 }
 
 // validHelpcodeTable 是辅助码表的严格语法：每行为空行、`#` 开头的注释或 `<字>=<码>`。`<字>` 恰好是一个非 ASCII、非空白、非控制字符的 Unicode 标量，`<码>` 恰好是 1 到 2 个小写 ASCII 字母（更长的拒绝，不像 Engine 的宽松解析器那样截断），`=` 两侧不允许空格；1 到 30000 条，同一个字出现两次拒绝。
 func validHelpcodeTable(raw []byte) bool {
-	lines, ok := pluginDataLines(raw)
+	text, ok := pluginDataText(raw)
 	if !ok {
 		return false
 	}
 	seen := map[string]bool{}
-	for _, line := range lines {
+	for text != "" {
+		line, rest, _ := strings.Cut(text, "\n")
+		text = rest
+		line = strings.TrimSuffix(line, "\r")
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
@@ -837,7 +836,7 @@ func validHelpcodeTable(raw []byte) bool {
 
 // validWordbookEntries 是单词本的严格语法：跳过空行和 `#` 开头的行，其余每行是 `word\tmeaning` 或 `word\tphonetic\tmeaning`，不支持引号，列不做裁剪。每条必须满足 WordbookEntry::is_valid（单词 1 到 64 个字符、音标至多 64 个字符可为空、释义 1 到 256 个字符，都不含控制字符）；1 到 20000 条，单词不能重复；任何一行不合法都拒绝整个包。
 func validWordbookEntries(raw []byte) bool {
-	lines, ok := pluginDataLines(raw)
+	text, ok := pluginDataText(raw)
 	if !ok {
 		return false
 	}
@@ -845,7 +844,10 @@ func validWordbookEntries(raw []byte) bool {
 		return utf8.RuneCountInString(s) <= max && !strings.ContainsFunc(s, unicode.IsControl)
 	}
 	seen := map[string]bool{}
-	for _, line := range lines {
+	for text != "" {
+		line, rest, _ := strings.Cut(text, "\n")
+		text = rest
+		line = strings.TrimSuffix(line, "\r")
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}

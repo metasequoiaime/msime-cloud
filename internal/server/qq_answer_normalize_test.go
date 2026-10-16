@@ -1,6 +1,7 @@
 package server
 
 import (
+	"math/rand"
 	"runtime"
 	"strings"
 	"testing"
@@ -53,6 +54,26 @@ func TestQQPromptLeakCandidate(t *testing.T) {
 	} {
 		if got := qqPromptLeakCandidate(tc.input); got != tc.want {
 			t.Errorf("qqPromptLeakCandidate(%q) = %v，预期 %v", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestQQAnswerCandidatesMatchesUnicodeRules(t *testing.T) {
+	inputs := []string{"", "普通回答", "资料里写着", "文档说明", "已截断", "\xff资料", "\xe6\x96\xff", "\xe6\x96\x99", "“设置”", "甲\t乙", "\t", "\xe2\x80\xff"}
+	random := rand.New(rand.NewSource(11))
+	for range 2000 {
+		data := make([]byte, random.Intn(80))
+		for i := range data {
+			data[i] = byte(random.Intn(256))
+		}
+		inputs = append(inputs, string(data))
+	}
+	for _, input := range inputs {
+		wantPromptLeak := strings.ContainsAny(input, "资料文档里截断")
+		wantReplacement := strings.ContainsAny(input, "“”‘’\t")
+		gotPromptLeak, gotReplacement := qqAnswerCandidates(input)
+		if gotPromptLeak != wantPromptLeak || gotReplacement != wantReplacement {
+			t.Fatalf("答案候选标记检查不兼容：输入=%q，结果=(%v, %v)，期望=(%v, %v)", input, gotPromptLeak, gotReplacement, wantPromptLeak, wantReplacement)
 		}
 	}
 }

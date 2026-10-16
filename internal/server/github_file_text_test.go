@@ -128,7 +128,7 @@ func TestGitHubFileTextUnicodeSpaceAllocationBudget(t *testing.T) {
 			}
 		}
 	})
-	if allocated := result.AllocedBytesPerOp(); allocated > 1<<20 {
-		t.Fatalf("Unicode 空白解码分配 %d 字节，超过 1 MiB 预算", allocated)
+	if allocated := result.AllocedBytesPerOp(); allocated > 768<<10 {
+		t.Fatalf("Unicode 空白解码分配 %d 字节，超过 768 KiB 预算", allocated)
 	}
 }

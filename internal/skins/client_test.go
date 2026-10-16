@@ -104,6 +104,47 @@ func TestClientDialectMatchesTheClientLoader(t *testing.T) {
 	}
 }
 
+// 共享用例表没有覆盖 [animation]，这里按客户端 read_animation 的规则和检查顺序补上；scripts/test_candidate_skins_seed.py 的 test_animation_table 对种子脚本跑同样的用例，改动时两边一起改。
+func TestClientAnimationTable(t *testing.T) {
+	f := loadClientFixture(t)
+	v2 := [2]string{"schema_version = 1", "schema_version = 2"}
+	for _, c := range []struct {
+		name, prepend, append, reason string
+		v1                            bool
+	}{
+		{"v2 without the table", "", "", "", false},
+		{"every key at its bounds", "", "[animation]\nenter = 'fade_scale'\nexit = 'none'\nselection = 'glow'\nduration_ms = 40\nstagger_ms = 80\n", "", false},
+		{"upper duration and lower stagger", "", "[animation]\nenter = 'slide_up'\nexit = 'fade'\nselection = 'spring'\nduration_ms = 600\nstagger_ms = 0\n", "", false},
+		{"empty table", "", "[animation]\n", "", false},
+		{"table on schema 1", "", "[animation]\nenter = 'fade'\n", "animation requires schema_version 2", true},
+		{"not a table", "animation = 'fade'\n", "", "invalid animation", false},
+		{"duration below range", "", "[animation]\nduration_ms = 39\n", "invalid animation duration_ms", false},
+		{"duration above range", "", "[animation]\nduration_ms = 601\n", "invalid animation duration_ms", false},
+		{"float duration", "", "[animation]\nduration_ms = 180.0\n", "invalid animation duration_ms", false},
+		{"stagger above range", "", "[animation]\nstagger_ms = 81\n", "invalid animation stagger_ms", false},
+		{"negative stagger", "", "[animation]\nstagger_ms = -1\n", "invalid animation stagger_ms", false},
+		{"duration is checked before presets", "", "[animation]\nenter = 'spin'\nduration_ms = 1\n", "invalid animation duration_ms", false},
+		{"unknown enter", "", "[animation]\nenter = 'spin'\n", "invalid animation enter", false},
+		{"enter checked before exit", "", "[animation]\nexit = 'spin'\nenter = 'Fade'\n", "invalid animation enter", false},
+		{"non-string exit", "", "[animation]\nexit = 1\n", "invalid animation exit", false},
+		{"unknown selection", "", "[animation]\nselection = 'bounce'\n", "invalid animation selection", false},
+	} {
+		replace := [][2]string{v2}
+		if c.v1 {
+			replace = nil
+		}
+		p, err := ParseStored(f.build(t, clientCase{Name: c.name, Template: "sample", Replace: replace, Prepend: c.prepend, Append: c.append}))
+		switch {
+		case c.reason == "" && err != nil:
+			t.Errorf("%s: rejected: %v", c.name, err)
+		case c.reason == "" && p.SchemaVersion != 2:
+			t.Errorf("%s: schema_version %d", c.name, p.SchemaVersion)
+		case c.reason != "" && (err == nil || err.Error() != ErrInvalid.Error()+": "+c.reason):
+			t.Errorf("%s: got %v, want %q", c.name, err, c.reason)
+		}
+	}
+}
+
 func TestStyledPackageShape(t *testing.T) {
 	f := loadClientFixture(t)
 	p, err := ParseStored(f.build(t, clientCase{Template: "styled"}))

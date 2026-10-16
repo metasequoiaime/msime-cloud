@@ -12189,8 +12189,10 @@
                           "schema_version": {
                             "type": "integer",
                             "enum": [
-                              1
-                            ]
+                              1,
+                              2
+                            ],
+                            "description": "内置与 skins_root 皮肤包恒为 1；数据库皮肤包为清单的 schema_version，2 表示清单可以带 [animation] 和装饰图的 motion、motion_period_ms，这些键不在本对象中展开，客户端从 skin.toml 资源读取。"
                           },
                           "id": {
                             "type": "string"
@@ -12544,8 +12546,10 @@
                     "schema_version": {
                       "type": "integer",
                       "enum": [
-                        1
-                      ]
+                        1,
+                        2
+                      ],
+                      "description": "内置与 skins_root 皮肤包恒为 1；数据库皮肤包为清单的 schema_version，2 表示清单可以带 [animation] 和装饰图的 motion、motion_period_ms，这些键不在本对象中展开，客户端从 skin.toml 资源读取。"
                     },
                     "id": {
                       "type": "string"

@@ -33,6 +33,9 @@ CANDIDATE_COLOR_KEYS = ("accent", "selected", "hover", "surface", "border", "tex
 MENU_COLOR_KEYS = ("background", "border", "text", "hover")
 MEDIA = {"css": "text/css; charset=utf-8", "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp", "svg": "image/svg+xml", "ico": "image/x-icon", "bmp": "image/bmp", "avif": "image/avif", "woff": "font/woff", "woff2": "font/woff2", "ttf": "font/ttf", "otf": "font/otf"}
 BASE_HINT = "base must be system or a built-in theme"
+# schema 2 的装饰图待机动效与 [animation] 预设，取值与客户端的 DecorationMotion、SkinAnimationPreset 相同。
+DECORATION_MOTIONS = ("none", "float", "sway", "breathe", "bounce")
+ANIMATION_PRESETS = ("none", "fade", "fade_scale", "slide_up", "spring", "glow")
 
 
 class Invalid(Exception):
@@ -137,7 +140,8 @@ def validate(folder, manifest, files):
     # The client's TOML parser stores integers as i64 and rejects anything wider as a syntax error.
     if not within_i64(table):
         raise Invalid("invalid TOML")
-    if not is_int(table.get("schema_version")) or table["schema_version"] != 1:
+    schema = table.get("schema_version")
+    if not is_int(schema) or schema not in (1, 2):
         raise Invalid("unsupported schema_version")
     if required_string(table, "id", 64) != folder:
         raise Invalid("manifest id does not match folder")
@@ -179,6 +183,7 @@ def validate(folder, manifest, files):
         raise Invalid("invalid decoration")
     if optional_string(decoration, "align", 16) not in (None, "left", "center", "right"):
         raise Invalid("invalid decoration")
+    validate_decoration_motion(decoration, top > 0, schema)
     if "background" in window:
         background = window["background"]
         if not isinstance(background, dict) or not image(background.get("image")):
@@ -221,8 +226,42 @@ def validate(folder, manifest, files):
     if preview is not None and (not safe_resource(preview, 256) or preview not in known):
         raise Invalid("invalid preview")
     validate_colors(table)
+    validate_animation(table, schema)
     validate_resources(manifest, files)
     return table
+
+
+def validate_decoration_motion(decoration, decorated, schema):
+    """客户端的 read_decoration_motion：motion 和 motion_period_ms 只在 schema 2 里可写，并且只对有装饰带的包有意义。"""
+    if "motion" not in decoration and "motion_period_ms" not in decoration:
+        return
+    if schema < 2:
+        raise Invalid("decoration motion requires schema_version 2")
+    if "motion" in decoration and decoration["motion"] not in DECORATION_MOTIONS:
+        raise Invalid("invalid decoration motion")
+    if not decorated:
+        raise Invalid("invalid decoration motion")
+    if "motion_period_ms" in decoration:
+        period = decoration["motion_period_ms"]
+        if not is_int(period) or not 1200 <= period <= 8000:
+            raise Invalid("invalid decoration motion_period_ms")
+
+
+def validate_animation(table, schema):
+    """客户端的 read_animation：[animation] 只在 schema 2 里可写，先查时长和错峰，再按 enter、exit、selection 查预设。"""
+    if "animation" not in table:
+        return
+    if schema < 2:
+        raise Invalid("animation requires schema_version 2")
+    animation = table["animation"]
+    if not isinstance(animation, dict):
+        raise Invalid("invalid animation")
+    for key, low, high in (("duration_ms", 40, 600), ("stagger_ms", 0, 80)):
+        if key in animation and (not is_int(animation[key]) or not low <= animation[key] <= high):
+            raise Invalid(f"invalid animation {key}")
+    for key in ("enter", "exit", "selection"):
+        if key in animation and (not isinstance(animation[key], str) or animation[key] not in ANIMATION_PRESETS):
+            raise Invalid(f"invalid animation {key}")
 
 
 def validate_windows_window_keys(window):

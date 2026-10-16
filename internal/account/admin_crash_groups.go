@@ -631,17 +631,18 @@ func crashPlatform(platform string) string {
 	return platform
 }
 
-// crashSignature groups a crash: the first 16 hex digits of sha256 over the canonical platform, the normalized message and the first non-system stack frame. The same failure on two platforms is two groups, because each platform's crash is fixed and tracked in its own repository; a group's platform therefore never changes. Empty means the crash is not grouped.
+// crashSignature 用标准平台、规范化消息和前 crashStackLines 行中的首个非系统栈帧计算 SHA256 的前 16 位十六进制摘要。同一故障在不同平台分别分组，组的平台不会改变；空签名表示不分组。
 func crashSignature(platform, message, stack string) string {
 	normalized := normalizeCrashMessage(message)
 	frame := ""
-	lines := strings.Split(stack, "\n")
-	if len(lines) > crashStackLines {
-		lines = lines[:crashStackLines]
-	}
-	for _, line := range lines {
+	lineCount := 0
+	for line := range strings.SplitSeq(stack, "\n") {
+		lineCount++
 		if candidate := normalizeCrashFrame(line); candidate != "" && !crashSystemFrame(candidate) {
 			frame = candidate
+			break
+		}
+		if lineCount == crashStackLines {
 			break
 		}
 	}

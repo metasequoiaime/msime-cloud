@@ -338,7 +338,12 @@ func (a *Service) diagnosticsToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
-	tag, err := tx.Exec(r.Context(), `UPDATE diagnostic_snapshots SET token_hash=$2,token_hint=$3 WHERE user_id=$1 AND expires_at>now()`, p.UserID, digest, diagnosticTokenHint(token))
+	// 先锁定快照，再用实时时钟判断有效期，避免账号锁或快照锁等待期间过期后仍换发令牌。
+	tag, err := tx.Exec(r.Context(), `WITH locked AS MATERIALIZED (
+ SELECT id,expires_at FROM diagnostic_snapshots WHERE user_id=$1 FOR UPDATE
+)
+UPDATE diagnostic_snapshots d SET token_hash=$2,token_hint=$3
+FROM locked l WHERE d.id=l.id AND l.expires_at>clock_timestamp()`, p.UserID, digest, diagnosticTokenHint(token))
 	if err != nil {
 		a.error(w, err)
 		return

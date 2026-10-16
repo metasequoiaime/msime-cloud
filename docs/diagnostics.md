@@ -16,7 +16,7 @@
 
   成功返回 201 `{"id","mcp_url","token","expires_at"}`，`mcp_url` 是 `https://api.msime.app/mcp/s/<id>`。令牌是 `msk_` 加 43 位 base64url，只在这个响应里出现一次，库里只存 SHA-256 和最后 4 个字符。每个用户只有一份有效快照：新上传在同一事务里删除旧快照和它的访问记录。每个用户每小时 6 次（`auth_rates`，所有副本共享），校验失败的请求不计数。
 - `GET /v1/users/me/diagnostics`：`{"snapshot":{"id","created_at","expires_at","bytes","sections","token_hint"}|null,"accesses":[{"at","tool","arguments","result_count","bytes"}]}`。不返回快照内容和令牌；`accesses` 是最近 50 次工具调用，新的在前。`arguments` 通常保存为 JSON；超过 1 KiB、JSON 或 UTF-8 编码无效，或因 NUL 转义、未配对代理字符、数字范围等原因无法存入 PostgreSQL `jsonb` 时，改为不超过 1 KiB 的参数原文字符串，实际 NUL 字节显示为 `\u0000` 文本，无效 UTF-8 字节序列替换为 `U+FFFD`（�），其后的内容继续保留至长度上限。
-- `POST /v1/users/me/diagnostics/token`：换一个新令牌，旧令牌立即失效，返回 200 `{"token"}`；没有有效快照返回 404 `diagnostics_not_found`。每个用户每小时 20 次。
+- `POST /v1/users/me/diagnostics/token`：换一个新令牌，旧令牌立即失效，返回 200 `{"token"}`；没有有效快照返回 404 `diagnostics_not_found`；等待账号或快照行锁期间过期的也按过期处理，不改动原令牌。每个用户每小时 20 次。
 - `DELETE /v1/users/me/diagnostics`：删除快照和访问记录，返回 204（没有快照也是 204）。
 
 ## MCP 端点

@@ -29,6 +29,12 @@ func TestDecode(t *testing.T) {
 		{"wrong content type", "text/plain", valid, "json_required", 1024, 415},
 		{"content type case", "Application/JSON", valid, "json_required", 1024, 415},
 		{"content type space", "application/json ", valid, "json_required", 1024, 415},
+		{"参数前空白", "application/json ; charset=utf-8", valid, "json_required", 1024, 415},
+		{"类型前空白", " application/json; charset=utf-8", valid, "json_required", 1024, 415},
+		{"空媒体类型", ";application/json", valid, "json_required", 1024, 415},
+		{"只有分号", ";;;;", valid, "json_required", 1024, 415},
+		{"参数内的类型不参与判断", "text/plain; application/json", valid, "json_required", 1024, 415},
+		{"多个空参数", "application/json;;; charset=utf-8;;", valid, "", 1024, 200},
 		{"empty", "application/json", "", "invalid_json", 1024, 400},
 		{"truncated", "application/json", `{"name":`, "invalid_json", 1024, 400},
 		{"unknown field", "application/json", `{"synthetic_private_input":true}`, "invalid_json", 1024, 400},
@@ -86,5 +92,78 @@ func TestDecodeReaderError(t *testing.T) {
 	})
 	if ok || w.Code != 400 || w.Body.String() != "invalid_json\n" {
 		t.Fatalf("读取错误不能透传：%v %d %q", ok, w.Code, w.Body.String())
+	}
+}
+
+func TestDecodeContentTypeMemoryBudget(t *testing.T) {
+	parameters := strings.Repeat(";synthetic=value", 10000)
+	for _, tc := range []struct {
+		name        string
+		contentType string
+		accepted    bool
+		status      int
+	}{
+		{"JSON", "application/json" + parameters, true, http.StatusOK},
+		{"其他类型", "text/plain" + parameters, false, http.StatusUnsupportedMediaType},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var accepted bool
+			var value struct {
+				Name string `json:"name"`
+			}
+			var response *httptest.ResponseRecorder
+			var code string
+			result := testing.Benchmark(func(b *testing.B) {
+				for b.Loop() {
+					r := httptest.NewRequest(http.MethodPost, "/synthetic", strings.NewReader(`{"name":"合成"}`))
+					r.Header.Set("Content-Type", tc.contentType)
+					response = httptest.NewRecorder()
+					accepted = httpjson.Decode(response, r, &value, 1024, func(w http.ResponseWriter, status int, reason string) {
+						code = reason
+						w.WriteHeader(status)
+					})
+				}
+			})
+			if accepted != tc.accepted || response.Code != tc.status {
+				t.Fatalf("accepted=%v status=%d", accepted, response.Code)
+			}
+			if accepted && (value.Name != "合成" || response.Body.Len() != 0 || code != "") {
+				t.Fatal("JSON 解析或成功响应发生变化")
+			}
+			if !accepted && code != "json_required" {
+				t.Fatalf("拒绝类型的错误码发生变化：%q", code)
+			}
+			if bytes := result.AllocedBytesPerOp(); bytes > 16<<10 {
+				t.Fatalf("一万个类型参数分配 %d 字节，超过 16 KiB 预算", bytes)
+			}
+		})
+	}
+}
+
+func BenchmarkDecodeContentType(b *testing.B) {
+	parameters := strings.Repeat(";synthetic=value", 10000)
+	for _, tc := range []struct {
+		name        string
+		contentType string
+		accepted    bool
+	}{
+		{"普通JSON", "application/json", true},
+		{"JSON多参数", "application/json" + parameters, true},
+		{"其他类型多参数", "text/plain" + parameters, false},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				r := httptest.NewRequest(http.MethodPost, "/synthetic", strings.NewReader(`{"name":"合成"}`))
+				r.Header.Set("Content-Type", tc.contentType)
+				w := httptest.NewRecorder()
+				var value struct {
+					Name string `json:"name"`
+				}
+				if accepted := httpjson.Decode(w, r, &value, 1024, func(w http.ResponseWriter, status int, _ string) { w.WriteHeader(status) }); accepted != tc.accepted {
+					b.Fatal("媒体类型判定发生变化")
+				}
+			}
+		})
 	}
 }

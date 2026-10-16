@@ -14,7 +14,7 @@ func TestDictionaryRequestBody(t *testing.T) {
 		{"辅助码独立选表", `{"operation":"helpcode","text":"木","schema":"xiaohe","scheme":"shuangpin","profile":"microsoft"}`, "helpcode", `{"text":"木","schema":"xiaohe"}`},
 		{"辅助码小鹤别名", `{"operation":"helpcode","text":"木","profile":"xiaohe"}`, "helpcode", `{"text":"木","schema":"xiaohe"}`},
 		{"辅助码自然码别名", `{"operation":"helpcode","text":"木","profile":"ziranma"}`, "helpcode", `{"text":"木","schema":"ziranma"}`},
-		{"完整选项", `{"text":"合成","operation":"datetime","scheme":"pinyin","profile":"xiaohe","limit":20,"direction":"en-zh","schema":"xiaohe","time":"2026-10-16T00:00:00Z","timezone":"UTC"}`, "datetime", `{"text":"合成","scheme":"pinyin","profile":"xiaohe","limit":20,"direction":"en-zh","schema":"xiaohe","time":"2026-10-16T00:00:00Z","timezone":"UTC"}`},
+		{"日期仅保留本操作选项", `{"text":"合成","operation":"datetime","scheme":"pinyin","profile":"xiaohe","limit":20,"direction":"en-zh","schema":"xiaohe","time":"2026-10-16T00:00:00Z","timezone":"UTC"}`, "datetime", `{"text":"合成","limit":20,"time":"2026-10-16T00:00:00Z","timezone":"UTC"}`},
 		{"省略零值", `{"text":"合成","operation":"","scheme":"","profile":"","limit":0,"direction":"","schema":"","time":"","timezone":""}`, "listed", `{"text":"合成"}`},
 		{"空值解码", `{"text":"合成","operation":null,"scheme":null,"limit":null}`, "listed", `{"text":"合成"}`},
 		{"转义文本", `{"text":"<>&\n\t\"\\\u2028\u2029","operation":"gloss","direction":"en-zh"}`, "gloss", `{"text":"<>&\n\t\"\\\u2028\u2029","direction":"en-zh"}`},

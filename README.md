@@ -238,7 +238,7 @@ Google 用户登录和管理员登录在打开浏览器前检查挑战有效期�
 
 ### QQ Bot 共用工具与 MCP
 
-`tools`、`tool` 和 `mcp` 共用 QQ Bot 的公共查询目录，只读发布词库和公开数据。`lookup_dictionary` 查候选、注音、释义、辅助码等；`operation=listed` 精确检查 1～7 个汉字的词语是否收录于发布拼音词库，返回 `word`、`code` 和 `listed`。默认候选查询收到纯汉字且方案为默认或 `pinyin` 时也转到此检查，编码查询仍返回候选；超过七字暂不支持精确检查，不能据此判断未收录。`browse_input_catalog` 浏览表情、颜文字和符号，`query_public_data` 查公告、社区统计、公开词包、回复模板、常用语、插件和皮肤。`tools` 输出每个工具的完整 JSON Schema；`tool` 输出 `source`（查询路径）和 `data`（原 API 响应）。工具名也接受连字符写法。
+`tools`、`tool` 和 `mcp` 共用 QQ Bot 的公共查询目录，只读发布词库和公开数据。`lookup_dictionary` 查候选、注音、释义、辅助码等；`operation=listed` 精确检查 1～7 个汉字的词语是否收录于发布拼音词库，返回 `word`、`code` 和 `listed`。默认候选查询收到纯汉字且方案为默认或 `pinyin` 时也转到此检查，编码查询仍返回候选；超过七字暂不支持精确检查，不能据此判断未收录。`browse_input_catalog` 浏览表情、颜文字和符号，`query_public_data` 查公告、社区统计、公开词包、回复模板、常用语、插件和皮肤。`tools` 输出每个工具的完整 JSON Schema；`tool` 输出 `source`（查询路径）和 `data`（原 API 响应）。工具名也接受连字符写法。 字典工具只向 API 传递当前 `operation` 使用的可选参数，忽略其他操作的选项；未知字段、类型与范围错误仍拒绝。直接调用 HTTP API 时，无关选项仍按原规则返回 400。
 
 ```sh
 ./msime-cloud tools

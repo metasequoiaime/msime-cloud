@@ -63,6 +63,27 @@ func TestQQPublicToolDispatch(t *testing.T) {
 	}
 }
 
+func TestQQPublicDictionaryRelevantOptions(t *testing.T) {
+	s := fixture(t, nil)
+	for _, args := range []string{
+		`{"operation":"gloss","text":"hello","direction":"invalid"}`,
+		`{"operation":"romaji","text":"kana","direction":"invalid"}`,
+		`{"operation":"datetime","text":"date","time":"invalid"}`,
+		`{"operation":"datetime","text":"date","timezone":"invalid/zone"}`,
+	} {
+		if got := s.qqPublicTool(t.Context(), "lookup_dictionary", json.RawMessage(args)); !strings.Contains(got, "public_api_status_400") {
+			t.Fatal("当前操作的非法选项不能被默认值掩盖：", got)
+		}
+	}
+	const args = `{"operation":"helpcode","text":"木","schema":"xiaohe","scheme":"pinyin","profile":"xiaohe","limit":20,"direction":"en-zh","time":"2026-01-02T03:04:05Z","timezone":"UTC"}`
+	if got := s.qqPublicTool(t.Context(), "lookup_dictionary", json.RawMessage(args)); !strings.Contains(got, "public_api_status_503") {
+		t.Fatal("合法的工具选项应通过校验后才报告引擎不可用：", got)
+	}
+	if response := call(s, "POST", "/v1/input/helpcode", strings.Replace(args, `"operation":"helpcode",`, "", 1)); response.Code != 400 {
+		t.Fatal("直接 HTTP 接口仍应拒绝无关选项：", response.Code)
+	}
+}
+
 func TestQQResearchPublicToolsAndBudget(t *testing.T) {
 	s, _, _ := qqServer(t)
 	rounds := 0
@@ -184,6 +205,9 @@ func TestQQPublicToolsPublishedDictionary(t *testing.T) {
 		{"lookup_dictionary", `{"operation":"helpcode","text":"木","schema":"xiaohe"}`, "(uN)"},
 		{"lookup_dictionary", `{"operation":"helpcode","text":"木","schema":"xiaohe","scheme":"pinyin","profile":"xiaohe"}`, "(uN)"},
 		{"lookup_dictionary", `{"operation":"helpcode","text":"木","profile":"xiaohe"}`, "(uN)"},
+		{"lookup_dictionary", `{"operation":"helpcode","text":"木","schema":"xiaohe","scheme":"pinyin","profile":"xiaohe","limit":20,"direction":"en-zh","time":"2026-01-02T03:04:05Z","timezone":"UTC"}`, "(uN)"},
+		{"lookup_dictionary", `{"operation":"annotate","text":"木","schema":"xiaohe","scheme":"pinyin","profile":"xiaohe","limit":20,"direction":"en-zh","time":"2026-01-02T03:04:05Z","timezone":"UTC"}`, "mu"},
+		{"lookup_dictionary", `{"operation":"gloss","text":"hello","schema":"xiaohe","scheme":"pinyin","profile":"xiaohe","limit":20,"direction":"en-zh","time":"2026-01-02T03:04:05Z","timezone":"UTC"}`, "喂"},
 		{"lookup_dictionary", `{"operation":"helpcode","text":"木","schema":"lantian"}`, "(aN)"},
 		{"lookup_dictionary", `{"operation":"helpcode","text":"木","schema":"ziranma"}`, "(aD)"},
 		{"lookup_dictionary", `{"operation":"helpcode","text":"木","schema":"shouyou2_0"}`, "(mD)"},
@@ -194,5 +218,53 @@ func TestQQPublicToolsPublishedDictionary(t *testing.T) {
 		if !strings.Contains(result, tc.want) || strings.Contains(result, "查询失败") {
 			t.Fatal(tc.name, result)
 		}
+	}
+}
+
+// 各操作通过真实 HTTP 校验和引擎，模型填入其他操作的默认值不能改变查询结果。
+func TestQQPublicDictionaryOperationOptions(t *testing.T) {
+	binary, resources := os.Getenv("MSIME_ENGINE_TEST_BINARY"), os.Getenv("MSIME_ENGINE_TEST_RESOURCES")
+	if binary == "" || resources == "" {
+		t.Skip("需要原生 Engine 及校验后的发布词库")
+	}
+	s := fixture(t, nil)
+	s.config.Engine.Binary, s.config.Engine.Resources = binary, resources
+	for _, tc := range []struct{ operation, text string }{
+		{"candidates", "nihao"}, {"listed", "木"}, {"jianpin", "nh"},
+		{"english", "hello"}, {"japanese", "konnichiha"}, {"quick", "date"},
+		{"annotate", "木"}, {"gloss", "hello"}, {"helpcode", "木"},
+		{"segmentation", "nihao"}, {"emoji", "xiaolian"}, {"kaomoji", "kaixin"},
+		{"unicode", "4e00"}, {"romaji", "konnichiha"}, {"convert", "合成"},
+		{"datetime", "date"},
+	} {
+		t.Run(tc.operation, func(t *testing.T) {
+			base := map[string]any{"operation": tc.operation, "text": tc.text, "limit": 20}
+			switch tc.operation {
+			case "candidates", "jianpin", "segmentation", "emoji", "kaomoji":
+				base["scheme"], base["profile"] = "shuangpin", "ziranma"
+			case "gloss":
+				base["direction"] = "en-zh"
+			case "romaji":
+				base["direction"] = "romaji-hiragana"
+			case "helpcode":
+				base["schema"] = "xiaohe"
+			case "datetime":
+				base["time"], base["timezone"] = "2026-01-02T03:04:05Z", "Asia/Tokyo"
+			}
+			args, _ := json.Marshal(base)
+			want := s.qqPublicTool(t.Context(), "lookup_dictionary", args)
+			if strings.Contains(want, "查询失败") {
+				t.Fatal(want)
+			}
+			for key, value := range map[string]any{"scheme": "pinyin", "profile": "xiaohe", "schema": "lantian", "direction": "en-zh", "time": "2026-01-01T00:00:00Z", "timezone": "UTC"} {
+				if _, exists := base[key]; !exists {
+					base[key] = value
+				}
+			}
+			args, _ = json.Marshal(base)
+			if got := s.qqPublicTool(t.Context(), "lookup_dictionary", args); got != want {
+				t.Fatalf("额外默认值改变了结果：%s；期望：%s", got, want)
+			}
+		})
 	}
 }

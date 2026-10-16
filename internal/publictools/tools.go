@@ -43,7 +43,7 @@ type Result struct {
 // Definitions 每次返回独立的 schema，调用方不能修改其它入口的工具定义。
 func Definitions() []*mcp.Tool {
 	return []*mcp.Tool{
-		tool("lookup_dictionary", "查询水杉发布词库与固定输入数据，不读取个人词库。listed 按 1～7 个汉字的词语精确检查发布拼音词库收录状态，返回 word、code、listed；默认 candidates 按编码查候选，收到纯汉字且方案为默认或 pinyin 时自动改为 listed。annotate 查汉字注音（注音成功不等于收录），gloss 查离线释义，helpcode 查辅助码。候选列表有限，没出现不等于整份词库没有该词。", map[string]any{
+		tool("lookup_dictionary", "查询水杉发布词库与固定输入数据，不读取个人词库。listed 按 1～7 个汉字的词语精确检查发布拼音词库收录状态，返回 word、code、listed；默认 candidates 按编码查候选，收到纯汉字且方案为默认或 pinyin 时自动改为 listed。annotate 查汉字注音（注音成功不等于收录），gloss 查离线释义，helpcode 查辅助码。只填写当前 operation 需要的可选参数，其他操作的参数会被忽略。候选列表有限，没出现不等于整份词库没有该词。", map[string]any{
 			"text":      field("string", "要查询的编码或文本"),
 			"operation": choice("查询类型，默认 candidates；查汉字词语是否收录用 listed", "candidates", "listed", "jianpin", "english", "japanese", "quick", "annotate", "gloss", "helpcode", "segmentation", "emoji", "kaomoji", "unicode", "romaji", "convert", "datetime"),
 			"scheme":    choice("编码候选的输入方案；helpcode 不使用此字段", "pinyin", "shuangpin", "wubi"),
@@ -215,11 +215,8 @@ func build(name string, arguments json.RawMessage) (Request, error) {
 		if in.Operation == "candidates" && pureHan(in.Text) && (in.Scheme == "" || in.Scheme == "pinyin") {
 			in.Operation = "listed"
 		}
-		if in.Operation == "listed" && (in.Scheme == "" || in.Scheme == "pinyin") {
-			in.Scheme, in.Profile = "", ""
-		}
 		if in.Operation == "helpcode" {
-			// 辅助码按 schema 选表，不向 HTTP 接口传候选专用的 scheme/profile。
+			// 辅助码按 schema 选表，兼容模型只提供同名双拼 profile 的调用。
 			if in.Schema == "" && in.Profile != "" {
 				switch in.Profile {
 				case "xiaohe", "ziranma":
@@ -229,10 +226,22 @@ func build(name string, arguments json.RawMessage) (Request, error) {
 					return Request{}, errors.New("invalid_dictionary_query")
 				}
 			}
-			in.Scheme, in.Profile = "", ""
 		}
 		if !slices.Contains([]string{"candidates", "listed", "jianpin", "english", "japanese", "quick", "annotate", "gloss", "helpcode", "segmentation", "emoji", "kaomoji", "unicode", "romaji", "convert", "datetime"}, in.Operation) || in.Text == "" || len(in.Text) > 8192 || in.Limit < 0 || in.Limit > 50 {
 			return Request{}, errors.New("invalid_dictionary_query")
+		}
+		// 模型可能填满共享 schema 的可选项；只向严格 HTTP 接口传当前操作使用的字段。
+		if !slices.Contains([]string{"candidates", "jianpin", "emoji", "kaomoji", "segmentation"}, in.Operation) {
+			in.Scheme, in.Profile = "", ""
+		}
+		if in.Operation != "gloss" && in.Operation != "romaji" {
+			in.Direction = ""
+		}
+		if in.Operation != "helpcode" {
+			in.Schema = ""
+		}
+		if in.Operation != "datetime" {
+			in.Time, in.Timezone = "", ""
 		}
 		// `operation` 仅用于已校验的路由，不写入输入接口的请求体。
 		operation := in.Operation

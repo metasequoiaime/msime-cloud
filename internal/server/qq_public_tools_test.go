@@ -14,6 +14,32 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/publictools"
 )
 
+// 能力问题即使不触发现查，回答模型也能看到实际工具目录；帮助给出直接提问的例子。
+func TestQQBotPublicToolAwareness(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	s.qq.config.Admins = nil
+	fake.selected = `{"sections":[],"lookup":false}`
+	fake.answer = `{"type":"answered","answer":"可以直接在群里查发布词库和公开插件，不用另连 MCP。"}`
+	qqDeliver(t, s, "m-tool-awareness", "你可以用 MCP 查词库吗")
+	for _, tool := range publictools.Definitions() {
+		if !strings.Contains(fake.answerSystem, tool.Name+"："+tool.Description) {
+			t.Error("回答模型没有收到已接入的工具说明", tool.Name)
+		}
+	}
+	if !strings.Contains(fake.answerSystem, "机器人自身不连接任意外部 MCP 服务器") || !strings.Contains(fake.answerSystem, "只有实际调用成功才说已查到") || len(fake.researchTools) != 0 {
+		t.Fatal(fake.answerSystem, fake.researchTools)
+	}
+	if !strings.Contains(fake.selectSystem, "同时要求查具体词条或公共数据时仍为 true") {
+		t.Fatal(fake.selectSystem)
+	}
+	calls := len(fake.chatCalls)
+	qqDeliver(t, s, "m-tool-help", "帮助")
+	last := fake.replyTexts()[len(fake.replyTexts())-1]
+	if !strings.Contains(last, "nihao 有哪些候选") || !strings.Contains(last, "有哪些公开插件") || calls != len(fake.chatCalls) {
+		t.Fatal(last, fake.chatCalls)
+	}
+}
+
 func TestQQPublicToolDispatch(t *testing.T) {
 	s := fixture(t, nil)
 	for _, tc := range []struct{ name, args, want string }{

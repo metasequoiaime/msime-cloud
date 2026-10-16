@@ -660,11 +660,23 @@ func crashSignature(platform, message, stack string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-// crashGroupTitle is the title of a new crash group, shared by the telemetry insert and the backfill: the first non-blank line of its message, trimmed, at most 200 characters.
+// crashGroupTitle 供遥测写入与历史回填共用，取消息中首个非空行，去除首尾空白，最多保留 200 个字符。
 func crashGroupTitle(message string) string {
 	line := crashFirstLine(message)
-	if utf8.RuneCountInString(line) > 200 {
-		line = strings.TrimSpace(string([]rune(line)[:200]))
+	if len(line) <= 200 {
+		return line
+	}
+	n := 0
+	for i := range line {
+		if n == 200 {
+			line = line[:i]
+			// 原实现仅在截断时逐字节替换非法 UTF-8；合法前缀可以直接复用。
+			if !utf8.ValidString(line) {
+				line = string([]rune(line))
+			}
+			return strings.TrimSpace(line)
+		}
+		n++
 	}
 	return line
 }

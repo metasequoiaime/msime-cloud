@@ -102,7 +102,7 @@ func (s *Server) qqAddVote(ctx context.Context, token, repo string, number int64
 	var comments []qqVoteComment
 	readComments := func(path string) (githubComments []qqVoteComment, response githubapp.Response, err error) {
 		response, err = client.Do(ctx, token, "GET", path, nil)
-		if err != nil || !response.OK() || response.Decode(&githubComments) != nil {
+		if err != nil || !response.OK() || response.Decode(&githubComments) != nil || githubComments == nil {
 			return nil, response, githubFailure("vote comments", response, err)
 		}
 		return githubComments, response, nil

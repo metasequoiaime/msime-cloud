@@ -3,10 +3,13 @@ package server
 import (
 	"fmt"
 	"path"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 )
+
+var previousDictionaryPackNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_]{0,63}$`)
 
 // 固定改动前的切分与筛选规则，独立对照新扫描实现的返回值。
 func previousDictionaryTextPath(name string) bool {
@@ -45,7 +48,7 @@ func previousDictionaryEditablePath(name string) bool {
 		return true
 	}
 	parts := strings.Split(name, "/")
-	return len(parts) == 3 && parts[0] == "packs" && adminPackName.MatchString(parts[1]) && slices.Contains([]string{"quanpin.txt", "english.txt", "translations.txt"}, parts[2])
+	return len(parts) == 3 && parts[0] == "packs" && previousDictionaryPackNamePattern.MatchString(parts[1]) && slices.Contains([]string{"quanpin.txt", "english.txt", "translations.txt"}, parts[2])
 }
 
 func TestDictionaryPathScanCompatibility(t *testing.T) {
@@ -112,7 +115,7 @@ func TestDictionaryPathScanAllocationBudget(t *testing.T) {
 		kind   string
 		budget float64
 	}{
-		{"sources", 100}, {"packs", 1200}, {"mixed", 900}, {"uppercase", 1200},
+		{"sources", 100}, {"packs", 0}, {"mixed", 300}, {"uppercase", 1200},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
 			names, wantAccepted, wantEditable := dictionaryPathScanInputs(tc.kind, 1000)
@@ -131,7 +134,7 @@ func TestDictionaryPathScanAllocationBudget(t *testing.T) {
 			if accepted != wantAccepted || editable != wantEditable {
 				t.Fatalf("筛选数量为 %d/%d，期望 %d/%d", accepted, editable, wantAccepted, wantEditable)
 			}
-			// race 模式下正则池会随机丢弃条目；预算容纳该成本和必要的大小写转换，仍检出逐路径切分。
+			// 预算容纳必要的大小写转换，并检出逐路径切分和包名校验引入的分配。
 			if allocations > tc.budget {
 				t.Fatalf("1000 个路径分配 %.0f 次，预算 %.0f 次", allocations, tc.budget)
 			}

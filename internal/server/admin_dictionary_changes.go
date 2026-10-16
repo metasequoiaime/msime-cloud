@@ -23,7 +23,6 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
 )
 
-var adminPackName = regexp.MustCompile(`^[a-z0-9][a-z0-9_]{0,63}$`)
 var dictionarySHAPattern = regexp.MustCompile(`^[a-f0-9]{40}$`)
 
 type dictionaryEdit struct {

@@ -14,7 +14,7 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/publictools"
 )
 
-// 能力问题即使不触发现查，回答模型也能看到实际工具目录；帮助给出直接提问的例子。
+// 能力问题即使不触发现查，回答模型也能看到实际工具目录；帮助提供固定的公共查询用法入口。
 func TestQQBotPublicToolAwareness(t *testing.T) {
 	s, fake, _ := qqServer(t)
 	s.qq.config.Admins = nil
@@ -35,7 +35,7 @@ func TestQQBotPublicToolAwareness(t *testing.T) {
 	calls := len(fake.chatCalls)
 	qqDeliver(t, s, "m-tool-help", "帮助")
 	last := fake.replyTexts()[len(fake.replyTexts())-1]
-	if !strings.Contains(last, "nihao 有哪些候选") || !strings.Contains(last, "有哪些公开插件") || calls != len(fake.chatCalls) {
+	if !strings.Contains(last, "/mcp") || calls != len(fake.chatCalls) {
 		t.Fatal(last, fake.chatCalls)
 	}
 }

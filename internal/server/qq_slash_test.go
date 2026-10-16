@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 // qqQuotedFrom 是 member 引用一条消息（quote 是被引用的文字）再 @机器人 的事件。
@@ -30,6 +31,47 @@ func TestQQSlashParse(t *testing.T) {
 		if _, _, ok := qqSlashParse(text); ok {
 			t.Errorf("%q parsed", text)
 		}
+	}
+}
+
+// 公共查询用法是固定命令，个人、群和管理员问答额度用完后仍可查看，但保留免费命令的防刷限额。
+func TestQQBotMCPCommand(t *testing.T) {
+	s, fake, limiter := qqServer(t)
+	s.qq.config.Admins = []string{"ADMIN1"}
+	stats := &memoryStats{}
+	s.qqStats = stats
+	limiter.counts = map[string]int{
+		"qq-bot-group|GROUP1":          qqBotGroupDaily,
+		"qq-bot-member|GROUP1/MEMBER1": qqBotMemberDaily,
+		"qq-bot-admin|ADMIN1":          qqBotAdminDaily,
+	}
+	for i, tc := range []struct{ member, text string }{
+		{"MEMBER1", "/mcp"},
+		{"ADMIN1", "/mcp"},
+		{"MEMBER1", "／ＭＣＰ"},
+	} {
+		qqPost(t, s, qqMessageFrom("m-mcp-"+string(rune('a'+i)), tc.member, tc.text))
+		s.qqWorkers.Wait()
+		texts := fake.replyTexts()
+		last := texts[len(texts)-1]
+		for _, example := range []string{"直接 @我 提问", "nihao", "注音", "hello", "辅助码", "公开词包", "插件和皮肤", "颜文字", "不需要另外连接 MCP"} {
+			if !strings.Contains(last, example) {
+				t.Errorf("%q 没有提供 %q 的用法：%s", tc.text, example, last)
+			}
+		}
+	}
+	if len(fake.chatCalls) != 0 || len(fake.searchQueries) != 0 || len(fake.created) != 0 || stats.counts["cmd_slash_mcp"] != 3 {
+		t.Fatal(fake.chatCalls, fake.searchQueries, fake.created, stats.counts)
+	}
+	if limiter.counts["qq-bot-free|GROUP1/MEMBER1"] != 2 || limiter.counts["qq-bot-free|GROUP1/ADMIN1"] != 1 || limiter.counts["qq-bot-group|GROUP1"] != qqBotGroupDaily || limiter.counts["qq-bot-member|GROUP1/MEMBER1"] != qqBotMemberDaily || limiter.counts["qq-bot-admin|ADMIN1"] != qqBotAdminDaily {
+		t.Fatal(limiter.counts)
+	}
+	limiter.counts["qq-bot-free|GROUP1/MEMBER1"] = qqBotFreeDaily
+	qqPost(t, s, qqMessageFrom("m-mcp-limited", "MEMBER1", "/mcp"))
+	s.qqWorkers.Wait()
+	texts := fake.replyTexts()
+	if texts[len(texts)-1] != qqLimitedReply(24*time.Hour) || stats.counts["limited_free"] != 1 || stats.counts["cmd_slash_mcp"] != 3 {
+		t.Fatal(texts, stats.counts)
 	}
 }
 

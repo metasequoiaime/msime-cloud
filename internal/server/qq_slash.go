@@ -25,7 +25,7 @@ var qqSlashNumber = regexp.MustCompile(`^[#＃]?[DdFfBb]?([0-9]{1,9})$`)
 var qqSlashWord = regexp.MustCompile(`^[a-z]{1,12}$`)
 
 // qqSlashFree 是不调模型、按 qqFreeCommand 只计宽松额度的斜杠命令。
-var qqSlashFree = []string{"help", "h", "ver", "version", "docs", "drafts", "darfts"}
+var qqSlashFree = []string{"help", "h", "ver", "version", "docs", "mcp", "drafts", "darfts"}
 
 // qqSlashParse 拆出斜杠命令：命令名（小写）和后面的参数；不是斜杠命令时 ok 为 false。只认「/」后面紧跟字母的写法，「/ 」「//」不算。
 func qqSlashParse(text string) (name, args string, ok bool) {
@@ -114,6 +114,9 @@ func (s *Server) qqSlashCommand(ctx context.Context, m qqGroupMessage, text stri
 	case "docs":
 		reply("使用文档：https://msime.app/docs/\n下载：https://msime.app/download/\nFAQ 和 Windows、macOS、Linux、Android、iOS 各平台的指南都在文档里。")
 		return "cmd_slash_docs"
+	case "mcp":
+		reply(qqMCPHelpText)
+		return "cmd_slash_mcp"
 	case "doc":
 		content := qqWithQuote(args, m.Quote.Text)
 		if content == "" {

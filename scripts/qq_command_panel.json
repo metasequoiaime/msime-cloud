@@ -3,6 +3,7 @@
   "items": [
     {"type": "command", "name": "/help", "desc": "怎么用我"},
     {"type": "command", "name": "/ver", "desc": "各平台最新版本"},
+    {"type": "command", "name": "/mcp", "desc": "查词库、注音、释义和公共数据的用法"},
     {"type": "command", "name": "/issues", "desc": "查 issue：后接关键词或编号"},
     {"type": "command", "name": "/add", "desc": "词打不出来：/add 词语 拼音"},
     {"type": "command", "name": "/doc", "desc": "文档缺了什么，可引用一条消息"},

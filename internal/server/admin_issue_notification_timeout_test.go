@@ -45,10 +45,10 @@ func TestAdminIssueNotificationLockWaitIsBoundedAndRetryable(t *testing.T) {
 			t.Error("解除通知锁后调用仍未退出")
 		}
 	}()
-	// 先确认真实查询已阻塞在本事务持有的通知锁上，再检查整批通知的等待上限。
+	// pg_locks 直接读取实时锁状态；持锁事务内的 pg_stat_activity 会复用统计快照。
 	for {
 		var waiting bool
-		if err := blocker.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1::integer=ANY(pg_blocking_pids(pid)))`, conn.PgConn().PID()).Scan(&waiting); err != nil {
+		if err := blocker.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND NOT granted AND $1::integer=ANY(pg_blocking_pids(pid)))`, conn.PgConn().PID()).Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
 		if waiting {

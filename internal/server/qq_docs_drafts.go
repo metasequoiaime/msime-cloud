@@ -44,14 +44,15 @@ func (s *Server) qqDraftDocsForGaps(ctx context.Context, from, to time.Time) []s
 			break
 		}
 		key := strings.ToLower(strings.Join(strings.Fields(c.topic), ""))
-		if err := s.limits.RateLimit(ctx, "qq-bot-docs-draft", key, 1, qqDocsDraftWindow); err != nil {
+		release, err := s.qqReserveDedupe(ctx, "qq-bot-docs-draft", key, qqDocsDraftWindow)
+		if err != nil {
 			continue
 		}
 		tried++
 		answer, err := s.qqAnswerQuestion(ctx, nil, c.topic, qqAsk{force: true})
 		if err != nil || answer.Type != "answered" || strings.TrimSpace(answer.Answer) == "" || answer.Escalate {
 			// 现查也答不上：退回名额，下周再试。
-			s.qqReleaseDocsDraft(ctx, key)
+			release()
 			continue
 		}
 		why := fmt.Sprintf("QQ 群里上周有 %d 次问到「%s」，机器人答不上（文档里没写）。", c.count, githubReferenceBreaker.Replace(c.topic))
@@ -59,19 +60,10 @@ func (s *Server) qqDraftDocsForGaps(ctx context.Context, from, to time.Time) []s
 			pulls = append(pulls, fmt.Sprintf("%s#%d「%s」", s.qq.config.KnowledgeRepo, number, githubReferenceBreaker.Replace(qqStripLinks(c.topic))))
 			continue
 		}
-		s.qqReleaseDocsDraft(ctx, key)
+		release()
 	}
 	if len(pulls) > 0 {
 		slog.Info("qq bot: docs drafts opened", "count", len(pulls))
 	}
 	return pulls
-}
-
-// qqReleaseDocsDraft 退回一个话题的起草名额，出错只记日志。
-func (s *Server) qqReleaseDocsDraft(ctx context.Context, key string) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-	defer cancel()
-	if err := s.limits.ReleaseRateLimit(ctx, "qq-bot-docs-draft", key); err != nil {
-		slog.Warn("qq bot: docs draft slot not released", "reason", err.Error())
-	}
 }

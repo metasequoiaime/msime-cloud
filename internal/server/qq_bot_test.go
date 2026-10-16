@@ -204,6 +204,7 @@ func (l *qqLimiter) ReleaseRateLease(ctx context.Context, scope, subject string,
 	defer l.mu.Unlock()
 	key := scope + "|" + subject
 	if l.leases[key].Equal(until) {
+		l.released = append(l.released, key)
 		l.counts[key] = 0
 	}
 	return nil

@@ -585,7 +585,7 @@ var (
 	qqBusyRetry = 500 * time.Millisecond
 )
 
-// rateLeaseLimiter 为 QQ 消息排队提供不占连接的共享租约，截止时间同时是释放时的持有者标识。
+// rateLeaseLimiter 为 QQ 消息排队和写入去重提供不占连接的共享租约，截止时间同时是释放时的持有者标识。
 type rateLeaseLimiter interface {
 	AcquireRateLease(ctx context.Context, scope, subject string, window time.Duration) (time.Time, error)
 	ReleaseRateLease(ctx context.Context, scope, subject string, until time.Time) error

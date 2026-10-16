@@ -18,7 +18,7 @@ const QQDraftClaimTimeout = 5 * time.Minute
 const QQDraftIdempotencyWindow = 10 * time.Minute
 
 // qqDraftUnclaimed 是「可以认领」的条件：没被认领，或者认领已经超时而且没记下 issue。
-var qqDraftUnclaimed = `(filed_at IS NULL OR (issue_ref='' AND filed_at<now()-'` + QQDraftClaimTimeout.String() + `'::interval))`
+var qqDraftUnclaimed = `(filed_at IS NULL OR (issue_ref='' AND filed_at<clock_timestamp()-'` + QQDraftClaimTimeout.String() + `'::interval))`
 
 // ErrQQDraftNotFound 表示草稿不存在或已经过期。
 var ErrQQDraftNotFound = errors.New("qq draft not found")
@@ -102,11 +102,13 @@ func QQDraftClaimStale(d QQDraft, now time.Time) bool {
 // UpdateQQDraft 更新还没提交的草稿的原话和整理结果，返回是否更新了。认领超时的草稿也算没提交；内容必须仍与整理前的快照相同，否则返回 ErrQQDraftChanged。
 func (a *Service) UpdateQQDraft(ctx context.Context, previous QQDraft, original, report string) (bool, error) {
 	var available, updated bool
-	// 先锁定并读取当前内容，等待其他补充提交后也能识别冲突；模型整理期间不持锁。
-	err := a.store.pool.QueryRow(ctx, `WITH current AS MATERIALIZED (
-SELECT id,original,report FROM qq_drafts WHERE id=$1 AND `+qqDraftUnclaimed+` AND created_at>now()-$4::interval FOR UPDATE
+	// 先锁定并读取当前内容，再检查锁后的有效期和认领状态；等待其他补充提交后仍能识别冲突，模型整理期间不持锁。
+	err := a.store.pool.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+SELECT id,original,report,created_at,filed_at,issue_ref FROM qq_drafts WHERE id=$1 FOR UPDATE
+), current AS MATERIALIZED (
+SELECT id,original,report FROM locked WHERE `+qqDraftUnclaimed+` AND created_at>clock_timestamp()-$4::interval
 ), updated AS (
-UPDATE qq_drafts SET original=$2,report=$3,updated_at=now()
+UPDATE qq_drafts SET original=$2,report=$3,updated_at=clock_timestamp()
 WHERE id IN (SELECT id FROM current WHERE original=$5 AND report=$6) RETURNING id
 )
 SELECT EXISTS(SELECT 1 FROM current),EXISTS(SELECT 1 FROM updated)`, previous.ID, original, report, QQDraftWindow.String(), previous.Original, previous.Report).Scan(&available, &updated)
@@ -131,7 +133,12 @@ func (a *Service) ClaimQQDraftLease(ctx context.Context, id int64) (time.Time, b
 // ClaimQQDraftSnapshot 在认领的同一条语句中返回当前内容，避免提交读取草稿之后、认领之前已被补充的旧报告。
 func (a *Service) ClaimQQDraftSnapshot(ctx context.Context, id int64) (QQDraft, bool, error) {
 	var draft QQDraft
-	err := a.store.pool.QueryRow(ctx, `UPDATE qq_drafts SET filed_at=clock_timestamp() WHERE id=$1 AND `+qqDraftUnclaimed+` AND created_at>now()-$2::interval
+	// 不能在等锁前判断草稿和租约的有效期，过期边界必须以锁后的时钟为准。
+	err := a.store.pool.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+SELECT id,created_at,filed_at,issue_ref FROM qq_drafts WHERE id=$1 FOR UPDATE
+)
+UPDATE qq_drafts SET filed_at=clock_timestamp()
+WHERE id IN (SELECT id FROM locked WHERE `+qqDraftUnclaimed+` AND created_at>clock_timestamp()-$2::interval)
 RETURNING id,subject,original,report,created_at,updated_at,filed_at,issue_ref`, id, QQDraftWindow.String()).Scan(&draft.ID, &draft.Subject, &draft.Original, &draft.Report, &draft.CreatedAt, &draft.UpdatedAt, &draft.FiledAt, &draft.IssueRef)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return QQDraft{}, false, nil
@@ -166,7 +173,12 @@ func (a *Service) ReleaseQQDraftLease(ctx context.Context, id int64, claimedAt t
 
 // DismissQQDraft 忽略一份还没提交的草稿（包括认领超时的），返回是否忽略了：已经在提交、提交过或者忽略过的不改。忽略后 filed_at 记成现在、issue_ref 记成 QQDraftIgnored，不再列出，也不能再补充或提交。
 func (a *Service) DismissQQDraft(ctx context.Context, id int64) (bool, error) {
-	tag, err := a.store.pool.Exec(ctx, `UPDATE qq_drafts SET filed_at=now(),issue_ref=$3 WHERE id=$1 AND `+qqDraftUnclaimed+` AND created_at>now()-$2::interval`, id, QQDraftWindow.String(), QQDraftIgnored)
+	// 先锁定草稿，再判断有效期和认领状态，与补充、认领的时钟规则一致。
+	tag, err := a.store.pool.Exec(ctx, `WITH locked AS MATERIALIZED (
+SELECT id,created_at,filed_at,issue_ref FROM qq_drafts WHERE id=$1 FOR UPDATE
+)
+UPDATE qq_drafts SET filed_at=clock_timestamp(),issue_ref=$3
+WHERE id IN (SELECT id FROM locked WHERE `+qqDraftUnclaimed+` AND created_at>clock_timestamp()-$2::interval)`, id, QQDraftWindow.String(), QQDraftIgnored)
 	return tag.RowsAffected() == 1, err
 }
 

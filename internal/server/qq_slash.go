@@ -65,22 +65,20 @@ func (s *Server) qqSlashCommand(ctx context.Context, m qqGroupMessage, text stri
 	if !ok {
 		return ""
 	}
-	fields := strings.Fields(args)
-	number := func(i int) (string, bool) {
-		if len(fields) <= i {
+	number := func() (string, bool) {
+		first, _ := qqSlashArgumentHead(args)
+		if first == "" {
 			return "", false
 		}
-		match := qqSlashNumber.FindStringSubmatch(fields[i])
+		match := qqSlashNumber.FindStringSubmatch(first)
 		if match == nil {
 			return "", false
 		}
 		return match[1], true
 	}
-	rest := func(i int) string {
-		if len(fields) <= i {
-			return ""
-		}
-		return strings.Join(fields[i:], " ")
+	rest := func() string {
+		_, tail := qqSlashArgumentHead(args)
+		return qqSlashArgumentText(tail)
 	}
 	chineseWith := func(command string, reply func(string)) string {
 		return s.qqCommand(ctx, m, command, admin, reply, progress)
@@ -125,26 +123,26 @@ func (s *Server) qqSlashCommand(ctx context.Context, m qqGroupMessage, text stri
 		}
 		return chinese("提文档 " + content)
 	case "drafts", "darfts":
-		if n, ok := number(0); ok {
+		if n, ok := number(); ok {
 			return chinese("看 D" + n)
 		}
 		return chinese("草稿")
 	case "submit":
-		n, ok := number(0)
+		n, ok := number()
 		if !ok {
 			// 从指令面板点进来常常没带编号：直接列出草稿，照着编号发就行。
 			return qqSlashPick(admin, "/submit", reply, chineseWith)
 		}
-		return chinese(strings.TrimSpace("提交 D" + n + " " + rest(1)))
+		return chinese(strings.TrimSpace("提交 D" + n + " " + rest()))
 	case "undraft":
-		n, ok := number(0)
+		n, ok := number()
 		if !ok {
 			return qqSlashPick(admin, "/undraft", reply, chineseWith)
 		}
 		return chinese("忽略 D" + n)
 	case "draft":
-		if n, ok := number(0); ok {
-			content := qqWithQuote(rest(1), m.Quote.Text)
+		if n, ok := number(); ok {
+			content := qqWithQuote(rest(), m.Quote.Text)
 			if content == "" {
 				return chinese("看 D" + n)
 			}
@@ -167,7 +165,7 @@ func (s *Server) qqSlashCommand(ctx context.Context, m qqGroupMessage, text stri
 		}
 		return chinese("提issue " + content)
 	case "issues":
-		return s.qqSlashIssues(ctx, fields, reply, chinese)
+		return s.qqSlashIssues(ctx, args, reply, chinese)
 	case "faqs":
 		return chinese("文档缺口")
 	case "q":
@@ -187,11 +185,11 @@ func (s *Server) qqSlashCommand(ctx context.Context, m qqGroupMessage, text stri
 		reply("记下了，发 /faqs 能看到；有答案了发 /a 编号 答案 写进 FAQ。")
 		return "cmd_slash_question"
 	case "a":
-		n, ok := number(0)
+		n, ok := number()
 		if !ok {
 			return qqSlashPick(admin, "/a", reply, chineseWith)
 		}
-		answer := rest(1)
+		answer := rest()
 		if answer == "" {
 			answer = m.Quote.Text
 		}
@@ -210,6 +208,39 @@ func (s *Server) qqSlashCommand(ctx context.Context, m qqGroupMessage, text stri
 	}
 	reply("没有 /" + name + " 这个命令。\n" + usage)
 	return "cmd_slash_unknown"
+}
+
+// qqSlashArgumentHead 只读取第一个参数，剩余参数保持原文，避免为编号后面的长正文构造字段切片。
+func qqSlashArgumentHead(args string) (first, tail string) {
+	args = strings.TrimSpace(args)
+	for field := range strings.FieldsSeq(args) {
+		return field, args[len(field):]
+	}
+	return "", ""
+}
+
+// qqSlashArgumentText 按原有 Fields、Join 的规则合并空白，只为保留的参数正文分配空间。
+func qqSlashArgumentText(args string) string {
+	args = strings.TrimSpace(args)
+	outputBytes := 0
+	for field := range strings.FieldsSeq(args) {
+		if len(field) == len(args) {
+			return field
+		}
+		if outputBytes > 0 {
+			outputBytes++
+		}
+		outputBytes += len(field)
+	}
+	var out strings.Builder
+	out.Grow(outputBytes)
+	for field := range strings.FieldsSeq(args) {
+		if out.Len() > 0 {
+			out.WriteByte(' ')
+		}
+		out.WriteString(field)
+	}
+	return out.String()
 }
 
 // qqSlashPick 是 /submit、/undraft、/a 没带编号时的回复：先说一句带例子的写法，再接上草稿或文档缺口的列表（「草稿」「文档缺口」的回复），管理员照着列表里的编号发就行。群友发时由「草稿」「文档缺口」自己回只有管理员能用。
@@ -232,25 +263,27 @@ func qqSlashPick(admin bool, command string, reply func(string), chineseWith fun
 }
 
 // qqSlashIssues 处理 /issues：不带参数列各仓库最新开着的 issue；「/issues 编号」查编号；开头写了仓库简称（qqSlashRepoAliases）时只在那个仓库里查编号或搜关键词；其余当关键词搜。
-func (s *Server) qqSlashIssues(ctx context.Context, fields []string, reply func(string), chinese func(string) string) string {
+func (s *Server) qqSlashIssues(ctx context.Context, args string, reply func(string), chinese func(string) string) string {
 	repos := s.qqGitHubRepos()
 	repoName := ""
+	first, tail := qqSlashArgumentHead(args)
 	// 第一个词是答疑仓库的名字或简称时只查那个仓库。
-	if len(fields) > 0 {
-		word := strings.ToLower(fields[0])
+	if first != "" {
+		word := strings.ToLower(first)
 		for _, r := range repos {
 			if _, name, _ := strings.Cut(r, "/"); strings.EqualFold(name, word) || strings.EqualFold(name, qqSlashRepoAliases[word]) {
-				repoName, repos, fields = name, []string{r}, fields[1:]
+				repoName, repos, args = name, []string{r}, tail
+				first, tail = qqSlashArgumentHead(args)
 				break
 			}
 		}
 	}
-	if len(fields) == 1 {
-		if match := qqSlashNumber.FindStringSubmatch(fields[0]); match != nil {
+	if first != "" && tail == "" {
+		if match := qqSlashNumber.FindStringSubmatch(first); match != nil {
 			return chinese(strings.TrimSpace(repoName + " #" + match[1]))
 		}
 	}
-	terms, sort := strings.Join(fields, " "), ""
+	terms, sort := qqSlashArgumentText(args), ""
 	if terms == "" {
 		terms, sort = "is:open", "&sort=created&order=desc"
 	}

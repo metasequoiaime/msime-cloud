@@ -181,6 +181,13 @@ func TestQQPublicToolsPublishedDictionary(t *testing.T) {
 		{"lookup_dictionary", `{"text":"nihao","limit":5}`, "你好"},
 		{"lookup_dictionary", `{"operation":"annotate","text":"重庆银行"}`, "chong'qing'yin'hang"},
 		{"lookup_dictionary", `{"operation":"gloss","text":"hello"}`, "喂"},
+		{"lookup_dictionary", `{"operation":"helpcode","text":"木","schema":"xiaohe"}`, "(uN)"},
+		{"lookup_dictionary", `{"operation":"helpcode","text":"木","schema":"xiaohe","scheme":"pinyin","profile":"xiaohe"}`, "(uN)"},
+		{"lookup_dictionary", `{"operation":"helpcode","text":"木","profile":"xiaohe"}`, "(uN)"},
+		{"lookup_dictionary", `{"operation":"helpcode","text":"木","schema":"lantian"}`, "(aN)"},
+		{"lookup_dictionary", `{"operation":"helpcode","text":"木","schema":"ziranma"}`, "(aD)"},
+		{"lookup_dictionary", `{"operation":"helpcode","text":"木","schema":"shouyou2_0"}`, "(mD)"},
+		{"lookup_dictionary", `{"operation":"helpcode","text":"木","schema":"shouyouplus"}`, "(mD)"},
 		{"browse_input_catalog", `{"kind":"symbols","limit":5}`, "据水杉公共数据："},
 	} {
 		result := s.qqPublicTool(t.Context(), tc.name, json.RawMessage(tc.args))

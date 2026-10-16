@@ -10,6 +10,10 @@ import (
 func TestDictionaryRequestBody(t *testing.T) {
 	for _, tc := range []struct{ name, arguments, operation, body string }{
 		{"默认查询", `{"text":"合成"}`, "listed", `{"text":"合成"}`},
+		{"辅助码默认表", `{"operation":"helpcode","text":"木","scheme":"pinyin"}`, "helpcode", `{"text":"木"}`},
+		{"辅助码独立选表", `{"operation":"helpcode","text":"木","schema":"xiaohe","scheme":"shuangpin","profile":"microsoft"}`, "helpcode", `{"text":"木","schema":"xiaohe"}`},
+		{"辅助码小鹤别名", `{"operation":"helpcode","text":"木","profile":"xiaohe"}`, "helpcode", `{"text":"木","schema":"xiaohe"}`},
+		{"辅助码自然码别名", `{"operation":"helpcode","text":"木","profile":"ziranma"}`, "helpcode", `{"text":"木","schema":"ziranma"}`},
 		{"完整选项", `{"text":"合成","operation":"datetime","scheme":"pinyin","profile":"xiaohe","limit":20,"direction":"en-zh","schema":"xiaohe","time":"2026-10-16T00:00:00Z","timezone":"UTC"}`, "datetime", `{"text":"合成","scheme":"pinyin","profile":"xiaohe","limit":20,"direction":"en-zh","schema":"xiaohe","time":"2026-10-16T00:00:00Z","timezone":"UTC"}`},
 		{"省略零值", `{"text":"合成","operation":"","scheme":"","profile":"","limit":0,"direction":"","schema":"","time":"","timezone":""}`, "listed", `{"text":"合成"}`},
 		{"空值解码", `{"text":"合成","operation":null,"scheme":null,"limit":null}`, "listed", `{"text":"合成"}`},

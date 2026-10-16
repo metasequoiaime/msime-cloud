@@ -196,7 +196,7 @@ func build(name string, arguments json.RawMessage) (Request, error) {
 	case "lookup_dictionary":
 		var in struct {
 			Text      string `json:"text"`
-			Operation string `json:"operation"`
+			Operation string `json:"operation,omitempty"`
 			Scheme    string `json:"scheme,omitempty"`
 			Profile   string `json:"profile,omitempty"`
 			Limit     int    `json:"limit,omitempty"`
@@ -214,12 +214,11 @@ func build(name string, arguments json.RawMessage) (Request, error) {
 		if !slices.Contains([]string{"candidates", "jianpin", "english", "japanese", "quick", "annotate", "gloss", "helpcode", "segmentation", "emoji", "kaomoji", "unicode", "romaji", "convert", "datetime"}, in.Operation) || in.Text == "" || len(in.Text) > 8192 || in.Limit < 0 || in.Limit > 50 {
 			return Request{}, errors.New("invalid_dictionary_query")
 		}
+		// `operation` 仅用于已校验的路由，不写入输入接口的请求体。
+		operation := in.Operation
+		in.Operation = ""
 		body, _ := json.Marshal(in)
-		var values map[string]json.RawMessage
-		_ = json.Unmarshal(body, &values)
-		delete(values, "operation")
-		body, _ = json.Marshal(values)
-		return Request{Method: http.MethodPost, Path: "/v1/input/" + in.Operation, Body: body, NeedsToken: true}, nil
+		return Request{Method: http.MethodPost, Path: "/v1/input/" + operation, Body: body, NeedsToken: true}, nil
 	case "browse_input_catalog":
 		var in struct {
 			Kind     string `json:"kind"`

@@ -52,7 +52,7 @@ const (
 	maxNotificationReads = 100
 )
 
-// normalizeNotification validates n and fills in the default title. A title is flattened to one line and cut to 300 characters rather than rejected, because callers pass text that comes from GitHub or from users.
+// normalizeNotification 校验通知并补齐默认标题；来自 GitHub 或用户的标题会合并为单行并截到 300 字。
 func normalizeNotification(n Notification) (Notification, error) {
 	if _, ok := notificationDefaultTitles[n.Kind]; !ok {
 		return n, errInvalidNotification
@@ -60,15 +60,54 @@ func normalizeNotification(n Notification) (Notification, error) {
 	if !resourceText(n.TargetPage, 0, 32, false) || !resourceText(n.TargetID, 0, 200, false) {
 		return n, errInvalidNotification
 	}
-	title := strings.Join(strings.FieldsFunc(strings.ToValidUTF8(n.Title, ""), func(c rune) bool { return unicode.IsSpace(c) || unicode.IsControl(c) }), " ")
+	title := normalizeNotificationTitle(n.Title)
 	if title == "" {
 		title = notificationDefaultTitles[n.Kind]
 	}
-	if utf8.RuneCountInString(title) > maxNotificationTitle {
-		title = string([]rune(title)[:maxNotificationTitle-1]) + "…"
-	}
 	n.Title = title
 	return n, nil
+}
+
+// normalizeNotificationTitle 删除非法编码，合并空白和控制字符，只构造长度上限内的标题。
+func normalizeNotificationTitle(text string) string {
+	var buffer [utf8.UTFMax * maxNotificationTitle]byte
+	length, count, cut := 0, 0, 0
+	pendingSpace := false
+	for offset := 0; offset < len(text); {
+		c, size := utf8.DecodeRuneInString(text[offset:])
+		start := offset
+		offset += size
+		if c == utf8.RuneError && size == 1 {
+			continue
+		}
+		if unicode.IsSpace(c) || unicode.IsControl(c) {
+			pendingSpace = count > 0
+			continue
+		}
+		// 只有后面还有正文才输出空格或省略号，避免尾部空白导致误截断。
+		if count == maxNotificationTitle || pendingSpace && count == maxNotificationTitle-1 {
+			length = cut + copy(buffer[cut:], "…")
+			return string(buffer[:length])
+		}
+		if pendingSpace {
+			buffer[length] = ' '
+			length++
+			count++
+			if count == maxNotificationTitle-1 {
+				cut = length
+			}
+			pendingSpace = false
+		}
+		length += copy(buffer[length:], text[start:offset])
+		count++
+		if count == maxNotificationTitle-1 {
+			cut = length
+		}
+	}
+	if length == len(text) && string(buffer[:length]) == text {
+		return text
+	}
+	return string(buffer[:length])
 }
 
 // insertNotification stamps created_at with clock_timestamp() rather than the transaction start, so a notification written late in a long transaction is not already covered by a 全部已读 watermark set while that transaction was running.

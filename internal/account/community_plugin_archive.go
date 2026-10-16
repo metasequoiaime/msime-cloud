@@ -851,15 +851,17 @@ func validWordbookEntries(raw []byte) bool {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		columns := strings.Split(line, "\t")
-		var word, phonetic, meaning string
-		switch len(columns) {
-		case 2:
-			word, meaning = columns[0], columns[1]
-		case 3:
-			word, phonetic, meaning = columns[0], columns[1], columns[2]
-		default:
+		word, rest, found := strings.Cut(line, "\t")
+		if !found {
 			return false
+		}
+		var phonetic string
+		meaning := rest
+		if before, after, found := strings.Cut(rest, "\t"); found {
+			phonetic, meaning = before, after
+			if strings.ContainsRune(meaning, '\t') {
+				return false
+			}
 		}
 		if word == "" || !bounded(word, maxWordbookWordChars) || !bounded(phonetic, maxWordbookPhoneticChars) || meaning == "" || !bounded(meaning, maxWordbookMeaningChars) || seen[word] {
 			return false

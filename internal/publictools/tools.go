@@ -99,13 +99,18 @@ func ChatDefinitions() []any {
 	return out
 }
 
-func Has(name string) bool {
-	for _, t := range Definitions() {
-		if t.Name == name {
-			return true
-		}
+// toolNames 只保留由定义导出的名称，不共享调用方可修改的 schema。
+var toolNames = sync.OnceValue(func() []string {
+	definitions := Definitions()
+	names := make([]string, len(definitions))
+	for i, tool := range definitions {
+		names[i] = tool.Name
 	}
-	return false
+	return names
+})
+
+func Has(name string) bool {
+	return slices.Contains(toolNames(), name)
 }
 
 // Call 对三个入口使用同一套严格校验，先构造受限请求再交给传输层。

@@ -147,11 +147,12 @@ result['info']['description']=result['info']['description'].replace('服务不�
 candidate=obj({'code':string(),'canonical_pinyin':string(),'word':string(),'weight':{'type':'integer','format':'int64'},'fixed_position':{'type':'integer'}})
 candidate_response=obj({'candidates':{'type':'array','items':candidate},'raw_segmentation':string(),'normalized_segmentation':string()})
 paths['/v1/input/capabilities']={'get':{'summary':'查询公共引擎配置能力','tags':['公共输入引擎'],'description':'返回 Engine 和词库是否配置，以及支持的输入方案、双拼方案和候选上限。','responses':{'200':{'description':'成功'},'401':{'description':'缺少有效令牌'}}}}
-input_titles={'romaji':'日语罗马字与假名转换','japanese':'日语罗马字候选查询','convert':'简体转繁体（OpenCC s2t）','annotate':'纯汉字词组注音','unicode':'Unicode 码点候选','datetime':'日期时间候选','english':'英文前缀补全','gloss':'中英双向释义','emoji':'Emoji 拼音查询','kaomoji':'颜文字拼音查询','jianpin':'简拼候选','candidates':'本地词库候选','segmentation':'输入方案切分','quick':'快捷短语候选','helpcode':'汉字辅助码'}
+input_titles={'romaji':'日语罗马字与假名转换','japanese':'日语罗马字候选查询','convert':'简体转繁体（OpenCC s2t）','annotate':'纯汉字词组注音','listed':'精确检查纯汉字词语是否在发布拼音词库中','unicode':'Unicode 码点候选','datetime':'日期时间候选','english':'英文前缀补全','gloss':'中英双向释义','emoji':'Emoji 拼音查询','kaomoji':'颜文字拼音查询','jianpin':'简拼候选','candidates':'本地词库候选','segmentation':'输入方案切分','quick':'快捷短语候选','helpcode':'汉字辅助码'}
 for operation,title in input_titles.items():
     fields={'text':string(minLength=1,description='查询文字；输入码最多 256 ASCII 字符，其他文字最多 8192 UTF-8 字节。'),'limit':{'type':'integer','minimum':1,'maximum':200,'default':20}}
     if operation in ['emoji','kaomoji','jianpin','candidates','segmentation']:
         fields.update({'scheme':string(enum=['pinyin','shuangpin','wubi'],default='pinyin'),'profile':string(enum=['xiaohe','ziranma','shoudao','microsoft'],default='xiaohe')})
+    if operation=='listed': fields['text']=string(minLength=1,maxLength=7,description='1～7 个基本汉字，精确检查发布拼音词库；不含个人词库、五笔或更长词语。')
     if operation=='datetime': fields.update({'time':string(format='date-time',description='RFC 3339 参考时刻，省略使用当前时间。'),'timezone':string(default='UTC',example='Asia/Shanghai',description='IANA 时区。')})
     if operation=='gloss': fields['direction']=string(enum=['en-zh','zh-en'],default='en-zh')
     if operation=='romaji': fields['direction']=string(enum=['romaji-hiragana','hiragana-katakana','kana-romaji'],default='romaji-hiragana')
@@ -161,6 +162,7 @@ for operation,title in input_titles.items():
     if operation=='japanese': response=obj(dict(candidate_response['properties'],hiragana=string(),pending=string(),complete={'type':'boolean'}))
     if operation in ['gloss','helpcode','convert']: response=obj({'text':string(),'schema':string(),'conversion':string()})
     if operation=='annotate': response=obj({'code':string(),'word':string()})
+    if operation=='listed': response=obj({'code':string(),'word':string(),'listed':{'type':'boolean'}},['code','word','listed'])
     if operation=='segmentation': response=obj({'raw':string(),'normalized':string()})
     responses={'200':{'description':'成功','content':{'application/json':{'schema':response}}}}
     for code,description in [('400','参数无效'),('401','缺少有效设备或用户令牌'),('429','限流'),('502','原生查询失败'),('503','原生 Engine 或数据未配置，或服务繁忙'),('504','查询超时')]: responses[code]={'description':description}

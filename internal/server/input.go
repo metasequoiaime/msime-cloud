@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"regexp"
@@ -145,7 +146,7 @@ func (s *Server) inputQuery(w http.ResponseWriter, r *http.Request) {
 			fail(w, 400, "invalid_input_code")
 			return
 		}
-	case "annotate":
+	case "annotate", "listed":
 		for _, ch := range v.Text {
 			if ch < 0x4e00 || ch > 0x9fff {
 				fail(w, 400, "pure_han_required")
@@ -154,6 +155,16 @@ func (s *Server) inputQuery(w http.ResponseWriter, r *http.Request) {
 		}
 		if utf8.RuneCountInString(v.Text) > 128 {
 			fail(w, 400, "invalid_input_request")
+			return
+		}
+		if op == "listed" {
+			// 当前引擎只对七字以内的词语反查精确读音，长词逐字注音可能漏掉多音字读法。
+			if utf8.RuneCountInString(v.Text) > 7 {
+				fail(w, 400, "invalid_input_request")
+				return
+			}
+			out, err := queryListedWord(r.Context(), s.config.Engine.Query, v.Text)
+			respondEngine(w, out, err)
 			return
 		}
 	case "convert":
@@ -175,6 +186,10 @@ func (s *Server) inputQuery(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) runEngine(w http.ResponseWriter, r *http.Request, request any) {
 	out, err := s.config.Engine.Query(r.Context(), request)
+	respondEngine(w, out, err)
+}
+
+func respondEngine(w http.ResponseWriter, out json.RawMessage, err error) {
 	if err != nil {
 		switch {
 		case errors.Is(err, engine.ErrUnavailable):

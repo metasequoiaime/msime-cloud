@@ -74,10 +74,12 @@ func (c cli) googleLoopback(open bool, begin func(target string) (string, int, s
 	if expected != "" && subtle.ConstantTimeCompare([]byte(state), []byte(expected)) != 1 {
 		return "", "", errors.New("the server's Google sign-in address does not carry the state it gave")
 	}
-	wait := min(time.Duration(expiresIn)*time.Second-googleLoginMargin, googleSignInWait)
-	if wait <= 0 {
+	marginSeconds := int(googleLoginMargin / time.Second)
+	if expiresIn <= marginSeconds {
 		return "", "", errors.New("the sign-in expires too soon to wait for the browser")
 	}
+	// 先按秒检查并限制等待时间，再换算纳秒，避免有效期乘法或减去安全余量时溢出。
+	wait := time.Duration(min(expiresIn-marginSeconds, int(googleSignInWait/time.Second))) * time.Second
 	fmt.Fprintf(c.stderr, "msime-cloud: sign in with Google at this address; waiting %s for the browser to come back:\n%s\n", wait.Round(time.Second), address)
 	if open {
 		if err = c.browse(address); err != nil {
@@ -133,8 +135,8 @@ func (c cli) adminSignIn(open bool) error {
 	if err = c.postJSON(admin, "/api/auth/cli/finish", map[string]string{"state": started.State, "code": code, "redirect_uri": target}, &finished); err != nil {
 		return err
 	}
-	if finished.Token == "" {
-		return errors.New("the admin site answered the sign-in without a session")
+	if finished.Token == "" || !validSessionLifetime(finished.ExpiresIn) {
+		return errors.New("the admin site answered the sign-in without a valid session")
 	}
 	user, _ := json.Marshal(map[string]string{"email": finished.Email})
 	kept := session{AccessToken: finished.Token, ExpiresAt: c.now().Add(time.Duration(finished.ExpiresIn) * time.Second), User: user}

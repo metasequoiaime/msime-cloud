@@ -8,9 +8,21 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/publictools"
 )
+
+// qqPublicToolCapabilities 让回答模型和现查模型使用同一个能力目录，避免没触发现查时否认已接入的工具。
+func qqPublicToolCapabilities() string {
+	var text strings.Builder
+	text.WriteString("你在群里已经接入这些内置的只读公共查询工具，用户直接提问即可，无需安装或连接 MCP：\n")
+	for _, tool := range publictools.Definitions() {
+		fmt.Fprintf(&text, "- %s：%s\n", tool.Name, tool.Description)
+	}
+	text.WriteString("这些工具与 msime-cloud 的 MCP、CLI 共用能力。用户问能不能用 MCP 或 CLI 时，先说明可以在群里直接查词库和公共数据，不要笼统说「群聊不能调用 MCP」而省略已接入的查询能力；需要区分时再说明：外部 MCP 客户端通过 msime-cloud mcp（stdio）连接，机器人自身不连接任意外部 MCP 服务器，也不执行任意 shell 或 CLI 命令。只有实际调用成功才说已查到；工具失败时按返回结果说明暂时不可用，不把失败说成没有词条。")
+	return text.String()
+}
 
 // qqPublicTool 在已鉴权、限流的 QQ 消息内复用现有处理器。工具层只能构造公共路径，
 // 请求不带账号或管理令牌；社区处理器仍按匿名访问规则检查可见性并使用共享数据库限流。

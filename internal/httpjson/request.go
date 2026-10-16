@@ -1,4 +1,4 @@
-// Package httpjson 提供账户与服务端共用的 JSON 请求校验。
+// Package httpjson 提供共用的 JSON 请求校验和响应写入。
 package httpjson
 
 import (

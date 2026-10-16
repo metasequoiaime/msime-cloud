@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -73,9 +74,7 @@ func Handler(store Snapshots) http.Handler {
 }
 
 func fail(w http.ResponseWriter, status int, code string) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": code, "message": code}})
+	httpjson.WriteError(w, status, code)
 }
 
 // LimitInput 是列表类工具的参数：最多返回多少条，0 表示全部。

@@ -23,6 +23,9 @@ import (
 
 const usage = `usage: msime-cloud <command> [arguments]
 
+  tools                                  list the shared public query tools as JSON
+  tool NAME [json|-]                     run one read-only dictionary or public-data tool
+  mcp                                    serve the same tools over MCP stdio
   routes [filter]                        list the operations: method, path, auth, summary
   describe METHOD PATH                   print one operation: parameters, request body and responses
   call METHOD PATH [json|-] [-q name=value]... [-F name=value|name=@file]... [-o file]
@@ -120,6 +123,8 @@ func (c cli) dispatch(args []string) error {
 			return usageError{"describe needs METHOD and PATH"}
 		}
 		return describe(c.stdout, args[0], args[1])
+	case "tools", "tool", "mcp":
+		return c.publicTools(append([]string{command}, args...))
 	case "call":
 		return c.call(args)
 	case "login":

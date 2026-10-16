@@ -229,6 +229,40 @@ echo '{"display_name":"昵称"}' | ./msime-cloud call PATCH /v1/users/me -
 ./msime-cloud login google                              # 打开浏览器登录 Google，最多等待 5 分钟
 会话保存在用户配置目录下 `msime-cloud/credentials.json`（权限 0600，可用 `MSIME_CLOUD_CONFIG_DIR` 指定目录）。`logout` 退出并清理本地保存的用户会话，`logout --all` 撤销该会话所属用户的全部会话；这两个命令始终使用保存的会话（需要时自动刷新），不使用 `MSIME_CLOUD_TOKEN`。要退出环境访问令牌对应的会话，可用 `call POST /v1/auth/logout '{"all":false}'`。登录、刷新、退出和失效会话清理共用操作系统文件锁，避免并发修改丢失其他服务的会话；失效清理只删除请求实际使用的会话，不会删除并发完成的新登录。每次登录保存独立的 `login_id`，刷新保留该标识；用户退出时也会清理等待退出响应期间由同一次登录刷新的凭据，并发完成的另一次登录继续保留。旧格式凭据首次刷新时自动补上。旧命令需要刷新时若发现另一个命令已重新登录（包括同一用户），会报错并保留新登录，请重新发起命令。锁等待最多 15 秒，持锁进程退出后由操作系统释放，不会按文件年龄抢占仍在刷新的进程。`credentials.lock` 文件会保留，请勿在命令运行时删除它。升级命令行时先结束旧版本进程，避免两种锁协议同时操作同一凭据文件。
 
+### QQ Bot 共用工具与 MCP
+
+`tools`、`tool` 和 `mcp` 共用 QQ Bot 的公共查询目录，只读发布词库和公开数据。`lookup_dictionary` 查候选、注音、释义、辅助码等，`browse_input_catalog` 浏览表情、颜文字和符号，`query_public_data` 查公告、社区统计、公开词包、回复模板、常用语、插件和皮肤。`tools` 输出每个工具的完整 JSON Schema；`tool` 输出 `source`（查询路径）和 `data`（原 API 响应）。工具名也接受连字符写法。
+
+```sh
+./msime-cloud tools
+./msime-cloud tool lookup_dictionary '{"text":"nihao","limit":10}'
+./msime-cloud tool lookup_dictionary '{"operation":"annotate","text":"水杉"}'
+./msime-cloud tool lookup_dictionary '{"operation":"gloss","text":"hello"}'
+./msime-cloud tool browse_input_catalog '{"kind":"symbols","q":"箭头"}'
+./msime-cloud tool query_public_data '{"resource":"resources","kind":"dictionary","q":"示例"}'
+./msime-cloud tool query_public_data '{"resource":"plugins"}'
+echo '{"resource":"notices"}' | ./msime-cloud tool query_public_data -
+./msime-cloud mcp
+```
+
+支持 MCP stdio 的客户端可配置如下；`command` 换成已安装命令的绝对路径，环境变量由客户端配置传入：
+
+```json
+{
+  "mcpServers": {
+    "msime-cloud": {
+      "command": "/path/to/msime-cloud",
+      "args": ["mcp"],
+      "env": {"MSIME_CLOUD_URL": "https://api.msime.app"}
+    }
+  }
+}
+```
+
+公共社区查询不需要登录。词库、输入目录和输入能力查询沿用部署的 API 鉴权，需要显式设置 `MSIME_CLOUD_TOKEN`；这三个新命令不读取 `login` 保存的个人或管理员会话，也不自动刷新令牌。公共目录查询始终不发送该令牌或 Cookie。每次工具调用最多 15 秒，参数最多 64 KiB、API 响应最多 1 MiB；不跟随重定向，失败只返回错误码。MCP 的 stdout 只承载协议消息。
+
+QQ Bot 可直接回答「帮我查 nihao 的候选」「水杉怎么注音」「有哪些公开词库」等问题，沿用现有模型现查流程与五次工具调用预算，在进程内复用同一查询层；无需配置外部 MCP 服务或启动 CLI 子进程。词库和输入目录要求服务端已配置 `engine`，公共社区要求用户数据库可用；未配置或失败时会明确报告查询失败。社区查询以匿名身份执行，所有 Bot 公共社区调用共享数据库里的同一个地址限流桶。候选列表只包含有限结果，未出现某词不能据此认定整份词库没有该词；个人词库和私人作品不在查询范围内。
+
 ## Swagger / OpenAPI
 
 文档默认关闭，生产环境保持 `docs_enabled: false`（省略时同样关闭）。只有本地开发需要调试时，在配置顶层设置 `"docs_enabled": true`，重启后访问 `/swagger/`（`/swagger` 自动跳转），规范文件为 `/openapi.json`。显式启用后的文档无需登录；关闭时页面、JS/CSS 和 OpenAPI 入口统一返回 404，即使携带有效令牌也不开放。在线 API 的鉴权不受文档开关影响。点击 **Authorize**，只填写令牌本身，再使用 **Try it out → Execute**。令牌不持久化到浏览器存储。WAV 接口提供文件上传；实时语音仅展示 WebSocket 协议，不提供 HTTP 调试按钮。页面与 Swagger UI 5.32.15 的 JS/CSS 均内嵌到二进制，无需外部 CDN，禁用外部 validator。

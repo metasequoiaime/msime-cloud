@@ -1,6 +1,7 @@
 package account
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -432,9 +433,9 @@ func (a *Service) OpenDiagnosticSnapshot(ctx context.Context, id, token string) 
 }
 
 // RecordDiagnosticAccess 为一次 MCP 工具调用写访问记录。参数过长、不是合法 JSON 或无法存入 `jsonb` 时，以不超过 1 KiB 的原文字符串保存。
-func (a *Service) RecordDiagnosticAccess(ctx context.Context, id, tool string, arguments json.RawMessage, resultCount, bytes int) error {
+func (a *Service) RecordDiagnosticAccess(ctx context.Context, id, tool string, arguments json.RawMessage, resultCount, byteCount int) error {
 	const query = `INSERT INTO diagnostic_accesses(snapshot_id,tool,arguments,result_count,bytes) VALUES($1,$2,$3,$4,$5)`
-	_, err := a.store.pool.Exec(ctx, query, id, tool, []byte(boundedDiagnosticArguments(arguments)), resultCount, bytes)
+	_, err := a.store.pool.Exec(ctx, query, id, tool, []byte(boundedDiagnosticArguments(arguments)), resultCount, byteCount)
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) {
 		return err
@@ -442,31 +443,31 @@ func (a *Service) RecordDiagnosticAccess(ctx context.Context, id, tool string, a
 	switch pgErr.Code {
 	case "22P02", "22P05", "22003":
 		// `jsonb` 还限制 Unicode 编码和 `numeric` 范围；只在数据库明确拒绝该次写入后，用原文字符串重试一次。
-		_, err = a.store.pool.Exec(ctx, query, id, tool, []byte(quotedDiagnosticArguments(strings.TrimSpace(string(arguments)))), resultCount, bytes)
+		_, err = a.store.pool.Exec(ctx, query, id, tool, []byte(quotedDiagnosticArguments(bytes.TrimSpace(arguments))), resultCount, byteCount)
 	}
 	return err
 }
 
 func boundedDiagnosticArguments(arguments json.RawMessage) json.RawMessage {
-	trimmed := strings.TrimSpace(string(arguments))
-	if trimmed == "" || trimmed == "null" {
+	trimmed := bytes.TrimSpace(arguments)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 		return json.RawMessage(`{}`)
 	}
-	if len(trimmed) <= diagnosticAccessArgumentBytes && utf8.ValidString(trimmed) && json.Valid([]byte(trimmed)) {
-		return json.RawMessage(trimmed)
+	if len(trimmed) <= diagnosticAccessArgumentBytes && utf8.Valid(trimmed) && json.Valid(trimmed) {
+		return bytes.Clone(trimmed)
 	}
 	return quotedDiagnosticArguments(trimmed)
 }
 
-func quotedDiagnosticArguments(trimmed string) json.RawMessage {
+func quotedDiagnosticArguments(trimmed []byte) json.RawMessage {
 	cut := trimmed[:min(len(trimmed), diagnosticAccessArgumentBytes)]
-	if !utf8.ValidString(cut) || strings.IndexByte(cut, 0) >= 0 {
+	if !utf8.Valid(cut) || bytes.IndexByte(cut, 0) >= 0 {
 		// 只生成上限内的规范化前缀；连续非法字节仍合并成一个替代字符。
 		var buffer [diagnosticAccessArgumentBytes]byte
 		prefix := buffer[:0]
 		invalid := false
 		for offset := 0; offset < len(trimmed) && len(prefix) < len(buffer); {
-			r, size := utf8.DecodeRuneInString(trimmed[offset:])
+			r, size := utf8.DecodeRune(trimmed[offset:])
 			offset += size
 			if r == utf8.RuneError && size == 1 {
 				if invalid {
@@ -487,7 +488,7 @@ func quotedDiagnosticArguments(trimmed string) json.RawMessage {
 				prefix = utf8.AppendRune(prefix, r)
 			}
 		}
-		cut = string(prefix)
+		cut = prefix
 	}
 
 	end := len(cut)
@@ -496,7 +497,7 @@ func quotedDiagnosticArguments(trimmed string) json.RawMessage {
 		end = 0
 		encoded := 2 // 为 JSON 字符串两侧的引号留出空间。
 		for end < len(cut) {
-			r, size := utf8.DecodeRuneInString(cut[end:])
+			r, size := utf8.DecodeRune(cut[end:])
 			width := size
 			switch r {
 			case '\\', '"', '\b', '\f', '\n', '\r', '\t':
@@ -515,6 +516,6 @@ func quotedDiagnosticArguments(trimmed string) json.RawMessage {
 			end += size
 		}
 	}
-	quoted, _ := json.Marshal(cut[:end])
+	quoted, _ := json.Marshal(string(cut[:end]))
 	return quoted
 }

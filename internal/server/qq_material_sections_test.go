@@ -53,12 +53,16 @@ func qqMaterialSectionsServer(tb testing.TB, sections []qqSection, selected []in
 	}
 	body := string(response)
 	now := time.Unix(1792108800, 0)
+	snippets := make([]string, len(sections))
+	for i, section := range sections {
+		snippets[i] = qqSnippet(section.Text)
+	}
 	return &Server{
 		config: Config{Chat: ChatEndpoint{Endpoint: Endpoint{URL: "https://chat.example.test"}}},
 		qq: &qqBot{
 			config:    QQBotConfig{Model: "synthetic-model"},
 			now:       func() time.Time { return now },
-			knowledge: qqKnowledge{sections: sections, loaded: now},
+			knowledge: qqKnowledge{sections: sections, snippets: snippets, toc: qqKnowledgeTOC(sections, snippets), loaded: now},
 		},
 		client: &http.Client{Transport: qqTestTransport(func(r *http.Request) (*http.Response, error) {
 			_ = r.Body.Close()

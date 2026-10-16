@@ -58,6 +58,7 @@ type qqKnowledge struct {
 	mu       sync.Mutex
 	sections []qqSection
 	snippets []string
+	toc      string
 	loaded   time.Time
 }
 
@@ -80,7 +81,7 @@ func (s *Server) qqKnowledgeSections(ctx context.Context) ([]qqSection, error) {
 	for i, section := range sections {
 		snippets[i] = qqSnippet(section.Text)
 	}
-	k.sections, k.snippets, k.loaded = sections, snippets, s.qq.now()
+	k.sections, k.snippets, k.toc, k.loaded = sections, snippets, qqKnowledgeTOC(sections, snippets), s.qq.now()
 	return sections, nil
 }
 
@@ -1556,8 +1557,11 @@ func (s *Server) qqKnowledgeMaterial(ctx context.Context, question string, ask *
 	}
 	s.qq.knowledge.mu.Lock()
 	snippets := s.qq.knowledge.snippets
+	toc := s.qq.knowledge.toc
 	s.qq.knowledge.mu.Unlock()
-	toc := qqKnowledgeTOC(sections, snippets)
+	if toc == "" {
+		toc = qqKnowledgeTOC(sections, snippets)
+	}
 	type selection struct {
 		Sections    []int  `json:"sections"`
 		IssueSearch string `json:"issue_search"`

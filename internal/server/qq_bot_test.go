@@ -261,8 +261,9 @@ type qqFake struct {
 	// appCalls 记下 GET /app 的次数，appStatus 非 0 时它返回这个错误状态；App 的 slug 是 msime-bot。
 	appCalls  int
 	appStatus int
-	// judge 是自测判分模型的输出（为空时判通过）。
-	judge string
+	// judge 是自测判分模型的输出（为空时判通过），judgeUsers 保存收到的题目、答案和依据。
+	judge      string
+	judgeUsers []string
 	// 看截图：vision 是看图模型的输出（为空时给一段默认描述），visionCalls 记下收到的图片数据地址的开头。
 	vision       string
 	visionFinish string
@@ -457,6 +458,7 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			f.chatCalls = append(f.chatCalls, "triage")
 		case system == qqSelfTestJudgePrompt:
 			content = f.judge
+			f.judgeUsers = append(f.judgeUsers, fmt.Sprint(messages[1].(map[string]any)["content"]))
 			if content == "" {
 				content = `{"pass":true,"reason":"满足要求"}`
 			}
@@ -6064,14 +6066,17 @@ func TestQQBotWebSearch(t *testing.T) {
 	s.qq.config.Admins = nil
 	fake.selected = `{"sections":[],"lookup":true}`
 	fake.answer = `{"type":"answered","answer":"不太清楚。"}`
-	fake.researchPath, fake.researchQuery = "x", "Photon Studio"
-	fake.webResults = "Photon Studio 是免费的跨平台图像编辑器，被称作轻量化 Photoshop 平替。"
-	fake.answerAfterResearch = `{"type":"answered","answer":"据网上资料，Photon Studio 是免费的跨平台图像编辑器。"}`
+	fake.researchPath, fake.researchQuery = "x", "Photon Studio Photoshop 图像编辑 官网"
+	fake.webResults = "据网上资料，Photon Studio 是图像编辑器，支持 PSD，但兼容性并不完美；往返 Photoshop 时应保留原文件并核对导出。"
+	fake.answerAfterResearch = `{"type":"answered","answer":"据网上查到的信息，Photon Studio 是图像编辑器，可以尝试用它编辑 PSD；与 Photoshop 往返时需核对兼容性，并保留原文件。"}`
 	qqDeliver(t, s, "m-web", "评价一下 Photon Studio 和 Photoshop")
-	if strings.Join(fake.webQueries, ",") != "Photon Studio" || !strings.Contains(fake.answerSystem, qqResearchHeading+"查到：Photon Studio 是免费的跨平台图像编辑器") {
+	if strings.Join(fake.webQueries, ",") != fake.researchQuery || !strings.Contains(fake.answerSystem, qqResearchHeading+"查到："+fake.webResults) {
 		t.Fatal(fake.webQueries, fake.answerSystem)
 	}
-	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "据网上资料，Photon Studio 是免费的跨平台图像编辑器。" {
+	if !strings.Contains(strings.Join(fake.researchUsers, "\n"), "评价一下 Photon Studio 和 Photoshop") {
+		t.Fatal(fake.researchUsers)
+	}
+	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "据网上查到的信息，Photon Studio 是图像编辑器，可以尝试用它编辑 PSD；与 Photoshop 往返时需核对兼容性，并保留原文件。" {
 		t.Fatal(last)
 	}
 	// 空的搜索词不发请求。
@@ -6531,11 +6536,13 @@ func TestQQSelectPromptPlatformLabels(t *testing.T) {
 	}
 }
 
-// 答题提示词：对比类按水杉自己的文档答、不现查；没说平台时只有一条规则（都能一行说清就每平台一行，否则只追问系统），原来互相冲突的两条不再同时出现；不写「没查到」；夹字母的词不建议加词。
+// 答题提示词保留平台和来源边界：水杉事实按对应说明回答，模糊故障先澄清，外部产品先查证再比较。
 func TestQQAnswerPromptRules(t *testing.T) {
 	for _, want := range []string{
 		"和其他输入法对比、问值不值得换时，挑水杉的功能、隐私、平台与下载段落（标成「各平台」的 FAQ 段落、各平台的功能总览、隐私段落）",
 		"只有问到对方产品的具体事实（价格、某项功能有没有）时才为 true；笼统对比、问值不值得换为 false",
+		"只挑通用故障段落，不默认他在用 Windows",
+		"用比较对象帮助消歧，不先要求用户提供链接",
 	} {
 		if !strings.Contains(qqSelectPrompt, want) {
 			t.Errorf("qqSelectPrompt missing %q", want)
@@ -6544,7 +6551,11 @@ func TestQQAnswerPromptRules(t *testing.T) {
 	for _, want := range []string{
 		"水杉自己的功能和隐私只按文档段落说，不用网上查到的内容或 issue 介绍水杉；不根据 issue 说水杉现在没有某功能；不把开着的 issue 数量或 0.x 版本号当成缺点。",
 		"用户没说平台时：各平台做法都能用一行（不超过 40 字）说清的，每个平台一行，只写入口；有任何一个平台要多步操作的，answer 只写一句追问「你用的是哪个系统？」",
-		"资料没写到的平台或细节，能用常识就用常识说一句",
+		"系统通用操作可以用常识简短回答",
+		"安装包格式、安装命令、依赖和安装后的配置步骤必须有对应平台的文档段落支持",
+		"现查结果已确认产品身份就直接说明它是什么",
+		"你用的什么系统，卡在哪一步，有什么报错提示？",
+		"这条故障澄清规则优先于下面的一般用法规则",
 		"不写「没查到」「没看到说明」「不确定具体入口」这类话",
 		"词里有字母、数字或符号（如栓Q、yyds）时不要建议加词",
 	} {
@@ -6562,6 +6573,12 @@ func TestQQAnswerPromptRules(t *testing.T) {
 	}
 	if !strings.Contains(qqResearchPrompt, "web_search 只用来查水杉以外的东西，不要搜水杉自身") {
 		t.Error(qqResearchPrompt)
+	}
+	if !strings.Contains(qqResearchPrompt, "把产品名和比较对象、用途一起作为搜索线索") || !strings.Contains(qqResearchPrompt, "摘要保留已确认的产品身份、与比较有关的功能差异和限制") {
+		t.Error(qqResearchPrompt)
+	}
+	if strings.Contains(qqSelectPrompt, "先挑 Windows 正式版和 FAQ") || strings.Contains(qqAnswerPrompt, "资料没写到的平台或细节，能用常识") {
+		t.Error("平台和产品事实的旧规则仍与澄清、查证规则冲突")
 	}
 }
 
@@ -6597,6 +6614,67 @@ func TestQQSelfTestLimits(t *testing.T) {
 	}
 	if got := strings.Count(strings.Join(fake.chatCalls, ","), "judge"); got != len(qqSelfTestCases)-1 {
 		t.Fatal(got, fake.chatCalls)
+	}
+}
+
+// 判分收到最终回答实际使用的资料，包括答不上后重答的现查结果；失败与答不上不因带了依据而变成通过。
+func TestQQSelfTestJudgeEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		lookup     bool
+		unknown    bool
+		research   bool
+		judgeFails bool
+	}{
+		{name: "文档直接回答"},
+		{name: "预先现查", lookup: true, research: true},
+		{name: "答不上后现查重答", unknown: true, research: true},
+		{name: "有依据仍判失败", judgeFails: true},
+		{name: "答不上不判分", unknown: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, fake, _ := qqServer(t)
+			const guide = "下载对应架构的软件包，再执行 demo-setup --prepare 完成配置。"
+			s.qq.knowledge.sections = []qqSection{{Doc: "Linux · 测试指南", Title: "安装", Text: guide}}
+			s.qq.knowledge.loaded = s.qq.now()
+			fake.selected = fmt.Sprintf(`{"sections":[1],"lookup":%t}`, tc.lookup)
+			fake.answer = `{"type":"answered","answer":"` + guide + `","evidence":"模型伪造的依据"}`
+			if tc.unknown {
+				fake.answer = `{"type":"unknown","topic":"测试安装方法"}`
+			}
+			if tc.research {
+				fake.researchPath, fake.researchQuery = "x", "Demo Paint Sample Edit 官网"
+				fake.webResults = "据网上资料，Demo Paint 支持图层，Sample Edit 支持批量导出。"
+				fake.answerAfterResearch = `{"type":"answered","answer":"前者适合图层编辑，后者适合批量导出。"}`
+			}
+			if tc.judgeFails {
+				fake.judge = `{"pass":false,"reason":"答案不符合要求"}`
+			}
+			c := qqSelfTestCase{Question: "测试问题", Expect: "按所查到的说明回答"}
+			result := s.qqSelfTestOne(context.Background(), c)
+			if tc.unknown && !tc.research {
+				if result.Pass || result.Reason != "答不上" || len(fake.judgeUsers) != 0 {
+					t.Fatal(result, fake.judgeUsers)
+				}
+				return
+			}
+			if result.Pass == tc.judgeFails || len(fake.judgeUsers) != 1 {
+				t.Fatal(result, fake.judgeUsers)
+			}
+			var input struct {
+				Question, Expect, Answer, Evidence string
+			}
+			if err := json.Unmarshal([]byte(fake.judgeUsers[0]), &input); err != nil {
+				t.Fatal(err)
+			}
+			_, material, ok := strings.Cut(fake.answerSystem, "\n\n资料：\n")
+			if !ok || input.Question != c.Question || input.Expect != c.Expect || input.Answer != result.Answer || input.Evidence != material || !strings.Contains(input.Evidence, guide) || strings.Contains(input.Evidence, "模型伪造的依据") {
+				t.Fatal(input, material)
+			}
+			if tc.research && !strings.Contains(input.Evidence, qqResearchHeading+"查到："+fake.webResults) {
+				t.Fatal(input.Evidence)
+			}
+		})
 	}
 }
 

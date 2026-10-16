@@ -46,11 +46,11 @@ func Definitions() []*mcp.Tool {
 		tool("lookup_dictionary", "查询水杉发布词库与固定输入数据，不读取个人词库。listed 按 1～7 个汉字的词语精确检查发布拼音词库收录状态，返回 word、code、listed；默认 candidates 按编码查候选，收到纯汉字且方案为默认或 pinyin 时自动改为 listed。annotate 查汉字注音（注音成功不等于收录），gloss 查离线释义，helpcode 查辅助码。候选列表有限，没出现不等于整份词库没有该词。", map[string]any{
 			"text":      field("string", "要查询的编码或文本"),
 			"operation": choice("查询类型，默认 candidates；查汉字词语是否收录用 listed", "candidates", "listed", "jianpin", "english", "japanese", "quick", "annotate", "gloss", "helpcode", "segmentation", "emoji", "kaomoji", "unicode", "romaji", "convert", "datetime"),
-			"scheme":    choice("输入方案", "pinyin", "shuangpin", "wubi"),
-			"profile":   choice("双拼方案", "xiaohe", "ziranma", "shoudao", "microsoft"),
+			"scheme":    choice("编码候选的输入方案；helpcode 不使用此字段", "pinyin", "shuangpin", "wubi"),
+			"profile":   choice("编码候选的双拼方案；查小鹤辅助码使用 schema=xiaohe", "xiaohe", "ziranma", "shoudao", "microsoft"),
 			"limit":     number("最多返回的候选数，默认 20", 1, 50),
 			"direction": field("string", "gloss: en-zh 或 zh-en；romaji: romaji-hiragana、hiragana-katakana 或 kana-romaji"),
-			"schema":    choice("辅助码方案", "lantian", "ziranma", "shouyou2_0", "shouyouplus", "xiaohe"),
+			"schema":    choice("helpcode 的辅助码表；查小鹤辅助码显式指定 xiaohe，与双拼 profile 不同", "lantian", "ziranma", "shouyou2_0", "shouyouplus", "xiaohe"),
 			"time":      field("string", "datetime 的 RFC3339 时间，可省略"),
 			"timezone":  field("string", "datetime 的 IANA 时区，默认 UTC"),
 		}, "text"),
@@ -216,6 +216,19 @@ func build(name string, arguments json.RawMessage) (Request, error) {
 			in.Operation = "listed"
 		}
 		if in.Operation == "listed" && (in.Scheme == "" || in.Scheme == "pinyin") {
+			in.Scheme, in.Profile = "", ""
+		}
+		if in.Operation == "helpcode" {
+			// 辅助码按 schema 选表，不向 HTTP 接口传候选专用的 scheme/profile。
+			if in.Schema == "" && in.Profile != "" {
+				switch in.Profile {
+				case "xiaohe", "ziranma":
+					in.Schema = in.Profile
+				default:
+					// 其余双拼方案没有同名辅助码表，不能默默改查默认表。
+					return Request{}, errors.New("invalid_dictionary_query")
+				}
+			}
 			in.Scheme, in.Profile = "", ""
 		}
 		if !slices.Contains([]string{"candidates", "listed", "jianpin", "english", "japanese", "quick", "annotate", "gloss", "helpcode", "segmentation", "emoji", "kaomoji", "unicode", "romaji", "convert", "datetime"}, in.Operation) || in.Text == "" || len(in.Text) > 8192 || in.Limit < 0 || in.Limit > 50 {

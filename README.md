@@ -245,6 +245,7 @@ Google 用户登录和管理员登录在打开浏览器前检查挑战有效期�
 ./msime-cloud tool lookup_dictionary '{"text":"水杉"}'
 ./msime-cloud tool lookup_dictionary '{"operation":"annotate","text":"水杉"}'
 ./msime-cloud tool lookup_dictionary '{"operation":"gloss","text":"hello"}'
+./msime-cloud tool lookup_dictionary '{"operation":"helpcode","text":"木","schema":"xiaohe"}'
 ./msime-cloud tool browse_input_catalog '{"kind":"symbols","q":"箭头"}'
 ./msime-cloud tool query_public_data '{"resource":"resources","kind":"dictionary","q":"示例"}'
 ./msime-cloud tool query_public_data '{"resource":"plugins"}'

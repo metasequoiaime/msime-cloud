@@ -82,7 +82,7 @@ jobs:
       - run: go test -race -count=1 -p 1 -coverpkg=./internal/account,./internal/server -coverprofile=database.cover ./internal/account ./internal/server
       - run: python3 scripts/check_go_coverage.py --database database.cover
 
-  # 判断这次改动有没有碰到原生引擎：引擎子模块、internal/engine、internal/server 里调用引擎的在线查询与词条投稿及依赖引擎的测试、原生资源、镜像和引擎相关脚本。拉取请求比对目标分支，main 上的推送比对推送前的提交；推送前的提交不可用（新建分支、强推）时按碰到处理。
+  # 判断这次改动有没有碰到原生引擎：引擎子模块、internal/engine、公共工具及其 CLI/QQ 入口、在线查询与词条投稿及依赖引擎的测试、原生资源、镜像和引擎相关脚本。拉取请求比对目标分支，main 上的推送比对推送前的提交；推送前的提交不可用（新建分支、强推）时按碰到处理。
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -95,7 +95,7 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null || git diff --name-only "$BASE" HEAD | grep -qE '^(Dockerfile|\.dockerignore|third_party/|native/|internal/engine/|internal/server/(input|word_submissions|cloud_native_test|native_e2e_test)\.go|scripts/(fetch_engine_resources|smoke_container|test_native)\.py)'; then
+          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null || git diff --name-only "$BASE" HEAD | grep -qE '^(Dockerfile|\.dockerignore|third_party/|native/|internal/engine/|internal/publictools/|cmd/msime-cloud/tools[^/]*\.go|internal/server/(input|word_submissions|cloud_native_test|native_e2e_test|qq_public_tools[^/]*)\.go|scripts/(fetch_engine_resources|smoke_container|test_native)\.py)'; then
             echo "native=true" >> "$GITHUB_OUTPUT"
           else
             echo "native=false" >> "$GITHUB_OUTPUT"

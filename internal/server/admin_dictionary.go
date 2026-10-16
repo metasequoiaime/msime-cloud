@@ -284,17 +284,22 @@ func dictionaryRows(name, text, query string, page int) ([]dictionaryRow, int) {
 		if total <= (page-1)*100 || total > page*100 {
 			continue
 		}
-		cols := strings.Split(strings.TrimSuffix(raw, "\r"), "\t")
+		var cols []string
 		if strings.HasSuffix(name, ".csv") {
 			reader := csv.NewReader(strings.NewReader(line))
 			reader.FieldsPerRecord = -1
 			if parsed, err := reader.Read(); err == nil {
 				cols = parsed
+			} else {
+				cols = strings.Split(strings.TrimSuffix(raw, "\r"), "\t")
 			}
 		} else if strings.HasPrefix(name, "sources/korean/") {
 			cols = strings.SplitN(line, ":", 3)
-		} else if len(cols) == 1 && !strings.HasSuffix(name, ".md") {
-			cols = strings.Fields(line)
+		} else {
+			cols = strings.Split(strings.TrimSuffix(raw, "\r"), "\t")
+			if len(cols) == 1 && !strings.HasSuffix(name, ".md") {
+				cols = strings.Fields(line)
+			}
 		}
 		rows = append(rows, dictionaryRow{Line: lineNumber, Columns: cols})
 	}

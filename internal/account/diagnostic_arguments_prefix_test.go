@@ -54,6 +54,11 @@ func TestQuotedDiagnosticArgumentsCompatibility(t *testing.T) {
 
 func TestQuotedDiagnosticArgumentsAllocationBudget(t *testing.T) {
 	for _, tc := range []struct{ name, text string }{
+		{"empty", ""},
+		{"short", "not JSON"},
+		{"ascii", strings.Repeat("a", 1024)},
+		{"unicode", strings.Repeat("水😀\u2028", 150)},
+		{"invalid", strings.Repeat("\xff", 1024)},
 		{"controls", strings.Repeat("\x01", 1024)},
 		{"html", strings.Repeat("<>&", 342)},
 		{"nul", strings.Repeat("\x00", 1024)},
@@ -67,8 +72,9 @@ func TestQuotedDiagnosticArgumentsAllocationBudget(t *testing.T) {
 			if len(got) > diagnosticAccessArgumentBytes || !json.Valid(got) {
 				t.Fatalf("结果不是上限内的 JSON：%q", got)
 			}
-			if allocations > 8 {
-				t.Fatalf("截断分配 %.0f 次，预算 8 次", allocations)
+			// 编码过程只为独立返回值分配一次，不依赖标准库缓存是否命中。
+			if allocations > 1 {
+				t.Fatalf("截断分配 %.0f 次，预算为独立返回值的 1 次分配", allocations)
 			}
 		})
 	}

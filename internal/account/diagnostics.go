@@ -491,31 +491,50 @@ func quotedDiagnosticArguments(trimmed []byte) json.RawMessage {
 		cut = prefix
 	}
 
-	end := len(cut)
-	// 每个源字节最多转义成六个 JSON 字节；短文本无需逐字计算预算。
-	if len(cut) > (diagnosticAccessArgumentBytes-2)/6 {
-		end = 0
-		encoded := 2 // 为 JSON 字符串两侧的引号留出空间。
-		for end < len(cut) {
-			r, size := utf8.DecodeRune(cut[end:])
-			width := size
-			switch r {
-			case '\\', '"', '\b', '\f', '\n', '\r', '\t':
-				width = 2
-			case '<', '>', '&', '\u2028', '\u2029':
-				width = 6
-			default:
-				if r < 0x20 {
-					width = 6
-				}
+	// 直接编码到上限内的缓冲区，省去字符串副本和通用 JSON 编码器的缓存分配。
+	var encoded [diagnosticAccessArgumentBytes]byte
+	quoted := append(encoded[:0], '"')
+	const hex = "0123456789abcdef"
+	for offset := 0; offset < len(cut); {
+		r, size := utf8.DecodeRune(cut[offset:])
+		part := cut[offset : offset+size]
+		switch r {
+		case '\\':
+			part = []byte(`\\`)
+		case '"':
+			part = []byte(`\"`)
+		case '\b':
+			part = []byte(`\b`)
+		case '\f':
+			part = []byte(`\f`)
+		case '\n':
+			part = []byte(`\n`)
+		case '\r':
+			part = []byte(`\r`)
+		case '\t':
+			part = []byte(`\t`)
+		case '<':
+			part = []byte(`\u003c`)
+		case '>':
+			part = []byte(`\u003e`)
+		case '&':
+			part = []byte(`\u0026`)
+		case '\u2028':
+			part = []byte(`\u2028`)
+		case '\u2029':
+			part = []byte(`\u2029`)
+		default:
+			if r < 0x20 {
+				escaped := [6]byte{'\\', 'u', '0', '0', hex[r>>4], hex[r&15]}
+				part = escaped[:]
 			}
-			if encoded+width > diagnosticAccessArgumentBytes {
-				break
-			}
-			encoded += width
-			end += size
 		}
+		if len(quoted)+len(part)+1 > len(encoded) {
+			break
+		}
+		quoted = append(quoted, part...)
+		offset += size
 	}
-	quoted, _ := json.Marshal(string(cut[:end]))
-	return quoted
+	quoted = append(quoted, '"')
+	return bytes.Clone(quoted)
 }

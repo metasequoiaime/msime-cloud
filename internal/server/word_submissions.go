@@ -724,11 +724,11 @@ func submissionTitle(counts map[string]int) string {
 	return "feat(custom): add " + strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1]
 }
 
-// addedLines counts the entry lines in head that base does not have, so maintainer edits on the rolling branch are reflected. Blank and # comment lines are not entries, and surrounding whitespace does not make a line different, as the dictionary build strips it.
+// addedLines 统计 head 比 base 多出的词条行数，包含维护者在滚动分支的修改。按词库构建规则去掉首尾空白并跳过空行和 # 注释，重复行按出现次数抵扣。
 func addedLines(base, head string) int {
 	remaining := map[string]int{}
 	entries := func(content string, visit func(string)) {
-		for _, line := range strings.Split(content, "\n") {
+		for line := range strings.SplitSeq(content, "\n") {
 			if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
 				visit(line)
 			}

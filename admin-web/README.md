@@ -19,7 +19,7 @@ pnpm dev
 - `src/utils/`：不依赖组件的公共工具。`time.ts` 提供本地时区日期格式化与中文相对时间，无效日期保留原文；`bytes.ts` 统一字节到 B、KB、MB 的单位换算，页面自行决定精度和空值文案；`number.ts` 提供数字千分位格式化，默认使用 `zh-CN`，页面可指定 `en-US` 和小数位等 `Intl` 选项。
 - `src/hooks/`：共享 React Hook。`use-debounced.ts` 延迟发布输入值，输入或延迟改变时重新计时，卸载时取消等待；`use-api-image.ts` 共用管理接口图片读取、五分钟缓存和 data URL 转换，支持 Cookie 与旧令牌，页面保留各自的缓存键和地址。
 - `src/shell/`：外壳（侧栏、顶栏、全局搜索、通知、外观、权限钩子 `usePermissions`、页面级快捷键）。
-- `src/ui/`：共享组件。`data-table.tsx`（选择、批量操作、本页筛选、分页）、`drawer.tsx`、`confirm.tsx`、`toast.tsx`（4 秒撤销与延迟提交）、`filter-chips.tsx`、`segmented.tsx`、`stat-tile.tsx`、`charts.tsx`、`states.tsx` 等。`overlay.ts` 记录打开的弹窗：页面快捷键在弹窗打开时失效，提示条把 Escape 交给最上层弹窗，弹窗不会因点击提示条的「撤销」而关闭。
+- `src/ui/`：共享组件。`data-table.tsx`（选择、批量操作、本页筛选、分页）、`drawer.tsx`、`confirm.tsx`、`toast.tsx`（4 秒撤销与延迟提交）、`filter-chips.tsx`、`segmented.tsx`、`stat-tile.tsx`、`charts.tsx`、`states.tsx` 等。`modal.tsx` 为确认框和发布表单共用弹窗框架与标题说明，保留普通遮罩以适配 CSP。`overlay.ts` 记录打开的弹窗：页面快捷键在弹窗打开时失效，提示条把 Escape 交给最上层弹窗，弹窗不会因点击提示条的「撤销」而关闭。
 - `src/auth.tsx`：登录状态、Google 登录与管理员密钥登录页。
 - `tests/csp_smoke.py`、`tests/harness/`：CSP 冒烟测试与共享组件测试页。
 
@@ -47,6 +47,8 @@ python3 tests/csp_smoke.py
 下载镜像回归测试会挂起链接保存和清空请求，确认输入框和写入按钮在等待期间不可操作，成功后显示服务端确认的链接，失败后恢复编辑并保留草稿。
 
 敏感词、管理员添加和 Issue 回复回归测试会在请求等待期间继续输入，确认成功回调只清理已提交且未继续编辑的草稿，失败时保留原文。Issue 回复还会关闭并重新打开同一条或另一条 Issue，确认即使新旧回复正文相同，旧请求也不会清空新草稿。
+
+公共弹窗回归测试覆盖宽窄布局、初始焦点、键盘事件、无障碍描述、提示条撤销、Escape 及外部点击关闭；确认框和发布表单还检查各自的初始焦点。
 
 发布管理回归测试会挂起触发发布和保存说明请求，确认版本号与发布说明在等待期间不可编辑，弹窗不能取消或按 Escape 关闭；成功后关闭弹窗，失败后保留原文并允许修改后重试。
 

@@ -337,6 +337,47 @@ def check_bytes(page):
         expect(rows.nth(index).locator("td")).to_have_text(values)
 
 
+def check_modal(browser, base: str, problems: list[str]):
+    # 独立上下文验证公共弹窗的焦点、无障碍描述、关闭与提示条交互。
+    context = browser.new_context(viewport={"width": 1280, "height": 860})
+    context.add_init_script("window.__csp = []; document.addEventListener('securitypolicyviolation', e => window.__csp.push(e.violatedDirective));")
+    page = context.new_page()
+    page.on("pageerror", lambda error: problems.append(f"公共弹窗页面异常：{error}"))
+    try:
+        page.goto(base + "/harness/?modal")
+        registered = page.get_by_test_id("modal-overlay")
+        expect(registered).to_have_text("false")
+        for kind, width, description in (("窄版", 400, "带有格式的说明"), ("宽版", 640, "带有格式的说明"), ("无说明", 400, "无说明弹窗")):
+            page.get_by_role("button", name=f"打开{kind}", exact=True).click()
+            dialog = page.get_by_role("dialog", name=f"{kind}弹窗", exact=True)
+            expect(dialog).to_be_visible()
+            expect(dialog).to_have_accessible_description(description)
+            expect(dialog.get_by_role("textbox", name="弹窗输入")).to_be_focused()
+            expect(registered).to_have_text("true")
+            page.wait_for_function("width => document.querySelector('[role=dialog]').getBoundingClientRect().width === width", arg=width)
+            page.keyboard.press("x")
+            expect(page.get_by_test_id("modal-key")).to_have_text("x")
+            # 提示条在弹窗外，点击撤销不能触发弹窗的外部关闭。
+            dialog.get_by_role("button", name="显示提示").click()
+            page.locator("[data-msime-toast] button").click()
+            expect(page.get_by_test_id("modal-undone")).to_have_text("true")
+            expect(dialog).to_be_visible()
+            # 提示条拿到 Escape 时仍应关闭最上层弹窗并注销遮罩。
+            dialog.get_by_role("button", name="显示提示").click()
+            page.keyboard.press("Escape")
+            expect(dialog).to_have_count(0)
+            expect(registered).to_have_text("false")
+        page.get_by_role("button", name="打开窄版", exact=True).click()
+        page.get_by_role("dialog").click(position={"x": 10, "y": 10})
+        expect(page.get_by_role("dialog")).to_be_visible()
+        page.mouse.click(5, 5)
+        expect(page.get_by_role("dialog")).to_have_count(0)
+        expect(registered).to_have_text("false")
+        problems.extend(f"公共弹窗 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+    finally:
+        context.close()
+
+
 def check_debounce(browser, base: str, problems: list[str]):
     # Playwright 时钟作用于整个上下文；独立上下文避免暂停后影响其他页面的 Query 通知。
     context = browser.new_context(viewport={"width": 1280, "height": 860})
@@ -1078,6 +1119,7 @@ def check_release_pending(context, base: str, problems: list[str]):
                 page.get_by_role("button", name="触发发布" if kind == "trigger" else "编辑说明", exact=True).click()
                 dialog = page.get_by_role("dialog")
                 field = dialog.get_by_role("textbox", name=label, exact=True)
+                expect(field).to_be_focused()
                 field.fill(draft)
                 with page.expect_request(lambda request: request.method == "POST") as sent:
                     dialog.get_by_role("button", name=button, exact=True).click()
@@ -1703,6 +1745,7 @@ def main() -> int:
                 expect(page.get_by_text("已选 3 项")).to_be_visible()
                 page.get_by_role("button", name="批量驳回").click()
                 dialog = page.get_by_role("dialog", name="驳回 3 项？")
+                expect(dialog.get_by_role("button", name="驳回", exact=True)).to_be_focused()
                 dialog.get_by_role("radio", name="原因乙").click()
                 dialog.get_by_placeholder("补充说明（可选）").fill("备注")
                 dialog.get_by_role("button", name="驳回").click()
@@ -1777,6 +1820,7 @@ def main() -> int:
                 check_bytes(page)
                 check_api_images(browser, base, problems)
                 check_api_image_pages(browser, base, problems)
+                check_modal(browser, base, problems)
                 check_debounce(browser, base, problems)
                 check_auth_generation(context, base, problems)
                 check_auth_logout(context, base, problems)

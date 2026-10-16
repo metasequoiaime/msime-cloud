@@ -1,6 +1,6 @@
 // Component harness for tests/csp_smoke.py: renders every shared ui piece with fixed test fixtures so the smoke test can exercise them under the production CSP.
 import "../../src/zod-config";
-import { StrictMode, useState } from "react";
+import { StrictMode, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider, useMutation } from "@tanstack/react-query";
 import { z } from "zod";
@@ -15,6 +15,8 @@ import type { Column } from "../../src/ui/data-table";
 import { DetailDrawer, DrawerComposer } from "../../src/ui/drawer";
 import { FilterChips } from "../../src/ui/filter-chips";
 import { KeyboardPreview } from "../../src/ui/keyboard-preview";
+import { ModalFrame, ModalHeading } from "../../src/ui/modal";
+import { useOverlayOpen } from "../../src/ui/overlay";
 import { Pill } from "../../src/ui/pill";
 import { ProgressBar } from "../../src/ui/progress";
 import { Segmented } from "../../src/ui/segmented";
@@ -61,6 +63,31 @@ function ImageHarness() {
       <option value="success">成功</option><option value="denied">无权限</option><option value="slow">等待响应</option>
     </select>
     {visible && <ImageResult id={id} enabled={enabled} />}
+  </main>;
+}
+
+function ModalHarness() {
+  const [kind, setKind] = useState("");
+  const [lastKey, setLastKey] = useState("");
+  const [undone, setUndone] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+  const overlayOpen = useOverlayOpen();
+  const toast = useToast();
+  return <main>
+    <button type="button" onClick={() => setKind("窄版弹窗")}>打开窄版</button>
+    <button type="button" onClick={() => setKind("宽版弹窗")}>打开宽版</button>
+    <button type="button" onClick={() => setKind("无说明弹窗")}>打开无说明</button>
+    <output data-testid="modal-overlay">{String(overlayOpen)}</output>
+    <output data-testid="modal-key">{lastKey}</output>
+    <output data-testid="modal-undone">{String(undone)}</output>
+    {kind && <ModalFrame wide={kind === "宽版弹窗"} onClose={() => setKind("")}
+      onOpenAutoFocus={event => { event.preventDefault(); input.current?.focus(); }}
+      onKeyDown={event => setLastKey(event.key)}>
+      <ModalHeading title={kind} description={kind === "无说明弹窗" ? undefined : <>带有<strong>格式</strong>的说明</>} />
+      <button type="button" onClick={() => toast({ text: "弹窗内提示", undo: () => setUndone(true) })}>显示提示</button>
+      <input ref={input} aria-label="弹窗输入" />
+      <button type="button" onClick={() => setKind("")}>关闭弹窗</button>
+    </ModalFrame>}
   </main>;
 }
 
@@ -164,6 +191,8 @@ if (!root) throw new Error("Missing harness root");
 const params = new URLSearchParams(window.location.search);
 createRoot(root).render(<StrictMode><ToastProvider>{params.has("images")
   ? <QueryClientProvider client={imageClient}><APICredentialsContext.Provider value={imageCredentials}><ImageHarness /></APICredentialsContext.Provider></QueryClientProvider>
+  : params.has("modal")
+  ? <ModalHarness />
   : params.has("auth")
   ? <QueryClientProvider client={authClient}><AuthProvider><AuthHarness /></AuthProvider></QueryClientProvider>
   : <ConfirmProvider><Harness /></ConfirmProvider>}</ToastProvider></StrictMode>);

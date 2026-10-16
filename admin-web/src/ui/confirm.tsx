@@ -1,8 +1,8 @@
 import { createContext, useCallback, useContext, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
-import { Dialog, ToggleGroup } from "radix-ui";
+import { ToggleGroup } from "radix-ui";
 import { Button } from "./button";
-import { keepOpenForToast, useRegisterOverlay } from "./overlay";
+import { ModalFrame, ModalHeading } from "./modal";
 
 export type ConfirmOptions = {
   title: string;
@@ -49,12 +49,11 @@ function ConfirmDialog({ pending, onDone }: { pending: Pending; onDone: (value: 
   const [pick, setPick] = useState(reasons?.[0] ?? "");
   const [note, setNote] = useState("");
   const okRef = useRef<HTMLButtonElement>(null);
-  useRegisterOverlay(true, () => onDone(null));
   const submit = () => {
     const trimmed = note.trim();
     onDone(pick ? pick + (trimmed ? `：${trimmed}` : "") : "");
   };
-  // Enter confirms unless the note textarea or a button (which activates itself) has focus.
+  // 焦点不在备注文本框或会自行触发的按钮上时，按 Enter 确认。
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const tag = (event.target as HTMLElement).tagName;
     if (event.key === "Enter" && tag !== "TEXTAREA" && tag !== "BUTTON" && !event.nativeEvent.isComposing) {
@@ -62,29 +61,20 @@ function ConfirmDialog({ pending, onDone }: { pending: Pending; onDone: (value: 
       submit();
     }
   };
-  // No Dialog.Overlay: Radix wraps the overlay in react-remove-scroll, which injects a <style> element that the admin CSP blocks. The scrim below is a plain element and outside clicks still dismiss through the content's dismissable layer.
-  return <Dialog.Root open onOpenChange={open => { if (!open) onDone(null); }}>
-    <Dialog.Portal>
-      <div className="fixed inset-0 z-70 grid place-items-center bg-[rgba(10,20,14,.38)] p-5">
-        <Dialog.Content onKeyDown={onKeyDown} onInteractOutside={keepOpenForToast} onOpenAutoFocus={event => { event.preventDefault(); okRef.current?.focus(); }}
-          className="w-full max-w-[400px] animate-pop-in rounded-[18px] bg-panel px-6 py-[22px] shadow-dialog outline-none">
-          <Dialog.Title className="m-0 text-[17px] font-bold text-ink">{title}</Dialog.Title>
-          {description ? <Dialog.Description className="m-0 mt-2 text-sm leading-[1.8] text-body">{description}</Dialog.Description> : <Dialog.Description className="sr-only">{title}</Dialog.Description>}
-          {reasons && reasons.length > 0 && <div className="mt-4">
-            <div className="mb-2 text-[12.5px] font-semibold text-muted" id="confirm-reason-label">原因</div>
-            <ToggleGroup.Root type="single" value={pick} onValueChange={next => { if (next) setPick(next); }} aria-labelledby="confirm-reason-label" className="flex flex-wrap gap-1.5">
-              {reasons.map(reason => <ToggleGroup.Item key={reason} value={reason}
-                className="h-[30px] rounded-full px-3 text-[13px] text-body inset-ring inset-ring-hair-2 transition hover:bg-panel-2 data-[state=on]:bg-accent-soft data-[state=on]:text-accent-ink data-[state=on]:inset-ring-accent-ring">{reason}</ToggleGroup.Item>)}
-            </ToggleGroup.Root>
-            <textarea rows={2} value={note} onChange={event => setNote(event.target.value)} placeholder="补充说明（可选）" aria-label="补充说明"
-              className="mt-2.5 block w-full resize-y rounded-[10px] bg-panel-2 px-3 py-2 text-[13.5px] text-ink outline-none placeholder:text-muted focus:ring-[1.5px] focus:ring-accent" />
-          </div>}
-          <div className="mt-5 flex justify-end gap-2">
-            <Button variant="outline" onClick={() => onDone(null)}>取消</Button>
-            <Button ref={okRef} variant={tone === "danger" ? "danger" : "primary"} onClick={submit}>{okLabel}</Button>
-          </div>
-        </Dialog.Content>
-      </div>
-    </Dialog.Portal>
-  </Dialog.Root>;
+  return <ModalFrame onClose={() => onDone(null)} onKeyDown={onKeyDown} onOpenAutoFocus={event => { event.preventDefault(); okRef.current?.focus(); }}>
+    <ModalHeading title={title} description={description} />
+    {reasons && reasons.length > 0 && <div className="mt-4">
+      <div className="mb-2 text-[12.5px] font-semibold text-muted" id="confirm-reason-label">原因</div>
+      <ToggleGroup.Root type="single" value={pick} onValueChange={next => { if (next) setPick(next); }} aria-labelledby="confirm-reason-label" className="flex flex-wrap gap-1.5">
+        {reasons.map(reason => <ToggleGroup.Item key={reason} value={reason}
+          className="h-[30px] rounded-full px-3 text-[13px] text-body inset-ring inset-ring-hair-2 transition hover:bg-panel-2 data-[state=on]:bg-accent-soft data-[state=on]:text-accent-ink data-[state=on]:inset-ring-accent-ring">{reason}</ToggleGroup.Item>)}
+      </ToggleGroup.Root>
+      <textarea rows={2} value={note} onChange={event => setNote(event.target.value)} placeholder="补充说明（可选）" aria-label="补充说明"
+        className="mt-2.5 block w-full resize-y rounded-[10px] bg-panel-2 px-3 py-2 text-[13.5px] text-ink outline-none placeholder:text-muted focus:ring-[1.5px] focus:ring-accent" />
+    </div>}
+    <div className="mt-5 flex justify-end gap-2">
+      <Button variant="outline" onClick={() => onDone(null)}>取消</Button>
+      <Button ref={okRef} variant={tone === "danger" ? "danger" : "primary"} onClick={submit}>{okLabel}</Button>
+    </div>
+  </ModalFrame>;
 }

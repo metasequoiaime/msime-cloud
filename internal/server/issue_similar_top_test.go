@@ -132,8 +132,8 @@ func TestSimilarIssueRowsAllocationBudget(t *testing.T) {
 	if !reflect.DeepEqual(got, previousSimilarIssueRows(items, row)) {
 		t.Fatal("大列表的相似问题结果发生变化")
 	}
-	if allocated := result.AllocedBytesPerOp(); allocated > 512<<10 {
-		t.Fatalf("筛选 1000 个问题分配 %d 字节，超过 512 KiB 预算", allocated)
+	if allocated := result.AllocedBytesPerOp(); allocated > 8<<10 {
+		t.Fatalf("筛选 1000 个问题分配 %d 字节，超过 8 KiB 预算", allocated)
 	}
 }
 

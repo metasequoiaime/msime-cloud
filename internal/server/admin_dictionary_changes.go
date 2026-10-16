@@ -185,13 +185,15 @@ func (s *Server) createDictionaryPR(ctx context.Context, gh *githubapp.Client, i
 		URL    string `json:"html_url"`
 	}
 	body := fmt.Sprintf("通过水杉管理后台提交 %d 项词条变更。\n\n文件：`%s`\n基准版本：`%s`\n\n请检查格式、读音、权重、重复项与翻译覆盖，并等待仓库检查通过后合入。", len(input.Changes), input.Path, base.SHA)
-	if err := write("POST", "/pulls", map[string]any{"title": title, "head": branch, "base": meta.Branch, "body": body}, &pull); err != nil {
+	err = write("POST", "/pulls", map[string]any{"title": title, "head": branch, "base": meta.Branch, "body": body}, &pull)
+	// PR 可能已经创建，不能因响应丢失或格式异常而继续缓存旧列表。
+	gh.Invalidate("/repos/" + repo + "/pulls")
+	if err != nil {
 		return result, err
 	}
 	if pull.Number <= 0 || pull.URL != "https://github.com/"+repo+"/pull/"+strconv.Itoa(pull.Number) {
 		return result, dictionaryChangeFail(502, "dictionary_uncertain")
 	}
-	gh.Invalidate("/repos/" + repo + "/pulls")
 	result.Number, result.URL = pull.Number, pull.URL
 	return result, nil
 }

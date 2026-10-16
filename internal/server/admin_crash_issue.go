@@ -128,6 +128,8 @@ func (s *Server) adminCrashIssue(w http.ResponseWriter, r *http.Request) {
 		request["assignees"] = []string{platform.Assignee}
 	}
 	response, err := client.Do(ctx, token, "POST", "/repos/"+platform.Repo+"/issues", request)
+	// 响应失败或损坏时 issue 也可能已创建，后续读取不能继续使用写入前的缓存。
+	client.Invalidate("/repos/" + platform.Repo + "/issues")
 	if err != nil {
 		slog.Warn("crash issue: create", "repo", platform.Repo, "reason", err.Error())
 		fail(w, 502, "github_unavailable")
@@ -150,7 +152,6 @@ func (s *Server) adminCrashIssue(w http.ResponseWriter, r *http.Request) {
 		fail(w, 502, "github_unavailable")
 		return
 	}
-	client.Invalidate("/repos/" + platform.Repo + "/issues")
 	// The issue now exists on GitHub; record it even if the request deadline ran out or the admin went away during the GitHub call. WithoutCancel keeps the actor for the audit row.
 	recordCtx, cancelRecord := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancelRecord()

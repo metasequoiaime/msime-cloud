@@ -188,20 +188,21 @@ func (a *Service) dictionaryImport(w http.ResponseWriter, r *http.Request) {
 		if line == "" {
 			continue
 		}
-		fields := strings.Split(line, "\t")
-		if len(fields) != 3 {
+		word, rest, firstTab := strings.Cut(line, "\t")
+		code, rawWeight, secondTab := strings.Cut(rest, "\t")
+		if !firstTab || !secondTab || strings.ContainsRune(rawWeight, '\t') {
 			writeError(w, 400, "invalid_dictionary_tsv")
 			return
 		}
-		weight, err := strconv.ParseInt(strings.TrimSpace(fields[2]), 10, 64)
+		weight, err := strconv.ParseInt(strings.TrimSpace(rawWeight), 10, 64)
 		if err != nil || weight < 0 {
 			writeError(w, 400, "invalid_dictionary_weight")
 			return
 		}
 		if input.Format == "windows" && (kind == "english" || kind == "quick") {
-			fields[0], fields[1] = fields[1], fields[0]
+			word, code = code, word
 		}
-		entries = append(entries, DictionaryEntry{Code: strings.TrimSpace(fields[1]), Word: strings.TrimSpace(fields[0]), Weight: weight})
+		entries = append(entries, DictionaryEntry{Code: strings.TrimSpace(code), Word: strings.TrimSpace(word), Weight: weight})
 	}
 	if len(entries) == 0 || len(entries) > 500 {
 		writeError(w, 400, "dictionary_import_limit")

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
@@ -260,6 +259,7 @@ func (a *Service) dictionaryExport(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="dictionary-`+kind+`.tsv"`)
+	var line []byte
 	started := false
 	err := stream(r.Context(), p.UserID, kind, func(e DictionaryEntry) error {
 		started = true
@@ -267,7 +267,15 @@ func (a *Service) dictionaryExport(w http.ResponseWriter, r *http.Request) {
 		if format == "windows" && (kind == "english" || kind == "quick") {
 			first, second = second, first
 		}
-		_, err := fmt.Fprintf(w, "%s\t%s\t%d\n", first, second, e.Weight)
+		// 缓冲区按最大单行复用，额外 23 字节容纳 int64 十进制数、两个制表符和换行。
+		line = slices.Grow(line[:0], len(first)+len(second)+23)
+		line = append(line, first...)
+		line = append(line, '\t')
+		line = append(line, second...)
+		line = append(line, '\t')
+		line = strconv.AppendInt(line, e.Weight, 10)
+		line = append(line, '\n')
+		_, err := w.Write(line)
 		return err
 	})
 	if err != nil {

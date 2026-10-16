@@ -30,6 +30,9 @@ const (
 
 var errInvalidAvatar = errors.New("invalid_avatar")
 
+// errAvatarCommitUncertain 表示头像登记的提交结果未知，对象可能已被数据库引用，不能删除。
+var errAvatarCommitUncertain = errors.New("avatar commit outcome unknown")
+
 // googleAvatarHost reports whether a stored Google picture URL may be handed to clients: only HTTPS on Google's own image host, so a client fetching it never reaches anywhere else.
 func googleAvatarHost(picture string) bool {
 	u, e := url.Parse(picture)
@@ -125,7 +128,10 @@ func (a *Service) putAvatar(w http.ResponseWriter, r *http.Request) {
 	}
 	previous, u, ids, e := a.store.SetAvatarKeyAndMe(r.Context(), p.UserID, key)
 	if e != nil {
-		a.deleteAvatarObject(key)
+		// 提交响应丢失时，数据库可能已经引用新对象；只有提交前确定失败才清理。
+		if !errors.Is(e, errAvatarCommitUncertain) {
+			a.deleteAvatarObject(key)
+		}
 		a.error(w, e)
 		return
 	}

@@ -61,6 +61,54 @@ func TestAddedLinePositionsAllocationBudget(t *testing.T) {
 	}
 }
 
+func dictPRUnchangedContent() string {
+	var rows strings.Builder
+	for i := range 5000 {
+		rows.WriteString("合成")
+		rows.WriteRune(rune(0x4e00 + i))
+		rows.WriteString("\tci'tiao\t1\n")
+	}
+	return rows.String()
+}
+
+func TestAddedLinePositionsUnchangedAllocations(t *testing.T) {
+	base := dictPRUnchangedContent()
+	for _, tc := range []struct{ name, head string }{
+		{"相同字符串", base},
+		{"相同内容独立副本", strings.Clone(base)},
+		{"全部删除", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []int
+			allocations := testing.AllocsPerRun(3, func() { got = addedLinePositions(base, tc.head) })
+			if got != nil {
+				t.Fatalf("无新增词条时位置应为 nil，得到 %v", got)
+			}
+			if allocations != 0 {
+				t.Fatalf("无新增词条仍分配 %g 次，期望零分配", allocations)
+			}
+		})
+	}
+}
+
+func BenchmarkAddedLinePositionsUnchanged(b *testing.B) {
+	base := dictPRUnchangedContent()
+	for _, tc := range []struct{ name, head string }{
+		{"相同字符串", base},
+		{"相同内容独立副本", strings.Clone(base)},
+		{"全部删除", ""},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				if got := addedLinePositions(base, tc.head); got != nil {
+					b.Fatal("无新增词条时返回了位置")
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkAddedLinePositions(b *testing.B) {
 	ignored := strings.Repeat("\n # 注释\r\n \t\r\n", 8192)
 	var rows strings.Builder

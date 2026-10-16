@@ -410,11 +410,15 @@ var (
 	maxReleaseNoteLines = 100
 )
 
-// parseReleaseNotes turns the body's "### 新增 / 修复 / 改进 / 说明 / 待办" sections into note lines. Lines under any other heading, or before the first heading, keep an empty kind so nothing is mislabelled.
+// parseReleaseNotes 从发布正文提取新增、修复、改进、说明和待办；其他标题下及首个标题前的说明不标注类别。
 func parseReleaseNotes(body string) []releaseNote {
 	notes := []releaseNote{}
+	var noteText strings.Builder
 	kind := ""
-	for line := range strings.SplitSeq(releaseHTMLComment.ReplaceAllString(body, ""), "\n") {
+	if releaseHTMLComment.MatchString(body) {
+		body = releaseHTMLComment.ReplaceAllString(body, "")
+	}
+	for line := range strings.SplitSeq(body, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || line == "---" || strings.HasPrefix(line, "```") {
 			continue
@@ -434,10 +438,11 @@ func parseReleaseNotes(body string) []releaseNote {
 		if line == "" {
 			continue
 		}
-		if utf8.RuneCountInString(line) > 500 {
-			line = string([]rune(line)[:500]) + "…"
-		}
-		notes = append(notes, releaseNote{Kind: kind, Text: line})
+		line = qqTruncate(line, 500)
+		// 把保留的说明写进结果缓冲区，避免短行引用整篇发布正文。
+		textStart := noteText.Len()
+		noteText.WriteString(line)
+		notes = append(notes, releaseNote{Kind: kind, Text: noteText.String()[textStart:]})
 		if len(notes) == maxReleaseNoteLines {
 			break
 		}

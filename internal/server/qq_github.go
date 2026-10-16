@@ -132,9 +132,14 @@ func (s *Server) qqSearchIssuesFor(ctx context.Context, repos []string, terms, s
 				return nil
 			}
 			var found struct {
-				Items []hit `json:"items"`
+				Items             []hit `json:"items"`
+				IncompleteResults bool  `json:"incomplete_results"`
 			}
 			if r.Decode(&found) != nil {
+				failed[i] = true
+				return nil
+			}
+			if found.IncompleteResults {
 				failed[i] = true
 				return nil
 			}
@@ -482,10 +487,14 @@ func (s *Server) qqRepoStats(ctx context.Context) string {
 					}
 					r, err := client.Get(qctx, token, "/search/issues?per_page=1&q="+url.QueryEscape("repo:"+repo+" "+q))
 					var found struct {
-						TotalCount *int `json:"total_count"`
+						TotalCount        *int `json:"total_count"`
+						IncompleteResults bool `json:"incomplete_results"`
 					}
 					if err != nil || !r.OK() || r.Decode(&found) != nil || found.TotalCount == nil {
 						return githubFailure("stats", r, err)
+					}
+					if found.IncompleteResults {
+						return fmt.Errorf("stats: incomplete results")
 					}
 					counts[k] = *found.TotalCount
 					return nil

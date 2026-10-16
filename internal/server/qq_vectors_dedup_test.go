@@ -48,9 +48,19 @@ func TestQQDocVectorsAvoidPreparingDuplicateContent(t *testing.T) {
 			t.Fatalf("合成 embedding 失败时 count=%d，err=%v", count, err)
 		}
 	})
-	// 相同文档名和标题只计算一次 ID；其余开销只应来自首次保留的段落和一次合成请求。
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			if count, err := s.syncQQDocVectors(context.Background()); err == nil || count != 0 {
+				b.Fatalf("合成 embedding 失败时 count=%d，err=%v", count, err)
+			}
+		}
+	})
+	// 连续相同文档名和标题只计算一次 ID；其余开销只应来自首次保留的段落和一次合成请求。
 	if overhead := allocations - identityAllocations; overhead > 256 {
 		t.Fatalf("重复正文准备额外分配 %.0f 次，超过 256 次预算", overhead)
+	}
+	if allocated := result.AllocedBytesPerOp(); allocated > 512<<10 {
+		t.Fatalf("重复正文准备分配 %d 字节，超过 512 KiB 预算", allocated)
 	}
 }
 

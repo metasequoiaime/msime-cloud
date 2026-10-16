@@ -415,8 +415,21 @@ func parseReleaseNotes(body string) []releaseNote {
 	notes := []releaseNote{}
 	var noteText strings.Builder
 	kind := ""
-	if releaseHTMLComment.MatchString(body) {
-		body = releaseHTMLComment.ReplaceAllString(body, "")
+	for {
+		match := releaseHTMLComment.FindStringIndex(body)
+		if match == nil {
+			break
+		}
+		if match[0] != 0 {
+			if strings.TrimSpace(body[:match[0]]) == "" {
+				body = body[match[0]:]
+				continue
+			}
+			body = releaseHTMLComment.ReplaceAllString(body, "")
+			break
+		}
+		// 删除开头的注释直接切片，避免注释后很长的正文被整段复制。
+		body = body[match[1]:]
 	}
 	for line := range strings.SplitSeq(body, "\n") {
 		line = strings.TrimSpace(line)

@@ -17,7 +17,7 @@ func tencentTranslationBatches(texts []string) ([]translationPart, []tencentTran
 		if part.text == "" {
 			continue
 		}
-		count := translationCharacterUnits(part.text)
+		count := utf16Length(part.text)
 		if units+count > tencentBatchCharacters && len(batch.texts) > 0 {
 			batches = append(batches, batch)
 			batch, units = tencentTranslationBatch{}, 0

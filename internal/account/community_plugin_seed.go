@@ -168,9 +168,12 @@ func collectPluginSeedFiles(dir string) ([]string, map[string][]byte, error) {
 			return nil, nil, fmt.Errorf("invalid_plugin_archive: %s is not a regular file", name)
 		case !validPluginFileName(name):
 			return nil, nil, fmt.Errorf("invalid_plugin_archive: %s is not a valid pack file name", name)
-		case lowered[strings.ToLower(name)]:
+		}
+		loweredName := strings.ToLower(name)
+		if lowered[loweredName] {
 			return nil, nil, fmt.Errorf("invalid_plugin_archive: %s differs from another file name only by case", name)
-		case len(names) == maxPluginPackFiles:
+		}
+		if len(names) == maxPluginPackFiles {
 			return nil, nil, fmt.Errorf("plugin_too_large: more than %d pack files", maxPluginPackFiles)
 		}
 		info, err := entry.Info()
@@ -184,7 +187,7 @@ func collectPluginSeedFiles(dir string) ([]string, map[string][]byte, error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		lowered[strings.ToLower(name)] = true
+		lowered[loweredName] = true
 		names = append(names, name)
 		contents[name] = data
 	}

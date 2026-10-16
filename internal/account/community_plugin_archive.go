@@ -144,12 +144,12 @@ func validPluginFileName(name string) bool {
 			return false
 		}
 	}
-	stem, _, _ := strings.Cut(strings.ToLower(name), ".")
-	switch stem {
-	case "con", "prn", "aux", "nul":
+	// 字符白名单已保证名称是 ASCII；直接比较保留名，避免复制整个名称。
+	stem, _, _ := strings.Cut(name, ".")
+	if len(stem) == 3 && (strings.EqualFold(stem, "con") || strings.EqualFold(stem, "prn") || strings.EqualFold(stem, "aux") || strings.EqualFold(stem, "nul")) {
 		return false
 	}
-	if len(stem) == 4 && (strings.HasPrefix(stem, "com") || strings.HasPrefix(stem, "lpt")) && stem[3] >= '0' && stem[3] <= '9' {
+	if len(stem) == 4 && (strings.EqualFold(stem[:3], "com") || strings.EqualFold(stem[:3], "lpt")) && stem[3] >= '0' && stem[3] <= '9' {
 		return false
 	}
 	return true
@@ -302,11 +302,15 @@ func readPluginArchive(archive []byte) (map[string]pluginMember, string) {
 		default:
 			return nil, "invalid_plugin_archive"
 		}
-		// Case-insensitive file systems would merge names that differ only in case.
-		if !validPluginFileName(name) || lowered[strings.ToLower(name)] {
+		// 不区分大小写的文件系统会合并仅大小写不同的文件名。
+		if !validPluginFileName(name) {
 			return nil, "invalid_plugin_archive"
 		}
-		lowered[strings.ToLower(name)] = true
+		loweredName := strings.ToLower(name)
+		if lowered[loweredName] {
+			return nil, "invalid_plugin_archive"
+		}
+		lowered[loweredName] = true
 		if e.file.Method != zip.Store && e.file.Method != zip.Deflate {
 			return nil, "invalid_plugin_archive"
 		}

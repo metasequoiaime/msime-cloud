@@ -218,10 +218,11 @@ func validCandidateFiles(manifest string, files map[string][]byte) string {
 		if candidateExtension(path) == "" {
 			return "candidate_skin_file_type"
 		}
-		if lowered[strings.ToLower(path)] {
+		loweredPath := strings.ToLower(path)
+		if lowered[loweredPath] {
 			return "candidate_skin_file_path"
 		}
-		lowered[strings.ToLower(path)] = true
+		lowered[loweredPath] = true
 		size := len(files[path])
 		total += size
 		if size < 1 || size > maxCandidateFileBytes || total > maxCandidatePackageBytes {

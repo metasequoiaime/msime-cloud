@@ -17,8 +17,9 @@ func skinMissing(err error) bool {
 }
 
 func (s *Server) skinCatalog(w http.ResponseWriter, r *http.Request) {
-	layout, theme := r.URL.Query().Get("layout"), r.URL.Query().Get("theme")
-	for key := range r.URL.Query() {
+	query := r.URL.Query()
+	layout, theme := query.Get("layout"), query.Get("theme")
+	for key := range query {
 		if key != "layout" && key != "theme" {
 			fail(w, 400, "invalid_skin_filter")
 			return

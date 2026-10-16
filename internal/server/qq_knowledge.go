@@ -58,6 +58,7 @@ type qqSection struct {
 type qqKnowledge struct {
 	mu       sync.Mutex
 	sections []qqSection
+	snippets []string
 	loaded   time.Time
 }
 
@@ -76,7 +77,11 @@ func (s *Server) qqKnowledgeSections(ctx context.Context) ([]qqSection, error) {
 		}
 		return nil, err
 	}
-	k.sections, k.loaded = sections, s.qq.now()
+	snippets := make([]string, len(sections))
+	for i, section := range sections {
+		snippets[i] = qqSnippet(section.Text)
+	}
+	k.sections, k.snippets, k.loaded = sections, snippets, s.qq.now()
 	return sections, nil
 }
 
@@ -365,6 +370,21 @@ func qqSnippetNeedsStructuredScan(text string) bool {
 		}
 	}
 	return false
+}
+
+// qqKnowledgeTOC 生成挑段落用的目录；知识库已加载的摘要可直接复用，测试或旧缓存没有摘要时回退到即时计算。
+func qqKnowledgeTOC(sections []qqSection, snippets []string) string {
+	var toc strings.Builder
+	for i, section := range sections {
+		var snippet string
+		if i < len(snippets) {
+			snippet = snippets[i]
+		} else {
+			snippet = qqSnippet(section.Text)
+		}
+		fmt.Fprintf(&toc, "%d. [%s] %s：%s\n", i+1, section.Doc, section.Title, snippet)
+	}
+	return toc.String()
 }
 
 // qqListLabelRunes 是列表项里标签的冒号最晚出现的位置（按字数，从列表符号后面算起）：再往后的冒号多半是句子里的，不是标签。
@@ -1517,10 +1537,10 @@ func (s *Server) qqKnowledgeMaterial(ctx context.Context, question string, ask *
 		slog.Warn("qq bot: knowledge unavailable, answering without it", "reason", err.Error())
 		degraded = true
 	}
-	var toc strings.Builder
-	for i, section := range sections {
-		fmt.Fprintf(&toc, "%d. [%s] %s：%s\n", i+1, section.Doc, section.Title, qqSnippet(section.Text))
-	}
+	s.qq.knowledge.mu.Lock()
+	snippets := s.qq.knowledge.snippets
+	s.qq.knowledge.mu.Unlock()
+	toc := qqKnowledgeTOC(sections, snippets)
 	type selection struct {
 		Sections    []int  `json:"sections"`
 		IssueSearch string `json:"issue_search"`
@@ -1535,7 +1555,7 @@ func (s *Server) qqKnowledgeMaterial(ctx context.Context, question string, ask *
 	recalled := make(chan qqVectorRecall, 1)
 	go func() { recalled <- s.qqRecall(ctx, question, sections, github) }()
 	began := time.Now()
-	err = s.qqChat(ctx, qqSelectPrompt+"\n\n目录：\n"+toc.String(), question, &picked)
+	err = s.qqChat(ctx, qqSelectPrompt+"\n\n目录：\n"+toc, question, &picked)
 	qqTimingFrom(ctx).selectMs.Add(time.Since(began).Milliseconds())
 	if err != nil {
 		if !github || ctx.Err() != nil || qqOutOfTime(ctx) {

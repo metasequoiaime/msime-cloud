@@ -39,6 +39,18 @@ func TestQQSnippetStructuredScanMatchesContainsAny(t *testing.T) {
 	}
 }
 
+func TestQQKnowledgeTOCUsesCachedSnippets(t *testing.T) {
+	sections := []qqSection{{Doc: "合成文档", Title: "正文", Text: "**正文里的长内容**"}}
+	got := qqKnowledgeTOC(sections, []string{"缓存摘要"})
+	want := "1. [合成文档] 正文：缓存摘要\n"
+	if got != want {
+		t.Fatalf("目录没有使用缓存摘要：结果=%q，期望=%q", got, want)
+	}
+	if got := qqKnowledgeTOC(sections, nil); got != "1. [合成文档] 正文：正文里的长内容\n" {
+		t.Fatalf("没有缓存摘要时回退结果变化：%q", got)
+	}
+}
+
 func TestQQSentencePrefixKeepsPreviousSemantics(t *testing.T) {
 	previous := func(text string, limit int) string {
 		runes := []rune(text)
@@ -167,6 +179,28 @@ func BenchmarkQQKnowledgePrefix(b *testing.B) {
 			}
 			if got == "" {
 				b.Fatal("知识库前缀为空")
+			}
+		})
+	}
+}
+
+func BenchmarkQQKnowledgeTOC(b *testing.B) {
+	sections := make([]qqSection, 100)
+	snippets := make([]string, len(sections))
+	for i := range sections {
+		sections[i] = qqSection{Doc: "合成文档", Title: "正文", Text: strings.Repeat("普通正文", 1000)}
+		snippets[i] = "普通正文"
+	}
+	for _, tc := range []struct {
+		name     string
+		snippets []string
+	}{{"重新扫描", nil}, {"复用缓存", snippets}} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				if qqKnowledgeTOC(sections, tc.snippets) == "" {
+					b.Fatal("目录为空")
+				}
 			}
 		})
 	}

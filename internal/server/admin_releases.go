@@ -600,6 +600,8 @@ func (s *Server) triggerRelease(w http.ResponseWriter, r *http.Request, gh *gith
 		"ref":    info.DefaultBranch,
 		"inputs": map[string]string{"version": body.Version},
 	})
+	// 流水线会更新发布列表和提交检查；响应丢失时也可能已经触发，需一并清理缓存。
+	gh.Invalidate("/repos/" + p.Repo + "/")
 	switch {
 	case err != nil:
 		failRelease(w, githubapp.ErrUnavailable)
@@ -615,7 +617,6 @@ func (s *Server) triggerRelease(w http.ResponseWriter, r *http.Request, gh *gith
 		failRelease(w, releaseStatusError(resp))
 		return
 	}
-	gh.Invalidate("/repos/" + p.Repo + "/actions/")
 	s.releaseAudit(ctx, "release_trigger", p.ID, map[string]any{"platform": p.Name, "version": body.Version, "workflow": p.ReleaseWorkflow})
 	s.releaseNotify(ctx, p, p.Name+" "+body.Version+" 发布流水线已触发", p.ID)
 	respond(w, 200, map[string]any{"ok": true})

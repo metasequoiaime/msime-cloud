@@ -311,8 +311,16 @@ func buildPublic(arguments json.RawMessage) (Request, error) {
 	if in.ID != "" && (!list || !publicID.MatchString(in.ID)) {
 		return Request{}, errors.New("invalid_public_id")
 	}
-	if (!list || in.ID != "") && (in.Q != "" || in.Offset != 0) || in.Resource != "notices" && (in.Platform != "" || in.Channel != "") || in.Resource != "resources" && in.Kind != "" {
-		return Request{}, errors.New("invalid_public_options")
+	// 模型可能填满共享 schema 的可选参数；只保留当前资源及列表/详情入口使用的字段。
+	// 校验仍在筛选之前执行，未知字段、私人筛选、非法 ID、类型与枚举不能被忽略。
+	if !list || in.ID != "" {
+		in.Q, in.Offset = "", 0
+	}
+	if in.Resource != "notices" {
+		in.Platform, in.Channel = "", ""
+	}
+	if in.Resource != "resources" || in.ID != "" {
+		in.Kind = ""
 	}
 	if in.Resource == "resources" && in.ID == "" && !slices.Contains([]string{"dictionary", "reply", "phrase"}, in.Kind) {
 		return Request{}, errors.New("resources_list_requires_kind")

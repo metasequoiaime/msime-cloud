@@ -89,10 +89,9 @@ func TestUnsafeArgumentsNeverExecute(t *testing.T) {
 		{"query_public_data", `{"resource":"plugins","id":"a/download"}`},
 		{"query_public_data", `{"resource":"plugins","id":"a%2fdownload"}`},
 		{"query_public_data", `{"resource":"plugins","id":"a?q=x"}`},
-		{"query_public_data", `{"resource":"notices","q":"x"}`},
-		{"query_public_data", `{"resource":"community_stats","platform":"android"}`},
-		{"query_public_data", `{"resource":"plugins","kind":"dictionary"}`},
-		{"query_public_data", `{"resource":"plugins","id":"a","q":"x"}`},
+		{"query_public_data", `{"resource":"plugins","kind":"private"}`},
+		{"query_public_data", `{"resource":"plugins","platform":42}`},
+		{"query_public_data", `{"resource":"community_stats","offset":-1}`},
 	} {
 		t.Run(tc.name+tc.args[:min(70, len(tc.args))], func(t *testing.T) {
 			_, err := Call(t.Context(), func(context.Context, Request) (json.RawMessage, error) {
@@ -101,6 +100,44 @@ func TestUnsafeArgumentsNeverExecute(t *testing.T) {
 			}, tc.name, json.RawMessage(tc.args))
 			if err == nil {
 				t.Fatal("没有拒绝参数")
+			}
+		})
+	}
+}
+
+// 所有公共资源均可能收到其他资源的默认值，列表筛选和详情 ID 仍须保留其原有语义。
+func TestPublicToolResourceRelevantOptions(t *testing.T) {
+	for _, tc := range []struct {
+		resource, id, path string
+		token              bool
+	}{
+		{"notices", "", "/v1/notices?channel=stable&platform=android", false},
+		{"community_stats", "", "/v1/community/stats", false},
+		{"input_capabilities", "", "/v1/input/capabilities", true},
+		{"resources", "", "/v1/community/resources?kind=dictionary&offset=20&q=synthetic", false},
+		{"plugins", "", "/v1/community/plugins?offset=20&q=synthetic", false},
+		{"skins", "", "/v1/community/skins?offset=20&q=synthetic", false},
+		{"candidate_skins", "", "/v1/community/candidate-skins?offset=20&q=synthetic", false},
+		{"resources", "synthetic-item", "/v1/community/resources/synthetic-item", false},
+		{"plugins", "synthetic-item", "/v1/community/plugins/synthetic-item", false},
+		{"skins", "synthetic-item", "/v1/community/skins/synthetic-item", false},
+		{"candidate_skins", "synthetic-item", "/v1/community/candidate-skins/synthetic-item", false},
+	} {
+		t.Run(tc.resource+"/"+tc.id, func(t *testing.T) {
+			args, err := json.Marshal(map[string]any{"resource": tc.resource, "id": tc.id, "q": "synthetic", "kind": "dictionary", "offset": 20, "platform": "android", "channel": "stable"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			result, err := Call(t.Context(), func(_ context.Context, request Request) (json.RawMessage, error) {
+				calls++
+				if request.Method != http.MethodGet || request.Path != tc.path || request.NeedsToken != tc.token || len(request.Body) != 0 {
+					t.Fatalf("公共请求参数错误：%+v", request)
+				}
+				return json.RawMessage(`{"synthetic":true}`), nil
+			}, "query_public_data", args)
+			if err != nil || calls != 1 || result.Source != tc.path {
+				t.Fatalf("公共目录查询失败：calls=%d result=%+v err=%v", calls, result, err)
 			}
 		})
 	}

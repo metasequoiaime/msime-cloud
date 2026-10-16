@@ -97,6 +97,16 @@ func TestQQGapTopicBoundedContactSemantics(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "联系方式跨摘要边界",
+			text: strings.Repeat("字", qqGapRunes-5) + "reader@example.test",
+			check: func(t *testing.T, got string) {
+				want := previousQQGapTopic(strings.Repeat("字", qqGapRunes-5) + "reader@example.test")
+				if got != want {
+					t.Fatalf("跨边界联系方式改变了摘要结果：%q，期望 %q", got, want)
+				}
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

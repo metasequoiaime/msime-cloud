@@ -393,7 +393,7 @@ func (a *Service) RateDiagnosticSnapshot(ctx context.Context, id string, limit i
  FROM diagnostic_snapshots d JOIN auth_users u ON u.id=d.user_id AND u.banned_at IS NULL
  WHERE d.id=$4 AND d.expires_at>clock_timestamp()
  ON CONFLICT(key) DO UPDATE SET count=CASE WHEN auth_rates.expires_at<=clock_timestamp() THEN 1 ELSE least(auth_rates.count+1,$3+1) END,
- expires_at=CASE WHEN auth_rates.expires_at<=clock_timestamp() THEN excluded.expires_at ELSE auth_rates.expires_at END RETURNING count`, "mcp-snapshot:"+hash(id), window.String(), limit, id).Scan(&n)
+ expires_at=CASE WHEN auth_rates.expires_at<=clock_timestamp() THEN clock_timestamp()+$2::interval ELSE auth_rates.expires_at END RETURNING count`, "mcp-snapshot:"+hash(id), window.String(), limit, id).Scan(&n)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrInvalid
 	}

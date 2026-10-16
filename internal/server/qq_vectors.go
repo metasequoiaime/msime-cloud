@@ -28,8 +28,6 @@ import (
 
 const (
 	defaultQQEmbeddingModel = "doubao-embedding-vision"
-	// qqPendingVectorID 只在本轮文档规划的本地缓存中使用；文档 ID 固定以 "doc:" 开头，不会与它冲突。
-	qqPendingVectorID = "\x00"
 	// qqEmbedBatch 是一次请求算的文本数：doubao-embedding-vision 一次最多 10 条（多了上游返回 400 「input limit exceeded: max 10」），10 条 1500 字的文本响应约 340KB，在上游响应 1MB 的上限内。
 	qqEmbedBatch = 10
 	// qqEmbedParallel 限制一次同步同时发出的 embedding 请求数，避免批量同步把上游并发额度打满。
@@ -314,29 +312,27 @@ func (s *Server) syncQQDocVectors(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	ids := make([]string, len(sections))
-	var idCache map[struct{ doc, title string }]string
-	if len(sections) > 0 {
-		idCache = make(map[struct{ doc, title string }]string, len(sections))
-	}
+	uniqueEstimate := 0
 	for i, section := range sections {
-		key := struct{ doc, title string }{section.Doc, section.Title}
-		if id, ok := idCache[key]; ok {
-			ids[i] = id
-			continue
+		if i > 0 && section.Doc == sections[i-1].Doc && section.Title == sections[i-1].Title {
+			ids[i] = ids[i-1]
+		} else {
+			ids[i] = qqDocID(section)
 		}
-		ids[i] = qqDocID(section)
-		idCache[key] = ids[i]
+		if i == 0 || ids[i] != ids[i-1] {
+			uniqueEstimate++
+		}
 	}
 	hashes, err := s.qqVectors.QQKnowledgeHashes(ctx, ids)
 	if err != nil {
 		return 0, err
 	}
-	items := make([]account.QQKnowledgeItem, 0, len(idCache))
-	texts := make([]string, 0, len(idCache))
+	items := make([]account.QQKnowledgeItem, 0, uniqueEstimate)
+	texts := make([]string, 0, uniqueEstimate)
+	var pending map[string]struct{}
 	for i, section := range sections {
 		// 只对本轮已经选中更新的 ID 去重，未变化的段落不能遮住后续同 ID 的更新。
-		key := struct{ doc, title string }{section.Doc, section.Title}
-		if idCache[key] == qqPendingVectorID {
+		if _, ok := pending[ids[i]]; ok {
 			continue
 		}
 		text := "[" + section.Doc + "] " + section.Title + "\n" + qqTruncate(section.Text, qqEmbedRunes)
@@ -344,7 +340,10 @@ func (s *Server) syncQQDocVectors(ctx context.Context) (int, error) {
 		if hashes[ids[i]] == h {
 			continue
 		}
-		idCache[key] = qqPendingVectorID
+		if pending == nil {
+			pending = make(map[string]struct{})
+		}
+		pending[ids[i]] = struct{}{}
 		items = append(items, account.QQKnowledgeItem{ID: ids[i], Kind: "doc", Title: section.Doc + " · " + section.Title, Summary: qqTruncate(section.Text, qqHistorySummaryRunes), ContentHash: h, UpdatedAt: s.qq.now()})
 		texts = append(texts, text)
 	}

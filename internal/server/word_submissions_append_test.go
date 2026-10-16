@@ -159,3 +159,40 @@ func BenchmarkAppendSubmissionBatch(b *testing.B) {
 		})
 	}
 }
+
+func TestAppendSubmissionWeightFormatting(t *testing.T) {
+	lines := []submissionLine{
+		{key: "long\t最大", weight: math.MaxInt},
+		{key: "short\t一位", weight: 1},
+		{key: "two\t两位", weight: 99},
+		{key: "three\t三位", weight: 100},
+		{key: "negative\t负数", weight: -1},
+		{key: "zero\t零"},
+		{key: "four\t四位", weight: 5000},
+	}
+	prefix := "long\t最大\t" + strconv.Itoa(math.MaxInt) + "\nshort\t一位\t1\ntwo\t两位\t99\nthree\t三位\t100\n"
+	for _, kind := range []submissionKind{kindWords, kindEnglish, kindTranslations, {}} {
+		want := prefix + "negative\t负数\nzero\t零\nfour\t四位\t5000\n"
+		if kind == kindWords {
+			want = prefix + "negative\t负数\t1\nzero\t零\t1\nfour\t四位\t5000\n"
+		}
+		if got := appendSubmissionLines("", submission{kind: kind, lines: lines}, ""); got != want {
+			t.Fatalf("kind=%q got=%q want=%q", kind.name, got, want)
+		}
+	}
+}
+
+func TestAppendSubmissionWeightAllocationBudget(t *testing.T) {
+	content, sub, output := submissionOutputFixture(kindWords)
+	want := strings.TrimPrefix(output, content)
+	var got string
+	allocations := testing.AllocsPerRun(3, func() {
+		got = appendSubmissionLines("", sub, "")
+	})
+	if got != want {
+		t.Fatal("批量权重格式化输出发生变化")
+	}
+	if allocations > 4 {
+		t.Fatalf("格式化二十条权重分配 %.0f 次，超过 4 次预算", allocations)
+	}
+}

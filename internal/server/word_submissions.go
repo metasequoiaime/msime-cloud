@@ -800,9 +800,29 @@ func appendSubmissionLines(content string, sub submission, base string) string {
 			low, high = baseLow, baseHigh
 		}
 	}
+	// 按实际输出字节数预留容量，避免批量追加时反复复制整份原文。
+	outputBytes := len(content)
+	needsNewline := content != "" && !strings.HasSuffix(content, "\n")
+	if needsNewline {
+		outputBytes++
+	}
+	for _, line := range sub.lines {
+		outputBytes += len(line.key) + 1
+		weight := line.weight
+		if sub.kind == kindWords {
+			weight = max(1, min(max(weight, low), high))
+		}
+		if weight > 0 {
+			outputBytes++
+			for ; weight > 0; weight /= 10 {
+				outputBytes++
+			}
+		}
+	}
 	var b strings.Builder
+	b.Grow(outputBytes)
 	b.WriteString(content)
-	if content != "" && !strings.HasSuffix(content, "\n") {
+	if needsNewline {
 		b.WriteString("\n")
 	}
 	for _, line := range sub.lines {

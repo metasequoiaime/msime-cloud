@@ -97,3 +97,65 @@ func BenchmarkAppendSubmissionLines(b *testing.B) {
 		}
 	}
 }
+
+func TestAppendSubmissionLinesOutputMemoryBudget(t *testing.T) {
+	for _, kind := range []submissionKind{kindWords, kindEnglish, kindTranslations} {
+		t.Run(kind.name, func(t *testing.T) {
+			content, sub, want := submissionOutputFixture(kind)
+			var got string
+			result := testing.Benchmark(func(b *testing.B) {
+				for b.Loop() {
+					got = appendSubmissionLines(content, sub, content)
+				}
+			})
+			if got != want {
+				t.Fatal("批量追加输出发生变化")
+			}
+			if bytes, budget := result.AllocedBytesPerOp(), int64(len(want))+(16<<10); bytes > budget {
+				t.Fatalf("批量追加分配 %d 字节，超过 %d 字节预算", bytes, budget)
+			}
+		})
+	}
+}
+
+func submissionOutputFixture(kind submissionKind) (string, submission, string) {
+	content := strings.Repeat("synthetic\tSynthetic\t1\n", 4800)
+	if kind == kindWords {
+		content = strings.Repeat("合成\tpinyin\t5000\n", 5100)
+	} else if kind == kindTranslations {
+		content = strings.Repeat("合成\tSynthetic\n", 4800)
+	}
+	sub := submission{kind: kind}
+	var suffix strings.Builder
+	for i := range wordSubmissionMaxEntries {
+		var key, weight string
+		value := 0
+		switch kind {
+		case kindWords:
+			key = strings.Repeat("合", 15) + string(rune('成'+i)) + "\t" + strings.TrimSuffix(strings.Repeat("cheng'", 16), "'")
+			value, weight = 5000, "\t5000"
+		case kindEnglish:
+			key = strings.Repeat("s", 63) + string(rune('a'+i)) + "\t" + strings.Repeat("合", 64)
+			value, weight = 1, "\t1"
+		case kindTranslations:
+			key = strings.Repeat("合", 63) + string(rune('成'+i)) + "\t" + strings.Repeat("成", 64)
+		}
+		sub.lines = append(sub.lines, submissionLine{key: key, weight: value})
+		suffix.WriteString(key + weight + "\n")
+	}
+	return content, sub, content + suffix.String()
+}
+
+func BenchmarkAppendSubmissionBatch(b *testing.B) {
+	for _, kind := range []submissionKind{kindWords, kindEnglish, kindTranslations} {
+		content, sub, want := submissionOutputFixture(kind)
+		b.Run(kind.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				if got := appendSubmissionLines(content, sub, content); got != want {
+					b.Fatal("批量追加输出发生变化")
+				}
+			}
+		})
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -21,13 +22,14 @@ type AdminIdentity struct {
 // adminSessionTouch is how stale last_seen_at may get before a request refreshes it, so busy consoles do not write on every request.
 const adminSessionTouch = 5 * time.Minute
 
-// adminProfileText keeps the first max runes of s with control characters removed, so untrusted profile text always fits its column.
+// adminProfileText 跳过非法 UTF-8 和控制字符，只收集前 max 个字符，再去除首尾空白。
 func adminProfileText(s string, max int) string {
-	s = strings.ToValidUTF8(s, "")
 	out := make([]rune, 0, min(len(s), max))
-	for _, c := range s {
-		if len(out) == max {
-			break
+	for offset := 0; offset < len(s) && len(out) < max; {
+		c, size := utf8.DecodeRuneInString(s[offset:])
+		offset += size
+		if c == utf8.RuneError && size == 1 {
+			continue
 		}
 		if !unicode.IsControl(c) {
 			out = append(out, c)

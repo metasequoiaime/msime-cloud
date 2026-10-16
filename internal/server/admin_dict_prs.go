@@ -450,6 +450,9 @@ func dictLineColumns(line string) (string, string) {
 func (s *Server) checkDictEntries(ctx context.Context, files []dictFile) []dictEntry {
 	entries := []dictEntry{}
 	for _, f := range files {
+		if len(f.added) == 0 {
+			continue
+		}
 		lines := strings.Split(f.head, "\n")
 		first := len(entries)
 		keys := make([]submissionLine, 0, len(f.added))

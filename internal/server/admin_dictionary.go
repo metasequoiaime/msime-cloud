@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
@@ -307,7 +308,7 @@ func dictionaryRows(name, text, query string, page int) ([]dictionaryRow, int) {
 }
 
 func dictionaryLineContainsLower(line, query string) bool {
-	// 常见的短英文词条在栈上转小写，Unicode 和长行仍由标准库处理。
+	// 常见的短词条在栈上转小写，长行仍由标准库处理。
 	var lower [256]byte
 	if len(line) > len(lower) {
 		return strings.Contains(strings.ToLower(line), query)
@@ -315,7 +316,7 @@ func dictionaryLineContainsLower(line, query string) bool {
 	for i := range len(line) {
 		c := line[i]
 		if c >= utf8.RuneSelf {
-			return strings.Contains(strings.ToLower(line), query)
+			return dictionaryUnicodeLineContainsLower(line, query)
 		}
 		if 'A' <= c && c <= 'Z' {
 			c += 'a' - 'A'
@@ -323,6 +324,28 @@ func dictionaryLineContainsLower(line, query string) bool {
 		lower[i] = c
 	}
 	return bytes.Contains(lower[:len(line)], []byte(query))
+}
+
+// dictionaryUnicodeLineContainsLower 处理最多 256 字节的短行；每个输入字节最多映射为四字节编码。
+func dictionaryUnicodeLineContainsLower(line, query string) bool {
+	for i, c := range line {
+		r := unicode.ToLower(c)
+		if r == c && c != utf8.RuneError {
+			continue
+		}
+		_, size := utf8.DecodeRuneInString(line[i:])
+		if r == c && size != 1 {
+			continue
+		}
+		var lower [256 * utf8.UTFMax]byte
+		folded := lower[:copy(lower[:], line[:i])]
+		folded = utf8.AppendRune(folded, r)
+		for _, rest := range line[i+size:] {
+			folded = utf8.AppendRune(folded, unicode.ToLower(rest))
+		}
+		return bytes.Contains(folded, []byte(query))
+	}
+	return strings.Contains(line, query)
 }
 
 func dictionaryEditablePath(name string) bool {

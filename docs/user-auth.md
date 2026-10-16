@@ -6,6 +6,14 @@
 
 参考 `config.example.json` 的 `auth` 配置，设置 `enabled: true`，通过环境变量提供数据库 URL 和至少 32 字节随机 `MSIME_AUTH_PEPPER`。密钥应存于 Vault，不提交到源码。
 
+数据库的 `server_encoding` 和连接的 `client_encoding` 都必须为 `UTF8`；服务及 `-migrate-users` 在建立连接时检查，不兼容时立即报「用户数据库及客户端连接编码必须为 UTF8」。`SQL_ASCII` 无法正确处理中文字符长度及部分 JSON 操作，其他数据库编码也不能完整保存本服务支持的 Unicode 文本。升级前用服务相同的连接配置执行 `SHOW server_encoding; SHOW client_encoding;`，确认两项均为 `UTF8`，不要在数据库 URL、角色或数据库默认参数中把 `client_encoding` 改为其他编码。新建数据库时显式指定编码，例如：
+
+```sh
+createdb --encoding=UTF8 --template=template0 --lc-collate=C --lc-ctype=C msime
+```
+
+已有数据库不能通过 `SET client_encoding` 改变其存储编码。不兼容的部署需先备份并检查现有文本数据，再建立 UTF-8 数据库、恢复并验证数据，最后切换服务连接；完成之前新版本会拒绝启动。启动检查只读取连接握手参数，不修改数据库或数据，也不要求运行账号拥有额外权限。
+
 服务启动时会检查表是否齐全，缺表就自己补迁移，所以运行账号有 DDL 权限时不需要任何手工步骤，新增表的版本直接滚动更新即可。
 
 生产上如果按下面的最小权限方案部署，运行账号没有 DDL 权限，自动迁移会失败并在启动日志里要求手工迁移。这种部署仍然按原来的方式做，用有 DDL 权限的账号先执行：

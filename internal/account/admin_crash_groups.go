@@ -584,9 +584,12 @@ func crashSystemFrame(frame string) bool {
 	return false
 }
 
-// normalizeCrashFrame strips what varies between builds and runs from one stack line: frame numbers, addresses, offsets and line numbers.
+// normalizeCrashFrame 去除栈行中随构建或运行变化的帧序号、地址、偏移量和行号。
 func normalizeCrashFrame(line string) string {
 	line = strings.TrimSpace(line)
+	if line == "" {
+		return ""
+	}
 	line = crashFrameIndex.ReplaceAllString(line, "")
 	line = crashAddressPattern.ReplaceAllString(line, "")
 	line = crashFrameOffset.ReplaceAllString(line, "")

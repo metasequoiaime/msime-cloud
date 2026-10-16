@@ -1,0 +1,1 @@
+function e(e){return Math.max(1,Math.min(1e4,Number.parseInt(e??`1`,10)||1))}export{e as t};

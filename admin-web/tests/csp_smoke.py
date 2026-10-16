@@ -337,6 +337,43 @@ def check_bytes(page):
         expect(rows.nth(index).locator("td")).to_have_text(values)
 
 
+def check_list_pagination(context, base: str, problems: list[str]):
+    from urllib.parse import parse_qs, urlencode, urlsplit
+    # 通过真实页面发出的请求核验解析结果、翻页和筛选重置，不依赖工具函数实现。
+    for path, filters, filter_label, reset_filters in (
+        ("users", {"role": "reviewer"}, "维护者", {"role": "maintainer"}),
+        ("feedback", {"type": "bug", "status": "resolved", "platform": "android"}, "待处理", {"type": "bug", "status": "new", "platform": "android"}),
+    ):
+        page = context.new_page()
+        page.on("pageerror", lambda error: problems.append(f"列表分页页面异常：{error}"))
+        endpoint = f"/api/{path}"
+        page.route("**/api/auth/session", lambda route: route.fulfill(json=FIXTURES["/api/auth/session"]))
+        page.route(f"**{endpoint}?*", lambda route: route.fulfill(json={**FIXTURES[endpoint], "total": 500000}))
+        try:
+            for raw, expected in ((None, 1), ("invalid", 1), ("-2", 1), ("10001", 10000), ("3suffix", 3)):
+                query = {**filters, **({"page": raw} if raw is not None else {})}
+                with page.expect_request(f"**{endpoint}?*") as sent:
+                    page.goto(base + f"/{path}?" + urlencode(query))
+                params = parse_qs(urlsplit(sent.value.url).query)
+                assert params == {"page": [str(expected)], **{key: [value] for key, value in filters.items()}}, params
+                expect(page.get_by_text(f"第 {expected} / 10000 页 · 每页 50 条", exact=True)).to_be_visible()
+                if expected == 1:
+                    expect(page.get_by_role("button", name="上一页", exact=True)).to_be_disabled()
+                if expected == 10000:
+                    expect(page.get_by_role("button", name="下一页", exact=True)).to_be_disabled()
+            with page.expect_request(f"**{endpoint}?*") as sent:
+                page.get_by_role("button", name="下一页", exact=True).click()
+            assert parse_qs(urlsplit(sent.value.url).query) == {"page": ["4"], **{key: [value] for key, value in filters.items()}}
+            expect(page.get_by_text("第 4 / 10000 页 · 每页 50 条", exact=True)).to_be_visible()
+            with page.expect_request(f"**{endpoint}?*") as sent:
+                page.get_by_role("radio", name=filter_label, exact=False).click()
+            assert parse_qs(urlsplit(sent.value.url).query) == {"page": ["1"], **{key: [value] for key, value in reset_filters.items()}}
+            expect(page.get_by_text("第 1 / 10000 页 · 每页 50 条", exact=True)).to_be_visible()
+            problems.extend(f"列表分页 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+        finally:
+            page.close()
+
+
 def check_modal(browser, base: str, problems: list[str]):
     # 独立上下文验证公共弹窗的焦点、无障碍描述、关闭与提示条交互。
     context = browser.new_context(viewport={"width": 1280, "height": 860})
@@ -1820,6 +1857,7 @@ def main() -> int:
                 check_bytes(page)
                 check_api_images(browser, base, problems)
                 check_api_image_pages(browser, base, problems)
+                check_list_pagination(context, base, problems)
                 check_modal(browser, base, problems)
                 check_debounce(browser, base, problems)
                 check_auth_generation(context, base, problems)

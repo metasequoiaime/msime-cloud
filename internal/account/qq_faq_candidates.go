@@ -15,7 +15,7 @@ const QQFAQCandidateWindow = 30 * 24 * time.Hour
 const QQFAQCandidateClaimTimeout = 5 * time.Minute
 
 // qqFAQCandidateClaimable 是「可以认领」的条件：还没处理，或者正在写入但认领已经超时。
-var qqFAQCandidateClaimable = `(state='open' OR (state='writing' AND claimed_at<now()-'` + QQFAQCandidateClaimTimeout.String() + `'::interval))`
+var qqFAQCandidateClaimable = `(state='open' OR (state='writing' AND claimed_at<clock_timestamp()-'` + QQFAQCandidateClaimTimeout.String() + `'::interval))`
 
 // ErrQQFAQCandidateNotFound 表示候选不存在、已经处理或者过期。
 var ErrQQFAQCandidateNotFound = errors.New("qq faq candidate not found")
@@ -84,7 +84,13 @@ func (a *Service) ClaimQQFAQCandidate(ctx context.Context, id int64) (bool, erro
 // ClaimQQFAQCandidateLease 认领候选并返回本次认领的时间戳。关闭或放回时必须带回这个时间戳，避免旧副本覆盖新副本的处理结果。
 func (a *Service) ClaimQQFAQCandidateLease(ctx context.Context, id int64) (time.Time, bool, error) {
 	var claimedAt time.Time
-	err := a.store.pool.QueryRow(ctx, `UPDATE qq_faq_candidates SET state='writing',claimed_at=clock_timestamp() WHERE id=$1 AND `+qqFAQCandidateClaimable+` AND created_at>now()-$2::interval RETURNING claimed_at`, id, QQFAQCandidateWindow.String()).Scan(&claimedAt)
+	// 先取得行锁，再判断候选有效期和认领租约，避免等待锁时跨过边界。
+	err := a.store.pool.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+SELECT id,state,claimed_at,created_at FROM qq_faq_candidates WHERE id=$1 FOR UPDATE
+)
+UPDATE qq_faq_candidates SET state='writing',claimed_at=clock_timestamp()
+WHERE id IN (SELECT id FROM locked WHERE `+qqFAQCandidateClaimable+` AND created_at>clock_timestamp()-$2::interval)
+RETURNING claimed_at`, id, QQFAQCandidateWindow.String()).Scan(&claimedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return time.Time{}, false, nil
 	}
@@ -108,7 +114,13 @@ func (a *Service) CloseQQFAQCandidate(ctx context.Context, id int64, state, ref 
 	if state != "done" && state != "ignored" {
 		return false, errors.New("invalid candidate state")
 	}
-	tag, err := a.store.pool.Exec(ctx, `UPDATE qq_faq_candidates SET state=$2,ref=$3,claimed_at=NULL WHERE id=$1 AND (`+qqFAQCandidateClaimable+` OR ($2='done' AND state='writing'))`, id, state, ref)
+	// 忽略操作也按锁后的有效期判断；已开成 PR 的完成记录仍可收尾。
+	tag, err := a.store.pool.Exec(ctx, `WITH locked AS MATERIALIZED (
+SELECT id,state,claimed_at,created_at FROM qq_faq_candidates WHERE id=$1 FOR UPDATE
+)
+UPDATE qq_faq_candidates SET state=$2,ref=$3,claimed_at=NULL
+WHERE id IN (SELECT id FROM locked WHERE (`+qqFAQCandidateClaimable+` OR ($2='done' AND state='writing'))
+AND ($2='done' OR created_at>clock_timestamp()-$4::interval))`, id, state, ref, QQFAQCandidateWindow.String())
 	return tag.RowsAffected() == 1, err
 }
 

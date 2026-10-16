@@ -1017,21 +1017,47 @@ const qqSentenceBreaks = "。！？；\n"
 
 // qqTruncateSentence 把超过 limit 字的文字截到 limit 字以内（含结尾的「…」），免得停在半句话上：在能留下的部分里找最后一个句末标点或换行，位置不早于 limit 的一半就截在那里（保留标点），否则硬截。没超过时原样返回。
 func qqTruncateSentence(text string, limit int) string {
-	end := len(text)
-	if limit >= 0 {
-		end = qqRuneEnd(text, limit)
-		if end == len(text) {
-			return text
+	if limit < 0 {
+		// 负上限沿用旧流程的返回和 panic 行为。
+		kept := []rune(text)[:max(limit-1, 0)]
+		for i := len(kept) - 1; i >= limit/2; i-- {
+			if strings.ContainsRune(qqSentenceBreaks, kept[i]) {
+				kept = kept[:i+1]
+				break
+			}
 		}
+		return strings.TrimRightFunc(string(kept), unicode.IsSpace) + "…"
 	}
-	kept := []rune(text[:end])[:max(limit-1, 0)]
-	for i := len(kept) - 1; i >= limit/2; i-- {
-		if strings.ContainsRune(qqSentenceBreaks, kept[i]) {
-			kept = kept[:i+1]
+	end := qqRuneEnd(text, limit)
+	if end == len(text) {
+		return text
+	}
+	_, size := utf8.DecodeLastRuneInString(text[:end])
+	end -= size
+	for offset, i := end, limit-2; i >= limit/2; i-- {
+		r, size := utf8.DecodeLastRuneInString(text[:offset])
+		if strings.ContainsRune(qqSentenceBreaks, r) {
+			end = offset
 			break
 		}
+		offset -= size
 	}
-	return strings.TrimRightFunc(string(kept), unicode.IsSpace) + "…"
+	prefix := strings.TrimRightFunc(text[:end], unicode.IsSpace)
+	if utf8.ValidString(prefix) {
+		return prefix + "…"
+	}
+	// 逐个无效字节转换为 U+FFFD；预先计算编码长度，只分配最终结果。
+	encodedSize := len("…")
+	for _, r := range prefix {
+		encodedSize += utf8.RuneLen(r)
+	}
+	var out strings.Builder
+	out.Grow(encodedSize)
+	for _, r := range prefix {
+		out.WriteRune(r)
+	}
+	out.WriteString("…")
+	return out.String()
 }
 
 // qqAnswerQuestion 用知识库回答一个问题：先按目录挑段落，再只用挑出的段落回答。

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"log/slog"
 	"maps"
 	"net/url"
@@ -382,7 +381,16 @@ func qqKnowledgeTOC(sections []qqSection, snippets []string) string {
 		} else {
 			snippet = qqSnippet(section.Text)
 		}
-		fmt.Fprintf(&toc, "%d. [%s] %s：%s\n", i+1, section.Doc, section.Title, snippet)
+		var number [20]byte
+		n := strconv.AppendInt(number[:0], int64(i+1), 10)
+		toc.Write(n)
+		toc.WriteString(". [")
+		toc.WriteString(section.Doc)
+		toc.WriteString("] ")
+		toc.WriteString(section.Title)
+		toc.WriteString("：")
+		toc.WriteString(snippet)
+		toc.WriteByte('\n')
 	}
 	return toc.String()
 }

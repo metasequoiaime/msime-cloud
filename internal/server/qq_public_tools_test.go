@@ -180,8 +180,13 @@ func TestQQPublicDataAnonymousVisibility(t *testing.T) {
 	}
 	for _, tc := range []struct{ args, want string }{
 		{`{"resource":"candidate_skins"}`, "public-marker"},
+		{`{"resource":"candidate_skins","id":"","q":"","kind":"dictionary","offset":0,"platform":"android","channel":"stable"}`, "public-marker"},
+		{`{"resource":"skins","id":"","q":"","kind":"dictionary","offset":0,"platform":"android","channel":"stable"}`, `"skins":[]`},
+		{`{"resource":"plugins","id":"","q":"","kind":"dictionary","offset":0,"platform":"android","channel":"stable"}`, `"plugins":[]`},
 		{`{"resource":"candidate_skins","id":"` + publicID + `"}`, "public-marker"},
+		{`{"resource":"candidate_skins","id":"` + publicID + `","q":"synthetic","kind":"dictionary","offset":20,"platform":"android","channel":"stable"}`, "public-marker"},
 		{`{"resource":"candidate_skins","id":"` + privateID + `"}`, "public_api_status_404"},
+		{`{"resource":"candidate_skins","id":"` + privateID + `","q":"synthetic","kind":"dictionary","offset":20,"platform":"android","channel":"stable"}`, "public_api_status_404"},
 		{`{"resource":"community_stats"}`, "据水杉公共数据："},
 	} {
 		result := s.qqPublicTool(t.Context(), "query_public_data", json.RawMessage(tc.args))

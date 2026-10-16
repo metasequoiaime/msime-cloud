@@ -386,8 +386,8 @@ func (c cli) refresh(server string, used session) (session, error) {
 		return session{}, fmt.Errorf("refreshing the session failed with %s: %s", response.Status, strings.TrimSpace(string(data)))
 	}
 	var tokens tokenResponse
-	if err = json.Unmarshal(data, &tokens); err != nil || tokens.AccessToken == "" {
-		return session{}, errors.New("the refresh response carries no token")
+	if err = json.Unmarshal(data, &tokens); err != nil || !tokens.valid() {
+		return session{}, errors.New("the refresh response carries an invalid session")
 	}
 	next := tokens.session(c.now())
 	next.LoginID = latest.loginID()
@@ -572,8 +572,8 @@ func (c cli) signIn(server, challenge, credential string) error {
 		return statusError{response.Status}
 	}
 	var tokens tokenResponse
-	if err = json.Unmarshal(data, &tokens); err != nil || tokens.AccessToken == "" {
-		return errors.New("the sign-in response carries no token")
+	if err = json.Unmarshal(data, &tokens); err != nil || !tokens.valid() {
+		return errors.New("the sign-in response carries an invalid session")
 	}
 	signedIn := tokens.session(c.now())
 	if err = c.store().put(server, &signedIn); err != nil {

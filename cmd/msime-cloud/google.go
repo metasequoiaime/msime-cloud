@@ -133,8 +133,8 @@ func (c cli) adminSignIn(open bool) error {
 	if err = c.postJSON(admin, "/api/auth/cli/finish", map[string]string{"state": started.State, "code": code, "redirect_uri": target}, &finished); err != nil {
 		return err
 	}
-	if finished.Token == "" {
-		return errors.New("the admin site answered the sign-in without a session")
+	if finished.Token == "" || !validSessionLifetime(finished.ExpiresIn) {
+		return errors.New("the admin site answered the sign-in without a valid session")
 	}
 	user, _ := json.Marshal(map[string]string{"email": finished.Email})
 	kept := session{AccessToken: finished.Token, ExpiresAt: c.now().Add(time.Duration(finished.ExpiresIn) * time.Second), User: user}

@@ -15,8 +15,15 @@ func (s *Service) TranslationCacheLookup(ctx context.Context, source, target str
 	if s == nil || s.store == nil || len(texts) == 0 {
 		return nil, nil
 	}
-	rows, err := s.store.pool.Query(ctx, `UPDATE translation_cache SET hit_count=hit_count+1,used_at=now()
- WHERE source_lang=$1 AND target_lang=$2 AND source_text=ANY($3) RETURNING source_text,target_text`, source, target, texts)
+	// 命中也会写入计数，必须与批量回写按相同字节顺序取锁，不能依赖执行计划的扫描顺序。
+	rows, err := s.store.pool.Query(ctx, `WITH locked AS MATERIALIZED (
+ SELECT source_lang,target_lang,source_text FROM translation_cache
+ WHERE source_lang=$1 AND target_lang=$2 AND source_text=ANY($3)
+ ORDER BY source_text COLLATE "C" FOR NO KEY UPDATE
+)
+UPDATE translation_cache c SET hit_count=c.hit_count+1,used_at=now()
+ FROM locked l WHERE c.source_lang=l.source_lang AND c.target_lang=l.target_lang AND c.source_text=l.source_text
+ RETURNING c.source_text,c.target_text`, source, target, texts)
 	if err != nil {
 		return nil, err
 	}
@@ -39,8 +46,10 @@ func (s *Service) TranslationCacheStore(ctx context.Context, source, target stri
 	if s == nil || s.store == nil || len(sources) == 0 {
 		return nil
 	}
+	// 原文与译文成对排序；相反请求顺序的批次也必须以同一顺序取得冲突行锁。
 	_, err := s.store.pool.Exec(ctx, `INSERT INTO translation_cache(source_lang,target_lang,source_text,target_text)
  SELECT $1,$2,s,t FROM unnest($3::text[],$4::text[]) AS pair(s,t)
+ ORDER BY s COLLATE "C"
  ON CONFLICT(source_lang,target_lang,source_text) DO UPDATE SET target_text=excluded.target_text,used_at=now()`,
 		source, target, sources, targets)
 	return err

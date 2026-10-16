@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -54,7 +55,7 @@ func maskEmail(email string) string {
 	if at <= 0 {
 		return "***"
 	}
-	first := []rune(email[:at])[0]
+	first, _ := utf8.DecodeRuneInString(email[:at])
 	return string(first) + "***" + email[at:]
 }
 

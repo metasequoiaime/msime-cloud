@@ -16,7 +16,7 @@ func TestFinishSkinJobRejectsExpiryWhileWaitingForLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := skinJobID('e')
-	if _, err := a.CreateSkinJob(ctx, id, "owner", 1, 1, time.Minute); err != nil {
+	if _, _, err := a.CreateSkinJob(ctx, id, "owner", 1, 1, 10, time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.pool.Exec(ctx, `UPDATE skin_jobs SET expires_at=clock_timestamp()+interval '1 second' WHERE id=$1`, id); err != nil {

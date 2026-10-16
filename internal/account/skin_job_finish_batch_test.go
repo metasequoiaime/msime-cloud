@@ -15,7 +15,7 @@ func TestFinishSkinJobUsesOneDatabaseCall(t *testing.T) {
 	}
 	jobID := skinJobID('f')
 	service := &Service{store: db}
-	if _, err := service.CreateSkinJob(ctx, jobID, "owner", 1, 1, time.Minute); err != nil {
+	if _, _, err := service.CreateSkinJob(ctx, jobID, "owner", 1, 1, 10, time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	cfg := db.pool.Config()

@@ -18,17 +18,17 @@ func TestSkinJobStoreCapsCancelAndStaleness(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range []byte{'a', 'b'} {
-		if _, err := a.CreateSkinJob(ctx, skinJobID(c), "owner-1", 2, 3, time.Minute); err != nil {
+		if _, _, err := a.CreateSkinJob(ctx, skinJobID(c), "owner-1", 2, 3, 10, time.Minute); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := a.CreateSkinJob(ctx, skinJobID('c'), "owner-1", 2, 3, time.Minute); !errors.Is(err, ErrSkinJobsBusy) {
+	if _, _, err := a.CreateSkinJob(ctx, skinJobID('c'), "owner-1", 2, 3, 10, time.Minute); !errors.Is(err, ErrSkinJobsBusy) {
 		t.Fatal("per-owner cap", err)
 	}
-	if _, err := a.CreateSkinJob(ctx, skinJobID('c'), "owner-2", 2, 3, time.Minute); err != nil {
+	if _, _, err := a.CreateSkinJob(ctx, skinJobID('c'), "owner-2", 2, 3, 10, time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.CreateSkinJob(ctx, skinJobID('d'), "owner-2", 2, 3, time.Minute); !errors.Is(err, ErrSkinJobsBusy) {
+	if _, _, err := a.CreateSkinJob(ctx, skinJobID('d'), "owner-2", 2, 3, 10, time.Minute); !errors.Is(err, ErrSkinJobsBusy) {
 		t.Fatal("global cap", err)
 	}
 	if err := a.DeleteSkinJob(ctx, skinJobID('a'), "owner-2"); !errors.Is(err, ErrSkinJobNotFound) {
@@ -43,13 +43,13 @@ func TestSkinJobStoreCapsCancelAndStaleness(t *testing.T) {
 	if alive, err := a.SkinJobHeartbeat(ctx, skinJobID('a')); err != nil || alive {
 		t.Fatal("cancelled worker told to continue", alive, err)
 	}
-	if _, err := a.CreateSkinJob(ctx, skinJobID('d'), "owner-2", 2, 3, time.Minute); !errors.Is(err, ErrSkinJobsBusy) {
+	if _, _, err := a.CreateSkinJob(ctx, skinJobID('d'), "owner-2", 2, 3, 10, time.Minute); !errors.Is(err, ErrSkinJobsBusy) {
 		t.Fatal("cancelled job released its slot before its worker stopped", err)
 	}
 	if recorded, err := a.FinishSkinJob(ctx, skinJobID('a'), "failed", "cancelled", nil); err != nil || recorded {
 		t.Fatal(recorded, err)
 	}
-	if _, err := a.CreateSkinJob(ctx, skinJobID('d'), "owner-2", 2, 3, time.Minute); err != nil {
+	if _, _, err := a.CreateSkinJob(ctx, skinJobID('d'), "owner-2", 2, 3, 10, time.Minute); err != nil {
 		t.Fatal("slot not released", err)
 	}
 
@@ -109,24 +109,24 @@ func TestSkinJobStoreDeadWorkersReleaseSlots(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range []byte{'a', 'b'} {
-		if _, err := a.CreateSkinJob(ctx, skinJobID(c), "owner-1", 2, 2, time.Minute); err != nil {
+		if _, _, err := a.CreateSkinJob(ctx, skinJobID(c), "owner-1", 2, 2, 10, time.Minute); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if err := a.DeleteSkinJob(ctx, skinJobID('a'), "owner-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.CreateSkinJob(ctx, skinJobID('c'), "owner-2", 2, 2, time.Minute); !errors.Is(err, ErrSkinJobsBusy) {
+	if _, _, err := a.CreateSkinJob(ctx, skinJobID('c'), "owner-2", 2, 2, 10, time.Minute); !errors.Is(err, ErrSkinJobsBusy) {
 		t.Fatal("live jobs must hold their slots", err)
 	}
 	// The replica running both jobs dies before its next heartbeat.
 	if _, err := db.pool.Exec(ctx, `UPDATE skin_jobs SET heartbeat_at=now()-interval '1 minute'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.CreateSkinJob(ctx, skinJobID('c'), "owner-1", 2, 2, time.Minute); err != nil {
+	if _, _, err := a.CreateSkinJob(ctx, skinJobID('c'), "owner-1", 2, 2, 10, time.Minute); err != nil {
 		t.Fatal("dead jobs held the per-owner cap", err)
 	}
-	if _, err := a.CreateSkinJob(ctx, skinJobID('d'), "owner-2", 2, 2, time.Minute); err != nil {
+	if _, _, err := a.CreateSkinJob(ctx, skinJobID('d'), "owner-2", 2, 2, 10, time.Minute); err != nil {
 		t.Fatal("dead jobs held the deployment cap", err)
 	}
 	var cancelled int
@@ -136,7 +136,7 @@ func TestSkinJobStoreDeadWorkersReleaseSlots(t *testing.T) {
 	if job, err := a.GetSkinJob(ctx, skinJobID('b'), "owner-1"); err != nil || job.State != "failed" || job.Reason != "cancelled" {
 		t.Fatal("orphaned running job", job, err)
 	}
-	if _, err := a.CreateSkinJob(ctx, skinJobID('e'), "owner-2", 2, 2, time.Minute); !errors.Is(err, ErrSkinJobsBusy) {
+	if _, _, err := a.CreateSkinJob(ctx, skinJobID('e'), "owner-2", 2, 2, 10, time.Minute); !errors.Is(err, ErrSkinJobsBusy) {
 		t.Fatal("live jobs must still fill the caps", err)
 	}
 }
@@ -152,7 +152,7 @@ func TestSkinJobStoreRejectsExpiredResults(t *testing.T) {
 	for _, state := range []string{"succeeded", "failed"} {
 		t.Run(state, func(t *testing.T) {
 			id := skinJobID('a')
-			if _, err := a.CreateSkinJob(ctx, id, "owner", 1, 1, time.Minute); err != nil {
+			if _, _, err := a.CreateSkinJob(ctx, id, "owner", 1, 1, 10, time.Minute); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := db.pool.Exec(ctx, `UPDATE skin_jobs SET expires_at=now()-interval '1 second',heartbeat_at=now() WHERE id=$1`, id); err != nil {
@@ -181,7 +181,7 @@ func TestSkinJobStoreRejectsExpiredResults(t *testing.T) {
 			if _, err := a.GetSkinJob(ctx, id, "owner"); !errors.Is(err, ErrSkinJobNotFound) {
 				t.Fatal("过期任务仍可读取", err)
 			}
-			if _, err := a.CreateSkinJob(ctx, skinJobID('b'), "owner", 1, 1, time.Minute); err != nil {
+			if _, _, err := a.CreateSkinJob(ctx, skinJobID('b'), "owner", 1, 1, 10, time.Minute); err != nil {
 				t.Fatal("过期任务未释放容量", err)
 			}
 			if err := a.DropSkinJob(ctx, skinJobID('b')); err != nil {

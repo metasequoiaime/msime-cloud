@@ -446,13 +446,16 @@ func (s *Store) ReleaseRate(ctx context.Context, key string) error {
 	return e
 }
 
+// rateUntilSQL 同时供单次限流和创建插画任务的事务批次使用，保持窗口计数和 Retry-After 的计算一致。
+const rateUntilSQL = `INSERT INTO auth_rates(key,count,expires_at) VALUES($1,1,clock_timestamp()+$2::interval)
+	ON CONFLICT(key) DO UPDATE SET count=CASE WHEN auth_rates.expires_at<=clock_timestamp() THEN 1 ELSE least(auth_rates.count+1,$3+1) END,
+	 expires_at=CASE WHEN auth_rates.expires_at<=clock_timestamp() THEN excluded.expires_at ELSE auth_rates.expires_at END RETURNING count,expires_at,clock_timestamp()`
+
 // RateUntil 与 Rate 计数方式相同，超限时额外返回当前窗口的剩余时长，供响应的 Retry-After 使用。
 func (s *Store) RateUntil(ctx context.Context, key string, limit int, window time.Duration) (time.Duration, error) {
 	var n int
 	var expires, now time.Time
-	e := s.pool.QueryRow(ctx, `INSERT INTO auth_rates(key,count,expires_at) VALUES($1,1,clock_timestamp()+$2::interval)
-	ON CONFLICT(key) DO UPDATE SET count=CASE WHEN auth_rates.expires_at<=clock_timestamp() THEN 1 ELSE least(auth_rates.count+1,$3+1) END,
-	 expires_at=CASE WHEN auth_rates.expires_at<=clock_timestamp() THEN excluded.expires_at ELSE auth_rates.expires_at END RETURNING count,expires_at,clock_timestamp()`, key, window.String(), limit).Scan(&n, &expires, &now)
+	e := s.pool.QueryRow(ctx, rateUntilSQL, key, window.String(), limit).Scan(&n, &expires, &now)
 	if e != nil {
 		return 0, e
 	}

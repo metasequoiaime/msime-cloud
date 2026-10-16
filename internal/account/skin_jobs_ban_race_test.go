@@ -21,7 +21,7 @@ func TestCreateSkinJobRejectsBanRace(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := (&Service{store: db}).CreateSkinJob(ctx, "skin-job-ban-race", "user:"+user.User.ID, 3, 8, 10)
+		_, _, err := (&Service{store: db}).CreateSkinJob(ctx, "skin-job-ban-race", "user:"+user.User.ID, 3, 8, 10, 10)
 		done <- err
 	}()
 	waitForAdminDatabaseLock(t, db, ban.Conn().PgConn().PID())

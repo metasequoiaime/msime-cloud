@@ -947,6 +947,15 @@ func (s *Server) approveDictPR(w http.ResponseWriter, r *http.Request, gh *githu
 		dictGitHubStatus(w, "merge", res.Status)
 		return
 	}
+	var merged struct {
+		Merged bool   `json:"merged"`
+		SHA    string `json:"sha"`
+	}
+	if res.Decode(&merged) != nil || !merged.Merged || merged.SHA == "" {
+		slog.Error("dictionary pull requests: merge confirmation missing", "pull", number, "status", res.Status)
+		fail(w, 502, "github_uncertain")
+		return
+	}
 	s.auditDictPR(ctx, "dict_pr_approve", number, map[string]any{"count": len(keep), "removed": removed})
 	respond(w, 200, map[string]any{"ok": true, "merged": true, "count": len(keep), "removed": removed})
 }

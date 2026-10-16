@@ -415,13 +415,14 @@ func (s *Server) readDictFiles(ctx context.Context, gh *githubapp.Client, p dict
 // addedLinePositions returns the indexes (into head split on newlines) of the entry lines head adds over base, counted the way addedLines counts them: stripped, blank and # lines skipped, each base line cancelling one equal head line in order.
 func addedLinePositions(base, head string) []int {
 	remaining := map[string]int{}
-	for _, line := range strings.Split(base, "\n") {
+	for line := range strings.SplitSeq(base, "\n") {
 		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
 			remaining[line]++
 		}
 	}
 	var added []int
-	for i, line := range strings.Split(head, "\n") {
+	i := 0
+	for line := range strings.SplitSeq(head, "\n") {
 		line = strings.TrimSpace(line)
 		switch {
 		case line == "" || strings.HasPrefix(line, "#"):
@@ -430,6 +431,7 @@ func addedLinePositions(base, head string) []int {
 		default:
 			added = append(added, i)
 		}
+		i++
 	}
 	return added
 }

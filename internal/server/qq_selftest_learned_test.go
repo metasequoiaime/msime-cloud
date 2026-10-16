@@ -73,8 +73,26 @@ func TestQQSelfTestLearnedCases(t *testing.T) {
 	}
 	fake.answer = `{"type":"answered","answer":"答了。"}`
 	results := s.runQQSelfTest(ctx)
-	if len(results) != len(cases) || !strings.Contains(strings.Join(fake.chatBodies, "\n"), "要求：要点和下面这个维护者核对过、写进 FAQ 的答案一致，说法可以不同、可以更简短，不能和它矛盾：核对过的答案J") {
+	if len(results) != len(cases) || len(fake.judgeUsers) != len(cases) {
 		t.Fatal(len(results))
+	}
+	found := false
+	for _, body := range fake.judgeUsers {
+		var input struct {
+			Question, Expect string
+		}
+		if err := json.Unmarshal([]byte(body), &input); err != nil {
+			t.Fatal(err)
+		}
+		if input.Question == "学到的问题J" {
+			found = true
+			if input.Expect != cases[len(qqSelfTestCases)].Expect || !strings.HasSuffix(input.Expect, "核对过的答案J") {
+				t.Fatal(input)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("判分没有收到学到的题目和核对过的答案")
 	}
 }
 

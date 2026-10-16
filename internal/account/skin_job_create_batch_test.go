@@ -44,7 +44,7 @@ func TestCreateSkinJobUsesBoundedRoundTrips(t *testing.T) {
 			trace.seen, trace.statements = 0, nil
 			trace.mu.Unlock()
 			a := &Service{store: &Store{pool: pool}}
-			expires, err := a.CreateSkinJob(ctx, id, owner, 1, 1, time.Minute)
+			expires, _, err := a.CreateSkinJob(ctx, id, owner, 1, 1, 10, time.Minute)
 			if err != nil {
 				t.Fatal("清理过期任务后应能复用 ID 和容量", err)
 			}
@@ -93,7 +93,7 @@ func TestCreateSkinJobUsesCapacityCommittedDuringLockWait(t *testing.T) {
 			}
 			done := make(chan error, 1)
 			go func() {
-				_, err := (&Service{store: db}).CreateSkinJob(ctx, skinJobID('a'), owner, 1, 1, time.Minute)
+				_, _, err := (&Service{store: db}).CreateSkinJob(ctx, skinJobID('a'), owner, 1, 1, 10, time.Minute)
 				done <- err
 			}()
 			waitForAdminDatabaseLock(t, db, blocker.Conn().PgConn().PID())
@@ -141,7 +141,7 @@ func TestCreateSkinJobRejectsInvalidOwnerBeforeGlobalLock(t *testing.T) {
 			if _, err := blocker.Exec(ctx, skinJobsLock); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := (&Service{store: db}).CreateSkinJob(ctx, skinJobID('c'), "user:"+uid, 1, 1, time.Minute); !errors.Is(err, want) {
+			if _, _, err := (&Service{store: db}).CreateSkinJob(ctx, skinJobID('c'), "user:"+uid, 1, 1, 10, time.Minute); !errors.Is(err, want) {
 				t.Fatal("无效账号未在全局锁之前被拒绝", err)
 			}
 		})
@@ -167,7 +167,7 @@ func TestCreateSkinJobRejectionRollsBackCleanup(t *testing.T) {
 			case "duplicate-id":
 				id, ownCap = activeID, 2
 			}
-			_, err := (&Service{store: db}).CreateSkinJob(ctx, id, owner, ownCap, totalCap, time.Minute)
+			_, _, err := (&Service{store: db}).CreateSkinJob(ctx, id, owner, ownCap, totalCap, 10, time.Minute)
 			if mode == "duplicate-id" {
 				if err == nil || errors.Is(err, ErrSkinJobsBusy) {
 					t.Fatal("插入约束失败应保留数据库错误", err)
@@ -198,7 +198,7 @@ func TestCreateSkinJobConcurrentCaps(t *testing.T) {
 	for i := range workers {
 		go func() {
 			<-start
-			_, err := a.CreateSkinJob(ctx, skinJobID(byte('0'+i)), fmt.Sprintf("owner-%d", i%2), 2, 3, time.Minute)
+			_, _, err := a.CreateSkinJob(ctx, skinJobID(byte('0'+i)), fmt.Sprintf("owner-%d", i%2), 2, 3, 10, time.Minute)
 			done <- err
 		}()
 	}

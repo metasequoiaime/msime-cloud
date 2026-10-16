@@ -590,6 +590,10 @@ func normalizeCrashFrame(line string) string {
 	if line == "" {
 		return ""
 	}
+	// 这些替换都要求 ASCII 数字或正则的 ASCII 空白；纯符号帧直接转小写，避免五次整行复制。
+	if !strings.ContainsAny(line, "0123456789 \t\n\f\r") {
+		return strings.ToLower(line)
+	}
 	line = crashFrameIndex.ReplaceAllString(line, "")
 	line = crashAddressPattern.ReplaceAllString(line, "")
 	line = crashFrameOffset.ReplaceAllString(line, "")

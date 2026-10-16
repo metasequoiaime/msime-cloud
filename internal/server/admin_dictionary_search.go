@@ -20,18 +20,19 @@ type dictionarySearchFile struct {
 
 // 每次最多搜索四个文件，批次按 8 MiB 控制，大文件单独处理；各批次固定同一不可变树。
 func (s *Server) dictionarySearch(w http.ResponseWriter, r *http.Request, gh *githubapp.Client) {
-	q := strings.TrimSpace(r.URL.Query().Get("q"))
-	scope := r.URL.Query().Get("scope")
+	query := r.URL.Query()
+	q := strings.TrimSpace(query.Get("q"))
+	scope := query.Get("scope")
 	if scope == "" {
 		scope = "all"
 	}
-	revision := r.URL.Query().Get("revision")
+	revision := query.Get("revision")
 	cursor := 0
 	var err error
-	if value := r.URL.Query().Get("cursor"); value != "" {
+	if value := query.Get("cursor"); value != "" {
 		cursor, err = strconv.Atoi(value)
 	}
-	if q == "" || len(q) > 200 || !utf8.ValidString(q) || !plainText(r.URL.Query().Get("q")) ||
+	if q == "" || len(q) > 200 || !utf8.ValidString(q) || !plainText(query.Get("q")) ||
 		!slices.Contains([]string{"all", "custom", "packs", "sources"}, scope) || err != nil || cursor < 0 ||
 		(revision != "" && !dictionarySHAPattern.MatchString(revision)) || (cursor > 0 && revision == "") {
 		fail(w, 400, "invalid_query")

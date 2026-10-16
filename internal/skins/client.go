@@ -231,7 +231,9 @@ func ParseStored(s Stored) (Package, error) {
 	if toml.Unmarshal(s.Manifest, &table) != nil {
 		return p, invalid("invalid TOML")
 	}
-	if n, ok := table["schema_version"].(int64); !ok || n != 1 {
+	// 客户端接受 1 和 2：版本 2 增加 [animation] 和装饰图的待机动效，版本 1 写这些键会被拒绝。
+	schema, ok := table["schema_version"].(int64)
+	if !ok || schema != 1 && schema != 2 {
 		return p, invalid("unsupported schema_version")
 	}
 	var err error
@@ -277,7 +279,7 @@ func ParseStored(s Stored) (Package, error) {
 		return p, invalid("missing candidate_window")
 	}
 	files := newPackageFiles(s.Resources)
-	if err = readWindow(&p, window, files); err != nil {
+	if err = readWindow(&p, window, files, schema); err != nil {
 		return p, err
 	}
 	if p.Toolbar, err = readToolbar(table); err != nil {
@@ -305,11 +307,14 @@ func ParseStored(s Stored) (Package, error) {
 	if err = readColors(&p, table); err != nil {
 		return p, err
 	}
-	p.SchemaVersion = 1
+	if err = readAnimation(table, schema); err != nil {
+		return p, err
+	}
+	p.SchemaVersion = int(schema)
 	return p, storedResources(&p, s)
 }
 
-func readWindow(p *Package, window map[string]any, files packageFiles) error {
+func readWindow(p *Package, window map[string]any, files packageFiles, schema int64) error {
 	w := &p.CandidateWindow
 	value, present := window["min_width_dip"]
 	if w.MinWidth = number(value, present); !bounded(w.MinWidth, 1000) {
@@ -359,6 +364,9 @@ func readWindow(p *Package, window map[string]any, files packageFiles) error {
 		d.Align = align
 	default:
 		return invalid("invalid decoration")
+	}
+	if err = readDecorationMotion(decoration, d.Top > 0, schema); err != nil {
+		return err
 	}
 	value, present = window["background"]
 	if !present {
@@ -419,6 +427,71 @@ func checkWindowsWindowKeys(window map[string]any) error {
 	if value, present := window["page_arrows"]; present {
 		if _, ok := value.(bool); !ok {
 			return invalid("invalid page_arrows")
+		}
+	}
+	return nil
+}
+
+// readDecorationMotion 是客户端的 read_decoration_motion：decoration.motion 和 motion_period_ms 只在 schema 2 里可写，并且只对有装饰带的包有意义。两个键都没写时不做任何检查。
+func readDecorationMotion(decoration map[string]any, decorated bool, schema int64) error {
+	motion, motionSet := decoration["motion"]
+	period, periodSet := decoration["motion_period_ms"]
+	if !motionSet && !periodSet {
+		return nil
+	}
+	if schema < 2 {
+		return invalid("decoration motion requires schema_version 2")
+	}
+	if motionSet {
+		if name, _ := motion.(string); !slices.Contains(decorationMotions, name) {
+			return invalid("invalid decoration motion")
+		}
+	}
+	if !decorated {
+		return invalid("invalid decoration motion")
+	}
+	if periodSet {
+		if ms, ok := period.(int64); !ok || ms < 1200 || ms > 8000 {
+			return invalid("invalid decoration motion_period_ms")
+		}
+	}
+	return nil
+}
+
+// decorationMotions 是客户端 DecorationMotion 的全部取值。
+var decorationMotions = []string{"none", "float", "sway", "breathe", "bounce"}
+
+// animationPresets 是客户端 SkinAnimationPreset 的全部取值。
+var animationPresets = []string{"none", "fade", "fade_scale", "slide_up", "spring", "glow"}
+
+// readAnimation 是客户端的 read_animation：[animation] 只在 schema 2 里可写；时长、错峰和三个预设按客户端的顺序检查，第一个错误的原因与客户端相同。
+func readAnimation(table map[string]any, schema int64) error {
+	value, present := table["animation"]
+	if !present {
+		return nil
+	}
+	if schema < 2 {
+		return invalid("animation requires schema_version 2")
+	}
+	animation, ok := value.(map[string]any)
+	if !ok {
+		return invalid("invalid animation")
+	}
+	for _, field := range []struct {
+		key      string
+		min, max int64
+	}{{"duration_ms", 40, 600}, {"stagger_ms", 0, 80}} {
+		if value, present := animation[field.key]; present {
+			if n, ok := value.(int64); !ok || n < field.min || n > field.max {
+				return invalid("invalid animation " + field.key)
+			}
+		}
+	}
+	for _, key := range []string{"enter", "exit", "selection"} {
+		if value, present := animation[key]; present {
+			if name, _ := value.(string); !slices.Contains(animationPresets, name) {
+				return invalid("invalid animation " + key)
+			}
 		}
 	}
 	return nil

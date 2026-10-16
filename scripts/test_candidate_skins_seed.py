@@ -48,6 +48,38 @@ class ClientDialectTests(unittest.TestCase):
                 if reason is None and case.get("base"):
                     self.assertEqual(table["base"], case["base"])
 
+    def test_animation_table(self):
+        """与 internal/skins/client_test.go 的 TestClientAnimationTable 相同的用例：共享用例表没有覆盖 [animation]。"""
+        fixture = json.loads(FIXTURE.read_text())
+        cases = [
+            ("v2 without the table", "", "", None, False),
+            ("every key at its bounds", "", "[animation]\nenter = 'fade_scale'\nexit = 'none'\nselection = 'glow'\nduration_ms = 40\nstagger_ms = 80\n", None, False),
+            ("upper duration and lower stagger", "", "[animation]\nenter = 'slide_up'\nexit = 'fade'\nselection = 'spring'\nduration_ms = 600\nstagger_ms = 0\n", None, False),
+            ("empty table", "", "[animation]\n", None, False),
+            ("table on schema 1", "", "[animation]\nenter = 'fade'\n", "animation requires schema_version 2", True),
+            ("not a table", "animation = 'fade'\n", "", "invalid animation", False),
+            ("duration below range", "", "[animation]\nduration_ms = 39\n", "invalid animation duration_ms", False),
+            ("duration above range", "", "[animation]\nduration_ms = 601\n", "invalid animation duration_ms", False),
+            ("float duration", "", "[animation]\nduration_ms = 180.0\n", "invalid animation duration_ms", False),
+            ("stagger above range", "", "[animation]\nstagger_ms = 81\n", "invalid animation stagger_ms", False),
+            ("negative stagger", "", "[animation]\nstagger_ms = -1\n", "invalid animation stagger_ms", False),
+            ("duration is checked before presets", "", "[animation]\nenter = 'spin'\nduration_ms = 1\n", "invalid animation duration_ms", False),
+            ("unknown enter", "", "[animation]\nenter = 'spin'\n", "invalid animation enter", False),
+            ("enter checked before exit", "", "[animation]\nexit = 'spin'\nenter = 'Fade'\n", "invalid animation enter", False),
+            ("non-string exit", "", "[animation]\nexit = 1\n", "invalid animation exit", False),
+            ("unknown selection", "", "[animation]\nselection = 'bounce'\n", "invalid animation selection", False),
+        ]
+        for name, prepend, append, want, v1 in cases:
+            with self.subTest(name):
+                case = {"name": name, "template": "sample", "prepend": prepend, "append": append, "replace": [] if v1 else [["schema_version = 1", "schema_version = 2"]]}
+                sid, manifest, files = build_case(fixture, case)
+                try:
+                    seed.validate(sid, manifest, files)
+                    reason = None
+                except seed.Invalid as error:
+                    reason = str(error)
+                self.assertEqual(reason, want)
+
     def test_resource_limits(self):
         manifest = b"schema_version = 1\nid = 'sample'\nname = 'S'\nversion = '1'\nbase = 'ink'\n[supports]\nlayouts = ['vertical']\nthemes = ['light']\n[candidate_window]\n"
         seed.validate("sample", manifest, {f"a{i}.css": 1 for i in range(511)})

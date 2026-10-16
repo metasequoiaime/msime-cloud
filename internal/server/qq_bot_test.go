@@ -4409,11 +4409,12 @@ func TestQQBotChatSkipsThinkingAndLogsTiming(t *testing.T) {
 
 // memoryDrafts 是测试用的草稿存储；updateErr、claimErr 不为空时对应的操作像数据库出错那样失败。
 type memoryDrafts struct {
-	mu        sync.Mutex
-	drafts    []account.QQDraft
-	createErr error
-	updateErr error
-	claimErr  error
+	mu                  sync.Mutex
+	drafts              []account.QQDraft
+	createErr           error
+	createAfterWriteErr error
+	updateErr           error
+	claimErr            error
 }
 
 func (m *memoryDrafts) CreateQQDraft(_ context.Context, subject, original, report string) (int64, error) {
@@ -4423,6 +4424,9 @@ func (m *memoryDrafts) CreateQQDraft(_ context.Context, subject, original, repor
 		return 0, m.createErr
 	}
 	m.drafts = append(m.drafts, account.QQDraft{ID: int64(len(m.drafts) + 1), Subject: account.QQDraftSubject(subject), Original: original, Report: report, CreatedAt: time.Date(2026, 10, 12, 1, 0, 0, 0, time.UTC), UpdatedAt: time.Now()})
+	if m.createAfterWriteErr != nil {
+		return 0, m.createAfterWriteErr
+	}
 	return int64(len(m.drafts)), nil
 }
 func (m *memoryDrafts) QQDraft(_ context.Context, id int64) (account.QQDraft, error) {
@@ -4669,10 +4673,24 @@ func TestQQBotDraftNotReport(t *testing.T) {
 	fake.summary = qqBugSummary
 	drafts.createErr = errors.New("database down")
 	s.qqDraftReport(context.Background(), "GROUP1/MEMBER1", "候选框又跑到左上角了", nil, func(bool) {})
-	if got := limiter.counts["qq-bot-drafts|GROUP1/MEMBER1"]; got != 0 {
-		t.Fatalf("草稿保存失败时不应占用草稿额度，实际剩余计数 %d", got)
+	if got := limiter.counts["qq-bot-drafts|GROUP1/MEMBER1"]; got != 1 {
+		t.Fatalf("草稿写入结果不确定时应保留额度，实际计数 %d", got)
 	}
 	drafts.createErr = nil
+	// 明确的 PostgreSQL 语句错误确认没有写入，才退回名额。
+	drafts.createErr = &pgconn.PgError{Code: "23514", Message: "check violation"}
+	s.qqDraftReport(context.Background(), "GROUP1/MEMBER2", "候选框又跑到左上角了", nil, func(bool) {})
+	if got := limiter.counts["qq-bot-drafts|GROUP1/MEMBER2"]; got != 0 {
+		t.Fatalf("明确拒绝的草稿写入应退回额度，实际计数 %d", got)
+	}
+	drafts.createErr = nil
+	// 返回错误前已经写入时不能退回额度，避免下一次重试再占一个名额并建重复草稿。
+	drafts.createAfterWriteErr = context.Canceled
+	s.qqDraftReport(context.Background(), "GROUP1/MEMBER3", "候选框又跑到左上角了", nil, func(bool) {})
+	if got := limiter.counts["qq-bot-drafts|GROUP1/MEMBER3"]; got != 1 || len(drafts.drafts) != 1 {
+		t.Fatalf("不确定写入应保留额度和已写草稿，计数 %d，草稿数 %d", got, len(drafts.drafts))
+	}
+	drafts.createAfterWriteErr = nil
 	// 额度用完：分不清是不是具体的 bug，照旧记进汇总 issue。
 	limiter.counts["qq-bot-drafts|GROUP1/MEMBER2"] = qqDraftsDaily
 	before := len(fake.replyTexts())

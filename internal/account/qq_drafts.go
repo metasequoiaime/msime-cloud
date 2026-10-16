@@ -14,6 +14,9 @@ const QQDraftWindow = 30 * 24 * time.Hour
 // QQDraftClaimTimeout 是认领的有效期：认领超过这么久还没记下 issue，就当作提交被打断了（例如副本被 SIGKILL，连放回认领都没来得及），草稿可以重新认领、补充，也重新出现在列表里。它要比 QQ 机器人一条消息的处理时限（4 分钟）长，正常还在提交的草稿不会被另一个副本抢走。
 const QQDraftClaimTimeout = 5 * time.Minute
 
+// QQDraftIdempotencyWindow 是同一条草稿写请求的幂等窗口。请求结果不确定时，短时间内重试应返回已经写入的草稿，而不是再建一份。
+const QQDraftIdempotencyWindow = 10 * time.Minute
+
 // qqDraftUnclaimed 是「可以认领」的条件：没被认领，或者认领已经超时而且没记下 issue。
 var qqDraftUnclaimed = `(filed_at IS NULL OR (issue_ref='' AND filed_at<now()-'` + QQDraftClaimTimeout.String() + `'::interval))`
 
@@ -44,6 +47,31 @@ func (a *Service) CreateQQDraft(ctx context.Context, subject, original, report s
 	var id int64
 	err := a.store.pool.QueryRow(ctx, `INSERT INTO qq_drafts(subject,original,report) VALUES($1,$2,$3) RETURNING id`, QQDraftSubject(subject), original, report).Scan(&id)
 	return id, err
+}
+
+// CreateQQDraftOnce 在短时间内对相同内容只新建一份草稿，返回已有或新建的编号。用事务级 advisory lock 串行化多个副本，处理提交成功但响应丢失后的重试。
+func (a *Service) CreateQQDraftOnce(ctx context.Context, subject, original, report string) (int64, error) {
+	tx, err := a.store.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+	subject = QQDraftSubject(subject)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1 || chr(31) || $2 || chr(31) || $3))`, subject, original, report); err != nil {
+		return 0, err
+	}
+	var id int64
+	err = tx.QueryRow(ctx, `SELECT id FROM qq_drafts WHERE subject=$1 AND original=$2 AND report=$3 AND created_at>now()-$4::interval ORDER BY id LIMIT 1`, subject, original, report, QQDraftIdempotencyWindow.String()).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = tx.QueryRow(ctx, `INSERT INTO qq_drafts(subject,original,report) VALUES($1,$2,$3) RETURNING id`, subject, original, report).Scan(&id)
+	}
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return id, nil
 }
 
 // QQDraft 读一份有效期内的草稿。

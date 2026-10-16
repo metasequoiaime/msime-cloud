@@ -91,6 +91,9 @@ func qqCompact(text string) string {
 	}
 	if prefix, ok := qqCompactTrailingPrefix(text); ok {
 		text = prefix
+		if utf8.ValidString(text) && qqCompactCanReuse(text) {
+			return text
+		}
 	}
 	var compactBuilder strings.Builder
 	compactBuilder.Grow(len(text))

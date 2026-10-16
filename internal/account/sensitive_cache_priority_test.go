@@ -21,7 +21,7 @@ func TestSensitiveCachePriorityOrder(t *testing.T) {
 	a := &Service{store: db}
 	check := func(want []int64) {
 		t.Helper()
-		words, err := a.sensitive.list(t.Context(), db, time.Now())
+		words, _, err := a.sensitive.list(t.Context(), db, time.Now())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -86,6 +86,7 @@ func BenchmarkSensitiveMatcherCachedPriority(b *testing.B) {
 					if previous {
 						// 旧流程按 ID 扫描规则，再对每次请求的命中排序；加载时间不计入两者的匹配基准。
 						a.sensitive.words = words
+						a.sensitive.plain = nil
 					}
 					matcher := a.SensitivePreview()
 					b.ReportAllocs()

@@ -19,6 +19,7 @@ func cachedSensitiveService(words []sensitiveWord) *Service {
 	})
 	// 测试和基准只测已缓存规则，避免长基准进入数据库刷新路径。
 	a.sensitive.words, a.sensitive.loaded = words, time.Now().AddDate(100, 0, 0)
+	a.sensitive.plain, _ = newSensitivePlainIndex(context.Background(), words)
 	return a
 }
 

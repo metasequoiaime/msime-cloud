@@ -126,6 +126,7 @@ func TestQQBotConfigValidation(t *testing.T) {
 type qqLimiter struct {
 	mu       sync.Mutex
 	counts   map[string]int
+	leases   map[string]time.Time
 	err      map[string]error
 	wait     time.Duration
 	released []string
@@ -167,6 +168,43 @@ func (l *qqLimiter) ReleaseRateLimit(ctx context.Context, scope, subject string)
 	l.released = append(l.released, scope+"|"+subject)
 	if l.counts[scope+"|"+subject] > 0 {
 		l.counts[scope+"|"+subject]--
+	}
+	return nil
+}
+
+func (l *qqLimiter) AcquireRateLease(ctx context.Context, scope, subject string, window time.Duration) (time.Time, error) {
+	if err := ctx.Err(); err != nil {
+		return time.Time{}, err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if err := l.err[scope]; err != nil {
+		return time.Time{}, err
+	}
+	key := scope + "|" + subject
+	if l.counts[key] > 0 && (l.leases[key].IsZero() || l.leases[key].After(time.Now())) {
+		return time.Time{}, account.ErrLimited
+	}
+	if l.counts == nil {
+		l.counts = map[string]int{}
+	}
+	if l.leases == nil {
+		l.leases = map[string]time.Time{}
+	}
+	until := time.Now().Add(window)
+	l.counts[key], l.leases[key] = 1, until
+	return until, nil
+}
+
+func (l *qqLimiter) ReleaseRateLease(ctx context.Context, scope, subject string, until time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	key := scope + "|" + subject
+	if l.leases[key].Equal(until) {
+		l.counts[key] = 0
 	}
 	return nil
 }
@@ -6974,7 +7012,7 @@ func TestQQBusyLeaseCoversProcessingBudget(t *testing.T) {
 	}
 }
 
-// 跨副本租约：另一个副本正在处理这位群友的消息时等它退回租约再处理，被占时多计的那一次要退回，不然对方退回后还要白等到 qqBusyWait；一直不退回（例如对方崩溃）时等满 qqBusyWait 照常处理。
+// 跨副本租约：另一个副本正在处理这位群友的消息时等待释放，再开始处理；一直不释放（例如对方崩溃）时等满 qqBusyWait 照常处理。
 func TestQQBotWaitsForBusyLease(t *testing.T) {
 	defer func(wait, retry time.Duration) { qqBusyWait, qqBusyRetry = wait, retry }(qqBusyWait, qqBusyRetry)
 	qqBusyWait, qqBusyRetry = 5*time.Second, 10*time.Millisecond

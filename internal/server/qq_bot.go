@@ -585,7 +585,13 @@ var (
 	qqBusyRetry = 500 * time.Millisecond
 )
 
-// qqLockSubject 拿到 subject 的处理权，返回释放它的函数，调用方处理完 defer 调用。先在副本内排队（Server.qqBusy，每个 subject 一个 channel，处理完时关掉），再拿跨副本租约：同一个群友的两条消息可能被推到两个副本。跨副本用 auth_rates 计数当租约（RateLimit 限 1 次、窗口 qqBusyLease，用完 ReleaseRateLimit），不用 account.WaitLock：持锁的整个处理预算 4 分钟会一直占着一个池连接，而连接池只有 8 个。auth_rates 超限时计数也会加到上限加一，被占时要把这次多计的退回，不然前一条退回租约后计数还是 1，后一条要白等到超时；副本内已经排过队，每个副本同一个群友最多一条消息在抢租约，两个副本时这样退回是准的。两步合计最多等 qqBusyWait，等满了、ctx 结束了或者数据库不可用时不拿锁照常处理，退化成原来的并行处理，不会卡住。
+// rateLeaseLimiter 为 QQ 消息排队提供不占连接的共享租约，截止时间同时是释放时的持有者标识。
+type rateLeaseLimiter interface {
+	AcquireRateLease(ctx context.Context, scope, subject string, window time.Duration) (time.Time, error)
+	ReleaseRateLease(ctx context.Context, scope, subject string, until time.Time) error
+}
+
+// qqLockSubject 先在副本内排队，再原子占用 auth_rates 中的跨副本租约。竞争失败不记次或退款，释放只针对本次租约，避免多副本竞争或旧请求收尾时提前放开其他持有者。处理期间不占数据库连接；两步合计最多等 qqBusyWait，等满、ctx 结束或数据库不可用时照常并行处理。
 func (s *Server) qqLockSubject(ctx context.Context, subject string) func() {
 	deadline := time.NewTimer(qqBusyWait)
 	defer deadline.Stop()
@@ -619,26 +625,31 @@ func (s *Server) qqLockSubject(ctx context.Context, subject string) func() {
 			return unlock
 		}
 	}
-	releaseLease := func() {
+	leases, ok := s.limits.(rateLeaseLimiter)
+	if !ok {
+		slog.Warn("qq bot: busy lease unavailable")
+		return unlock
+	}
+	releaseLease := func(until time.Time) {
 		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 		defer cancel()
-		if err := s.limits.ReleaseRateLimit(rctx, "qq-bot-busy", subject); err != nil {
+		if err := leases.ReleaseRateLease(rctx, "qq-bot-busy", subject, until); err != nil {
 			slog.Warn("qq bot: busy lease not released", "reason", err.Error())
 		}
 	}
 	for {
-		switch err := s.limits.RateLimit(ctx, "qq-bot-busy", subject, 1, qqBusyLease); {
+		until, err := leases.AcquireRateLease(ctx, "qq-bot-busy", subject, qqBusyLease)
+		switch {
 		case err == nil:
 			// 先退回租约再放开副本内的队，排在后面的那条一拿到队就能拿到租约。
 			return func() {
-				releaseLease()
+				releaseLease(until)
 				unlock()
 			}
 		case !errors.Is(err, account.ErrLimited):
 			slog.Warn("qq bot: busy lease unavailable", "reason", err.Error())
 			return unlock
 		}
-		releaseLease()
 		select {
 		case <-time.After(qqBusyRetry):
 		case <-deadline.C:

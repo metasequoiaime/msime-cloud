@@ -995,30 +995,8 @@ func pluginStrftime(format string, t time.Time) (string, bool) {
 		period = "PM"
 	}
 	weekday := int(t.Weekday())
-	fixed := map[byte]string{
-		'%': "%",
-		'a': t.Weekday().String()[:3],
-		'A': t.Weekday().String(),
-		'b': t.Month().String()[:3],
-		'h': t.Month().String()[:3],
-		'B': t.Month().String(),
-		'c': t.Format("Mon Jan _2 15:04:05 2006"),
-		'D': t.Format("01/02/06"),
-		'x': t.Format("01/02/06"),
-		'F': t.Format("2006-01-02"),
-		'G': fmt.Sprintf("%04d", year),
-		'n': "\n",
-		'p': period,
-		'P': strings.ToLower(period),
-		'r': fmt.Sprintf("%02d:%02d:%02d %s", hour12, t.Minute(), t.Second(), period),
-		'R': t.Format("15:04"),
-		't': "\t",
-		'T': t.Format("15:04:05"),
-		'X': t.Format("15:04:05"),
-		'u': strconv.Itoa((weekday+6)%7 + 1),
-		'w': strconv.Itoa(weekday + 1),
-		'Y': fmt.Sprintf("%04d", t.Year()),
-	}
+	// 固定指令均为 ASCII，结果非空且忽略填充方式；栈上数组避免重复格式化和 map 扩容。
+	var fixed [128]string
 	var out strings.Builder
 	for i := 0; i < len(format); {
 		if format[i] != '%' {
@@ -1043,6 +1021,10 @@ func pluginStrftime(format string, t time.Time) (string, bool) {
 		}
 		component := format[i+1]
 		i += 2
+		if int(component) < len(fixed) && fixed[component] != "" {
+			out.WriteString(fixed[component])
+			continue
+		}
 		number := func(value, width int, fallback byte) string {
 			p := pad
 			if p == 0 {
@@ -1058,46 +1040,88 @@ func pluginStrftime(format string, t time.Time) (string, bool) {
 				return strings.Repeat("0", width-len(digits)) + digits
 			}
 		}
-		if text, ok := fixed[component]; ok {
-			out.WriteString(text)
-			continue
-		}
 		var text string
+		cache := true
 		switch component {
-		case 'C':
-			text = number(t.Year()/100, 2, '0')
-		case 'd':
-			text = number(t.Day(), 2, '0')
-		case 'e':
-			text = number(t.Day(), 2, '_')
-		case 'g':
-			text = number(year%100, 2, '0')
-		case 'H':
-			text = number(t.Hour(), 2, '0')
-		case 'I':
-			text = number(hour12, 2, '0')
-		case 'j':
-			text = number(t.YearDay(), 3, '0')
-		case 'k':
-			text = number(t.Hour(), 2, '_')
-		case 'l':
-			text = number(hour12, 2, '_')
-		case 'm':
-			text = number(int(t.Month()), 2, '0')
-		case 'M':
-			text = number(t.Minute(), 2, '0')
-		case 'S':
-			text = number(t.Second(), 2, '0')
-		case 'U':
-			text = number((t.YearDay()-weekday+6)/7, 2, '0')
-		case 'V':
-			text = number(week, 2, '0')
-		case 'W':
-			text = number((t.YearDay()-(weekday+6)%7+6)/7, 2, '0')
-		case 'y':
-			text = number(t.Year()%100, 2, '0')
+		case '%':
+			text = "%"
+		case 'a':
+			text = t.Weekday().String()[:3]
+		case 'A':
+			text = t.Weekday().String()
+		case 'b', 'h':
+			text = t.Month().String()[:3]
+		case 'B':
+			text = t.Month().String()
+		case 'c':
+			text = t.Format("Mon Jan _2 15:04:05 2006")
+		case 'D', 'x':
+			text = t.Format("01/02/06")
+		case 'F':
+			text = t.Format("2006-01-02")
+		case 'G':
+			text = fmt.Sprintf("%04d", year)
+		case 'n':
+			text = "\n"
+		case 'p':
+			text = period
+		case 'P':
+			text = strings.ToLower(period)
+		case 'r':
+			text = fmt.Sprintf("%02d:%02d:%02d %s", hour12, t.Minute(), t.Second(), period)
+		case 'R':
+			text = t.Format("15:04")
+		case 't':
+			text = "\t"
+		case 'T', 'X':
+			text = t.Format("15:04:05")
+		case 'u':
+			text = strconv.Itoa((weekday+6)%7 + 1)
+		case 'w':
+			text = strconv.Itoa(weekday + 1)
+		case 'Y':
+			text = fmt.Sprintf("%04d", t.Year())
 		default:
-			return "", false
+			cache = false
+			switch component {
+			case 'C':
+				text = number(t.Year()/100, 2, '0')
+			case 'd':
+				text = number(t.Day(), 2, '0')
+			case 'e':
+				text = number(t.Day(), 2, '_')
+			case 'g':
+				text = number(year%100, 2, '0')
+			case 'H':
+				text = number(t.Hour(), 2, '0')
+			case 'I':
+				text = number(hour12, 2, '0')
+			case 'j':
+				text = number(t.YearDay(), 3, '0')
+			case 'k':
+				text = number(t.Hour(), 2, '_')
+			case 'l':
+				text = number(hour12, 2, '_')
+			case 'm':
+				text = number(int(t.Month()), 2, '0')
+			case 'M':
+				text = number(t.Minute(), 2, '0')
+			case 'S':
+				text = number(t.Second(), 2, '0')
+			case 'U':
+				text = number((t.YearDay()-weekday+6)/7, 2, '0')
+			case 'V':
+				text = number(week, 2, '0')
+			case 'W':
+				text = number((t.YearDay()-(weekday+6)%7+6)/7, 2, '0')
+			case 'y':
+				text = number(t.Year()%100, 2, '0')
+			default:
+				return "", false
+			}
+		}
+		if cache {
+			fixed[component] = text
 		}
 		out.WriteString(text)
 	}

@@ -9,10 +9,10 @@ import (
 
 func TestDictionaryRequestBody(t *testing.T) {
 	for _, tc := range []struct{ name, arguments, operation, body string }{
-		{"默认查询", `{"text":"合成"}`, "candidates", `{"text":"合成"}`},
+		{"默认查询", `{"text":"合成"}`, "listed", `{"text":"合成"}`},
 		{"完整选项", `{"text":"合成","operation":"datetime","scheme":"pinyin","profile":"xiaohe","limit":20,"direction":"en-zh","schema":"xiaohe","time":"2026-10-16T00:00:00Z","timezone":"UTC"}`, "datetime", `{"text":"合成","scheme":"pinyin","profile":"xiaohe","limit":20,"direction":"en-zh","schema":"xiaohe","time":"2026-10-16T00:00:00Z","timezone":"UTC"}`},
-		{"省略零值", `{"text":"合成","operation":"","scheme":"","profile":"","limit":0,"direction":"","schema":"","time":"","timezone":""}`, "candidates", `{"text":"合成"}`},
-		{"空值解码", `{"text":"合成","operation":null,"scheme":null,"limit":null}`, "candidates", `{"text":"合成"}`},
+		{"省略零值", `{"text":"合成","operation":"","scheme":"","profile":"","limit":0,"direction":"","schema":"","time":"","timezone":""}`, "listed", `{"text":"合成"}`},
+		{"空值解码", `{"text":"合成","operation":null,"scheme":null,"limit":null}`, "listed", `{"text":"合成"}`},
 		{"转义文本", `{"text":"<>&\n\t\"\\\u2028\u2029","operation":"gloss","direction":"en-zh"}`, "gloss", `{"text":"<>&\n\t\"\\\u2028\u2029","direction":"en-zh"}`},
 		{"重复字段", `{"text":"旧值","text":"合成","operation":"gloss","operation":"annotate"}`, "annotate", `{"text":"合成"}`},
 		{"非法UTF8替换", "{\"text\":\"\xff\"}", "candidates", `{"text":"\uFFFD"}`},

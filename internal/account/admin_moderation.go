@@ -487,19 +487,23 @@ func (a *Service) PendingCommunity(ctx context.Context) (int, error) {
 	return total, err
 }
 
-// screenCommunityText runs an upload's text through the sensitive-word matcher: blocked reports a block-level hit, and flag is the warning stored with a review-level hit (nil when nothing needs review).
+// screenCommunityText 匹配上传内容，只收集复核提示所需的命中前缀，仍检查全部命中以免漏掉靠后的拦截规则。
 func screenCommunityText(ctx context.Context, matcher SensitiveMatcher, texts ...string) (blocked bool, flag *string, err error) {
 	hits, err := matcher.Match(ctx, strings.Join(texts, "\n"))
 	if err != nil {
 		return false, nil, err
 	}
 	var review []string
+	var runes int
 	for _, hit := range hits {
 		switch hit.Level {
 		case SensitiveBlock:
 			return true, nil, nil
 		case SensitiveReview:
-			if !slices.Contains(review, hit.Pattern) {
+			if runes <= sensitiveFlagLimit && !slices.Contains(review, hit.Pattern) {
+				if len(review) > 0 {
+					runes = sensitiveFlagRunes(review[0], hit.Pattern, runes)
+				}
 				review = append(review, hit.Pattern)
 			}
 		}
@@ -511,9 +515,26 @@ func screenCommunityText(ctx context.Context, matcher SensitiveMatcher, texts ..
 	return false, &text, nil
 }
 
+const sensitiveFlagLimit = 500
+
+// sensitiveFlagRunes 在第二个唯一规则出现时才开始计数，单条规则交给格式化函数处理。
+func sensitiveFlagRunes(first, next string, runes int) int {
+	if runes == 0 {
+		// 固定前缀和末尾引号共 8 字，后续每条规则增加两个分隔符字符。
+		runes = 8 + sensitiveFlagPatternRunes(first)
+	}
+	return runes + 2 + sensitiveFlagPatternRunes(next)
+}
+
+func sensitiveFlagPatternRunes(pattern string) int {
+	// 超过这些字节的规则本身已超出提示字数上限，无需完整计数。
+	prefix := pattern[:min(len(pattern), utf8.UTFMax*(sensitiveFlagLimit+1))]
+	return utf8.RuneCountInString(prefix)
+}
+
 // sensitiveFlagText 构造存入 moderation_reason 的敏感词提示，最多保留 500 字，只扫描和复制输出需要的前缀。
 func sensitiveFlagText(patterns []string) string {
-	const limit = 500
+	const limit = sensitiveFlagLimit
 	if len(patterns) == 0 {
 		return "命中敏感词：「」"
 	}
@@ -594,9 +615,16 @@ func (a *Service) rescreenRestored(ctx context.Context, tx pgx.Tx, section strin
 			continue
 		}
 		var patterns []string
+		var runes int
 		for _, hit := range hits {
 			if !slices.Contains(patterns, hit.Pattern) {
+				if len(patterns) > 0 {
+					runes = sensitiveFlagRunes(patterns[0], hit.Pattern, runes)
+				}
 				patterns = append(patterns, hit.Pattern)
+			}
+			if runes > sensitiveFlagLimit {
+				break
 			}
 		}
 		flaggedIDs = append(flaggedIDs, id)

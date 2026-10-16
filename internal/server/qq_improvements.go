@@ -97,10 +97,42 @@ type qqImprovementCounted struct {
 	count int
 }
 
+// qqTopicCapacitySample 超过常见的重复周期，只对足够大的输入做估算。
+const qqTopicCapacitySample = 257
+
 // qqCountTopics 按话题（忽略空白和大小写）归并并按次数降序排列，次数相同时保留首次出现顺序。
 func qqCountTopics(topics []string) []qqImprovementCounted {
-	indexes := map[string]int{}
-	out := []qqImprovementCounted{}
+	capacity := len(topics)
+	if capacity >= qqTopicCapacitySample {
+		// 用前 257 条估算不同键的数量，重复话题很多时减少预留，前缀重复后又出现大量新话题时仍保留足够容量。
+		var sample [qqTopicCapacitySample]string
+		distinct := 0
+		for i := range sample {
+			key := qqCompactLower(topics[i])
+			if key == "" {
+				key = "（没有概括）"
+			}
+			seen := false
+			for j := 0; j < distinct; j++ {
+				if sample[j] == key {
+					seen = true
+					break
+				}
+			}
+			if !seen {
+				sample[distinct] = key
+				distinct++
+			}
+		}
+		if distinct < len(sample) {
+			capacity = (distinct*len(topics) + len(sample) - 1) / len(sample)
+			if capacity == 0 {
+				capacity = 1
+			}
+		}
+	}
+	indexes := make(map[string]int, capacity)
+	out := make([]qqImprovementCounted, 0, capacity)
 	for _, t := range topics {
 		key := qqCompactLower(t)
 		if key == "" {

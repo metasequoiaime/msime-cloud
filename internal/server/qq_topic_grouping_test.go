@@ -83,8 +83,36 @@ func TestQQTopicGroupingAllocationBudget(t *testing.T) {
 	if !reflect.DeepEqual(got, previousQQCountTopics(topics)) {
 		t.Fatal("大量不同话题的归并结果变化")
 	}
-	if result.AllocedBytesPerOp() > 512<<10 {
+	if result.AllocedBytesPerOp() > 320<<10 {
 		t.Fatalf("话题元数据不应重复保存在多个映射和切片中：%s", result.MemString())
+	}
+}
+
+func TestQQTopicGroupingPartialDuplicateAllocationBudget(t *testing.T) {
+	topics := qqTopicGroupingFixture(2048, 64)
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			_ = qqCountTopics(topics)
+		}
+	})
+	if result.AllocedBytesPerOp() > 64<<10 {
+		t.Fatalf("部分重复话题归并分配超过预算：%s", result.MemString())
+	}
+}
+
+func TestQQTopicGroupingPrefixDuplicateAllocationBudget(t *testing.T) {
+	topics := make([]string, 2048)
+	topics[0], topics[1] = "重复话题", "重复话题"
+	for i := 2; i < len(topics); i++ {
+		topics[i] = fmt.Sprintf("新话题%04d", i)
+	}
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			_ = qqCountTopics(topics)
+		}
+	})
+	if result.AllocedBytesPerOp() > 320<<10 {
+		t.Fatalf("前缀重复后大量不同话题归并分配超过预算：%s", result.MemString())
 	}
 }
 

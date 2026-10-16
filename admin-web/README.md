@@ -17,7 +17,7 @@ pnpm dev
 - `src/routes/router.tsx`：路由表。每个页面是 `src/pages/<page>/index.tsx` 的默认导出，懒加载为独立 chunk；旧路径（`/admins`、`/audit`、`/system`、`/crashes`、`/skins`、`/dictionaries`、`/replies`）在这里重定向。新增页面时同步修改 `src/nav.ts` 和 Go 侧 `embed.go` 的 `pagePaths`。
 - `src/api/`：每个页面一个模块，放 Zod schema、类型和标签。`client.ts` 提供 `useAPI()`（绑定当前登录身份，401 时自动登出）、`requestAPI()`，以及所有服务端错误码的中文提示 `codeMessages`；新增错误码在这里加文案，页面只在语境需要不同措辞时局部覆盖。`keys.ts` 是 TanStack Query 的 key 工厂。
 - `src/utils/`：不依赖组件的公共工具。`time.ts` 提供本地时区日期格式化与中文相对时间，无效日期保留原文；`bytes.ts` 统一字节到 B、KB、MB 的单位换算，页面自行决定精度和空值文案；`number.ts` 提供数字千分位格式化，默认使用 `zh-CN`，页面可指定 `en-US` 和小数位等 `Intl` 选项。
-- `src/hooks/`：共享 React Hook。`use-debounced.ts` 延迟发布输入值，输入或延迟改变时重新计时，卸载时取消等待。
+- `src/hooks/`：共享 React Hook。`use-debounced.ts` 延迟发布输入值，输入或延迟改变时重新计时，卸载时取消等待；`use-api-image.ts` 共用管理接口图片读取、五分钟缓存和 data URL 转换，支持 Cookie 与旧令牌，页面保留各自的缓存键和地址。
 - `src/shell/`：外壳（侧栏、顶栏、全局搜索、通知、外观、权限钩子 `usePermissions`、页面级快捷键）。
 - `src/ui/`：共享组件。`data-table.tsx`（选择、批量操作、本页筛选、分页）、`drawer.tsx`、`confirm.tsx`、`toast.tsx`（4 秒撤销与延迟提交）、`filter-chips.tsx`、`segmented.tsx`、`stat-tile.tsx`、`charts.tsx`、`states.tsx` 等。`overlay.ts` 记录打开的弹窗：页面快捷键在弹窗打开时失效，提示条把 Escape 交给最上层弹窗，弹窗不会因点击提示条的「撤销」而关闭。
 - `src/auth.tsx`：登录状态、Google 登录与管理员密钥登录页。
@@ -51,6 +51,8 @@ python3 tests/csp_smoke.py
 发布管理回归测试会挂起触发发布和保存说明请求，确认版本号与发布说明在等待期间不可编辑，弹窗不能取消或按 Escape 关闭；成功后关闭弹窗，失败后保留原文并允许修改后重试。
 
 词库 PR 修剪回归测试会挂起“仅保留勾选项”请求，确认等待期间不能改选或使用按钮、快捷键再次写入；切到其他 PR 再返回后仍保留等待保护，其他 PR 可继续审核。成功后保留主动收录的重复词条选择，失败后保留原选择并恢复编辑。
+
+图片 Hook 回归测试使用真实浏览器读取合成 PNG，验证 Cookie 与旧令牌、禁用查询、缓存复用、HTTP 错误及卸载取消请求，并检查 data URL 在后台 CSP 下可正常显示。
 
 ## 构建产物
 

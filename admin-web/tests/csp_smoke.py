@@ -372,6 +372,105 @@ def check_debounce(browser, base: str, problems: list[str]):
         context.close()
 
 
+SMOKE_PNG = bytes.fromhex("89504e470d0a1a0a0000000d4948445200000001000000010804000000b51c0c020000000b4944415478da6364f80f00010501012718e3660000000049454e44ae426082")
+
+
+def check_api_images(browser, base: str, problems: list[str]):
+    # 使用真实浏览器的 fetch 和 FileReader，只在 HTTP 边界提供合成图片和受控错误。
+    for mode in ("cookie", "token"):
+        context = browser.new_context()
+        context.add_cookies([{"name": "image-session", "value": "synthetic-session", "url": base}])
+        context.add_init_script("window.__csp = []; document.addEventListener('securitypolicyviolation', e => window.__csp.push(e.violatedDirective));")
+        page = context.new_page()
+        page.on("pageerror", lambda error: problems.append(f"图片 Hook 页面异常：{error}"))
+        requests = []
+        pending = []
+
+        def image_response(route):
+            requests.append(route.request)
+            if route.request.url.endswith("/slow"):
+                pending.append(route)
+            elif route.request.url.endswith("/denied"):
+                route.fulfill(status=403, body="synthetic upstream details must stay private")
+            else:
+                route.fulfill(content_type="image/png", body=SMOKE_PNG)
+
+        page.route("**/api/image-test/*", image_response)
+        try:
+            page.goto(base + f"/harness/?images={mode}")
+            status = page.get_by_test_id("image-status")
+            expect(status).to_have_text("pending:idle")
+            assert not requests, "禁用的图片查询不应发起请求"
+            page.get_by_role("button", name="读取图片", exact=True).click()
+            expect(status).to_have_text("success:idle")
+            image = page.get_by_role("img", name="测试图片", exact=True)
+            expect(image).to_have_attribute("src", re.compile(r"^data:image/png;base64,"))
+            page.wait_for_function("document.querySelector('img')?.naturalWidth === 1")
+            assert len(requests) == 1
+            headers = requests[0].all_headers()
+            assert "image-session=synthetic-session" in headers.get("cookie", "")
+            assert headers.get("authorization") == ("Bearer image-test-token" if mode == "token" else None)
+            # 同一查询重新挂载时沿用未过期缓存，不再下载图片。
+            page.get_by_role("button", name="切换图片显示", exact=True).click()
+            expect(status).to_have_count(0)
+            page.get_by_role("button", name="切换图片显示", exact=True).click()
+            expect(status).to_have_text("success:idle")
+            assert len(requests) == 1, "重新挂载应复用五分钟内的缓存"
+            page.get_by_role("combobox", name="图片来源", exact=True).select_option("denied")
+            expect(status).to_have_text("error:idle:403:")
+            expect(image).to_have_count(0)
+            expect(page.locator("body")).not_to_contain_text("synthetic upstream details")
+            with page.expect_request(lambda request: request.url.endswith("/api/image-test/slow")):
+                page.get_by_role("combobox", name="图片来源", exact=True).select_option("slow")
+            expect(status).to_have_text("pending:fetching")
+            with page.expect_event("requestfailed", predicate=lambda request: request.url.endswith("/api/image-test/slow")):
+                page.get_by_role("button", name="切换图片显示", exact=True).click()
+            problems.extend(f"图片 Hook CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+        finally:
+            for route in pending:
+                route.abort()
+            page.unroute_all(behavior="ignoreErrors")
+            context.close()
+
+
+def check_api_image_pages(browser, base: str, problems: list[str]):
+    # 页面本身也使用合成图片，覆盖两个调用方的地址编码与截图位置。
+    context = browser.new_context()
+    context.add_init_script("window.__csp = []; document.addEventListener('securitypolicyviolation', e => window.__csp.push(e.violatedDirective));")
+    page = context.new_page()
+    page.on("pageerror", lambda error: problems.append(f"图片页面异常：{error}"))
+    feedback = FIXTURES["/api/feedback"]
+    feedback_row = {**feedback["items"][0], "screenshots": 2}
+    candidate = {**FIXTURES["/api/skins/smoke-skin"], "id": "image-skin/one", "name": "图片测试", "content": {}}
+    paths = []
+
+    def image_response(route):
+        paths.append(route.request.url.removeprefix(base))
+        route.fulfill(content_type="image/png", body=SMOKE_PNG)
+
+    page.route("**/api/auth/session", lambda route: route.fulfill(json=FIXTURES["/api/auth/session"]))
+    page.route("**/api/feedback?*", lambda route: route.fulfill(json={**feedback, "items": [feedback_row]}))
+    page.route("**/api/feedback/*/screenshots/*", image_response)
+    page.route("**/api/candidate-skins?*", lambda route: route.fulfill(json={"items": [{**FIXTURES["/api/skins"]["items"][0], "id": candidate["id"], "name": candidate["name"]}], "page": 1, "total": 1, "has_more": False}))
+    page.route("**/api/candidate-skins/image-skin%2Fone", lambda route: route.fulfill(json=candidate))
+    page.route("**/api/candidate-skins/*/preview", image_response)
+    try:
+        page.goto(base + f"/feedback?focus={feedback_row['id']}")
+        for position in (0, 1):
+            image = page.get_by_role("img", name=f"截图 {position + 1}", exact=True)
+            expect(image).to_have_attribute("src", re.compile(r"^data:image/png;base64,"))
+            expect(image).to_have_js_property("naturalWidth", 1)
+        assert sorted(paths) == [f"/api/feedback/{feedback_row['id']}/screenshots/{position}" for position in (0, 1)]
+        page.goto(base + "/community?tab=candidate-skins&focus=image-skin%2Fone")
+        image = page.get_by_role("img", name="图片测试预览图", exact=True)
+        expect(image).to_have_attribute("src", re.compile(r"^data:image/png;base64,"))
+        expect(image).to_have_js_property("naturalWidth", 1)
+        assert paths[-1] == "/api/candidate-skins/image-skin%2Fone/preview"
+        problems.extend(f"图片页面 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+    finally:
+        context.close()
+
+
 def check_auth_generation(context, base: str, problems: list[str]):
     # 用受控响应模拟真实 mutation：清空 QueryClient 后，旧请求仍可能完成。
     for initial_token in (None, "test-admin-token"):
@@ -1676,6 +1775,8 @@ def main() -> int:
                 page.get_by_role("button", name="取消选择").click()
                 violations("ui harness")
                 check_bytes(page)
+                check_api_images(browser, base, problems)
+                check_api_image_pages(browser, base, problems)
                 check_debounce(browser, base, problems)
                 check_auth_generation(context, base, problems)
                 check_auth_logout(context, base, problems)

@@ -61,6 +61,8 @@ const (
 	maxCLIResponseBytes = 16 << 20
 	// 自动等待 Retry-After 的最长时长；超过上限时直接返回响应。
 	maxRetryWait = time.Minute
+	// CLI 请求正文上限；避免从 stdin 或文件构造 multipart 时无界占用内存。
+	maxCLIRequestBytes = 16 << 20
 )
 
 type usageError struct{ message string }
@@ -90,6 +92,17 @@ func readCLIResponse(body io.Reader) ([]byte, error) {
 	}
 	if len(data) > maxCLIResponseBytes {
 		return nil, fmt.Errorf("response exceeds %d bytes", maxCLIResponseBytes)
+	}
+	return data, nil
+}
+
+func readCLIRequest(body io.Reader, limit int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("request exceeds %d bytes", limit)
 	}
 	return data, nil
 }
@@ -210,9 +223,12 @@ func (c cli) parseCall(args []string) (request, error) {
 		text := []byte(positional[2])
 		if positional[2] == "-" {
 			var err error
-			if text, err = io.ReadAll(c.stdin); err != nil {
+			if text, err = readCLIRequest(c.stdin, maxCLIRequestBytes); err != nil {
 				return r, fmt.Errorf("cannot read the body from stdin: %w", err)
 			}
+		}
+		if len(text) > maxCLIRequestBytes {
+			return r, fmt.Errorf("request exceeds %d bytes", maxCLIRequestBytes)
 		}
 		if !json.Valid(text) {
 			return r, usageError{"the body is not valid JSON"}
@@ -229,11 +245,24 @@ func (c cli) parseCall(args []string) (request, error) {
 				if err := form.WriteField(name, value); err != nil {
 					return r, err
 				}
+				if buffer.Len() > maxCLIRequestBytes {
+					return r, fmt.Errorf("request exceeds %d bytes", maxCLIRequestBytes)
+				}
 				continue
 			}
-			data, err := os.ReadFile(path)
+			file, err := os.Open(path)
 			if err != nil {
 				return r, fmt.Errorf("cannot read %s: %w", path, err)
+			}
+			remaining := maxCLIRequestBytes - buffer.Len()
+			if remaining <= 0 {
+				file.Close()
+				return r, fmt.Errorf("request exceeds %d bytes", maxCLIRequestBytes)
+			}
+			data, readErr := readCLIRequest(file, int64(remaining))
+			file.Close()
+			if readErr != nil {
+				return r, fmt.Errorf("cannot read %s: %w", path, readErr)
 			}
 			part, err := form.CreateFormFile(name, filepath.Base(path))
 			if err != nil {
@@ -242,9 +271,15 @@ func (c cli) parseCall(args []string) (request, error) {
 			if _, err = part.Write(data); err != nil {
 				return r, err
 			}
+			if buffer.Len() > maxCLIRequestBytes {
+				return r, fmt.Errorf("request exceeds %d bytes", maxCLIRequestBytes)
+			}
 		}
 		if err := form.Close(); err != nil {
 			return r, err
+		}
+		if buffer.Len() > maxCLIRequestBytes {
+			return r, fmt.Errorf("request exceeds %d bytes", maxCLIRequestBytes)
 		}
 		r.body, r.contentType = buffer.Bytes(), form.FormDataContentType()
 	}

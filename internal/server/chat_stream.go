@@ -71,7 +71,17 @@ type cappedReader struct {
 
 func (c *cappedReader) Read(p []byte) (int, error) {
 	if c.left <= 0 {
-		return 0, errChatStreamTooLarge
+		// 达到上限后再读一个字节，只把确实存在的第 limit+1 个字节判为超限；
+		// 上游恰好在上限处结束时应正常返回 EOF。
+		var extra [1]byte
+		n, err := c.r.Read(extra[:])
+		if n > 0 {
+			return 0, errChatStreamTooLarge
+		}
+		if err != nil && err != io.EOF {
+			return 0, upstreamTransportError{cause: err}
+		}
+		return 0, err
 	}
 	if int64(len(p)) > c.left {
 		p = p[:c.left]

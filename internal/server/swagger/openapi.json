@@ -15969,15 +15969,11 @@
     },
     "/v1/community/candidate-skins/{id}/download": {
       "post": {
-        "summary": "下载候选窗皮肤包并去重计数",
+        "summary": "下载候选窗皮肤包",
         "tags": [
           "皮肤社区"
         ],
-        "security": [
-          {
-            "userSession": []
-          }
-        ],
+        "security": [],
         "parameters": [
           {
             "name": "id",
@@ -15989,7 +15985,7 @@
             }
           }
         ],
-        "description": "返回原样清单和重新编码后的图片；下载人数按账号去重。私有作品仅作者可下载。 详见 docs/skin-community.md。",
+        "description": "公开作品无需登录，返回原样清单和重新编码后的图片；仅有效登录会话计入按账号去重的下载人数，匿名下载不计数。私有或已下架作品仅作者可下载。 详见 docs/skin-community.md。",
         "responses": {
           "200": {
             "description": "成功",

@@ -720,11 +720,14 @@ SELECT $1,files.path,files.bytes
 FROM unnest($2::text[],$3::bytea[]) AS files(path,bytes)`, []any{id, paths, contents}
 }
 func (a *Service) communityCandidateDownload(w http.ResponseWriter, r *http.Request) {
-	p, ok := a.principal(w, r, false)
-	if !ok {
-		return
+	viewer := a.communityViewer(r)
+	var tx pgx.Tx
+	var e error
+	if viewer == "" {
+		tx, e = a.store.pool.Begin(r.Context())
+	} else {
+		tx, e = a.store.userDataTransaction(r.Context(), viewer)
 	}
-	tx, e := a.store.userDataTransaction(r.Context(), p.UserID)
 	if e != nil {
 		a.error(w, e)
 		return
@@ -734,7 +737,7 @@ func (a *Service) communityCandidateDownload(w http.ResponseWriter, r *http.Requ
 	var manifest []byte
 	files := map[string][]byte{}
 	batch := &pgx.Batch{}
-	batch.Queue(`SELECT package_id,manifest FROM community_candidate_skins WHERE id=$1 AND ((visibility='public' AND moderation<>'removed') OR owner_id=$2) FOR SHARE`, r.PathValue("id"), p.UserID).QueryRow(func(row pgx.Row) error {
+	batch.Queue(`SELECT package_id,manifest FROM community_candidate_skins WHERE id=$1 AND ((visibility='public' AND moderation<>'removed') OR owner_id=$2) FOR SHARE`, r.PathValue("id"), viewer).QueryRow(func(row pgx.Row) error {
 		return row.Scan(&packageID, &manifest)
 	})
 	batch.Queue(`SELECT path,bytes FROM community_candidate_skin_files WHERE skin_id=$1 ORDER BY path`, r.PathValue("id")).Query(func(rows pgx.Rows) error {
@@ -749,7 +752,10 @@ func (a *Service) communityCandidateDownload(w http.ResponseWriter, r *http.Requ
 		}
 		return rows.Err()
 	})
-	batch.Queue(`INSERT INTO community_candidate_skin_downloads(skin_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, r.PathValue("id"), p.UserID)
+	// 下载人数仍按有效账号去重；匿名请求不创建账号或下载记录。
+	if viewer != "" {
+		batch.Queue(`INSERT INTO community_candidate_skin_downloads(skin_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, r.PathValue("id"), viewer)
+	}
 	e = tx.SendBatch(r.Context(), batch).Close()
 	if errors.Is(e, pgx.ErrNoRows) {
 		writeError(w, 404, "skin_not_found")

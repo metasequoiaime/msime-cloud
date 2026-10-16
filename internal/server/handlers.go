@@ -401,8 +401,9 @@ func (s *Server) cloud(w http.ResponseWriter, r *http.Request) {
 	if !enabled(w, s.config.Cloud) {
 		return
 	}
-	text := r.URL.Query().Get("text")
-	scheme := r.URL.Query().Get("scheme")
+	query := r.URL.Query()
+	text := query.Get("text")
+	scheme := query.Get("scheme")
 	itc := "zh-t-i0-pinyin"
 	if scheme == "japanese" {
 		itc = "ja-t-i0-und"
@@ -414,7 +415,7 @@ func (s *Server) cloud(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "pinyin_spelling_required")
 		return
 	}
-	n, ok := intQuery(r, "limit", 5, contract.CloudCandidates)
+	n, ok := intQuery(query, "limit", 5, contract.CloudCandidates)
 	if !ok || !bounded(text, contract.CloudInputBytes) || !utf8.ValidString(text) {
 		fail(w, 400, "invalid_cloud_request")
 		return

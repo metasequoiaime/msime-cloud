@@ -528,8 +528,8 @@ func enabled(w http.ResponseWriter, e Endpoint) bool {
 	return true
 }
 func bounded(v string, n int) bool { return strings.TrimSpace(v) != "" && len(v) <= n }
-func intQuery(r *http.Request, name string, defaultValue, maximum int) (int, bool) {
-	v := r.URL.Query().Get(name)
+func intQuery(query url.Values, name string, defaultValue, maximum int) (int, bool) {
+	v := query.Get(name)
 	if v == "" {
 		return defaultValue, true
 	}

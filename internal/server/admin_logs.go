@@ -138,18 +138,18 @@ func (f logFilter) logQL(selector string) string {
 	return b.String()
 }
 
-// logsRequest 做两个日志接口共同的检查：方法、功能开关、权限和筛选参数。失败时已写好响应。
-func (s *Server) logsRequest(w http.ResponseWriter, r *http.Request) (logFilter, bool) {
+// logsRequest 做两个日志接口共同的检查：方法、功能开关、权限和筛选参数。成功时一并返回已解析的查询参数，供后续校验复用；失败时已写好响应。
+func (s *Server) logsRequest(w http.ResponseWriter, r *http.Request) (logFilter, url.Values, bool) {
 	if r.Method != http.MethodGet {
 		fail(w, 405, "method_not_allowed")
-		return logFilter{}, false
+		return logFilter{}, nil, false
 	}
 	if !s.config.Admin.Logs.enabled() {
 		fail(w, 404, "logs_disabled")
-		return logFilter{}, false
+		return logFilter{}, nil, false
 	}
 	if !requirePerm(w, r, account.PermViewLogs) {
-		return logFilter{}, false
+		return logFilter{}, nil, false
 	}
 	query := r.URL.Query()
 	f := logFilter{pod: query.Get("pod"), level: strings.ToUpper(query.Get("level")), q: query.Get("q")}
@@ -161,14 +161,14 @@ func (s *Server) logsRequest(w http.ResponseWriter, r *http.Request) (logFilter,
 	case len(f.q) > maxLogQuery || !utf8.ValidString(f.q) || strings.IndexFunc(f.q, unicode.IsControl) >= 0:
 		fail(w, 400, "invalid_query")
 	default:
-		return f, true
+		return f, query, true
 	}
-	return logFilter{}, false
+	return logFilter{}, nil, false
 }
 
 // logSince 解析 since（Go 时长写法，例如 15m、1h），范围 1 分钟到 24 小时。
-func logSince(r *http.Request) (time.Duration, bool) {
-	v := r.URL.Query().Get("since")
+func logSince(query url.Values) (time.Duration, bool) {
+	v := query.Get("since")
 	if v == "" {
 		return defaultLogSince, true
 	}
@@ -407,16 +407,16 @@ func lokiUnavailable(w http.ResponseWriter, err error) {
 
 // adminLogs 服务 GET /api/logs?since=&limit=&pod=&level=&q=，需要 view_logs：返回时间窗口内最新的 limit 行（按时间升序，最新的在最后）和窗口内出现过的副本。
 func (s *Server) adminLogs(w http.ResponseWriter, r *http.Request) {
-	f, ok := s.logsRequest(w, r)
+	f, query, ok := s.logsRequest(w, r)
 	if !ok {
 		return
 	}
-	since, ok := logSince(r)
+	since, ok := logSince(query)
 	if !ok {
 		fail(w, 400, "invalid_since")
 		return
 	}
-	limit, ok := intQuery(r, "limit", defaultLogLimit, maxLogLimit)
+	limit, ok := intQuery(query, "limit", defaultLogLimit, maxLogLimit)
 	if !ok {
 		fail(w, 400, "invalid_limit")
 		return
@@ -655,17 +655,17 @@ func (s *Server) logStreamAccess(ctx context.Context, r *http.Request) string {
 //
 // 没有新行时每 15 秒发送一行注释作为心跳。不带 cursor（也没有 Last-Event-ID 请求头）时先回填 since 窗口内最新的 backfill 行；带 cursor 时从它之后继续，最早回到一小时前。
 func (s *Server) adminLogsStream(w http.ResponseWriter, r *http.Request) {
-	f, ok := s.logsRequest(w, r)
+	f, query, ok := s.logsRequest(w, r)
 	if !ok {
 		return
 	}
-	since, ok := logSince(r)
+	since, ok := logSince(query)
 	if !ok {
 		fail(w, 400, "invalid_since")
 		return
 	}
 	backfill := defaultLogBackfill
-	if v := r.URL.Query().Get("backfill"); v != "" {
+	if v := query.Get("backfill"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 || n > maxLogBackfill {
 			fail(w, 400, "invalid_backfill")
@@ -675,7 +675,7 @@ func (s *Server) adminLogsStream(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now()
 	cursor := int64(0)
-	if v := r.URL.Query().Get("cursor"); v != "" || r.Header.Get("Last-Event-ID") != "" {
+	if v := query.Get("cursor"); v != "" || r.Header.Get("Last-Event-ID") != "" {
 		if v == "" {
 			v = r.Header.Get("Last-Event-ID")
 		}

@@ -63,10 +63,14 @@ func TestQQOpenFAQPullSearchesAllPages(t *testing.T) {
 			t.Cleanup(upstream.Close)
 			s.adminGitHub.APIURL = upstream.URL
 			s.adminGitHub.HTTP = upstream.Client()
-			got := s.qqOpenFAQPull(context.Background(), "test-token", "o/docs", "字体发虚怎么办")
+			got, err := s.qqOpenFAQPull(context.Background(), "test-token", "o/docs", "字体发虚怎么办")
 			mu.Lock()
 			gotPages := slices.Clone(pages)
 			mu.Unlock()
+			wantErr := tc.name == "unavailable" || tc.name == "invalid"
+			if (err != nil) != wantErr {
+				t.Errorf("查重错误 %v，期望有错误：%v", err, wantErr)
+			}
 			if got != tc.want {
 				t.Errorf("返回 PR #%d，期望 #%d", got, tc.want)
 			}

@@ -601,14 +601,45 @@ func normalizeCrashFrame(line string) string {
 	return strings.ToLower(strings.TrimSpace(crashSpaces.ReplaceAllString(line, " ")))
 }
 
-// normalizeCrashMessage keeps the first non-blank line of a crash message with addresses, identifiers and numbers masked, so the same failure groups across runs.
+// normalizeCrashMessage 保留消息首个非空行，掩去地址、标识符和数字，让同一故障在不同运行中归为一组。
 func normalizeCrashMessage(message string) string {
 	line := crashFirstLine(message)
+	if !crashMessageMayChange(line) {
+		return strings.ToLower(line)
+	}
 	line = crashAddressPattern.ReplaceAllString(line, "0x?")
 	line = crashUUIDPattern.ReplaceAllString(line, "?")
 	line = crashHexRunPattern.ReplaceAllString(line, "?")
 	line = crashDigitsPattern.ReplaceAllString(line, "#")
 	return strings.ToLower(strings.TrimSpace(crashSpaces.ReplaceAllString(line, " ")))
+}
+
+// crashMessageMayChange 保守筛选可能被正则替换的行；八个连续十六进制字母也覆盖不含数字、嵌在单词中的 UUID，单个空格无需替换。
+func crashMessageMayChange(line string) bool {
+	hexRun := 0
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		if c >= utf8.RuneSelf {
+			hexRun = 0
+			continue
+		}
+		switch {
+		case c >= '0' && c <= '9':
+			return true
+		case c == '\t' || c == '\n' || c == '\f' || c == '\r':
+			return true
+		case c == ' ' && i > 0 && line[i-1] == ' ':
+			return true
+		case c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F':
+			hexRun++
+			if hexRun == 8 {
+				return true
+			}
+		default:
+			hexRun = 0
+		}
+	}
+	return false
 }
 
 func crashFirstLine(text string) string {

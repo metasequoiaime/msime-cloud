@@ -726,6 +726,9 @@ func submissionTitle(counts map[string]int) string {
 
 // addedLines 统计 head 比 base 多出的词条行数，包含维护者在滚动分支的修改。按词库构建规则去掉首尾空白并跳过空行和 # 注释，重复行按出现次数抵扣。
 func addedLines(base, head string) int {
+	if head == "" || base == head {
+		return 0
+	}
 	remaining := map[string]int{}
 	entries := func(content string, visit func(string)) {
 		for line := range strings.SplitSeq(content, "\n") {

@@ -2092,7 +2092,30 @@ func TestQQBotModelTimeoutBudget(t *testing.T) {
 		t.Fatal("primary timeouts")
 	}
 	fake.fallbackAnswer = `{"type":"answered","answer":"备用模型的回答。"}`
+	transport := s.client.Transport
+	var attemptedModels []string
+	// 从传输入口记录尝试并等待主模型取消，避免短时限下 TLS 建连延迟让服务端漏记主模型。
+	s.client.Transport = qqTestTransport(func(r *http.Request) (*http.Response, error) {
+		if r.URL.String() == s.config.Chat.URL {
+			body, err := r.GetBody()
+			if err != nil {
+				return nil, err
+			}
+			defer body.Close()
+			var request chatRequest
+			if err := json.NewDecoder(body).Decode(&request); err != nil {
+				return nil, err
+			}
+			attemptedModels = append(attemptedModels, request.Model)
+			if request.Model == fake.hangModel {
+				<-r.Context().Done()
+				return nil, r.Context().Err()
+			}
+		}
+		return transport.RoundTrip(r)
+	})
 	ask := func(ctx context.Context, model string) (qqAnswer, time.Duration, error) {
+		attemptedModels = nil
 		var answer qqAnswer
 		started := time.Now()
 		err := s.qqChatModel(ctx, model, qqAnswerPrompt, "五笔怎么切换", &answer)
@@ -2101,28 +2124,27 @@ func TestQQBotModelTimeoutBudget(t *testing.T) {
 	defer func(primary, strong time.Duration) { qqPrimaryModelTimeout, qqStrongModelTimeout = primary, strong }(qqPrimaryModelTimeout, qqStrongModelTimeout)
 	// haiku 挂起时按短的时限换备用模型，strong_model 挂起时按长的时限换。
 	qqPrimaryModelTimeout, qqStrongModelTimeout = 50*time.Millisecond, 400*time.Millisecond
-	fake.hangModel, fake.models = "claude-haiku-5-5", nil
-	if answer, took, err := ask(context.Background(), "claude-haiku-5-5"); err != nil || answer.Answer != "备用模型的回答。" || took >= 400*time.Millisecond || strings.Join(fake.models, ",") != "claude-haiku-5-5,fallback-model" {
-		t.Fatal(answer, took, err, fake.models)
+	fake.hangModel = "claude-haiku-5-5"
+	if answer, took, err := ask(context.Background(), "claude-haiku-5-5"); err != nil || answer.Answer != "备用模型的回答。" || took >= 400*time.Millisecond || strings.Join(attemptedModels, ",") != "claude-haiku-5-5,fallback-model" {
+		t.Fatal(answer, took, err, attemptedModels)
 	}
-	fake.hangModel, fake.models = "strong-model", nil
-	if answer, took, err := ask(context.Background(), "strong-model"); err != nil || answer.Answer != "备用模型的回答。" || took < 400*time.Millisecond || strings.Join(fake.models, ",") != "strong-model,fallback-model" {
-		t.Fatal(answer, took, err, fake.models)
+	fake.hangModel = "strong-model"
+	if answer, took, err := ask(context.Background(), "strong-model"); err != nil || answer.Answer != "备用模型的回答。" || took < 400*time.Millisecond || strings.Join(attemptedModels, ",") != "strong-model,fallback-model" {
+		t.Fatal(answer, took, err, attemptedModels)
 	}
 	// 剩余 25.2 秒时主模型只有 0.2 秒（给备用留 25 秒），不等满 35 秒。
 	qqStrongModelTimeout = 35 * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), qqFallbackReserve+200*time.Millisecond)
 	defer cancel()
-	fake.models = nil
-	if answer, took, err := ask(ctx, "strong-model"); err != nil || answer.Answer != "备用模型的回答。" || took > 5*time.Second || strings.Join(fake.models, ",") != "strong-model,fallback-model" {
-		t.Fatal(answer, took, err, fake.models)
+	if answer, took, err := ask(ctx, "strong-model"); err != nil || answer.Answer != "备用模型的回答。" || took > 5*time.Second || strings.Join(attemptedModels, ",") != "strong-model,fallback-model" {
+		t.Fatal(answer, took, err, attemptedModels)
 	}
 	// 剩余不到 20 秒时主模型失败就直接返回错误，不再试备用模型。
 	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	fake.hangModel, fake.failModel, fake.models = "", "strong-model", nil
-	if _, _, err := ask(ctx, "strong-model"); err == nil || strings.Join(fake.models, ",") != "strong-model" {
-		t.Fatal(err, fake.models)
+	fake.hangModel, fake.failModel = "", "strong-model"
+	if _, _, err := ask(ctx, "strong-model"); err == nil || strings.Join(attemptedModels, ",") != "strong-model" {
+		t.Fatal(err, attemptedModels)
 	}
 }
 

@@ -1883,10 +1883,14 @@ func (s *Server) qqDuplicate(ctx context.Context, client *githubapp.Client, toke
 		return 0, githubFailure("search", r, err)
 	}
 	var found struct {
-		Items []qqIssue `json:"items"`
+		Items             []qqIssue `json:"items"`
+		IncompleteResults bool      `json:"incomplete_results"`
 	}
 	if r.Decode(&found) != nil || found.Items == nil {
 		return 0, errors.New("search: invalid response")
+	}
+	if found.IncompleteResults {
+		return 0, errors.New("search: incomplete results")
 	}
 	var candidates strings.Builder
 	numbers := map[int64]bool{}

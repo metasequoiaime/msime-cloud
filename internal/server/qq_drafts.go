@@ -164,37 +164,53 @@ func qqDraftAsk(report qqReport, missing string) string {
 	return "还差：" + ask + "直接 @我 回一句就行。"
 }
 
-var (
-	// qqTrailingAskWords 是答案末尾问群友要信息的问句里常见的词。qqAskRequest 是不带问号的索要（「说一下我好接着帮你缩小范围～」），只在紧跟着这样的问句时一起去掉。
-	qqTrailingAskWords = regexp.MustCompile(`版本|系统|哪个|说一下|告诉我`)
-	qqAskRequest       = regexp.MustCompile(`说一下|告诉我`)
-	// qqSentencePattern 把一行切成句子，句末的标点跟着句子走。
-	qqSentencePattern = regexp.MustCompile(`[^。！？!?～~]*[。！？!?～~]+|[^。！？!?～~]+`)
-)
-
-// qqStripTrailingAsk 去掉答案最后一行末尾问群友要信息的句子：以「？」或「?」结尾、含 qqTrailingAskWords 的问句，以及跟在它后面的 qqAskRequest 索要。草稿说明会追问缺的信息时用（qqDraftResult.Asked）：提示词要求 escalate 时不列要补充的信息，模型不一定照做，原来答案末尾问「你是哪个版本？」，紧接着的说明又问一遍。只去掉末尾连着的这几句，前面的句子不动；最后一行只剩这些、而且前面没有别的行时保留原文。
+// qqStripTrailingAsk 去掉答案最后一行末尾问群友要信息的句子：以「？」或「?」结尾、含「版本」「系统」「哪个」「说一下」「告诉我」的问句，以及跟在它后面含「说一下」「告诉我」的索要。草稿说明会追问缺的信息时用（qqDraftResult.Asked）：提示词要求 escalate 时不列要补充的信息，模型不一定照做，原来答案末尾问「你是哪个版本？」，紧接着的说明又问一遍。只去掉末尾连着的这几句，前面的句子不动；最后一行只剩这些、而且前面没有别的行时保留原文。
 func qqStripTrailingAsk(answer string) string {
 	trimmed := strings.TrimRight(answer, " \t\r\n")
-	cut := strings.LastIndex(trimmed, "\n") + 1
-	head, sentences := trimmed[:cut], qqSentencePattern.FindAllString(trimmed[cut:], -1)
-	end, asked := len(sentences), false
-	for i := len(sentences) - 1; i >= 0; i-- {
-		sentence := strings.TrimSpace(sentences[i])
+	strip, asked := len(trimmed), false
+	for end := len(trimmed); end > 0; {
+		start := qqLastSentenceStart(trimmed[:end])
+		sentence := strings.TrimSpace(trimmed[start:end])
 		question := strings.HasSuffix(sentence, "？") || strings.HasSuffix(sentence, "?")
-		if question && qqTrailingAskWords.MatchString(sentence) {
-			end, asked = i, true
-		} else if asked || !qqAskRequest.MatchString(sentence) {
+		request := strings.Contains(sentence, "说一下") || strings.Contains(sentence, "告诉我")
+		if question && (strings.Contains(sentence, "版本") || strings.Contains(sentence, "系统") || strings.Contains(sentence, "哪个") || request) {
+			strip, asked = start, true
+		} else if asked || !request {
 			break
 		}
+		if start == 0 || trimmed[start-1] == '\n' {
+			break
+		}
+		end = start
 	}
 	if !asked {
 		return answer
 	}
-	stripped := strings.TrimRight(head+strings.Join(sentences[:end], ""), " \t\r\n")
+	stripped := strings.TrimRight(trimmed[:strip], " \t\r\n")
 	if strings.TrimSpace(stripped) == "" {
 		return answer
 	}
 	return stripped
+}
+
+// qqLastSentenceStart 逆向定位最后一行的末句：先越过末尾连续的句末标点，再越过正文，保留原有正则的拆句边界。
+func qqLastSentenceStart(line string) int {
+	content := false
+	for end := len(line); end > 0; {
+		r, size := utf8.DecodeLastRuneInString(line[:end])
+		switch r {
+		case '\n':
+			return end
+		case '。', '！', '？', '!', '?', '～', '~':
+			if content {
+				return end
+			}
+		default:
+			content = true
+		}
+		end -= size
+	}
+	return 0
 }
 
 // qqSameDraftWindow 是并进刚起的草稿的时限：草稿新建或最后一次补充超过这么久，就当作另一件事，另起一份。

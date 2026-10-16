@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/engine"
@@ -49,7 +48,7 @@ func (a *Service) validateDictionary(ctx context.Context, kind string, entries [
 		end := min(start+50, len(entries))
 		batch := []map[string]any{}
 		for _, e := range entries[start:end] {
-			if e.Weight < 0 || e.Word == "" || len(e.Word) > 2048 || len(e.Code) > 512 || !utf8.ValidString(e.Word+e.Code) || strings.ContainsAny(e.Word+e.Code, "\x00\t\r\n") || strings.TrimSpace(e.Word) == "" || (kind == "quick" && len(utf16.Encode([]rune(e.Word))) > 199) {
+			if e.Weight < 0 || e.Word == "" || len(e.Word) > 2048 || len(e.Code) > 512 || !utf8.ValidString(e.Word+e.Code) || strings.ContainsAny(e.Word+e.Code, "\x00\t\r\n") || strings.TrimSpace(e.Word) == "" || (kind == "quick" && utf16Length(e.Word) > 199) {
 				return nil, engine.ErrInvalid
 			}
 			batch = append(batch, map[string]any{"kind": kind, "code": e.Code, "text": e.Word, "weight": e.Weight})

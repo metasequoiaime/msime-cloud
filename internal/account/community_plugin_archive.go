@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 	"unicode"
-	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/pelletier/go-toml/v2"
@@ -700,7 +699,7 @@ func validPluginCommands(table map[string]any, m pluginManifest) bool {
 			return false
 		}
 		template := *row.Template
-		if strings.TrimSpace(template) == "" || len(utf16.Encode([]rune(template))) > maxCommandTemplate || strings.ContainsFunc(template, unicode.IsControl) || !validCommandTemplate(template) {
+		if strings.TrimSpace(template) == "" || utf16Length(template) > maxCommandTemplate || strings.ContainsFunc(template, unicode.IsControl) || !validCommandTemplate(template) {
 			return false
 		}
 	}
@@ -742,7 +741,7 @@ func pluginLowercase(s string) bool {
 
 // pluginShortText 是短语文本和符号的共同规则：不是空白、不含控制字符、1 到 max 个 UTF-16 单元。
 func pluginShortText(s string, max int) bool {
-	return strings.TrimSpace(s) != "" && utf8.ValidString(s) && !strings.ContainsFunc(s, unicode.IsControl) && len(utf16.Encode([]rune(s))) <= max
+	return strings.TrimSpace(s) != "" && utf8.ValidString(s) && !strings.ContainsFunc(s, unicode.IsControl) && utf16Length(s) <= max
 }
 
 // validPluginPhrases 对应 phrase_table.rs：1 到 2000 个 `[[phrases]]`，每行只有 `key`（1 到 32 个小写 ASCII 字母，K 模式的要求）和 `text`；(`key`,`text`) 不能重复，同一个 key 可以对应多条 text。短语表没有数据文件。
@@ -935,7 +934,7 @@ var commandTemplateInstants = []time.Time{time.Date(2026, time.September, 30, 23
 func validCommandTemplate(template string) bool {
 	for _, instant := range commandTemplateInstants {
 		expanded, ok := expandCommandTemplate(template, instant)
-		if !ok || strings.ContainsFunc(expanded, unicode.IsControl) || len(utf16.Encode([]rune(expanded))) > maxCommandTemplate {
+		if !ok || strings.ContainsFunc(expanded, unicode.IsControl) || utf16Length(expanded) > maxCommandTemplate {
 			return false
 		}
 	}

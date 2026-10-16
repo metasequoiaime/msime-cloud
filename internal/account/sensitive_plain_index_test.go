@@ -411,3 +411,24 @@ func BenchmarkSensitivePlainIndexBuild(b *testing.B) {
 		}
 	}
 }
+
+func TestSensitivePlainIndexBuildAllocationBudget(t *testing.T) {
+	words := sensitivePlainScanWords(1024, true)
+	random := rand.New(rand.NewSource(702))
+	for i := range words {
+		var pattern strings.Builder
+		for range 200 {
+			pattern.WriteByte(byte('a' + random.Intn(26)))
+		}
+		words[i].plain = pattern.String()
+	}
+	allocations := testing.AllocsPerRun(10, func() {
+		index, err := newSensitivePlainIndex(t.Context(), words)
+		if err != nil || index == nil {
+			t.Fatalf("构建索引：%v", err)
+		}
+	})
+	if allocations > 12 {
+		t.Fatalf("构建索引分配 %.0f 次，期望不超过 12 次", allocations)
+	}
+}

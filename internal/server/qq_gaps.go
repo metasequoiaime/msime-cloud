@@ -208,29 +208,22 @@ func (s *Server) recordQQGapIn(ctx context.Context, dailyScope string, daily int
 		slog.Warn("qq bot: gap skipped", "reason", "empty_topic")
 		return false
 	}
-	for _, limit := range []struct {
-		scope, subject string
-		count          int
-		window         time.Duration
-	}{{dailyScope, s.qq.config.GapsRepo, daily, 24 * time.Hour}, {"qq-bot-gap", topic, 1, 7 * 24 * time.Hour}} {
-		switch err := s.limits.RateLimit(ctx, limit.scope, limit.subject, limit.count, limit.window); {
-		case errors.Is(err, account.ErrLimited) && limit.scope == "qq-bot-gap":
-			return true
-		case errors.Is(err, account.ErrLimited):
-			slog.Info("qq bot: gap skipped", "reason", "daily_cap", "scope", dailyScope)
-			return false
-		case err != nil:
-			slog.Warn("qq bot: gap not recorded", "reason", err.Error())
-			return false
-		}
+	switch err := s.limits.RateLimit(ctx, dailyScope, s.qq.config.GapsRepo, daily, 24*time.Hour); {
+	case errors.Is(err, account.ErrLimited):
+		slog.Info("qq bot: gap skipped", "reason", "daily_cap", "scope", dailyScope)
+		return false
+	case err != nil:
+		slog.Warn("qq bot: gap not recorded", "reason", err.Error())
+		return false
 	}
-	// 去重名额在写 GitHub 之前就占了；后面任何一步失败都要退回，否则 7 天内再遇到同一个问题会被当成已经记下，回复「已经记下来了」，其实汇总 issue 里没有。每天的额度不退。ctx 这时可能已经失效，退名额用单独的时限。
-	release := func() {
-		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-		defer cancel()
-		if err := s.limits.ReleaseRateLimit(rctx, "qq-bot-gap", topic); err != nil {
-			slog.Warn("qq bot: gap slot not released", "reason", err.Error())
-		}
+	// 去重名额在写 GitHub 前占用，明确失败才退回本次租约，否则保留以避免重复发布。每天的额度不退。
+	release, err := s.qqReserveDedupe(ctx, "qq-bot-gap", topic, 7*24*time.Hour)
+	switch {
+	case errors.Is(err, account.ErrLimited):
+		return true
+	case err != nil:
+		slog.Warn("qq bot: gap not recorded", "reason", err.Error())
+		return false
 	}
 	client, repo := s.adminGitHub, s.qq.config.GapsRepo
 	token, err := client.Token(ctx, repo, issueTokenPerms)

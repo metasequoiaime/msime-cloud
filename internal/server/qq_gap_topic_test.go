@@ -75,7 +75,7 @@ func TestQQGapTopicRateLimitSubject(t *testing.T) {
 	for _, text := range qqGapTopicInputs()[2:] {
 		want := previousQQGapTopic(text)
 		limiter.counts = map[string]int{"qq-bot-gap|" + want: 1}
-		if !s.recordQQGap(context.Background(), "群友问：", text) || limiter.counts["qq-bot-gap|"+want] != 2 || len(fake.comments) != 0 {
+		if !s.recordQQGap(context.Background(), "群友问：", text) || limiter.counts["qq-bot-gap|"+want] != 1 || len(fake.comments) != 0 {
 			t.Fatalf("去重键变化或重复发布：输入=%q，限流=%v", text, limiter.counts)
 		}
 	}

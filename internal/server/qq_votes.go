@@ -62,7 +62,8 @@ func (s *Server) qqVoteFeature(ctx context.Context, subject string, report qqRep
 	}
 	ref := qqIssueNumberText(repo, number)
 	voter := subject + "|" + repo + "#" + strconv.FormatInt(number, 10)
-	switch err := s.limits.RateLimit(ctx, "qq-bot-vote", voter, 1, qqVoteWindow); {
+	release, err := s.qqReserveDedupe(ctx, "qq-bot-vote", voter, qqVoteWindow)
+	switch {
 	case errors.Is(err, account.ErrLimited):
 		return "这个需求已经有人提过：" + ref + "，你之前已经记过一票了。" + s.qqProgressHint(repo, number)
 	case err != nil:
@@ -75,11 +76,7 @@ func (s *Server) qqVoteFeature(ctx context.Context, subject string, report qqRep
 		var uncertain *qqVoteWriteUncertainError
 		if !errors.As(err, &uncertain) {
 			// 确认写入没有发出或被 GitHub 拒绝时退回名额；否则这位群友 30 天内再提会被告知「你之前已经记过一票了」，计数评论里其实没有他。
-			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-			if err := s.limits.ReleaseRateLimit(rctx, "qq-bot-vote", voter); err != nil {
-				slog.Warn("qq bot: vote slot not released", "reason", err.Error())
-			}
-			cancel()
+			release()
 		} else {
 			slog.Warn("qq bot: vote write result uncertain; keeping vote slot", "repo", repo)
 		}

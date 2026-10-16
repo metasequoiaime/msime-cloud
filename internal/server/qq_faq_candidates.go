@@ -63,7 +63,8 @@ func (s *Server) recordQQFAQCandidate(ctx context.Context, question, answer stri
 		return
 	}
 	subject := strings.Join(strings.Fields(question), "")
-	if err := s.limits.RateLimit(ctx, "qq-bot-faq-candidate", subject, 1, 7*24*time.Hour); err != nil {
+	release, err := s.qqReserveDedupe(ctx, "qq-bot-faq-candidate", subject, 7*24*time.Hour)
+	if err != nil {
 		if !errors.Is(err, account.ErrLimited) {
 			slog.Warn("qq bot: faq candidate limit unavailable", "reason", err.Error())
 		}
@@ -71,11 +72,7 @@ func (s *Server) recordQQFAQCandidate(ctx context.Context, question, answer stri
 	}
 	if _, err := s.qqFAQCandidates.AddQQFAQCandidate(ctx, question, qqTruncate(answer, qqFAQCandidateRunes)); err != nil {
 		if qqDatabaseWriteDefinitelyRejected(err) {
-			releaseCtx, releaseCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-			if releaseErr := s.limits.ReleaseRateLimit(releaseCtx, "qq-bot-faq-candidate", subject); releaseErr != nil {
-				slog.Warn("qq bot: faq candidate quota not released", "reason", releaseErr.Error())
-			}
-			releaseCancel()
+			release()
 		}
 		slog.Warn("qq bot: faq candidate not stored", "reason", err.Error())
 	}

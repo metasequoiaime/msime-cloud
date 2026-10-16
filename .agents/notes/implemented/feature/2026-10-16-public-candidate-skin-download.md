@@ -8,7 +8,7 @@ Status: implemented
 
 ## Decision
 
-现有 POST `/v1/community/candidate-skins/{id}/download` 接受匿名请求，与公开浏览使用相同的会话识别规则：没有有效会话时只允许下载公开且未下架的作品；私有或已下架作品仍只对拥有者开放。不存在或不允许访问统一返回 404，不返回包内容。
+现有 POST `/v1/community/candidate-skins/{id}/download` 接受匿名请求：没有有效凭据时只允许下载公开且未下架的作品；私有或已下架作品仍只对拥有者开放。不存在或不允许访问统一返回 404，不返回包内容。认证查询失败、取消或超时必须返回错误，不能当成匿名请求继续执行；因此下载接口单独区分认证错误，不能复用吞掉所有认证错误的浏览辅助函数 `communityViewer`。
 
 匿名下载不创建账号、下载行或新统计表。有效账号继续使用用户事务、封禁复查和下载唯一键，保留按账号去重的人数定义。两种请求都在事务中锁定皮肤行，防止可见性修改或删除与下载读取交错；来源限制、数据库按地址限流和返回包格式保持不变。
 
@@ -22,7 +22,7 @@ Status: implemented
 
 ## Verification
 
-PostgreSQL 集成用例核对匿名、无效令牌与有效会话取得相同包，覆盖私有、下架、不存在、拥有者权限和下载去重。完整本地检查结果随 PR 记录。
+PostgreSQL 集成用例核对匿名、格式无效、格式有效但不存在的令牌与有效会话取得相同包，覆盖私有、下架、不存在、拥有者权限和下载去重。`TestUserDataTransactionsRollbackAtEveryDatabaseStatement/download_candidate_skin` 在每一条认证和下载 SQL 上注入取消，验证失败能被识别且没有残留写入；原实现漏掉认证取消，完整 PostgreSQL CI 会失败。完整检查结果随 PR 记录。
 
 ## Related notes audit
 

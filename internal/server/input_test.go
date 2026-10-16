@@ -51,7 +51,7 @@ func TestRealNativeHTTP(t *testing.T) {
 	s.config.Engine.Binary = binary
 	for _, tc := range []struct{ path, body, fragment string }{
 		{"unicode", `{"text":"4E2D","limit":5}`, "中"},
-		{"romaji", `{"text":"kon'nichiha"}`, "こんにちは"},
+		{"romaji", `{"text":"konnichiha"}`, "こんにちは"},
 		{"romaji", `{"text":"かな","direction":"hiragana-katakana"}`, "カナ"},
 		{"romaji", `{"text":"かな","direction":"kana-romaji"}`, "kana"},
 		{"datetime", `{"text":"date","time":"2026-09-08T18:00:00Z","timezone":"Asia/Shanghai","limit":5}`, "2026-09-09"},

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
@@ -22,6 +23,8 @@ const (
 	qqReportsDaily = 50
 	// qqGapRunes 是一条概括的长度上限。
 	qqGapRunes = 200
+	// qqGapTopicFastPathBytes 限制流式快路径的输入大小；超大输入交给标准库的批量空白扫描，避免逐 rune 检查边缘空白反而变慢。
+	qqGapTopicFastPathBytes = 512 << 10
 	// qqGapsIssueTTL 是汇总 issue 编号的缓存时间：维护者关闭它后，最多这么久之后新的问题会记到新开的 issue 上，不会一直评论在已关闭的 issue 下。
 	qqGapsIssueTTL = time.Hour
 	// qqGapRecordTimeout 是记一条汇总的时限（见 recordQQGapIn）。要拿令牌、查汇总 issue、可能新建、再评论，几次 GitHub 调用，3 秒不够；也不能长：副本关停时 Close 等满 qqCloseGrace 取消 lifetime 之后还要等它，preStop、HTTP 关停、qqCloseGrace 加上它要落在部署的 terminationGracePeriodSeconds（100 秒）以内。
@@ -182,10 +185,19 @@ func qqContactPatternsOverlap(text string, first, second *regexp.Regexp) bool {
 
 // qqGapTopic 先合并空白并完整脱敏，再截取概括前缀，保持去重键和公开评论正文一致。
 func qqGapTopic(topic string) string {
-	topic = qqRedactContactsBefore(qqNormalizeWhitespace(topic), qqGapRunes)
+	truncated := false
+	fast := len(topic) <= qqGapTopicFastPathBytes && !qqGapTopicMayContainContact(topic)
+	if !fast {
+		topic = qqRedactContactsBefore(qqNormalizeWhitespace(topic), qqGapRunes)
+	} else {
+		topic, truncated = qqNormalizeWhitespacePrefix(topic, qqGapRunes)
+	}
 	end := qqRuneEnd(topic, qqGapRunes)
-	if end == len(topic) {
+	if end == len(topic) && !truncated {
 		// 合并空白也可能只返回长输入中的短子串，短概括同样需要独立保存。
+		if fast {
+			return topic
+		}
 		return strings.Clone(topic)
 	}
 	prefix := topic[:end]
@@ -193,8 +205,69 @@ func qqGapTopic(topic string) string {
 		// 截断时沿用 rune 切片的转换规则，每个无效字节替换为 U+FFFD。
 		return string([]rune(prefix))
 	}
+	if fast {
+		return topic
+	}
 	// 保留的概括独立持有短正文，避免引用长输入的底层内存。
 	return strings.Clone(prefix)
+}
+
+// qqGapTopicMayContainContact 判断原文是否含有联系方式正则可能用到的特征；没有时可以在达到概括长度后停止扫描。
+func qqGapTopicMayContainContact(text string) bool {
+	if strings.ContainsAny(text, "@+0123456789qQvVwWxX") {
+		return true
+	}
+	return strings.Contains(text, "扣扣") || strings.Contains(text, "群") || strings.Contains(text, "微信")
+}
+
+// qqNormalizeWhitespacePrefix 合并空白并截取前 maxRunes 个字符；调用方已确认文本不可能含联系方式，所以达到上限后可以停止读取尾部。
+func qqNormalizeWhitespacePrefix(text string, maxRunes int) (string, bool) {
+	text = strings.TrimSpace(text)
+	var out strings.Builder
+	fields := 0
+	runes := 0
+	for offset := 0; offset < len(text); {
+		r, size := utf8.DecodeRuneInString(text[offset:])
+		if unicode.IsSpace(r) {
+			offset += size
+			continue
+		}
+		if fields == 0 {
+			// 中文正文通常每个字符占 3 字节；容量略小于最坏情况，避免常见路径为尚未写入的尾部过度分配。
+			capacity := min(len(text)-offset, maxRunes*3)
+			if capacity > 0 {
+				out.Grow(capacity)
+			}
+		}
+		if fields > 0 {
+			out.WriteByte(' ')
+			runes++
+			if runes == maxRunes {
+				return out.String(), true
+			}
+		}
+		fields++
+		for offset < len(text) {
+			r, size = utf8.DecodeRuneInString(text[offset:])
+			if unicode.IsSpace(r) {
+				break
+			}
+			out.WriteString(text[offset : offset+size])
+			offset += size
+			runes++
+			if runes == maxRunes {
+				for rest := offset; rest < len(text); {
+					next, nextSize := utf8.DecodeRuneInString(text[rest:])
+					if !unicode.IsSpace(next) {
+						return out.String(), true
+					}
+					rest += nextSize
+				}
+				return out.String(), false
+			}
+		}
+	}
+	return out.String(), false
 }
 
 // qqAppLoginTimeout 是启动时取 App 的 bot 账号的时限。

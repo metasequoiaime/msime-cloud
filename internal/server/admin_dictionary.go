@@ -308,10 +308,10 @@ func dictionaryRows(name, text, query string, page int) ([]dictionaryRow, int) {
 }
 
 func dictionaryLineContainsLower(line, query string) bool {
-	// 常见的短词条在栈上转小写，长行仍由标准库处理。
+	// 短词条在栈上转小写，长行分段转换并搜索。
 	var lower [256]byte
 	if len(line) > len(lower) {
-		return strings.Contains(strings.ToLower(line), query)
+		return dictionaryLongLineContainsLower(line, query)
 	}
 	for i := range len(line) {
 		c := line[i]
@@ -323,7 +323,10 @@ func dictionaryLineContainsLower(line, query string) bool {
 		}
 		lower[i] = c
 	}
-	return bytes.Contains(lower[:len(line)], []byte(query))
+	if len(query) <= 32 {
+		return bytes.Contains(lower[:len(line)], []byte(query))
+	}
+	return dictionaryShortBytesContain(lower[:len(line)], query)
 }
 
 // dictionaryUnicodeLineContainsLower 处理最多 256 字节的短行；每个输入字节最多映射为四字节编码。
@@ -343,9 +346,77 @@ func dictionaryUnicodeLineContainsLower(line, query string) bool {
 		for _, rest := range line[i+size:] {
 			folded = utf8.AppendRune(folded, unicode.ToLower(rest))
 		}
-		return bytes.Contains(folded, []byte(query))
+		if len(query) <= 32 {
+			return bytes.Contains(folded, []byte(query))
+		}
+		return dictionaryShortBytesContain(folded, query)
 	}
 	return strings.Contains(line, query)
+}
+
+// dictionaryShortBytesContain 搜索最多 1024 字节的短行结果，避免长查询转换成字节切片时分配。
+func dictionaryShortBytesContain(folded []byte, query string) bool {
+	if len(query) > len(folded) {
+		return false
+	}
+	var buffer [256 * utf8.UTFMax]byte
+	return bytes.Contains(folded, buffer[:copy(buffer[:], query)])
+}
+
+// dictionaryLongLineContainsLower 找到首个需要转换的字符，不变的长行直接搜索原文。
+func dictionaryLongLineContainsLower(line, query string) bool {
+	// 接口查询最多 200 字节，即使每字节转为四字节编码也在此范围内。
+	if len(query) > 1024 {
+		return strings.Contains(strings.ToLower(line), query)
+	}
+	if query == "" {
+		return true
+	}
+	for i := range len(line) {
+		c := line[i]
+		if c >= utf8.RuneSelf {
+			for offset, r := range line[i:] {
+				if unicode.ToLower(r) != r {
+					return dictionaryFoldedLineContains(line, query, i+offset)
+				}
+				if r == utf8.RuneError {
+					if _, size := utf8.DecodeRuneInString(line[i+offset:]); size == 1 {
+						return dictionaryFoldedLineContains(line, query, i+offset)
+					}
+				}
+			}
+			return strings.Contains(line, query)
+		}
+		if 'A' <= c && c <= 'Z' {
+			return dictionaryFoldedLineContains(line, query, i)
+		}
+	}
+	return strings.Contains(line, query)
+}
+
+// dictionaryFoldedLineContains 按固定大小的段搜索小写结果，保留查询长度减一的尾部以覆盖跨段匹配。
+func dictionaryFoldedLineContains(line, query string, start int) bool {
+	prefix := line[:start]
+	if strings.Contains(prefix, query) {
+		return true
+	}
+	var buffer [2048]byte
+	var queryBuffer [1024]byte
+	needle := queryBuffer[:copy(queryBuffer[:], query)]
+	overlap := min(len(prefix), len(query)-1)
+	folded := buffer[:copy(buffer[:], prefix[len(prefix)-overlap:])]
+	for _, c := range line[start:] {
+		if len(folded) > len(buffer)-utf8.UTFMax {
+			if bytes.Contains(folded, needle) {
+				return true
+			}
+			overlap = len(query) - 1
+			copy(buffer[:], folded[len(folded)-overlap:])
+			folded = buffer[:overlap]
+		}
+		folded = utf8.AppendRune(folded, unicode.ToLower(c))
+	}
+	return bytes.Contains(folded, needle)
 }
 
 func dictionaryEditablePath(name string) bool {

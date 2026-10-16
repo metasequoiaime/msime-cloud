@@ -331,7 +331,12 @@ func applyDictionaryChanges(name, text string, changes []dictionaryEdit) (string
 	}
 	result := out.String()
 	// 翻译允许覆盖同一源词，其他文件按前两列去重。
-	remaining := map[string]int{}
+	remainingCapacity := 0
+	if lineCount <= 10000 {
+		// 中等词库预留去重表空间，超大词库可能有大量重复键，避免按行数一次性占满内存。
+		remainingCapacity = lineCount
+	}
+	remaining := make(map[string]int, remainingCapacity)
 
 	for line := range strings.SplitSeq(text, "\n") {
 		if k := dictionaryEntryKey(line); k != "" {

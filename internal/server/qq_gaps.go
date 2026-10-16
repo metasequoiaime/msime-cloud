@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
@@ -41,9 +42,29 @@ const qqContactRedacted = "（已隐去）"
 // qqRedactContacts 删掉 text 里的联系方式，见 qqContactPatterns。
 func qqRedactContacts(text string) string {
 	for _, pattern := range qqContactPatterns {
-		text = pattern.ReplaceAllString(text, qqContactRedacted)
+		// 没有匹配时直接复用正文，避免 ReplaceAllString 仍复制整段文字。
+		if pattern.MatchString(text) {
+			text = pattern.ReplaceAllString(text, qqContactRedacted)
+		}
 	}
 	return text
+}
+
+// qqGapTopic 先合并空白并完整脱敏，再截取概括前缀，保持去重键和公开评论正文一致。
+func qqGapTopic(topic string) string {
+	topic = qqRedactContacts(qqNormalizeWhitespace(topic))
+	end := qqRuneEnd(topic, qqGapRunes)
+	if end == len(topic) {
+		// 合并空白也可能只返回长输入中的短子串，短概括同样需要独立保存。
+		return strings.Clone(topic)
+	}
+	prefix := topic[:end]
+	if !utf8.ValidString(prefix) {
+		// 截断时沿用 rune 切片的转换规则，每个无效字节替换为 U+FFFD。
+		return string([]rune(prefix))
+	}
+	// 保留的概括独立持有短正文，避免引用长输入的底层内存。
+	return strings.Clone(prefix)
 }
 
 // qqAppLoginTimeout 是启动时取 App 的 bot 账号的时限。
@@ -178,7 +199,7 @@ func (s *Server) recordQQGapIn(ctx context.Context, dailyScope string, daily int
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), qqGapRecordTimeout)
 	defer cancel()
 	// 联系方式在去重和截断之前删掉：7 天去重的键和写进 issue 的是同一段文字。
-	topic = qqRedactContacts(strings.Join(strings.Fields(topic), " "))
+	topic = qqGapTopic(topic)
 	switch {
 	case s.qq.config.GapsRepo == "":
 		slog.Info("qq bot: gap skipped", "reason", "no_repo")
@@ -186,9 +207,6 @@ func (s *Server) recordQQGapIn(ctx context.Context, dailyScope string, daily int
 	case topic == "":
 		slog.Warn("qq bot: gap skipped", "reason", "empty_topic")
 		return false
-	}
-	if runes := []rune(topic); len(runes) > qqGapRunes {
-		topic = string(runes[:qqGapRunes])
 	}
 	for _, limit := range []struct {
 		scope, subject string

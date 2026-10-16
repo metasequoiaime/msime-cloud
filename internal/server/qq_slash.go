@@ -78,7 +78,7 @@ func (s *Server) qqSlashCommand(ctx context.Context, m qqGroupMessage, text stri
 	}
 	rest := func() string {
 		_, tail := qqSlashArgumentHead(args)
-		return qqSlashArgumentText(tail)
+		return qqNormalizeWhitespace(tail)
 	}
 	chineseWith := func(command string, reply func(string)) string {
 		return s.qqCommand(ctx, m, command, admin, reply, progress)
@@ -219,30 +219,6 @@ func qqSlashArgumentHead(args string) (first, tail string) {
 	return "", ""
 }
 
-// qqSlashArgumentText 按原有 Fields、Join 的规则合并空白，只为保留的参数正文分配空间。
-func qqSlashArgumentText(args string) string {
-	args = strings.TrimSpace(args)
-	outputBytes := 0
-	for field := range strings.FieldsSeq(args) {
-		if len(field) == len(args) {
-			return field
-		}
-		if outputBytes > 0 {
-			outputBytes++
-		}
-		outputBytes += len(field)
-	}
-	var out strings.Builder
-	out.Grow(outputBytes)
-	for field := range strings.FieldsSeq(args) {
-		if out.Len() > 0 {
-			out.WriteByte(' ')
-		}
-		out.WriteString(field)
-	}
-	return out.String()
-}
-
 // qqSlashPick 是 /submit、/undraft、/a 没带编号时的回复：先说一句带例子的写法，再接上草稿或文档缺口的列表（「草稿」「文档缺口」的回复），管理员照着列表里的编号发就行。群友发时由「草稿」「文档缺口」自己回只有管理员能用。
 func qqSlashPick(admin bool, command string, reply func(string), chineseWith func(string, func(string)) string) string {
 	list, example := "草稿", command+" 12"
@@ -283,7 +259,7 @@ func (s *Server) qqSlashIssues(ctx context.Context, args string, reply func(stri
 			return chinese(strings.TrimSpace(repoName + " #" + match[1]))
 		}
 	}
-	terms, sort := qqSlashArgumentText(args), ""
+	terms, sort := qqNormalizeWhitespace(args), ""
 	if terms == "" {
 		terms, sort = "is:open", "&sort=created&order=desc"
 	}

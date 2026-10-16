@@ -614,6 +614,30 @@ type qqAnswer struct {
 // qqLinkPattern 匹配链接：协议名加上之后连续的 ASCII 可见字符。曾经用 \S*://\S*，会把紧挨着链接的中文（中文句子里没有空格）连同整句一起删掉。
 var qqLinkPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[!-~]*`)
 
+// qqNormalizeWhitespace 按原有 Fields、Join 的规则合并空白，只为保留的正文分配空间。
+func qqNormalizeWhitespace(text string) string {
+	text = strings.TrimSpace(text)
+	outputBytes := 0
+	for field := range strings.FieldsSeq(text) {
+		if len(field) == len(text) {
+			return field
+		}
+		if outputBytes > 0 {
+			outputBytes++
+		}
+		outputBytes += len(field)
+	}
+	var out strings.Builder
+	out.Grow(outputBytes)
+	for field := range strings.FieldsSeq(text) {
+		if out.Len() > 0 {
+			out.WriteByte(' ')
+		}
+		out.WriteString(field)
+	}
+	return out.String()
+}
+
 // qqCollapseSpaceRuns 将连续的 ASCII 空格或制表符合并为一个空格，单个制表符保持原样。
 func qqCollapseSpaceRuns(text string) string {
 	size := len(text)

@@ -68,10 +68,10 @@ func TestQQSlashArgumentStreamingMatchesFields(t *testing.T) {
 			wantHead, wantTail = fields[0], strings.Join(fields[1:], " ")
 		}
 		head, tail := qqSlashArgumentHead(text)
-		if head != wantHead || qqSlashArgumentText(tail) != wantTail {
+		if head != wantHead || qqNormalizeWhitespace(tail) != wantTail {
 			t.Fatalf("首参数或剩余正文变化：输入=%q，首参数=%q，剩余=%q", text, head, tail)
 		}
-		if got, want := qqSlashArgumentText(text), strings.Join(fields, " "); got != want {
+		if got, want := qqNormalizeWhitespace(text), strings.Join(fields, " "); got != want {
 			t.Fatalf("参数空白合并变化：输入=%q，结果=%q，期望=%q", text, got, want)
 		}
 	}
@@ -90,7 +90,7 @@ func TestQQSlashArgumentTextAllocationBudget(t *testing.T) {
 			var got string
 			result := testing.Benchmark(func(b *testing.B) {
 				for b.Loop() {
-					got = qqSlashArgumentText(tc.args)
+					got = qqNormalizeWhitespace(tc.args)
 				}
 			})
 			if got != want || result.AllocedBytesPerOp() > tc.budget {
@@ -107,7 +107,7 @@ func BenchmarkQQSlashArgumentText(b *testing.B) {
 		run  func(string) string
 	}{
 		{"previous", func(text string) string { return strings.Join(strings.Fields(text), " ") }},
-		{"current", qqSlashArgumentText},
+		{"current", qqNormalizeWhitespace},
 	} {
 		b.Run(implementation.name, func(b *testing.B) {
 			b.ReportAllocs()

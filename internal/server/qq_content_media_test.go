@@ -101,3 +101,26 @@ func BenchmarkQQReleaseNotesMedia(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkQQReleaseMaterialRepeated(b *testing.B) {
+	for _, cached := range []bool{false, true} {
+		b.Run(map[bool]string{false: "重新清洗", true: "复用缓存"}[cached], func(b *testing.B) {
+			list := []qqPlatformRelease{{
+				ID: "windows", Name: "Windows", Repo: "o/win",
+				Stable: &qqRelease{TagName: "v0.10.1", PublishedAt: "2026-10-11T00:00:00Z", Body: "- " + strings.Repeat("合成更新内容 ", 2000)},
+			}}
+			b.ReportAllocs()
+			for b.Loop() {
+				list[0].Stable.notesReady = cached
+				all := qqReleasesMaterial(list, nil)
+				if !cached {
+					list[0].Stable.notesReady = false
+				}
+				filtered := qqReleasesMaterial(list, func(qqPlatformRelease) bool { return true })
+				if all == "" || filtered == "" {
+					b.Fatal("版本资料为空")
+				}
+			}
+		})
+	}
+}

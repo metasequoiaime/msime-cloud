@@ -747,7 +747,7 @@ func (s *Store) SetAvatarKey(ctx context.Context, uid, key string) (string, erro
 	return previous, nil
 }
 
-// SetAvatarKeyAndMe 在用户行锁内替换头像登记，并在同一个批次读取头像上传响应所需的资料，返回旧键供调用方删除对象。
+// SetAvatarKeyAndMe 在用户行锁内替换头像登记，并在同一个批次读取头像上传响应所需的资料，返回旧键供调用方删除对象。提交失败时用 errAvatarCommitUncertain 标记结果未知，调用方应保留可能已被引用的新对象。
 func (s *Store) SetAvatarKeyAndMe(ctx context.Context, uid, key string) (string, User, []Identity, error) {
 	tx, e := s.pool.Begin(ctx)
 	if e != nil {
@@ -779,7 +779,7 @@ func (s *Store) SetAvatarKeyAndMe(ctx context.Context, uid, key string) (string,
 		return "", User{}, nil, e
 	}
 	if e = tx.Commit(ctx); e != nil {
-		return "", User{}, nil, e
+		return "", User{}, nil, fmt.Errorf("%w: %w", errAvatarCommitUncertain, e)
 	}
 	return previous, u, ids, nil
 }

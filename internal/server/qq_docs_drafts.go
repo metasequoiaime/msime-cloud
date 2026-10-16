@@ -43,7 +43,7 @@ func (s *Server) qqDraftDocsForGaps(ctx context.Context, from, to time.Time) []s
 		if c.count < qqDocsDraftMinCount || tried == qqDocsDraftWeekly {
 			break
 		}
-		key := strings.ToLower(strings.Join(strings.Fields(c.topic), ""))
+		key := qqCompactLower(c.topic)
 		if err := s.limits.RateLimit(ctx, "qq-bot-docs-draft", key, 1, qqDocsDraftWindow); err != nil {
 			continue
 		}

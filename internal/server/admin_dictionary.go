@@ -292,12 +292,16 @@ func dictionaryRows(name, text, query string, page int) ([]dictionaryRow, int) {
 		}
 		var cols []string
 		if strings.HasSuffix(name, ".csv") {
-			reader := csv.NewReader(strings.NewReader(line))
-			reader.FieldsPerRecord = -1
-			if parsed, err := reader.Read(); err == nil {
-				cols = parsed
+			if !strings.ContainsRune(line, '"') {
+				cols = strings.Split(line, ",")
 			} else {
-				cols = strings.Split(strings.TrimSuffix(raw, "\r"), "\t")
+				reader := csv.NewReader(strings.NewReader(line))
+				reader.FieldsPerRecord = -1
+				if parsed, err := reader.Read(); err == nil {
+					cols = parsed
+				} else {
+					cols = strings.Split(strings.TrimSuffix(raw, "\r"), "\t")
+				}
 			}
 		} else if strings.HasPrefix(name, "sources/korean/") {
 			cols = strings.SplitN(line, ":", 3)

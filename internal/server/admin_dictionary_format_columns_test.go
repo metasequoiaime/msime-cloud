@@ -32,7 +32,7 @@ func TestDictionaryRowsFormatColumnAllocationBudget(t *testing.T) {
 		columns    []string
 		budget     int64
 	}{
-		{"source.csv", field + ",100,注音\n", []string{field, "100", "注音"}, 4 << 20},
+		{"source.csv", field + ",100,注音\n", []string{field, "100", "注音"}, 64 << 10},
 		{"sources/korean/hanja.txt", field + ":漢字:100\n", []string{field, "漢字", "100"}, 64 << 10},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -28,6 +28,8 @@ import (
 
 const (
 	defaultQQEmbeddingModel = "doubao-embedding-vision"
+	// qqPendingVectorID 只在本轮文档规划的本地缓存中使用；文档 ID 固定以 "doc:" 开头，不会与它冲突。
+	qqPendingVectorID = "\x00"
 	// qqEmbedBatch 是一次请求算的文本数：doubao-embedding-vision 一次最多 10 条（多了上游返回 400 「input limit exceeded: max 10」），10 条 1500 字的文本响应约 340KB，在上游响应 1MB 的上限内。
 	qqEmbedBatch = 10
 	// qqEmbedParallel 限制一次同步同时发出的 embedding 请求数，避免批量同步把上游并发额度打满。
@@ -331,10 +333,10 @@ func (s *Server) syncQQDocVectors(ctx context.Context) (int, error) {
 	}
 	items := make([]account.QQKnowledgeItem, 0, len(idCache))
 	texts := make([]string, 0, len(idCache))
-	pending := make(map[string]bool, len(idCache))
 	for i, section := range sections {
 		// 只对本轮已经选中更新的 ID 去重，未变化的段落不能遮住后续同 ID 的更新。
-		if pending[ids[i]] {
+		key := struct{ doc, title string }{section.Doc, section.Title}
+		if idCache[key] == qqPendingVectorID {
 			continue
 		}
 		text := "[" + section.Doc + "] " + section.Title + "\n" + qqTruncate(section.Text, qqEmbedRunes)
@@ -342,7 +344,7 @@ func (s *Server) syncQQDocVectors(ctx context.Context) (int, error) {
 		if hashes[ids[i]] == h {
 			continue
 		}
-		pending[ids[i]] = true
+		idCache[key] = qqPendingVectorID
 		items = append(items, account.QQKnowledgeItem{ID: ids[i], Kind: "doc", Title: section.Doc + " · " + section.Title, Summary: qqTruncate(section.Text, qqHistorySummaryRunes), ContentHash: h, UpdatedAt: s.qq.now()})
 		texts = append(texts, text)
 	}

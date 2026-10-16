@@ -155,7 +155,7 @@ func (s *Server) qqSummariseFAQ(ctx context.Context, text string, categories []s
 	// 答案里不允许出现二级或一级标题，免得打乱 FAQ 的分类结构；也去掉链接。
 	for _, answer := range []*string{&entry.Answer, &entry.AnswerTW} {
 		*answer = qqLinkPattern.ReplaceAllString(*answer, "")
-		for _, line := range strings.Split(*answer, "\n") {
+		for line := range strings.SplitSeq(*answer, "\n") {
 			if strings.HasPrefix(line, "# ") || strings.HasPrefix(line, "## ") || strings.HasPrefix(line, "### ") {
 				return entry, errors.New("model answer contains headings")
 			}

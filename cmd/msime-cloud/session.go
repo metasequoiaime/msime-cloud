@@ -30,6 +30,15 @@ type tokenResponse struct {
 	User         json.RawMessage `json:"user"`
 }
 
+// validSessionLifetime 在换算为 time.Duration 前检查秒数，拒绝立即过期和时长溢出的凭据。
+func validSessionLifetime(seconds int) bool {
+	return seconds > 0 && int64(seconds) <= int64((1<<63-1)/time.Second)
+}
+
+func (t tokenResponse) valid() bool {
+	return t.AccessToken != "" && t.RefreshToken != "" && validSessionLifetime(t.ExpiresIn)
+}
+
 func (t tokenResponse) session(now time.Time) session {
 	s := session{AccessToken: t.AccessToken, RefreshToken: t.RefreshToken, ExpiresAt: now.Add(time.Duration(t.ExpiresIn) * time.Second), User: t.User}
 	s.LoginID = s.loginID()

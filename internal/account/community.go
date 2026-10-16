@@ -9,9 +9,7 @@ import (
 	"math"
 	"net/http"
 	"slices"
-	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -288,22 +286,13 @@ func (a *Service) communityViewer(r *http.Request) string {
 	return p.UserID
 }
 func (a *Service) communityList(w http.ResponseWriter, r *http.Request) {
-	offset := 0
-	if raw := r.URL.Query().Get("offset"); raw != "" {
-		n, e := strconv.Atoi(raw)
-		if e != nil || n < 0 || n > 100000 {
-			writeError(w, 400, "invalid_offset")
-			return
-		}
-		offset = n
-	}
-	search := r.URL.Query().Get("q")
-	if !utf8.ValidString(search) || len(search) > 128 || strings.ContainsRune(search, 0) {
-		writeError(w, 400, "invalid_search")
+	offset, search, code := communityListPage(r)
+	if code != "" {
+		writeError(w, 400, code)
 		return
 	}
-	scope := r.URL.Query().Get("scope")
-	if scope != "" && scope != "mine" && scope != "saved" {
+	scope, validScope := communityListScope(r)
+	if !validScope {
 		writeError(w, 400, "invalid_scope")
 		return
 	}

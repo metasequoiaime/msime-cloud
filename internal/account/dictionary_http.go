@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -83,18 +84,20 @@ func (a *Service) validateDictionary(ctx context.Context, kind string, entries [
 	}
 	return result, nil
 }
-func dictionaryPage(r *http.Request) (offset, limit int, ok bool) {
+
+// dictionaryPage 使用处理函数已解析的参数，避免分页和筛选反复解码同一份查询字符串。
+func dictionaryPage(query url.Values) (offset, limit int, ok bool) {
 	limit = 200
 	ok = true
 	var err error
-	if r.URL.Query().Has("limit") {
-		limit, err = strconv.Atoi(r.URL.Query().Get("limit"))
+	if query.Has("limit") {
+		limit, err = strconv.Atoi(query.Get("limit"))
 		if err != nil {
 			ok = false
 		}
 	}
-	if r.URL.Query().Has("offset") {
-		offset, err = strconv.Atoi(r.URL.Query().Get("offset"))
+	if query.Has("offset") {
+		offset, err = strconv.Atoi(query.Get("offset"))
 		if err != nil {
 			ok = false
 		}
@@ -112,8 +115,9 @@ func (a *Service) dictionary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == "GET" {
-		offset, limit, ok := dictionaryPage(r)
-		q := r.URL.Query().Get("q")
+		query := r.URL.Query()
+		offset, limit, ok := dictionaryPage(query)
+		q := query.Get("q")
 		if !ok || len(q) > 1024 || !utf8.ValidString(q) || strings.ContainsRune(q, 0) {
 			writeError(w, 400, "invalid_dictionary_query")
 			return
@@ -280,12 +284,13 @@ func (a *Service) dictionaryChanges(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	query := r.URL.Query()
 	after := int64(0)
 	var err error
-	if r.URL.Query().Has("after") {
-		after, err = strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
+	if query.Has("after") {
+		after, err = strconv.ParseInt(query.Get("after"), 10, 64)
 	}
-	_, limit, ok := dictionaryPage(r)
+	_, limit, ok := dictionaryPage(query)
 	if err != nil || after < 0 || !ok {
 		writeError(w, 400, "invalid_change_cursor")
 		return

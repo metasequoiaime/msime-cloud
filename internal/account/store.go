@@ -722,14 +722,29 @@ func (s *Store) Me(ctx context.Context, uid string) (User, []Identity, error) {
 	return u, ids, nil
 }
 
-// profileDisplayName turns a provider's name claim into a nickname the PATCH /v1/users/me rules would accept, or "" when it cannot be one: blank, not UTF-8, or carrying control characters. A longer name is cut to the 64-character limit rather than dropped.
+// profileDisplayName 将身份提供方的昵称规范化为用户接口接受的格式；完整校验后最多保留前 64 个字符。
 func profileDisplayName(name string) string {
 	name = strings.TrimSpace(name)
-	if name == "" || !utf8.ValidString(name) || strings.IndexFunc(name, unicode.IsControl) >= 0 {
+	if name == "" {
 		return ""
 	}
-	if runes := []rune(name); len(runes) > 64 {
-		name = strings.TrimSpace(string(runes[:64]))
+	cut, count := len(name), 0
+	for offset, r := range name {
+		if r == utf8.RuneError {
+			if _, size := utf8.DecodeRuneInString(name[offset:]); size == 1 {
+				return ""
+			}
+		}
+		if unicode.IsControl(r) {
+			return ""
+		}
+		if count == 64 {
+			cut = offset
+		}
+		count++
+	}
+	if count > 64 {
+		return strings.Clone(strings.TrimSpace(name[:cut]))
 	}
 	return name
 }

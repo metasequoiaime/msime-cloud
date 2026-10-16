@@ -315,13 +315,22 @@ func candidatePackageLicense(pkg skins.Package) CandidateSkinLicense {
 	return CandidateSkinLicense{Code: pkg.License.Code, Assets: pkg.License.Assets, Source: pkg.License.Source}
 }
 
-// sanitizeCandidateImages decodes every image with the codec its extension names and re-encodes it, which drops EXIF, XMP, ICC and text chunks and flattens APNG to its first frame. Dimensions and JPEG scan counts are checked from the headers before any full decode.
+// sanitizeCandidateImages 按扩展名选择解码器完整解码每张图片：静态 PNG 和 JPEG 解码后重新编码，从而去掉 EXIF、XMP、ICC 和文本块；APNG 走 parseCandidateAPNG 的块级清理，保留动画并逐帧解码校验。尺寸、APNG 帧数和 JPEG 扫描段数都在完整解码前从文件头读取，APNG 的每幅画面都按整张画布计入整包像素上限。
 func sanitizeCandidateImages(files map[string][]byte, preview string) (map[string][]byte, string) {
 	pixels := 0
+	animated := map[string]*candidateAPNG{}
 	for path, data := range files {
 		var config image.Config
 		var err error
-		if candidateExtension(path) == "png" {
+		images := 1
+		if candidateExtension(path) == "png" && candidateAnimatedPNG(data) {
+			a, code := parseCandidateAPNG(data)
+			if code != "" {
+				return nil, code
+			}
+			animated[path] = a
+			config.Width, config.Height, images = a.width, a.height, a.images
+		} else if candidateExtension(path) == "png" {
 			config, err = png.DecodeConfig(bytes.NewReader(data))
 		} else if jpegScans(data) > maxJPEGScans {
 			return nil, "candidate_skin_image_invalid"
@@ -334,7 +343,7 @@ func sanitizeCandidateImages(files map[string][]byte, preview string) (map[strin
 		if config.Width < 1 || config.Height < 1 || config.Width > maxCandidateSide || config.Height > maxCandidateSide {
 			return nil, "candidate_skin_too_large"
 		}
-		pixels += config.Width * config.Height
+		pixels += config.Width * config.Height * images
 		if pixels > maxCandidatePixels {
 			return nil, "candidate_skin_too_large"
 		}
@@ -345,7 +354,12 @@ func sanitizeCandidateImages(files map[string][]byte, preview string) (map[strin
 		var decoded image.Image
 		var err error
 		var out bytes.Buffer
-		if candidateExtension(path) == "png" {
+		if a := animated[path]; a != nil {
+			if !a.decode() {
+				return nil, "candidate_skin_image_invalid"
+			}
+			out.Write(a.clean)
+		} else if candidateExtension(path) == "png" {
 			if decoded, err = png.Decode(bytes.NewReader(data)); err == nil {
 				err = (&png.Encoder{CompressionLevel: png.BestCompression}).Encode(&out, decoded)
 			}

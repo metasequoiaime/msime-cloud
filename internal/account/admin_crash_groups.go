@@ -498,17 +498,31 @@ type crashSpike struct {
 	Count7d, CountPrev7d       int64
 }
 
-// notification phrases the spike like the console's other alerts, for example "iOS 崩溃分组 EXC_BAD_ACCESS 上升 32%".
+// notification 按控制台其他告警的样式构造通知，例如“iOS 崩溃分组 EXC_BAD_ACCESS 上升 32%”。
 func (s crashSpike) notification() Notification {
-	title := []rune(s.Title)
-	if len(title) > 80 {
-		title = append(title[:79], '…')
+	title, suffix := s.Title, ""
+	count, cut := 0, 0
+	for i := range title {
+		if count == 79 {
+			cut = i
+		}
+		if count == 80 {
+			title, suffix = title[:cut], "…"
+			break
+		}
+		count++
+	}
+	// 只检查保留的前缀；原有 rune 转换会将每个非法字节替换为 U+FFFD。
+	if !utf8.ValidString(title) {
+		title = string([]rune(title))
 	}
 	platform := crashPlatformName(s.Platform)
-	text := platform + " 新增崩溃分组 " + string(title)
+	var text string
 	if s.CountPrev7d > 0 {
 		rise := (s.Count7d*100+s.CountPrev7d/2)/s.CountPrev7d - 100
-		text = platform + " 崩溃分组 " + string(title) + " 上升 " + strconv.FormatInt(rise, 10) + "%"
+		text = platform + " 崩溃分组 " + title + suffix + " 上升 " + strconv.FormatInt(rise, 10) + "%"
+	} else {
+		text = platform + " 新增崩溃分组 " + title + suffix
 	}
 	return Notification{Kind: NotifyCrashSpike, Title: text, TargetPage: "crash", TargetID: s.Signature}
 }

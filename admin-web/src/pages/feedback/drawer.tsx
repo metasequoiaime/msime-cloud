@@ -1,6 +1,4 @@
-import { useContext } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { APICredentialsContext, APIError } from "../../api/client";
+import { useAPIImage } from "../../hooks/use-api-image";
 import { platformName } from "../../api/crash";
 import { diagnosticLabels, feedbackStatusLabels, feedbackStatusTones, feedbackTypeLabels } from "../../api/feedback";
 import type { FeedbackRow } from "../../api/feedback";
@@ -10,29 +8,11 @@ import { DetailDrawer } from "../../ui/drawer";
 import type { DrawerAction, DrawerField, DrawerSection } from "../../ui/drawer";
 import { Skeleton, SkeletonRows } from "../../ui/states";
 
-// useScreenshot 经管理接口读一张截图并转成 data: URL（后台 CSP 的 img-src 只放行 'self' 和 data:），会话 Cookie 和内存里的旧令牌都能用。
-function useScreenshot(id: string, position: number) {
-  const credentials = useContext(APICredentialsContext);
-  const token = credentials?.token;
-  return useQuery({
-    queryKey: keys.page("feedback", "screenshot", id, position),
-    staleTime: 5 * 60_000,
-    queryFn: async ({ signal }) => {
-      const response = await fetch(`/api/feedback/${encodeURIComponent(id)}/screenshots/${position}`, { signal, credentials: "same-origin", headers: token ? { Authorization: `Bearer ${token}` } : {} });
-      if (!response.ok) throw new APIError(response.status, "");
-      const blob = await response.blob();
-      return await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result));
-        reader.onerror = () => reject(reader.error);
-        reader.readAsDataURL(blob);
-      });
-    },
-  });
-}
-
 function Screenshot({ id, position }: { id: string; position: number }) {
-  const image = useScreenshot(id, position);
+  const image = useAPIImage({
+    queryKey: keys.page("feedback", "screenshot", id, position),
+    path: `/api/feedback/${encodeURIComponent(id)}/screenshots/${position}`,
+  });
   if (image.isPending) return <Skeleton className="h-[220px] rounded-[12px]" />;
   if (image.isError) return <p className="m-0 rounded-[12px] bg-panel-2 px-3 py-6 text-center text-[13px] text-muted">截图加载失败</p>;
   return <img src={image.data} alt={`截图 ${position + 1}`} className="block max-h-[360px] w-full rounded-[12px] bg-panel-2 object-contain" />;

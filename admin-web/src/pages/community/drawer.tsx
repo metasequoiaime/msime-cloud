@@ -1,7 +1,7 @@
+import { useAPIImage } from "../../hooks/use-api-image";
 import { formatNumber } from "../../utils/number";
-import { useContext } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { APICredentialsContext, APIError, useAPI } from "../../api/client";
+import { useAPI } from "../../api/client";
 import { keys } from "../../api/keys";
 import type { CandidateCategory, Detail, Section } from "../../api/community";
 import { candidateCategories, candidateCategoryLabels, detailSchema, isCandidateCategory, moderationLabels, moderationTones, pluginKindLabels, resourceContentSchema, sectionLabels, sensitiveCategoryLabels, sensitiveLevelLabels } from "../../api/community";
@@ -15,30 +15,11 @@ import { ErrorState, Skeleton, SkeletonRows } from "../../ui/states";
 import type { Target } from "./actions";
 import { formatBytes, formatTime } from "./format";
 
-// usePreviewImage loads a candidate skin's preview through the admin API and turns it into a data: URL, which img-src allows, so it works with both the session cookie and the in-memory legacy token.
-function usePreviewImage(id: string, enabled: boolean) {
-  const credentials = useContext(APICredentialsContext);
-  const token = credentials?.token;
-  return useQuery({
-    queryKey: keys.page("community", "preview", id),
-    enabled,
-    staleTime: 5 * 60_000,
-    queryFn: async ({ signal }) => {
-      const response = await fetch(`/api/candidate-skins/${encodeURIComponent(id)}/preview`, { signal, credentials: "same-origin", headers: token ? { Authorization: `Bearer ${token}` } : {} });
-      if (!response.ok) throw new APIError(response.status, "");
-      const blob = await response.blob();
-      return await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result));
-        reader.onerror = () => reject(reader.error);
-        reader.readAsDataURL(blob);
-      });
-    },
-  });
-}
-
 function CandidatePreview({ id, name }: { id: string; name: string }) {
-  const image = usePreviewImage(id, true);
+  const image = useAPIImage({
+    queryKey: keys.page("community", "preview", id),
+    path: `/api/candidate-skins/${encodeURIComponent(id)}/preview`,
+  });
   if (image.isPending) return <Skeleton className="mb-5 h-[180px] rounded-[14px]" />;
   if (image.isError) return <p className="m-0 mb-5 rounded-[14px] bg-panel-2 px-4 py-6 text-center text-[13px] text-muted">预览图加载失败</p>;
   return <img src={image.data} alt={`${name}预览图`} className="mb-5 block max-h-[260px] w-full rounded-[14px] bg-panel-2 object-contain" />;

@@ -5,7 +5,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider, useMutation } from "@tanstack/react-query";
 import { z } from "zod";
 import { AuthProvider, useAuth } from "../../src/auth";
-import { APIError, useAPI } from "../../src/api/client";
+import { APICredentialsContext, APIError, useAPI } from "../../src/api/client";
 import { Button } from "../../src/ui/button";
 import { Card, CardHeader, Banner } from "../../src/ui/card";
 import { AreaChart, ChartLegend, Sparkline } from "../../src/ui/charts";
@@ -21,6 +21,8 @@ import { Segmented } from "../../src/ui/segmented";
 import { StatGrid, StatTile } from "../../src/ui/stat-tile";
 import { Switch } from "../../src/ui/switch";
 import { ToastProvider, useToast } from "../../src/ui/toast";
+import { useAPIImage } from "../../src/hooks/use-api-image";
+import { keys } from "../../src/api/keys";
 import { useDebounced } from "../../src/hooks/use-debounced";
 import { formatBytes as dictionaryBytes } from "../../src/pages/dictionary";
 import { formatBytes as communityBytes } from "../../src/pages/community/format";
@@ -37,6 +39,31 @@ const series = Array.from({ length: 30 }, (_, index) => ({ day: `09-${String(ind
 const skin = { background: 0xf5faf6, keyBackground: 0xffffff, keyForeground: 0x0f2419, accent: 0x1e8e4e, actionBackground: 0x1e8e4e, cornerRadius: 8, borderWidth: 1, shadow: 0.1, pattern: 1, monospaced: false };
 
 const authClient = new QueryClient();
+const imageClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+const imageCredentials = { token: new URLSearchParams(window.location.search).get("images") === "token" ? "image-test-token" : "", onUnauthorized: () => undefined };
+
+function ImageResult({ id, enabled }: { id: string; enabled: boolean }) {
+  const image = useAPIImage({ queryKey: keys.page("image-test", id), path: `/api/image-test/${id}`, enabled });
+  return <>
+    <output data-testid="image-status">{image.status}:{image.fetchStatus}{image.error instanceof APIError ? `:${image.error.status}:${image.error.code}` : ""}</output>
+    {image.data && <img src={image.data} alt="测试图片" />}
+  </>;
+}
+
+function ImageHarness() {
+  const [enabled, setEnabled] = useState(false);
+  const [visible, setVisible] = useState(true);
+  const [id, setId] = useState("success");
+  return <main>
+    <button type="button" onClick={() => setEnabled(true)}>读取图片</button>
+    <button type="button" onClick={() => setVisible(value => !value)}>切换图片显示</button>
+    <select aria-label="图片来源" value={id} onChange={event => setId(event.target.value)}>
+      <option value="success">成功</option><option value="denied">无权限</option><option value="slow">等待响应</option>
+    </select>
+    {visible && <ImageResult id={id} enabled={enabled} />}
+  </main>;
+}
+
 const byteCases = [0, 1.5, 1023, 1024, 1536, 10239, 10240, 1048575, 1048576, 1610612736, -1, NaN, Infinity, -Infinity];
 
 function BytesHarness() {
@@ -134,6 +161,9 @@ function Harness() {
 
 const root = document.getElementById("root");
 if (!root) throw new Error("Missing harness root");
-createRoot(root).render(<StrictMode><ToastProvider>{new URLSearchParams(window.location.search).has("auth")
+const params = new URLSearchParams(window.location.search);
+createRoot(root).render(<StrictMode><ToastProvider>{params.has("images")
+  ? <QueryClientProvider client={imageClient}><APICredentialsContext.Provider value={imageCredentials}><ImageHarness /></APICredentialsContext.Provider></QueryClientProvider>
+  : params.has("auth")
   ? <QueryClientProvider client={authClient}><AuthProvider><AuthHarness /></AuthProvider></QueryClientProvider>
   : <ConfirmProvider><Harness /></ConfirmProvider>}</ToastProvider></StrictMode>);

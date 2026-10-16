@@ -631,6 +631,25 @@ type qqAnswer struct {
 // qqLinkPattern 匹配链接：协议名加上之后连续的 ASCII 可见字符。曾经用 \S*://\S*，会把紧挨着链接的中文（中文句子里没有空格）连同整句一起删掉。
 var qqLinkPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[!-~]*`)
 
+// qqCompactLower 流式合并字段，只为保留的正文分配空间；无需合并时直接转小写。
+func qqCompactLower(text string) string {
+	text = strings.TrimSpace(text)
+	outputBytes := 0
+	for field := range strings.FieldsSeq(text) {
+		if len(field) == len(text) {
+			return strings.ToLower(text)
+		}
+		outputBytes += len(field)
+	}
+	var out strings.Builder
+	out.Grow(outputBytes)
+	for field := range strings.FieldsSeq(text) {
+		out.WriteString(field)
+	}
+	// 先合并再转小写，保留被空白拆开的无效 UTF-8 字节重新组成有效字符的行为。
+	return strings.ToLower(out.String())
+}
+
 // qqNormalizeWhitespace 按原有 Fields、Join 的规则合并空白，只为保留的正文分配空间。
 func qqNormalizeWhitespace(text string) string {
 	text = strings.TrimSpace(text)

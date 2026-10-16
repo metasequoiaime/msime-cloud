@@ -1,12 +1,12 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -97,25 +97,23 @@ type qqImprovementCounted struct {
 	count int
 }
 
-// qqCountTopics 按话题（忽略空白和大小写）归并并按次数从多到少排。
+// qqCountTopics 按话题（忽略空白和大小写）归并并按次数降序排列，次数相同时保留首次出现顺序。
 func qqCountTopics(topics []string) []qqImprovementCounted {
-	counts, first := map[string]int{}, map[string]string{}
-	var order []string
+	indexes := map[string]int{}
+	out := []qqImprovementCounted{}
 	for _, t := range topics {
-		key := strings.ToLower(strings.Join(strings.Fields(t), ""))
+		key := qqCompactLower(t)
 		if key == "" {
 			key, t = "（没有概括）", "（没有概括）"
 		}
-		if _, ok := counts[key]; !ok {
-			order, first[key] = append(order, key), t
+		if index, ok := indexes[key]; ok {
+			out[index].count++
+		} else {
+			indexes[key] = len(out)
+			out = append(out, qqImprovementCounted{t, 1})
 		}
-		counts[key]++
 	}
-	out := make([]qqImprovementCounted, 0, len(order))
-	for _, key := range order {
-		out = append(out, qqImprovementCounted{first[key], counts[key]})
-	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].count > out[j].count })
+	slices.SortStableFunc(out, func(a, b qqImprovementCounted) int { return cmp.Compare(b.count, a.count) })
 	return out
 }
 

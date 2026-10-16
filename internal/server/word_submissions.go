@@ -825,13 +825,17 @@ func appendSubmissionLines(content string, sub submission, base string) string {
 	if needsNewline {
 		b.WriteString("\n")
 	}
+	// 正权重最多 19 位，复用栈上缓冲区，避免每条词条创建数字字符串。
+	var weightBuffer [20]byte
 	for _, line := range sub.lines {
 		b.WriteString(line.key)
-		switch {
-		case sub.kind == kindWords:
-			b.WriteString("\t" + strconv.Itoa(max(1, min(max(line.weight, low), high))))
-		case line.weight > 0:
-			b.WriteString("\t" + strconv.Itoa(line.weight))
+		weight := line.weight
+		if sub.kind == kindWords {
+			weight = max(1, min(max(weight, low), high))
+		}
+		if weight > 0 {
+			b.WriteByte('\t')
+			b.Write(strconv.AppendInt(weightBuffer[:0], int64(weight), 10))
 		}
 		b.WriteString("\n")
 	}

@@ -2268,9 +2268,14 @@ func TestQQBotAnswersWithGitHubContext(t *testing.T) {
 			t.Fatalf("releases missing %q:\n%s", want, fake.answerSystem)
 		}
 	}
+	// 只检查检索资料，工具名 helpcode 等系统说明不属于 Release 正文。
+	_, answerMaterial, ok := strings.Cut(fake.answerSystem, "\n\n资料：\n")
+	if !ok {
+		t.Fatal("回答请求缺少资料分隔符")
+	}
 	for _, unwanted := range []string{"预发布的说明", "旧版的说明", "新版预览的说明", "code", "hidden"} {
-		if strings.Contains(fake.answerSystem, unwanted) {
-			t.Fatalf("release notes must only come from the newest stable release, found %q:\n%s", unwanted, fake.answerSystem)
+		if strings.Contains(answerMaterial, unwanted) {
+			t.Fatalf("release notes must only come from the newest stable release, found %q:\n%s", unwanted, answerMaterial)
 		}
 	}
 	if strings.Contains(fake.answerSystem, "#9") {

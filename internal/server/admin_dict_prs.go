@@ -453,13 +453,21 @@ func (s *Server) checkDictEntries(ctx context.Context, files []dictFile) []dictE
 		if len(f.added) == 0 {
 			continue
 		}
-		lines := strings.Split(f.head, "\n")
 		first := len(entries)
 		keys := make([]submissionLine, 0, len(f.added))
-		for _, at := range f.added {
-			word, second := dictLineColumns(lines[at])
-			entries = append(entries, dictEntry{Index: len(entries), File: f.kind.file, Kind: f.kind.name, Word: word, Pinyin: second, Flag: dictFlagNew})
-			keys = append(keys, submissionLine{key: word + "\t" + second})
+		// 新增位置由 addedLinePositions 按物理行递增生成，读完最后一条即可停止。
+		at, next := 0, 0
+		for line := range strings.SplitSeq(f.head, "\n") {
+			if at == f.added[next] {
+				word, second := dictLineColumns(line)
+				entries = append(entries, dictEntry{Index: len(entries), File: f.kind.file, Kind: f.kind.name, Word: word, Pinyin: second, Flag: dictFlagNew})
+				keys = append(keys, submissionLine{key: word + "\t" + second})
+				next++
+				if next == len(f.added) {
+					break
+				}
+			}
+			at++
 		}
 		s.flagDictFile(ctx, f, entries[first:], keys)
 	}

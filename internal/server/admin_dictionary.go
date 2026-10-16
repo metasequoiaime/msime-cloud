@@ -277,7 +277,7 @@ func dictionaryRows(name, text, query string, page int) ([]dictionaryRow, int) {
 			}
 			continue
 		}
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "//") || (q != "" && !strings.Contains(strings.ToLower(line), q)) {
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "//") || (q != "" && !dictionaryLineContainsLower(line, q)) {
 			continue
 		}
 		total++
@@ -304,6 +304,25 @@ func dictionaryRows(name, text, query string, page int) ([]dictionaryRow, int) {
 		rows = append(rows, dictionaryRow{Line: lineNumber, Columns: cols})
 	}
 	return rows, total
+}
+
+func dictionaryLineContainsLower(line, query string) bool {
+	// 常见的短英文词条在栈上转小写，Unicode 和长行仍由标准库处理。
+	var lower [256]byte
+	if len(line) > len(lower) {
+		return strings.Contains(strings.ToLower(line), query)
+	}
+	for i := range len(line) {
+		c := line[i]
+		if c >= utf8.RuneSelf {
+			return strings.Contains(strings.ToLower(line), query)
+		}
+		if 'A' <= c && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		lower[i] = c
+	}
+	return bytes.Contains(lower[:len(line)], []byte(query))
 }
 
 func dictionaryEditablePath(name string) bool {

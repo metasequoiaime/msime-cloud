@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 	"unicode"
-	"unicode/utf16"
 	"unicode/utf8"
 )
 
@@ -455,11 +454,15 @@ func (s *Server) cloud(w http.ResponseWriter, r *http.Request) {
 	// Google 可能返回仅覆盖输入前缀的候选。
 	// 拼音响应没有替换范围字段，因此只保留覆盖完整输入的候选。
 	// 日语 matched_length 统计转换后的假名长度，而非输入罗马字长度。
-	queryLength := len(utf16.Encode([]rune(text)))
+	filterMatchLength := scheme != "japanese" && metadata.MatchedLength != nil
+	queryLength := 0
+	if filterMatchLength {
+		queryLength = utf16Length(text)
+	}
 	clean := make([]string, 0, n)
 	seen := map[string]bool{}
 	for index, c := range candidates {
-		if scheme != "japanese" && metadata.MatchedLength != nil && metadata.MatchedLength[index] != queryLength {
+		if filterMatchLength && metadata.MatchedLength[index] != queryLength {
 			continue
 		}
 		c = strings.TrimSpace(c)

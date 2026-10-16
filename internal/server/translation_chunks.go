@@ -13,17 +13,6 @@ type translationPart struct {
 	text, prefix, suffix, translated string
 }
 
-func translationCharacterUnits(text string) int {
-	n := 0
-	for _, r := range text {
-		n++
-		if r > 0xffff {
-			n++
-		}
-	}
-	return n
-}
-
 // translationTextChunks 优先在后半段的空白或标点处断开，找不到时按完整 Unicode 字符切分。
 func translationTextChunks(text string, limit int) []string {
 	var chunks []string

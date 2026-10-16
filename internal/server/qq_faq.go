@@ -2,9 +2,7 @@ package server
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -120,11 +118,14 @@ func qqSyncFAQSources(sources, oldFAQ, newFAQ string) (string, bool) {
 			SourceSha256 string `json:"sourceSha256"`
 		} `json:"files"`
 	}
-	oldSum, newSum := sha256.Sum256([]byte(oldFAQ)), sha256.Sum256([]byte(newFAQ))
-	oldHash, newHash := hex.EncodeToString(oldSum[:]), hex.EncodeToString(newSum[:])
-	if json.Unmarshal([]byte(sources), &record) != nil || record.Files["faq.md"].SourceSha256 != oldHash || strings.Count(sources, `"`+oldHash+`"`) != 1 {
+	if json.Unmarshal([]byte(sources), &record) != nil {
 		return "", false
 	}
+	oldHash := qqContentHash(oldFAQ)
+	if record.Files["faq.md"].SourceSha256 != oldHash || strings.Count(sources, `"`+oldHash+`"`) != 1 {
+		return "", false
+	}
+	newHash := qqContentHash(newFAQ)
 	return strings.Replace(sources, `"`+oldHash+`"`, `"`+newHash+`"`, 1), true
 }
 

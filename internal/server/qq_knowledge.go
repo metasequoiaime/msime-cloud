@@ -374,6 +374,15 @@ func qqSnippetNeedsStructuredScan(text string) bool {
 // qqKnowledgeTOC 生成挑段落用的目录；知识库已加载的摘要可直接复用，测试或旧缓存没有摘要时回退到即时计算。
 func qqKnowledgeTOC(sections []qqSection, snippets []string) string {
 	var toc strings.Builder
+	if len(snippets) >= len(sections) {
+		outputBytes := 0
+		for i, section := range sections {
+			var number [20]byte
+			n := strconv.AppendInt(number[:0], int64(i+1), 10)
+			outputBytes += len(n) + len(". [") + len(section.Doc) + len("] ") + len(section.Title) + len("：") + len(snippets[i]) + 1
+		}
+		toc.Grow(outputBytes)
+	}
 	for i, section := range sections {
 		var snippet string
 		if i < len(snippets) {

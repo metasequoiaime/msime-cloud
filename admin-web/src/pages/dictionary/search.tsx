@@ -1,3 +1,4 @@
+import { formatNumber } from "../../utils/number";
 import { useEffect, useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Search, X } from "lucide-react";
@@ -41,7 +42,7 @@ export function DictionarySearch({ onOpen }: { onOpen: (path: string, query: str
       {active && <Button variant="ghost" aria-label="关闭跨词库搜索" onClick={() => { setActive(undefined); setInput(""); }}><X size={15} aria-hidden="true" />清空</Button>}
     </form>
     {!active ? <p className="mb-0 mt-2 text-[12px] text-muted">不用先选文件，直接在所有词库中查找词条，搜索结果可打开继续编辑。</p> : <>
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2"><p aria-live="polite" className="m-0 text-[13px] text-body">{complete ? "搜索完成" : paused ? "已暂停搜索" : results.isError ? "搜索中断" : "正在搜索"} · 「{active.query}」 · 找到 {matches.toLocaleString("zh-CN")} 条 · {last?.next_cursor ?? 0} / {last?.total_files ?? "—"} 个文件</p>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2"><p aria-live="polite" className="m-0 text-[13px] text-body">{complete ? "搜索完成" : paused ? "已暂停搜索" : results.isError ? "搜索中断" : "正在搜索"} · 「{active.query}」 · 找到 {formatNumber(matches)} 条 · {last?.next_cursor ?? 0} / {last?.total_files ?? "—"} 个文件</p>
         {!complete && !results.isError && <Button size="sm" variant="outline" onClick={() => setPaused(value => !value)}>{paused ? "继续搜索" : "暂停搜索"}</Button>}
       </div>
       {results.isError && <div className="mt-3"><ErrorState error={results.error} onRetry={() => { setPaused(false); if (pages.length) void results.fetchNextPage(); else void results.refetch(); }} /></div>}
@@ -49,7 +50,7 @@ export function DictionarySearch({ onOpen }: { onOpen: (path: string, query: str
       {skipped.length > 0 && <details className="mt-3 text-[12px] text-muted"><summary>有 {skipped.length} 个文件未能搜索</summary><ul>{skipped.map(file => <li key={file.path}>{file.path}：{file.reason}</li>)}</ul></details>}
       <div className="mt-3 grid max-h-[380px] gap-3 overflow-y-auto">{files.map(file => <div key={file.path} className="rounded-xl bg-panel-2 p-3">
         <div className="flex flex-wrap items-center justify-between gap-2"><span className="min-w-0 break-all text-[13px] font-semibold text-ink">{file.path} <Pill tone={file.editable ? "ok" : "mute"}>{file.editable ? "可维护" : "只读"}</Pill></span><Button size="sm" variant="outline" onClick={() => onOpen(file.path, active.query)}>{file.editable ? "打开并编辑" : "打开查看"}</Button></div>
-        <p className="mb-2 mt-1 text-[12px] text-muted">匹配 {file.total.toLocaleString("zh-CN")} 条{file.rows.length > 5 ? "，预览前 5 条，打开文件查看全部" : ""}</p>
+        <p className="mb-2 mt-1 text-[12px] text-muted">匹配 {formatNumber(file.total)} 条{file.rows.length > 5 ? "，预览前 5 条，打开文件查看全部" : ""}</p>
         <ul className="m-0 grid list-none gap-1 p-0">{file.rows.slice(0, 5).map(row => <li key={row.line}><button type="button" onClick={() => onOpen(file.path, active.query)} className="flex w-full gap-3 rounded-lg px-2 py-1 text-left text-[12.5px] text-body hover:bg-accent-soft"><span className="shrink-0 text-muted">{row.line}</span><span className="min-w-0 break-all">{row.columns.join(" · ")}</span></button></li>)}</ul>
       </div>)}</div>
       {complete && !files.length && <Empty title={`未找到「${active.query}」`}>试试更短的词语、拼音或编码。</Empty>}

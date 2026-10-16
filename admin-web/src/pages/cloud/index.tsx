@@ -1,3 +1,4 @@
+import { formatNumber } from "../../utils/number";
 import { useQuery } from "@tanstack/react-query";
 import { useAPI } from "../../api/client";
 import type { CloudService } from "../../api/cloud";
@@ -11,7 +12,7 @@ import { Dot } from "../../ui/pill";
 import { ProgressBar } from "../../ui/progress";
 import { ErrorState, NotConfigured, Skeleton } from "../../ui/states";
 
-const number = (value: number, digits = 0) => value.toLocaleString("zh-CN", { maximumFractionDigits: digits });
+const number = (value: number, digits = 0) => formatNumber(value, "zh-CN", { maximumFractionDigits: digits });
 
 // Large character counts read as 万 like the design (190 万 / 500 万字符).
 function chars(value: number): string {

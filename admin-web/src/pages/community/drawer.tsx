@@ -1,3 +1,4 @@
+import { formatNumber } from "../../utils/number";
 import { useContext } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { APICredentialsContext, APIError, useAPI } from "../../api/client";
@@ -45,8 +46,8 @@ function CandidatePreview({ id, name }: { id: string; name: string }) {
 
 function dataField(detail: Detail): string {
   const parts: string[] = [];
-  if (detail.downloads !== undefined) parts.push(`下载 ${detail.downloads.toLocaleString("zh-CN")}`);
-  if (detail.saves !== undefined) parts.push(`收藏 ${detail.saves.toLocaleString("zh-CN")}`);
+  if (detail.downloads !== undefined) parts.push(`下载 ${formatNumber(detail.downloads)}`);
+  if (detail.saves !== undefined) parts.push(`收藏 ${formatNumber(detail.saves)}`);
   if (detail.rating_count) parts.push(`${(detail.rating_average ?? 0).toFixed(1)} 分（${detail.rating_count} 人）`);
   return parts.join(" · ") || "—";
 }

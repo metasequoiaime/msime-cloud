@@ -1,3 +1,4 @@
+import { formatNumber } from "../../utils/number";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
@@ -112,7 +113,7 @@ export default function NoticePage() {
     if (!value.title) problem = "请先填写标题";
     else if (value.targets.length === 0) problem = "请选择投放范围";
     else if (publishing && value.channels.length === 0) problem = "请至少选择一个渠道";
-    else if (bodyTooLong(value)) problem = `正文最多 ${noticeBodyMax.toLocaleString("zh-CN")} 字，请缩短正文。`;
+    else if (bodyTooLong(value)) problem = `正文最多 ${formatNumber(noticeBodyMax)} 字，请缩短正文。`;
     if (problem) {
       toast(problem);
       return null;

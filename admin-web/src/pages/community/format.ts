@@ -1,3 +1,4 @@
+import { formatNumber } from "../../utils/number";
 import { formatDateTime } from "../../utils/time";
 import { splitBytes } from "../../utils/bytes";
 import { z } from "zod";
@@ -15,14 +16,12 @@ export function formatBytes(value: number): string {
   return `${amount.toFixed(1)} MB`;
 }
 
-const count = (value: number) => value.toLocaleString("zh-CN");
-
 // itemMeta is the card's stats line after the author, built only from real counters.
 export function itemMeta(section: Section, item: Item): string {
   const parts: string[] = [];
-  if ((section === "dictionaries" || section === "phrases") && item.entries != null) parts.push(`${count(item.entries)} 条`);
-  if (item.downloads !== undefined) parts.push(`下载 ${count(item.downloads)}`);
-  if (item.saves !== undefined) parts.push(`收藏 ${count(item.saves)}`);
+  if ((section === "dictionaries" || section === "phrases") && item.entries != null) parts.push(`${formatNumber(item.entries)} 条`);
+  if (item.downloads !== undefined) parts.push(`下载 ${formatNumber(item.downloads)}`);
+  if (item.saves !== undefined) parts.push(`收藏 ${formatNumber(item.saves)}`);
   if ((section === "skins" || section === "candidate-skins") && item.category) parts.push(candidateCategoryLabel(item.category));
   if (section === "candidate-skins" && item.visibility === "private") parts.push("私有");
   if (item.reports > 0) parts.push(`被举报 ${item.reports} 次`);

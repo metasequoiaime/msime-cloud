@@ -1,3 +1,4 @@
+import { formatNumber } from "../../utils/number";
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAPI } from "../../api/client";
@@ -15,7 +16,6 @@ import type { ChipOption } from "../../ui/filter-chips";
 import { StatGrid, StatTile } from "../../ui/stat-tile";
 import { Skeleton } from "../../ui/states";
 
-const number = (n: number) => n.toLocaleString("en-US");
 const knownPlatforms = new Set<string>(platformOptions.map(option => option.key));
 
 function rowId(row: DownloadRow): string {
@@ -32,7 +32,7 @@ function WeekBar({ value, max }: { value: number; max: number }) {
     <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-[3px] bg-panel-2" aria-hidden="true">
       <div className="h-full rounded-[3px] bg-accent" style={{ width: `${max > 0 ? (value / max) * 100 : 0}%` }} />
     </div>
-    <span className="min-w-10 text-right text-xs text-muted tabular-nums">{number(value)}</span>
+    <span className="min-w-10 text-right text-xs text-muted tabular-nums">{formatNumber(value, "en-US")}</span>
   </div>;
 }
 
@@ -46,7 +46,7 @@ function columnsFor(max: number): Column<DownloadRow>[] {
         : <span className="text-muted">未上报</span>,
     },
     { id: "channel", header: "渠道", width: "minmax(140px,1fr)", cell: row => <span className="block truncate text-muted">{channelLabel(row)}</span> },
-    { id: "today", header: "今日", width: "70px", align: "right", cell: row => <span className="tabular-nums">{number(row.today)}</span> },
+    { id: "today", header: "今日", width: "70px", align: "right", cell: row => <span className="tabular-nums">{formatNumber(row.today, "en-US")}</span> },
     { id: "week", header: "近 7 天", width: "minmax(160px,1.3fr)", cell: row => <WeekBar value={row.week} max={max} /> },
   ];
 }
@@ -54,7 +54,7 @@ function columnsFor(max: number): Column<DownloadRow>[] {
 function mirrorShare(summary: DownloadsSummary): { value: string; sub: string } {
   if (!summary.channel_reported) return { value: "—", sub: "客户端未上报渠道" };
   if (summary.mirror_share === null) return { value: "—", sub: "近 7 天暂无下载" };
-  return { value: `${Math.round(summary.mirror_share * 100)}%`, sub: `近 7 天 ${number(summary.totals.mirror_week)} 次` };
+  return { value: `${Math.round(summary.mirror_share * 100)}%`, sub: `近 7 天 ${formatNumber(summary.totals.mirror_week, "en-US")} 次` };
 }
 
 function Stats({ summary }: { summary: DownloadsSummary | undefined }) {
@@ -63,10 +63,10 @@ function Stats({ summary }: { summary: DownloadsSummary | undefined }) {
   }
   const share = mirrorShare(summary);
   return <StatGrid>
-    <StatTile label="今日下载" value={number(summary.totals.today)} sub={`UTC ${summary.day}`} />
-    <StatTile label="近 7 天" value={number(summary.totals.week)} sub="含 GitHub Release 快照" />
+    <StatTile label="今日下载" value={formatNumber(summary.totals.today, "en-US")} sub={`UTC ${summary.day}`} />
+    <StatTile label="近 7 天" value={formatNumber(summary.totals.week, "en-US")} sub="含 GitHub Release 快照" />
     <StatTile label="国内镜像占比" value={share.value} sub={share.sub} />
-    <StatTile label="GitHub Release 近 7 天" value={number(summary.totals.github_week)} sub={summary.snapshot_day ? `快照截至 ${summary.snapshot_day}` : "暂无下载快照"} />
+    <StatTile label="GitHub Release 近 7 天" value={formatNumber(summary.totals.github_week, "en-US")} sub={summary.snapshot_day ? `快照截至 ${summary.snapshot_day}` : "暂无下载快照"} />
   </StatGrid>;
 }
 

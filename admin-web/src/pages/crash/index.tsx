@@ -1,3 +1,4 @@
+import { formatNumber } from "../../utils/number";
 import { useCallback, useMemo, useState } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { errorMessage, isGithubDisabled, useAPI } from "../../api/client";
@@ -16,7 +17,7 @@ import { FilterChips } from "../../ui/filter-chips";
 import { Pill } from "../../ui/pill";
 import { StatGrid, StatTile } from "../../ui/stat-tile";
 import { useToast } from "../../ui/toast";
-import { formatCount, useCrashActions } from "./actions";
+import { useCrashActions } from "./actions";
 import { CrashDrawer } from "./drawer";
 
 const ALL = "all";
@@ -91,7 +92,7 @@ export default function CrashPage() {
     {
       id: "signature", header: "崩溃签名", width: "minmax(280px,2.4fr)",
       cell: group => <CellText mono strong={false} title={<span title={group.title}>{group.title || group.signature}</span>}
-        sub={group.devices_7d === null ? "影响设备未上报" : `影响 ${formatCount(group.devices_7d)} 台设备`} />,
+        sub={group.devices_7d === null ? "影响设备未上报" : `影响 ${formatNumber(group.devices_7d)} 台设备`} />,
     },
     { id: "platform", header: "平台 / 版本", width: "120px", cell: group => <CellText strong={false} title={platformName(group.platform)} sub={<span className="font-mono">{group.version}</span>} /> },
     {
@@ -100,7 +101,7 @@ export default function CrashPage() {
         <div className="h-1.5 flex-1 overflow-hidden rounded-[3px] bg-panel-2">
           <div className={cn("h-full rounded-[3px]", group.status === "fixed" ? "bg-accent" : "bg-bad")} style={{ width: `${(group.count_7d / max) * 100}%` }} />
         </div>
-        <span className="min-w-10 text-right text-xs text-muted tabular-nums">{formatCount(group.count_7d)}</span>
+        <span className="min-w-10 text-right text-xs text-muted tabular-nums">{formatNumber(group.count_7d)}</span>
       </div>,
     },
     {
@@ -130,10 +131,10 @@ export default function CrashPage() {
   return <>
     <PageIntro page="crash" />
     <StatGrid className="mb-3.5">
-      <StatTile label="今日安装上报" value={summary?.installs_today == null ? "—" : formatCount(summary.installs_today)} sub={summary?.installs_today === null ? UNREPORTED : "今天上报过的安装"} />
+      <StatTile label="今日安装上报" value={summary?.installs_today == null ? "—" : formatNumber(summary.installs_today)} sub={summary?.installs_today === null ? UNREPORTED : "今天上报过的安装"} />
       <StatTile label="无崩溃会话" value={summary?.crash_free_rate == null ? "—" : `${(summary.crash_free_rate * 100).toFixed(2)}%`} sub={summary?.crash_free_rate === null ? UNREPORTED : "近 7 天"} />
-      <StatTile label="崩溃分组" value={summary ? formatCount(summary.groups) : "—"} sub={summary ? `近 7 天崩溃 ${formatCount(summary.crashes_7d)} 次` : undefined} />
-      <StatTile label="影响设备" value={summary?.devices_7d == null ? "—" : formatCount(summary.devices_7d)} sub={summary?.devices_7d === null ? UNREPORTED : "近 7 天"} />
+      <StatTile label="崩溃分组" value={summary ? formatNumber(summary.groups) : "—"} sub={summary ? `近 7 天崩溃 ${formatNumber(summary.crashes_7d)} 次` : undefined} />
+      <StatTile label="影响设备" value={summary?.devices_7d == null ? "—" : formatNumber(summary.devices_7d)} sub={summary?.devices_7d === null ? UNREPORTED : "近 7 天"} />
     </StatGrid>
     {githubDisabled && <Banner tone="warn" className="mb-3.5">
       <b className="text-ink">未配置 GitHub 集成。</b>服务端没有配置 admin.github，暂时不能从崩溃分组建 Issue；可以在详情里手动标记为已知问题或已修复。

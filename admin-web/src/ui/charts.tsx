@@ -1,3 +1,4 @@
+import { formatNumber } from "../utils/number";
 import type { ReactNode } from "react";
 import { Area, AreaChart as RechartsAreaChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { cn } from "./cn";
@@ -39,7 +40,8 @@ export type AreaChartProps<K extends string> = {
   className?: string;
 };
 
-const defaultFormat = (value: number) => value.toLocaleString("zh-CN");
+// 图表回调还会传入刻度下标，只把数值交给公共格式化工具。
+const defaultFormat = (value: number) => formatNumber(value);
 
 // AreaChart is the multi-series time chart: dashed gridlines, muted axis labels, themed tooltip.
 export function AreaChart<K extends string>({ data, xKey, series, height = 220, filled = true, stacked = false, yDomain, showYAxis = false, formatX, formatValue = defaultFormat, ariaLabel, className }: AreaChartProps<K>) {

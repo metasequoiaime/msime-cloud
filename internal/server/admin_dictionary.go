@@ -123,13 +123,14 @@ func (s *Server) dictionaryTree(w http.ResponseWriter, r *http.Request, gh *gith
 }
 
 func (s *Server) dictionaryFile(w http.ResponseWriter, r *http.Request, gh *githubapp.Client) {
-	name := strings.TrimSpace(r.URL.Query().Get("path"))
+	query := r.URL.Query()
+	name := strings.TrimSpace(query.Get("path"))
 	if !dictionaryTextPath(name) || len(name) > 256 || !utf8.ValidString(name) || strings.Contains(name, "..") {
 		fail(w, http.StatusBadRequest, "invalid_dictionary_path")
 		return
 	}
 	page := 1
-	if value := r.URL.Query().Get("page"); value != "" {
+	if value := query.Get("page"); value != "" {
 		parsed, err := strconv.Atoi(value)
 		page = parsed
 		if err != nil || page < 1 || page > 1000000 {
@@ -137,7 +138,7 @@ func (s *Server) dictionaryFile(w http.ResponseWriter, r *http.Request, gh *gith
 			return
 		}
 	}
-	q := r.URL.Query().Get("q")
+	q := query.Get("q")
 	if len(q) > 200 || !plainText(q) {
 		fail(w, 400, "invalid_query")
 		return

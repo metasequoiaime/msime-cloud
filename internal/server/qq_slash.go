@@ -285,7 +285,7 @@ func (s *Server) qqSlashDraft(ctx context.Context, m qqGroupMessage, content str
 		return "not_report"
 	}
 	raw, _ := json.Marshal(report)
-	id, err := s.qqDrafts.CreateQQDraft(ctx, m.GroupOpenID+"/"+m.Author.MemberOpenID, qqTruncate(content, qqDraftOriginalRunes), string(raw))
+	id, err := createQQDraft(ctx, s.qqDrafts, m.GroupOpenID+"/"+m.Author.MemberOpenID, qqTruncate(content, qqDraftOriginalRunes), string(raw))
 	if err != nil {
 		slog.Warn("qq bot: slash draft not stored", "reason", err.Error())
 		reply(qqReplyUnavailable)

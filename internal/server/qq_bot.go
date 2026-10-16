@@ -1885,7 +1885,7 @@ func (s *Server) qqDuplicate(ctx context.Context, client *githubapp.Client, toke
 	var found struct {
 		Items []qqIssue `json:"items"`
 	}
-	if r.Decode(&found) != nil {
+	if r.Decode(&found) != nil || found.Items == nil {
 		return 0, errors.New("search: invalid response")
 	}
 	var candidates strings.Builder

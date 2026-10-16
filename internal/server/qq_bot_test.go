@@ -657,7 +657,11 @@ func (f *qqFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(f.searchStatus)
 			return
 		}
-		result := map[string]any{"items": f.searchItems}
+		items := f.searchItems
+		if items == nil {
+			items = []map[string]any{}
+		}
+		result := map[string]any{"items": items}
 		if total, ok := f.searchTotals[r.URL.Query().Get("q")]; ok {
 			result["total_count"] = total
 		}

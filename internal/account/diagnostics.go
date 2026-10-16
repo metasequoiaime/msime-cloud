@@ -459,22 +459,62 @@ func boundedDiagnosticArguments(arguments json.RawMessage) json.RawMessage {
 }
 
 func quotedDiagnosticArguments(trimmed string) json.RawMessage {
-	// 无效字节替换为可见字符，保留其后的内容，再按 UTF-8 边界截断。
-	trimmed = strings.ToValidUTF8(trimmed, "\ufffd")
-	// 实际 NUL 也不能存入 `jsonb` 字符串，保留为可见的转义文本。
-	trimmed = strings.ReplaceAll(trimmed, "\x00", `\u0000`)
 	cut := trimmed[:min(len(trimmed), diagnosticAccessArgumentBytes)]
-	for !utf8.ValidString(cut) {
-		cut = cut[:len(cut)-1]
-	}
-	quoted, _ := json.Marshal(cut)
-	// 转义可能让字符串变长，继续缩短直到不超过上限。
-	for len(quoted) > diagnosticAccessArgumentBytes {
-		cut = cut[:len(cut)-1]
-		for !utf8.ValidString(cut) {
-			cut = cut[:len(cut)-1]
+	if !utf8.ValidString(cut) || strings.IndexByte(cut, 0) >= 0 {
+		// 只生成上限内的规范化前缀；连续非法字节仍合并成一个替代字符。
+		var buffer [diagnosticAccessArgumentBytes]byte
+		prefix := buffer[:0]
+		invalid := false
+		for offset := 0; offset < len(trimmed) && len(prefix) < len(buffer); {
+			r, size := utf8.DecodeRuneInString(trimmed[offset:])
+			offset += size
+			if r == utf8.RuneError && size == 1 {
+				if invalid {
+					continue
+				}
+				invalid = true
+			} else {
+				invalid = false
+			}
+			if r == 0 {
+				// 实际 NUL 转成可见文本，允许像旧实现一样在这段 ASCII 文本中间截断。
+				replacement := `\u0000`
+				prefix = append(prefix, replacement[:min(len(replacement), len(buffer)-len(prefix))]...)
+			} else {
+				if utf8.RuneLen(r) > len(buffer)-len(prefix) {
+					break
+				}
+				prefix = utf8.AppendRune(prefix, r)
+			}
 		}
-		quoted, _ = json.Marshal(cut)
+		cut = string(prefix)
 	}
+
+	end := len(cut)
+	// 每个源字节最多转义成六个 JSON 字节；短文本无需逐字计算预算。
+	if len(cut) > (diagnosticAccessArgumentBytes-2)/6 {
+		end = 0
+		encoded := 2 // 为 JSON 字符串两侧的引号留出空间。
+		for end < len(cut) {
+			r, size := utf8.DecodeRuneInString(cut[end:])
+			width := size
+			switch r {
+			case '\\', '"', '\b', '\f', '\n', '\r', '\t':
+				width = 2
+			case '<', '>', '&', '\u2028', '\u2029':
+				width = 6
+			default:
+				if r < 0x20 {
+					width = 6
+				}
+			}
+			if encoded+width > diagnosticAccessArgumentBytes {
+				break
+			}
+			encoded += width
+			end += size
+		}
+	}
+	quoted, _ := json.Marshal(cut[:end])
 	return quoted
 }

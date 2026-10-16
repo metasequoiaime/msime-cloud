@@ -24,6 +24,21 @@ func TestQQSnippetStructuredScanCandidate(t *testing.T) {
 	}
 }
 
+func TestQQSnippetStructuredScanMatchesContainsAny(t *testing.T) {
+	random := rand.New(rand.NewSource(19))
+	const markers = "*-_:：[]`>#|"
+	for size := 0; size <= 256; size++ {
+		data := make([]byte, size)
+		if _, err := random.Read(data); err != nil {
+			t.Fatal(err)
+		}
+		text := string(data)
+		if got, want := qqSnippetNeedsStructuredScan(text), strings.ContainsAny(text, markers); got != want {
+			t.Fatalf("结构化摘要扫描不兼容：长度=%d，结果=%v，期望=%v", size, got, want)
+		}
+	}
+}
+
 func TestQQSentencePrefixKeepsPreviousSemantics(t *testing.T) {
 	previous := func(text string, limit int) string {
 		runes := []rune(text)

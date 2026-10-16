@@ -18,18 +18,19 @@ func (a *Service) dictionaryCatalog(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "unknown_dictionary_kind")
 		return
 	}
-	offset, limit, ok := dictionaryPage(r)
+	params := r.URL.Query()
+	offset, limit, ok := dictionaryPage(params)
 	if !ok {
 		writeError(w, 400, "invalid_dictionary_page")
 		return
 	}
-	for key, values := range r.URL.Query() {
+	for key, values := range params {
 		if len(values) != 1 || (key != "q" && key != "scheme" && key != "profile" && key != "offset" && key != "limit") {
 			writeError(w, 400, "invalid_dictionary_query")
 			return
 		}
 	}
-	v := PersonalQuery{Text: strings.ToLower(r.URL.Query().Get("q")), Kind: kind, Scheme: r.URL.Query().Get("scheme"), Profile: r.URL.Query().Get("profile"), Limit: limit}
+	v := PersonalQuery{Text: strings.ToLower(params.Get("q")), Kind: kind, Scheme: params.Get("scheme"), Profile: params.Get("profile"), Limit: limit}
 	var query map[string]any
 	if kind == "quick" && v.Text == "" {
 		query = map[string]any{"text": "", "limit": limit}

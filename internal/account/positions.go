@@ -82,8 +82,9 @@ func (a *Service) candidatePositions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == "GET" {
-		offset, limit, ok := dictionaryPage(r)
-		key := r.URL.Query().Get("context")
+		query := r.URL.Query()
+		offset, limit, ok := dictionaryPage(query)
+		key := query.Get("context")
 		if !ok || (key != "" && !validPositionText(key, 512)) {
 			writeError(w, 400, "invalid_position_query")
 			return

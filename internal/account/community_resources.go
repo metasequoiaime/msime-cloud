@@ -170,8 +170,9 @@ func scanResource(row interface{ Scan(...any) error }) (CommunityResource, error
 	return v, err
 }
 func (a *Service) resourceList(w http.ResponseWriter, r *http.Request) {
-	offset, _, ok := dictionaryPage(r)
-	kind, scope, q := r.URL.Query().Get("kind"), r.URL.Query().Get("scope"), r.URL.Query().Get("q")
+	query := r.URL.Query()
+	offset, _, ok := dictionaryPage(query)
+	kind, scope, q := query.Get("kind"), query.Get("scope"), query.Get("q")
 	if !ok || !resourceKinds[kind] || (scope != "" && scope != "mine" && scope != "saved") || !resourceText(q, 0, 128, false) {
 		writeError(w, 400, "invalid_resource_query")
 		return

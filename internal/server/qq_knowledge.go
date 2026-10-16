@@ -354,7 +354,17 @@ func qqNormalizedPrefix(text string, limit int, stripMarkdown bool) string {
 
 // qqSnippetNeedsStructuredScan 判断摘要是否可能含有加粗、列表标签或 Markdown 噪声；普通正文跳过三次结构化扫描。
 func qqSnippetNeedsStructuredScan(text string) bool {
-	return strings.ContainsAny(text, "*-_:：[]`>#|")
+	for i := 0; i < len(text); i++ {
+		switch text[i] {
+		case '*', '-', '_', ':', '[', ']', '`', '>', '#', '|':
+			return true
+		case 0xef:
+			if i+2 < len(text) && text[i+1] == 0xbc && text[i+2] == 0x9a {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // qqListLabelRunes 是列表项里标签的冒号最晚出现的位置（按字数，从列表符号后面算起）：再往后的冒号多半是句子里的，不是标签。

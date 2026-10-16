@@ -312,7 +312,7 @@ for path,method,title,body,response,status,description in [
  ('/v1/community/candidate-skins/{id}','patch','作者修改候选窗皮肤的可见性或分类',dict(obj({'visibility':string(enum=['private','public']),'category':candidate_category},None,True),minProperties=1),community_candidate_skin,'200','仅作者可修改，visibility 与 category 至少带一个（都缺省返回 400 invalid_visibility）。转为公开须声明 assets 许可、占用公开配额，并计入每小时 10 次的发布额度；修改分类计入每小时 60 次的私有额度，不更新 updated_at，也不重新进入审核。'),
  ('/v1/community/candidate-skins/{id}','delete','作者下架候选窗皮肤',None,obj({'deleted':{'type':'boolean'}}),'200','仅作者可下架，连带删除图片、下载和评分记录。'),
  ('/v1/community/candidate-skins/{id}/preview','get','候选窗皮肤预览图',None,obj({'path':string(),'content_type':string(enum=['image/png','image/jpeg']),'data':string(format='byte')}),'200','返回重新编码后的预览图，data 为标准 base64；私有作品仅作者可取。'),
- ('/v1/community/candidate-skins/{id}/download','post','下载候选窗皮肤包并去重计数',None,community_candidate_skin_package,'200','返回原样清单和重新编码后的图片；下载人数按账号去重。私有作品仅作者可下载。'),
+ ('/v1/community/candidate-skins/{id}/download','post','下载候选窗皮肤包',None,community_candidate_skin_package,'200','公开作品无需登录，返回原样清单和重新编码后的图片；仅有效登录会话计入按账号去重的下载人数，匿名下载不计数。私有或已下架作品仅作者可下载。'),
  ('/v1/community/candidate-skins/{id}/rating','put','为候选窗皮肤评分',obj({'stars':{'type':'integer','minimum':1,'maximum':5}},['stars'],True),obj({'stars':{'type':'integer'}}),'200','登录即可评分，不需要先下载；不能给自己的作品评分（403 download_before_rating_or_own_skin），重复提交更新同一条评分；不存在、私有或已下架的作品返回 404。'),
  ('/v1/community/candidate-skins/{id}/save','put','收藏或取消收藏候选窗皮肤',save_request,save_response,'200','请求体为 {"saved":bool}，重复提交结果相同，返回收藏状态与收藏总数。不存在、已下架（作者本人除外）或别人的私有作品收藏时返回 404 skin_not_found；取消收藏不看作品状态，总是返回 200。'),
 ]:
@@ -323,7 +323,7 @@ for path,method,title,body,response,status,description in [
     if path=='/v1/community/candidate-skins/{id}' and method=='get': parameters.append(fields)
     if method=='get' and path=='/v1/community/candidate-skins': parameters.append({'name':'category','in':'query','schema':string(enum=candidate_categories),'description':'只列出该图库分类的作品。'})
     if response is community_candidate_skin or method=='get' and path=='/v1/community/candidate-skins': parameters.append(category_include_param)
-    operation={'summary':title,'tags':['皮肤社区'],'security':[] if method=='get' and not path.endswith('/sync') else [{'userSession':[]}],'parameters':parameters,
+    operation={'summary':title,'tags':['皮肤社区'],'security':[] if method=='get' and not path.endswith('/sync') or method=='post' and path.endswith('/download') else [{'userSession':[]}],'parameters':parameters,
       'description':description+' 详见 docs/skin-community.md。',
       'responses':{status:{'description':'成功','content':{'application/json':{'schema':response}}},**{c:{'description':m} for c,m in [('400','参数、清单或图片无效'),('401','需要用户登录'),('403','正在评价自己的作品'),('404','皮肤不存在、已下架、为他人的私有作品或非作者'),('409','配额已满、UUID 冲突或替换包 id 不符'),('415','需要 application/json'),('429','请求过多'),('503','服务不可用或图片处理繁忙')]}}}
     if body: operation['requestBody']={'required':True,'content':{'application/json':{'schema':body}}}

@@ -667,7 +667,6 @@ func (s *Server) editReleaseNotes(w http.ResponseWriter, r *http.Request, gh *gi
 	if !s.patchRelease(w, ctx, gh, p, release.ID, map[string]any{"body": next}) {
 		return
 	}
-	gh.Invalidate("/repos/" + p.Repo + "/")
 	// GitHub 读写已经完成，先释放锁占用的连接，再写入数据库审计。
 	unlock()
 	s.releaseAudit(ctx, "release_notes", tag, map[string]any{"platform": p.Name, "version": releaseVersion(p, tag)})
@@ -711,7 +710,6 @@ func (s *Server) withdrawRelease(w http.ResponseWriter, r *http.Request, gh *git
 	if !s.patchRelease(w, ctx, gh, p, release.ID, map[string]any{"prerelease": true, "body": withdrawnBody(releaseUserBody(release.Body))}) {
 		return
 	}
-	gh.Invalidate("/repos/" + p.Repo + "/")
 	var previous *ghRelease
 	for j := i + 1; j < len(releases); j++ {
 		if releaseStatus(releases[j]) == "released" {
@@ -764,6 +762,8 @@ func (s *Server) patchRelease(w http.ResponseWriter, ctx context.Context, gh *gi
 		return false
 	}
 	resp, err := gh.Do(ctx, token, "PATCH", "/repos/"+p.Repo+"/releases/"+strconv.FormatInt(id, 10), patch)
+	// 发布状态可能已更新；即使调用失败，也清理缓存以便下一次读取确认实际结果。
+	gh.Invalidate("/repos/" + p.Repo + "/")
 	switch {
 	case err != nil:
 		failRelease(w, githubapp.ErrUnavailable)

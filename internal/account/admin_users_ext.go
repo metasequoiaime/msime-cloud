@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -280,20 +281,26 @@ func withSessionUserAgent(ctx context.Context, userAgent string) context.Context
 	return context.WithValue(ctx, sessionUserAgentKey{}, userAgent)
 }
 
-// sessionUserAgent is the User-Agent newSession stores: valid UTF-8 without control characters, cut to the 256 characters the auth_sessions check allows.
+// sessionUserAgent 删除非法 UTF-8 和控制字符，只收集会话允许的前 256 个字符，再去除首尾空白。
 func sessionUserAgent(ctx context.Context) string {
 	raw, _ := ctx.Value(sessionUserAgentKey{}).(string)
-	var b strings.Builder
-	n := 0
-	for _, c := range strings.ToValidUTF8(raw, "") {
-		if n == 256 {
-			break
+	if raw == "" {
+		return ""
+	}
+	var buffer [utf8.UTFMax * 256]byte
+	length, count := 0, 0
+	for offset := 0; offset < len(raw) && count < 256; {
+		c, size := utf8.DecodeRuneInString(raw[offset:])
+		start := offset
+		offset += size
+		if c == utf8.RuneError && size == 1 {
+			continue
 		}
 		if unicode.IsControl(c) {
 			continue
 		}
-		b.WriteRune(c)
-		n++
+		length += copy(buffer[length:], raw[start:offset])
+		count++
 	}
-	return strings.TrimSpace(b.String())
+	return strings.TrimSpace(string(buffer[:length]))
 }

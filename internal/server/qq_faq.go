@@ -2,9 +2,7 @@ package server
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -59,7 +57,7 @@ type qqFAQEntry struct {
 // qqFAQCategories 列出 FAQ 的二级标题。
 func qqFAQCategories(faq string) []string {
 	var categories []string
-	for _, line := range strings.Split(faq, "\n") {
+	for line := range strings.SplitSeq(faq, "\n") {
 		if strings.HasPrefix(line, "## ") {
 			categories = append(categories, strings.TrimSpace(line[3:]))
 		}
@@ -69,37 +67,48 @@ func qqFAQCategories(faq string) []string {
 
 // qqInsertFAQ 把一条问答插到第 index 个二级标题那一节的末尾：下一个二级标题之前，或者页尾核对说明（以 footer 开头的段落）之前，都没有时接在文末。
 func qqInsertFAQ(faq string, index int, question, answer, footer string) (string, bool) {
-	lines := strings.Split(faq, "\n")
-	seen, start := -1, -1
-	for i, line := range lines {
-		if strings.HasPrefix(line, "## ") {
-			seen++
-			if seen == index {
-				start = i
+	seen, insertAt, offset := -1, -1, 0
+	for line := range strings.SplitSeq(faq, "\n") {
+		if insertAt < 0 {
+			if strings.HasPrefix(line, "## ") {
+				seen++
+				if seen == index {
+					insertAt = offset + len(line)
+				}
+			}
+		} else {
+			if strings.HasPrefix(line, "## ") || strings.HasPrefix(line, footer) {
 				break
 			}
+			// 记住节内最后一行非空内容的末尾，原有空行留在新条目之后。
+			if strings.TrimSpace(line) != "" {
+				insertAt = offset + len(line)
+			}
 		}
+		offset += len(line) + 1
 	}
-	if start < 0 {
+	if insertAt < 0 {
 		return faq, false
 	}
-	end := len(lines)
-	for i := start + 1; i < len(lines); i++ {
-		if strings.HasPrefix(lines[i], "## ") || strings.HasPrefix(lines[i], footer) {
-			end = i
-			break
+	answer = strings.TrimSpace(answer)
+	var out strings.Builder
+	out.Grow(len(faq) + len(question) + len(answer) + 9)
+	out.WriteString(faq[:insertAt])
+	out.WriteString("\n\n### ")
+	out.WriteString(question)
+	out.WriteString("\n\n")
+	out.WriteString(answer)
+	if insertAt < len(faq) {
+		tail := faq[insertAt+1:]
+		first, _, _ := strings.Cut(tail, "\n")
+		// 后面紧跟非空行时补一个空行，其余情况保留原有空白和换行。
+		if strings.TrimSpace(first) != "" {
+			out.WriteByte('\n')
 		}
+		out.WriteByte('\n')
+		out.WriteString(tail)
 	}
-	// 插在节末最后一行非空内容之后，原来的空行留在条目后面与后文隔开；后面紧跟着下一节时补一个空行。
-	for end > start+1 && strings.TrimSpace(lines[end-1]) == "" {
-		end--
-	}
-	entry := []string{"", "### " + question, "", strings.TrimSpace(answer)}
-	if end < len(lines) && strings.TrimSpace(lines[end]) != "" {
-		entry = append(entry, "")
-	}
-	out := append(append(append([]string{}, lines[:end]...), entry...), lines[end:]...)
-	return strings.Join(out, "\n"), true
+	return out.String(), true
 }
 
 // qqSyncFAQSources 在译文核对记录（zh-TW/sources.json）里 faq.md 的 sourceSha256 等于旧简体原文的哈希时，把它换成新原文的哈希，返回新的文件内容；不一致（译文本来就没同步）或格式不对时返回 false。只替换这一个哈希字符串，不重新序列化，文件的键顺序和缩进保持原样。
@@ -109,11 +118,14 @@ func qqSyncFAQSources(sources, oldFAQ, newFAQ string) (string, bool) {
 			SourceSha256 string `json:"sourceSha256"`
 		} `json:"files"`
 	}
-	oldSum, newSum := sha256.Sum256([]byte(oldFAQ)), sha256.Sum256([]byte(newFAQ))
-	oldHash, newHash := hex.EncodeToString(oldSum[:]), hex.EncodeToString(newSum[:])
-	if json.Unmarshal([]byte(sources), &record) != nil || record.Files["faq.md"].SourceSha256 != oldHash || strings.Count(sources, `"`+oldHash+`"`) != 1 {
+	if json.Unmarshal([]byte(sources), &record) != nil {
 		return "", false
 	}
+	oldHash := qqContentHash(oldFAQ)
+	if record.Files["faq.md"].SourceSha256 != oldHash || strings.Count(sources, `"`+oldHash+`"`) != 1 {
+		return "", false
+	}
+	newHash := qqContentHash(newFAQ)
 	return strings.Replace(sources, `"`+oldHash+`"`, `"`+newHash+`"`, 1), true
 }
 

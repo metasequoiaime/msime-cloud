@@ -537,16 +537,6 @@ func (a *Service) begin(w http.ResponseWriter, r *http.Request) {
 	}
 	response := map[string]any{"challenge_id": id, "expires_in": 300}
 	if v.Provider == "anonymous" {
-		// 开户没有门槛,拦在这一层:每个地址每天有限额,否则一段脚本就能把账号和 AI 额度刷穿。
-		limit := a.config.Anonymous.DailyPerAddress
-		if limit <= 0 {
-			limit = 5
-		}
-		// 和上面的通用限流一样按 clientAddress 计：默认只信任 TCP 对端，配置了 `client_ip_header` 才读代理写入的头。
-		if e := a.store.Rate(r.Context(), "anonymous:"+hash(a.clientAddress(r)), limit, 24*time.Hour); e != nil {
-			a.error(w, e)
-			return
-		}
 		subject := strings.TrimSpace(v.Target)
 		if len(subject) < 8 || len(subject) > 64 {
 			writeError(w, 400, "invalid_target")
@@ -559,6 +549,16 @@ func (a *Service) begin(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		c.Subject = subject
+		// 开户没有门槛，每个地址每天有限额，否则一段脚本就能把账号和 AI 额度刷穿。
+		limit := a.config.Anonymous.DailyPerAddress
+		if limit <= 0 {
+			limit = 5
+		}
+		// 和上面的通用限流一样按 clientAddress 计：默认只信任 TCP 对端，配置了 `client_ip_header` 才读代理写入的头。
+		if e := a.store.Rate(r.Context(), "anonymous:"+hash(a.clientAddress(r)), limit, 24*time.Hour); e != nil {
+			a.error(w, e)
+			return
+		}
 	}
 	var code string
 	if v.Provider == "email" || v.Provider == "phone" {

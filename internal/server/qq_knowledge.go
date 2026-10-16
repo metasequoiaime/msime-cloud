@@ -287,9 +287,22 @@ func qqBoldSnippetPrefix(text string) (string, bool) {
 	return out.String(), count > 0
 }
 
+// qqTruncateWhitespace 合并词间空白，再按字数上限截断。
+func qqTruncateWhitespace(text string, limit int) string {
+	if len(text) <= limit {
+		return qqNormalizeWhitespace(text)
+	}
+	prefix := qqNormalizedPrefix(text, min(limit, len(text))+1, false)
+	return qqTruncate(prefix, limit)
+}
+
 // qqSnippetNormalizedPrefix 合并词间空白，按需清理 Markdown，只构建摘要所需的前缀；多留一字供 qqTruncate 判断省略号。
 func qqSnippetNormalizedPrefix(text string, stripMarkdown bool) string {
-	const limit = qqSnippetRunes + 1
+	return qqNormalizedPrefix(text, qqSnippetRunes+1, stripMarkdown)
+}
+
+// qqNormalizedPrefix 只构建合并空白后的前 limit 字，按需清理 Markdown，保留原始非空白字节。
+func qqNormalizedPrefix(text string, limit int, stripMarkdown bool) string {
 	var out strings.Builder
 	count := 0
 	pendingSpace := false
@@ -317,7 +330,11 @@ func qqSnippetNormalizedPrefix(text string, stripMarkdown bool) string {
 			continue
 		}
 		if count == 0 {
-			out.Grow(min(len(text), limit*utf8.UTFMax))
+			capacity := len(text)
+			if limit <= len(text)/utf8.UTFMax {
+				capacity = limit * utf8.UTFMax
+			}
+			out.Grow(capacity)
 		}
 		if pendingSpace {
 			out.WriteByte(' ')

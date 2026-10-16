@@ -295,7 +295,7 @@ func (s *Server) qqSelfTestAlert(ctx context.Context, results []qqSelfTestResult
 		}
 		fmt.Fprintf(&b, "- [ ] 「%s」%s：%s", githubReferenceBreaker.Replace(r.Case.Question), source, githubReferenceBreaker.Replace(r.Reason))
 		if r.Answer != "" {
-			fmt.Fprintf(&b, "（回答：%s）", githubReferenceBreaker.Replace(qqStripLinks(qqTruncate(strings.Join(strings.Fields(r.Answer), " "), 200))))
+			fmt.Fprintf(&b, "（回答：%s）", githubReferenceBreaker.Replace(qqStripLinks(qqTruncateWhitespace(r.Answer, 200))))
 		}
 		b.WriteString("\n")
 	}

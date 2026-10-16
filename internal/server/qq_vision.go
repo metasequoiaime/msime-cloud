@@ -143,11 +143,11 @@ func (s *Server) qqDescribeImage(ctx context.Context, a qqAttachment) (string, e
 		}
 		out.Description = strings.ReplaceAll(m[1], `\n`, " ")
 	}
-	description := strings.Join(strings.Fields(qqStripLinks(out.Description)), " ")
+	description := qqTruncateWhitespace(qqStripLinks(out.Description), qqVisionRunes)
 	if description == "" {
 		return "", errors.New("empty description")
 	}
-	return qqTruncate(description, qqVisionRunes), nil
+	return description, nil
 }
 
 // qqWithShot 把截图描述接在问题后面；描述为空时原样返回。

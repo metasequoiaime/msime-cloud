@@ -879,6 +879,9 @@ func validPluginSymbols(table map[string]any, m pluginManifest) bool {
 	if m.Groups == nil || len(*m.Groups) < 1 || len(*m.Groups) > maxSymbolGroups || len(rows) != len(*m.Groups) {
 		return false
 	}
+	const linearLimit = 32
+	// 不足 64 项的小组及前 32 项沿用线性查重；大组才创建哈希表，并在各组间清空复用。
+	var seen map[string]struct{}
 	total := 0
 	titles := make(map[[2]string]bool, len(*m.Groups))
 	for i, group := range *m.Groups {
@@ -903,9 +906,29 @@ func validPluginSymbols(table map[string]any, m pluginManifest) bool {
 			return false
 		}
 		for j, item := range items {
-			if !pluginShortText(item, maxSymbolItemUnits) || slices.Contains(items[:j], item) {
+			if !pluginShortText(item, maxSymbolItemUnits) {
 				return false
 			}
+			if len(items) < 2*linearLimit || j < linearLimit {
+				if slices.Contains(items[:j], item) {
+					return false
+				}
+				continue
+			}
+			if j == linearLimit {
+				if seen == nil {
+					seen = make(map[string]struct{}, len(items))
+				} else {
+					clear(seen)
+				}
+				for _, previous := range items[:j] {
+					seen[previous] = struct{}{}
+				}
+			}
+			if _, duplicate := seen[item]; duplicate {
+				return false
+			}
+			seen[item] = struct{}{}
 		}
 		if total += len(items); total > maxSymbolItems {
 			return false

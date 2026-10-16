@@ -213,7 +213,10 @@ func build(name string, arguments json.RawMessage) (Request, error) {
 			in.Operation = "candidates"
 		}
 		if in.Operation == "candidates" && pureHan(in.Text) && (in.Scheme == "" || in.Scheme == "pinyin") {
-			in.Operation, in.Scheme, in.Profile = "listed", "", ""
+			in.Operation = "listed"
+		}
+		if in.Operation == "listed" && (in.Scheme == "" || in.Scheme == "pinyin") {
+			in.Scheme, in.Profile = "", ""
 		}
 		if !slices.Contains([]string{"candidates", "listed", "jianpin", "english", "japanese", "quick", "annotate", "gloss", "helpcode", "segmentation", "emoji", "kaomoji", "unicode", "romaji", "convert", "datetime"}, in.Operation) || in.Text == "" || len(in.Text) > 8192 || in.Limit < 0 || in.Limit > 50 {
 			return Request{}, errors.New("invalid_dictionary_query")

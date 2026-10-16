@@ -147,6 +147,12 @@
       "internal/server/input_test.go::TestPublishedDictionaryHTTP",
       "internal/server/api_validation_test.go::TestAllInputOperationsRejectMalformedRequests"
     ],
+    "POST /v1/input/listed": [
+      "internal/server/input_listed_test.go::TestListedWordHTTPValidation",
+      "internal/server/input_listed_test.go::TestQueryListedWord",
+      "internal/server/input_listed_test.go::TestPublishedListedWord",
+      "internal/server/qq_public_tools_test.go::TestQQPublicToolDispatch"
+    ],
     "POST /v1/input/unicode": [
       "internal/server/input_test.go::TestRealNativeHTTP",
       "internal/server/api_validation_test.go::TestAllInputOperationsRejectMalformedRequests"

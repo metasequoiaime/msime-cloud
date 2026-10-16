@@ -23,6 +23,7 @@ func TestPublicToolRequests(t *testing.T) {
 		{"lookup_dictionary", `{"text":"合成词"}`, "POST", "/v1/input/listed", true},
 		{"lookup_dictionary", `{"operation":"candidates","text":"合成词","scheme":"pinyin","profile":"xiaohe"}`, "POST", "/v1/input/listed", true},
 		{"lookup_dictionary", `{"operation":"listed","text":"合成词"}`, "POST", "/v1/input/listed", true},
+		{"lookup_dictionary", `{"operation":"listed","text":"合成词","scheme":"pinyin","profile":"xiaohe"}`, "POST", "/v1/input/listed", true},
 		{"lookup_dictionary", `{"text":"hecheng","scheme":"shuangpin"}`, "POST", "/v1/input/candidates", true},
 		{"lookup_dictionary", `{"text":"合成词","scheme":"wubi"}`, "POST", "/v1/input/candidates", true},
 		{"lookup_dictionary", `{"operation":"annotate","text":"合成"}`, "POST", "/v1/input/annotate", true},

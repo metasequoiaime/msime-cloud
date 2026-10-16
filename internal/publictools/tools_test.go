@@ -20,6 +20,11 @@ func TestPublicToolRequests(t *testing.T) {
 		token                    bool
 	}{
 		{"lookup_dictionary", `{"text":"hecheng"}`, "POST", "/v1/input/candidates", true},
+		{"lookup_dictionary", `{"text":"合成词"}`, "POST", "/v1/input/listed", true},
+		{"lookup_dictionary", `{"operation":"candidates","text":"合成词","scheme":"pinyin","profile":"xiaohe"}`, "POST", "/v1/input/listed", true},
+		{"lookup_dictionary", `{"operation":"listed","text":"合成词"}`, "POST", "/v1/input/listed", true},
+		{"lookup_dictionary", `{"text":"hecheng","scheme":"shuangpin"}`, "POST", "/v1/input/candidates", true},
+		{"lookup_dictionary", `{"text":"合成词","scheme":"wubi"}`, "POST", "/v1/input/candidates", true},
 		{"lookup_dictionary", `{"operation":"annotate","text":"合成"}`, "POST", "/v1/input/annotate", true},
 		{"lookup_dictionary", `{"operation":"gloss","text":"synthetic","direction":"en-zh"}`, "POST", "/v1/input/gloss", true},
 		{"browse_input_catalog", `{"kind":"symbols","q":"a&scope=mine"}`, "GET", "/v1/catalog/symbols?category=&limit=20&offset=0&q=a%26scope%3Dmine", true},
@@ -40,6 +45,9 @@ func TestPublicToolRequests(t *testing.T) {
 				}
 				if r.Method == "POST" && (!json.Valid(r.Body) || strings.Contains(string(r.Body), `"operation"`)) {
 					t.Fatalf("错误请求体：%s", r.Body)
+				}
+				if r.Path == "/v1/input/listed" && (strings.Contains(string(r.Body), `"scheme"`) || strings.Contains(string(r.Body), `"profile"`)) {
+					t.Fatalf("词语检查不能带候选方案：%s", r.Body)
 				}
 				return json.RawMessage(`{"items":["synthetic"]}`), nil
 			}, tc.name, json.RawMessage(tc.args))

@@ -45,6 +45,7 @@ func TestQQPublicToolDispatch(t *testing.T) {
 	for _, tc := range []struct{ name, args, want string }{
 		{"query_public_data", `{"resource":"input_capabilities"}`, "据水杉公共数据："},
 		{"lookup_dictionary", `{"text":"hecheng"}`, "public_api_status_503"},
+		{"lookup_dictionary", `{"text":"合成词"}`, "public_api_status_503"},
 		{"browse_input_catalog", `{"kind":"symbols"}`, "public_api_status_503"},
 		{"query_public_data", `{"resource":"plugins","scope":"mine"}`, "invalid_tool_arguments"},
 		{"lookup_dictionary", `{"text":"a","operation":"../users/me"}`, "invalid_tool_arguments"},

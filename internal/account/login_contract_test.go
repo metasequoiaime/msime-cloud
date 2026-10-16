@@ -169,3 +169,24 @@ func TestAnonymousAccountsAreCreatedAndReusedByCredential(t *testing.T) {
 	raw, _ := json.Marshal(map[string]string{"provider": "anonymous", "target": "BAD SUBJECT"})
 	apiRequest(t, mux, "POST", "/v1/auth/challenges", string(raw), "", 400)
 }
+
+func TestAnonymousInvalidTargetDoesNotConsumeDailyLimit(t *testing.T) {
+	db := testStore(t)
+	t.Setenv("ANON_INVALID_TARGET_PEPPER", strings.Repeat("p", 32))
+	a := &Service{store: db, config: Config{
+		PepperEnv: "ANON_INVALID_TARGET_PEPPER",
+		Anonymous: AnonymousConfig{Enabled: true, DailyPerAddress: 1},
+	}}
+	mux := http.NewServeMux()
+	Mount(mux, a)
+	challenge := func(target string, expected int) int {
+		raw, _ := json.Marshal(map[string]string{"provider": "anonymous", "target": target})
+		return apiRequest(t, mux, "POST", "/v1/auth/challenges", string(raw), "", expected).Code
+	}
+	if got := challenge("INVALID TARGET", http.StatusBadRequest); got != http.StatusBadRequest {
+		t.Fatalf("invalid target status=%d", got)
+	}
+	if got := challenge("msime-valid-0001", http.StatusCreated); got != http.StatusCreated {
+		t.Fatalf("valid target was blocked after invalid request: status=%d", got)
+	}
+}

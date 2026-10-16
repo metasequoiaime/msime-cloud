@@ -158,6 +158,9 @@ func randomToken() string {
 	return hex.EncodeToString(b)
 }
 func hash(s string) string { v := sha256.Sum256([]byte(s)); return hex.EncodeToString(v[:]) }
+
+var errDatabaseEncoding = errors.New("用户数据库及客户端连接编码必须为 UTF8")
+
 func Open(ctx context.Context, dsn string) (*Store, error) {
 	cfg, e := pgxpool.ParseConfig(dsn)
 	if e != nil {
@@ -165,6 +168,13 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 	}
 	cfg.MaxConns = 8
 	cfg.ConnConfig.ConnectTimeout = 5 * time.Second
+	// 每个新连接都检查握手参数，避免中文长度、JSON 和客户端字节解释不一致；无需额外查询权限。
+	cfg.AfterConnect = func(_ context.Context, conn *pgx.Conn) error {
+		if conn.PgConn().ParameterStatus("server_encoding") != "UTF8" || conn.PgConn().ParameterStatus("client_encoding") != "UTF8" {
+			return errDatabaseEncoding
+		}
+		return nil
+	}
 	p, e := pgxpool.NewWithConfig(ctx, cfg)
 	if e != nil {
 		return nil, e
@@ -176,6 +186,10 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 	for {
 		if e = p.Ping(ctx); e == nil {
 			return &Store{p}, nil
+		}
+		if errors.Is(e, errDatabaseEncoding) {
+			p.Close()
+			return nil, errDatabaseEncoding
 		}
 		select {
 		case <-ctx.Done():

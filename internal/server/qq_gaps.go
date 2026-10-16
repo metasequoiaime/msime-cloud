@@ -52,6 +52,52 @@ func qqRedactContacts(text string) string {
 	return text
 }
 
+// qqContactMayStartBefore 用联系方式的必要特征判断匹配是否可能在摘要前开始，避免联系方式在长正文末尾时让每个正则都扫描全文。
+func qqContactMayStartBefore(text string, end, pattern int) bool {
+	end = min(end, len(text))
+	switch pattern {
+	case 0:
+		for search := 0; ; {
+			offset := strings.IndexByte(text[search:], '@')
+			if offset < 0 {
+				return false
+			}
+			offset += search
+			start := offset
+			for start > 0 && (text[start-1] >= 'A' && text[start-1] <= 'Z' || text[start-1] >= 'a' && text[start-1] <= 'z' || text[start-1] >= '0' && text[start-1] <= '9' || strings.ContainsRune("._%+-", rune(text[start-1]))) {
+				start--
+			}
+			if start < offset && start < end {
+				return true
+			}
+			search = offset + 1
+		}
+	case 1:
+		for i := 0; i < len(text) && i < end+4; i++ {
+			if text[i] == '1' {
+				return true
+			}
+		}
+		return false
+	case 2:
+		return qqContainsContactKeywordBefore(text, end, "qq", "Qq", "qQ", "QQ", "扣扣", "群", "微信", "vx", "Vx", "vX", "VX", "wx", "Wx", "wX", "WX")
+	case 3:
+		return qqContainsContactKeywordBefore(text, end, "微信", "vx", "Vx", "vX", "VX", "wx", "Wx", "wX", "WX")
+	default:
+		return true
+	}
+}
+
+func qqContainsContactKeywordBefore(text string, end int, keywords ...string) bool {
+	text = text[:min(end, len(text))]
+	for _, keyword := range keywords {
+		if strings.Contains(text, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
 // qqRedactContactsBefore 只处理摘要前的联系方式；摘要后的匹配不会影响结果，可以跳过整段正文的复制。
 func qqRedactContactsBefore(text string, maxRunes int) string {
 	end := qqRuneEnd(text, maxRunes)
@@ -60,6 +106,10 @@ func qqRedactContactsBefore(text string, maxRunes int) string {
 	}
 	var skipped uint8
 	for i, pattern := range qqContactPatterns {
+		if !qqContactMayStartBefore(text, end, i) {
+			skipped |= 1 << i
+			continue
+		}
 		match := pattern.FindStringIndex(text)
 		if match == nil {
 			continue
@@ -86,6 +136,9 @@ func qqRedactContactsBefore(text string, maxRunes int) string {
 	// 前面的替换可能缩短正文，使原本在摘要后的匹配移到摘要内；再检查一次以保持完整脱敏的结果。
 	for i, pattern := range qqContactPatterns {
 		if skipped&(1<<i) == 0 {
+			continue
+		}
+		if !qqContactMayStartBefore(text, end, i) {
 			continue
 		}
 		match := pattern.FindStringIndex(text)

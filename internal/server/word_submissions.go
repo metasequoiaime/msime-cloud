@@ -358,7 +358,8 @@ func (s *Server) submitWords(w http.ResponseWriter, r *http.Request) {
 		wordsFail(w, 503, "rate_limit_unavailable", "词条提交暂时不可用，请稍后再试。")
 		return
 	}
-	if ct := strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]); ct != "application/json" {
+	mediaType, _, _ := strings.Cut(r.Header.Get("Content-Type"), ";")
+	if strings.TrimSpace(mediaType) != "application/json" {
 		wordsFail(w, 415, "json_required", "请求格式不正确。")
 		return
 	}

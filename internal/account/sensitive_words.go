@@ -121,7 +121,7 @@ func (s *sensitiveWords) list(ctx context.Context, store *Store, now time.Time) 
 	return loaded, nil
 }
 
-// loadSensitiveWords reads and compiles the whole list. A stored regex that no longer compiles (it was validated on insert) is skipped with a warning rather than disabling the list.
+// loadSensitiveWords 读取并编译完整规则表，缓存按拦截优先、同级 ID 递增排列；无效的已存正则仅警告并跳过。
 func loadSensitiveWords(ctx context.Context, store *Store) ([]sensitiveWord, error) {
 	rows, err := store.pool.Query(ctx, `SELECT id,pattern,is_regex,category,level FROM admin_sensitive_words ORDER BY id`)
 	if err != nil {
@@ -147,7 +147,14 @@ func loadSensitiveWords(ctx context.Context, store *Store) ([]sensitiveWord, err
 		}
 		words = append(words, w)
 	}
-	return words, rows.Err()
+	if err = rows.Err(); err != nil {
+		return words, err
+	}
+	// 缓存发布前只排序一次，匹配时按此顺序收集即可保持拦截优先和同级规则的稳定顺序。
+	slices.SortStableFunc(words, func(x, y sensitiveWord) int {
+		return sensitiveLevelRank(x.hit.Level) - sensitiveLevelRank(y.hit.Level)
+	})
+	return words, nil
 }
 
 // maxSensitiveRegexRepeat bounds how much a regex's counted repeats multiply it (see sensitiveRegexRepeatCost). Go's regexp runs in linear time, but its cost per input byte grows with the expanded program, so `[\pL\pN]{1000}` would take seconds on one large upload and a match cannot be cancelled. At this bound the worst case on a 350 KB text stays near 0.2 s.
@@ -396,9 +403,6 @@ func (m sensitiveMatcher) Match(ctx context.Context, text string) ([]SensitiveHi
 	if len(hits) == 0 {
 		return nil, nil
 	}
-	slices.SortStableFunc(hits, func(x, y SensitiveHit) int {
-		return sensitiveLevelRank(x.Level) - sensitiveLevelRank(y.Level)
-	})
 	if !m.preview {
 		m.a.sensitive.record(ctx, m.a.store, hits, now)
 	}

@@ -104,8 +104,8 @@ func TestApplyDictionaryWeightBatchAllocationBudget(t *testing.T) {
 	if err != nil || got != want.String() {
 		t.Fatalf("批量追加结果变化：err=%v", err)
 	}
-	if bytes := result.AllocedBytesPerOp(); bytes > 8<<20 {
-		t.Fatalf("五千行词库追加百条词条分配 %d 字节，超过 8 MiB 预算", bytes)
+	if bytes := result.AllocedBytesPerOp(); bytes > 512<<10 {
+		t.Fatalf("五千行词库追加百条词条分配 %d 字节，超过 512 KiB 预算", bytes)
 	}
 }
 

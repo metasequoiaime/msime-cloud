@@ -3,6 +3,7 @@ package account
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -102,6 +103,36 @@ func TestQQDrafts(t *testing.T) {
 	}
 	if _, err := a.QQDraft(ctx, id); !errors.Is(err, ErrQQDraftNotFound) {
 		t.Fatal(err)
+	}
+}
+
+func TestQQDraftCreateOnceIsIdempotentConcurrently(t *testing.T) {
+	db := testStore(t)
+	a := &Service{store: db}
+	ctx := context.Background()
+	if _, err := db.pool.Exec(ctx, `TRUNCATE qq_drafts`); err != nil {
+		t.Fatal(err)
+	}
+	const workers = 8
+	ids := make([]int64, workers)
+	errs := make([]error, workers)
+	var wg sync.WaitGroup
+	for i := range workers {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			ids[i], errs[i] = a.CreateQQDraftOnce(ctx, "G/M1", "同一条原话", `{"kind":"bug"}`)
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil || ids[i] != ids[0] {
+			t.Fatalf("worker %d: id=%d err=%v, all ids=%v", i, ids[i], err, ids)
+		}
+	}
+	var count int
+	if err := db.pool.QueryRow(ctx, `SELECT count(*) FROM qq_drafts`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("got %d drafts, err=%v", count, err)
 	}
 }
 

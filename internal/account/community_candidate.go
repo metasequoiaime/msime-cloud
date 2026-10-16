@@ -22,7 +22,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-// Limits for user-published candidate-window skin packages. crates/client-core/src/skin/candidate_community.rs mirrors them so the client can refuse a package before uploading it.
+// Limits for user-published candidate-window skin packages. crates/client-services/src/skin/candidate_community.rs mirrors them so the client can refuse a package before uploading it.
 const (
 	// The manifest can reference only the preview, the decoration image and the background image, and every uploaded file must be referenced, so three files is the real bound.
 	maxCandidateFiles         = 3
@@ -720,11 +720,14 @@ SELECT $1,files.path,files.bytes
 FROM unnest($2::text[],$3::bytea[]) AS files(path,bytes)`, []any{id, paths, contents}
 }
 func (a *Service) communityCandidateDownload(w http.ResponseWriter, r *http.Request) {
-	p, ok := a.principal(w, r, false)
-	if !ok {
-		return
+	viewer := a.communityViewer(r)
+	var tx pgx.Tx
+	var e error
+	if viewer == "" {
+		tx, e = a.store.pool.Begin(r.Context())
+	} else {
+		tx, e = a.store.userDataTransaction(r.Context(), viewer)
 	}
-	tx, e := a.store.userDataTransaction(r.Context(), p.UserID)
 	if e != nil {
 		a.error(w, e)
 		return
@@ -734,7 +737,7 @@ func (a *Service) communityCandidateDownload(w http.ResponseWriter, r *http.Requ
 	var manifest []byte
 	files := map[string][]byte{}
 	batch := &pgx.Batch{}
-	batch.Queue(`SELECT package_id,manifest FROM community_candidate_skins WHERE id=$1 AND ((visibility='public' AND moderation<>'removed') OR owner_id=$2) FOR SHARE`, r.PathValue("id"), p.UserID).QueryRow(func(row pgx.Row) error {
+	batch.Queue(`SELECT package_id,manifest FROM community_candidate_skins WHERE id=$1 AND ((visibility='public' AND moderation<>'removed') OR owner_id=$2) FOR SHARE`, r.PathValue("id"), viewer).QueryRow(func(row pgx.Row) error {
 		return row.Scan(&packageID, &manifest)
 	})
 	batch.Queue(`SELECT path,bytes FROM community_candidate_skin_files WHERE skin_id=$1 ORDER BY path`, r.PathValue("id")).Query(func(rows pgx.Rows) error {
@@ -749,7 +752,10 @@ func (a *Service) communityCandidateDownload(w http.ResponseWriter, r *http.Requ
 		}
 		return rows.Err()
 	})
-	batch.Queue(`INSERT INTO community_candidate_skin_downloads(skin_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, r.PathValue("id"), p.UserID)
+	// 下载人数仍按有效账号去重；匿名请求不创建账号或下载记录。
+	if viewer != "" {
+		batch.Queue(`INSERT INTO community_candidate_skin_downloads(skin_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, r.PathValue("id"), viewer)
+	}
 	e = tx.SendBatch(r.Context(), batch).Close()
 	if errors.Is(e, pgx.ErrNoRows) {
 		writeError(w, 404, "skin_not_found")
@@ -966,7 +972,7 @@ func (a *Service) communityCandidateReplace(w http.ResponseWriter, r *http.Reque
 	}
 	license := candidatePackageLicense(pkg)
 	batch := &pgx.Batch{}
-	batch.Queue(`UPDATE community_candidate_skins SET name=$2,description=$3,version=$4,license_code=$5,license_assets=$6,license_source=$7,manifest=$8,preview_path=$9,request_sha256=$10,updated_at=now(),`+reviewAgain("$11")+` WHERE id=$1`,
+	batch.Queue(`UPDATE community_candidate_skins SET name=$2,description=$3,version=$4,license_code=$5,license_assets=$6,license_source=$7,manifest=$8,preview_path=$9,request_sha256=$10,updated_at=clock_timestamp(),`+reviewAgain("$11")+` WHERE id=$1`,
 		id, input.Name, input.Description, pkg.Version, license.Code, license.Assets, license.Source, []byte(input.Manifest), pkg.Preview, digest, flag)
 	batch.Queue(`DELETE FROM community_candidate_skin_files WHERE skin_id=$1`, id)
 	query, args := candidateFilesInsertQuery(id, clean)
@@ -1067,7 +1073,7 @@ FROM community_candidate_skins s WHERE s.id=$1 AND s.owner_id=$2 FOR UPDATE`, id
 		if categoryChanged {
 			nextCategory = *input.Category
 		}
-		if _, e = tx.Exec(r.Context(), `UPDATE community_candidate_skins SET visibility=COALESCE($2::text,visibility),category=COALESCE($3::text,category),updated_at=CASE WHEN $2::text IS NOT NULL AND visibility<>$2::text THEN now() ELSE updated_at END,moderation=CASE WHEN $2::text='public' AND visibility<>'public' AND moderation='approved' THEN 'pending' ELSE moderation END WHERE id=$1`, id, nextVisibility, nextCategory); e != nil {
+		if _, e = tx.Exec(r.Context(), `UPDATE community_candidate_skins SET visibility=COALESCE($2::text,visibility),category=COALESCE($3::text,category),updated_at=CASE WHEN $2::text IS NOT NULL AND visibility<>$2::text THEN clock_timestamp() ELSE updated_at END,moderation=CASE WHEN $2::text='public' AND visibility<>'public' AND moderation='approved' THEN 'pending' ELSE moderation END WHERE id=$1`, id, nextVisibility, nextCategory); e != nil {
 			a.error(w, e)
 			return
 		}

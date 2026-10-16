@@ -3,7 +3,7 @@
 
 Usage: candidate_skins_seed.py CHECKOUT [--only id,...] [--role ROLE] > candidate-skins.sql
 
-Every package is validated with the rules the client loader applies (crates/client-core/src/skin/catalog.rs), the same port internal/skins/client.go serves them with; testdata/client_dialect.json, a copy of the client's shared case table, pins both. A package the client would reject is refused, never rewritten. Packages whose license.assets says UNVERIFIED are skipped unless named with --only, and then refused. The SQL runs in one transaction as the DML runtime role, inserts only what is missing and fails the whole transaction if an existing package differs from the reviewed files.
+Every package is validated with the rules the client loader applies (crates/client-services/src/skin/catalog.rs), the same port internal/skins/client.go serves them with; testdata/client_dialect.json, a copy of the client's shared case table, pins both. A package the client would reject is refused, never rewritten. Packages whose license.assets says UNVERIFIED are skipped unless named with --only, and then refused. The SQL runs in one transaction as the DML runtime role, inserts only what is missing and fails the whole transaction if an existing package differs from the reviewed files.
 """
 import argparse
 import hashlib

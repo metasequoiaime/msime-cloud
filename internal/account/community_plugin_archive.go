@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 	"unicode"
-	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/pelletier/go-toml/v2"
@@ -700,7 +699,7 @@ func validPluginCommands(table map[string]any, m pluginManifest) bool {
 			return false
 		}
 		template := *row.Template
-		if strings.TrimSpace(template) == "" || len(utf16.Encode([]rune(template))) > maxCommandTemplate || strings.ContainsFunc(template, unicode.IsControl) || !validCommandTemplate(template) {
+		if strings.TrimSpace(template) == "" || utf16Length(template) > maxCommandTemplate || strings.ContainsFunc(template, unicode.IsControl) || !validCommandTemplate(template) {
 			return false
 		}
 	}
@@ -742,7 +741,7 @@ func pluginLowercase(s string) bool {
 
 // pluginShortText 是短语文本和符号的共同规则：不是空白、不含控制字符、1 到 max 个 UTF-16 单元。
 func pluginShortText(s string, max int) bool {
-	return strings.TrimSpace(s) != "" && utf8.ValidString(s) && !strings.ContainsFunc(s, unicode.IsControl) && len(utf16.Encode([]rune(s))) <= max
+	return strings.TrimSpace(s) != "" && utf8.ValidString(s) && !strings.ContainsFunc(s, unicode.IsControl) && utf16Length(s) <= max
 }
 
 // validPluginPhrases 对应 phrase_table.rs：1 到 2000 个 `[[phrases]]`，每行只有 `key`（1 到 32 个小写 ASCII 字母，K 模式的要求）和 `text`；(`key`,`text`) 不能重复，同一个 key 可以对应多条 text。短语表没有数据文件。
@@ -796,26 +795,25 @@ func validPluginWordbook(table map[string]any, m pluginManifest) (map[string]int
 	return map[string]int{*m.Wordbook.File: maxWordbookBytes}, true
 }
 
-// pluginDataLines 把数据文件拆成行：必须是 UTF-8，可带 BOM，行尾为 LF 或 CRLF（只去掉行尾的一个 `\r`，其他位置的 `\r` 留给逐行规则当作控制字符拒绝）。
-func pluginDataLines(raw []byte) ([]string, bool) {
+// pluginDataText 校验完整文件为 UTF-8，并剥除开头可选的 BOM，供逐行校验使用。
+func pluginDataText(raw []byte) (string, bool) {
 	if !utf8.Valid(raw) {
-		return nil, false
+		return "", false
 	}
-	lines := strings.Split(strings.TrimPrefix(string(raw), "\uFEFF"), "\n")
-	for i, line := range lines {
-		lines[i] = strings.TrimSuffix(line, "\r")
-	}
-	return lines, true
+	return strings.TrimPrefix(string(raw), "\uFEFF"), true
 }
 
 // validHelpcodeTable 是辅助码表的严格语法：每行为空行、`#` 开头的注释或 `<字>=<码>`。`<字>` 恰好是一个非 ASCII、非空白、非控制字符的 Unicode 标量，`<码>` 恰好是 1 到 2 个小写 ASCII 字母（更长的拒绝，不像 Engine 的宽松解析器那样截断），`=` 两侧不允许空格；1 到 30000 条，同一个字出现两次拒绝。
 func validHelpcodeTable(raw []byte) bool {
-	lines, ok := pluginDataLines(raw)
+	text, ok := pluginDataText(raw)
 	if !ok {
 		return false
 	}
 	seen := map[string]bool{}
-	for _, line := range lines {
+	for text != "" {
+		line, rest, _ := strings.Cut(text, "\n")
+		text = rest
+		line = strings.TrimSuffix(line, "\r")
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
@@ -837,7 +835,7 @@ func validHelpcodeTable(raw []byte) bool {
 
 // validWordbookEntries 是单词本的严格语法：跳过空行和 `#` 开头的行，其余每行是 `word\tmeaning` 或 `word\tphonetic\tmeaning`，不支持引号，列不做裁剪。每条必须满足 WordbookEntry::is_valid（单词 1 到 64 个字符、音标至多 64 个字符可为空、释义 1 到 256 个字符，都不含控制字符）；1 到 20000 条，单词不能重复；任何一行不合法都拒绝整个包。
 func validWordbookEntries(raw []byte) bool {
-	lines, ok := pluginDataLines(raw)
+	text, ok := pluginDataText(raw)
 	if !ok {
 		return false
 	}
@@ -845,19 +843,24 @@ func validWordbookEntries(raw []byte) bool {
 		return utf8.RuneCountInString(s) <= max && !strings.ContainsFunc(s, unicode.IsControl)
 	}
 	seen := map[string]bool{}
-	for _, line := range lines {
+	for text != "" {
+		line, rest, _ := strings.Cut(text, "\n")
+		text = rest
+		line = strings.TrimSuffix(line, "\r")
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		columns := strings.Split(line, "\t")
-		var word, phonetic, meaning string
-		switch len(columns) {
-		case 2:
-			word, meaning = columns[0], columns[1]
-		case 3:
-			word, phonetic, meaning = columns[0], columns[1], columns[2]
-		default:
+		word, rest, found := strings.Cut(line, "\t")
+		if !found {
 			return false
+		}
+		var phonetic string
+		meaning := rest
+		if before, after, found := strings.Cut(rest, "\t"); found {
+			phonetic, meaning = before, after
+			if strings.ContainsRune(meaning, '\t') {
+				return false
+			}
 		}
 		if word == "" || !bounded(word, maxWordbookWordChars) || !bounded(phonetic, maxWordbookPhoneticChars) || meaning == "" || !bounded(meaning, maxWordbookMeaningChars) || seen[word] {
 			return false
@@ -931,7 +934,7 @@ var commandTemplateInstants = []time.Time{time.Date(2026, time.September, 30, 23
 func validCommandTemplate(template string) bool {
 	for _, instant := range commandTemplateInstants {
 		expanded, ok := expandCommandTemplate(template, instant)
-		if !ok || strings.ContainsFunc(expanded, unicode.IsControl) || len(utf16.Encode([]rune(expanded))) > maxCommandTemplate {
+		if !ok || strings.ContainsFunc(expanded, unicode.IsControl) || utf16Length(expanded) > maxCommandTemplate {
 			return false
 		}
 	}
@@ -992,30 +995,8 @@ func pluginStrftime(format string, t time.Time) (string, bool) {
 		period = "PM"
 	}
 	weekday := int(t.Weekday())
-	fixed := map[byte]string{
-		'%': "%",
-		'a': t.Weekday().String()[:3],
-		'A': t.Weekday().String(),
-		'b': t.Month().String()[:3],
-		'h': t.Month().String()[:3],
-		'B': t.Month().String(),
-		'c': t.Format("Mon Jan _2 15:04:05 2006"),
-		'D': t.Format("01/02/06"),
-		'x': t.Format("01/02/06"),
-		'F': t.Format("2006-01-02"),
-		'G': fmt.Sprintf("%04d", year),
-		'n': "\n",
-		'p': period,
-		'P': strings.ToLower(period),
-		'r': fmt.Sprintf("%02d:%02d:%02d %s", hour12, t.Minute(), t.Second(), period),
-		'R': t.Format("15:04"),
-		't': "\t",
-		'T': t.Format("15:04:05"),
-		'X': t.Format("15:04:05"),
-		'u': strconv.Itoa((weekday+6)%7 + 1),
-		'w': strconv.Itoa(weekday + 1),
-		'Y': fmt.Sprintf("%04d", t.Year()),
-	}
+	// 固定指令均为 ASCII，结果非空且忽略填充方式；栈上数组避免重复格式化和 map 扩容。
+	var fixed [128]string
 	var out strings.Builder
 	for i := 0; i < len(format); {
 		if format[i] != '%' {
@@ -1040,6 +1021,10 @@ func pluginStrftime(format string, t time.Time) (string, bool) {
 		}
 		component := format[i+1]
 		i += 2
+		if int(component) < len(fixed) && fixed[component] != "" {
+			out.WriteString(fixed[component])
+			continue
+		}
 		number := func(value, width int, fallback byte) string {
 			p := pad
 			if p == 0 {
@@ -1055,46 +1040,88 @@ func pluginStrftime(format string, t time.Time) (string, bool) {
 				return strings.Repeat("0", width-len(digits)) + digits
 			}
 		}
-		if text, ok := fixed[component]; ok {
-			out.WriteString(text)
-			continue
-		}
 		var text string
+		cache := true
 		switch component {
-		case 'C':
-			text = number(t.Year()/100, 2, '0')
-		case 'd':
-			text = number(t.Day(), 2, '0')
-		case 'e':
-			text = number(t.Day(), 2, '_')
-		case 'g':
-			text = number(year%100, 2, '0')
-		case 'H':
-			text = number(t.Hour(), 2, '0')
-		case 'I':
-			text = number(hour12, 2, '0')
-		case 'j':
-			text = number(t.YearDay(), 3, '0')
-		case 'k':
-			text = number(t.Hour(), 2, '_')
-		case 'l':
-			text = number(hour12, 2, '_')
-		case 'm':
-			text = number(int(t.Month()), 2, '0')
-		case 'M':
-			text = number(t.Minute(), 2, '0')
-		case 'S':
-			text = number(t.Second(), 2, '0')
-		case 'U':
-			text = number((t.YearDay()-weekday+6)/7, 2, '0')
-		case 'V':
-			text = number(week, 2, '0')
-		case 'W':
-			text = number((t.YearDay()-(weekday+6)%7+6)/7, 2, '0')
-		case 'y':
-			text = number(t.Year()%100, 2, '0')
+		case '%':
+			text = "%"
+		case 'a':
+			text = t.Weekday().String()[:3]
+		case 'A':
+			text = t.Weekday().String()
+		case 'b', 'h':
+			text = t.Month().String()[:3]
+		case 'B':
+			text = t.Month().String()
+		case 'c':
+			text = t.Format("Mon Jan _2 15:04:05 2006")
+		case 'D', 'x':
+			text = t.Format("01/02/06")
+		case 'F':
+			text = t.Format("2006-01-02")
+		case 'G':
+			text = fmt.Sprintf("%04d", year)
+		case 'n':
+			text = "\n"
+		case 'p':
+			text = period
+		case 'P':
+			text = strings.ToLower(period)
+		case 'r':
+			text = fmt.Sprintf("%02d:%02d:%02d %s", hour12, t.Minute(), t.Second(), period)
+		case 'R':
+			text = t.Format("15:04")
+		case 't':
+			text = "\t"
+		case 'T', 'X':
+			text = t.Format("15:04:05")
+		case 'u':
+			text = strconv.Itoa((weekday+6)%7 + 1)
+		case 'w':
+			text = strconv.Itoa(weekday + 1)
+		case 'Y':
+			text = fmt.Sprintf("%04d", t.Year())
 		default:
-			return "", false
+			cache = false
+			switch component {
+			case 'C':
+				text = number(t.Year()/100, 2, '0')
+			case 'd':
+				text = number(t.Day(), 2, '0')
+			case 'e':
+				text = number(t.Day(), 2, '_')
+			case 'g':
+				text = number(year%100, 2, '0')
+			case 'H':
+				text = number(t.Hour(), 2, '0')
+			case 'I':
+				text = number(hour12, 2, '0')
+			case 'j':
+				text = number(t.YearDay(), 3, '0')
+			case 'k':
+				text = number(t.Hour(), 2, '_')
+			case 'l':
+				text = number(hour12, 2, '_')
+			case 'm':
+				text = number(int(t.Month()), 2, '0')
+			case 'M':
+				text = number(t.Minute(), 2, '0')
+			case 'S':
+				text = number(t.Second(), 2, '0')
+			case 'U':
+				text = number((t.YearDay()-weekday+6)/7, 2, '0')
+			case 'V':
+				text = number(week, 2, '0')
+			case 'W':
+				text = number((t.YearDay()-(weekday+6)%7+6)/7, 2, '0')
+			case 'y':
+				text = number(t.Year()%100, 2, '0')
+			default:
+				return "", false
+			}
+		}
+		if cache {
+			fixed[component] = text
 		}
 		out.WriteString(text)
 	}

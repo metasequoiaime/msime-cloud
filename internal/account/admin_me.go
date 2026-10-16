@@ -21,9 +21,6 @@ var adminPrefDefaults = map[string]bool{
 	"weekly_digest":              false,
 }
 
-// adminSessionCookies are the names the server may give the console session cookie; the personal page uses them only to mark the caller's own session.
-var adminSessionCookies = []string{"__Host-msime_admin", "msime_admin_local"}
-
 // adminActorClause matches admin_audit.actor (or a moderated_by column) against the caller: every Google session and the personal access token of one email, or the legacy token. column is a fixed identifier and $1 is adminActorArg.
 func adminActorClause(column string, access AdminAccess) string {
 	if access.Email == "" {
@@ -84,17 +81,12 @@ func adminDevice(header string) string {
 	return strings.Join(parts, " · ")
 }
 
-// adminCurrentSessionHashes 返回请求中按优先级排列的管理后台会话哈希；令牌调用没有 cookie。
+// adminCurrentSessionHashes 返回鉴权层确认的来源会话哈希；个人访问令牌没有当前会话。
 func adminCurrentSessionHashes(r *http.Request) []string {
-	hashes := []string{}
-	for _, name := range adminSessionCookies {
-		cookie, err := r.Cookie(name)
-		if err != nil || len(cookie.Value) != 64 {
-			continue
-		}
-		hashes = append(hashes, hash(cookie.Value))
+	if sessionHash, _ := r.Context().Value(adminSessionKey{}).(string); sessionHash != "" {
+		return []string{sessionHash}
 	}
-	return hashes
+	return nil
 }
 
 // adminMe serves GET /api/me. Dictionary PRs and issues count distinct targets, so triaging and then commenting on one issue counts it once.

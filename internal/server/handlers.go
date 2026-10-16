@@ -622,6 +622,28 @@ func (s *Server) nativeCloudCandidates(r *http.Request, text string, limit int) 
 			break
 		}
 	}
-	compact := strings.NewReplacer("'", "", " ", "")
-	return clean, result.Normalized != "" && compact.Replace(result.Normalized) != compact.Replace(text)
+	return clean, cloudPinyinCorrected(result.Normalized, text)
+}
+
+// cloudPinyinCorrected 判断忽略空格和单引号后，引擎是否改变了输入拼音。
+func cloudPinyinCorrected(normalized, text string) bool {
+	if normalized == "" || normalized == text {
+		return false
+	}
+	for {
+		for len(normalized) > 0 && (normalized[0] == ' ' || normalized[0] == '\'') {
+			normalized = normalized[1:]
+		}
+		for len(text) > 0 && (text[0] == ' ' || text[0] == '\'') {
+			text = text[1:]
+		}
+		if len(normalized) == 0 || len(text) == 0 {
+			return len(normalized) != len(text)
+		}
+		if normalized[0] != text[0] {
+			return true
+		}
+		normalized = normalized[1:]
+		text = text[1:]
+	}
 }

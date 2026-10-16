@@ -414,14 +414,18 @@ func (s *Server) readDictFiles(ctx context.Context, gh *githubapp.Client, p dict
 
 // addedLinePositions returns the indexes (into head split on newlines) of the entry lines head adds over base, counted the way addedLines counts them: stripped, blank and # lines skipped, each base line cancelling one equal head line in order.
 func addedLinePositions(base, head string) []int {
+	if head == "" || base == head {
+		return nil
+	}
 	remaining := map[string]int{}
-	for _, line := range strings.Split(base, "\n") {
+	for line := range strings.SplitSeq(base, "\n") {
 		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
 			remaining[line]++
 		}
 	}
 	var added []int
-	for i, line := range strings.Split(head, "\n") {
+	i := 0
+	for line := range strings.SplitSeq(head, "\n") {
 		line = strings.TrimSpace(line)
 		switch {
 		case line == "" || strings.HasPrefix(line, "#"):
@@ -430,30 +434,40 @@ func addedLinePositions(base, head string) []int {
 		default:
 			added = append(added, i)
 		}
+		i++
 	}
 	return added
 }
 
 // dictLineColumns splits an entry line into its first two columns as the dictionary build reads them.
 func dictLineColumns(line string) (string, string) {
-	fields := strings.Split(strings.TrimSpace(line), "\t")
-	if len(fields) < 2 {
-		return strings.TrimSpace(fields[0]), ""
-	}
-	return strings.TrimSpace(fields[0]), strings.TrimSpace(fields[1])
+	first, rest, _ := strings.Cut(strings.TrimSpace(line), "\t")
+	second, _, _ := strings.Cut(rest, "\t")
+	return strings.TrimSpace(first), strings.TrimSpace(second)
 }
 
 // checkDictEntries numbers the added entries across the files in title order (words, English words, translations) and flags each one: a sensitive-word hit, an entry the website form would reject, or a duplicate of the base file, the shipped dictionary or an earlier entry of the same pull request.
 func (s *Server) checkDictEntries(ctx context.Context, files []dictFile) []dictEntry {
 	entries := []dictEntry{}
 	for _, f := range files {
-		lines := strings.Split(f.head, "\n")
+		if len(f.added) == 0 {
+			continue
+		}
 		first := len(entries)
 		keys := make([]submissionLine, 0, len(f.added))
-		for _, at := range f.added {
-			word, second := dictLineColumns(lines[at])
-			entries = append(entries, dictEntry{Index: len(entries), File: f.kind.file, Kind: f.kind.name, Word: word, Pinyin: second, Flag: dictFlagNew})
-			keys = append(keys, submissionLine{key: word + "\t" + second})
+		// 新增位置由 addedLinePositions 按物理行递增生成，读完最后一条即可停止。
+		at, next := 0, 0
+		for line := range strings.SplitSeq(f.head, "\n") {
+			if at == f.added[next] {
+				word, second := dictLineColumns(line)
+				entries = append(entries, dictEntry{Index: len(entries), File: f.kind.file, Kind: f.kind.name, Word: word, Pinyin: second, Flag: dictFlagNew})
+				keys = append(keys, submissionLine{key: word + "\t" + second})
+				next++
+				if next == len(f.added) {
+					break
+				}
+			}
+			at++
 		}
 		s.flagDictFile(ctx, f, entries[first:], keys)
 	}

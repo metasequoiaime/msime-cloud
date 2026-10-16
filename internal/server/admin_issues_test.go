@@ -541,6 +541,38 @@ func TestAdminIssuesAnnounceNew(t *testing.T) {
 	}
 }
 
+// 通知写入暂时失败后，同一问题应在后续轮询重试，成功后仍只保留一条通知。
+func TestAdminIssuesAnnounceRetriesAfterDatabaseFailure(t *testing.T) {
+	s, f, conn, schema := issuesFixture(t)
+	ctx := context.Background()
+	if _, err := s.pendingIssues(ctx); err != nil {
+		t.Fatal(err)
+	}
+	table := pgx.Identifier{schema, "admin_notifications"}.Sanitize()
+	if _, err := conn.Exec(ctx, "ALTER TABLE "+table+" ADD CONSTRAINT reject_issue_notification CHECK (kind <> 'issue')"); err != nil {
+		t.Fatal(err)
+	}
+	f.add(issuesWinRepo, &fakeIssue{number: 13, title: "新问题", author: "gina", state: "open", created: time.Now().Add(time.Second)})
+	s.adminGitHub = f.client()
+	if n, err := s.pendingIssues(ctx); n != 3 || err != nil {
+		t.Fatal(n, err)
+	}
+	if got := notificationRows(t, conn, schema); len(got) != 0 {
+		t.Fatal("失败的写入不应产生通知", got)
+	}
+	if _, err := conn.Exec(ctx, "ALTER TABLE "+table+" DROP CONSTRAINT reject_issue_notification"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if n, err := s.pendingIssues(ctx); n != 3 || err != nil {
+			t.Fatal(n, err)
+		}
+		if got := notificationRows(t, conn, schema); !slices.Equal(got, []string{"issue issues " + issuesWinRepo + "#13"}) {
+			t.Fatalf("第 %d 次重试后通知错误：%v", i+1, got)
+		}
+	}
+}
+
 func TestAdminIssueDetail(t *testing.T) {
 	s, _, _, _ := issuesFixture(t)
 	status, v := issuesRequest(t, s, "GET", "/api/issues/"+issuesWinRepo+"/10", "")

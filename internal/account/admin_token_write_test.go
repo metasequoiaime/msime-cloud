@@ -204,6 +204,56 @@ func TestAdminTokenReplacementChecksExpiryAfterSourceLock(t *testing.T) {
 	}
 }
 
+func TestAdminTokenReplacementStartsLifetimeAfterSourceLock(t *testing.T) {
+	db := testStore(t)
+	ctx := t.Context()
+	a := &Service{store: db}
+	email := randomToken()[:16] + "@example.test"
+	source, err := a.CreateAdminSession(ctx, AdminIdentity{Subject: "g", Email: email})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx = WithAdminSession(WithAdminAccess(ctx, AdminAccess{Actor: "google:g:" + email, Email: email}), source)
+	block, err := db.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer block.Rollback(context.Background())
+	if _, err := block.Exec(ctx, `SELECT 1 FROM admin_sessions WHERE token_hash=$1 FOR UPDATE`, hash(source)); err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		info adminTokenInfo
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		tx, err := db.pool.Begin(ctx)
+		if err != nil {
+			done <- result{err: err}
+			return
+		}
+		defer tx.Rollback(context.Background())
+		_, info, err := issueAdminToken(ctx, tx, email)
+		if err == nil {
+			err = tx.Commit(ctx)
+		}
+		done <- result{info: info, err: err}
+	}()
+	waitForAdminDatabaseLock(t, db, block.Conn().PgConn().PID())
+	time.Sleep(3 * time.Second)
+	if err := block.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := <-done
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	if remaining := time.Until(got.info.ExpiresAt); remaining < adminTokenLifetime-1500*time.Millisecond {
+		t.Fatalf("PAT 有效期从锁等待前开始，剩余 %s，预期接近 %s", remaining, adminTokenLifetime)
+	}
+}
+
 func TestAdminTokenReplacementMissingInsertResult(t *testing.T) {
 	db := testStore(t)
 	ctx := t.Context()

@@ -267,7 +267,9 @@ func dictionaryRows(name, text, query string, page int) ([]dictionaryRow, int) {
 	total := 0
 	q := strings.ToLower(query)
 	yamlHeader := strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml")
-	for i, raw := range strings.Split(text, "\n") {
+	lineNumber := 0
+	for raw := range strings.SplitSeq(text, "\n") {
+		lineNumber++
 		line := strings.TrimSpace(raw)
 		if yamlHeader {
 			if line == "..." {
@@ -275,7 +277,7 @@ func dictionaryRows(name, text, query string, page int) ([]dictionaryRow, int) {
 			}
 			continue
 		}
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "//") || !strings.Contains(strings.ToLower(line), q) {
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "//") || (q != "" && !strings.Contains(strings.ToLower(line), q)) {
 			continue
 		}
 		total++
@@ -294,7 +296,7 @@ func dictionaryRows(name, text, query string, page int) ([]dictionaryRow, int) {
 		} else if len(cols) == 1 && !strings.HasSuffix(name, ".md") {
 			cols = strings.Fields(line)
 		}
-		rows = append(rows, dictionaryRow{Line: i + 1, Columns: cols})
+		rows = append(rows, dictionaryRow{Line: lineNumber, Columns: cols})
 	}
 	return rows, total
 }

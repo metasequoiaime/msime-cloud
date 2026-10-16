@@ -119,10 +119,18 @@ func (s *Server) qqEmbedItems(ctx context.Context, items []account.QQKnowledgeIt
 	results := make([][][]float32, (len(texts)+qqEmbedBatch-1)/qqEmbedBatch)
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.SetLimit(qqEmbedParallel)
+	scheduled := false
 	for batch, start := 0, 0; start < len(texts); batch, start = batch+1, start+qqEmbedBatch {
+		if err := groupCtx.Err(); err != nil {
+			break
+		}
 		batch, start := batch, start
 		end := min(start+qqEmbedBatch, len(texts))
+		scheduled = true
 		group.Go(func() error {
+			if err := groupCtx.Err(); err != nil {
+				return err
+			}
 			vectors, err := s.qqEmbed(groupCtx, texts[start:end])
 			if err != nil {
 				return err
@@ -133,6 +141,9 @@ func (s *Server) qqEmbedItems(ctx context.Context, items []account.QQKnowledgeIt
 	}
 	if err := group.Wait(); err != nil {
 		return err
+	}
+	if !scheduled && ctx.Err() != nil {
+		return ctx.Err()
 	}
 	for batch, vectors := range results {
 		start := batch * qqEmbedBatch
@@ -172,14 +183,81 @@ func qqRuneEnd(text string, limit int) int {
 	return len(text)
 }
 
+// qqContentHash 分块计算以 NUL 分隔的原始字节哈希，避免拼接和转换时复制完整正文。
+func qqContentHashSum(parts ...string) (sum [sha256.Size]byte) {
+	small := true
+	total := 0
+	for i, part := range parts {
+		remaining := 1024 - total
+		if i > 0 {
+			if remaining == 0 {
+				small = false
+				break
+			}
+			remaining--
+		}
+		if len(part) > remaining {
+			small = false
+			break
+		}
+		total += len(part)
+		if i > 0 {
+			total++
+		}
+	}
+	if small {
+		var buf [1024]byte
+		used := 0
+		for i, part := range parts {
+			if i > 0 {
+				buf[used] = 0
+				used++
+			}
+			used += copy(buf[used:], part)
+		}
+		return sha256.Sum256(buf[:used])
+	}
+	h := sha256.New()
+	var buf [1024]byte
+	used := 0
+	for i, part := range parts {
+		if i > 0 {
+			buf[used] = 0
+			used++
+			if used == len(buf) {
+				h.Write(buf[:])
+				used = 0
+			}
+		}
+		for part != "" {
+			n := copy(buf[used:], part)
+			used += n
+			part = part[n:]
+			if used == len(buf) {
+				h.Write(buf[:])
+				used = 0
+			}
+		}
+	}
+	h.Write(buf[:used])
+	h.Sum(sum[:0])
+	return sum
+}
+
 func qqContentHash(parts ...string) string {
-	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
-	return hex.EncodeToString(sum[:])
+	sum := qqContentHashSum(parts...)
+	var encoded [sha256.Size * 2]byte
+	hex.Encode(encoded[:], sum[:])
+	return string(encoded[:])
 }
 
 // qqDocID 是文档段落在向量索引里的 id：按文档名和标题，内容变了 id 不变。
 func qqDocID(section qqSection) string {
-	return "doc:" + qqContentHash(section.Doc, section.Title)[:24]
+	sum := qqContentHashSum(section.Doc, section.Title)
+	var id [len("doc:") + 24]byte
+	copy(id[:], "doc:")
+	hex.Encode(id[len("doc:"):], sum[:12])
+	return string(id[:])
 }
 
 // qqVectorJob 是同步向量索引的后台任务，运行到 s.lifetime 结束。
@@ -234,21 +312,37 @@ func (s *Server) syncQQDocVectors(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	ids := make([]string, len(sections))
+	var idCache map[struct{ doc, title string }]string
+	if len(sections) > 0 {
+		idCache = make(map[struct{ doc, title string }]string, len(sections))
+	}
 	for i, section := range sections {
+		key := struct{ doc, title string }{section.Doc, section.Title}
+		if id, ok := idCache[key]; ok {
+			ids[i] = id
+			continue
+		}
 		ids[i] = qqDocID(section)
+		idCache[key] = ids[i]
 	}
 	hashes, err := s.qqVectors.QQKnowledgeHashes(ctx, ids)
 	if err != nil {
 		return 0, err
 	}
-	var items []account.QQKnowledgeItem
-	var texts []string
+	items := make([]account.QQKnowledgeItem, 0, len(idCache))
+	texts := make([]string, 0, len(idCache))
+	pending := make(map[string]bool, len(idCache))
 	for i, section := range sections {
-		text := "[" + section.Doc + "] " + section.Title + "\n" + qqTruncate(section.Text, qqEmbedRunes)
-		h := qqContentHash(text)
-		if hashes[ids[i]] == h || slices.ContainsFunc(items, func(it account.QQKnowledgeItem) bool { return it.ID == ids[i] }) {
+		// 只对本轮已经选中更新的 ID 去重，未变化的段落不能遮住后续同 ID 的更新。
+		if pending[ids[i]] {
 			continue
 		}
+		text := "[" + section.Doc + "] " + section.Title + "\n" + qqTruncate(section.Text, qqEmbedRunes)
+		h := qqContentHash(text)
+		if hashes[ids[i]] == h {
+			continue
+		}
+		pending[ids[i]] = true
 		items = append(items, account.QQKnowledgeItem{ID: ids[i], Kind: "doc", Title: section.Doc + " · " + section.Title, Summary: qqTruncate(section.Text, qqHistorySummaryRunes), ContentHash: h, UpdatedAt: s.qq.now()})
 		texts = append(texts, text)
 	}
@@ -322,7 +416,7 @@ func (s *Server) syncQQHistoryVectors(ctx context.Context, repo string) (int, er
 					state = "已关闭未合并"
 				}
 			}
-			body := qqPlainText(qqImagePattern.ReplaceAllString(issue.Body, " "))
+			body := qqPlainText(qqStripImagesAndHTML(issue.Body))
 			h := qqContentHash(issue.Title, state, body, strconv.Itoa(issue.Comments))
 			if hashes[ids[i]] == h {
 				continue

@@ -301,27 +301,53 @@ const qqReleaseNoteRunes = 300
 // qqReleaseNotes 把发布说明变成一行纯文本交给模型：去掉图片、HTML 标签和代码块，每行过 qqPlainText（链接只留文字，去掉 Markdown 符号），丢掉空行，条目之间用「；」隔开，小标题后面接「：」，再按句截到 qqReleaseNoteRunes 字。曾经资料里只有 tag 和日期，问「windows 最新版更新了啥」只能叫群友自己去 GitHub 看。
 func qqReleaseNotes(body string) string {
 	var b strings.Builder
-	fenced, heading := false, false
-	for line := range strings.SplitSeq(qqImagePattern.ReplaceAllString(body, " "), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "```") {
-			fenced = !fenced
-			continue
+	heading := false
+	qqReleaseNotesVisibleSegments(body, func(segment string) {
+		for line := range strings.SplitSeq(qqStripImagesAndHTML(segment), "\n") {
+			trimmed := strings.TrimSpace(line)
+			text := strings.TrimRight(qqPlainText(trimmed), "。；;：: ")
+			if text == "" {
+				continue
+			}
+			if b.Len() > 0 && !heading {
+				b.WriteString("；")
+			}
+			b.WriteString(text)
+			heading = strings.HasPrefix(trimmed, "#")
+			if heading {
+				b.WriteString("：")
+			}
 		}
-		text := strings.TrimRight(qqPlainText(trimmed), "。；;：: ")
-		if fenced || text == "" {
-			continue
-		}
-		if b.Len() > 0 && !heading {
-			b.WriteString("；")
-		}
-		b.WriteString(text)
-		heading = strings.HasPrefix(trimmed, "#")
-		if heading {
-			b.WriteString("：")
-		}
-	}
+	})
 	return qqTruncateSentence(strings.TrimSuffix(b.String(), "："), qqReleaseNoteRunes)
+}
+
+// qqReleaseNotesVisibleSegments 按代码围栏切出需要处理的连续正文片段；围栏内内容不经过图片和 HTML 正则扫描，片段本身仍保留跨行 Markdown 结构。
+func qqReleaseNotesVisibleSegments(body string, yield func(string)) {
+	fenced := false
+	segmentStart := 0
+	for offset := 0; offset < len(body); {
+		lineEnd := len(body)
+		next := len(body)
+		if i := strings.IndexByte(body[offset:], '\n'); i >= 0 {
+			lineEnd = offset + i
+			next = lineEnd + 1
+		}
+		line := body[offset:lineEnd]
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			if !fenced && segmentStart < offset {
+				yield(body[segmentStart:offset])
+			}
+			fenced = !fenced
+			segmentStart = next
+		} else if fenced {
+			segmentStart = next
+		}
+		offset = next
+	}
+	if !fenced && segmentStart < len(body) {
+		yield(body[segmentStart:])
+	}
 }
 
 // qqReleasesMaterial 是交给回答的模型的各平台最新版本，每个平台一行，写出仓库名和完整 tag，方便模型对照 issue；notes 为 nil 或对这个平台返回 true 时，在最新正式版下面加一行「更新内容：…」（见 qqReleaseNotes），预发布版和新版预览不附。

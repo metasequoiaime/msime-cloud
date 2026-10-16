@@ -1,16 +1,25 @@
 package account
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // TelemetryPath 是服务端经 Route 挂载的匿名事件接口；IsPath 让它绕过 Bearer 中间件，accountRouteRate 按这个路由给它独立的额度，所以服务端必须原样挂载在这个路径上。
 const TelemetryPath = "/v1/telemetry/events"
+
+// telemetryWriteDefinitelyRejected 只把数据库明确返回的语句错误视为未写入。连接中断、超时等错误的结果可能未知，不能退款后让已写入的事件逃过额度。
+func telemetryWriteDefinitelyRejected(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr)
+}
 
 const (
 	// telemetryRateLimit 是遥测事件按地址每分钟的上限，单独一份额度，上报不会挤占登录和社区接口的每分钟 120 次。客户端每次启动只发几条事件，60 次足够补发离线队列。
@@ -128,6 +137,7 @@ func (a *Service) Telemetry(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	signature := ""
+	var releaseCrashRate func() error
 	if v.Kind == "crash" {
 		// 已记录的 ID 是客户端重试（例如上次的 202 在网络中丢失），直接按重复事件返回 202，不再占用当天的崩溃额度；否则同一条崩溃重试几次就会挤掉其他崩溃。
 		var seen bool
@@ -147,21 +157,39 @@ func (a *Service) Telemetry(w http.ResponseWriter, r *http.Request) {
 			a.error(w, err)
 			return
 		}
+		releaseCrashRate = func() error {
+			releaseCtx, cancelRelease := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+			defer cancelRelease()
+			return a.ReleaseRateLimit(releaseCtx, "telemetry-crash", a.clientAddress(r))
+		}
 		signature = crashSignature(v.Platform, v.Message, v.Stack)
 	}
 	// 只为本次真正插入的崩溃事件更新分组，避免并发重试刷新或创建分组。
-	_, err := a.store.pool.Exec(ctx, `WITH inserted AS (
+	var inserted bool
+	// id 检查和每日额度扣除之间存在并发窗口；若另一个请求先写入，退回本次预留的额度。
+	err := a.store.pool.QueryRow(ctx, `WITH inserted AS (
  INSERT INTO admin_events(id,kind,platform,version,message,stack,artifact,channel,install_id,signature)
  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(id) DO NOTHING
  RETURNING signature,version
-)
-INSERT INTO admin_crash_groups(signature,platform,version,title)
+	), grouped AS (
+	 INSERT INTO admin_crash_groups(signature,platform,version,title)
 SELECT signature,$11,version,$12 FROM inserted WHERE signature IS NOT NULL
-ON CONFLICT(signature) DO UPDATE SET version=EXCLUDED.version,last_seen=GREATEST(admin_crash_groups.last_seen,EXCLUDED.last_seen)`,
-		v.ID, v.Kind, v.Platform, v.Version, v.Message, v.Stack, telemetryNull(v.Artifact), telemetryNull(v.Channel), telemetryNull(v.InstallID), telemetryNull(signature), crashPlatform(v.Platform), crashGroupTitle(v.Message))
+	ON CONFLICT(signature) DO UPDATE SET version=EXCLUDED.version,last_seen=GREATEST(admin_crash_groups.last_seen,EXCLUDED.last_seen)
+	)
+	SELECT EXISTS(SELECT 1 FROM inserted)`,
+		v.ID, v.Kind, v.Platform, v.Version, v.Message, v.Stack, telemetryNull(v.Artifact), telemetryNull(v.Channel), telemetryNull(v.InstallID), telemetryNull(signature), crashPlatform(v.Platform), crashGroupTitle(v.Message)).Scan(&inserted)
 	if err != nil {
+		if releaseCrashRate != nil && telemetryWriteDefinitelyRejected(err) {
+			_ = releaseCrashRate()
+		}
 		a.error(w, err)
 		return
+	}
+	if releaseCrashRate != nil && !inserted {
+		if err := releaseCrashRate(); err != nil {
+			a.error(w, err)
+			return
+		}
 	}
 	write(w, 202, map[string]bool{"accepted": true})
 }

@@ -71,12 +71,12 @@ func (a *Service) adminOverview(w http.ResponseWriter, r *http.Request, _ string
    'crashes',crash_counts.crashes,
    'open_crashes',crash_counts.open_crashes,
    'skins',(SELECT count(*) FROM community_skins WHERE moderation<>'removed'),
-   'skin_downloads',(SELECT count(*) FROM community_skin_downloads),
+   'skin_downloads',(`+communitySkinDownloadsQuery+`),
    'plugins',(SELECT count(*) FROM community_plugins WHERE moderation<>'removed'),
    'plugin_downloads',(SELECT count(*) FROM community_plugin_downloads),
    'dictionaries',resource_counts.dictionaries,
    'replies',resource_counts.replies,
-   'resource_saves',(SELECT count(*) FROM community_resource_saves),
+   'resource_saves',resource_counts.resource_saves,
    'daily',(WITH overview_days AS (
      SELECT d FROM generate_series(date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' - ($1::int - 1) * interval '1 day',date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC',interval '1 day') d
    ), user_daily AS (

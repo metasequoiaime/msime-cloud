@@ -53,13 +53,15 @@ const (
 	maxLogPods  = 100
 	lokiTimeout = 10 * time.Second
 
-	// 日志流的参数。每 logStreamPoll 轮询一次 Loki；每次最多 logStreamPages 页、每页 logStreamPageSize 行，这就是单个连接的速率上限（默认每 2 秒 1000 行）。
+	// 日志流每轮最多查询 logStreamPages 次、每次最多发送 logStreamPageSize 条新行；重复边界和额外一行前瞻不占发送额度。
 	logStreamPoll      = 2 * time.Second
 	logStreamHeartbeat = 15 * time.Second
 	logStreamPageSize  = 500
 	logStreamPages     = 2
-	defaultLogBackfill = 200
-	maxLogBackfill     = 1000
+	// 同一时间戳最多读取 logStreamMaxBatchSize 行；查询额外读取一行，确认超限后发送 gap，避免静默跳过或无限扩大响应。
+	logStreamMaxBatchSize = 2000
+	defaultLogBackfill    = 200
+	maxLogBackfill        = 1000
 	// logStreamOverlap 是每次轮询回看的时间：不同节点上的 promtail 推送有先后，晚到的行时间戳可能早于已经见过的最新一行，回看一段再按（时间戳、副本、行内容）去重就不会漏掉它们。
 	logStreamOverlap = 5 * time.Second
 	// logStreamMaxLag 是允许落后的最长时间；日志产生得比速率上限还快时，超过它就跳到最新位置并发送 gap 事件，而不是越落越远。
@@ -324,7 +326,15 @@ func (s *Server) lokiQueryRange(ctx context.Context, query string, start, end in
 	if body.Status != "success" || body.Data.ResultType != "streams" {
 		return nil, errLoki{"unexpected result"}
 	}
+	// Loki 已返回所有流，先统计总行数，避免展开结果时反复扩容。
+	count := 0
+	for _, stream := range body.Data.Result {
+		count += len(stream.Values)
+	}
 	var entries []lokiEntry
+	if count > 0 {
+		entries = make([]lokiEntry, 0, count)
+	}
 	for _, stream := range body.Data.Result {
 		for _, value := range stream.Values {
 			ns, err := strconv.ParseInt(value[0], 10, 64)
@@ -491,65 +501,109 @@ type logKey struct {
 
 func (e lokiEntry) key() logKey {
 	h := fnv.New64a()
-	_, _ = io.WriteString(h, e.pod)
+	_, _ = h.Write([]byte(e.pod))
 	_, _ = h.Write([]byte{0})
-	_, _ = io.WriteString(h, e.line)
+	_, _ = h.Write([]byte(e.line))
 	return logKey{e.ns, h.Sum64()}
 }
 
 // logTail 是一个日志流的读取进度。
 type logTail struct {
 	query string
-	// cursor 是已经读到的位置：它之前的行都已读过（回看窗口内晚到的行除外）。floor 及更早的行一律不再发送（回填之前的、或续传时客户端已经有的）。
+	// cursor 不越过尚未读完的时间戳，供客户端续传；floor 及更早的行不再发送。next 是分页继续读取的位置。
 	cursor, floor int64
+	next          int64
 	seen          map[logKey]struct{}
+	// readAt 记录分页边界时间戳已读取的原始行数，包含重复行；负数表示超限且已经提示缺口。
+	readAt map[int64]int
 	// busy 表示上一次轮询用满了页数，这次不回看，先追上进度。
 	busy bool
 }
 
-// pollLogs 读取 cursor 之后到 now 的新行（回看 logStreamOverlap 并去重），按时间升序返回。读完时 cursor 推进到 now；页数用满时 cursor 停在读到的最后一个时间戳，下次接着读。用满页数后仍落后超过 logStreamMaxLag 时跳到最新位置，gap 为 true。
-func (s *Server) pollLogs(ctx context.Context, t *logTail, now int64) (out []lokiEntry, gap bool, err error) {
+type logGap struct{ from, to int64 }
+
+// pollLogs 读取到 now 为止的新行，回看并去重。同时间戳分页按已读行数扩大请求，发送额度仍为每页五百条；超过单时间戳上限或落后太多时返回明确的缺口范围。
+func (s *Server) pollLogs(ctx context.Context, t *logTail, now int64) (out []lokiEntry, gaps []logGap, err error) {
+	if t.readAt == nil {
+		t.readAt = map[int64]int{}
+	}
 	if t.busy && now-t.cursor > int64(logStreamMaxLag) {
-		gap = true
+		gaps = append(gaps, logGap{t.cursor, now - int64(logStreamOverlap)})
 		t.cursor = now - int64(logStreamOverlap)
 		t.floor = t.cursor - 1
 		t.busy = false
+		t.next = 0
 		clear(t.seen)
+		clear(t.readAt)
 	}
 	start := t.cursor
-	if !t.busy {
+	if t.busy && t.next > 0 {
+		start = t.next
+	} else if !t.busy {
 		start -= int64(logStreamOverlap)
 	}
 	start = max(start, t.floor+1)
-	t.busy = false
 	for page := 0; page < logStreamPages && start < now; page++ {
-		entries, err := s.lokiQueryRange(ctx, t.query, start, now, logStreamPageSize, "forward")
-		if err != nil {
-			return out, gap, err
+		if t.readAt[start] < 0 {
+			start++
+			if start >= now {
+				t.busy = false
+				t.next = 0
+				break
+			}
 		}
-		last := start
-		for _, e := range entries {
-			last = max(last, e.ns)
-			if e.ns <= t.floor {
+		limit := min(logStreamPageSize+max(t.readAt[start], 0), logStreamMaxBatchSize) + 1
+		entries, err := s.lokiQueryRange(ctx, t.query, start, now, limit, "forward")
+		if err != nil {
+			return out, gaps, err
+		}
+		// Loki 按流分组返回，必须先合并排序，才能按总时间顺序保留前瞻行。
+		sortLogEntries(entries)
+		n, added := 0, 0
+		for n < len(entries) && n < limit-1 {
+			e := entries[n]
+			if e.ns <= t.floor || t.readAt[e.ns] < 0 {
+				n++
 				continue
 			}
 			k := e.key()
 			if _, dup := t.seen[k]; dup {
+				n++
 				continue
+			}
+			if added == logStreamPageSize {
+				break
 			}
 			t.seen[k] = struct{}{}
 			out = append(out, e)
+			added++
+			n++
 		}
-		if len(entries) < logStreamPageSize {
+		if n == len(entries) {
+			t.busy = false
+			t.next = 0
 			break
 		}
-		t.busy = page == logStreamPages-1
-		// 下一页从这一页最新的时间戳开始（含），同一时间戳的行靠去重排除；整页都是同一时间戳时向前推进 1 纳秒，避免原地打转。
-		if last == start {
-			last++
+		last := entries[n-1].ns
+		count := 0
+		for i := n - 1; i >= 0 && entries[i].ns == last; i-- {
+			count++
 		}
-		start = last
-		t.cursor = max(t.cursor, last)
+		if t.readAt[last] >= 0 {
+			t.readAt[last] = max(t.readAt[last], count)
+		}
+		start = last + 1
+		if entries[n].ns == last && t.readAt[last] >= 0 {
+			if t.readAt[last] >= logStreamMaxBatchSize {
+				gaps = append(gaps, logGap{last, last + 1})
+				t.readAt[last] = -1
+			} else {
+				start = last
+			}
+		}
+		t.next = start
+		t.cursor = start - 1
+		t.busy = true
 	}
 	if !t.busy {
 		t.cursor = max(t.cursor, now)
@@ -561,8 +615,13 @@ func (s *Server) pollLogs(ctx context.Context, t *logTail, now int64) (out []lok
 			delete(t.seen, k)
 		}
 	}
+	for ns := range t.readAt {
+		if ns < horizon {
+			delete(t.readAt, ns)
+		}
+	}
 	sortLogEntries(out)
-	return out, gap, nil
+	return out, gaps, nil
 }
 
 // logStreamAccess 重新读取建立日志流时使用的凭据和当前角色，返回空字符串表示仍可读日志，其余值是结束流的公开原因。
@@ -590,7 +649,7 @@ func (s *Server) logStreamAccess(ctx context.Context, r *http.Request) string {
 //
 //   - lines：{"lines":[...]}，事件 id 是续传游标；
 //   - pods：{"pods":[...]}，since 窗口内有日志的副本，连接时和之后每 30 秒发送一次；
-//   - gap：{"from","to"}，日志产生得比速率上限快，落后太多，中间一段被跳过；
+//   - gap：{"from","to"}，读取落后太多或单时间戳行数超限，一段日志被跳过；
 //   - error：{"code":"logs_unavailable"}，Loki 暂时不可用，连接保持并继续重试，连续失败 5 次后关闭；
 //   - end：{"reason":"..."}，连接满 30 分钟或凭据、权限校验失败后关闭。
 //
@@ -707,7 +766,10 @@ func (s *Server) adminLogsStream(w http.ResponseWriter, r *http.Request) {
 	} else {
 		start := now.Add(-since).UnixNano()
 		t.cursor, t.floor = now.UnixNano(), start-1
-		if backfill > 0 {
+		if backfill == 0 {
+			// 不回填时，轮询回看也不能补发连接建立之前的日志。
+			t.floor = t.cursor - 1
+		} else {
 			entries, err := s.lokiQueryRange(ctx, t.query, start, now.UnixNano(), backfill, "backward")
 			if err != nil {
 				if ctx.Err() != nil || !lokiFailed(err) {
@@ -749,13 +811,14 @@ func (s *Server) adminLogsStream(w http.ResponseWriter, r *http.Request) {
 				send("end", "", map[string]string{"reason": reason})
 				return
 			}
-			from := t.cursor
-			entries, gap, err := s.pollLogs(ctx, t, tick.UnixNano())
+			entries, gaps, err := s.pollLogs(ctx, t, tick.UnixNano())
 			if ctx.Err() != nil {
 				return
 			}
-			if gap && !send("gap", "", map[string]string{"from": strconv.FormatInt(from, 10), "to": strconv.FormatInt(t.floor+1, 10)}) {
-				return
+			for _, gap := range gaps {
+				if !send("gap", "", map[string]string{"from": strconv.FormatInt(gap.from, 10), "to": strconv.FormatInt(gap.to, 10)}) {
+					return
+				}
 			}
 			if err != nil {
 				if !lokiFailed(err) {

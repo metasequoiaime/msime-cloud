@@ -358,7 +358,8 @@ func (s *Server) submitWords(w http.ResponseWriter, r *http.Request) {
 		wordsFail(w, 503, "rate_limit_unavailable", "词条提交暂时不可用，请稍后再试。")
 		return
 	}
-	if ct := strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]); ct != "application/json" {
+	mediaType, _, _ := strings.Cut(r.Header.Get("Content-Type"), ";")
+	if strings.TrimSpace(mediaType) != "application/json" {
 		wordsFail(w, 415, "json_required", "请求格式不正确。")
 		return
 	}
@@ -724,16 +725,27 @@ func submissionTitle(counts map[string]int) string {
 	return "feat(custom): add " + strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1]
 }
 
-// addedLines counts the entry lines in head that base does not have, so maintainer edits on the rolling branch are reflected. Blank and # comment lines are not entries, and surrounding whitespace does not make a line different, as the dictionary build strips it.
+// addedLines 统计 head 比 base 多出的词条行数，包含维护者在滚动分支的修改。按词库构建规则去掉首尾空白并跳过空行和 # 注释，重复行按出现次数抵扣。
 func addedLines(base, head string) int {
-	remaining := map[string]int{}
+	if head == "" || base == head {
+		return 0
+	}
 	entries := func(content string, visit func(string)) {
-		for _, line := range strings.Split(content, "\n") {
+		for line := range strings.SplitSeq(content, "\n") {
 			if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
 				visit(line)
 			}
 		}
 	}
+	// 原文完整保留且追加从新行开始时，原有次数全部抵扣，只需统计追加部分。
+	if len(head) > len(base) && (base == "" || strings.HasSuffix(base, "\n") || head[len(base)] == '\n') {
+		if suffix, ok := strings.CutPrefix(head, base); ok {
+			added := 0
+			entries(suffix, func(string) { added++ })
+			return added
+		}
+	}
+	remaining := map[string]int{}
 	entries(base, func(line string) { remaining[line]++ })
 	added := 0
 	entries(head, func(line string) {
@@ -766,17 +778,21 @@ func submissionCommitMessage(sub submission) string {
 	return b.String()
 }
 
-// wordWeightRange is the lowest and highest weight of the entries in words.txt, which the msime-dictionary check-words gate requires every added entry to stay within; ok is false when the file has none. Lines are read as the dictionary build reads them: stripped, blank and # lines skipped, word<TAB>pinyin<TAB>weight.
+// wordWeightRange 返回 words.txt 的最小与最大有效权重，供新增中文词条限制范围；没有有效权重时 ok 为 false。按词库构建规则去掉行首尾空白，跳过空行和 # 注释，并只接受三列。
 func wordWeightRange(content string) (low, high int, ok bool) {
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		if line = strings.TrimSpace(line); line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		fields := strings.Split(line, "\t")
-		if len(fields) != 3 {
+		_, rest, found := strings.Cut(line, "\t")
+		if !found {
 			continue
 		}
-		weight, err := strconv.Atoi(strings.TrimSpace(fields[2]))
+		_, weightField, found := strings.Cut(rest, "\t")
+		if !found || strings.Contains(weightField, "\t") {
+			continue
+		}
+		weight, err := strconv.Atoi(strings.TrimSpace(weightField))
 		if err != nil || weight < 1 {
 			continue
 		}
@@ -788,24 +804,50 @@ func wordWeightRange(content string) (low, high int, ok bool) {
 	return low, high, ok
 }
 
-// appendSubmissionLines adds the submission's lines to content, making sure the existing content ends with a newline first. Word weights are fitted to the range base words.txt uses (and never below 1, the build's minimum).
+// appendSubmissionLines 追加投稿词条，并在原文缺少末尾换行时补齐。仅中文词条需要读取基础词库的权重范围，且权重不低于 1。
 func appendSubmissionLines(content string, sub submission, base string) string {
-	low, high, ok := wordWeightRange(base)
-	if !ok {
-		low, high = 1, math.MaxInt
+	low, high := 1, math.MaxInt
+	if sub.kind == kindWords {
+		if baseLow, baseHigh, ok := wordWeightRange(base); ok {
+			low, high = baseLow, baseHigh
+		}
 	}
-	var b strings.Builder
-	b.WriteString(content)
-	if content != "" && !strings.HasSuffix(content, "\n") {
-		b.WriteString("\n")
+	// 按实际输出字节数预留容量，避免批量追加时反复复制整份原文。
+	outputBytes := len(content)
+	needsNewline := content != "" && !strings.HasSuffix(content, "\n")
+	if needsNewline {
+		outputBytes++
 	}
 	for _, line := range sub.lines {
+		outputBytes += len(line.key) + 1
+		weight := line.weight
+		if sub.kind == kindWords {
+			weight = max(1, min(max(weight, low), high))
+		}
+		if weight > 0 {
+			outputBytes++
+			for ; weight > 0; weight /= 10 {
+				outputBytes++
+			}
+		}
+	}
+	var b strings.Builder
+	b.Grow(outputBytes)
+	b.WriteString(content)
+	if needsNewline {
+		b.WriteString("\n")
+	}
+	// 正权重最多 19 位，复用栈上缓冲区，避免每条词条创建数字字符串。
+	var weightBuffer [20]byte
+	for _, line := range sub.lines {
 		b.WriteString(line.key)
-		switch {
-		case sub.kind == kindWords:
-			b.WriteString("\t" + strconv.Itoa(max(1, min(max(line.weight, low), high))))
-		case line.weight > 0:
-			b.WriteString("\t" + strconv.Itoa(line.weight))
+		weight := line.weight
+		if sub.kind == kindWords {
+			weight = max(1, min(max(weight, low), high))
+		}
+		if weight > 0 {
+			b.WriteByte('\t')
+			b.Write(strconv.AppendInt(weightBuffer[:0], int64(weight), 10))
 		}
 		b.WriteString("\n")
 	}
@@ -925,23 +967,49 @@ func (s *Server) shippedEntries(ctx context.Context, operation string, batch []m
 	return listed
 }
 
-// listedLines returns the indexes of lines whose key (the first two columns) content already has. Columns are stripped and blank and # lines skipped, as the dictionary build reads the files.
+// listedLines 按输入顺序返回已有词条的索引，只保存待查键；列去除首尾空白，跳过空行和 # 注释，与词库构建规则一致。
 func listedLines(content string, lines []submissionLine) alreadyListedError {
-	existing := map[string]bool{}
+	pending := map[string]bool{}
+	maxKeyBytes := 0
+	for _, line := range lines {
+		pending[line.key] = true
+		maxKeyBytes = max(maxKeyBytes, len(line.key))
+	}
+	if len(pending) == 0 {
+		return nil
+	}
 	scanner := bufio.NewScanner(strings.NewReader(content))
 	scanner.Buffer(make([]byte, 0, 4096), 1<<20)
+	// 复用键缓冲区，避免为每条长词条重新分配拼接结果。
+	var keyBuffer []byte
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
+		// 扫描缓冲区只在当前轮使用，待查表始终保存请求里的键。
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 || bytes.HasPrefix(line, []byte("#")) {
 			continue
 		}
-		if fields := strings.Split(line, "\t"); len(fields) >= 2 {
-			existing[strings.TrimSpace(fields[0])+"\t"+strings.TrimSpace(fields[1])] = true
+		first, rest, ok := bytes.Cut(line, []byte("\t"))
+		if !ok {
+			continue
+		}
+		second, _, _ := bytes.Cut(rest, []byte("\t"))
+		first, second = bytes.TrimSpace(first), bytes.TrimSpace(second)
+		keyBytes := len(first) + 1 + len(second)
+		if keyBytes > maxKeyBytes {
+			continue
+		}
+		keyBuffer = slices.Grow(keyBuffer[:0], keyBytes)
+		keyBuffer = append(keyBuffer, first...)
+		keyBuffer = append(keyBuffer, '\t')
+		keyBuffer = append(keyBuffer, second...)
+		delete(pending, string(keyBuffer))
+		if len(pending) == 0 {
+			break
 		}
 	}
 	var listed alreadyListedError
 	for i, line := range lines {
-		if existing[line.key] {
+		if !pending[line.key] {
 			listed = append(listed, i)
 		}
 	}

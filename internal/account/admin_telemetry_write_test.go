@@ -113,6 +113,13 @@ VALUES($1,'ios','old','合成崩溃','fixed',now()-interval '1 day') RETURNING l
 			if count := clipboardTestCount(t, db, `SELECT count(*) FROM admin_events`); count != 0 {
 				t.Fatal("分组写入失败仍留下事件", count)
 			}
+			var charged int
+			if err := db.pool.QueryRow(ctx, `SELECT COALESCE(sum(count),0) FROM auth_rates WHERE key LIKE 'telemetry-crash:%'`).Scan(&charged); err != nil {
+				t.Fatal(err)
+			}
+			if charged != 0 {
+				t.Fatalf("未接受的崩溃写入失败仍消耗了 %d 次每日额度", charged)
+			}
 			wantGroups := 0
 			if existing {
 				wantGroups = 1

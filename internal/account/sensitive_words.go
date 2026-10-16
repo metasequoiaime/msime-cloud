@@ -49,9 +49,10 @@ type SensitiveMatcher interface {
 
 // sensitiveWord is one cached entry: a plain word in its folded form, or a compiled regex.
 type sensitiveWord struct {
-	hit   SensitiveHit
-	plain string
-	re    *regexp.Regexp
+	hit     SensitiveHit
+	plain   string
+	re      *regexp.Regexp
+	literal string
 }
 
 // sensitiveHitKey counts hits per word and UTC day.
@@ -140,6 +141,7 @@ func loadSensitiveWords(ctx context.Context, store *Store) ([]sensitiveWord, err
 				slog.Warn("sensitive words: stored regex skipped", "id", w.hit.WordID, "reason", "invalid_regex")
 				continue
 			}
+			w.literal = sensitiveRegexLiteral(w.hit.Pattern)
 		} else if w.plain = foldSensitive(w.hit.Pattern, true); w.plain == "" {
 			continue
 		}
@@ -168,6 +170,38 @@ func compileSensitiveRegex(pattern string) (*regexp.Regexp, error) {
 		return nil, errors.New("pattern repeats too much")
 	}
 	return re, nil
+}
+
+// sensitiveRegexLiteral 返回可以安全作为前置 contains 检查的纯字面正则。大小写折叠、全角折叠或格式字符会让原文与规范化文本不再一一对应，这些规则保留完整正则匹配。
+func sensitiveRegexLiteral(pattern string) string {
+	for _, r := range pattern {
+		if r >= 'A' && r <= 'Z' {
+			return ""
+		}
+	}
+	tree, err := syntax.Parse("(?i)"+pattern, syntax.Perl)
+	if err != nil {
+		return ""
+	}
+	tree = tree.Simplify()
+	if tree.Op != syntax.OpLiteral || len(tree.Rune) == 0 {
+		return ""
+	}
+	literal := make([]rune, len(tree.Rune))
+	for i, r := range tree.Rune {
+		if unicode.Is(unicode.Cf, r) || r >= '！' && r <= '～' {
+			return ""
+		}
+		lower := unicode.ToLower(r)
+		// RE2 的大小写折叠还包括某些不能由 ToLower 归一到同一个字符的等价字母（例如 σ/ς、s/ſ）。这些字符在规范化文本里仍然不同，不能用字面量前置检查跳过正则。
+		for folded := unicode.SimpleFold(r); folded != r; folded = unicode.SimpleFold(folded) {
+			if unicode.ToLower(folded) != lower {
+				return ""
+			}
+		}
+		literal[i] = lower
+	}
+	return string(literal)
 }
 
 // sensitiveRegexRepeatCost is the number of program steps a counted repeat ({n} or {n,m}) adds, mult being the product of the enclosing repeat counts: each leaf inside a repeat counts its width times mult. Unrepeated leaves and *, + and ? cost nothing here, because they keep the program as written and the pattern length (at most 200 characters) already bounds them.
@@ -205,6 +239,30 @@ func sensitiveRegexRepeatCost(re *syntax.Regexp, mult int) int {
 
 // foldSensitive normalises text for matching: invisible format characters (zero-width spaces and joiners, bidi marks) are removed so they cannot split a word, full-width ASCII becomes half-width, letters lowercase, and with dropSpace every white space character is removed so spacing cannot split a plain word.
 func foldSensitive(text string, dropSpace bool) string {
+	for offset := 0; offset < len(text); {
+		r, size := utf8.DecodeRuneInString(text[offset:])
+		out := r
+		remove := false
+		switch {
+		case unicode.Is(unicode.Cf, r):
+			remove = true
+		case r == '　':
+			out = ' '
+		case r >= '！' && r <= '～':
+			out -= 0xFEE0
+		}
+		if dropSpace && unicode.IsSpace(out) {
+			remove = true
+		}
+		if remove || unicode.ToLower(out) != r || r == utf8.RuneError && size == 1 {
+			return foldSensitiveChanged(text, dropSpace)
+		}
+		offset += size
+	}
+	return text
+}
+
+func foldSensitiveChanged(text string, dropSpace bool) string {
 	var b strings.Builder
 	b.Grow(len(text))
 	for _, r := range text {
@@ -312,6 +370,9 @@ func (m sensitiveMatcher) Match(ctx context.Context, text string) ([]SensitiveHi
 		} else {
 			if !spacedReady {
 				spaced, spacedReady = foldSensitive(text, false), true
+			}
+			if w.literal != "" && !strings.Contains(spaced, w.literal) {
+				continue
 			}
 			matched = w.re.MatchString(spaced)
 			if !matched {

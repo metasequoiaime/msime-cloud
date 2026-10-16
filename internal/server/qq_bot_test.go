@@ -24,6 +24,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
 )
@@ -2487,20 +2488,20 @@ func TestQQBotRecordsUnansweredTopics(t *testing.T) {
 	if s.qq.gapsIssue != 0 {
 		t.Fatal("a failed comment must drop the cached issue")
 	}
-	// 没写进去的问题退回去重名额：GitHub 评论返回 500 时如实说没记下，下一次同一个问题重新写评论，而不是说「已经记下来了」。
+	// 明确拒绝的评论退回去重名额；5xx 的结果不确定，保留名额避免下一次重复写入。
 	if limiter.counts["qq-bot-gap|第四个问题"] != 0 || fake.replyTexts()[len(fake.replyTexts())-1] != qqUnknownUnrecordedReply {
 		t.Fatal(limiter.counts, fake.replyTexts())
 	}
 	fake.commentStatus = 500
 	qqDeliver(t, s, "m-gap-5-retry", "第四个")
-	if limiter.counts["qq-bot-gap|第四个问题"] != 0 || fake.replyTexts()[len(fake.replyTexts())-1] != qqUnknownUnrecordedReply {
+	if limiter.counts["qq-bot-gap|第四个问题"] != 1 || fake.replyTexts()[len(fake.replyTexts())-1] != qqUnknownUnrecordedReply {
 		t.Fatal(limiter.counts, fake.replyTexts())
 	}
 	fake.commentStatus = 0
 	delete(fake.comments, "/repos/o/docs/issues/77/comments")
 	qqDeliver(t, s, "m-gap-5-again", "第四个")
-	if c := fake.comments["/repos/o/docs/issues/77/comments"]; c == nil || c["body"] != "群友问：第四个问题" || fake.replyTexts()[len(fake.replyTexts())-1] != qqUnknownReply {
-		t.Fatal(fake.comments, fake.replyTexts())
+	if fake.comments["/repos/o/docs/issues/77/comments"] != nil || fake.replyTexts()[len(fake.replyTexts())-1] != qqUnknownReply {
+		t.Fatal("不确定的写入结果不应再次发布评论", fake.comments, fake.replyTexts())
 	}
 	// 每天的上限。
 	limiter.counts["qq-bot-gaps-day|o/docs"] = qqGapsDaily
@@ -4408,11 +4409,12 @@ func TestQQBotChatSkipsThinkingAndLogsTiming(t *testing.T) {
 
 // memoryDrafts 是测试用的草稿存储；updateErr、claimErr 不为空时对应的操作像数据库出错那样失败。
 type memoryDrafts struct {
-	mu        sync.Mutex
-	drafts    []account.QQDraft
-	createErr error
-	updateErr error
-	claimErr  error
+	mu                  sync.Mutex
+	drafts              []account.QQDraft
+	createErr           error
+	createAfterWriteErr error
+	updateErr           error
+	claimErr            error
 }
 
 func (m *memoryDrafts) CreateQQDraft(_ context.Context, subject, original, report string) (int64, error) {
@@ -4422,6 +4424,9 @@ func (m *memoryDrafts) CreateQQDraft(_ context.Context, subject, original, repor
 		return 0, m.createErr
 	}
 	m.drafts = append(m.drafts, account.QQDraft{ID: int64(len(m.drafts) + 1), Subject: account.QQDraftSubject(subject), Original: original, Report: report, CreatedAt: time.Date(2026, 10, 12, 1, 0, 0, 0, time.UTC), UpdatedAt: time.Now()})
+	if m.createAfterWriteErr != nil {
+		return 0, m.createAfterWriteErr
+	}
 	return int64(len(m.drafts)), nil
 }
 func (m *memoryDrafts) QQDraft(_ context.Context, id int64) (account.QQDraft, error) {
@@ -4668,10 +4673,24 @@ func TestQQBotDraftNotReport(t *testing.T) {
 	fake.summary = qqBugSummary
 	drafts.createErr = errors.New("database down")
 	s.qqDraftReport(context.Background(), "GROUP1/MEMBER1", "候选框又跑到左上角了", nil, func(bool) {})
-	if got := limiter.counts["qq-bot-drafts|GROUP1/MEMBER1"]; got != 0 {
-		t.Fatalf("草稿保存失败时不应占用草稿额度，实际剩余计数 %d", got)
+	if got := limiter.counts["qq-bot-drafts|GROUP1/MEMBER1"]; got != 1 {
+		t.Fatalf("草稿写入结果不确定时应保留额度，实际计数 %d", got)
 	}
 	drafts.createErr = nil
+	// 明确的 PostgreSQL 语句错误确认没有写入，才退回名额。
+	drafts.createErr = &pgconn.PgError{Code: "23514", Message: "check violation"}
+	s.qqDraftReport(context.Background(), "GROUP1/MEMBER2", "候选框又跑到左上角了", nil, func(bool) {})
+	if got := limiter.counts["qq-bot-drafts|GROUP1/MEMBER2"]; got != 0 {
+		t.Fatalf("明确拒绝的草稿写入应退回额度，实际计数 %d", got)
+	}
+	drafts.createErr = nil
+	// 返回错误前已经写入时不能退回额度，避免下一次重试再占一个名额并建重复草稿。
+	drafts.createAfterWriteErr = context.Canceled
+	s.qqDraftReport(context.Background(), "GROUP1/MEMBER3", "候选框又跑到左上角了", nil, func(bool) {})
+	if got := limiter.counts["qq-bot-drafts|GROUP1/MEMBER3"]; got != 1 || len(drafts.drafts) != 1 {
+		t.Fatalf("不确定写入应保留额度和已写草稿，计数 %d，草稿数 %d", got, len(drafts.drafts))
+	}
+	drafts.createAfterWriteErr = nil
 	// 额度用完：分不清是不是具体的 bug，照旧记进汇总 issue。
 	limiter.counts["qq-bot-drafts|GROUP1/MEMBER2"] = qqDraftsDaily
 	before := len(fake.replyTexts())
@@ -5564,6 +5583,107 @@ func TestQQBotFeatureVotes(t *testing.T) {
 	}
 }
 
+func TestQQBotFeatureVoteDoesNotReleaseLimitAfterLostGitHubWriteResponse(t *testing.T) {
+	s, fake, limiter := qqServer(t)
+	s.qqDrafts = &memoryDrafts{}
+	s.qq.config.Admins = nil
+	s.config.Admin.GitHub.Platforms = nil
+	fake.answer = `{"type":"answered","answer":"现在还不支持。","escalate":true,"topic":"希望支持候选框透明度"}`
+	fake.summary = `{"kind":"feature","title":"候选框支持透明度","proposal":"候选框背景可以调透明度","keywords":"候选框 透明度"}`
+	fake.searchItems = []map[string]any{{"number": 7, "title": "候选框透明度", "body": "希望能调透明度"}}
+	fake.duplicate = `{"duplicate":7}`
+	fake.issueComments = map[string]string{
+		"/repos/o/r/issues/7/comments": `[{"id":55,"body":"` + strings.ReplaceAll(qqVoteBody(1), `"`, `\"`) + `",` + qqAppAuthor + `}]`,
+	}
+	loseResponse := true
+	client := *s.adminGitHub.HTTP
+	transport := client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	client.Transport = qqTestTransport(func(r *http.Request) (*http.Response, error) {
+		response, err := transport.RoundTrip(r)
+		if err == nil && loseResponse && r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/issues/comments/") {
+			loseResponse = false
+			return response, errors.New("synthetic connection reset after GitHub write")
+		}
+		return response, err
+	})
+	s.adminGitHub.HTTP = &client
+	deliver := func(id string) {
+		t.Helper()
+		qqPost(t, s, qqMessageFrom(id, "MEMBER8", "候选框透明度再加一"))
+		s.qqWorkers.Wait()
+	}
+	deliver("m-vote-lost-response")
+	if fake.patched["/repos/o/r/issues/comments/55"]["body"] != qqVoteBody(2) || slices.Contains(limiter.released, "qq-bot-vote|GROUP1/MEMBER8|o/r#7") {
+		t.Fatalf("GitHub 已写入但限额被退回：patched=%v released=%v", fake.patched, limiter.released)
+	}
+	fake.issueComments["/repos/o/r/issues/7/comments"] = `[{"id":55,"body":"` + strings.ReplaceAll(qqVoteBody(2), `"`, `\"`) + `",` + qqAppAuthor + `}]`
+	deliver("m-vote-lost-response-retry")
+	if got := fake.patched["/repos/o/r/issues/comments/55"]["body"]; got != qqVoteBody(2) {
+		t.Fatalf("重试不应再次计票：%v", got)
+	}
+}
+
+// GitHub 已经写入但响应在传输层丢失时，后续读取不能继续使用写入前的评论缓存。
+func TestQQAddVoteInvalidatesCommentCacheWhenWriteResultIsUncertain(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	token, err := s.adminGitHub.Token(context.Background(), "o/r", issueTokenPerms)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/repos/o/r/issues/7/comments?per_page=100&page=1"
+	fake.issueComments = map[string]string{path: `[{"id":55,"body":"` + strings.ReplaceAll(qqVoteBody(1), `"`, `\"`) + `",` + qqAppAuthor + `}]`}
+	if _, err := s.adminGitHub.Get(context.Background(), token, path); err != nil {
+		t.Fatal("预热评论缓存失败：", err)
+	}
+	client := *s.adminGitHub.HTTP
+	transport := client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	patchStarted := make(chan struct{})
+	allowPatchResponse := make(chan struct{})
+	client.Transport = qqTestTransport(func(r *http.Request) (*http.Response, error) {
+		response, err := transport.RoundTrip(r)
+		if err == nil && r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/issues/comments/") {
+			close(patchStarted)
+			<-allowPatchResponse
+			return response, errors.New("synthetic connection reset after GitHub write")
+		}
+		return response, err
+	})
+	s.adminGitHub.HTTP = &client
+	voteDone := make(chan error, 1)
+	go func() {
+		_, err := s.qqAddVote(context.Background(), token, "o/r", 7)
+		voteDone <- err
+	}()
+	<-patchStarted
+	if response, err := s.adminGitHub.Get(context.Background(), token, path); err != nil {
+		t.Fatal("写入进行中读取评论失败：", err)
+	} else if !strings.Contains(string(response.Body), qqVoteBody(1)) {
+		t.Fatalf("写入进行中应读到写入前的远端状态：%s", response.Body)
+	}
+	close(allowPatchResponse)
+	if err := <-voteDone; err == nil {
+		t.Fatal("不确定的 GitHub 写入应返回错误")
+	}
+	fake.issueComments[path] = `[{"id":55,"body":"` + strings.ReplaceAll(qqVoteBody(2), `"`, `\"`) + `",` + qqAppAuthor + `}]`
+	response, err := s.adminGitHub.Get(context.Background(), token, path)
+	if err != nil {
+		t.Fatal("读取评论失败：", err)
+	}
+	var comments []map[string]any
+	if err := response.Decode(&comments); err != nil {
+		t.Fatal(err)
+	}
+	if len(comments) != 1 || comments[0]["body"] != qqVoteBody(2) {
+		t.Fatalf("写入结果不确定时仍返回旧缓存：%v", comments)
+	}
+}
+
 // memoryFAQCandidates 是测试用的文档候选存储。state 为空是还没处理，"writing" 是认领了正在写进 FAQ，处理过的是「状态:PR」。
 type memoryFAQCandidates struct {
 	mu       sync.Mutex
@@ -5710,7 +5830,7 @@ func (m *memoryFAQCandidates) CloseQQFAQCandidateLease(ctx context.Context, id i
 
 func TestQQBotFAQCandidateWriteFailureReleasesQuota(t *testing.T) {
 	s, _, limiter := qqServer(t)
-	candidates := &memoryFAQCandidates{addErr: errors.New("database unavailable")}
+	candidates := &memoryFAQCandidates{addErr: &pgconn.PgError{Code: "23514"}}
 	s.qqFAQCandidates = candidates
 
 	s.recordQQFAQCandidate(context.Background(), "五笔怎么切换", "在设置的输入方案里选五笔。")

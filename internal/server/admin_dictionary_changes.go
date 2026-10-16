@@ -191,6 +191,7 @@ func (s *Server) createDictionaryPR(ctx context.Context, gh *githubapp.Client, i
 	if pull.Number <= 0 || pull.URL != "https://github.com/"+repo+"/pull/"+strconv.Itoa(pull.Number) {
 		return result, dictionaryChangeFail(502, "dictionary_uncertain")
 	}
+	gh.Invalidate("/repos/" + repo + "/pulls")
 	result.Number, result.URL = pull.Number, pull.URL
 	return result, nil
 }
@@ -207,6 +208,7 @@ func applyDictionaryChanges(name, text string, changes []dictionaryEdit) (string
 		return "", dictionaryChangeFail(400, "dictionary_readonly")
 	}
 	lines := strings.Split(text, "\n")
+	validator := dictionaryColumnValidator{name: name, lines: lines}
 	newline := "\n"
 	if strings.Contains(text, "\r\n") {
 		newline = "\r\n"
@@ -236,7 +238,7 @@ func applyDictionaryChanges(name, text string, changes []dictionaryEdit) (string
 			updates[edit.Line] = nil
 			continue
 		}
-		if err := validateDictionaryColumns(name, text, edit.Columns); err != nil {
+		if err := validator.validate(edit.Columns); err != nil {
 			return "", err
 		}
 		value := strings.Join(edit.Columns, "\t")
@@ -246,8 +248,31 @@ func applyDictionaryChanges(name, text string, changes []dictionaryEdit) (string
 			updates[edit.Line] = &value
 		}
 	}
+	// 按删改后的字节数预留空间，追加前可能需要补一个换行。
+	outputBytes := len(text)
+	for line, value := range updates {
+		original := lines[line-1]
+		if value == nil {
+			outputBytes -= len(original)
+			if line < len(lines) {
+				outputBytes--
+			}
+		} else {
+			outputBytes += len(*value) - len(original)
+			if strings.HasSuffix(original, "\r") {
+				outputBytes++
+			}
+		}
+	}
+	if outputBytes > 0 && len(additions) > 0 {
+		outputBytes += len(newline)
+	}
+	for _, value := range additions {
+		outputBytes += len(value) + len(newline)
+	}
 	// 保留未修改行的每一个字节及换行风格，仅修改目标行。
 	var out strings.Builder
+	out.Grow(outputBytes)
 	for i, original := range lines {
 		value, changed := updates[i+1]
 		if changed && value == nil {
@@ -265,42 +290,63 @@ func applyDictionaryChanges(name, text string, changes []dictionaryEdit) (string
 			out.WriteByte('\n')
 		}
 	}
-	result := out.String()
 	if len(additions) > 0 {
-		if result != "" && !strings.HasSuffix(result, "\n") {
-			result += newline
+		if out.Len() > 0 && !strings.HasSuffix(out.String(), "\n") {
+			out.WriteString(newline)
 		}
-		result += strings.Join(additions, newline) + newline
+		for _, value := range additions {
+			out.WriteString(value)
+			out.WriteString(newline)
+		}
 	}
+	result := out.String()
 	// 翻译允许覆盖同一源词，其他文件按前两列去重。
-	seen := map[string]int{}
-	oldCounts := map[string]int{}
-	key := func(line string) string {
-		cols := strings.Split(strings.TrimSuffix(line, "\r"), "\t")
-		if len(cols) < 2 {
-			return ""
-		}
-		return strings.Join(cols[:2], "\t")
-	}
+	remaining := map[string]int{}
+
 	for _, line := range lines {
-		if k := key(line); k != "" {
-			oldCounts[k]++
+		if k := dictionaryEntryKey(line); k != "" {
+			remaining[k]++
 		}
 	}
-	for _, line := range strings.Split(result, "\n") {
-		k := key(line)
+	for line := range strings.SplitSeq(result, "\n") {
+		k := dictionaryEntryKey(line)
 		if k == "" {
 			continue
 		}
-		seen[k]++
-		if seen[k] > max(1, oldCounts[k]) {
+		if count, exists := remaining[k]; !exists {
+			// 新键只允许出现一次；保留零值以拒绝后续重复。
+			remaining[k] = 0
+		} else if count > 0 {
+			remaining[k] = count - 1
+		} else {
 			return "", dictionaryChangeFail(409, "dictionary_duplicate")
 		}
 	}
 	return result, nil
 }
 
-func validateDictionaryColumns(name, existing string, cols []string) error {
+// dictionaryEntryKey 从原行截取前两列作为去重键，避免拆分再拼接。
+func dictionaryEntryKey(line string) string {
+	line = strings.TrimSuffix(line, "\r")
+	first, rest, ok := strings.Cut(line, "\t")
+	if !ok {
+		return ""
+	}
+	second, _, _ := strings.Cut(rest, "\t")
+	return line[:len(first)+1+len(second)]
+}
+
+// dictionaryColumnValidator 在单次变更中复用原词库的权重范围，避免每条新增词条都重扫文件。
+type dictionaryColumnValidator struct {
+	name        string
+	lines       []string
+	weightsRead bool
+	minimum     int64
+	maximum     int64
+}
+
+func (v *dictionaryColumnValidator) validate(cols []string) error {
+	name := v.name
 	invalid := func() error { return dictionaryChangeFail(400, "invalid_dictionary_entry") }
 	isTranslation := path.Base(name) == "translations.txt"
 	required := 3
@@ -337,24 +383,30 @@ func validateDictionaryColumns(name, existing string, cols []string) error {
 		return invalid()
 	}
 	if strings.HasPrefix(name, "custom/") {
-		minimum, maximum := int64(0), int64(0)
-		for _, line := range strings.Split(existing, "\n") {
-			fields := strings.Split(strings.TrimSpace(line), "\t")
-			if len(fields) != 3 || strings.HasPrefix(fields[0], "#") {
-				continue
+		if !v.weightsRead {
+			for _, line := range v.lines {
+				first, rest, ok := strings.Cut(strings.TrimSpace(line), "\t")
+				if !ok || strings.HasPrefix(first, "#") {
+					continue
+				}
+				_, weightField, ok := strings.Cut(rest, "\t")
+				if !ok || strings.Contains(weightField, "\t") {
+					continue
+				}
+				n, err := strconv.ParseInt(weightField, 10, 64)
+				if err != nil {
+					continue
+				}
+				if v.minimum == 0 || n < v.minimum {
+					v.minimum = n
+				}
+				if n > v.maximum {
+					v.maximum = n
+				}
 			}
-			n, err := strconv.ParseInt(fields[2], 10, 64)
-			if err != nil {
-				continue
-			}
-			if minimum == 0 || n < minimum {
-				minimum = n
-			}
-			if n > maximum {
-				maximum = n
-			}
+			v.weightsRead = true
 		}
-		if minimum == 0 || weight < minimum || weight > maximum {
+		if v.minimum == 0 || weight < v.minimum || weight > v.maximum {
 			return invalid()
 		}
 	}

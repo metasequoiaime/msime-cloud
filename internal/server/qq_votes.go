@@ -30,6 +30,12 @@ type qqVoteComment struct {
 	qqGitHubAuthor
 }
 
+// qqVoteWriteUncertainError 表示 GitHub 写入的结果未知：请求可能已经生效，只是响应没有可靠地返回。
+type qqVoteWriteUncertainError struct{ cause error }
+
+func (e *qqVoteWriteUncertainError) Error() string { return e.cause.Error() }
+func (e *qqVoteWriteUncertainError) Unwrap() error { return e.cause }
+
 // qqVoteBody 是有 n 位群友需要时的计数评论。
 func qqVoteBody(n int) string {
 	return fmt.Sprintf("QQ 群里有 %d 位群友需要这个功能（由 QQ 群答疑机器人统计，同一位群友只算一次）。%s%d -->", n, qqVoteMarker, n)
@@ -66,12 +72,17 @@ func (s *Server) qqVoteFeature(ctx context.Context, subject string, report qqRep
 	count, err := s.qqAddVote(ctx, token, repo, number)
 	if err != nil {
 		slog.Warn("qq bot: vote not recorded", "repo", repo, "reason", err.Error())
-		// 这一票没记上，退回名额；否则这位群友 30 天内再提会被告知「你之前已经记过一票了」，计数评论里其实没有他。
-		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-		if err := s.limits.ReleaseRateLimit(rctx, "qq-bot-vote", voter); err != nil {
-			slog.Warn("qq bot: vote slot not released", "reason", err.Error())
+		var uncertain *qqVoteWriteUncertainError
+		if !errors.As(err, &uncertain) {
+			// 确认写入没有发出或被 GitHub 拒绝时退回名额；否则这位群友 30 天内再提会被告知「你之前已经记过一票了」，计数评论里其实没有他。
+			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+			if err := s.limits.ReleaseRateLimit(rctx, "qq-bot-vote", voter); err != nil {
+				slog.Warn("qq bot: vote slot not released", "reason", err.Error())
+			}
+			cancel()
+		} else {
+			slog.Warn("qq bot: vote write result uncertain; keeping vote slot", "repo", repo)
 		}
-		cancel()
 		return "这个需求已经有人提过：" + ref + "，开发者会在那里跟进。" + s.qqProgressHint(repo, number)
 	}
 	return fmt.Sprintf("这个需求已经有人提过：%s，我帮你在那里记了一票，现在 QQ 群里一共 %d 人需要。%s", ref, count, s.qqProgressHint(repo, number))
@@ -121,18 +132,33 @@ func (s *Server) qqAddVote(ctx context.Context, token, repo string, number int64
 			continue
 		}
 		n, _ := strconv.Atoi(m[1])
+		// 写入结果可能在响应返回前丢失；先失效缓存，避免不确定时继续读到旧评论。
+		client.Invalidate("/repos/" + repo + "/issues")
+		defer client.Invalidate("/repos/" + repo + "/issues")
 		r, err := client.Do(ctx, token, "PATCH", "/repos/"+repo+"/issues/comments/"+strconv.FormatInt(c.ID, 10), map[string]string{"body": qqVoteBody(n + 1)})
+		client.Invalidate("/repos/" + repo + "/issues")
 		if err != nil || !r.OK() {
-			return 0, githubFailure("vote update", r, err)
+			failure := githubFailure("vote update", r, err)
+			if err != nil || r.Status == 0 || r.Status >= 500 {
+				return 0, &qqVoteWriteUncertainError{cause: failure}
+			}
+			return 0, failure
 		}
 		return n + 1, nil
 	}
 	if unknown {
 		return 0, errors.New("vote comments: app login unavailable")
 	}
+	client.Invalidate("/repos/" + repo + "/issues")
+	defer client.Invalidate("/repos/" + repo + "/issues")
 	r, err = client.Do(ctx, token, "POST", issuePath+"/comments", map[string]string{"body": qqVoteBody(1)})
+	client.Invalidate("/repos/" + repo + "/issues")
 	if err != nil || !r.OK() {
-		return 0, githubFailure("vote create", r, err)
+		failure := githubFailure("vote create", r, err)
+		if err != nil || r.Status == 0 || r.Status >= 500 {
+			return 0, &qqVoteWriteUncertainError{cause: failure}
+		}
+		return 0, failure
 	}
 	return 1, nil
 }

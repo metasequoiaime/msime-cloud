@@ -1029,6 +1029,80 @@ func TestCommunityCandidateSkinSync(t *testing.T) {
 	apiRequest(t, mux, "PUT", "/v1/community/candidate-skins/"+private, candidateReplaceBody(t, "Private v3", manifest, files), owner.AccessToken, 429)
 }
 
+func TestCommunityCandidateSkinReplaceUpdatedAtUsesPostLockTime(t *testing.T) {
+	db := testStore(t)
+	a := &Service{store: db}
+	mux := http.NewServeMux()
+	Mount(mux, a)
+	owner := complete(t, db, Identity{"email", "candidate-updated-at-lock@example.test"})
+	manifest, files := candidateFixture(t, "shared")
+	for _, tc := range []struct {
+		name, method, path, body, id string
+	}{
+		{"replace", "PUT", "/v1/community/candidate-skins/da334455-1234-4234-8234-000000000001", candidateReplaceBody(t, "After", manifest, files), "da334455-1234-4234-8234-000000000001"},
+		{"visibility", "PATCH", "/v1/community/candidate-skins/da334455-1234-4234-8234-000000000002", `{"visibility":"private"}`, "da334455-1234-4234-8234-000000000002"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			insertCandidateSkin(t, db, tc.id, owner.User.ID, "Before")
+			blocker, err := db.pool.Begin(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer blocker.Rollback(context.Background())
+			if _, err := blocker.Exec(t.Context(), `SELECT id FROM auth_users WHERE id=$1 FOR UPDATE`, owner.User.ID); err != nil {
+				t.Fatal(err)
+			}
+
+			result := make(chan *httptest.ResponseRecorder, 1)
+			go func() {
+				r := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+				r.Header.Set("Content-Type", "application/json")
+				r.Header.Set("Authorization", "Bearer "+owner.AccessToken)
+				w := httptest.NewRecorder()
+				mux.ServeHTTP(w, r)
+				result <- w
+			}()
+			for deadline := time.Now().Add(10 * time.Second); ; {
+				var waiting bool
+				if err := db.pool.QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT banned_at IS NOT NULL%')`).Scan(&waiting); err != nil {
+					t.Fatal(err)
+				}
+				if waiting {
+					break
+				}
+				select {
+				case w := <-result:
+					t.Fatal("request finished before the user lock was released", w.Code, w.Body.String())
+				default:
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("request never waited on the user lock")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+
+			var marker time.Time
+			if err := db.pool.QueryRow(t.Context(), `UPDATE community_candidate_skins SET updated_at=clock_timestamp() WHERE id=$1 RETURNING updated_at`, tc.id).Scan(&marker); err != nil {
+				t.Fatal(err)
+			}
+			if err := blocker.Commit(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			w := <-result
+			if w.Code != 200 {
+				t.Fatal(w.Code, w.Body.String())
+			}
+			var replaced CommunityCandidateSkin
+			if err := json.Unmarshal(w.Body.Bytes(), &replaced); err != nil {
+				t.Fatal(w.Body.String(), err)
+			}
+			if replaced.UpdatedAt.Before(marker) {
+				t.Fatalf("request moved updated_at backwards: got %s before concurrent update %s", replaced.UpdatedAt, marker)
+			}
+		})
+	}
+}
+
 func TestCommunityCandidateSkinSchemaUpgrade(t *testing.T) {
 	db := testStore(t)
 	owner := complete(t, db, Identity{"email", "candidate-upgrade@example.test"})

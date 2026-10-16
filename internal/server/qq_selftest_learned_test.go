@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"strings"
 	"sync"
@@ -10,6 +11,30 @@ import (
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
+
+func TestQQSelfTestAlertInvalidatesIssueCache(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	fake.openIssues = `[]`
+	s.qq.config.ImprovementRepo = "o/r"
+	ctx := context.Background()
+	token, err := s.adminGitHub.Token(ctx, "o/r", issueTokenPerms)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/repos/o/r/issues?state=open"
+	if response, err := s.adminGitHub.Get(ctx, token, path); err != nil || !response.OK() {
+		t.Fatalf("预热 issue 缓存失败：状态=%d，错误=%v", response.Status, err)
+	}
+	s.qqSelfTestAlert(ctx, []qqSelfTestResult{{Case: qqSelfTestCase{Question: "鸿蒙版怎么下载"}, Answer: "答案", Reason: "只复述资料"}}, "0.1.0", "daily")
+	response, err := s.adminGitHub.Get(ctx, token, path)
+	if err != nil || !response.OK() {
+		t.Fatalf("读取 issue 列表失败：状态=%d，错误=%v", response.Status, err)
+	}
+	var issues []json.RawMessage
+	if err := response.Decode(&issues); err != nil || fake.openIssueCalls != 2 {
+		t.Fatalf("创建自测告警后缓存未失效：请求次数=%d，解码错误=%v", fake.openIssueCalls, err)
+	}
+}
 
 type memoryLearnedCases struct {
 	mu    sync.Mutex

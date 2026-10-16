@@ -22,6 +22,35 @@ const (
 // qqImagePattern 匹配 Markdown 图片和 HTML 标签，维护者评论里的截图对模型没有用。
 var qqImagePattern = regexp.MustCompile(`!\[[^\]]*\]\([^)]*\)|<[^>\n]+>`)
 
+// qqStripImagesAndHTML 将 Markdown 图片和 HTML 标签替换为空格，无匹配时复用正文。
+func qqStripImagesAndHTML(text string) string {
+	start := strings.Index(text, "![")
+	if tag := strings.IndexByte(text, '<'); tag >= 0 && (start < 0 || tag < start) {
+		start = tag
+	}
+	if start < 0 {
+		return text
+	}
+	candidate := text[start:]
+	// 普通前缀更长时复用首次匹配索引，单个匹配不再重新执行正则或重复复制前缀。
+	if start >= len(candidate) {
+		match := qqImagePattern.FindStringIndex(candidate)
+		if match == nil {
+			return text
+		}
+		tail := candidate[match[1]:]
+		if !strings.Contains(tail, "![") && !strings.ContainsRune(tail, '<') {
+			return text[:start+match[0]] + " " + tail
+		}
+		return text[:start] + qqImagePattern.ReplaceAllString(candidate, " ")
+	}
+	// 从最早可能的标记开始探测，避免重复扫描其前面的普通正文。
+	if !qqImagePattern.MatchString(candidate) {
+		return text
+	}
+	return qqImagePattern.ReplaceAllString(text, " ")
+}
+
 // qqIssueDetail 是补上下文要用到的 issue 字段，和 qqIssue 一起嵌入解码（编号在 qqIssue 里，这里不能再有同名字段，否则两个都解不出来）。
 type qqIssueDetail struct {
 	State       string `json:"state"`
@@ -158,7 +187,7 @@ func (s *Server) qqLookupMaintainerComment(ctx context.Context, repo string, num
 		default:
 			continue
 		}
-		text := qqPlainText(qqImagePattern.ReplaceAllString(comments[i].Body, " "))
+		text := qqPlainText(qqStripImagesAndHTML(comments[i].Body))
 		if text == "" {
 			continue
 		}

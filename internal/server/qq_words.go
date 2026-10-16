@@ -40,10 +40,28 @@ var qqToneless = map[rune]rune{
 }
 
 // qqPinyinPunctuation 是群友常用来把拼音括起来的符号，规范时换成空格：「扛把子（kang ba zi）」「扛把子 “kang ba zi”」。
-var qqPinyinPunctuation = strings.NewReplacer("（", " ", "）", " ", "(", " ", ")", " ", "[", " ", "]", " ", "【", " ", "】", " ", "「", " ", "」", " ", "《", " ", "》", " ", "“", " ", "”", " ", "\"", " ")
+var (
+	qqPinyinPunctuation = strings.NewReplacer("（", " ", "）", " ", "(", " ", ")", " ", "[", " ", "]", " ", "【", " ", "】", " ", "「", " ", "」", " ", "《", " ", "》", " ", "“", " ", "”", " ", "\"", " ")
+	qqPinyinCleanup     = strings.NewReplacer("u:", "v", "’", "'", "-", " ", "　", " ")
+)
 
 // qqNormalizePinyin 把群友写的拼音规范成投稿用的格式：小写，去掉声调和括号，音节之间用 ' 分隔，ü 写作 v。
 func qqNormalizePinyin(raw string) string {
+	// 普通小写拼音只需合并分隔符，跳过声调和标点替换及临时切片。
+	if strings.IndexFunc(raw, func(r rune) bool {
+		return (r < 'a' || r > 'z') && r != ' ' && r != '\''
+	}) < 0 {
+		var out strings.Builder
+		for part := range strings.FieldsFuncSeq(raw, func(r rune) bool { return r == ' ' || r == '\'' }) {
+			if out.Len() == 0 {
+				out.Grow(len(raw))
+			} else {
+				out.WriteByte('\'')
+			}
+			out.WriteString(part)
+		}
+		return out.String()
+	}
 	raw = strings.Map(func(r rune) rune {
 		if plain, ok := qqToneless[r]; ok {
 			return plain
@@ -51,7 +69,7 @@ func qqNormalizePinyin(raw string) string {
 		return r
 	}, strings.ToLower(raw))
 	raw = qqPinyinPunctuation.Replace(raw)
-	raw = strings.NewReplacer("u:", "v", "’", "'", "-", " ", "　", " ").Replace(raw)
+	raw = qqPinyinCleanup.Replace(raw)
 	return strings.Join(strings.FieldsFunc(raw, func(r rune) bool { return r == ' ' || r == '\'' }), "'")
 }
 
@@ -60,28 +78,37 @@ func qqSplitPinyin(pinyin string, n int) string {
 	if strings.Contains(pinyin, "'") || n <= 1 {
 		return pinyin
 	}
-	var split func(rest string, left int) []string
-	split = func(rest string, left int) []string {
+	if n > len(pinyin) || (len(pinyin)-1)/6 >= n {
+		return pinyin
+	}
+	// 同一后缀和剩余音节数只搜索一次；路径复用，避免逐层复制成功结果。
+	failed := make(map[[2]int]bool)
+	syllables := make([]string, n)
+	var split func(rest string, left int) bool
+	split = func(rest string, left int) bool {
 		if rest == "" {
-			if left == 0 {
-				return []string{}
-			}
-			return nil
+			return left == 0
 		}
-		if left == 0 {
-			return nil
+		if left == 0 || len(rest) < left || (len(rest)-1)/6 >= left {
+			return false
+		}
+		state := [2]int{len(rest), left}
+		if failed[state] {
+			return false
 		}
 		for size := min(6, len(rest)); size >= 1; size-- {
 			if !pinyinSyllables[rest[:size]] {
 				continue
 			}
-			if tail := split(rest[size:], left-1); tail != nil {
-				return append([]string{rest[:size]}, tail...)
+			syllables[n-left] = rest[:size]
+			if split(rest[size:], left-1) {
+				return true
 			}
 		}
-		return nil
+		failed[state] = true
+		return false
 	}
-	if syllables := split(pinyin, n); syllables != nil {
+	if split(pinyin, n) {
 		return strings.Join(syllables, "'")
 	}
 	return pinyin

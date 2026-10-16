@@ -548,6 +548,191 @@ def check_profile_rollback(context, base: str, problems: list[str]):
             page.close()
 
 
+def check_dictionary_editor_actions(context, base: str, problems: list[str]):
+    # 保存必须包含仍在输入的单元格，校验失败不能提交旧草稿；放弃也必须清理输入缓冲。
+    for formula in (False, True):
+        for keyboard in (False, True):
+            page = context.new_page()
+            page.on("pageerror", lambda error: problems.append(f"词库当前输入测试页面异常：{error}"))
+            pending = []
+            page.route("**/api/auth/session", lambda route: route.fulfill(json=FIXTURES["/api/auth/session"]))
+            page.route("**/api/dictionary/changes", lambda route: pending.append(route))
+            try:
+                page.goto(base + "/dictionary")
+                page.get_by_role("radio", name=re.compile("专题词包")).click()
+                table = page.get_by_role("grid", name="词条电子表格")
+                weight = table.locator('[data-cell="C1"]')
+                weight.click()
+                weight.get_by_role("textbox").fill("250")
+                weight.get_by_role("textbox").press("Enter")
+                word = table.locator('[data-cell="A1"]')
+                word.click()
+                editor = page.get_by_role("textbox", name="单元格内容", exact=True) if formula else word.get_by_role("textbox")
+                oversized = "x" * 1001
+                editor.fill(oversized)
+
+                def save():
+                    if keyboard:
+                        editor.press("Control+s")
+                    else:
+                        page.get_by_role("button", name="保存变更（1）", exact=True).click()
+
+                save()
+                expect(page.get_by_role("alert")).to_contain_text("单元格最多 1000 字节")
+                expect(editor).to_have_value(oversized)
+                expect(table).to_have_attribute("aria-readonly", "false")
+                assert not pending, "当前输入校验失败时不能只提交此前暂存的草稿"
+                expect(page.get_by_text("已创建 PR #42。", exact=False)).to_have_count(0)
+                editor.fill("修正词条")
+                with page.expect_request("**/api/dictionary/changes") as sent:
+                    save()
+                assert sent.value.post_data_json["changes"] == [{"operation": "replace", "line": 1, "columns": ["修正词条", "shi'li", "250"]}]
+                pending.pop().fulfill(json=FIXTURES["/api/dictionary/changes"])
+                expect(page.get_by_text("已创建 PR #42。", exact=False)).to_be_visible()
+                expect(page.get_by_text("待保存变更", exact=False)).to_have_count(0)
+                word.click()
+                editor = page.get_by_role("textbox", name="单元格内容", exact=True) if formula else word.get_by_role("textbox")
+                editor.fill(oversized)
+                page.get_by_role("button", name="放弃草稿", exact=True).click()
+                expect(editor).to_have_value("示例")
+                expect(page.get_by_role("alert")).to_have_count(0)
+                expect(page.get_by_text("待保存变更", exact=False)).to_have_count(0)
+                expect(page.get_by_role("button", name="保存变更", exact=True)).to_be_disabled()
+                page.get_by_role("radio", name=re.compile("自定义词库")).click()
+                expect(page.get_by_text("当前文件有待提交变更", exact=False)).to_have_count(0)
+                expect(page.get_by_role("grid", name="词条电子表格").locator('[data-cell="A1"]').get_by_role("textbox")).to_have_value("水杉")
+                assert not pending, "放弃输入不应发送保存请求"
+                problems.extend(f"词库当前输入测试 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+            finally:
+                for route in pending:
+                    route.abort()
+                page.unroute_all(behavior="ignoreErrors")
+                page.close()
+
+
+def check_dictionary_editor_navigation(context, base: str, problems: list[str]):
+    # 搜索和分页会重建表格，必须先暂存当前输入，失败时保留原视图和输入。
+    for formula in (False, True):
+        for action, address, line, target in (("下一页", "A100", 100, "测试99"), ("上一页", "A5", 105, "示例"), ("搜索词条", "A1", 102, "测试0"), ("清空词条搜索", "A1", 2, "示例")):
+            page = context.new_page()
+            page.on("pageerror", lambda error: problems.append(f"词库编辑导航测试页面异常：{error}"))
+            pending = []
+            page.route("**/api/auth/session", lambda route: route.fulfill(json=FIXTURES["/api/auth/session"]))
+            page.route("**/api/dictionary/changes", lambda route: pending.append(route))
+            try:
+                page.goto(base + "/dictionary")
+                page.get_by_role("radio", name=re.compile("专题词包")).click()
+                table = page.get_by_role("grid", name="词条电子表格")
+                if action in ("搜索词条", "清空词条搜索"):
+                    page.get_by_role("textbox", name="搜索当前文件词条", exact=True).fill("测试")
+                    expect(page.get_by_text("找到 104 条「测试」的匹配", exact=False)).to_be_visible()
+                if action in ("上一页", "搜索词条"):
+                    page.get_by_role("button", name="下一页", exact=True).click()
+                    expect(page.get_by_text("第 2 / 2 页", exact=False)).to_be_visible()
+                cell = table.locator(f'[data-cell="{address}"]')
+                cell.click()
+                editor = page.get_by_role("textbox", name="单元格内容", exact=True) if formula else cell.get_by_role("textbox")
+                oversized = "x" * 1001
+                editor.fill(oversized)
+                editor.press("Enter")
+                expect(page.get_by_role("alert")).to_contain_text("单元格最多 1000 字节")
+                before = table.inner_text()
+                navigation = page.get_by_role("button", name=action, exact=True)
+                navigation.click()
+                expect(page.get_by_role("alert")).to_contain_text("单元格最多 1000 字节")
+                expect(editor).to_have_value(oversized)
+                assert table.inner_text() == before, f"{action}不能丢弃当前无效输入并更换视图"
+                assert not pending, "切换视图不应创建 PR"
+                editor.fill("修正词条")
+                navigation.click()
+                expect(table.locator('[data-cell="A1"]').get_by_role("textbox")).to_have_value(target)
+                expect(page.get_by_text("待保存变更 · 1 项", exact=False)).to_be_visible()
+                with page.expect_request("**/api/dictionary/changes") as sent:
+                    page.get_by_role("button", name="保存变更（1）", exact=True).click()
+                assert sent.value.post_data_json["changes"] == [{"operation": "replace", "line": line, "columns": ["修正词条", "ce'shi", "100"]}]
+                pending.pop().fulfill(json=FIXTURES["/api/dictionary/changes"])
+                expect(page.get_by_text("已创建 PR #42。", exact=False)).to_be_visible()
+                problems.extend(f"词库编辑导航测试 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+            finally:
+                for route in pending:
+                    route.abort()
+                page.unroute_all(behavior="ignoreErrors")
+                page.close()
+
+
+def check_preferences_pending(context, base: str, problems: list[str]):
+    # 同一资料缓存不能并发乐观更新；切走再返回也要等原请求及确认刷新完成。
+    for switching in (False, True):
+        for status in (200, 500):
+            page = context.new_page()
+            page.on("pageerror", lambda error: problems.append(f"通知偏好等待请求测试页面异常：{error}"))
+            profile = {**FIXTURES["/api/me"], "prefs": dict(FIXTURES["/api/me"]["prefs"])}
+            pending, refresh = [], []
+            hold_refresh = False
+
+            def me(route):
+                if route.request.method == "POST":
+                    pending.append(route)
+                elif hold_refresh:
+                    refresh.append(route)
+                else:
+                    route.fulfill(json=profile)
+
+            page.route("**/api/auth/session", lambda route: route.fulfill(json=FIXTURES["/api/auth/session"]))
+            page.route("**/api/me", me)
+            try:
+                page.goto(base + "/me")
+                preference = page.get_by_role("switch", name="词库 PR 提醒", exact=True)
+                names = ("词库 PR 提醒", "社区举报提醒", "崩溃告警")
+                expect(preference).to_be_checked()
+                for name in names:
+                    expect(page.get_by_role("switch", name=name, exact=True)).to_be_enabled()
+                with page.expect_request(lambda request: request.method == "POST" and request.url.endswith("/api/me")) as sent:
+                    preference.click()
+                assert sent.value.post_data_json == {"action": "set_pref", "key": "notify_dict_pr", "value": False}
+                expect(preference).not_to_be_checked()
+                if switching:
+                    page.get_by_role("link", name="数据概览", exact=True).click()
+                    expect(page.get_by_role("heading", name="数据概览", exact=True)).to_be_visible()
+                    page.locator('a[title="个人中心"]').click()
+                for name in names:
+                    expect(page.get_by_role("switch", name=name, exact=True)).to_be_disabled()
+                # 标签关联的开关已禁用，仍发送指针点击以确认浏览器不会触发新的写入。
+                page.get_by_text("词库 PR 提醒", exact=True).click(force=True)
+                page.get_by_text("社区举报提醒", exact=True).click(force=True)
+                assert len(pending) == 1, "保存期间不应发起另一次偏好写入"
+                hold_refresh = True
+                if status == 200:
+                    profile["prefs"]["notify_dict_pr"] = False
+                with page.expect_request(lambda request: request.method == "GET" and request.url.endswith("/api/me")):
+                    pending.pop().fulfill(status=status, json={"ok": True} if status == 200 else {"error": "admin_auth_unavailable"})
+                expect(preference).to_be_disabled()
+                if status != 200:
+                    expect(page.get_by_text(re.compile(r"^操作失败："))).to_be_visible()
+                    expect(preference).to_be_checked()
+                hold_refresh = False
+                for route in refresh:
+                    route.fulfill(json=profile)
+                refresh.clear()
+                expect(preference).to_be_enabled()
+                expect(preference).to_be_checked(checked=status != 200)
+                with page.expect_request(lambda request: request.method == "POST" and request.url.endswith("/api/me")) as resent:
+                    preference.click()
+                value = status == 200
+                assert resent.value.post_data_json == {"action": "set_pref", "key": "notify_dict_pr", "value": value}
+                profile["prefs"]["notify_dict_pr"] = value
+                pending.pop().fulfill(json={"ok": True})
+                expect(preference).to_be_enabled()
+                expect(preference).to_be_checked(checked=value)
+                expect(page.get_by_role("switch", name="每周摘要邮件", exact=True)).to_be_disabled()
+                problems.extend(f"通知偏好等待请求测试 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+            finally:
+                for route in pending + refresh:
+                    route.abort()
+                page.unroute_all(behavior="ignoreErrors")
+                page.close()
+
+
 def check_notice_pending(context, base: str, problems: list[str]):
     # 显式挂起请求，验证保存、发布和归档期间不能改写或切换编辑器；失败后仍保留原文。
     for action in ("save_notice_draft", "publish_notice", "archive_notice"):
@@ -1496,6 +1681,9 @@ def main() -> int:
                 check_auth_logout(context, base, problems)
                 check_auth_logout_flush(context, base, problems)
                 check_profile_rollback(context, base, problems)
+                check_dictionary_editor_actions(context, base, problems)
+                check_dictionary_editor_navigation(context, base, problems)
+                check_preferences_pending(context, base, problems)
                 check_notice_pending(context, base, problems)
                 check_notice_pending_focus(context, base, problems)
                 check_mirror_pending(context, base, problems)

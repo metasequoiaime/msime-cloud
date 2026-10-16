@@ -114,31 +114,41 @@ func (s *Server) qqGapsIssue(ctx context.Context, token string) (int64, error) {
 		defer release()
 	}
 	client, repo := s.adminGitHub, s.qq.config.GapsRepo
-	r, err := client.Do(ctx, token, "GET", "/repos/"+repo+"/issues?state=open&per_page=100", nil)
-	if err != nil || !r.OK() {
-		return 0, githubFailure("gaps list", r, err)
-	}
-	var issues []qqIssue
-	if r.Decode(&issues) != nil {
-		return 0, errors.New("gaps list: invalid response")
-	}
 	unknown := false
-	for _, issue := range issues {
-		if issue.Title != qqGapsTitle || len(issue.PullRequest) != 0 && string(issue.PullRequest) != "null" {
-			continue
+	for page := 1; ; page++ {
+		r, err := client.Do(ctx, token, "GET", "/repos/"+repo+"/issues?state=open&per_page=100&page="+strconv.Itoa(page), nil)
+		if err != nil || !r.OK() {
+			return 0, githubFailure("gaps list", r, err)
 		}
-		owned, known := s.qqWrittenByApp(ctx, issue.qqGitHubAuthor)
-		if owned {
-			number = issue.Number
+		var issues []qqIssue
+		if r.Decode(&issues) != nil {
+			return 0, errors.New("gaps list: invalid response")
+		}
+		for _, issue := range issues {
+			if issue.Title != qqGapsTitle || len(issue.PullRequest) != 0 && string(issue.PullRequest) != "null" {
+				continue
+			}
+			owned, known := s.qqWrittenByApp(ctx, issue.qqGitHubAuthor)
+			if owned {
+				number = issue.Number
+				break
+			}
+			unknown = unknown || !known
+		}
+		// 一页写满时继续查找，避免长期保留的汇总被后来的 Issue 挤出第一页后重复新建。
+		if number > 0 || len(issues) < 100 {
 			break
 		}
-		unknown = unknown || !known
 	}
 	if number == 0 && unknown {
 		return 0, errors.New("gaps list: app login unavailable")
 	}
 	if number == 0 {
+		// 写入结果可能在响应返回前丢失；先失效缓存，避免不确定时继续读到旧 issue 列表。
+		client.Invalidate("/repos/" + repo + "/issues")
+		defer client.Invalidate("/repos/" + repo + "/issues")
 		r, err := client.Do(ctx, token, "POST", "/repos/"+repo+"/issues", map[string]any{"title": qqGapsTitle, "body": qqGapsBody})
+		client.Invalidate("/repos/" + repo + "/issues")
 		var created struct {
 			Number int64 `json:"number"`
 		}
@@ -217,14 +227,20 @@ func (s *Server) recordQQGapIn(ctx context.Context, dailyScope string, daily int
 		release()
 		return false
 	}
+	client.Invalidate("/repos/" + repo + "/issues")
+	defer client.Invalidate("/repos/" + repo + "/issues")
 	r, err := client.Do(ctx, token, "POST", "/repos/"+repo+"/issues/"+strconv.FormatInt(number, 10)+"/comments", map[string]string{"body": prefix + githubReferenceBreaker.Replace(topic)})
+	client.Invalidate("/repos/" + repo + "/issues")
 	if err != nil || !r.OK() {
 		// 汇总 issue 可能已经被关闭或删除；清掉缓存，下一次重新查找或新建。
 		s.qq.mu.Lock()
 		s.qq.gapsIssue = 0
 		s.qq.mu.Unlock()
 		slog.Warn("qq bot: gap not recorded", "reason", githubFailure("gaps comment", r, err).Error())
-		release()
+		// 传输错误或 5xx 的响应结果不确定，GitHub 可能已经接受了评论；保留去重名额，避免下一次重复发布。明确的 4xx 拒绝才退回名额。
+		if err == nil && r.Status > 0 && r.Status < 500 {
+			release()
+		}
 		return false
 	}
 	return true

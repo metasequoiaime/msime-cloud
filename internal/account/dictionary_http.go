@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/engine"
@@ -49,7 +48,7 @@ func (a *Service) validateDictionary(ctx context.Context, kind string, entries [
 		end := min(start+50, len(entries))
 		batch := []map[string]any{}
 		for _, e := range entries[start:end] {
-			if e.Weight < 0 || e.Word == "" || len(e.Word) > 2048 || len(e.Code) > 512 || !utf8.ValidString(e.Word+e.Code) || strings.ContainsAny(e.Word+e.Code, "\x00\t\r\n") || strings.TrimSpace(e.Word) == "" || (kind == "quick" && len(utf16.Encode([]rune(e.Word))) > 199) {
+			if e.Weight < 0 || e.Word == "" || len(e.Word) > 2048 || len(e.Code) > 512 || !utf8.ValidString(e.Word+e.Code) || strings.ContainsAny(e.Word+e.Code, "\x00\t\r\n") || strings.TrimSpace(e.Word) == "" || (kind == "quick" && utf16Length(e.Word) > 199) {
 				return nil, engine.ErrInvalid
 			}
 			batch = append(batch, map[string]any{"kind": kind, "code": e.Code, "text": e.Word, "weight": e.Weight})
@@ -183,26 +182,26 @@ func (a *Service) dictionaryImport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_dictionary_format")
 		return
 	}
-	lines := strings.Split(strings.ReplaceAll(strings.TrimPrefix(input.Text, "\ufeff"), "\r\n", "\n"), "\n")
 	entries := []DictionaryEntry{}
-	for _, line := range lines {
+	for line := range strings.SplitSeq(strings.ReplaceAll(strings.TrimPrefix(input.Text, "\ufeff"), "\r\n", "\n"), "\n") {
 		if line == "" {
 			continue
 		}
-		fields := strings.Split(line, "\t")
-		if len(fields) != 3 {
+		word, rest, firstTab := strings.Cut(line, "\t")
+		code, rawWeight, secondTab := strings.Cut(rest, "\t")
+		if !firstTab || !secondTab || strings.ContainsRune(rawWeight, '\t') {
 			writeError(w, 400, "invalid_dictionary_tsv")
 			return
 		}
-		weight, err := strconv.ParseInt(strings.TrimSpace(fields[2]), 10, 64)
+		weight, err := strconv.ParseInt(strings.TrimSpace(rawWeight), 10, 64)
 		if err != nil || weight < 0 {
 			writeError(w, 400, "invalid_dictionary_weight")
 			return
 		}
 		if input.Format == "windows" && (kind == "english" || kind == "quick") {
-			fields[0], fields[1] = fields[1], fields[0]
+			word, code = code, word
 		}
-		entries = append(entries, DictionaryEntry{Code: strings.TrimSpace(fields[1]), Word: strings.TrimSpace(fields[0]), Weight: weight})
+		entries = append(entries, DictionaryEntry{Code: strings.TrimSpace(code), Word: strings.TrimSpace(word), Weight: weight})
 	}
 	if len(entries) == 0 || len(entries) > 500 {
 		writeError(w, 400, "dictionary_import_limit")
@@ -308,7 +307,7 @@ func (a *Service) dictionaryImportHans(w http.ResponseWriter, r *http.Request) {
 		weight = *input.Weight
 	}
 	words := []string{}
-	for _, line := range strings.Split(strings.ReplaceAll(strings.TrimPrefix(input.Text, "\ufeff"), "\r\n", "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.ReplaceAll(strings.TrimPrefix(input.Text, "\ufeff"), "\r\n", "\n"), "\n") {
 		word := strings.TrimSpace(line)
 		if word == "" {
 			continue

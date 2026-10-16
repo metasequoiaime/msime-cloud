@@ -47,7 +47,7 @@ const (
 
 	noticeTitleMax = 200
 	noticeBodyMax  = 20000
-	// noticeAdminLimit bounds GET /api/notices per group: the newest drafts and live notices, and separately the newest archived ones.
+	// noticeAdminLimit 限制 GET /api/notices 每种状态的数量：草稿、已发布和已归档各取最近的记录。
 	noticeAdminLimit = 200
 	// noticePublicLimit bounds the public feed; clients only show the newest few.
 	noticePublicLimit = 20
@@ -185,8 +185,10 @@ func noticeAuthor(actor string) string {
 
 // adminNotices serves GET /api/notices.
 func (a *Service) adminNotices(w http.ResponseWriter, r *http.Request, _ string) {
-	// Drafts and live notices are bounded separately from archived ones, so a pile of archived notices never pushes a live notice out of the console where it could no longer be archived.
-	rows, err := a.store.pool.Query(r.Context(), `SELECT * FROM ((SELECT id,title,body,targets,channels,status,created_by,created_at,published_at,updated_at FROM admin_notices WHERE status<>'archived' ORDER BY COALESCE(published_at,updated_at) DESC,id DESC LIMIT $1)
+	// 各状态分别限量，避免大量新草稿或归档把仍在展示的公告挤出后台，导致无法从列表归档。
+	rows, err := a.store.pool.Query(r.Context(), `SELECT * FROM ((SELECT id,title,body,targets,channels,status,created_by,created_at,published_at,updated_at FROM admin_notices WHERE status='live' ORDER BY COALESCE(published_at,updated_at) DESC,id DESC LIMIT $1)
+UNION ALL
+(SELECT id,title,body,targets,channels,status,created_by,created_at,published_at,updated_at FROM admin_notices WHERE status='draft' ORDER BY COALESCE(published_at,updated_at) DESC,id DESC LIMIT $1)
 UNION ALL
 (SELECT id,title,body,targets,channels,status,created_by,created_at,published_at,updated_at FROM admin_notices WHERE status='archived' ORDER BY COALESCE(published_at,updated_at) DESC,id DESC LIMIT $1)) n
 ORDER BY COALESCE(published_at,updated_at) DESC,id DESC`, noticeAdminLimit)
@@ -292,7 +294,7 @@ func actionSaveNoticeDraft(a *Service, ctx context.Context, tx pgx.Tx, v actionR
 		if status != "draft" {
 			return actionResult{}, actionFail(409, "not_draft")
 		}
-		if _, err = tx.Exec(ctx, `UPDATE admin_notices SET title=$2,body=$3,targets=$4,channels=$5,updated_at=now() WHERE id=$1`, id, in.Title, in.Body, in.Targets, in.Channels); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE admin_notices SET title=$2,body=$3,targets=$4,channels=$5,updated_at=clock_timestamp() WHERE id=$1`, id, in.Title, in.Body, in.Targets, in.Channels); err != nil {
 			return actionResult{}, err
 		}
 	}
@@ -337,7 +339,8 @@ func actionPublishNotice(a *Service, ctx context.Context, tx pgx.Tx, v actionReq
 			return actionResult{}, err
 		}
 		n = Notice{ID: id, Title: in.Title, Body: in.Body, Targets: in.Targets, Channels: in.Channels}
-		if _, err = tx.Exec(ctx, `UPDATE admin_notices SET title=$2,body=$3,targets=$4,channels=$5,status='live',published_at=now(),updated_at=now() WHERE id=$1`, id, n.Title, n.Body, n.Targets, n.Channels); err != nil {
+		if _, err = tx.Exec(ctx, `WITH publication AS MATERIALIZED (SELECT clock_timestamp() AS at)
+UPDATE admin_notices SET title=$2,body=$3,targets=$4,channels=$5,status='live',published_at=publication.at,updated_at=publication.at FROM publication WHERE id=$1`, id, n.Title, n.Body, n.Targets, n.Channels); err != nil {
 			return actionResult{}, err
 		}
 	}
@@ -371,7 +374,7 @@ func actionArchiveNotice(a *Service, ctx context.Context, tx pgx.Tx, v actionReq
 	if status == "archived" {
 		return actionResult{}, actionFail(409, "already_archived")
 	}
-	if _, err = tx.Exec(ctx, `UPDATE admin_notices SET status='archived',updated_at=now() WHERE id=$1`, id); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE admin_notices SET status='archived',updated_at=clock_timestamp() WHERE id=$1`, id); err != nil {
 		return actionResult{}, err
 	}
 	detail := map[string]any{"title": stored.Title, "from": status}

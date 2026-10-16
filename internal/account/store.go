@@ -579,8 +579,10 @@ func newSession(ctx context.Context, tx pgx.Tx, uid string, batch *pgx.Batch) (T
 	batch.Queue(userQuery, uid).QueryRow(func(row pgx.Row) error {
 		return scanUser(row, &t.User)
 	})
-	// 保存请求传入的 User-Agent，供管理后台区分用户设备。
-	batch.Queue(`INSERT INTO auth_sessions(id,user_id,access_hash,refresh_hash,access_expires,expires_at,user_agent) VALUES($1,$2,$3,$4,now()+interval '15 minutes',now()+interval '30 days',$5)`, randomToken(), uid, hash(t.AccessToken), hash(t.RefreshToken), sessionUserAgent(ctx))
+	// 保存请求传入的 User-Agent，供管理后台区分用户设备；会话计时从锁等待后的实际写入开始，三个时间共用同一个时钟读数。
+	batch.Queue(`WITH issued AS MATERIALIZED (SELECT clock_timestamp() AS issued_at)
+INSERT INTO auth_sessions(id,user_id,access_hash,refresh_hash,created_at,access_expires,expires_at,user_agent)
+SELECT $1,$2,$3,$4,issued_at,issued_at+interval '15 minutes',issued_at+interval '30 days',$5 FROM issued`, randomToken(), uid, hash(t.AccessToken), hash(t.RefreshToken), sessionUserAgent(ctx))
 	err := tx.SendBatch(ctx, batch).Close()
 	return t, err
 }
@@ -876,7 +878,7 @@ func (s *Store) Prune(ctx context.Context) {
 // voiceContributionRetentionDays 是语音贡献的保留期，到期由 Store.Prune 删除。
 const voiceContributionRetentionDays = 180
 
-// VoiceContribution 是用户自愿上传的一条语音样本：音频已由调用方校验为 WAV 或 Ogg、不超过 60 秒。
+// VoiceContribution 是用户自愿上传的一条语音样本：调用方已校验音频格式为 WAV 或 Ogg、大小不超过 2 MiB，并检查客户端声明的 `DurationMS` 在 1–60000 范围内；实际音频时长未在服务端解析。
 type VoiceContribution struct {
 	Language, Provider, Transcript, AppVersion, AudioMime string
 	DurationMS                                            int

@@ -75,8 +75,83 @@ const qqCommandTrailing = "?!。.~…"
 
 // qqCompact 把消息规范成和精确匹配的命令词比较的形状：全角折成半角，去掉所有空白，转小写，去掉开头的「/」，再循环去掉末尾的问号、感叹号、句号、波浪号、省略号和表情符号（unicode.So、unicode.Sk，以及表情后面的变体选择符和零宽连接符）。原来只去掉空白，中文输入法习惯在句末打的「帮助？」、QQ 机器人用户习惯的「/help」、「最新版本🙏」都认不出，绕到模型那里等十几秒。只剩一个字符时不再去掉，「?」本身就是帮助的别名。
 func qqCompact(text string) string {
-	compact := strings.TrimPrefix(strings.ToLower(strings.Join(strings.Fields(qqFoldWidth(text)), "")), "/")
-	for utf8.RuneCountInString(compact) > 1 {
+	// 普通中文消息没有任何需要规范化的字符时直接复用正文；qqFreeCommand 会在每条消息上调用这里。
+	if qqCompactCanReuse(text) {
+		return text
+	}
+	if prefix, ok := qqCompactTrailingPrefix(text); ok {
+		text = prefix
+	}
+	var compactBuilder strings.Builder
+	compactBuilder.Grow(len(text))
+	for len(text) > 0 {
+		r, size := utf8.DecodeRuneInString(text)
+		text = text[size:]
+		if unicode.IsSpace(r) {
+			continue
+		}
+		if r == utf8.RuneError && size == 1 {
+			compactBuilder.WriteRune(r)
+			continue
+		}
+		if r >= 0xFF01 && r <= 0xFF5E {
+			r -= 0xFEE0
+		}
+		compactBuilder.WriteRune(unicode.ToLower(r))
+	}
+	compact := strings.TrimPrefix(compactBuilder.String(), "/")
+	return qqTrimCommandTrailing(compact)
+}
+
+// qqCompactTrailingPrefix 找出规范化后会被裁掉的尾部表情和标点，避免先把它们写入大缓冲。
+func qqCompactTrailingPrefix(text string) (string, bool) {
+	suffixStart := len(text)
+	found := false
+	for end := len(text); end > 0; {
+		r, size := utf8.DecodeLastRuneInString(text[:end])
+		start := end - size
+		if unicode.IsSpace(r) {
+			if found {
+				suffixStart = start
+			}
+			end = start
+			continue
+		}
+		if r == utf8.RuneError && size == 1 {
+			break
+		}
+		if r >= 0xFF01 && r <= 0xFF5E {
+			r -= 0xFEE0
+		}
+		r = unicode.ToLower(r)
+		if !strings.ContainsRune(qqCommandTrailing, r) && !unicode.In(r, unicode.So, unicode.Sk) && r != 0xFE0F && r != 0x200D {
+			break
+		}
+		found = true
+		suffixStart = start
+		end = start
+	}
+	if !found {
+		return "", false
+	}
+	count, first := 0, rune(0)
+	for _, r := range text[:suffixStart] {
+		if !unicode.IsSpace(r) {
+			if count == 0 {
+				first = r
+			}
+			count++
+		}
+	}
+	if count > 0 && !(count == 1 && first == '/') {
+		return text[:suffixStart], true
+	}
+	return "", false
+}
+
+// qqTrimCommandTrailing 只统计一次字符数，逐个移除尾部标点和表情，同时至少保留一个字符。
+func qqTrimCommandTrailing(compact string) string {
+	for count := utf8.RuneCountInString(compact); count > 1; count-- {
 		r, size := utf8.DecodeLastRuneInString(compact)
 		if !strings.ContainsRune(qqCommandTrailing, r) && !unicode.In(r, unicode.So, unicode.Sk) && r != 0xFE0F && r != 0x200D {
 			break
@@ -86,8 +161,31 @@ func qqCompact(text string) string {
 	return compact
 }
 
+func qqCompactCanReuse(text string) bool {
+	if text == "" || strings.HasPrefix(text, "/") {
+		return false
+	}
+	count := 0
+	var last rune
+	for _, r := range text {
+		count++
+		last = r
+		if unicode.IsSpace(r) || unicode.IsUpper(r) || r >= 0xFF01 && r <= 0xFF5E {
+			return false
+		}
+	}
+	if count > 1 && (strings.ContainsRune(qqCommandTrailing, last) || unicode.In(last, unicode.So, unicode.Sk) || last == 0xFE0F || last == 0x200D) {
+		return false
+	}
+	return true
+}
+
 // qqIssueRef 匹配「#编号」查进度的命令（qqIssueRefPattern），先把全角折成半角；不是这个命令时返回 nil。
 func qqIssueRef(text string) []string {
+	// issue 命令必须含有半角或全角井号；普通消息无需折叠全角和执行正则。
+	if strings.IndexByte(text, '#') < 0 && !strings.Contains(text, "＃") {
+		return nil
+	}
 	return qqIssueRefPattern.FindStringSubmatch(strings.TrimSpace(qqFoldWidth(text)))
 }
 
@@ -144,7 +242,12 @@ func qqWordsQuestion(content string, glued bool) bool {
 // qqCommandArg 判断 text 是不是以某个命令词开头、后面跟着分隔符（qqLooseCommands 和以 ASCII 字母结尾的命令词不要求），返回去掉命令词后的参数；「查不到词库怎么办」这类以同一个字开头的普通提问不算命令。
 func qqCommandArg(text string, words ...string) (string, bool) {
 	trimmed := strings.TrimSpace(text)
-	lower := strings.ToLower(trimmed)
+	maxBytes := 0
+	for _, word := range words {
+		maxBytes = max(maxBytes, len(word))
+	}
+	// 每个字符转小写后至少占一个字节，取 maxBytes 个字符足以比较所有命令，且不会复制参数正文。
+	lower := strings.ToLower(trimmed[:qqRuneEnd(trimmed, maxBytes)])
 	for _, word := range words {
 		if !strings.HasPrefix(lower, word) {
 			continue
@@ -396,7 +499,7 @@ func (s *Server) qqIssueBodyText(ctx context.Context, name, number string) strin
 		default:
 			return ""
 		}
-		return qqTruncateSentence(qqPlainText(qqImagePattern.ReplaceAllString(issue.Body, " ")), qqIssueBodyRunes)
+		return qqTruncateSentence(qqPlainText(qqStripImagesAndHTML(issue.Body)), qqIssueBodyRunes)
 	}
 	return ""
 }

@@ -10,8 +10,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
+
+// qqDatabaseWriteDefinitelyRejected 只把 PostgreSQL 明确返回的语句错误视为未写入。连接中断、超时等错误的提交结果可能未知，不能退款后让已经写入的候选再次出现。
+func qqDatabaseWriteDefinitelyRejected(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr)
+}
 
 // 把答案沉淀进文档。机器人现查 GitHub 才答上的问题，说明文档里缺这块；答不上的问题更是。这些都记成「文档候选」（account.QQFAQCandidate，编号 F12 这样），管理员发「文档缺口」看列表，「看 F12」看完整的问题和机器人当时的回答，「写进FAQ F12」用「记录答案」的流程（qq_faq.go）整理成 FAQ 的一条给知识库开 PR，没答上的在后面补上答案：「写进FAQ F12 答：……」；「忽略 F12」拿掉。同一个问题 7 天内只记一次（auth_rates）。写进 FAQ 前先在数据库里认领候选（state 改成 writing），两个管理员同时发只有一个开 PR；没开成时放回，放回不受处理消息的时限影响；副本中途被杀掉来不及放回时，认领超过 5 分钟（account.QQFAQCandidateClaimTimeout）就当作被打断，可以再处理。差评（qq_bad_answers.go，编号 B7 这样）共用「看」「写进FAQ」「忽略」这几个命令。
 
@@ -44,7 +51,7 @@ var (
 // qqAnswerPrefix 是「写进FAQ F12 答：……」里答案的开头。
 var qqAnswerPrefix = regexp.MustCompile(`^答[:：]\s*`)
 
-// recordQQFAQCandidate 记下一条文档候选；同一个问题 7 天内只记一次，写入失败退回去重额度。在回复之后调用，不跟随处理消息的 ctx、另限 3 秒（写法照 recordQQTurn）：滚动发布取消了 ctx 也要记下。
+// recordQQFAQCandidate 记下一条文档候选；同一个问题 7 天内只记一次，数据库明确拒绝时退回去重额度，结果不确定时保留额度。在回复之后调用，不跟随处理消息的 ctx、另限 3 秒（写法照 recordQQTurn）：滚动发布取消了 ctx 也要记下。
 func (s *Server) recordQQFAQCandidate(ctx context.Context, question, answer string) {
 	if s.qqFAQCandidates == nil {
 		return
@@ -63,11 +70,13 @@ func (s *Server) recordQQFAQCandidate(ctx context.Context, question, answer stri
 		return
 	}
 	if _, err := s.qqFAQCandidates.AddQQFAQCandidate(ctx, question, qqTruncate(answer, qqFAQCandidateRunes)); err != nil {
-		releaseCtx, releaseCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-		if releaseErr := s.limits.ReleaseRateLimit(releaseCtx, "qq-bot-faq-candidate", subject); releaseErr != nil {
-			slog.Warn("qq bot: faq candidate quota not released", "reason", releaseErr.Error())
+		if qqDatabaseWriteDefinitelyRejected(err) {
+			releaseCtx, releaseCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+			if releaseErr := s.limits.ReleaseRateLimit(releaseCtx, "qq-bot-faq-candidate", subject); releaseErr != nil {
+				slog.Warn("qq bot: faq candidate quota not released", "reason", releaseErr.Error())
+			}
+			releaseCancel()
 		}
-		releaseCancel()
 		slog.Warn("qq bot: faq candidate not stored", "reason", err.Error())
 	}
 }

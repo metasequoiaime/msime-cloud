@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -256,6 +257,15 @@ func (s *Server) writeQQFAQ(ctx context.Context, text, drafted string, reply fun
 		reply("没看出要记录的问题和答案，请写成「记录答案 问：… 答：…」。")
 		return 0
 	}
+	// 查找开放 PR 到创建 PR 是一个跨副本的读改写过程，必须串行化，否则两个副本都查不到时会各自开一条重复 PR。
+	if s.qqLocks != nil {
+		release, err := s.qqLocks.WaitLock(ctx, "qq-faq:"+repo, 15*time.Second)
+		if err != nil {
+			fail("lock", err)
+			return 0
+		}
+		defer release()
+	}
 	// 同一问题已经有还没合并的 PR 时不再新开，返回那个 PR 的编号（从文档候选、差评写进来的照样标成已处理）：原来只看默认分支的 FAQ，前一个 PR 还没合并时再记一次、或者两个管理员同时写同一条，都会多开一个内容相同的 PR。
 	if number := s.qqOpenFAQPull(ctx, token, repo, entry.Question); number > 0 {
 		_, short, _ := strings.Cut(repo, "/")
@@ -320,7 +330,10 @@ func (s *Server) writeQQFAQ(ctx context.Context, text, drafted string, reply fun
 	} else {
 		body += "\n\n现有繁体译文与简体原文不同步（或读取失败），这次只改了简体，`" + twPath + "` 和 `" + sourcesPath + "` 需要另行同步。"
 	}
+	client.Invalidate("/repos/" + repo + "/pulls")
+	defer client.Invalidate("/repos/" + repo + "/pulls")
 	r, err = client.Do(ctx, token, "POST", "/repos/"+repo+"/pulls", map[string]any{"title": "docs(faq): add 「" + githubReferenceBreaker.Replace(entry.Question) + "」", "head": branch, "base": base, "body": body})
+	client.Invalidate("/repos/" + repo + "/pulls")
 	var pull struct {
 		Number int64 `json:"number"`
 	}
@@ -328,6 +341,7 @@ func (s *Server) writeQQFAQ(ctx context.Context, text, drafted string, reply fun
 		fail("pull", githubFailure("pull", r, err))
 		return 0
 	}
+	client.Invalidate("/repos/" + repo + "/pulls")
 	// 写进 FAQ 的问题和答案记成一道自测题，之后改提示词、换模型时同一个问题答错了自测能发现。
 	if drafted == "" {
 		s.learnQQSelfTestCase(ctx, entry.Question, entry.Answer)
@@ -337,9 +351,8 @@ func (s *Server) writeQQFAQ(ctx context.Context, text, drafted string, reply fun
 	return pull.Number
 }
 
-// qqOpenFAQPull 在知识库仓库开着的 PR 里找「记录答案」开的（分支以 qq-faq/ 开头）、标题含同一个问题的，返回它的编号，没有时返回 0。只看最近的 100 个开着的 PR；列不出来时只记日志、返回 0，照常开 PR：重复的 PR 合并前还有人工核对，不值得因此拦下这次记录。
+// qqOpenFAQPull 在知识库仓库开着的 PR 里找「记录答案」开的（分支以 qq-faq/ 开头）、标题含同一个问题的，返回它的编号，没有时返回 0。按页查找全部开放 PR；列不出来时只记日志、返回 0，照常开 PR：重复的 PR 合并前还有人工核对，不值得因此拦下这次记录。
 func (s *Server) qqOpenFAQPull(ctx context.Context, token, repo, question string) int64 {
-	r, err := s.adminGitHub.Do(ctx, token, "GET", "/repos/"+repo+"/pulls?state=open&per_page=100", nil)
 	var pulls []struct {
 		Number int64  `json:"number"`
 		Title  string `json:"title"`
@@ -347,15 +360,22 @@ func (s *Server) qqOpenFAQPull(ctx context.Context, token, repo, question string
 			Ref string `json:"ref"`
 		} `json:"head"`
 	}
-	if err != nil || !r.OK() || r.Decode(&pulls) != nil {
-		slog.Warn("qq bot: open faq pulls unavailable", "reason", githubFailure("pulls", r, err).Error())
-		return 0
-	}
 	title := "「" + githubReferenceBreaker.Replace(question) + "」"
-	for _, pull := range pulls {
-		if strings.HasPrefix(pull.Head.Ref, "qq-faq/") && strings.Contains(pull.Title, title) {
-			return pull.Number
+	for page := 1; ; page++ {
+		path := "/repos/" + repo + "/pulls?state=open&per_page=100&page=" + strconv.Itoa(page)
+		r, err := s.adminGitHub.Do(ctx, token, "GET", path, nil)
+		pulls = nil
+		if err != nil || !r.OK() || r.Decode(&pulls) != nil {
+			slog.Warn("qq bot: open faq pulls unavailable", "reason", githubFailure("pulls", r, err).Error())
+			return 0
+		}
+		for _, pull := range pulls {
+			if strings.HasPrefix(pull.Head.Ref, "qq-faq/") && strings.Contains(pull.Title, title) {
+				return pull.Number
+			}
+		}
+		if len(pulls) < 100 {
+			return 0
 		}
 	}
-	return 0
 }

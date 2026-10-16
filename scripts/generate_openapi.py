@@ -87,26 +87,29 @@ result['info']['description']+=' 用户接口详见用户体系标签；登录�
 # 小牛异步媒体接口独立于 Engine 契约，供 Swagger 和命令行共用。
 niutrans_field=string(minLength=1,description='非空，最多 256 UTF-8 字节，不得含 CR 或 LF。')
 niutrans_upload=obj({'file':string(format='binary',description='非空文件，最多 64 MiB。'),'from':niutrans_field,'to':niutrans_field,**{name:niutrans_field for name in ['realmCode','termId','memoryId','processingMode','translationEngine']}},['file','from','to'])
-niutrans_file={'name':'file_no','in':'path','required':True,'schema':string(minLength=1,description='小牛返回的任务编号，最多 256 UTF-8 字节，不得含 /、反斜杠、CR 或 LF。调用方对路径段进行一次 URL 编码；服务端按编号原文转发，编号中的百分号序列不再作为路径分隔符解码。')}
+niutrans_file={'name':'file_no','in':'path','required':True,'schema':string(minLength=1,description='本服务上传响应 data.fileNo 中的加签任务编号，最多 512 字节；只允许上传身份用于同类媒体。请原样保存并对路径段进行一次 URL 编码，不能使用上游原始编号。')}
 niutrans_json={'description':'成功转发小牛 JSON，最多 1 MiB；业务状态由上游 JSON 表示。','content':{'application/json':{'schema':{}}}}
 niutrans_errors={code:{'description':description,'content':{'application/json':{'schema':{'$ref':'#/components/schemas/Error'}}}} for code,description in [('400','请求参数无效'),('401','需要有效设备令牌或用户 access_token'),('403','来源不被允许或账号已封禁'),('429','请求过于频繁或并发已满'),('502','上游不可用、响应不是有效 JSON 或超过响应上限'),('503','niutrans_api_not_configured：该小牛接口未配置，或服务不可用')]}
 for kind,title in [('documents','文档'),('images','图片'),('voice','语音')]:
     base='/v1/niutrans/'+kind
     paths[base]={'post':{'summary':'创建小牛'+title+'翻译任务','tags':['小牛媒体翻译'],'description':'multipart/form-data 上传 file、from、to，支持领域、术语、记忆、处理模式和翻译引擎参数。单个文件最多 64 MiB，请求体最多 65 MiB，最多 32 个部件；字段名不得为空或重复，非文件字段非空、最多 256 字节且不得含 CR/LF。未列出的字段不会转发。服务端签名请求，客户端不提供供应商凭据。请求期间使用系统临时目录中的私有临时文件，以固定 Content-Length 流式发送；完成、拒绝、上游失败或取消后关闭并删除，不长期保存文件。','requestBody':{'required':True,'content':{'multipart/form-data':{'schema':niutrans_upload}}},'responses':{'200':niutrans_json,**niutrans_errors,'413':{'description':'file_too_large_or_empty 或 too_many_parts：文件为空、超过 64 MiB 或部件超过 32 个'},'415':{'description':'multipart_required：需要 multipart/form-data'}}}}
     paths[base]['post']['responses']['503']={**niutrans_errors['503'],'description':'niutrans_api_not_configured：该小牛接口未配置；upload_storage_unavailable：临时目录不可用或写入失败；或服务不可用。'}
+    paths[base]['post']['responses']['200']={**niutrans_json,'description':'小牛上传响应；成功时 data.fileNo 替换为本服务加签编号，绑定上传身份和媒体类型，其他业务字段保留。code 为 200 却缺少有效 fileNo 时返回 502。'}
     for suffix,method,action in [('', 'get','查询状态'),('/interrupt','put','终止任务'),('/download','get','下载结果')]:
         download=suffix=='/download'
-        description='使用小牛返回的 file_no 操作'+title+'翻译任务；不需要请求体。'
+        description='使用本服务上传响应中的 data.fileNo 操作'+title+'翻译任务；不需要请求体。'
         response=niutrans_json
         parameters=[niutrans_file]
         errors=dict(niutrans_errors)
+        errors['404']={'description':'niutrans_task_not_found：编号未加签、已被篡改、属于其他身份或媒体类型，或上游应用/密钥已更换。','content':{'application/json':{'schema':{'$ref':'#/components/schemas/Error'}}}}
         if download:
             description+=' type 取 0..5，省略或为空时使用 1。最多流式转发 64 MiB，Content-Type 沿用上游，缺失时使用 application/octet-stream。已发送响应后遇到超限或读取失败会中断连接，不追加 JSON；调用方应将残缺下载视为失败。'
             parameters.append({'name':'type','in':'query','schema':string(enum=['0','1','2','3','4','5'],default='1')})
             response={'description':'小牛返回的文件，最多 64 MiB。','content':{'*/*':{'schema':string(format='binary')}}}
             errors['502']={'description':'上游不可用，或在发送文件前发现响应超过 64 MiB。','content':{'application/json':{'schema':{'$ref':'#/components/schemas/Error'}}}}
         paths.setdefault(base+'/{file_no}'+suffix,{})[method]={'summary':'小牛'+title+'翻译：'+action,'tags':['小牛媒体翻译'],'description':description,'parameters':parameters,'responses':{'200':response,**errors}}
-paths['/v1/niutrans/documents/{file_no}']['delete']={'summary':'删除小牛文档翻译任务','tags':['小牛媒体翻译'],'description':'使用小牛返回的 file_no 删除文档任务；不需要请求体。','parameters':[niutrans_file],'responses':{'200':niutrans_json,**niutrans_errors}}
+paths['/v1/niutrans/documents/{file_no}']['delete']={'summary':'删除小牛文档翻译任务','tags':['小牛媒体翻译'],'description':'使用本服务上传响应中的 data.fileNo 删除文档任务；不需要请求体。','parameters':[niutrans_file],'responses':{'200':niutrans_json,**niutrans_errors}}
+paths['/v1/niutrans/documents/{file_no}']['delete']['responses']['404']=paths['/v1/niutrans/documents/{file_no}']['get']['responses']['404']
 paths['/v1/niutrans/resources']={'get':{'summary':'查询小牛资源','tags':['小牛媒体翻译'],'description':'调用已配置的小牛资源管理动作。仅使用 action 查询参数生成签名请求，其他查询参数不会转发；不需要请求体。','parameters':[{'name':'action','in':'query','required':True,'schema':string(minLength=1,description='资源管理动作，最多 64 UTF-8 字节，不得含 /、反斜杠、CR 或 LF。')}],'responses':{'200':niutrans_json,**niutrans_errors}}}
 # 跨端用户数据不属于 Engine 在线输入契约。
 preference_fields=json.loads((root/'internal/account/preferences_fields.json').read_text())
@@ -309,7 +312,7 @@ for path,method,title,body,response,status,description in [
  ('/v1/community/candidate-skins/{id}','patch','作者修改候选窗皮肤的可见性或分类',dict(obj({'visibility':string(enum=['private','public']),'category':candidate_category},None,True),minProperties=1),community_candidate_skin,'200','仅作者可修改，visibility 与 category 至少带一个（都缺省返回 400 invalid_visibility）。转为公开须声明 assets 许可、占用公开配额，并计入每小时 10 次的发布额度；修改分类计入每小时 60 次的私有额度，不更新 updated_at，也不重新进入审核。'),
  ('/v1/community/candidate-skins/{id}','delete','作者下架候选窗皮肤',None,obj({'deleted':{'type':'boolean'}}),'200','仅作者可下架，连带删除图片、下载和评分记录。'),
  ('/v1/community/candidate-skins/{id}/preview','get','候选窗皮肤预览图',None,obj({'path':string(),'content_type':string(enum=['image/png','image/jpeg']),'data':string(format='byte')}),'200','返回重新编码后的预览图，data 为标准 base64；私有作品仅作者可取。'),
- ('/v1/community/candidate-skins/{id}/download','post','下载候选窗皮肤包并去重计数',None,community_candidate_skin_package,'200','返回原样清单和重新编码后的图片；下载人数按账号去重。私有作品仅作者可下载。'),
+ ('/v1/community/candidate-skins/{id}/download','post','下载候选窗皮肤包',None,community_candidate_skin_package,'200','公开作品无需登录，返回原样清单和重新编码后的图片；仅有效登录会话计入按账号去重的下载人数，匿名下载不计数。私有或已下架作品仅作者可下载。'),
  ('/v1/community/candidate-skins/{id}/rating','put','为候选窗皮肤评分',obj({'stars':{'type':'integer','minimum':1,'maximum':5}},['stars'],True),obj({'stars':{'type':'integer'}}),'200','登录即可评分，不需要先下载；不能给自己的作品评分（403 download_before_rating_or_own_skin），重复提交更新同一条评分；不存在、私有或已下架的作品返回 404。'),
  ('/v1/community/candidate-skins/{id}/save','put','收藏或取消收藏候选窗皮肤',save_request,save_response,'200','请求体为 {"saved":bool}，重复提交结果相同，返回收藏状态与收藏总数。不存在、已下架（作者本人除外）或别人的私有作品收藏时返回 404 skin_not_found；取消收藏不看作品状态，总是返回 200。'),
 ]:
@@ -320,7 +323,7 @@ for path,method,title,body,response,status,description in [
     if path=='/v1/community/candidate-skins/{id}' and method=='get': parameters.append(fields)
     if method=='get' and path=='/v1/community/candidate-skins': parameters.append({'name':'category','in':'query','schema':string(enum=candidate_categories),'description':'只列出该图库分类的作品。'})
     if response is community_candidate_skin or method=='get' and path=='/v1/community/candidate-skins': parameters.append(category_include_param)
-    operation={'summary':title,'tags':['皮肤社区'],'security':[] if method=='get' and not path.endswith('/sync') else [{'userSession':[]}],'parameters':parameters,
+    operation={'summary':title,'tags':['皮肤社区'],'security':[] if method=='get' and not path.endswith('/sync') or method=='post' and path.endswith('/download') else [{'userSession':[]}],'parameters':parameters,
       'description':description+' 详见 docs/skin-community.md。',
       'responses':{status:{'description':'成功','content':{'application/json':{'schema':response}}},**{c:{'description':m} for c,m in [('400','参数、清单或图片无效'),('401','需要用户登录'),('403','正在评价自己的作品'),('404','皮肤不存在、已下架、为他人的私有作品或非作者'),('409','配额已满、UUID 冲突或替换包 id 不符'),('415','需要 application/json'),('429','请求过多'),('503','服务不可用或图片处理繁忙')]}}}
     if body: operation['requestBody']={'required':True,'content':{'application/json':{'schema':body}}}
@@ -383,7 +386,7 @@ for path,method,title,body,response in [
     if path=='/v1/community/resources' and method=='post': operation['responses'].update(screening_responses)
     paths.setdefault(path,{})[method]=operation
 count=lambda description:{'type':'integer','minimum':0,'description':description}
-community_stats=obj({'skins':count('已发布的用户皮肤数'),'skin_downloads':count('皮肤下载人次（按账号和皮肤去重）'),'dictionaries':count('已发布的共享词库数'),'replies':count('已发布的回复模板数'),'resource_saves':count('词库与回复模板收藏人次（按账号和作品去重）'),'generated_at':string(format='date-time',description='数据库统计时间（UTC）')},['skins','skin_downloads','dictionaries','replies','resource_saves','generated_at'])
+community_stats=obj({'skins':count('已发布的用户皮肤数'),'skin_downloads':count('皮肤下载人次（按账号和皮肤去重）'),'dictionaries':count('已发布的共享词库数'),'replies':count('已发布的回复模板数'),'resource_saves':count('未下架词库与回复模板收藏人次（含待审核作品，按账号和作品去重）'),'generated_at':string(format='date-time',description='数据库统计时间（UTC）')},['skins','skin_downloads','dictionaries','replies','resource_saves','generated_at'])
 paths['/v1/community/stats']={'get':{'summary':'社区内容统计','tags':['创作社区'],'security':[],
     'description':'公开只读，供官网展示。只统计社区作品与去重后的下载、收藏人次，不含用户数和安装包上报；注销账号的作品与互动随之移除。响应禁用缓存，调用方自行缓存。',
     'responses':{'200':{'description':'成功','content':{'application/json':{'schema':community_stats}}},'429':{'description':'请求过多','headers':{'Retry-After':{'description':'重试等待秒数','schema':{'type':'integer'}}}},'503':{'description':'用户体系未启用或数据库不可用'}}}}
@@ -490,8 +493,8 @@ paths['/v1/users/me/clipboard/devices/{device_id}']={
 }
 paths['/v1/skins/jobs']['post']['description']+=' 启用数据库时另有每个主体每天 10 个任务的配额（匿名账号同样适用，删除的任务也计数），超出返回 429 rate_limit_exceeded 并带 Retry-After（窗口剩余秒数）。'
 paths['/v1/skins/jobs']['post']['responses']['429']={'description':'超过每日插画配额','headers':{'Retry-After':{'description':'配额窗口剩余秒数','schema':{'type':'integer'}}},'content':{'application/json':{'schema':{'$ref':'#/components/schemas/Error'}}}}
-voice_payload=obj({'language':string(pattern='^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$',example='zh-CN'),'provider':string(pattern='^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$',example='doubao'),'duration_ms':{'type':'integer','minimum':1,'maximum':60000},'transcript':string(maxLength=2000,description='识别结果，去掉首尾空白后最多 2000 个字符。'),'app_version':string(pattern='^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$')},['language','provider','duration_ms','transcript','app_version'],True)
-paths['/v1/voice/contributions']={'post':{'summary':'贡献一段语音样本','tags':['语音'],'security':[{'userSession':[]}],'description':'只在用户打开「贡献语音」后由客户端上传；需要用户会话（匿名账号也可以），设备令牌返回 401。multipart/form-data：payload 为 JSON（最多 16 KiB，未知字段返回 400），audio 为 WAV（RIFF 结构校验）或 Ogg，最多 2 MiB、60 秒。每个用户每小时 30 次（auth_rates，所有副本共享）。样本只用于改进语音识别，保留 180 天，注销账号或删除云端数据时一并删除；音频和文本不写日志。','requestBody':{'required':True,'content':{'multipart/form-data':{'schema':obj({'payload':voice_payload,'audio':string(format='binary')},['payload','audio']),'encoding':{'payload':{'contentType':'application/json'},'audio':{'contentType':'audio/wav, audio/ogg'}}}}},'responses':{'201':{'description':'已保存','content':{'application/json':{'schema':obj({'id':string()},['id'])}}},**user_error_responses([('400','invalid_payload、invalid_audio、unexpected_part 或 multipart 无效'),('401','需要用户会话'),('403','账号已封禁'),('413','音频超过 2 MiB'),('415','需要 multipart/form-data'),('429','上传过于频繁'),('503','用户体系不可用')])}}}
+voice_payload=obj({'language':string(pattern='^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$',example='zh-CN'),'provider':string(pattern='^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$',example='doubao'),'duration_ms':{'type':'integer','minimum':1,'maximum':60000,'description':'客户端声明的音频时长（毫秒）；服务端只校验字段范围，不解析媒体的实际时长。客户端须在上传前确认实际音频不超过 60 秒。'},'transcript':string(maxLength=2000,description='识别结果，去掉首尾空白后最多 2000 个字符。'),'app_version':string(pattern='^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$')},['language','provider','duration_ms','transcript','app_version'],True)
+paths['/v1/voice/contributions']={'post':{'summary':'贡献一段语音样本','tags':['语音'],'security':[{'userSession':[]}],'description':'只在用户打开「贡献语音」后由客户端上传；需要用户会话（匿名账号也可以），设备令牌返回 401。multipart/form-data：payload 为 JSON（最多 16 KiB，未知字段返回 400），audio 为 WAV（RIFF 结构校验）或 Ogg（起始页签名校验），最多 2 MiB。duration_ms 是客户端声明的时长，服务端校验其在 1–60000 范围内，不解析媒体实际时长；客户端须在上传前确认实际音频不超过 60 秒。每个用户每小时 30 次（auth_rates，所有副本共享）。样本只用于改进语音识别，保留 180 天，注销账号或删除云端数据时一并删除；音频和文本不写日志。','requestBody':{'required':True,'content':{'multipart/form-data':{'schema':obj({'payload':voice_payload,'audio':string(format='binary')},['payload','audio']),'encoding':{'payload':{'contentType':'application/json'},'audio':{'contentType':'audio/wav, audio/ogg'}}}}},'responses':{'201':{'description':'已保存','content':{'application/json':{'schema':obj({'id':string()},['id'])}}},**user_error_responses([('400','invalid_payload、invalid_audio、unexpected_part 或 multipart 无效'),('401','需要用户会话'),('403','账号已封禁'),('413','音频超过 2 MiB'),('415','需要 multipart/form-data'),('429','上传过于频繁'),('503','用户体系不可用')])}}}
 
 # 诊断快照上传与远程 MCP（安卓重做批次三）。/mcp/s/{id} 不在 /v1 下、用快照令牌鉴权，不收进这份规范，见 docs/diagnostics.md。
 diagnostic_event_kinds=['key_down','key_up','candidate_shown','candidate_selected','commit','backspace','panel_open','panel_close','ime_start','ime_finish']

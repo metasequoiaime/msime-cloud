@@ -83,7 +83,7 @@ func (s *Server) adminCrashIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Hold the group's issue lock from the duplicate check until the issue is recorded, and re-read the group under it, so two concurrent requests cannot both open an issue.
-	release, err := s.accounts.LockCrashGroupIssue(ctx, signature)
+	locked, err := s.accounts.LockCrashGroupIssue(ctx, signature)
 	if errors.Is(err, account.ErrCrashIssueBusy) {
 		fail(w, 409, "issue_in_progress")
 		return
@@ -92,8 +92,8 @@ func (s *Server) adminCrashIssue(w http.ResponseWriter, r *http.Request) {
 		fail(w, 503, "auth_unavailable")
 		return
 	}
-	defer release()
-	if group, err = s.accounts.CrashGroupForIssue(ctx, signature); err != nil {
+	defer locked.Release()
+	if group, err = locked.Source(ctx); err != nil {
 		if errors.Is(err, account.ErrCrashGroupNotFound) {
 			fail(w, 404, "not_found")
 		} else {
@@ -154,7 +154,7 @@ func (s *Server) adminCrashIssue(w http.ResponseWriter, r *http.Request) {
 	// The issue now exists on GitHub; record it even if the request deadline ran out or the admin went away during the GitHub call. WithoutCancel keeps the actor for the audit row.
 	recordCtx, cancelRecord := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancelRecord()
-	if err = s.accounts.SetCrashGroupIssue(recordCtx, signature, platform.Repo, created.Number, created.HTMLURL); err != nil {
+	if err = locked.Record(recordCtx, platform.Repo, created.Number, created.HTMLURL); err != nil {
 		// The issue exists on GitHub but the group does not point at it; hand the link back so it is not lost.
 		slog.Error("crash issue: record", "signature", signature, "issue", created.HTMLURL, "reason", err.Error())
 		respond(w, 503, map[string]any{"error": map[string]string{"code": "issue_not_recorded", "message": "issue_not_recorded"}, "issue_url": created.HTMLURL})

@@ -24,7 +24,7 @@ const (
 	voiceContributionAudioBytes = 2 << 20
 	// voiceContributionPayloadBytes 是 payload JSON 的上限。
 	voiceContributionPayloadBytes = 16 << 10
-	// voiceContributionMaxMS 是一段音频的最长时长。
+	// voiceContributionMaxMS 是客户端声明时长的上限；服务端不解析音频的实际时长。
 	voiceContributionMaxMS = 60000
 	// voiceContributionTranscriptRunes 是识别文本的上限。
 	voiceContributionTranscriptRunes = 2000
@@ -55,7 +55,7 @@ func voiceAudioMime(audio []byte) string {
 	}
 }
 
-// voiceContribution 处理 POST /v1/voice/contributions：multipart，payload 为 JSON {language,provider,duration_ms,transcript,app_version}，audio 为 WAV 或 Ogg（≤2 MiB、≤60 秒）。成功返回 201 {id}。音频和文本只存进数据库，保留 180 天，不写日志。
+// voiceContribution 处理 `POST /v1/voice/contributions`：multipart，`payload` 为 JSON {language,provider,duration_ms,transcript,app_version}，`audio` 为 WAV 或 Ogg（≤2 MiB），声明的 `duration_ms` 为 1–60000。成功返回 201 {id}。音频和文本只存进数据库，保留 180 天，不写日志；实际时长由客户端在上传前确认，服务端不解析。
 func (s *Server) voiceContribution(w http.ResponseWriter, r *http.Request) {
 	if s.accounts == nil {
 		fail(w, 503, "service_disabled")

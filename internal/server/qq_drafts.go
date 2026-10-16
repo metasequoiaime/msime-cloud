@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
 
@@ -40,6 +41,18 @@ type qqDraftStore interface {
 	SetQQDraftIssueLease(ctx context.Context, id int64, claimedAt time.Time, ref string) (bool, error)
 	DismissQQDraft(ctx context.Context, id int64) (bool, error)
 	OpenQQDrafts(ctx context.Context, limit int) ([]account.QQDraft, int, error)
+}
+
+// qqDraftOnceStore 支持短时间内相同草稿内容幂等写入；旧的测试存储和其他实现退回普通写入。
+type qqDraftOnceStore interface {
+	CreateQQDraftOnce(ctx context.Context, subject, original, report string) (int64, error)
+}
+
+func createQQDraft(ctx context.Context, store qqDraftStore, subject, original, report string) (int64, error) {
+	if once, ok := store.(qqDraftOnceStore); ok {
+		return once.CreateQQDraftOnce(ctx, subject, original, report)
+	}
+	return store.CreateQQDraft(ctx, subject, original, report)
 }
 
 // qqDraftCommand 匹配「提交 D12 …」「补充 D12 …」「看 D12」「忽略 D12」，分组是命令、编号和后面的内容（「看」「忽略」不用后面的内容）。也认「提交D12」、小写的 d、命令后的冒号（「补充：D1 Windows 11」）、编号前的「#」、d 和数字之间的空格（「补充 d 1 win11」），编号后面可以用句号、分号、顿号隔开内容：原来多一个冒号就认不出，补充的内容被当成提问交给模型。
@@ -110,11 +123,17 @@ func (s *Server) qqDraftReport(ctx context.Context, subject, text string, histor
 	// 整理、记票、并入都做完了，最后这一步写库不跟随处理消息的 ctx（写法照 recordQQTurn）：答案可能已经按「说明里会追问」去掉了末尾的追问发出去，这时滚动发布取消了 ctx、草稿没建成，追问就落空了。
 	raw, _ := json.Marshal(report)
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-	id, err := s.qqDrafts.CreateQQDraft(sctx, subject, qqTruncate(text, qqDraftOriginalRunes), string(raw))
+	id, err := createQQDraft(sctx, s.qqDrafts, subject, qqTruncate(text, qqDraftOriginalRunes), string(raw))
 	cancel()
 	if err != nil {
 		slog.Warn("qq bot: draft not stored", "reason", err.Error())
-		releaseDraftSlot()
+		// PostgreSQL 明确拒绝语句时可以确认没有新建草稿，才退回名额。连接中断、超时或取消时事务可能已经提交，保留名额避免重试再建一份草稿。
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			releaseDraftSlot()
+		} else {
+			slog.Warn("qq bot: draft write outcome uncertain; keeping draft slot")
+		}
 		return qqDraftResult{}
 	}
 	// 群友看到的说法不用「草稿」「GitHub」这类内部叫法；编号要留着，补充时用得到。压成一行：原来「我已经把这个问题记下来了，编号 D12…还想知道：…」又长又和答案末尾的追问重复。
@@ -236,7 +255,7 @@ func (s *Server) qqAdminDraft(ctx context.Context, m qqGroupMessage, text string
 		return "", false
 	}
 	raw, _ := json.Marshal(report)
-	id, err := s.qqDrafts.CreateQQDraft(ctx, m.GroupOpenID+"/"+m.Author.MemberOpenID, qqTruncate(text, qqDraftOriginalRunes), string(raw))
+	id, err := createQQDraft(ctx, s.qqDrafts, m.GroupOpenID+"/"+m.Author.MemberOpenID, qqTruncate(text, qqDraftOriginalRunes), string(raw))
 	if err != nil {
 		slog.Warn("qq bot: admin draft not stored", "reason", err.Error())
 		return "", false

@@ -2607,7 +2607,7 @@
         },
         "responses": {
           "200": {
-            "description": "成功转发小牛 JSON，最多 1 MiB；业务状态由上游 JSON 表示。",
+            "description": "小牛上传响应；成功时 data.fileNo 替换为本服务加签编号，绑定上传身份和媒体类型，其他业务字段保留。code 为 200 却缺少有效 fileNo 时返回 502。",
             "content": {
               "application/json": {
                 "schema": {}
@@ -2689,7 +2689,7 @@
         "tags": [
           "小牛媒体翻译"
         ],
-        "description": "使用小牛返回的 file_no 操作文档翻译任务；不需要请求体。",
+        "description": "使用本服务上传响应中的 data.fileNo 操作文档翻译任务；不需要请求体。",
         "parameters": [
           {
             "name": "file_no",
@@ -2698,7 +2698,7 @@
             "schema": {
               "type": "string",
               "minLength": 1,
-              "description": "小牛返回的任务编号，最多 256 UTF-8 字节，不得含 /、反斜杠、CR 或 LF。调用方对路径段进行一次 URL 编码；服务端按编号原文转发，编号中的百分号序列不再作为路径分隔符解码。"
+              "description": "本服务上传响应 data.fileNo 中的加签任务编号，最多 512 字节；只允许上传身份用于同类媒体。请原样保存并对路径段进行一次 URL 编码，不能使用上游原始编号。"
             }
           }
         ],
@@ -2763,6 +2763,16 @@
           },
           "503": {
             "description": "niutrans_api_not_configured：该小牛接口未配置，或服务不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "niutrans_task_not_found：编号未加签、已被篡改、属于其他身份或媒体类型，或上游应用/密钥已更换。",
             "content": {
               "application/json": {
                 "schema": {
@@ -2778,7 +2788,7 @@
         "tags": [
           "小牛媒体翻译"
         ],
-        "description": "使用小牛返回的 file_no 删除文档任务；不需要请求体。",
+        "description": "使用本服务上传响应中的 data.fileNo 删除文档任务；不需要请求体。",
         "parameters": [
           {
             "name": "file_no",
@@ -2787,7 +2797,7 @@
             "schema": {
               "type": "string",
               "minLength": 1,
-              "description": "小牛返回的任务编号，最多 256 UTF-8 字节，不得含 /、反斜杠、CR 或 LF。调用方对路径段进行一次 URL 编码；服务端按编号原文转发，编号中的百分号序列不再作为路径分隔符解码。"
+              "description": "本服务上传响应 data.fileNo 中的加签任务编号，最多 512 字节；只允许上传身份用于同类媒体。请原样保存并对路径段进行一次 URL 编码，不能使用上游原始编号。"
             }
           }
         ],
@@ -2852,6 +2862,16 @@
           },
           "503": {
             "description": "niutrans_api_not_configured：该小牛接口未配置，或服务不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "niutrans_task_not_found：编号未加签、已被篡改、属于其他身份或媒体类型，或上游应用/密钥已更换。",
             "content": {
               "application/json": {
                 "schema": {
@@ -2869,7 +2889,7 @@
         "tags": [
           "小牛媒体翻译"
         ],
-        "description": "使用小牛返回的 file_no 操作文档翻译任务；不需要请求体。",
+        "description": "使用本服务上传响应中的 data.fileNo 操作文档翻译任务；不需要请求体。",
         "parameters": [
           {
             "name": "file_no",
@@ -2878,7 +2898,7 @@
             "schema": {
               "type": "string",
               "minLength": 1,
-              "description": "小牛返回的任务编号，最多 256 UTF-8 字节，不得含 /、反斜杠、CR 或 LF。调用方对路径段进行一次 URL 编码；服务端按编号原文转发，编号中的百分号序列不再作为路径分隔符解码。"
+              "description": "本服务上传响应 data.fileNo 中的加签任务编号，最多 512 字节；只允许上传身份用于同类媒体。请原样保存并对路径段进行一次 URL 编码，不能使用上游原始编号。"
             }
           }
         ],
@@ -2950,6 +2970,16 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "niutrans_task_not_found：编号未加签、已被篡改、属于其他身份或媒体类型，或上游应用/密钥已更换。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -2960,7 +2990,7 @@
         "tags": [
           "小牛媒体翻译"
         ],
-        "description": "使用小牛返回的 file_no 操作文档翻译任务；不需要请求体。 type 取 0..5，省略或为空时使用 1。最多流式转发 64 MiB，Content-Type 沿用上游，缺失时使用 application/octet-stream。已发送响应后遇到超限或读取失败会中断连接，不追加 JSON；调用方应将残缺下载视为失败。",
+        "description": "使用本服务上传响应中的 data.fileNo 操作文档翻译任务；不需要请求体。 type 取 0..5，省略或为空时使用 1。最多流式转发 64 MiB，Content-Type 沿用上游，缺失时使用 application/octet-stream。已发送响应后遇到超限或读取失败会中断连接，不追加 JSON；调用方应将残缺下载视为失败。",
         "parameters": [
           {
             "name": "file_no",
@@ -2969,7 +2999,7 @@
             "schema": {
               "type": "string",
               "minLength": 1,
-              "description": "小牛返回的任务编号，最多 256 UTF-8 字节，不得含 /、反斜杠、CR 或 LF。调用方对路径段进行一次 URL 编码；服务端按编号原文转发，编号中的百分号序列不再作为路径分隔符解码。"
+              "description": "本服务上传响应 data.fileNo 中的加签任务编号，最多 512 字节；只允许上传身份用于同类媒体。请原样保存并对路径段进行一次 URL 编码，不能使用上游原始编号。"
             }
           },
           {
@@ -3060,6 +3090,16 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "niutrans_task_not_found：编号未加签、已被篡改、属于其他身份或媒体类型，或上游应用/密钥已更换。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -3130,7 +3170,7 @@
         },
         "responses": {
           "200": {
-            "description": "成功转发小牛 JSON，最多 1 MiB；业务状态由上游 JSON 表示。",
+            "description": "小牛上传响应；成功时 data.fileNo 替换为本服务加签编号，绑定上传身份和媒体类型，其他业务字段保留。code 为 200 却缺少有效 fileNo 时返回 502。",
             "content": {
               "application/json": {
                 "schema": {}
@@ -3212,7 +3252,7 @@
         "tags": [
           "小牛媒体翻译"
         ],
-        "description": "使用小牛返回的 file_no 操作图片翻译任务；不需要请求体。",
+        "description": "使用本服务上传响应中的 data.fileNo 操作图片翻译任务；不需要请求体。",
         "parameters": [
           {
             "name": "file_no",
@@ -3221,7 +3261,7 @@
             "schema": {
               "type": "string",
               "minLength": 1,
-              "description": "小牛返回的任务编号，最多 256 UTF-8 字节，不得含 /、反斜杠、CR 或 LF。调用方对路径段进行一次 URL 编码；服务端按编号原文转发，编号中的百分号序列不再作为路径分隔符解码。"
+              "description": "本服务上传响应 data.fileNo 中的加签任务编号，最多 512 字节；只允许上传身份用于同类媒体。请原样保存并对路径段进行一次 URL 编码，不能使用上游原始编号。"
             }
           }
         ],
@@ -3286,6 +3326,16 @@
           },
           "503": {
             "description": "niutrans_api_not_configured：该小牛接口未配置，或服务不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "niutrans_task_not_found：编号未加签、已被篡改、属于其他身份或媒体类型，或上游应用/密钥已更换。",
             "content": {
               "application/json": {
                 "schema": {
@@ -3303,7 +3353,7 @@
         "tags": [
           "小牛媒体翻译"
         ],
-        "description": "使用小牛返回的 file_no 操作图片翻译任务；不需要请求体。",
+        "description": "使用本服务上传响应中的 data.fileNo 操作图片翻译任务；不需要请求体。",
         "parameters": [
           {
             "name": "file_no",
@@ -3312,7 +3362,7 @@
             "schema": {
               "type": "string",
               "minLength": 1,
-              "description": "小牛返回的任务编号，最多 256 UTF-8 字节，不得含 /、反斜杠、CR 或 LF。调用方对路径段进行一次 URL 编码；服务端按编号原文转发，编号中的百分号序列不再作为路径分隔符解码。"
+              "description": "本服务上传响应 data.fileNo 中的加签任务编号，最多 512 字节；只允许上传身份用于同类媒体。请原样保存并对路径段进行一次 URL 编码，不能使用上游原始编号。"
             }
           }
         ],
@@ -3384,6 +3434,16 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "niutrans_task_not_found：编号未加签、已被篡改、属于其他身份或媒体类型，或上游应用/密钥已更换。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -3394,7 +3454,7 @@
         "tags": [
           "小牛媒体翻译"
         ],
-        "description": "使用小牛返回的 file_no 操作图片翻译任务；不需要请求体。 type 取 0..5，省略或为空时使用 1。最多流式转发 64 MiB，Content-Type 沿用上游，缺失时使用 application/octet-stream。已发送响应后遇到超限或读取失败会中断连接，不追加 JSON；调用方应将残缺下载视为失败。",
+        "description": "使用本服务上传响应中的 data.fileNo 操作图片翻译任务；不需要请求体。 type 取 0..5，省略或为空时使用 1。最多流式转发 64 MiB，Content-Type 沿用上游，缺失时使用 application/octet-stream。已发送响应后遇到超限或读取失败会中断连接，不追加 JSON；调用方应将残缺下载视为失败。",
         "parameters": [
           {
             "name": "file_no",
@@ -3403,7 +3463,7 @@
             "schema": {
               "type": "string",
               "minLength": 1,
-              "description": "小牛返回的任务编号，最多 256 UTF-8 字节，不得含 /、反斜杠、CR 或 LF。调用方对路径段进行一次 URL 编码；服务端按编号原文转发，编号中的百分号序列不再作为路径分隔符解码。"
+              "description": "本服务上传响应 data.fileNo 中的加签任务编号，最多 512 字节；只允许上传身份用于同类媒体。请原样保存并对路径段进行一次 URL 编码，不能使用上游原始编号。"
             }
           },
           {
@@ -3494,6 +3554,16 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "niutrans_task_not_found：编号未加签、已被篡改、属于其他身份或媒体类型，或上游应用/密钥已更换。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -3564,7 +3634,7 @@
         },
         "responses": {
           "200": {
-            "description": "成功转发小牛 JSON，最多 1 MiB；业务状态由上游 JSON 表示。",
+            "description": "小牛上传响应；成功时 data.fileNo 替换为本服务加签编号，绑定上传身份和媒体类型，其他业务字段保留。code 为 200 却缺少有效 fileNo 时返回 502。",
             "content": {
               "application/json": {
                 "schema": {}
@@ -3646,7 +3716,7 @@
         "tags": [
           "小牛媒体翻译"
         ],
-        "description": "使用小牛返回的 file_no 操作语音翻译任务；不需要请求体。",
+        "description": "使用本服务上传响应中的 data.fileNo 操作语音翻译任务；不需要请求体。",
         "parameters": [
           {
             "name": "file_no",
@@ -3655,7 +3725,7 @@
             "schema": {
               "type": "string",
               "minLength": 1,
-              "description": "小牛返回的任务编号，最多 256 UTF-8 字节，不得含 /、反斜杠、CR 或 LF。调用方对路径段进行一次 URL 编码；服务端按编号原文转发，编号中的百分号序列不再作为路径分隔符解码。"
+              "description": "本服务上传响应 data.fileNo 中的加签任务编号，最多 512 字节；只允许上传身份用于同类媒体。请原样保存并对路径段进行一次 URL 编码，不能使用上游原始编号。"
             }
           }
         ],
@@ -3720,6 +3790,16 @@
           },
           "503": {
             "description": "niutrans_api_not_configured：该小牛接口未配置，或服务不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "niutrans_task_not_found：编号未加签、已被篡改、属于其他身份或媒体类型，或上游应用/密钥已更换。",
             "content": {
               "application/json": {
                 "schema": {
@@ -3737,7 +3817,7 @@
         "tags": [
           "小牛媒体翻译"
         ],
-        "description": "使用小牛返回的 file_no 操作语音翻译任务；不需要请求体。",
+        "description": "使用本服务上传响应中的 data.fileNo 操作语音翻译任务；不需要请求体。",
         "parameters": [
           {
             "name": "file_no",
@@ -3746,7 +3826,7 @@
             "schema": {
               "type": "string",
               "minLength": 1,
-              "description": "小牛返回的任务编号，最多 256 UTF-8 字节，不得含 /、反斜杠、CR 或 LF。调用方对路径段进行一次 URL 编码；服务端按编号原文转发，编号中的百分号序列不再作为路径分隔符解码。"
+              "description": "本服务上传响应 data.fileNo 中的加签任务编号，最多 512 字节；只允许上传身份用于同类媒体。请原样保存并对路径段进行一次 URL 编码，不能使用上游原始编号。"
             }
           }
         ],
@@ -3818,6 +3898,16 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "niutrans_task_not_found：编号未加签、已被篡改、属于其他身份或媒体类型，或上游应用/密钥已更换。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -3828,7 +3918,7 @@
         "tags": [
           "小牛媒体翻译"
         ],
-        "description": "使用小牛返回的 file_no 操作语音翻译任务；不需要请求体。 type 取 0..5，省略或为空时使用 1。最多流式转发 64 MiB，Content-Type 沿用上游，缺失时使用 application/octet-stream。已发送响应后遇到超限或读取失败会中断连接，不追加 JSON；调用方应将残缺下载视为失败。",
+        "description": "使用本服务上传响应中的 data.fileNo 操作语音翻译任务；不需要请求体。 type 取 0..5，省略或为空时使用 1。最多流式转发 64 MiB，Content-Type 沿用上游，缺失时使用 application/octet-stream。已发送响应后遇到超限或读取失败会中断连接，不追加 JSON；调用方应将残缺下载视为失败。",
         "parameters": [
           {
             "name": "file_no",
@@ -3837,7 +3927,7 @@
             "schema": {
               "type": "string",
               "minLength": 1,
-              "description": "小牛返回的任务编号，最多 256 UTF-8 字节，不得含 /、反斜杠、CR 或 LF。调用方对路径段进行一次 URL 编码；服务端按编号原文转发，编号中的百分号序列不再作为路径分隔符解码。"
+              "description": "本服务上传响应 data.fileNo 中的加签任务编号，最多 512 字节；只允许上传身份用于同类媒体。请原样保存并对路径段进行一次 URL 编码，不能使用上游原始编号。"
             }
           },
           {
@@ -3921,6 +4011,16 @@
           },
           "503": {
             "description": "niutrans_api_not_configured：该小牛接口未配置，或服务不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "niutrans_task_not_found：编号未加签、已被篡改、属于其他身份或媒体类型，或上游应用/密钥已更换。",
             "content": {
               "application/json": {
                 "schema": {
@@ -15869,15 +15969,11 @@
     },
     "/v1/community/candidate-skins/{id}/download": {
       "post": {
-        "summary": "下载候选窗皮肤包并去重计数",
+        "summary": "下载候选窗皮肤包",
         "tags": [
           "皮肤社区"
         ],
-        "security": [
-          {
-            "userSession": []
-          }
-        ],
+        "security": [],
         "parameters": [
           {
             "name": "id",
@@ -15889,7 +15985,7 @@
             }
           }
         ],
-        "description": "返回原样清单和重新编码后的图片；下载人数按账号去重。私有作品仅作者可下载。 详见 docs/skin-community.md。",
+        "description": "公开作品无需登录，返回原样清单和重新编码后的图片；仅有效登录会话计入按账号去重的下载人数，匿名下载不计数。私有或已下架作品仅作者可下载。 详见 docs/skin-community.md。",
         "responses": {
           "200": {
             "description": "成功",
@@ -18189,7 +18285,7 @@
                     "resource_saves": {
                       "type": "integer",
                       "minimum": 0,
-                      "description": "词库与回复模板收藏人次（按账号和作品去重）"
+                      "description": "未下架词库与回复模板收藏人次（含待审核作品，按账号和作品去重）"
                     },
                     "generated_at": {
                       "type": "string",
@@ -21956,7 +22052,7 @@
             "userSession": []
           }
         ],
-        "description": "只在用户打开「贡献语音」后由客户端上传；需要用户会话（匿名账号也可以），设备令牌返回 401。multipart/form-data：payload 为 JSON（最多 16 KiB，未知字段返回 400），audio 为 WAV（RIFF 结构校验）或 Ogg，最多 2 MiB、60 秒。每个用户每小时 30 次（auth_rates，所有副本共享）。样本只用于改进语音识别，保留 180 天，注销账号或删除云端数据时一并删除；音频和文本不写日志。",
+        "description": "只在用户打开「贡献语音」后由客户端上传；需要用户会话（匿名账号也可以），设备令牌返回 401。multipart/form-data：payload 为 JSON（最多 16 KiB，未知字段返回 400），audio 为 WAV（RIFF 结构校验）或 Ogg（起始页签名校验），最多 2 MiB。duration_ms 是客户端声明的时长，服务端校验其在 1–60000 范围内，不解析媒体实际时长；客户端须在上传前确认实际音频不超过 60 秒。每个用户每小时 30 次（auth_rates，所有副本共享）。样本只用于改进语音识别，保留 180 天，注销账号或删除云端数据时一并删除；音频和文本不写日志。",
         "requestBody": {
           "required": true,
           "content": {
@@ -21980,7 +22076,8 @@
                       "duration_ms": {
                         "type": "integer",
                         "minimum": 1,
-                        "maximum": 60000
+                        "maximum": 60000,
+                        "description": "客户端声明的音频时长（毫秒）；服务端只校验字段范围，不解析媒体的实际时长。客户端须在上传前确认实际音频不超过 60 秒。"
                       },
                       "transcript": {
                         "type": "string",

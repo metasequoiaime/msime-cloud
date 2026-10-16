@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """刷新 internal/skins/testdata/client_dialect.json，或用 --check 核对它是否与 msime 的共享用例表一致。
 
-用例表的唯一来源是 msime 的 crates/client-core/src/skin/catalog/client_dialect.json，皮肤清单的各个实现（client-core、本仓的 internal/skins/client.go 与 scripts/candidate_skins_seed.py、msime-windows）都按它校验。msime 改了规则不会触动本仓，所以没有放进 PR 的必需检查：同步 msime 的规则改动时手动运行本脚本，再修正 go test 和种子脚本测试报出的差异。
+用例表的唯一来源是 msime 的 crates/client-services/src/skin/catalog/client_dialect.json，皮肤清单的各个实现（client-services、本仓的 internal/skins/client.go 与 scripts/candidate_skins_seed.py、msime-windows）都按它校验。msime 改了规则不会触动本仓，所以没有放进 PR 的必需检查：同步 msime 的规则改动时手动运行本脚本，再修正 go test 和种子脚本测试报出的差异。
 """
 import argparse
 import sys
 import urllib.request
 from pathlib import Path
 
-SOURCE = 'https://raw.githubusercontent.com/metasequoiaime/msime/{ref}/crates/client-core/src/skin/catalog/client_dialect.json'
+SOURCE = 'https://raw.githubusercontent.com/metasequoiaime/msime/{ref}/crates/client-services/src/skin/catalog/client_dialect.json'
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = ROOT / 'internal/skins/testdata/client_dialect.json'
 

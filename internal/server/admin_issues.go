@@ -534,7 +534,7 @@ func (s *Server) rememberIssues(ctx context.Context, items []issueRow, openOnly,
 		}
 	}
 	m.mu.Unlock()
-	// An issue is marked seen before it is announced, so the announcement must not die with the request that happened to list it.
+	// 通知不随触发轮询的请求取消；写入失败时清除预占标记，让后续轮询重试。
 	ctx = context.WithoutCancel(ctx)
 	for _, row := range announce {
 		title := "#" + strconv.Itoa(row.Number) + " " + row.Title
@@ -543,6 +543,9 @@ func (s *Server) rememberIssues(ctx context.Context, items []issueRow, openOnly,
 		}
 		key := issueRef{Repo: row.Repo, N: row.Number}.key()
 		if err := s.accounts.NotifyOnce(ctx, account.Notification{Kind: account.NotifyIssue, Title: title, TargetPage: "issues", TargetID: key}); err != nil {
+			m.mu.Lock()
+			delete(m.seen, key)
+			m.mu.Unlock()
 			slog.Error("issues: notification failed", "issue", key, "reason", err.Error())
 		}
 	}
@@ -833,38 +836,53 @@ func (s *Server) similarIssues(ctx context.Context, gh *githubapp.Client, row is
 	if err != nil {
 		return out
 	}
+	return similarIssueRows(snap.items, row)
+}
+
+// similarIssueRows 从已读取的问题列表中筛选至多三个相似问题。
+func similarIssueRows(items []issueRow, row issueRow) []issueSimilar {
+	out := []issueSimilar{}
 	target := titleBigrams(row.Title)
 	type scored struct {
 		row   issueRow
 		score float64
 	}
-	var candidates []scored
-	for _, other := range snap.items {
+	candidates := make([]scored, 0, 3)
+	for _, other := range items {
 		if other.Repo == row.Repo && other.Number == row.Number {
 			continue
 		}
-		if score := bigramSimilarity(target, titleBigrams(other.Title)); score >= 0.3 {
-			candidates = append(candidates, scored{other, score})
+		score := bigramSimilarity(target, titleBigrams(other.Title))
+		if score < 0.3 {
+			continue
 		}
+		position := 0
+		for position < len(candidates) {
+			previous := candidates[position]
+			if score > previous.score || score == previous.score && other.CreatedAt.After(previous.row.CreatedAt) {
+				break
+			}
+			position++
+		}
+		if position == cap(candidates) {
+			continue
+		}
+		if len(candidates) < cap(candidates) {
+			candidates = append(candidates, scored{})
+		}
+		// 相同分数和时间的候选排在已有项之后，保留原稳定排序的次序。
+		copy(candidates[position+1:], candidates[position:len(candidates)-1])
+		candidates[position] = scored{other, score}
 	}
-	slices.SortStableFunc(candidates, func(a, b scored) int {
-		switch {
-		case a.score > b.score:
-			return -1
-		case a.score < b.score:
-			return 1
-		}
-		return b.row.CreatedAt.Compare(a.row.CreatedAt)
-	})
-	for _, c := range candidates[:min(3, len(candidates))] {
+	for _, c := range candidates {
 		out = append(out, issueSimilar{c.row.Repo, c.row.Number, c.row.Title, c.row.State, c.row.URL})
 	}
 	return out
 }
 
-// titleBigrams is the set of adjacent letter or digit pairs of a lowercased title; punctuation and spaces separate words and never join a pair.
-func titleBigrams(title string) map[string]bool {
-	set := map[string]bool{}
+// titleBigrams 收集小写标题中相邻的字母或数字对；标点和空格分隔词语，不跨边界组合。
+func titleBigrams(title string) map[[2]rune]bool {
+	set := map[[2]rune]bool{}
 	var prev rune
 	for _, c := range strings.ToLower(title) {
 		if !unicode.IsLetter(c) && !unicode.IsDigit(c) {
@@ -872,15 +890,15 @@ func titleBigrams(title string) map[string]bool {
 			continue
 		}
 		if prev != 0 {
-			set[string([]rune{prev, c})] = true
+			set[[2]rune{prev, c}] = true
 		}
 		prev = c
 	}
 	return set
 }
 
-// bigramSimilarity is the Dice coefficient of two bigram sets.
-func bigramSimilarity(a, b map[string]bool) float64 {
+// bigramSimilarity 返回两个二元组集合的 Dice 相似系数。
+func bigramSimilarity(a, b map[[2]rune]bool) float64 {
 	if len(a) == 0 || len(b) == 0 {
 		return 0
 	}

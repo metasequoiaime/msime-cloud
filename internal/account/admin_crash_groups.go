@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Crash page (unit U9): the crash event list, crash groups, their signatures and status.
@@ -242,7 +243,15 @@ const crashGroupSamples = 5
 
 // crashGroup 在同一条查询的快照中读取分组、统计和最新样本；分组不存在时返回 pgx.ErrNoRows。
 func (a *Service) crashGroup(ctx context.Context, signature string, samples int) (crashGroupRow, []crashSample, error) {
-	rows, err := a.store.pool.Query(ctx, `WITH c AS (`+crashGroupCounts+`)
+	return readCrashGroup(ctx, a.store.pool, signature, samples)
+}
+
+type crashGroupQuerier interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}
+
+func readCrashGroup(ctx context.Context, q crashGroupQuerier, signature string, samples int) (crashGroupRow, []crashSample, error) {
+	rows, err := q.Query(ctx, `WITH c AS (`+crashGroupCounts+`)
 SELECT `+crashGroupColumns+`,
  s.id IS NOT NULL,COALESCE(s.id,''),COALESCE(s.platform,''),COALESCE(s.version,''),
  COALESCE(s.message,''),COALESCE(s.stack,''),COALESCE(s.resolved,false),COALESCE(s.created_at,g.last_seen)
@@ -330,7 +339,11 @@ var ErrCrashGroupNotFound = errors.New("crash group not found")
 
 // CrashGroupForIssue reads the crash group signature for a GitHub issue; a missing group is ErrCrashGroupNotFound.
 func (a *Service) CrashGroupForIssue(ctx context.Context, signature string) (CrashIssueSource, error) {
-	group, samples, err := a.crashGroup(ctx, signature, 1)
+	return crashGroupForIssue(ctx, a.store.pool, signature)
+}
+
+func crashGroupForIssue(ctx context.Context, q crashGroupQuerier, signature string) (CrashIssueSource, error) {
+	group, samples, err := readCrashGroup(ctx, q, signature, 1)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CrashIssueSource{}, ErrCrashGroupNotFound
 	}
@@ -357,8 +370,14 @@ var ErrCrashIssueBusy = errors.New("crash group issue in progress")
 // crashIssueLockSpace is the first key of the per-group advisory lock that serializes issue creation; the second is hashtext(signature).
 const crashIssueLockSpace int32 = 0x6d736369
 
-// LockCrashGroupIssue serializes opening a GitHub issue for one crash group across requests and replicas, so two clicks cannot open two issues: it holds a session advisory lock on its own connection until the returned release is called, and returns ErrCrashIssueBusy when another request holds it. Read the group again after locking.
-func (a *Service) LockCrashGroupIssue(ctx context.Context, signature string) (func(), error) {
+// CrashIssueLock 持有分组的会话锁和连接，供同一个请求顺序重读分组、登记 Issue，避免持锁时再向连接池申请连接。
+type CrashIssueLock struct {
+	conn      *pgxpool.Conn
+	signature string
+}
+
+// LockCrashGroupIssue 串行化同一崩溃分组在多个请求和副本上的 Issue 创建；其他请求持锁时返回 ErrCrashIssueBusy。调用方应在锁内重读分组，并在完成后调用 Release。
+func (a *Service) LockCrashGroupIssue(ctx context.Context, signature string) (*CrashIssueLock, error) {
 	conn, err := a.store.pool.Acquire(ctx)
 	if err != nil {
 		return nil, err
@@ -371,25 +390,41 @@ func (a *Service) LockCrashGroupIssue(ctx context.Context, signature string) (fu
 		}
 		return nil, err
 	}
-	return func() {
-		// The request context may already be done; unlock on a fresh one, and drop the connection rather than return it to the pool still holding the lock.
-		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if _, err := conn.Exec(unlockCtx, `SELECT pg_advisory_unlock($1,hashtext($2))`, crashIssueLockSpace, signature); err != nil {
-			_ = conn.Conn().Close(unlockCtx)
-		}
-		conn.Release()
-	}, nil
+	return &CrashIssueLock{conn: conn, signature: signature}, nil
+}
+
+// Source 使用持锁连接重读分组，以锁内最新状态判断是否已经创建 Issue。
+func (l *CrashIssueLock) Source(ctx context.Context) (CrashIssueSource, error) {
+	return crashGroupForIssue(ctx, l.conn, l.signature)
+}
+
+// Record 使用持锁连接原子写入 Issue 链接、状态和审计，避免 GitHub 创建成功后因等待池中另一连接而登记失败。
+func (l *CrashIssueLock) Record(ctx context.Context, repo string, number int64, url string) error {
+	return recordCrashGroupIssue(ctx, l.conn, l.signature, repo, number, url)
+}
+
+// Release 在独立上下文中解锁；失败时关闭连接，防止把仍持锁的会话交还连接池。
+func (l *CrashIssueLock) Release() {
+	unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := l.conn.Exec(unlockCtx, `SELECT pg_advisory_unlock($1,hashtext($2))`, crashIssueLockSpace, l.signature); err != nil {
+		_ = l.conn.Conn().Close(unlockCtx)
+	}
+	l.conn.Release()
 }
 
 // SetCrashGroupIssue 用一条原子语句登记崩溃分组的 GitHub issue、将分组标记为 `known` 并记录审计。只在 issue 创建成功后调用。
 func (a *Service) SetCrashGroupIssue(ctx context.Context, signature, repo string, number int64, url string) error {
+	return recordCrashGroupIssue(ctx, a.store.pool, signature, repo, number, url)
+}
+
+func recordCrashGroupIssue(ctx context.Context, q queryRower, signature, repo string, number int64, url string) error {
 	detail, err := auditDetail(map[string]any{"repo": repo, "number": number, "issue_url": url, "to": "known"})
 	if err != nil {
 		return err
 	}
 	var previous string
-	err = a.store.pool.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+	err = q.QueryRow(ctx, `WITH locked AS MATERIALIZED (
  SELECT status FROM admin_crash_groups WHERE signature=$1 FOR UPDATE
 ), updated AS (
  UPDATE admin_crash_groups g SET status='known',issue_url=$2
@@ -536,9 +571,9 @@ var crashSystemPrefixes = []string{
 	"???", "<unknown>",
 }
 
-// crashSystemFrame reports whether a normalized, lowercased frame belongs to the system: any of its fields (module, symbol) starts with a system prefix.
+// crashSystemFrame 判断规范化的小写栈帧是否属于系统：模块或符号的任一字段以系统前缀开头即命中。
 func crashSystemFrame(frame string) bool {
-	for _, field := range strings.Fields(frame) {
+	for field := range strings.FieldsSeq(frame) {
 		field = strings.TrimLeft(field, "-+[(")
 		for _, prefix := range crashSystemPrefixes {
 			if strings.HasPrefix(field, prefix) {
@@ -549,9 +584,12 @@ func crashSystemFrame(frame string) bool {
 	return false
 }
 
-// normalizeCrashFrame strips what varies between builds and runs from one stack line: frame numbers, addresses, offsets and line numbers.
+// normalizeCrashFrame 去除栈行中随构建或运行变化的帧序号、地址、偏移量和行号。
 func normalizeCrashFrame(line string) string {
 	line = strings.TrimSpace(line)
+	if line == "" {
+		return ""
+	}
 	line = crashFrameIndex.ReplaceAllString(line, "")
 	line = crashAddressPattern.ReplaceAllString(line, "")
 	line = crashFrameOffset.ReplaceAllString(line, "")
@@ -596,17 +634,18 @@ func crashPlatform(platform string) string {
 	return platform
 }
 
-// crashSignature groups a crash: the first 16 hex digits of sha256 over the canonical platform, the normalized message and the first non-system stack frame. The same failure on two platforms is two groups, because each platform's crash is fixed and tracked in its own repository; a group's platform therefore never changes. Empty means the crash is not grouped.
+// crashSignature 用标准平台、规范化消息和前 crashStackLines 行中的首个非系统栈帧计算 SHA256 的前 16 位十六进制摘要。同一故障在不同平台分别分组，组的平台不会改变；空签名表示不分组。
 func crashSignature(platform, message, stack string) string {
 	normalized := normalizeCrashMessage(message)
 	frame := ""
-	lines := strings.Split(stack, "\n")
-	if len(lines) > crashStackLines {
-		lines = lines[:crashStackLines]
-	}
-	for _, line := range lines {
+	lineCount := 0
+	for line := range strings.SplitSeq(stack, "\n") {
+		lineCount++
 		if candidate := normalizeCrashFrame(line); candidate != "" && !crashSystemFrame(candidate) {
 			frame = candidate
+			break
+		}
+		if lineCount == crashStackLines {
 			break
 		}
 	}

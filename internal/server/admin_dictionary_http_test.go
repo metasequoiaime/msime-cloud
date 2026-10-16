@@ -27,6 +27,7 @@ type dictionaryMock struct {
 	tree                 []dictionaryTreeItem
 	blobs                map[string]string
 	truncated            bool
+	pullCreated          bool
 }
 
 func (f *dictionaryMock) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -82,6 +83,12 @@ func (f *dictionaryMock) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(f.text))
 	case r.Method == "GET" && r.URL.Path == root+"/commits/main":
 		_ = json.NewEncoder(w).Encode(map[string]any{"sha": strings.Repeat("b", 40)})
+	case r.Method == "GET" && r.URL.Path == root+"/pulls":
+		pulls := []any{}
+		if f.pullCreated {
+			pulls = append(pulls, map[string]any{"number": 42, "state": "open", "head": map[string]any{"ref": "dictionary-admin/test", "repo": map[string]string{"full_name": dictTestRepo}}, "base": map[string]string{"ref": "main"}})
+		}
+		_ = json.NewEncoder(w).Encode(pulls)
 	case r.Method == "GET" && strings.HasPrefix(r.URL.Path, root+"/contents/"):
 		if r.URL.Query().Get("ref") != strings.Repeat("b", 40) || r.Header.Get("Accept") != "application/vnd.github.raw+json" {
 			w.WriteHeader(400)
@@ -94,10 +101,34 @@ func (f *dictionaryMock) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == "PUT" && strings.HasPrefix(r.URL.Path, root+"/contents/"):
 		_, _ = w.Write([]byte(`{}`))
 	case r.Method == "POST" && r.URL.Path == root+"/pulls":
+		f.pullCreated = true
 		w.WriteHeader(201)
 		_ = json.NewEncoder(w).Encode(map[string]any{"number": 42, "html_url": "https://github.com/" + dictTestRepo + "/pull/42"})
 	default:
 		w.WriteHeader(404)
+	}
+}
+
+func TestDictionaryChangesInvalidatesPullCache(t *testing.T) {
+	f := &dictionaryMock{text: "甲\tjia\t1\n乙\tyi\t5\n"}
+	client := dictionaryMockClient(t, f)
+	client.Cache = &githubapp.Cache{}
+	path := "/repos/" + dictTestRepo + "/pulls"
+	if response, err := client.Get(t.Context(), "synthetic-token", path); err != nil || !response.OK() {
+		t.Fatalf("预热词库 PR 缓存失败：状态=%d，错误=%v", response.Status, err)
+	}
+	s := &Server{adminGitHub: client, config: Config{Admin: AdminConfig{GitHub: AdminGitHubConfig{DictionaryRepo: dictTestRepo}}}}
+	body, _ := json.Marshal(dictionaryChangeRequest{Path: "custom/words.txt", SHA: dictionaryBlobSHA([]byte(f.text)), Changes: []dictionaryEdit{{Operation: "add", Columns: []string{"丙", "bing", "3"}}}})
+	if response := dictionaryDirect(s, "POST", "/api/dictionary/changes", string(body), true); response.Code != 200 {
+		t.Fatalf("提交词库变更失败：状态=%d，响应=%s", response.Code, response.Body.String())
+	}
+	response, err := client.Get(t.Context(), "synthetic-token", path)
+	if err != nil || !response.OK() {
+		t.Fatalf("读取词库 PR 列表失败：状态=%d，错误=%v", response.Status, err)
+	}
+	var pulls []map[string]any
+	if err := response.Decode(&pulls); err != nil || len(pulls) != 1 {
+		t.Fatalf("提交后词库 PR 缓存未失效：数量=%d，错误=%v", len(pulls), err)
 	}
 }
 

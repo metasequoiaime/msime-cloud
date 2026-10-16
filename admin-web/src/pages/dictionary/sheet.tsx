@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { ClipboardEvent, KeyboardEvent, PointerEvent } from "react";
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { ClipboardEvent, KeyboardEvent, PointerEvent, Ref } from "react";
 import { ArrowDownToLine, CircleAlert, Copy, Plus, Redo2, Trash2, Undo2 } from "lucide-react";
 import type { DictionaryRow } from "../../api/dictionary";
 import { Button } from "../../ui/button";
@@ -8,14 +8,16 @@ import { applyCells, canEditCell, cellAddress, cellError, clipboardText, draftEr
 import type { Cell, CellChange, Draft, SheetRow } from "./sheet-model";
 
 type Editor = { cell: Cell; value: string };
+export type DictionarySheetHandle = { commit: () => Draft[] | null; discard: () => void };
 type Props = {
+  ref: Ref<DictionarySheetHandle>;
   path: string; originals: DictionaryRow[]; labels: string[]; defaults: string[]; drafts: Draft[];
   editable: boolean; locked: boolean; hasMore: boolean; focused: boolean; canUndo: boolean; canRedo: boolean;
   onChange: (drafts: Draft[]) => void; onEditing: (editing: boolean) => void;
   onUndo: () => void; onRedo: () => void; onSave: (drafts: Draft[]) => void;
 };
 
-export function DictionarySheet({ path, originals, labels, defaults, drafts, editable, locked, hasMore, focused: expanded, canUndo, canRedo, onChange, onEditing, onUndo, onRedo, onSave }: Props) {
+export function DictionarySheet({ ref, path, originals, labels, defaults, drafts, editable, locked, hasMore, focused: expanded, canUndo, canRedo, onChange, onEditing, onUndo, onRedo, onSave }: Props) {
   const rows = useMemo(() => makeSheetRows(originals, drafts, defaults, editable), [originals, drafts, defaults, editable]);
   const [active, setActive] = useState<Cell>({ row: 0, col: 0 });
   const [anchor, setAnchor] = useState<Cell>(active);
@@ -75,6 +77,8 @@ export function DictionarySheet({ path, originals, labels, defaults, drafts, edi
     if (next) clearEditor();
     return next;
   };
+  // 外部保存与放弃按钮也必须处理当前输入，不能只操作已经暂存的草稿。
+  useImperativeHandle(ref, () => ({ commit, discard: () => { clearEditor(); setError(""); setNotice(""); } }));
   const begin = (value = currentValue, end = true) => {
     if (!writable) { setError("此单元格只读，可选中复制；新增词条请在表格末尾录入。"); return; }
     const entry = { cell: active, value }; editorRef.current = entry; setEditor(entry); onEditing(true); setError(""); setNotice(""); setAnchor(active);

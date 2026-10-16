@@ -115,3 +115,22 @@ func TestCommunityStatsCountsPublicContentAnonymously(t *testing.T) {
 		}
 	}
 }
+
+func TestCommunityStatsExcludesRemovedSkinDownloads(t *testing.T) {
+	db := testStore(t)
+	owner := complete(t, db, Identity{"email", "stats-removed-owner@example.test"})
+	reader := complete(t, db, Identity{"email", "stats-removed-reader@example.test"})
+	if _, err := db.pool.Exec(t.Context(), `INSERT INTO community_skins(id,owner_id,name,design,moderation) VALUES('stats-removed-skin',$1,'待下架','{}','removed')`, owner.User.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.pool.Exec(t.Context(), `INSERT INTO community_skin_downloads(skin_id,user_id) VALUES('stats-removed-skin',$1)`, reader.User.ID); err != nil {
+		t.Fatal(err)
+	}
+	var stats CommunityStats
+	if err := db.pool.QueryRow(t.Context(), communityStatsQuery).Scan(&stats.Skins, &stats.SkinDownloads, &stats.Dictionaries, &stats.Replies, &stats.ResourceSaves, &stats.GeneratedAt); err != nil {
+		t.Fatal(err)
+	}
+	if stats.Skins != 0 || stats.SkinDownloads != 0 {
+		t.Fatalf("已下架皮肤及其下载不应出现在公共统计：%+v", stats)
+	}
+}

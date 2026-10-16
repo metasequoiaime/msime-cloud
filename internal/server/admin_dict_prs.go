@@ -438,11 +438,9 @@ func addedLinePositions(base, head string) []int {
 
 // dictLineColumns splits an entry line into its first two columns as the dictionary build reads them.
 func dictLineColumns(line string) (string, string) {
-	fields := strings.Split(strings.TrimSpace(line), "\t")
-	if len(fields) < 2 {
-		return strings.TrimSpace(fields[0]), ""
-	}
-	return strings.TrimSpace(fields[0]), strings.TrimSpace(fields[1])
+	first, rest, _ := strings.Cut(strings.TrimSpace(line), "\t")
+	second, _, _ := strings.Cut(rest, "\t")
+	return strings.TrimSpace(first), strings.TrimSpace(second)
 }
 
 // checkDictEntries numbers the added entries across the files in title order (words, English words, translations) and flags each one: a sensitive-word hit, an entry the website form would reject, or a duplicate of the base file, the shipped dictionary or an earlier entry of the same pull request.

@@ -571,9 +571,9 @@ var crashSystemPrefixes = []string{
 	"???", "<unknown>",
 }
 
-// crashSystemFrame reports whether a normalized, lowercased frame belongs to the system: any of its fields (module, symbol) starts with a system prefix.
+// crashSystemFrame 判断规范化的小写栈帧是否属于系统：模块或符号的任一字段以系统前缀开头即命中。
 func crashSystemFrame(frame string) bool {
-	for _, field := range strings.Fields(frame) {
+	for field := range strings.FieldsSeq(frame) {
 		field = strings.TrimLeft(field, "-+[(")
 		for _, prefix := range crashSystemPrefixes {
 			if strings.HasPrefix(field, prefix) {

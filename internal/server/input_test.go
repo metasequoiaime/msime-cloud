@@ -30,6 +30,10 @@ func TestInputValidationAndDisabledEngine(t *testing.T) {
 		{"candidates", `{"text":"nihao","scheme":"unknown"}`, 400},
 		{"gloss", `{"text":"hello","direction":"en-fr"}`, 400},
 		{"helpcode", `{"text":"你好","schema":"../secret"}`, 400},
+		{"annotate", `{"text":"合成","scheme":"wubi"}`, 400},
+		{"annotate", `{"text":"合成","scheme":"shuangpin","profile":"unknown"}`, 400},
+		{"annotate", `{"text":"hecheng","scheme":"shuangpin"}`, 400},
+		{"annotate", `{"text":"合成","scheme":"shuangpin","profile":"xiaohe"}`, 503},
 		{"unknown", `{"text":"hello"}`, 404},
 	} {
 		w := call(s, "POST", "/v1/input/"+tc.path, tc.body)

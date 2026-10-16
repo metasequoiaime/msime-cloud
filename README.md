@@ -247,6 +247,7 @@ Google 用户登录和管理员登录在打开浏览器前检查挑战有效期�
 ./msime-cloud tool lookup_dictionary '{"text":"nihao","limit":10}'
 ./msime-cloud tool lookup_dictionary '{"text":"水杉"}'
 ./msime-cloud tool lookup_dictionary '{"operation":"annotate","text":"水杉"}'
+./msime-cloud tool lookup_dictionary '{"operation":"annotate","text":"合成","scheme":"shuangpin","profile":"xiaohe"}'
 ./msime-cloud tool lookup_dictionary '{"operation":"gloss","text":"hello"}'
 ./msime-cloud tool lookup_dictionary '{"operation":"helpcode","text":"木","schema":"xiaohe"}'
 ./msime-cloud tool browse_input_catalog '{"kind":"symbols","q":"箭头"}'
@@ -255,6 +256,8 @@ Google 用户登录和管理员登录在打开浏览器前检查挑战有效期�
 echo '{"resource":"notices"}' | ./msime-cloud tool query_public_data -
 ./msime-cloud mcp
 ```
+
+汉字反查完整双拼按键码使用 `annotate`、`scheme=shuangpin` 和 `profile`（`xiaohe`、`ziranma`、`shoudao`、`microsoft`）。返回 `code` 完整按键码、`segmented_code` 两键分段和 `pinyin` 原读音；不包含辅助码，也不代表词库收录。旧服务尚不支持这些注音参数，需与本次固定引擎一起更新。
 
 支持 MCP stdio 的客户端可配置如下；`command` 换成已安装命令的绝对路径，环境变量由客户端配置传入：
 

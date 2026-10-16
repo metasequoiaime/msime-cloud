@@ -7305,6 +7305,24 @@
                     "minimum": 1,
                     "maximum": 200,
                     "default": 20
+                  },
+                  "scheme": {
+                    "type": "string",
+                    "enum": [
+                      "pinyin",
+                      "shuangpin"
+                    ],
+                    "default": "pinyin"
+                  },
+                  "profile": {
+                    "type": "string",
+                    "enum": [
+                      "xiaohe",
+                      "ziranma",
+                      "shoudao",
+                      "microsoft"
+                    ],
+                    "default": "xiaohe"
                   }
                 },
                 "required": [
@@ -7324,9 +7342,24 @@
                   "type": "object",
                   "properties": {
                     "code": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "全拼编码，或 scheme=shuangpin 时不含分隔符的完整按键码。"
                     },
                     "word": {
+                      "type": "string"
+                    },
+                    "pinyin": {
+                      "type": "string",
+                      "description": "双拼响应中的原全拼读音；编码成功不证明词库收录。"
+                    },
+                    "segmented_code": {
+                      "type": "string",
+                      "description": "双拼两键分段，保留撇号。"
+                    },
+                    "scheme": {
+                      "type": "string"
+                    },
+                    "profile": {
                       "type": "string"
                     }
                   }

@@ -152,6 +152,7 @@ for operation,title in input_titles.items():
     fields={'text':string(minLength=1,description='查询文字；输入码最多 256 ASCII 字符，其他文字最多 8192 UTF-8 字节。'),'limit':{'type':'integer','minimum':1,'maximum':200,'default':20}}
     if operation in ['emoji','kaomoji','jianpin','candidates','segmentation']:
         fields.update({'scheme':string(enum=['pinyin','shuangpin','wubi'],default='pinyin'),'profile':string(enum=['xiaohe','ziranma','shoudao','microsoft'],default='xiaohe')})
+    if operation=='annotate': fields.update({'scheme':string(enum=['pinyin','shuangpin'],default='pinyin'),'profile':string(enum=['xiaohe','ziranma','shoudao','microsoft'],default='xiaohe')})
     if operation=='listed': fields['text']=string(minLength=1,maxLength=7,description='1～7 个基本汉字，精确检查发布拼音词库；不含个人词库、五笔或更长词语。')
     if operation=='datetime': fields.update({'time':string(format='date-time',description='RFC 3339 参考时刻，省略使用当前时间。'),'timezone':string(default='UTC',example='Asia/Shanghai',description='IANA 时区。')})
     if operation=='gloss': fields['direction']=string(enum=['en-zh','zh-en'],default='en-zh')
@@ -161,7 +162,7 @@ for operation,title in input_titles.items():
     if operation=='romaji': response=obj({'text':string(),'pending':string(),'complete':{'type':'boolean'}})
     if operation=='japanese': response=obj(dict(candidate_response['properties'],hiragana=string(),pending=string(),complete={'type':'boolean'}))
     if operation in ['gloss','helpcode','convert']: response=obj({'text':string(),'schema':string(),'conversion':string()})
-    if operation=='annotate': response=obj({'code':string(),'word':string()})
+    if operation=='annotate': response=obj({'code':string(description='全拼编码，或 scheme=shuangpin 时不含分隔符的完整按键码。'),'word':string(),'pinyin':string(description='双拼响应中的原全拼读音；编码成功不证明词库收录。'),'segmented_code':string(description='双拼两键分段，保留撇号。'),'scheme':string(),'profile':string()})
     if operation=='listed': response=obj({'code':string(),'word':string(),'listed':{'type':'boolean'}},['code','word','listed'])
     if operation=='segmentation': response=obj({'raw':string(),'normalized':string()})
     responses={'200':{'description':'成功','content':{'application/json':{'schema':response}}}}

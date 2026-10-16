@@ -27,6 +27,7 @@ func TestPublicToolRequests(t *testing.T) {
 		{"lookup_dictionary", `{"text":"hecheng","scheme":"shuangpin"}`, "POST", "/v1/input/candidates", true},
 		{"lookup_dictionary", `{"text":"合成词","scheme":"wubi"}`, "POST", "/v1/input/candidates", true},
 		{"lookup_dictionary", `{"operation":"annotate","text":"合成"}`, "POST", "/v1/input/annotate", true},
+		{"lookup_dictionary", `{"text":"合成词","scheme":"shuangpin","profile":"ziranma"}`, "POST", "/v1/input/annotate", true},
 		{"lookup_dictionary", `{"operation":"gloss","text":"synthetic","direction":"en-zh"}`, "POST", "/v1/input/gloss", true},
 		{"browse_input_catalog", `{"kind":"symbols","q":"a&scope=mine"}`, "GET", "/v1/catalog/symbols?category=&limit=20&offset=0&q=a%26scope%3Dmine", true},
 		{"query_public_data", `{"resource":"notices","platform":"android","channel":"stable"}`, "GET", "/v1/notices?channel=stable&platform=android", false},
@@ -56,6 +57,22 @@ func TestPublicToolRequests(t *testing.T) {
 				t.Fatalf("%+v %v", result, err)
 			}
 		})
+	}
+}
+
+func TestHanziShuangpinQueryPreservesEncodingOptions(t *testing.T) {
+	for _, operation := range []string{"candidates", "annotate"} {
+		args, _ := json.Marshal(map[string]any{"operation": operation, "text": "合成", "scheme": "shuangpin", "profile": "microsoft", "schema": "xiaohe", "direction": "en-zh", "time": "2026-01-02T03:04:05Z", "timezone": "UTC"})
+		_, err := Call(t.Context(), func(_ context.Context, request Request) (json.RawMessage, error) {
+			var body map[string]any
+			if json.Unmarshal(request.Body, &body) != nil || request.Path != "/v1/input/annotate" || body["text"] != "合成" || body["scheme"] != "shuangpin" || body["profile"] != "microsoft" || len(body) != 3 {
+				t.Fatalf("双拼汉字反查未保留所属选项：%+v", request)
+			}
+			return json.RawMessage(`{"code":"synthetic"}`), nil
+		}, "lookup_dictionary", args)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

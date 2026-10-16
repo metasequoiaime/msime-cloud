@@ -47,8 +47,8 @@ func (s *Server) inputQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	request := map[string]any{"operation": op, "text": v.Text, "limit": v.Limit}
-	// Reject options irrelevant to an operation rather than silently changing their meaning.
-	usesScheme := op == "emoji" || op == "kaomoji" || op == "jianpin" || op == "candidates" || op == "segmentation"
+	// HTTP 接口拒绝无关选项；注音仅在显式双拼方案下返回按键码。
+	usesScheme := op == "emoji" || op == "kaomoji" || op == "jianpin" || op == "candidates" || op == "segmentation" || op == "annotate"
 	if (!usesScheme && (v.Scheme != "" || v.Profile != "")) || (op != "gloss" && op != "romaji" && v.Direction != "") || (op != "datetime" && (v.Time != "" || v.Timezone != "")) || (op != "helpcode" && v.Schema != "") {
 		fail(w, 400, "invalid_input_options")
 		return
@@ -61,6 +61,10 @@ func (s *Server) inputQuery(w http.ResponseWriter, r *http.Request) {
 			v.Profile = "xiaohe"
 		}
 		if (v.Scheme != "pinyin" && v.Scheme != "shuangpin" && v.Scheme != "wubi") || (v.Profile != "xiaohe" && v.Profile != "ziranma" && v.Profile != "shoudao" && v.Profile != "microsoft") {
+			fail(w, 400, "invalid_input_scheme")
+			return
+		}
+		if op == "annotate" && v.Scheme == "wubi" {
 			fail(w, 400, "invalid_input_scheme")
 			return
 		}

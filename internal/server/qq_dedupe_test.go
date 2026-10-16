@@ -51,7 +51,8 @@ func TestQQDedupeReleaseSurvivesCanceledRequest(t *testing.T) {
 	}
 	cancel()
 	release()
-	until, err := limiter.AcquireRateLease(t.Context(), "synthetic-dedupe", "topic", time.Hour)
+	// 用不同窗口保证模拟租约的标识不同，避免依赖 Windows 的系统时钟分辨率。
+	until, err := limiter.AcquireRateLease(t.Context(), "synthetic-dedupe", "topic", 2*time.Hour)
 	if err != nil {
 		t.Fatal("取消原请求后未释放名额", err)
 	}

@@ -43,15 +43,31 @@ func (a *Service) dictionaryError(w http.ResponseWriter, err error) {
 	}
 }
 func (a *Service) validateDictionary(ctx context.Context, kind string, entries []DictionaryEntry) ([]DictionaryEntry, error) {
+	type validationEntry struct {
+		Kind   string `json:"kind"`
+		Code   string `json:"code"`
+		Text   string `json:"text"`
+		Weight int64  `json:"weight"`
+	}
 	result := []DictionaryEntry{}
 	for start := 0; start < len(entries); start += 50 {
 		end := min(start+50, len(entries))
-		batch := []map[string]any{}
 		for _, e := range entries[start:end] {
-			if e.Weight < 0 || e.Word == "" || len(e.Word) > 2048 || len(e.Code) > 512 || !utf8.ValidString(e.Word+e.Code) || strings.ContainsAny(e.Word+e.Code, "\x00\t\r\n") || strings.TrimSpace(e.Word) == "" || (kind == "quick" && utf16Length(e.Word) > 199) {
+			if e.Weight < 0 || e.Word == "" || len(e.Word) > 2048 || len(e.Code) > 512 {
 				return nil, engine.ErrInvalid
 			}
-			batch = append(batch, map[string]any{"kind": kind, "code": e.Code, "text": e.Word, "weight": e.Weight})
+			// 合法 UTF-8 字段独立检查以避免拼接；异常边界仍沿用旧联合校验语义。
+			if (!utf8.ValidString(e.Word) || !utf8.ValidString(e.Code)) && !utf8.ValidString(e.Word+e.Code) {
+				return nil, engine.ErrInvalid
+			}
+			if strings.ContainsAny(e.Word, "\x00\t\r\n") || strings.ContainsAny(e.Code, "\x00\t\r\n") || strings.TrimSpace(e.Word) == "" || (kind == "quick" && utf16Length(e.Word) > 199) {
+				return nil, engine.ErrInvalid
+			}
+		}
+		// 整批校验成功后再分配，避免逐条构造 map 和扩容，也不为无效批次创建请求。
+		batch := make([]validationEntry, end-start)
+		for i, e := range entries[start:end] {
+			batch[i] = validationEntry{Kind: kind, Code: e.Code, Text: e.Word, Weight: e.Weight}
 		}
 		raw, err := a.engine.Query(ctx, map[string]any{"operation": "validate_dictionary_batch", "entries": batch})
 		if err != nil {

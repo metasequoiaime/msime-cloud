@@ -240,7 +240,7 @@ func TestQQPublicDictionaryOperationOptions(t *testing.T) {
 		t.Run(tc.operation, func(t *testing.T) {
 			base := map[string]any{"operation": tc.operation, "text": tc.text, "limit": 20}
 			switch tc.operation {
-			case "candidates", "jianpin", "segmentation", "emoji", "kaomoji":
+			case "candidates", "jianpin", "segmentation", "emoji", "kaomoji", "annotate":
 				base["scheme"], base["profile"] = "shuangpin", "ziranma"
 			case "gloss":
 				base["direction"] = "en-zh"

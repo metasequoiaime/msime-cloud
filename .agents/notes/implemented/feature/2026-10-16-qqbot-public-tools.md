@@ -10,7 +10,7 @@ QQ Bot 的现查只支持 GitHub 和网络搜索，无法确认发布词库里�
 
 在 `internal/publictools` 维护受限的只读工具目录和请求构造：`lookup_dictionary` 查询发布词库及固定输入数据，`browse_input_catalog` 浏览表情、颜文字和符号，`query_public_data` 查询公共公告、社区统计、词包、插件和皮肤。工具参数不能携带原始 URL、私人路径、凭据、shell 命令或资源目录。
 
-字典工具先做共享 schema 校验，再按最终 `operation` 构造 HTTP 请求。仅候选、简拼、表情、颜文字和分词保留 `scheme/profile`，仅释义与假名转换保留 `direction`，仅辅助码保留 `schema`，仅日期查询保留 `time/timezone`；`text/limit` 是公共字段。模型可能填满共享 schema 的可选参数，工具层不能把其他操作的默认值透传给严格 HTTP 接口。未知字段、错误类型、枚举和范围仍在筛选前拒绝；当前操作自己的参数仍由原接口校验，不能把错误方向、日期或码表改成默认值。
+字典工具先做共享 schema 校验，再按最终 `operation` 构造 HTTP 请求。仅候选、简拼、表情、颜文字、分词和注音保留 `scheme/profile`，仅释义与假名转换保留 `direction`，仅辅助码保留 `schema`，仅日期查询保留 `time/timezone`；`text/limit` 是公共字段。模型可能填满共享 schema 的可选参数，工具层不能把其他操作的默认值透传给严格 HTTP 接口。未知字段、错误类型、枚举和范围仍在筛选前拒绝；当前操作自己的参数仍由原接口校验，不能把错误方向、日期或码表改成默认值。
 
 辅助码查询 `helpcode` 使用 `schema` 选表。显式 `schema` 优先；未给 `schema` 时，只把同名的 `profile=xiaohe/ziranma` 兼容为辅助码表，其他双拼方案没有可靠映射，拒绝而不默默查默认表。两个字段均未提供时保留接口的蓝天默认表。按操作筛选和该兼容只作用于共用工具层，直接 HTTP 调用仍严格拒绝无关参数，候选和双拼查询保留原语义。
 

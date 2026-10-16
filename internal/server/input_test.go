@@ -30,6 +30,10 @@ func TestInputValidationAndDisabledEngine(t *testing.T) {
 		{"candidates", `{"text":"nihao","scheme":"unknown"}`, 400},
 		{"gloss", `{"text":"hello","direction":"en-fr"}`, 400},
 		{"helpcode", `{"text":"你好","schema":"../secret"}`, 400},
+		{"annotate", `{"text":"合成","scheme":"wubi"}`, 400},
+		{"annotate", `{"text":"合成","scheme":"shuangpin","profile":"unknown"}`, 400},
+		{"annotate", `{"text":"hecheng","scheme":"shuangpin"}`, 400},
+		{"annotate", `{"text":"合成","scheme":"shuangpin","profile":"xiaohe"}`, 503},
 		{"unknown", `{"text":"hello"}`, 404},
 	} {
 		w := call(s, "POST", "/v1/input/"+tc.path, tc.body)
@@ -47,7 +51,7 @@ func TestRealNativeHTTP(t *testing.T) {
 	s.config.Engine.Binary = binary
 	for _, tc := range []struct{ path, body, fragment string }{
 		{"unicode", `{"text":"4E2D","limit":5}`, "中"},
-		{"romaji", `{"text":"konnichiha"}`, "こんにちは"},
+		{"romaji", `{"text":"kon'nichiha"}`, "こんにちは"},
 		{"romaji", `{"text":"かな","direction":"hiragana-katakana"}`, "カナ"},
 		{"romaji", `{"text":"かな","direction":"kana-romaji"}`, "kana"},
 		{"datetime", `{"text":"date","time":"2026-09-08T18:00:00Z","timezone":"Asia/Shanghai","limit":5}`, "2026-09-09"},

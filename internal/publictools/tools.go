@@ -43,11 +43,11 @@ type Result struct {
 // Definitions 每次返回独立的 schema，调用方不能修改其它入口的工具定义。
 func Definitions() []*mcp.Tool {
 	return []*mcp.Tool{
-		tool("lookup_dictionary", "查询水杉发布词库与固定输入数据，不读取个人词库。listed 按 1～7 个汉字的词语精确检查发布拼音词库收录状态，返回 word、code、listed；默认 candidates 按编码查候选，收到纯汉字且方案为默认或 pinyin 时自动改为 listed。annotate 查汉字注音（注音成功不等于收录），gloss 查离线释义，helpcode 查辅助码。只填写当前 operation 需要的可选参数，其他操作的参数会被忽略。候选列表有限，没出现不等于整份词库没有该词。", map[string]any{
+		tool("lookup_dictionary", "查询水杉发布词库与固定输入数据，不读取个人词库。listed 按 1～7 个汉字的词语精确检查发布拼音词库收录状态，返回 word、code、listed；默认 candidates 按编码查候选，收到纯汉字且方案为默认或 pinyin 时自动改为 listed。annotate 查汉字注音；反查完整双拼按键码用 annotate + scheme=shuangpin + profile，返回完整 code、两键 segmented_code、全拼 pinyin，不含辅助码、不证明收录；纯汉字的双拼 candidates 自动转为此反查，gloss 查离线释义，helpcode 查辅助码。只填写当前 operation 需要的可选参数，其他操作的参数会被忽略。候选列表有限，没出现不等于整份词库没有该词。", map[string]any{
 			"text":      field("string", "要查询的编码或文本"),
 			"operation": choice("查询类型，默认 candidates；查汉字词语是否收录用 listed", "candidates", "listed", "jianpin", "english", "japanese", "quick", "annotate", "gloss", "helpcode", "segmentation", "emoji", "kaomoji", "unicode", "romaji", "convert", "datetime"),
-			"scheme":    choice("编码候选的输入方案；helpcode 不使用此字段", "pinyin", "shuangpin", "wubi"),
-			"profile":   choice("编码候选的双拼方案；查小鹤辅助码使用 schema=xiaohe", "xiaohe", "ziranma", "shoudao", "microsoft"),
+			"scheme":    choice("候选的输入方案；annotate 支持 pinyin/shuangpin，helpcode 不使用此字段", "pinyin", "shuangpin", "wubi"),
+			"profile":   choice("候选或汉字反查按键码的双拼方案；查小鹤辅助码使用 schema=xiaohe", "xiaohe", "ziranma", "shoudao", "microsoft"),
 			"limit":     number("最多返回的候选数，默认 20", 1, 50),
 			"direction": field("string", "gloss: en-zh 或 zh-en；romaji: romaji-hiragana、hiragana-katakana 或 kana-romaji"),
 			"schema":    choice("helpcode 的辅助码表；查小鹤辅助码显式指定 xiaohe，与双拼 profile 不同", "lantian", "ziranma", "shouyou2_0", "shouyouplus", "xiaohe"),
@@ -215,6 +215,9 @@ func build(name string, arguments json.RawMessage) (Request, error) {
 		if in.Operation == "candidates" && pureHan(in.Text) && (in.Scheme == "" || in.Scheme == "pinyin") {
 			in.Operation = "listed"
 		}
+		if in.Operation == "candidates" && pureHan(in.Text) && in.Scheme == "shuangpin" {
+			in.Operation = "annotate"
+		}
 		if in.Operation == "helpcode" {
 			// 辅助码按 schema 选表，兼容模型只提供同名双拼 profile 的调用。
 			if in.Schema == "" && in.Profile != "" {
@@ -231,7 +234,7 @@ func build(name string, arguments json.RawMessage) (Request, error) {
 			return Request{}, errors.New("invalid_dictionary_query")
 		}
 		// 模型可能填满共享 schema 的可选项；只向严格 HTTP 接口传当前操作使用的字段。
-		if !slices.Contains([]string{"candidates", "jianpin", "emoji", "kaomoji", "segmentation"}, in.Operation) {
+		if !slices.Contains([]string{"candidates", "jianpin", "emoji", "kaomoji", "segmentation", "annotate"}, in.Operation) {
 			in.Scheme, in.Profile = "", ""
 		}
 		if in.Operation != "gloss" && in.Operation != "romaji" {

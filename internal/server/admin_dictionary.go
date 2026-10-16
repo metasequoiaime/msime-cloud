@@ -433,5 +433,18 @@ func dictionaryEditablePath(name string) bool {
 		return false
 	}
 	pack, file, ok := strings.Cut(rest, "/")
-	return ok && !strings.Contains(file, "/") && adminPackName.MatchString(pack) && slices.Contains([]string{"quanpin.txt", "english.txt", "translations.txt"}, file)
+	return ok && !strings.Contains(file, "/") && validDictionaryPackName(pack) && slices.Contains([]string{"quanpin.txt", "english.txt", "translations.txt"}, file)
+}
+
+func validDictionaryPackName(name string) bool {
+	if len(name) == 0 || len(name) > 64 || name[0] == '_' {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_') {
+			return false
+		}
+	}
+	return true
 }

@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"github.com/metasequoiaime/MSIME-Backend/internal/engine"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
@@ -392,15 +391,17 @@ func Route(a *Service, pattern string, method func(*Service, http.ResponseWriter
 		method(a, w, r)
 	}
 }
-func write(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+func setPrivateResponseHeaders(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(value)
+}
+func write(w http.ResponseWriter, status int, value any) {
+	setPrivateResponseHeaders(w)
+	httpjson.Write(w, status, value)
 }
 func writeError(w http.ResponseWriter, status int, code string) {
-	write(w, status, map[string]any{"error": map[string]string{"code": code, "message": code}})
+	setPrivateResponseHeaders(w)
+	httpjson.WriteError(w, status, code)
 }
 func (a *Service) error(w http.ResponseWriter, e error) {
 	switch {

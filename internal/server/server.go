@@ -273,12 +273,10 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) servedBy {
 	return servedAPI
 }
 func respond(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	httpjson.Write(w, status, v)
 }
 func fail(w http.ResponseWriter, status int, code string) {
-	respond(w, status, map[string]any{"error": map[string]string{"code": code, "message": code}})
+	httpjson.WriteError(w, status, code)
 }
 func (s *Server) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

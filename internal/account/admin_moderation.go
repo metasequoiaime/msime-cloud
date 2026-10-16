@@ -511,13 +511,54 @@ func screenCommunityText(ctx context.Context, matcher SensitiveMatcher, texts ..
 	return false, &text, nil
 }
 
-// sensitiveFlagText is the automatic flag stored in moderation_reason for the matched patterns, at most 500 characters.
+// sensitiveFlagText 构造存入 moderation_reason 的敏感词提示，最多保留 500 字，只扫描和复制输出需要的前缀。
 func sensitiveFlagText(patterns []string) string {
-	text := "命中敏感词：「" + strings.Join(patterns, "」「") + "」"
-	if utf8.RuneCountInString(text) > 500 {
-		text = string([]rune(text)[:499]) + "…"
+	const limit = 500
+	if len(patterns) == 0 {
+		return "命中敏感词：「」"
 	}
-	return text
+	// 固定文案共 8 字；单词经有界计数确认能完整放下时直接拼接。
+	if len(patterns) == 1 {
+		pattern := patterns[0]
+		if len(pattern) <= limit-8 || len(pattern) <= (limit-8)*utf8.UTFMax && utf8.RuneCountInString(pattern) <= limit-8 {
+			return "命中敏感词：「" + pattern + "」"
+		}
+	}
+	// 每字最多 4 字节，保留这些字节足以确认是否超过 500 字；被切开的末尾字符不会落在保留的 499 字内。
+	var buffer [utf8.UTFMax * (limit + 1)]byte
+	length := copy(buffer[:], "命中敏感词：「")
+	appendPart := func(part string) bool {
+		length += copy(buffer[length:], part)
+		return length < len(buffer)
+	}
+	complete := true
+	for i, pattern := range patterns {
+		if i > 0 && !appendPart("」「") || !appendPart(pattern) {
+			complete = false
+			break
+		}
+	}
+	if complete {
+		appendPart("」")
+	}
+	if length > limit {
+		cut, offset := 0, 0
+		for count := 0; count < limit && offset < length; count++ {
+			if count == limit-1 {
+				cut = offset
+			}
+			_, size := utf8.DecodeRune(buffer[offset:length])
+			offset += size
+		}
+		if offset < length {
+			length = cut + copy(buffer[cut:], "…")
+			// 旧流程只在截断时将非法字节转换为 U+FFFD，未截断时保留原始字节。
+			if !utf8.Valid(buffer[:length]) {
+				return string([]rune(string(buffer[:length])))
+			}
+		}
+	}
+	return string(buffer[:length])
 }
 
 // contentScreenSQL selects, for the id in $1, the fields contentScreenText reads; content is the manifest or resource content of sections that have one.

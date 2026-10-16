@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -16,6 +17,18 @@ import (
 )
 
 const streamBody = `{"messages":[{"role":"user","content":"hello"}],"stream":true}`
+
+func TestCappedReaderAcceptsResponseAtExactLimit(t *testing.T) {
+	data := bytes.Repeat([]byte("x"), 8)
+	reader := &cappedReader{r: bytes.NewReader(data), left: int64(len(data))}
+	got, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("恰好达到上限的响应被拒绝：%v", err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatalf("读取内容=%q，期望=%q", got, data)
+	}
+}
 
 // postStream 通过真实的 HTTP 服务发起流式请求，返回尚未读取的响应，让测试逐个事件读取。
 func postStream(t *testing.T, ctx context.Context, live *httptest.Server, body string) *http.Response {

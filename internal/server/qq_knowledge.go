@@ -1170,7 +1170,43 @@ var (
 
 // qqPromptLeakCandidate 判断答案是否含有提示词泄漏规则可能命中的字面字符；没有候选字符时跳过正则扫描。
 func qqPromptLeakCandidate(answer string) bool {
-	return strings.ContainsAny(answer, "资料文档里截断")
+	promptLeak, _ := qqAnswerCandidates(answer)
+	return promptLeak
+}
+
+// qqAnswerCandidates 一次扫描答案中的提示词泄漏和替换候选标记，避免重复逐 rune 解码正文。
+func qqAnswerCandidates(answer string) (promptLeak, replacement bool) {
+	for i := 0; i < len(answer); i++ {
+		switch answer[i] {
+		case '\t':
+			replacement = true
+		case 0xe2:
+			if i+2 < len(answer) && answer[i+1] == 0x80 {
+				switch answer[i+2] {
+				case 0x98, 0x99, 0x9c, 0x9d:
+					replacement = true
+				}
+			}
+		case 0xe6:
+			if i+2 < len(answer) && (answer[i+1] == 0x96 && (answer[i+2] == 0x99 || answer[i+2] == 0x87 || answer[i+2] == 0xad) ||
+				answer[i+1] == 0xa1 && answer[i+2] == 0xa3 ||
+				answer[i+1] == 0x88 && answer[i+2] == 0xaa) {
+				promptLeak = true
+			}
+		case 0xe8:
+			if i+2 < len(answer) && answer[i+1] == 0xb5 && answer[i+2] == 0x84 {
+				promptLeak = true
+			}
+		case 0xe9:
+			if i+2 < len(answer) && answer[i+1] == 0x87 && answer[i+2] == 0x8c {
+				promptLeak = true
+			}
+		}
+		if promptLeak && replacement {
+			return true, true
+		}
+	}
+	return promptLeak, replacement
 }
 
 // qqStripAnswerHeadings 沿用原正则的井号数量和 ASCII 空白规则，只在确需移除行首标记时构建正文。
@@ -1227,17 +1263,18 @@ func qqStripAnswerHeadings(answer string) string {
 
 // qqNormalizeAnswer 统一答案的格式：模型偶尔不照提示词写，同一个群里一会儿“”一会儿「」，或者冒出 **、## 和字面的 \t，读起来不像同一个助手说的。引号换成「」『』，字面的 \t 和制表符换成空格，删掉 **、__，去掉行首的 #（「#123」这种 issue 编号不动），行首的「- 」保留，三个以上的连续换行压成两个。
 func qqNormalizeAnswer(answer string) string {
-	if qqPromptLeakCandidate(answer) {
-		if word := qqPromptLeak.FindString(answer); word != "" {
-			slog.Info("qq bot: prompt leak", "word", word)
-		}
-	}
 	// 无匹配时正则替换仍会复制正文，先确认有英文单词里的弯撇号。
 	if strings.ContainsRune(answer, '’') && qqApostrophe.MatchString(answer) {
 		answer = qqApostrophe.ReplaceAllString(answer, "$1'$2")
 	}
+	promptLeak, replacement := qqAnswerCandidates(answer)
+	if promptLeak {
+		if word := qqPromptLeak.FindString(answer); word != "" {
+			slog.Info("qq bot: prompt leak", "word", word)
+		}
+	}
 	// 这组含多字节引号的替换规则也会复制无匹配正文，缺少所有标记时直接复用。
-	if strings.ContainsAny(answer, "“”‘’\t") || strings.Contains(answer, "**") || strings.Contains(answer, "__") {
+	if replacement || strings.Contains(answer, "**") || strings.Contains(answer, "__") {
 		answer = qqAnswerReplacer.Replace(answer)
 	}
 	if strings.Contains(answer, `\t`) && !qqWindowsPath.MatchString(answer) {

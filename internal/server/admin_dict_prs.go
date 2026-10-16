@@ -679,16 +679,10 @@ func (s *Server) trimFiles(ctx context.Context, gh *githubapp.Client, token stri
 		if len(drop) == 0 {
 			continue
 		}
-		lines := strings.Split(f.head, "\n")
-		kept := make([]string, 0, len(lines))
-		for i, line := range lines {
-			if !drop[i] {
-				kept = append(kept, line)
-			}
-		}
+		content := trimDictionaryContent(f.head, drop)
 		res, err := gh.Do(ctx, token, "PUT", repo+"/contents/"+f.kind.file, map[string]string{
 			"message": "chore(custom): drop " + strconv.Itoa(len(drop)) + " entries during review",
-			"content": base64.StdEncoding.EncodeToString([]byte(strings.Join(kept, "\n"))),
+			"content": base64.StdEncoding.EncodeToString([]byte(content)),
 			"sha":     f.blobSHA,
 			"branch":  p.Head.Ref,
 		})
@@ -729,6 +723,25 @@ func (s *Server) trimFiles(ctx context.Context, gh *githubapp.Client, token stri
 		}
 	}
 	return head, title, removed, nil
+}
+
+// trimDictionaryContent 删除指定物理行并保留其余行之间的原始换行语义，不构造整份行切片。
+func trimDictionaryContent(content string, drop map[int]bool) string {
+	var kept strings.Builder
+	kept.Grow(len(content))
+	first := true
+	line := 0
+	for part := range strings.SplitSeq(content, "\n") {
+		if !drop[line] {
+			if !first {
+				kept.WriteByte('\n')
+			}
+			kept.WriteString(part)
+			first = false
+		}
+		line++
+	}
+	return kept.String()
 }
 
 // trimFailure answers a failed trim: a concurrent change is a 409 the reviewer resolves by reloading, an unknown write outcome a 502 that must not be retried blindly.

@@ -292,6 +292,23 @@ func TestABinaryResponseNeedsAFile(t *testing.T) {
 	}
 }
 
+func TestCallRequestBodiesAreBound(t *testing.T) {
+	const limit = 16 << 20
+	largeJSON := `"` + strings.Repeat("a", limit) + `"`
+	c := cli{stdin: strings.NewReader(largeJSON)}
+	if _, err := c.parseCall([]string{"POST", "/v1/test", "-"}); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("超大 stdin 请求未被拒绝：%v", err)
+	}
+
+	file := filepath.Join(t.TempDir(), "large.bin")
+	if err := os.WriteFile(file, []byte(strings.Repeat("a", limit+1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (cli{}).parseCall([]string{"POST", "/v1/test", "-F", "file=@" + file}); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("超大文件请求未被拒绝：%v", err)
+	}
+}
+
 func TestFormFieldsUploadAFile(t *testing.T) {
 	h := newHarness(t)
 	h.env["MSIME_CLOUD_TOKEN"] = "device-token"

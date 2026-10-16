@@ -25,7 +25,6 @@ var builtin embed.FS
 var ErrNotFound = errors.New("skin_not_found")
 var ErrInvalid = errors.New("invalid_skin")
 var idPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
-var resourcePattern = regexp.MustCompile(`^[a-zA-Z0-9._/-]{1,256}$`)
 var builtinIDs = []string{"fluent", "wechat", "graphite", "willow_green"}
 
 func SafeID(id string) bool  { return idPattern.MatchString(id) }
@@ -104,15 +103,7 @@ func validList(values, allowed []string) bool {
 }
 func bounded(v, max float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0 && v <= max }
 func safeResource(name string) bool {
-	if !resourcePattern.MatchString(name) || !fs.ValidPath(name) {
-		return false
-	}
-	for _, part := range strings.Split(name, "/") {
-		if part == "." || part == ".." || part == "" {
-			return false
-		}
-	}
-	return mediaType(name) != ""
+	return clientSafeResource(name, 256) && mediaType(name) != ""
 }
 func mediaType(name string) string {
 	if name == "skin.toml" {

@@ -120,12 +120,13 @@ func clientMediaType(name string) string {
 }
 func clientImage(name string) bool { return strings.HasPrefix(clientMediaType(name), "image/") }
 
-// clientSafeResource is the client's safe_resource: relative, no backslash, and every segment a non-dot ASCII identifier.
+// clientSafeResource 对应客户端的 safe_resource：相对路径，每段仅含允许的 ASCII 字符，且不是空串、点或双点。
 func clientSafeResource(name string, max int) bool {
-	if name == "" || len(name) > max || strings.ContainsRune(name, '\\') {
+	if name == "" || len(name) > max {
 		return false
 	}
-	for _, part := range strings.Split(name, "/") {
+	for {
+		part, rest, more := strings.Cut(name, "/")
 		if part == "" || part == "." || part == ".." {
 			return false
 		}
@@ -135,8 +136,11 @@ func clientSafeResource(name string, max int) bool {
 				return false
 			}
 		}
+		if !more {
+			return true
+		}
+		name = rest
 	}
-	return true
 }
 
 // SafeResource exposes clientSafeResource to other packages that accept package paths from clients, so they apply exactly the client's rule.

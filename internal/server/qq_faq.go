@@ -22,6 +22,8 @@ const (
 	qqFAQBranchStamp = "20060102-150405"
 	// qqFAQReplyRunes 是开完 PR 的回复里带上的答案长度。
 	qqFAQReplyRunes = 150
+	// qqFAQPullPages 是查重时最多读取的开放 PR 页数；超过后无法确认没有重复项。
+	qqFAQPullPages = 20
 )
 
 // errQQFAQTooShort 表示模型整理出的答案太短，要请管理员补充。
@@ -408,7 +410,7 @@ func (s *Server) qqOpenFAQPull(ctx context.Context, token, repo, question string
 		} `json:"head"`
 	}
 	title := "「" + githubReferenceBreaker.Replace(question) + "」"
-	for page := 1; ; page++ {
+	for page := 1; page <= qqFAQPullPages; page++ {
 		path := "/repos/" + repo + "/pulls?state=open&per_page=100&page=" + strconv.Itoa(page)
 		r, err := s.adminGitHub.Do(ctx, token, "GET", path, nil)
 		pulls = nil
@@ -430,4 +432,5 @@ func (s *Server) qqOpenFAQPull(ctx context.Context, token, repo, question string
 			return 0, nil
 		}
 	}
+	return 0, errors.New("pulls list exceeds page limit")
 }

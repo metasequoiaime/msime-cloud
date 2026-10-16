@@ -80,3 +80,32 @@ func TestQQOpenFAQPullSearchesAllPages(t *testing.T) {
 		})
 	}
 }
+
+// 持续返回满页时查重必须停止在固定页数，不能无限消耗 GitHub 请求。
+func TestQQOpenFAQPullStopsAtPageLimit(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	var pages []int
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/o/docs/pulls" {
+			fake.ServeHTTP(w, r)
+			return
+		}
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		pages = append(pages, page)
+		rows := make([]map[string]any, 100)
+		for i := range rows {
+			rows[i] = map[string]any{"number": i + 1, "title": "其他问题", "head": map[string]string{"ref": "qq-faq/other"}}
+		}
+		_ = json.NewEncoder(w).Encode(rows)
+	}))
+	t.Cleanup(upstream.Close)
+	s.adminGitHub.APIURL = upstream.URL
+	s.adminGitHub.HTTP = upstream.Client()
+	got, err := s.qqOpenFAQPull(context.Background(), "test-token", "o/docs", "字体发虚怎么办")
+	if err == nil || got != 0 {
+		t.Fatalf("超出页数上限后应返回错误，结果 #%d，错误 %v", got, err)
+	}
+	if len(pages) != qqFAQPullPages {
+		t.Fatalf("查询了 %d 页，期望 %d", len(pages), qqFAQPullPages)
+	}
+}

@@ -81,6 +81,9 @@ var qqDraftsSchema string
 
 //go:embed qq_knowledge_schema.sql
 var qqKnowledgeSchema string
+
+//go:embed typing_statistics_schema.sql
+var typingStatisticsSchema string
 var ErrInvalid = errors.New("invalid_credentials")
 var ErrLimited = errors.New("rate_limit_exceeded")
 var ErrConflict = errors.New("identity_already_linked")
@@ -222,7 +225,7 @@ func (s *Store) MigrateAs(ctx context.Context, role string) error {
 			return e
 		}
 	}
-	if _, e = tx.Exec(ctx, schema+"\n"+userDataSchema+"\n"+communitySchema+"\n"+adminSchema+"\n"+translationSchema+"\n"+candidateSkinSchema+"\n"+communityCandidateSkinSchema+"\n"+communityPluginSchema+"\n"+adminOpsSchema+"\n"+skinJobSchema+"\n"+feedbackSchema+"\n"+voiceContributionsSchema+"\n"+diagnosticsSchema+"\n"+qqConversationsSchema+"\n"+qqDraftsSchema+"\n"+qqFAQCandidatesSchema+"\n"+qqBadAnswersSchema+"\n"+qqStatsSchema+"\n"+qqImprovementsSchema+"\n"+qqSelfTestCasesSchema); e != nil {
+	if _, e = tx.Exec(ctx, schema+"\n"+userDataSchema+"\n"+communitySchema+"\n"+adminSchema+"\n"+translationSchema+"\n"+candidateSkinSchema+"\n"+communityCandidateSkinSchema+"\n"+communityPluginSchema+"\n"+adminOpsSchema+"\n"+skinJobSchema+"\n"+feedbackSchema+"\n"+voiceContributionsSchema+"\n"+diagnosticsSchema+"\n"+qqConversationsSchema+"\n"+qqDraftsSchema+"\n"+qqFAQCandidatesSchema+"\n"+qqBadAnswersSchema+"\n"+qqStatsSchema+"\n"+qqImprovementsSchema+"\n"+qqSelfTestCasesSchema+"\n"+typingStatisticsSchema); e != nil {
 		return e
 	}
 	// QQ 答疑的向量索引要用 pgvector：它的 halfvec 类型在当前 search_path 里解析得到才建表（扩展要超级用户安装，迁移角色装不了），否则答疑退回只用目录挑段落，服务照常启动。判断类型而不是判断扩展装没装：扩展装在 public，而 search_path 不含 public 的连接（例如测试用的独立 schema）解析不到它的类型，建表会让整个迁移失败。
@@ -322,7 +325,12 @@ SELECT question,answer,created_at FROM qq_selftest_cases WHERE false;
 -- QQ 答疑每天的处理结果计数；缺表时启动走迁移。
 SELECT day,outcome,count FROM qq_daily_stats WHERE false;
 -- 被群友说答错的回答；缺表或缺处理状态列时启动走迁移（状态列的命名 CHECK 和列在同一次迁移中加上，只探测列）。
-SELECT id,question,answer,feedback,retry,state,created_at FROM qq_bad_answers WHERE false`); e != nil {
+SELECT id,question,answer,feedback,retry,state,created_at FROM qq_bad_answers WHERE false;
+-- 打字统计的云端汇总和 QQ 群友的账号绑定；缺表时启动走迁移。
+SELECT user_id,device,platform,ranks,beyond,updated_at FROM typing_statistics_devices WHERE false;
+SELECT user_id,device,day,characters,active_seconds,hours,categories,sources,updated_at FROM typing_statistics_days WHERE false;
+SELECT id,subject,user_id,created_at FROM qq_account_links WHERE false;
+SELECT code_hash,subject,expires_at FROM qq_link_codes WHERE false`); e != nil {
 		return e
 	}
 	// QQ 答疑的向量索引：pgvector 的 halfvec 解析得到、表却还没建时（扩展是在库已经迁移过之后才装的）启动走迁移；解析不到时这个功能本来就关闭，不算缺表。
@@ -895,6 +903,10 @@ func (s *Store) Prune(ctx context.Context) {
 		"DELETE FROM qq_daily_stats WHERE day<current_date-90",
 		"DELETE FROM qq_improvement_events WHERE created_at<now()-interval '60 days'",
 		"DELETE FROM qq_selftest_cases WHERE created_at<now()-interval '180 days'",
+		// 打字统计只保留 typingStatisticsRetentionDays 天；很久没上传的设备连同它的每日汇总一起删除。绑定码过期即删。
+		"DELETE FROM typing_statistics_days WHERE day<current_date-" + strconv.Itoa(typingStatisticsRetentionDays),
+		"DELETE FROM typing_statistics_devices WHERE updated_at<now()-interval '" + strconv.Itoa(typingStatisticsRetentionDays) + " days'",
+		"DELETE FROM qq_link_codes WHERE expires_at<now()",
 		// 语音贡献只保留 voiceContributionRetentionDays 天。
 		"DELETE FROM voice_contributions WHERE created_at<now()-interval '" + strconv.Itoa(voiceContributionRetentionDays) + " days'",
 		// 云剪贴板按用户设置的保留天数清理，置顶的条目不受保留期影响；0 表示一直保留。

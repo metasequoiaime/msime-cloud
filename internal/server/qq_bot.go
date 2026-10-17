@@ -46,7 +46,7 @@ const (
 	qqBotSignatureMaxAge = 5 * time.Minute
 	// qqBotMessageWindow 是消息 id 的去重期。QQ 在没有收到成功应答时会重推同一个事件，重推间隔远小于这个时长。
 	qqBotMessageWindow = 7 * 24 * time.Hour
-	// 每个群友、每个群、每个管理员 24 小时内最多处理的消息数（auth_rates，所有副本共享，窗口从这段时间的第一条消息算起）。它们限制的是交给模型的次数，所以问答、闲聊和追问都计数。普通群友先查个人限额、通过了才计入群限额，超了个人限额的消息不占群的额度；管理员不受个人和群限额限制，只有自己的 qqBotAdminDaily 兜底，群额度用完时也能提 issue。不调模型的命令（帮助、版本、草稿列表、#编号，见 qqFreeCommand）不占这几个额度，每人（群友和管理员都算）另有宽松的 qqBotFreeDaily 防刷。
+	// 每个群友、每个群、每个管理员 24 小时内最多处理的消息数（auth_rates，所有副本共享，窗口从这段时间的第一条消息算起）。它们限制的是交给模型的次数，所以问答、闲聊和追问都计数。普通群友先查个人限额、通过了才计入群限额，超了个人限额的消息不占群的额度；管理员不受个人和群限额限制，只有自己的 qqBotAdminDaily 兜底，群额度用完时也能提 issue。不调模型的命令（帮助、版本、打字数据和绑定、草稿列表、#编号，见 qqFreeCommand）不占这几个额度，每人（群友和管理员都算）另有宽松的 qqBotFreeDaily 防刷。
 	qqBotMemberDaily = 20
 	qqBotGroupDaily  = 300
 	qqBotAdminDaily  = 100

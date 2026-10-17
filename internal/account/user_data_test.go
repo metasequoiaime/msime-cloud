@@ -89,7 +89,7 @@ func TestUserDataSummaryExportAndDelete(t *testing.T) {
 		r.Close()
 		files[f.Name] = string(b)
 	}
-	for _, name := range []string{"profile.json", "preferences.json", "dictionary.ndjson", "phrases.json", "clipboard.json", "community.json", "sessions.json"} {
+	for _, name := range []string{"profile.json", "preferences.json", "dictionary.ndjson", "phrases.json", "clipboard.json", "community.json", "typing_statistics.json", "sessions.json"} {
 		if _, ok := files[name]; !ok {
 			t.Fatal("missing", name)
 		}

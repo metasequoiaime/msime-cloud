@@ -65,6 +65,8 @@ type Server struct {
 	qqBadAnswers qqBadAnswerStore
 	// qqStats 是答疑每天的处理结果计数（account.Service，见 qq_digest.go）；没有数据库时为 nil。
 	qqStats qqStatsStore
+	// qqTyping 是群友的账号绑定和打字统计（account.Service，见 qq_typing.go）；没有数据库时为 nil。
+	qqTyping qqTypingStore
 	// qqImprovements 是答疑的改进依据（account.Service，见 qq_improvements.go）；没有数据库时为 nil。
 	qqImprovements qqImprovementStore
 	// qqLearnedCases 是从核对过的答案里学到的自测题（account.Service，见 qq_selftest.go）；没有数据库时为 nil。
@@ -175,6 +177,7 @@ func New(c Config) (*Server, error) {
 			s.qqFAQCandidates = s.accounts
 			s.qqBadAnswers = s.accounts
 			s.qqStats = s.accounts
+			s.qqTyping = s.accounts
 			s.adminJobs.Add(1)
 			go func() {
 				defer s.adminJobs.Done()

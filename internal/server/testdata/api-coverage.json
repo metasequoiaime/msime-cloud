@@ -551,6 +551,24 @@
     "POST /v1/users/me/diagnostics/token": [
       "internal/account/diagnostics_test.go::TestDiagnosticsUploadReadRotateAndDelete"
     ],
+    "PUT /v1/users/me/typing-statistics": [
+      "internal/account/typing_statistics_test.go::TestTypingStatisticsUploadAndDelete",
+      "internal/account/typing_statistics_test.go::TestTypingUploadValidation",
+      "internal/account/typing_statistics_test.go::TestTypingStatisticsUploadRate"
+    ],
+    "DELETE /v1/users/me/typing-statistics": [
+      "internal/account/typing_statistics_test.go::TestTypingStatisticsUploadAndDelete"
+    ],
+    "GET /v1/users/me/qq-links": [
+      "internal/account/typing_statistics_test.go::TestQQLinks"
+    ],
+    "POST /v1/users/me/qq-links": [
+      "internal/account/typing_statistics_test.go::TestQQLinks",
+      "internal/account/typing_statistics_test.go::TestQQLinkAttemptRate"
+    ],
+    "DELETE /v1/users/me/qq-links/{id}": [
+      "internal/account/typing_statistics_test.go::TestQQLinks"
+    ],
     "POST /v1/niutrans/documents": [
       "internal/server/niutrans_media_test.go::TestNiuTransDocumentUploadAndStatus",
       "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes",

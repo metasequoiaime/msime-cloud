@@ -132,44 +132,24 @@ func TestQQBotRecordsImprovements(t *testing.T) {
 	}
 }
 
-// 管理员「改进依据」马上汇总最近 7 天（含今天）在 msime-cloud 开 issue（仓库有 qq-bot 标签才加），一天两次；没有要处理的不开；普通群友不能用；配置 none 时关闭。
-func TestQQBotImprovementCommand(t *testing.T) {
+// fileQQImprovementReport 在改进仓库开 issue，仓库有 qq-bot 标签才加；没有要处理的不开。管理员手动开的「改进依据」命令已经去掉，这里直接测它，每周自动开的路径见 TestQQImprovementTick。
+func TestFileQQImprovementReport(t *testing.T) {
 	s, fake, _ := qqServer(t)
-	s.qq.config.Admins = []string{"ADMIN1"}
 	store := &memoryImprovements{}
 	s.qqImprovements = store
-	s.qq.now = func() time.Time { return time.Date(2026, 10, 12, 4, 0, 0, 0, time.UTC) }
 	fake.repoLabels = map[string]string{defaultQQImprovementRepo: `[{"name":"qq-bot"},{"name":"bug"}]`}
-	last := func() string { return fake.replyTexts()[len(fake.replyTexts())-1] }
-	deliver := func(id, member string) {
-		t.Helper()
-		qqPost(t, s, qqMessageFrom(id, member, "改进依据"))
-		s.qqWorkers.Wait()
-	}
-	deliver("m-ic-member", "MEMBER9")
-	if last() != "只有管理员能用「改进依据」。" || len(fake.created) != 0 {
-		t.Fatal(last(), fake.created)
-	}
-	deliver("m-ic-empty", "ADMIN1")
-	if last() != "最近 7 天没有答不上、被说答错或出错的记录，没开 issue。" || len(fake.created) != 0 {
-		t.Fatal(last(), fake.created)
+	ctx := context.Background()
+	to := time.Date(2026, 10, 13, 0, 0, 0, 0, qqStatsZone)
+	if _, filed, err := s.fileQQImprovementReport(ctx, to.AddDate(0, 0, -7), to, nil); err != nil || filed || len(fake.created) != 0 {
+		t.Fatal(filed, err, fake.created)
 	}
 	store.events = append(store.events, account.QQImprovementEvent{Kind: "unknown", Topic: "鸿蒙版怎么下载", Detail: "docs"})
-	deliver("m-ic-1", "ADMIN1")
-	if len(fake.created) != 1 || fake.created[0]["_repo"] != defaultQQImprovementRepo || fake.created[0]["title"] != "QQ 机器人改进依据：10-06 ~ 10-12" || !strings.Contains(last(), "#123") {
-		t.Fatal(last(), fake.created)
+	number, filed, err := s.fileQQImprovementReport(ctx, to.AddDate(0, 0, -7), to, nil)
+	if err != nil || !filed || number != 123 || len(fake.created) != 1 || fake.created[0]["_repo"] != defaultQQImprovementRepo || fake.created[0]["title"] != "QQ 机器人改进依据：10-06 ~ 10-12" {
+		t.Fatal(number, filed, err, fake.created)
 	}
 	if labels, _ := fake.created[0]["labels"].([]any); len(labels) != 1 || labels[0] != "qq-bot" {
 		t.Fatal(fake.created[0]["labels"])
-	}
-	deliver("m-ic-2", "ADMIN1")
-	if len(fake.created) != 1 || !strings.HasPrefix(last(), "今天已经生成过两次了") {
-		t.Fatal(last(), len(fake.created))
-	}
-	s.qq.config.ImprovementRepo = "none"
-	deliver("m-ic-off", "ADMIN1")
-	if last() != "改进依据暂时用不了。" || len(fake.created) != 1 {
-		t.Fatal(last())
 	}
 }
 

@@ -6588,12 +6588,9 @@ func TestQQBotSelfTestTimeout(t *testing.T) {
 	s, fake, _ := qqServer(t)
 	s.qq.config.Admins = []string{"ADMIN1"}
 	fake.hangModel = "claude-haiku-5-5"
-	m := qqGroupMessage{ID: "m-selftest-timeout", Content: "自测", GroupOpenID: "GROUP1"}
-	m.Author.MemberOpenID = "ADMIN1"
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	s.handleQQFeedback(ctx, m)
-	last := fake.replyTexts()[len(fake.replyTexts())-1]
+	last := qqSelfTestSummary(s.runQQSelfTest(ctx))
 	if !strings.HasPrefix(last, fmt.Sprintf("自测 0/%d 通过，%d 题超时。没答完的：「五笔怎么切换」", len(qqSelfTestCases), len(qqSelfTestCases))) || strings.Contains(last, "没通过的") || strings.Contains(last, "deadline") || strings.Contains(last, "context") {
 		t.Fatal(last)
 	}
@@ -6701,9 +6698,7 @@ func TestQQSelfTestLimits(t *testing.T) {
 	s, fake, _ := qqServer(t)
 	s.qq.config.Admins = []string{"ADMIN1"}
 	fake.answer = `{"type":"answered","answer":"` + strings.Repeat("长", 250) + `"}`
-	qqPost(t, s, qqMessageFrom("m-selftest-limit", "ADMIN1", "自测"))
-	s.qqWorkers.Wait()
-	last := fake.replyTexts()[len(fake.replyTexts())-1]
+	last := qqSelfTestSummary(s.runQQSelfTest(context.Background()))
 	if want := fmt.Sprintf("自测 %d/%d 通过。没通过的：\n- 「怎么卸载」回答 250 字，超过 200 字（回答：%s…）", len(qqSelfTestCases)-1, len(qqSelfTestCases), strings.Repeat("长", qqSelfTestAnswerRunes)); last != want {
 		t.Fatalf("%q", last)
 	}
@@ -6773,40 +6768,31 @@ func TestQQSelfTestJudgeEvidence(t *testing.T) {
 	}
 }
 
-// 「自测」用固定的题目跑真实的答疑流程再判分，回复通过数和没通过的原因；不记差评、不记文档候选。
-func TestQQBotSelfTest(t *testing.T) {
+// 自测用固定的题目跑真实的答疑流程再判分，汇总通过数和没通过的原因；不记差评、不记文档候选。定时自测只把分数记进改进依据。
+func TestQQSelfTestRun(t *testing.T) {
 	s, fake, limiter := qqServer(t)
-	s.qq.config.Admins = []string{"ADMIN1"}
 	candidates := &memoryFAQCandidates{}
 	s.qqFAQCandidates = candidates
 	improvements := &memoryImprovements{}
 	s.qqImprovements = improvements
 	fake.judge = `{"pass":true,"reason":"满足要求"}`
-	qqPost(t, s, qqMessageFrom("m-selftest", "ADMIN1", "自测"))
-	s.qqWorkers.Wait()
-	replies := fake.replyTexts()
-	if len(replies) != 2 || !strings.HasPrefix(replies[0], "开始自测") || replies[1] != fmt.Sprintf("自测 %d/%d 通过。", len(qqSelfTestCases), len(qqSelfTestCases)) {
-		t.Fatal(replies)
+	ctx := context.Background()
+	if got := qqSelfTestSummary(s.runQQSelfTest(ctx)); got != fmt.Sprintf("自测 %d/%d 通过。", len(qqSelfTestCases), len(qqSelfTestCases)) {
+		t.Fatal(got)
 	}
-	if strings.Count(strings.Join(fake.chatCalls, ","), "judge") != len(qqSelfTestCases) || len(candidates.items) != 0 {
-		t.Fatal(fake.chatCalls, candidates.items)
+	if strings.Count(strings.Join(fake.chatCalls, ","), "judge") != len(qqSelfTestCases) || len(candidates.items) != 0 || len(fake.replyTexts()) != 0 {
+		t.Fatal(fake.chatCalls, candidates.items, fake.replyTexts())
 	}
 	// 改进依据只记分数；自测里答不上的题不算群友答不上。
+	limiter.counts = map[string]int{}
+	s.qqScheduledSelfTest(ctx, "0.90.0", "daily")
 	if want := fmt.Sprintf("自测 %d/%d 通过。", len(qqSelfTestCases), len(qqSelfTestCases)); len(improvements.events) != 1 || improvements.events[0].Kind != "selftest" || improvements.events[0].Detail != want {
 		t.Fatal(improvements.events)
 	}
 	// 判不过、答不上的列出原因。
 	fake.judge = `{"pass":false,"reason":"只复述了资料"}`
-	qqPost(t, s, qqMessageFrom("m-selftest-2", "ADMIN1", "自测"))
-	s.qqWorkers.Wait()
-	if last := fake.replyTexts()[len(fake.replyTexts())-1]; !strings.HasPrefix(last, fmt.Sprintf("自测 0/%d 通过。没通过的：\n- 「五笔怎么切换」只复述了资料（回答：在设置的「输入方案」里选五笔。）", len(qqSelfTestCases))) {
-		t.Fatal(last)
-	}
-	limiter.counts["qq-bot-selftest|ADMIN1"] = qqSelfTestDaily
-	qqPost(t, s, qqMessageFrom("m-selftest-3", "ADMIN1", "自测"))
-	s.qqWorkers.Wait()
-	if last := fake.replyTexts()[len(fake.replyTexts())-1]; last != "今天自测的次数用完了，明天再来。" {
-		t.Fatal(last)
+	if got := qqSelfTestSummary(s.runQQSelfTest(ctx)); !strings.HasPrefix(got, fmt.Sprintf("自测 0/%d 通过。没通过的：\n- 「五笔怎么切换」只复述了资料（回答：在设置的「输入方案」里选五笔。）", len(qqSelfTestCases))) {
+		t.Fatal(got)
 	}
 }
 
@@ -6886,7 +6872,7 @@ func TestQQLogSelfTestThreshold(t *testing.T) {
 		passed  int
 		trigger string
 		want    string
-	}{{11, "deploy", "INFO"}, {10, "daily", "ERROR"}, {0, "admin", "INFO"}} {
+	}{{11, "deploy", "INFO"}, {10, "daily", "ERROR"}} {
 		if alert := qqLogSelfTest(results(tc.passed), "0.78.0", tc.trigger); alert != (tc.want == "ERROR") {
 			t.Fatal(tc, alert)
 		}

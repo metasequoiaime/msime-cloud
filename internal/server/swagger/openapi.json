@@ -1439,6 +1439,10 @@
                     "expires_in": {
                       "type": "integer"
                     },
+                    "reused": {
+                      "type": "boolean",
+                      "description": "同一邮箱或手机号已有未过期验证码时为 true，此次不会重复发送。"
+                    },
                     "nonce": {
                       "type": "string"
                     },
@@ -21157,7 +21161,7 @@
             "userSession": []
           }
         ],
-        "description": "只发到账号已验证的邮箱（邮箱登录身份，或 email_verified 的 Google 邮箱），不接受收件地址。正文是固定模板，链接只有 https://msime.app/download/?release=<platform>。每个用户每小时 3 次、每天 10 次，并计入全站每天 500 封的发信额度。没有已验证邮箱返回 409 no_verified_email，客户端改用复制链接。",
+        "description": "只发到账号已验证的邮箱（邮箱登录身份，或 email_verified 的 Google 邮箱），不接受收件地址。正文是固定模板，链接只有 https://msime.app/download/?release=<platform>。每个用户每小时 3 次、每天 10 次，并计入全站每天 450 封的发信额度。没有已验证邮箱返回 409 no_verified_email，客户端改用复制链接。",
         "requestBody": {
           "required": true,
           "content": {

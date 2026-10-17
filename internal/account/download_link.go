@@ -100,7 +100,7 @@ func (a *Service) downloadLink(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err = a.store.Rate(r.Context(), "delivery-global", 500, 24*time.Hour); err != nil {
+	if err = a.store.Rate(r.Context(), "delivery-global", deliveryGlobalDailyLimit, 24*time.Hour); err != nil {
 		a.error(w, err)
 		return
 	}

@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS auth_challenges (
  attempts integer NOT NULL DEFAULT 0, expires_at timestamptz NOT NULL
 );
 CREATE INDEX IF NOT EXISTS auth_challenges_expiry ON auth_challenges(expires_at);
+CREATE INDEX IF NOT EXISTS auth_challenges_active_code ON auth_challenges(provider,subject,expires_at) WHERE code_hash<>'' AND nonce LIKE 'code-v1:%';
 CREATE TABLE IF NOT EXISTS auth_sessions (
  id text PRIMARY KEY, user_id text NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
  access_hash text NOT NULL UNIQUE, refresh_hash text NOT NULL UNIQUE,

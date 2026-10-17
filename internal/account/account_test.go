@@ -418,11 +418,13 @@ func TestOIDCSignatureAudienceIssuerNonceAndExpiry(t *testing.T) {
 
 type captureSender struct {
 	code string
+	sent int
 	fail bool
 }
 
 func (s *captureSender) Send(_ context.Context, _, _, code string) error {
 	s.code = code
+	s.sent++
 	if s.fail {
 		return errors.New("不可用")
 	}
@@ -454,6 +456,33 @@ func TestEmailHTTPFlowAndFailure(t *testing.T) {
 		ID string `json:"challenge_id"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &c)
+	if sender.sent != 1 {
+		t.Fatal("首次请求应发送一封验证码邮件", sender.sent)
+	}
+	if _, e := s.pool.Exec(context.Background(), `UPDATE auth_rates SET expires_at=now()-interval '1 second' WHERE key LIKE 'target-minute:%'`); e != nil {
+		t.Fatal(e)
+	}
+	w = request("/v1/auth/challenges", map[string]string{"provider": "email", "target": "one@example.test"})
+	if w.Code != 201 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	var reused struct {
+		ID     string `json:"challenge_id"`
+		Reused bool   `json:"reused"`
+	}
+	if e := json.Unmarshal(w.Body.Bytes(), &reused); e != nil || !reused.Reused || reused.ID == c.ID {
+		t.Fatal("有效验证码应创建新挑战但复用验证码", w.Body.String(), e)
+	}
+	if sender.sent != 1 || sender.code == "" {
+		t.Fatal("复用有效验证码不得再次发送邮件", sender.sent)
+	}
+	if w = request("/v1/auth/login", map[string]string{"challenge_id": reused.ID, "credential": sender.code}); w.Code != 200 {
+		t.Fatal("复用挑战应接受原验证码", w.Code, w.Body.String())
+	}
+	var deliveries int
+	if e := s.pool.QueryRow(context.Background(), `SELECT count FROM auth_rates WHERE key='delivery-global'`).Scan(&deliveries); e != nil || deliveries != 1 {
+		t.Fatal("复用验证码不应占用全站发信额度", deliveries, e)
+	}
 	if w = request("/v1/auth/login", map[string]string{"challenge_id": c.ID, "credential": "abcdef"}); w.Code != 401 {
 		t.Fatal(w.Code)
 	}

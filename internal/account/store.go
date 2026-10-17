@@ -280,10 +280,11 @@ func (s *Store) Ready(ctx context.Context) error {
 		return e
 	}
 	// 单独补加的索引不会被表和列探测发现；按实际表检查，确保旧库启动时补齐。
-	var refreshSessionIndex, googleProfileIndex bool
+	var refreshSessionIndex, googleProfileIndex, activeCodeIndex bool
 	if e := s.pool.QueryRow(ctx, `SELECT
  EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid='auth_used_refresh'::regclass AND c.relname='auth_used_refresh_session'),
- EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid='auth_identities'::regclass AND c.relname='auth_identities_google_profile')`).Scan(&refreshSessionIndex, &googleProfileIndex); e != nil {
+ EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid='auth_identities'::regclass AND c.relname='auth_identities_google_profile'),
+ EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid='auth_challenges'::regclass AND c.relname='auth_challenges_active_code')`).Scan(&refreshSessionIndex, &googleProfileIndex, &activeCodeIndex); e != nil {
 		return e
 	}
 	if !refreshSessionIndex {
@@ -291,6 +292,9 @@ func (s *Store) Ready(ctx context.Context) error {
 	}
 	if !googleProfileIndex {
 		return errors.New("google profile index missing")
+	}
+	if !activeCodeIndex {
+		return errors.New("active code index missing")
 	}
 	// 连续的表和列探测只检查执行错误，一次发送并按顺序执行，任意语句失败都会触发迁移。
 	// 先取得迁移锁的共享模式，避免同批表锁与其他副本迁移的 DDL 锁反向等待。
@@ -489,6 +493,18 @@ func (s *Store) RateUntil(ctx context.Context, key string, limit int, window tim
 func (s *Store) PutChallenge(ctx context.Context, c Challenge) error {
 	_, e := s.pool.Exec(ctx, `INSERT INTO auth_challenges(id_hash,provider,subject,nonce,code_hash,link_user,code_verifier,redirect_uri,expires_at) VALUES($1,$2,$3,$4,$5,NULLIF($6,''),$7,$8,now()+interval '5 minutes')`, c.IDHash, c.Provider, c.Subject, c.Nonce, c.CodeHash, c.LinkUser, c.CodeVerifier, c.RedirectURI)
 	return e
+}
+
+// ActiveCodeSeed 返回同一目标仍有效的最新验证码种子。种子只用于在验证码有效期内复用邮件内容，不能直接作为验证码或挑战 ID。
+func (s *Store) ActiveCodeSeed(ctx context.Context, provider, subject string) (string, bool, error) {
+	var seed string
+	err := s.pool.QueryRow(ctx, `SELECT nonce FROM auth_challenges
+WHERE provider=$1 AND subject=$2 AND code_hash<>'' AND nonce LIKE 'code-v1:%' AND expires_at>clock_timestamp()
+ORDER BY expires_at LIMIT 1`, provider, subject).Scan(&seed)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	return seed, err == nil, err
 }
 func (s *Store) Attempt(ctx context.Context, id string) (Challenge, error) {
 	var c Challenge

@@ -417,15 +417,19 @@ func TestOIDCSignatureAudienceIssuerNonceAndExpiry(t *testing.T) {
 }
 
 type captureSender struct {
-	code string
-	sent int
-	fail bool
+	code      string
+	sent      int
+	fail      bool
+	permanent bool
 }
 
 func (s *captureSender) Send(_ context.Context, _, _, code string) error {
 	s.code = code
 	s.sent++
 	if s.fail {
+		if s.permanent {
+			return &deliveryFailure{permanent: true}
+		}
 		return errors.New("不可用")
 	}
 	return nil
@@ -493,10 +497,18 @@ func TestEmailHTTPFlowAndFailure(t *testing.T) {
 	if w = request("/v1/auth/login", map[string]string{"challenge_id": c.ID, "credential": sender.code}); w.Code != 401 {
 		t.Fatal("OTP 重放应失败", w.Code)
 	}
-	sender.fail = true
+	sender.fail, sender.permanent = true, true
 	w = request("/v1/auth/challenges", map[string]string{"provider": "email", "target": "two@example.test"})
 	if w.Code != 503 {
 		t.Fatal(w.Code)
+	}
+	sent := sender.sent
+	w = request("/v1/auth/challenges", map[string]string{"provider": "email", "target": "two@example.test"})
+	if w.Code != 503 || sender.sent != sent {
+		t.Fatal("永久拒收目标不应再次投递", w.Code, sender.sent, sent)
+	}
+	if e := s.pool.QueryRow(context.Background(), `SELECT count FROM auth_rates WHERE key='delivery-global'`).Scan(&deliveries); e != nil || deliveries != 1 {
+		t.Fatal("永久拒收应退回全站发信额度", deliveries, e)
 	}
 	var n int
 	s.pool.QueryRow(context.Background(), "SELECT count(*) FROM auth_challenges WHERE subject='two@example.test'").Scan(&n)

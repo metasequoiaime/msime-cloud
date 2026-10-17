@@ -11,10 +11,14 @@ import (
 
 // ReserveRateLimit 预留一次可退款额度，拒绝时不增加计数并返回剩余等待时间。成功返回的退款函数绑定本窗口，且最多执行一次；调用方只在明确失败时调用，并提供独立的短时上下文。预留期间不持有数据库连接。
 func (a *Service) ReserveRateLimit(ctx context.Context, scope, subject string, limit int, window time.Duration) (func(context.Context) error, time.Duration, error) {
+	return a.reserveRateKey(ctx, scope+":"+hash(subject), limit, window)
+}
+
+// reserveRateKey 与 ReserveRateLimit 相同，但允许兼容已有的非哈希限流键（例如全站发信额度）。
+func (a *Service) reserveRateKey(ctx context.Context, key string, limit int, window time.Duration) (func(context.Context) error, time.Duration, error) {
 	if limit <= 0 || window <= 0 {
 		return nil, 0, ErrInvalid
 	}
-	key := scope + ":" + hash(subject)
 	var until time.Time
 	err := a.store.pool.QueryRow(ctx, `INSERT INTO auth_rates AS a(key,count,expires_at)
 VALUES($1,1,clock_timestamp()+$2::interval)

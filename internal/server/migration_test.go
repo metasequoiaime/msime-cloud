@@ -212,7 +212,7 @@ func TestStartupMigratesAdminConsoleObjectsAddedLater(t *testing.T) {
 		"admin_events.artifact", "admin_events.channel", "admin_events.install_id", "admin_events.signature", "admin_events_kind_check", "community_plugins_kind_known",
 	}
 	adminOnly := []string{
-		"admin_roles", "admin_role_permissions", "admin_tokens", "admin_notifications", "admin_notification_reads", "admin_preferences", "admin_service_metrics", "admin_service_daily", "admin_service_minutes", "admin_service_verdicts", "admin_incidents", "release_asset_snapshots",
+		"admin_roles", "admin_role_permissions", "admin_tokens", "admin_notifications", "admin_notification_reads", "admin_preferences", "admin_service_metrics", "admin_service_daily", "admin_email_delivery_daily", "admin_service_minutes", "admin_service_verdicts", "admin_incidents", "release_asset_snapshots",
 		"admin_audit.detail", "admin_members.role", "admin_sessions.id", "admin_sessions.name", "admin_sessions.created_at", "admin_sessions.last_seen_at", "admin_sessions.user_agent",
 	}
 	for _, object := range append(append([]string{}, public...), adminOnly...) {

@@ -330,6 +330,8 @@ SELECT kind,topic,detail,created_at FROM qq_improvement_events WHERE false;
 SELECT question,answer,created_at FROM qq_selftest_cases WHERE false;
 -- SMTP 在 RCPT 阶段永久拒收的目标；缺表时启动走迁移。
 SELECT provider,target_hash,reason,created_at,expires_at FROM auth_delivery_suppressions WHERE false;
+-- 邮件每日投递统计；缺表时启动走迁移。
+SELECT day,attempted,accepted,rejected,failed FROM admin_email_delivery_daily WHERE false;
 -- QQ 答疑每天的处理结果计数；缺表时启动走迁移。
 SELECT day,outcome,count FROM qq_daily_stats WHERE false;
 -- 被群友说答错的回答；缺表或缺处理状态列时启动走迁移（状态列的命名 CHECK 和列在同一次迁移中加上，只探测列）。
@@ -931,6 +933,7 @@ SELECT banned,COALESCE((SELECT avatar_key FROM removed),'') FROM locked`, uid).S
 func (s *Store) Prune(ctx context.Context) {
 	batch := &pgx.Batch{}
 	for _, q := range []string{"DELETE FROM admin_login_flows WHERE expires_at<now()", "DELETE FROM admin_sessions WHERE expires_at<now()", "DELETE FROM admin_tokens WHERE expires_at<now()", "DELETE FROM auth_challenges WHERE expires_at<now()", "DELETE FROM auth_rates WHERE expires_at<now()", "DELETE FROM auth_delivery_suppressions WHERE expires_at<now()", "DELETE FROM auth_sessions WHERE expires_at<now()", "DELETE FROM skin_jobs WHERE expires_at<now()",
+		"DELETE FROM admin_email_delivery_daily WHERE day<(clock_timestamp() AT TIME ZONE 'UTC')::date-" + strconv.Itoa(emailDeliveryRetentionDays),
 		// 诊断快照到期即删，访问记录随外键一起删除。
 		"DELETE FROM diagnostic_snapshots WHERE expires_at<now()",
 		// Activity heartbeats and session ends only feed the overview's last 60 days, so they are kept for telemetryActivityRetentionDays. Downloads and crashes stay: the cumulative counters and crash groups read them.

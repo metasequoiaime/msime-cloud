@@ -19,6 +19,9 @@ export type OverviewService = z.infer<typeof overviewServiceSchema>;
 export const activeDaySchema = z.object({ day: z.string(), windows: count, mac_linux: count, mobile: count });
 export type ActiveDay = z.infer<typeof activeDaySchema>;
 
+export const emailDeliveryDaySchema = z.object({ day: z.string(), attempted: count, accepted: count, rejected: count, failed: count });
+export type EmailDeliveryDay = z.infer<typeof emailDeliveryDaySchema>;
+
 // GET /api/overview?days=7|30. Totals, the daily series, the telemetry-backed device metrics (zero or null until clients report active/session events; telemetry says whether they do), database-side pending work and the monitored services.
 export const overviewSchema = z.object({
   users: count,
@@ -29,6 +32,7 @@ export const overviewSchema = z.object({
   crashes: count,
   open_crashes: count,
   range_days: z.number().int(),
+  email_delivery: z.array(emailDeliveryDaySchema).nullable().transform(rows => rows ?? []),
   telemetry: z.object({ active: z.boolean(), sessions: z.boolean() }),
   active_devices_daily: z.array(activeDaySchema).nullable().transform(rows => rows ?? []),
   active_devices_7d: count,

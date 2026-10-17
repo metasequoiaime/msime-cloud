@@ -95,6 +95,21 @@ function PlatformActive({ data }: { data: Overview }) {
   </Card>;
 }
 
+function EmailDelivery({ data }: { data: Overview }) {
+  const total = data.email_delivery.reduce((sum, row) => sum + row.attempted, 0);
+  return <Card>
+    <CardHeader title={`近 ${data.range_days} 天邮件投递`} sub={`供应商调用 ${formatNumber(total)} 次`} />
+    {data.email_delivery.length === 0
+      ? <Empty title="暂无发信记录" className="py-8" />
+      : <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-left text-[13px]">
+          <thead><tr className="border-b border-hair text-muted"><th className="py-2 pr-4 font-medium">日期</th><th className="py-2 pr-4 font-medium">调用</th><th className="py-2 pr-4 font-medium">已接受</th><th className="py-2 pr-4 font-medium">拒收</th><th className="py-2 font-medium">失败</th></tr></thead>
+          <tbody>{data.email_delivery.slice().reverse().map(row => <tr key={row.day} className="border-b border-hair last:border-b-0"><td className="py-2 pr-4 tabular-nums text-ink">{row.day}</td><td className="py-2 pr-4 tabular-nums text-ink">{formatNumber(row.attempted)}</td><td className="py-2 pr-4 tabular-nums text-ink">{formatNumber(row.accepted)}</td><td className="py-2 pr-4 tabular-nums text-ink">{formatNumber(row.rejected)}</td><td className="py-2 tabular-nums text-ink">{formatNumber(row.failed)}</td></tr>)}</tbody>
+        </table>
+      </div>}
+  </Card>;
+}
+
 function TodoRow({ to, icon, title, sub, count }: { to: "/dictpr" | "/community" | "/issues" | "/crash"; icon: string; title: string; sub: ReactNode; count: number | undefined }) {
   return <li>
     <Link to={to} className="flex items-center gap-3 rounded-xl px-2.5 py-3 text-body no-underline transition hover:bg-panel-2 hover:text-body">
@@ -173,6 +188,7 @@ export default function OverviewPage() {
         <Todos data={query.data} />
         <Services data={query.data} />
       </div>
+      <EmailDelivery data={query.data} />
     </div>}
   </>;
 }

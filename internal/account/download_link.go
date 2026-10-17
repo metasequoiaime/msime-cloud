@@ -146,7 +146,9 @@ func (a *Service) downloadLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	subject, body := downloadLinkMessage(v.Platform)
-	if err = a.mailer.Mail(r.Context(), email, subject, body); err != nil {
+	err = a.mailer.Mail(r.Context(), email, subject, body)
+	a.recordEmailDelivery("email", err)
+	if err != nil {
 		if permanentDeliveryFailure(err) {
 			a.suppressDeliveryTarget(r.Context(), "email", email)
 		}

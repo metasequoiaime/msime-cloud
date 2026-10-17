@@ -207,6 +207,16 @@ CREATE TABLE IF NOT EXISTS admin_service_daily (
  p95_ms integer,
  PRIMARY KEY(service,day)
 );
+
+-- 邮件投递按 UTC 日期汇总，保留供应商实际调用和结果，不把额度预留当作发信成功。
+CREATE TABLE IF NOT EXISTS admin_email_delivery_daily (
+ day date PRIMARY KEY,
+ attempted bigint NOT NULL DEFAULT 0,
+ accepted bigint NOT NULL DEFAULT 0,
+ rejected bigint NOT NULL DEFAULT 0,
+ failed bigint NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS admin_incidents (
  id bigserial PRIMARY KEY,
  service text NOT NULL,

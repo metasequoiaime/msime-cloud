@@ -46,7 +46,7 @@ const (
 /submit 12 提交草稿　/undraft 12 不提交
 /issue 引用一条消息直接提 issue，后面可以补版本、优先级
 /faqs 文档缺口　/a 3 答案 写进 FAQ　/q 引用的问题记成文档缺口
-/bad 被说答错的　/weekly 周报　/selftest 自测　/report 改进依据
+/bad 被说答错的　/weekly 周报
 中文命令照旧能用：草稿、提交 D12、写进FAQ F3、记录答案 问：… 答：…`
 )
 
@@ -314,18 +314,13 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 	if command := s.qqFAQCandidateCommands(ctx, text, admin, reply); command != "" {
 		return command
 	}
-	if compact := qqCompact(text); compact == "周报" || compact == "自测" || compact == "改进依据" {
-		switch {
-		case !admin:
-			reply("只有管理员能用「" + compact + "」。")
-		case compact == "周报":
+	if qqCompact(text) == "周报" {
+		if admin {
 			s.qqWeeklyDigest(ctx, reply)
-		case compact == "改进依据":
-			s.qqImprovementCommand(ctx, m.Author.MemberOpenID, reply)
-		default:
-			s.qqSelfTest(ctx, m.Author.MemberOpenID, reply)
+		} else {
+			reply("只有管理员能用「周报」。")
 		}
-		return "cmd_" + map[string]string{"周报": "digest", "自测": "selftest", "改进依据": "improvement"}[compact]
+		return "cmd_digest"
 	}
 	if compact := qqCompact(text); compact == "差评" || compact == "答错的" {
 		if !admin {

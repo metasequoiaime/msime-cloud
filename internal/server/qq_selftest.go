@@ -16,7 +16,7 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
 
-// 自测。每次改提示词都可能把别的问题改坏（例如「对这个 issue 提改进意见」被改成只会复述），所以内置一组固定的问题，覆盖使用问题、问人、提建议、外部软件、统计、闲聊、版本和各平台指南。管理员发「自测」，机器人用生产环境真实的知识库、GitHub 和模型逐个回答（不记差评、不记文档候选、不回到群里），再让强模型按每题的要求判对错，回复通过数、超时的题数和没通过的原因（附上机器人回答的开头）。
+// 自测。每次改提示词都可能把别的问题改坏（例如「对这个 issue 提改进意见」被改成只会复述），所以内置一组固定的问题，覆盖使用问题、问人、提建议、外部软件、统计、闲聊、版本和各平台指南。发版后（qqDeploySelfTest）和每天定时（qqDailySelfTest）各跑一次：机器人用生产环境真实的知识库、GitHub 和模型逐个回答（不记差评、不记文档候选、不回到群里），再让强模型按每题的要求判对错，结果写日志、分数记进改进依据，掉分时开 issue。管理员在群里手动发「自测」的命令已经去掉：6 天里没人用过，修好之后要发版才生效，发版本身就会再跑一次。
 
 const (
 	// qqSelfTestParallel 是同时跑的题数：每题最多几十秒，固定的十三题加上至多 qqSelfTestLearned 道学到的题分三批，在被动回复的 5 分钟里跑得完。
@@ -25,7 +25,6 @@ const (
 	qqSelfTestLearned = 8
 	// qqSelfTestDailyHour 是每天定时自测的时间（北京时间，几点以后），见 qqDailySelfTest。
 	qqSelfTestDailyHour = 8
-	qqSelfTestDaily     = 3
 	qqSelfTestTimeout   = 3 * time.Minute
 	// qqSelfTestDeployWindow 是发版后自测按版本号认领的有效期，见 qqDeploySelfTest：同一版本在这段时间里只跑一次，一个版本很少在线超过一个月。
 	qqSelfTestDeployWindow = 30 * 24 * time.Hour
@@ -202,30 +201,7 @@ func (s *Server) qqSelfTestOne(ctx context.Context, c qqSelfTestCase) qqSelfTest
 	return result
 }
 
-// qqSelfTest 处理管理员的「自测」。
-func (s *Server) qqSelfTest(ctx context.Context, member string, reply func(string)) {
-	switch err := s.limits.RateLimit(ctx, "qq-bot-selftest", member, qqSelfTestDaily, 24*time.Hour); {
-	case errors.Is(err, account.ErrLimited):
-		reply("今天自测的次数用完了，明天再来。")
-		return
-	case err != nil:
-		slog.Warn("qq bot: selftest limit unavailable", "reason", err.Error())
-		reply(qqReplyUnavailable)
-		return
-	}
-	reply("开始自测，大约要两三分钟～")
-	ctx, cancel := context.WithTimeout(ctx, qqSelfTestTimeout)
-	defer cancel()
-	results := s.runQQSelfTest(ctx)
-	qqLogSelfTest(results, msimebackend.Version(), "admin")
-	summary := qqSelfTestSummary(results)
-	// 改进周报只写第一句的分数（「自测 8/10 通过，1 题超时。」），不写机器人的回答。
-	score, _, _ := strings.Cut(summary, "。")
-	s.recordQQImprovement(ctx, "selftest", "", score+"。")
-	reply(summary)
-}
-
-// qqDeploySelfTest 是发版后的自测：副本启动、知识库预热完后跑一遍全部自测题，结果只写日志（qqLogSelfTest），不发回群里。按版本号认领（qq-bot-selftest-deploy，有效期 qqSelfTestDeployWindow），两个副本、同一版本重启几次都只跑一次；认领不到（已经跑过）或额度表出错时跳过。曾经自测只有管理员发「自测」才跑，发版后第一批群友就是实际的验证者，提示词或模型退化了要等差评才知道。副本关停打断了自测时不记汇总，免得一批超时被当成退化去告警。不加看图题：自测要一张固定的截图资源，维护成本高，看图的回归由单测覆盖。
+// qqDeploySelfTest 是发版后的自测：副本启动、知识库预热完后跑一遍全部自测题，结果只写日志（qqLogSelfTest），不发回群里。按版本号认领（qq-bot-selftest-deploy，有效期 qqSelfTestDeployWindow），两个副本、同一版本重启几次都只跑一次；认领不到（已经跑过）或额度表出错时跳过。曾经自测只有管理员在群里发「自测」才跑，发版后第一批群友就是实际的验证者，提示词或模型退化了要等差评才知道。副本关停打断了自测时不记汇总，免得一批超时被当成退化去告警。不加看图题：自测要一张固定的截图资源，维护成本高，看图的回归由单测覆盖。
 func (s *Server) qqDeploySelfTest(ctx context.Context, version string) {
 	switch err := s.limits.RateLimit(ctx, "qq-bot-selftest-deploy", version, 1, qqSelfTestDeployWindow); {
 	case errors.Is(err, account.ErrLimited):
@@ -299,7 +275,7 @@ func (s *Server) qqSelfTestAlert(ctx context.Context, results []qqSelfTestResult
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("\n先看最近改过的提示词、模型配置和知识库；管理员可以在群里 @机器人 发「自测」复查。")
+	b.WriteString("\n先看最近改过的提示词、模型配置和知识库；修好发版后会自动再跑一次自测。")
 	client := s.adminGitHub
 	token, err := client.Token(ctx, repo, issueTokenPerms)
 	if err != nil {
@@ -321,9 +297,8 @@ func (s *Server) qqSelfTestAlert(ctx context.Context, results []qqSelfTestResult
 	slog.Info("qq bot: selftest alert filed", "repo", repo, "version", version)
 }
 
-// qqLogSelfTest 记自测的汇总行「qq bot: selftest」：通过数、超时数、总题数、版本号和触发方式（管理员发「自测」是 admin，发版后是 deploy）。发版后的自测没有人看回复，没通过的题各记一条 Warn（问题和原因，不记回答），通过的比例低于 qqSelfTestAlertPassed / qqSelfTestAlertOf 时汇总行打 Error 供 Loki 告警；管理员自己跑的在群里看得到结果，改提示词时常常故意跑不过，只打 Info。
+// qqLogSelfTest 记自测的汇总行「qq bot: selftest」：通过数、超时数、总题数、版本号和触发方式（发版后是 deploy，每天定时是 daily）。自测没有人看回复，没通过的题各记一条 Warn（问题和原因，不记回答），通过的比例低于 qqSelfTestAlertPassed / qqSelfTestAlertOf 时汇总行打 Error 供 Loki 告警。
 func qqLogSelfTest(results []qqSelfTestResult, version, trigger string) (alert bool) {
-	scheduled := trigger != "admin"
 	passed, timedOut, fixed, fixedPassed := 0, 0, 0, 0
 	for _, r := range results {
 		switch {
@@ -338,12 +313,12 @@ func qqLogSelfTest(results []qqSelfTestResult, version, trigger string) (alert b
 				fixedPassed++
 			}
 		}
-		if scheduled && !r.Pass {
+		if !r.Pass {
 			slog.Warn("qq bot: selftest case not passed", "version", version, "question", r.Case.Question, "learned", r.Case.Learned, "reason", r.Reason)
 		}
 	}
 	attrs := []any{"passed", passed, "timed_out", timedOut, "total", len(results), "fixed_passed", fixedPassed, "fixed_total", fixed, "version", version, "trigger", trigger}
-	if scheduled && fixedPassed*qqSelfTestAlertOf < fixed*qqSelfTestAlertPassed {
+	if fixedPassed*qqSelfTestAlertOf < fixed*qqSelfTestAlertPassed {
 		slog.Error("qq bot: selftest", attrs...)
 		return true
 	}

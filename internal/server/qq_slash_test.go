@@ -209,7 +209,7 @@ func TestQQBotSlashCommands(t *testing.T) {
 	}
 }
 
-// /add 是加词；/bad、/selftest、/report 对应差评、自测、改进依据，群友不能用；/a 没带编号时列出文档缺口。
+// /add 是加词；/bad 是差评，群友不能用；/selftest、/report 已经去掉，回「没有这个命令」；/a 没带编号时列出文档缺口。
 func TestQQBotSlashAliases(t *testing.T) {
 	s, fake, _ := qqServer(t)
 	s.qq.config.Admins = []string{"ADMIN1"}
@@ -233,8 +233,8 @@ func TestQQBotSlashAliases(t *testing.T) {
 	if !strings.HasPrefix(last(), "只有管理员能看差评") {
 		t.Fatal(last())
 	}
-	deliver("m-al-report-member", "MEMBER9", "/report")
-	if last() != "只有管理员能用「改进依据」。" {
+	deliver("m-al-report", "ADMIN1", "/report")
+	if !strings.HasPrefix(last(), "没有 /report 这个命令。") {
 		t.Fatal(last())
 	}
 	deliver("m-al-a", "ADMIN1", "/a")

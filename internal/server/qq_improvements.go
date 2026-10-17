@@ -297,33 +297,3 @@ func (s *Server) fileQQImprovementReport(ctx context.Context, from, to time.Time
 	slog.Info("qq bot: improvement report filed", "repo", repo, "number", created.Number)
 	return created.Number, true, nil
 }
-
-// qqImprovementCommand 处理管理员的「改进依据」：马上汇总最近 7 天（含今天）开一个 issue。曾经算到今天 0 点为止，白天发命令时当天的问题反而不在里面。
-func (s *Server) qqImprovementCommand(ctx context.Context, member string, reply func(string)) {
-	if s.qqImprovements == nil || s.qqImprovementRepo() == "" {
-		reply("改进依据暂时用不了。")
-		return
-	}
-	switch err := s.limits.RateLimit(ctx, "qq-bot-improvement", member, 2, 24*time.Hour); {
-	case errors.Is(err, account.ErrLimited):
-		reply("今天已经生成过两次了，明天再来。每周一早上 9 点也会自动生成。")
-		return
-	case err != nil:
-		slog.Warn("qq bot: improvement limit unavailable", "reason", err.Error())
-		reply(qqReplyUnavailable)
-		return
-	}
-	now := s.qq.now().In(qqStatsZone)
-	to := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, qqStatsZone).AddDate(0, 0, 1)
-	number, filed, err := s.fileQQImprovementReport(ctx, to.AddDate(0, 0, -7), to, nil)
-	switch {
-	case err != nil:
-		slog.Warn("qq bot: improvement report not filed", "reason", err.Error())
-		reply(qqReplyUnavailable)
-		return
-	case !filed:
-		reply("最近 7 天没有答不上、被说答错或出错的记录，没开 issue。")
-		return
-	}
-	reply("最近 7 天的改进依据已经汇总成 " + qqIssueNumberText(s.qqImprovementRepo(), number) + "。每周一早上 9 点会自动再开一份。")
-}

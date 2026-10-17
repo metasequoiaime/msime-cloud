@@ -105,10 +105,6 @@ func (s *Server) qqSlashCommand(ctx context.Context, m qqGroupMessage, text stri
 		return chinese("解绑")
 	case "weekly":
 		return chinese("周报")
-	case "selftest":
-		return chinese("自测")
-	case "report":
-		return chinese("改进依据")
 	case "bad":
 		return chinese("差评")
 	case "add":

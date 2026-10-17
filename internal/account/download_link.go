@@ -149,6 +149,8 @@ func (a *Service) downloadLink(w http.ResponseWriter, r *http.Request) {
 	if err = a.mailer.Mail(r.Context(), email, subject, body); err != nil {
 		if permanentDeliveryFailure(err) {
 			a.suppressDeliveryTarget(r.Context(), "email", email)
+		}
+		if deliveryMayRefund(err) {
 			a.refundDeliveryReservation(r.Context(), releaseGlobal)
 		}
 		writeError(w, 503, "delivery_failed")

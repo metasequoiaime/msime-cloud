@@ -69,6 +69,12 @@ func TestSMTPPermanentRecipientFailure(t *testing.T) {
 	if !permanentDeliveryFailure(&deliveryFailure{permanent: true}) {
 		t.Fatal("永久投递失败标记丢失")
 	}
+	if !deliveryMayRefund(&deliveryFailure{}) {
+		t.Fatal("进入 SMTP DATA 之前失败应退回额度")
+	}
+	if deliveryMayRefund(&deliveryFailure{accepted: true}) {
+		t.Fatal("进入 SMTP DATA 后失败不得退回额度")
+	}
 }
 
 func TestSMTPRequiresSTARTTLSBeforeAuthentication(t *testing.T) {

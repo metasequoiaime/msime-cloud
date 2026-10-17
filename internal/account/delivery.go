@@ -28,14 +28,22 @@ type delivery struct {
 	smtpAddress string
 }
 
-// deliveryFailure 只在 SMTP 的 RCPT 阶段明确拒收收件地址时标记 permanent；DATA 之后的退信没有同步证据，不能误判成地址永久失效。
-type deliveryFailure struct{ permanent bool }
+// deliveryFailure 记录 SMTP 是否已经进入 DATA 阶段；进入 DATA 后的失败可能已经投递，不能退回额度或判定地址失效。
+type deliveryFailure struct {
+	permanent bool
+	accepted  bool
+}
 
 func (e *deliveryFailure) Error() string { return "邮件发送失败" }
 
 func permanentDeliveryFailure(err error) bool {
 	var failure *deliveryFailure
 	return errors.As(err, &failure) && failure.permanent
+}
+
+func deliveryMayRefund(err error) bool {
+	var failure *deliveryFailure
+	return errors.As(err, &failure) && !failure.accepted
 }
 
 const deliverySuppressionTTL = 30 * 24 * time.Hour
@@ -60,7 +68,7 @@ func (d delivery) Send(ctx context.Context, channel, target, code string) error 
 	}
 	// SDK/SMTP 错误可能包含手机号、验证码或凭据，不向调用者透传。
 	if e != nil {
-		if permanentDeliveryFailure(e) {
+		if deliveryFailureError(e) {
 			return e
 		}
 		return errors.New("验证码发送失败")
@@ -104,7 +112,7 @@ func (d delivery) Mail(ctx context.Context, target, subject, body string) error 
 		return errors.New("邮件发送失败")
 	}
 	if e := d.mail(ctx, target, subject, body); e != nil {
-		if permanentDeliveryFailure(e) {
+		if deliveryFailureError(e) {
 			return e
 		}
 		return errors.New("邮件发送失败")
@@ -175,25 +183,25 @@ func (d delivery) smtpAuthenticate(client *smtp.Client) error {
 func (d delivery) smtpSend(client *smtp.Client, target, subject, body string) error {
 	from := d.config.Email.From
 	if e := client.Mail(from); e != nil {
-		return e
+		return &deliveryFailure{accepted: false}
 	}
 	if e := client.Rcpt(target); e != nil {
 		if smtpPermanentError(e) {
 			return &deliveryFailure{permanent: true}
 		}
-		return e
+		return &deliveryFailure{accepted: false}
 	}
 	message := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n%s\r\n", from, target, mime.QEncoding.Encode("UTF-8", subject), base64.StdEncoding.EncodeToString([]byte(body)))
 	writer, e := client.Data()
 	if e != nil {
-		return e
+		return &deliveryFailure{accepted: false}
 	}
 	if _, e = writer.Write([]byte(message)); e != nil {
 		writer.Close()
-		return e
+		return &deliveryFailure{accepted: true}
 	}
 	if e = writer.Close(); e != nil {
-		return e
+		return &deliveryFailure{accepted: true}
 	}
 	// DATA 已确认即视为成功；QUIT 失败不能触发重复投递。
 	_ = client.Quit()
@@ -205,15 +213,20 @@ func smtpPermanentError(err error) bool {
 	return errors.As(err, &smtpErr) && smtpErr.Code >= 500 && smtpErr.Code < 600
 }
 
+func deliveryFailureError(err error) bool {
+	var failure *deliveryFailure
+	return errors.As(err, &failure)
+}
+
 // mail 依次连接、认证、发送。
 func (d delivery) mail(ctx context.Context, target, subject, body string) error {
 	client, release, e := d.smtpConnect(ctx)
 	if e != nil {
-		return e
+		return &deliveryFailure{accepted: false}
 	}
 	defer release()
 	if e = d.smtpAuthenticate(client); e != nil {
-		return e
+		return &deliveryFailure{accepted: false}
 	}
 	return d.smtpSend(client, target, subject, body)
 }

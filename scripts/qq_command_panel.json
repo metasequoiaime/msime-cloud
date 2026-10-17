@@ -7,9 +7,8 @@
     {"type": "command", "name": "/mcp", "desc": "词库和公共数据查询用法"},
     {"type": "command", "name": "/issues", "desc": "查 issue：后接关键词或编号"},
     {"type": "command", "name": "/add", "desc": "词打不出来：/add 词语 拼音"},
-    {"type": "command", "name": "/stats", "desc": "我的打字数据，先 /bind 绑定账号"},
-    {"type": "command", "name": "/bind", "desc": "拿绑定码，在水杉输入法里绑定账号"},
-    {"type": "command", "name": "/unbind", "desc": "解除 QQ 和水杉账号的绑定"},
+    {"type": "command", "name": "/stats", "desc": "我的打字数据，需先 /bind 绑定"},
+    {"type": "command", "name": "/bind", "desc": "拿绑定码，到水杉输入法里绑定"},
     {"type": "command", "name": "/doc", "desc": "文档缺了什么，可引用一条消息"},
     {"type": "link", "name": "使用文档", "desc": "各平台指南和常见问题", "link": "https://msime.app/docs/"},
     {"type": "link", "name": "下载", "desc": "Windows、Mac、Linux、安卓、iOS", "link": "https://msime.app/download/"},
@@ -21,9 +20,6 @@
     {"type": "command", "name": "/faqs", "desc": "文档缺口列表", "only_admin": true},
     {"type": "command", "name": "/a", "desc": "写进 FAQ：/a 编号 答案", "only_admin": true},
     {"type": "command", "name": "/q", "desc": "把引用的问题记成文档缺口", "only_admin": true},
-    {"type": "command", "name": "/bad", "desc": "群友说答错的回答", "only_admin": true},
-    {"type": "command", "name": "/weekly", "desc": "最近 7 天周报", "only_admin": true},
-    {"type": "command", "name": "/selftest", "desc": "用固定问题考考机器人", "only_admin": true},
-    {"type": "command", "name": "/report", "desc": "汇总改进依据开 issue", "only_admin": true}
+    {"type": "command", "name": "/weekly", "desc": "最近 7 天周报", "only_admin": true}
   ]
 }

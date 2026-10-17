@@ -2,9 +2,13 @@ package server
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/text/width"
 )
 
 // qqQuotedFrom 是 member 引用一条消息（quote 是被引用的文字）再 @机器人 的事件。
@@ -240,5 +244,51 @@ func TestQQBotSlashAliases(t *testing.T) {
 	deliver("m-al-docs", "MEMBER9", "/docs")
 	if !strings.Contains(last(), "下载：https://msime.app/download/") {
 		t.Fatal(last())
+	}
+}
+
+// 指令面板的配置（scripts/qq_command_panel.json）要放得进开放平台的限制：最多 20 项，名称最宽 14、描述最宽 30，宽度按 scripts/qq_command_panel.py 的算法，东亚宽字符算 2。超了的话同步脚本整次失败，而脚本只在部署后手动运行，原来超了也能一路合进 main（#648、#753 和 #754 都踩过）。命令项的名称要能被 qqSlashParse 认成斜杠命令。
+func TestQQCommandPanelFitsTheLimits(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "scripts", "qq_command_panel.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var panel struct {
+		Items []struct{ Type, Name, Desc string } `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &panel); err != nil {
+		t.Fatal(err)
+	}
+	if len(panel.Items) == 0 || len(panel.Items) > 20 {
+		t.Fatalf("面板有 %d 项，开放平台最多 20 项", len(panel.Items))
+	}
+	wide := func(text string) int {
+		n := 0
+		for _, r := range text {
+			if kind := width.LookupRune(r).Kind(); kind == width.EastAsianWide || kind == width.EastAsianFullwidth {
+				n += 2
+			} else {
+				n++
+			}
+		}
+		return n
+	}
+	seen := map[string]bool{}
+	for _, item := range panel.Items {
+		if n := wide(item.Name); n > 14 {
+			t.Errorf("%s 的名称宽 %d，最多 14", item.Name, n)
+		}
+		if n := wide(item.Desc); n > 30 {
+			t.Errorf("%s 的描述宽 %d，最多 30：%s", item.Name, n, item.Desc)
+		}
+		if seen[item.Name] {
+			t.Errorf("%s 重复", item.Name)
+		}
+		seen[item.Name] = true
+		if item.Type == "command" {
+			if name, args, ok := qqSlashParse(item.Name); !ok || args != "" || "/"+name != item.Name {
+				t.Errorf("%s 不是斜杠命令", item.Name)
+			}
+		}
 	}
 }

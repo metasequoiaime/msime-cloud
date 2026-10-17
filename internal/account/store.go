@@ -277,7 +277,7 @@ func (s *Store) Ready(ctx context.Context) error {
  LEFT JOIN auth_identities ai ON false AND ai.email_verified AND ai.email||ai.name||ai.picture||u.avatar_key='' AND ai.updated_at IS NULL
  LEFT JOIN auth_challenges ch ON false AND ch.code_verifier||ch.redirect_uri=''
  LEFT JOIN auth_provider_tokens pt ON false
- LEFT JOIN auth_delivery_suppressions ds ON false AND ds.reason||ds.target_hash=''
+ LEFT JOIN auth_delivery_suppressions ads ON false AND ads.reason||ads.target_hash=''
  WHERE false`).Scan(&n); e != nil {
 		return e
 	}

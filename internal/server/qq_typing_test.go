@@ -80,10 +80,10 @@ func TestQQTypingCard(t *testing.T) {
 		absent []string
 	}{
 		{"没绑定", account.QQTypingReport{}, []string{"还没绑定水杉账号", "/bind"}, nil},
-		{"没上传", account.QQTypingReport{Linked: true, DisplayName: "一号"}, []string{"已绑定「一号」", qqTypingUploadPath}, nil},
+		{"没上传", account.QQTypingReport{Linked: true, DisplayName: "一号"}, []string{"已绑定「一号」", qqTypingUploadPath, "每台设备要各自打开"}, nil},
 		{"最近 7 天没打字", account.QQTypingReport{Linked: true, DisplayName: "一号", Devices: 1, Days: qqTypingWeek(today, 0, 0, 0, 0, 0, 0, 0, 5)}, []string{"「一号」最近 7 天没有打字记录。"}, nil},
 		{"今天", full, []string{
-			"【一号 · 今天】\n983 字 · 活跃 21 分钟 · 每分钟 47 字\n\n【习惯】最常在 22 点打字\n全拼 68% · brandNew 22% · 语音 6%\n\n【趋势】近 7 天 4,883 字，比上一周少 19%，已经连续 14 天\n\n【选词】首选一次就中 81%，前三个以内 96%（累计）",
+			"【一号 · 今天】\n983 字 · 活跃 21 分钟 · 每分钟 47 字\n\n【习惯】最常在 22 点打字\n全拼 68% · brandNew 22% · 语音 6%\n\n【趋势】近 7 天 4,883 字，比上一周少 19%，已经连续 14 天\n\n【选词】首选一次就中 81%，前三个以内 96%（累计）\n\n（只统计打开了「上传到云端」的设备，现在有 2 台；别的设备要各自打开）",
 		}, []string{"五笔", "unknown"}},
 		{"今天没打字，写最近一天", account.QQTypingReport{Linked: true, DisplayName: "一号", Devices: 1, Days: qqTypingWeek(today, 0, 0, 1200, 1100), Selections: account.TypingSelections{Ranks: []int64{5}}},
 			[]string{"【一号 · 10月15日】\n1,200 字", "近 7 天 2,300 字，已经连续 2 天"}, []string{"活跃", "最常", "首选", "上一周"}},

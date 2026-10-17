@@ -172,10 +172,14 @@ var userDataExportFiles = []userDataExportFile{
  'candidate_skins',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id,'name',name,'created_at',created_at) ORDER BY created_at) FROM community_candidate_skins WHERE owner_id=$1),'[]'::jsonb),
  'resources',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id,'kind',kind,'name',name,'created_at',created_at) ORDER BY created_at) FROM community_resources WHERE owner_id=$1),'[]'::jsonb),
  'plugins',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id,'kind',kind,'name',name,'created_at',created_at) ORDER BY created_at) FROM community_plugins WHERE owner_id=$1),'[]'::jsonb))`},
+	{"typing_statistics.json", `SELECT jsonb_build_object(
+ 'devices',COALESCE((SELECT jsonb_agg(jsonb_build_object('device',device,'platform',platform,'ranks',ranks,'beyond',beyond,'updated_at',updated_at) ORDER BY device) FROM typing_statistics_devices WHERE user_id=$1),'[]'::jsonb),
+ 'days',COALESCE((SELECT jsonb_agg(jsonb_build_object('device',device,'day',day,'characters',characters,'active_seconds',active_seconds,'hours',hours,'categories',categories,'sources',sources) ORDER BY day,device) FROM typing_statistics_days WHERE user_id=$1),'[]'::jsonb),
+ 'qq_links',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id::text,'created_at',created_at) ORDER BY created_at) FROM qq_account_links WHERE user_id=$1),'[]'::jsonb))`},
 	{"sessions.json", `SELECT COALESCE(jsonb_agg(jsonb_build_object('user_agent',user_agent,'created_at',created_at,'revoked',revoked,'expires_at',expires_at) ORDER BY created_at DESC),'[]'::jsonb) FROM auth_sessions WHERE user_id=$1`},
 }
 
-// userDataExport 处理 GET /v1/users/me/data/export：把本人的数据流式写成 zip（profile、preferences、dictionary.ndjson、phrases、clipboard、community、sessions）。每用户每天 userDataExportsPerDay 次。开始写响应后出错只能中断连接，客户端会拿到不完整的 zip 而不是一个看似完整的包。内容不写日志。
+// userDataExport 处理 GET /v1/users/me/data/export：把本人的数据流式写成 zip（profile、preferences、dictionary.ndjson、phrases、clipboard、community、typing_statistics、sessions）。每用户每天 userDataExportsPerDay 次。开始写响应后出错只能中断连接，客户端会拿到不完整的 zip 而不是一个看似完整的包。内容不写日志。
 func (a *Service) userDataExport(w http.ResponseWriter, r *http.Request) {
 	p, ok := a.principal(w, r, false)
 	if !ok {

@@ -27,6 +27,7 @@ const (
 /add 扛把子 kang ba zi　某个词打不出来，投稿到词库
 /doc FAQ 没写鸿蒙版怎么下载　文档缺了什么或写错了
 /docs 使用文档和下载地址
+/stats 我的打字数据，先发 /bind 绑定水杉账号
 觉得我答错了，@我 说「不对」，我会重新查。`
 	qqMCPHelpText = `群内可以查发布词库和公共数据，直接 @我 提问，例如：
 查 nihao 的候选词，最多 5 个
@@ -202,10 +203,10 @@ func qqIssueRef(text string) []string {
 	return qqIssueRefPattern.FindStringSubmatch(strings.TrimSpace(qqFoldWidth(text)))
 }
 
-// qqFreeCommand 判断消息是不是不调模型的命令：帮助、版本、草稿列表和「#编号」。handleQQFeedback 把它们排在个人和群的额度之前，只按人计一个宽松的 qqBotFreeDaily：群额度用完后，新人发「帮助」原来只能收到「额度用完了」，刚上手多试几个命令也在花自己交给模型的额度。版本和「#编号」要读 GitHub，但读请求有缓存。
+// qqFreeCommand 判断消息是不是不调模型的命令：帮助、版本、打字数据和绑定、草稿列表和「#编号」。handleQQFeedback 把它们排在个人和群的额度之前，只按人计一个宽松的 qqBotFreeDaily：群额度用完后，新人发「帮助」原来只能收到「额度用完了」，刚上手多试几个命令也在花自己交给模型的额度。版本和「#编号」要读 GitHub，但读请求有缓存。
 func qqFreeCommand(text string) bool {
 	compact := qqCompact(text)
-	return slices.Contains(qqHelpAliases, compact) || slices.Contains(qqReleaseAliases, compact) || compact == "草稿" || compact == "草稿列表" || qqIssueRef(text) != nil || qqSlashFreeCommand(text)
+	return slices.Contains(qqHelpAliases, compact) || slices.Contains(qqReleaseAliases, compact) || slices.Contains(qqTypingAliases, compact) || slices.Contains(qqBindAliases, compact) || slices.Contains(qqUnbindAliases, compact) || compact == "草稿" || compact == "草稿列表" || qqIssueRef(text) != nil || qqSlashFreeCommand(text)
 }
 
 // qqCommandSeparators 是命令词和参数之间可以有的分隔符。
@@ -302,6 +303,9 @@ func qqCommandPrefixEqualFold(prefix, word string) bool {
 // qqCommand 处理群里的命令，返回处理结果的名字（写进每条消息的处理日志，见 handleQQFeedback），不是命令时返回空字符串。progress 发过渡语，同一条消息只发一句（见 handleQQFeedback）。
 func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, admin bool, reply, progress func(string)) string {
 	if command := s.qqSlashCommand(ctx, m, text, admin, reply, progress); command != "" {
+		return command
+	}
+	if command := s.qqTypingCommands(ctx, m, text, reply); command != "" {
 		return command
 	}
 	if command := s.qqDraftCommands(ctx, m, text, admin, reply); command != "" {

@@ -15,7 +15,14 @@ type overviewBody struct {
 	DownloadsPrev30d int   `json:"downloads_prev_30d"`
 	RangeDays        int   `json:"range_days"`
 	Daily            []any `json:"daily"`
-	Telemetry        struct {
+	EmailDelivery    []struct {
+		Day       string `json:"day"`
+		Attempted int    `json:"attempted"`
+		Accepted  int    `json:"accepted"`
+		Rejected  int    `json:"rejected"`
+		Failed    int    `json:"failed"`
+	} `json:"email_delivery"`
+	Telemetry struct {
 		Active   bool `json:"active"`
 		Sessions bool `json:"sessions"`
 	} `json:"telemetry"`
@@ -57,7 +64,7 @@ type overviewService struct {
 func overviewTestService(t *testing.T) *Service {
 	t.Helper()
 	db := testStore(t)
-	if _, err := db.pool.Exec(context.Background(), `TRUNCATE admin_events,admin_crash_groups,admin_service_daily,admin_incidents CASCADE`); err != nil {
+	if _, err := db.pool.Exec(context.Background(), `TRUNCATE admin_events,admin_crash_groups,admin_service_daily,admin_incidents,admin_email_delivery_daily CASCADE`); err != nil {
 		t.Fatal(err)
 	}
 	return &Service{store: db}
@@ -80,12 +87,17 @@ func TestOverviewWithoutClientTelemetry(t *testing.T) {
 	if body.Telemetry.Active || body.Telemetry.Sessions || body.CrashFreeRate != nil || body.CrashTop != nil || body.CrashGroupLatest != nil || body.ActiveDevices7d != 0 || len(body.PlatformActive7d) != 0 {
 		t.Fatalf("telemetry without events %+v", body)
 	}
-	if len(body.ActiveDevicesDaily) != 7 || len(body.Daily) != 7 || body.RangeDays != 7 {
+	if len(body.ActiveDevicesDaily) != 7 || len(body.Daily) != 7 || len(body.EmailDelivery) != 7 || body.RangeDays != 7 {
 		t.Fatalf("series length %+v", body)
 	}
 	for _, day := range body.ActiveDevicesDaily {
 		if day.Windows+day.MacLinux+day.Mobile != 0 || len(day.Day) != 10 {
 			t.Fatalf("empty day %+v", day)
+		}
+	}
+	for _, day := range body.EmailDelivery {
+		if day.Attempted+day.Accepted+day.Rejected+day.Failed != 0 || len(day.Day) != 10 {
+			t.Fatalf("空邮件统计日错误 %+v", day)
 		}
 	}
 	if body.ServicesConfigured || len(body.Services) != 0 || body.Pending["community"] != 0 || body.Pending["crash_groups"] != 0 {
@@ -120,6 +132,9 @@ INSERT INTO admin_service_daily(service,day,ok_minutes,total_minutes,degraded,p9
  ('chat',current_date,500,600,true,1800),
  ('stt',current_date,0,30,true,NULL),
  ('stale',current_date,10,10,false,1);
+INSERT INTO admin_email_delivery_daily(day,attempted,accepted,rejected,failed) VALUES
+ ((now() AT TIME ZONE 'UTC')::date,12,8,3,1),
+ ((now() AT TIME ZONE 'UTC')::date-1,4,4,0,0);
 INSERT INTO admin_incidents(service,title) VALUES('translation','翻译超时'),('stt','语音识别中断')`); err != nil {
 		t.Fatal(err)
 	}
@@ -149,6 +164,9 @@ INSERT INTO admin_incidents(service,title) VALUES('translation','翻译超时'),
 	}
 	if body.Downloads != 3 || body.Downloads30d != 1 || body.DownloadsPrev30d != 2 {
 		t.Fatalf("downloads %+v", body)
+	}
+	if len(body.EmailDelivery) != 30 || body.EmailDelivery[29].Attempted != 12 || body.EmailDelivery[29].Accepted != 8 || body.EmailDelivery[29].Rejected != 3 || body.EmailDelivery[29].Failed != 1 || body.EmailDelivery[28].Attempted != 4 {
+		t.Fatalf("邮件投递统计 %+v", body.EmailDelivery)
 	}
 	// The macOS aliases fold together and outrank iOS; the older Android crashes are outside the 7-day window.
 	if top := body.CrashTop; top == nil || top.Platform != "macos" || top.Version != "2" || top.Crashes != 2 {

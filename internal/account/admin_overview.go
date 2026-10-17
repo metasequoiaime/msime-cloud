@@ -93,7 +93,11 @@ func (a *Service) adminOverview(w http.ResponseWriter, r *http.Request, _ string
        AND kind IN ('download','crash')
      GROUP BY 1
    ) SELECT json_agg(json_build_object('day',to_char(overview_days.d AT TIME ZONE 'UTC','YYYY-MM-DD'),'users',COALESCE(user_daily.users,0),'downloads',COALESCE(event_daily.downloads,0),'crashes',COALESCE(event_daily.crashes,0)) ORDER BY overview_days.d)
-   FROM overview_days LEFT JOIN user_daily USING(d) LEFT JOIN event_daily USING(d)), 'range_days',$1,
+   FROM overview_days LEFT JOIN user_daily USING(d) LEFT JOIN event_daily USING(d)),
+   'email_delivery',(WITH email_days AS (
+     SELECT d::date AS day FROM generate_series((date_trunc('day',now() AT TIME ZONE 'UTC')::date-($1-1)),date_trunc('day',now() AT TIME ZONE 'UTC')::date,interval '1 day') d
+   ) SELECT json_agg(json_build_object('day',to_char(email_days.day,'YYYY-MM-DD'),'attempted',COALESCE(stats.attempted,0),'accepted',COALESCE(stats.accepted,0),'rejected',COALESCE(stats.rejected,0),'failed',COALESCE(stats.failed,0)) ORDER BY email_days.day)
+   FROM email_days LEFT JOIN admin_email_delivery_daily stats ON stats.day=email_days.day), 'range_days',$1,
    'downloads_30d',(SELECT count(*) FROM admin_events WHERE kind='download' AND created_at>=now()-interval '30 days'),
    'downloads_prev_30d',(SELECT count(*) FROM admin_events WHERE kind='download' AND created_at>=now()-interval '60 days' AND created_at<now()-interval '30 days'),
    'telemetry',json_build_object(

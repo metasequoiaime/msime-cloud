@@ -641,7 +641,9 @@ func (a *Service) begin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !reused {
-			if e := a.sender.Send(r.Context(), v.Provider, c.Subject, code); e != nil {
+			e = a.sender.Send(r.Context(), v.Provider, c.Subject, code)
+			a.recordEmailDelivery(v.Provider, e)
+			if e != nil {
 				a.store.DropChallenge(r.Context(), c.IDHash)
 				if permanentDeliveryFailure(e) {
 					a.suppressDeliveryTarget(r.Context(), v.Provider, target)
@@ -674,7 +676,9 @@ func (a *Service) begin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if code != "" {
-		if e := a.sender.Send(r.Context(), v.Provider, c.Subject, code); e != nil {
+		e := a.sender.Send(r.Context(), v.Provider, c.Subject, code)
+		a.recordEmailDelivery(v.Provider, e)
+		if e != nil {
 			a.store.DropChallenge(r.Context(), c.IDHash)
 			a.error(w, e)
 			return

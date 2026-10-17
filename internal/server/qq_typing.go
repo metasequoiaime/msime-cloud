@@ -32,10 +32,10 @@ var (
 // qqTypingDays 是读出的天数：近 7 天和上一个 7 天用来比较，再往前是为了数连续打字的天数，不超过服务端的保留期。
 const qqTypingDays = 60
 
-// qqTypingBindPath 是在客户端里输入绑定码的说法，qqTypingUploadPath 是打开上传的位置，写进回复，和客户端的界面名称一致。桌面端的账号页在各平台都叫「账号与同步」。这两个入口只在包含它们的桌面端版本里有，手机端暂时没有，所以回复里说清楚设置里还没有这一项时该怎么办，不写具体版本号（发版后会过时）。
+// qqTypingBindPath 是在客户端里输入绑定码的说法，qqTypingUploadPath 是打开上传的位置，写进回复，和各平台的界面名称一致：桌面端（macOS、Linux、Windows）在设置的「账号与同步」和「打字统计」，手机端（Android、iOS、鸿蒙）在底部的「我的」（鸿蒙叫「我」）和「统计」。旧版本还没有这两个入口，回复里只说「先更新」，不写具体版本号（发版后会过时）。
 const (
-	qqTypingBindPath   = "打开设置里的「账号与同步」，在「绑定 QQ 群助手」里输入它（设置里还没有这一项的话，等桌面端更新；手机端暂时没有）"
-	qqTypingUploadPath = "「设置 → 打字统计」里的「上传到云端」"
+	qqTypingBindPath   = "在「绑定 QQ 群助手」里输入它（桌面端在设置的「账号与同步」，手机端在底部的「我的」或「我」；找不到这一项就先更新水杉输入法）"
+	qqTypingUploadPath = "打字统计页的「上传到云端」（桌面端在设置的「打字统计」，手机端在底部的「统计」）"
 )
 
 // qqTypingSourceNames 是输入来源在回复里的叫法，和客户端统计页一致；不认识的来源照写 id。
@@ -118,13 +118,15 @@ func qqTypingToday(now time.Time) time.Time {
 //
 //	【选词】首选一次就中 81%，前三个以内 96%（累计）
 //
-// 纯文本，段标题加空行分段：群聊发 Markdown 要内邀开通。
+//	（只统计打开了「上传到云端」的设备，现在有 2 台；别的设备要各自打开）
+//
+// 最后一句是因为上传开关只存在本机：在电脑上打开了，手机不会跟着打开，用户常以为打开一次就全算进去了。纯文本，段标题加空行分段：群聊发 Markdown 要内邀开通。
 func qqTypingCard(report account.QQTypingReport, today time.Time) string {
 	if !report.Linked {
 		return "还没绑定水杉账号。@我 发 /bind 拿绑定码，在水杉输入法里输入后就能查。"
 	}
 	if report.Devices == 0 {
-		return fmt.Sprintf("已绑定「%s」，但还没有上传过打字统计。在水杉输入法%s打开（设置里还没有的话，等桌面端更新），过几分钟再来。", report.DisplayName, qqTypingUploadPath)
+		return fmt.Sprintf("已绑定「%s」，但还没有上传过打字统计。\n在水杉输入法里打开%s，过几分钟再来。每台设备要各自打开；找不到这一项就先更新水杉输入法。", report.DisplayName, qqTypingUploadPath)
 	}
 	days := map[string]account.TypingDay{}
 	for _, d := range report.Days {
@@ -178,6 +180,7 @@ func qqTypingCard(report account.QQTypingReport, today time.Time) string {
 	if line := qqTypingSelections(report.Selections); line != "" {
 		lines = append(lines, "【选词】"+line)
 	}
+	lines = append(lines, fmt.Sprintf("（只统计打开了「上传到云端」的设备，现在有 %d 台；别的设备要各自打开）", report.Devices))
 	return strings.Join(lines, "\n\n")
 }
 

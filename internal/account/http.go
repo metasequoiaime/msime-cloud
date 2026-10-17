@@ -482,6 +482,23 @@ func (a *Service) codeHash(challenge, code string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
+// refundDeliveryReservation 只在尚未交给邮件供应商，或供应商在 RCPT 阶段明确拒收时退回全站额度。
+func (a *Service) refundDeliveryReservation(parent context.Context, release func(context.Context) error) {
+	if release == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 3*time.Second)
+	defer cancel()
+	_ = release(ctx)
+}
+
+// suppressDeliveryTarget 记录明确无效的收件目标；退信发生在 DATA 之后时没有同步证据，不能在这里误记。
+func (a *Service) suppressDeliveryTarget(parent context.Context, provider, target string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 3*time.Second)
+	defer cancel()
+	_ = a.store.SuppressDelivery(ctx, provider, target, "smtp_rcpt_rejected", deliverySuppressionTTL)
+}
+
 // verificationCode 使用随机种子和服务端密钥生成六位验证码。相同目标复用有效挑战时，种子保持不变，因此不会再次发送邮件。
 func (a *Service) verificationCode(provider, target, seed string) string {
 	mac := hmac.New(sha256.New, []byte(os.Getenv(a.config.PepperEnv)))
@@ -581,6 +598,15 @@ func (a *Service) begin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		c.Subject = target
+		suppressed, e := a.store.DeliverySuppressed(r.Context(), v.Provider, target)
+		if e != nil {
+			a.error(w, e)
+			return
+		}
+		if suppressed {
+			writeError(w, 503, "delivery_failed")
+			return
+		}
 		for _, lim := range []struct {
 			key    string
 			n      int
@@ -596,8 +622,10 @@ func (a *Service) begin(w http.ResponseWriter, r *http.Request) {
 			a.error(w, e)
 			return
 		}
+		var releaseGlobal func(context.Context) error
 		if !reused {
-			if e = a.store.Rate(r.Context(), "delivery-global", deliveryGlobalDailyLimit, 24*time.Hour); e != nil {
+			releaseGlobal, _, e = a.reserveRateKey(r.Context(), "delivery-global", deliveryGlobalDailyLimit, 24*time.Hour)
+			if e != nil {
 				a.error(w, e)
 				return
 			}
@@ -608,12 +636,17 @@ func (a *Service) begin(w http.ResponseWriter, r *http.Request) {
 		c.CodeHash = a.codeHash(id, code)
 		response["reused"] = reused
 		if e = a.store.PutChallenge(r.Context(), c); e != nil {
+			a.refundDeliveryReservation(r.Context(), releaseGlobal)
 			a.error(w, e)
 			return
 		}
 		if !reused {
 			if e := a.sender.Send(r.Context(), v.Provider, c.Subject, code); e != nil {
 				a.store.DropChallenge(r.Context(), c.IDHash)
+				if permanentDeliveryFailure(e) {
+					a.suppressDeliveryTarget(r.Context(), v.Provider, target)
+					a.refundDeliveryReservation(r.Context(), releaseGlobal)
+				}
 				a.error(w, e)
 				return
 			}

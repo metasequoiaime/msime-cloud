@@ -94,19 +94,30 @@ func (a *Service) downloadLink(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "no_verified_email")
 		return
 	}
+	suppressed, err := a.store.DeliverySuppressed(r.Context(), "email", email)
+	if err != nil {
+		a.error(w, err)
+		return
+	}
+	if suppressed {
+		writeError(w, 503, "delivery_failed")
+		return
+	}
 	for _, lim := range downloadLinkLimits {
 		if err = a.store.Rate(r.Context(), lim.key+":"+hash(p.UserID), lim.n, lim.window); err != nil {
 			a.error(w, err)
 			return
 		}
 	}
-	if err = a.store.Rate(r.Context(), "delivery-global", deliveryGlobalDailyLimit, 24*time.Hour); err != nil {
+	releaseGlobal, _, err := a.reserveRateKey(r.Context(), "delivery-global", deliveryGlobalDailyLimit, 24*time.Hour)
+	if err != nil {
 		a.error(w, err)
 		return
 	}
 	// 限流在事务前独立计数，避免持有连接时再申请同一连接池；发送失败仍消耗额度。
 	tx, err := a.store.userDataTransaction(r.Context(), p.UserID)
 	if err != nil {
+		a.refundDeliveryReservation(r.Context(), releaseGlobal)
 		a.error(w, err)
 		return
 	}
@@ -114,15 +125,32 @@ func (a *Service) downloadLink(w http.ResponseWriter, r *http.Request) {
 	// 发信前在用户锁内重新读取邮箱，保证等待期间提交的封禁或身份变更生效。
 	email, err = verifiedEmailQuery(r.Context(), tx, p.UserID)
 	if err != nil {
+		a.refundDeliveryReservation(r.Context(), releaseGlobal)
 		a.error(w, err)
 		return
 	}
 	if email == "" {
+		a.refundDeliveryReservation(r.Context(), releaseGlobal)
 		writeError(w, 409, "no_verified_email")
+		return
+	}
+	suppressed, err = a.store.DeliverySuppressed(r.Context(), "email", email)
+	if err != nil {
+		a.refundDeliveryReservation(r.Context(), releaseGlobal)
+		a.error(w, err)
+		return
+	}
+	if suppressed {
+		a.refundDeliveryReservation(r.Context(), releaseGlobal)
+		writeError(w, 503, "delivery_failed")
 		return
 	}
 	subject, body := downloadLinkMessage(v.Platform)
 	if err = a.mailer.Mail(r.Context(), email, subject, body); err != nil {
+		if permanentDeliveryFailure(err) {
+			a.suppressDeliveryTarget(r.Context(), "email", email)
+			a.refundDeliveryReservation(r.Context(), releaseGlobal)
+		}
 		writeError(w, 503, "delivery_failed")
 		return
 	}

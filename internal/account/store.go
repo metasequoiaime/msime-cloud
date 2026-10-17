@@ -276,7 +276,9 @@ func (s *Store) Ready(ctx context.Context) error {
  LEFT JOIN site_settings ss ON false
  LEFT JOIN auth_identities ai ON false AND ai.email_verified AND ai.email||ai.name||ai.picture||u.avatar_key='' AND ai.updated_at IS NULL
  LEFT JOIN auth_challenges ch ON false AND ch.code_verifier||ch.redirect_uri=''
- LEFT JOIN auth_provider_tokens pt ON false WHERE false`).Scan(&n); e != nil {
+ LEFT JOIN auth_provider_tokens pt ON false
+ LEFT JOIN auth_delivery_suppressions ds ON false AND ds.reason||ds.target_hash=''
+ WHERE false`).Scan(&n); e != nil {
 		return e
 	}
 	// 单独补加的索引不会被表和列探测发现；按实际表检查，确保旧库启动时补齐。
@@ -326,6 +328,8 @@ SELECT id,question,answer,state,ref,created_at,claimed_at FROM qq_faq_candidates
 SELECT kind,topic,detail,created_at FROM qq_improvement_events WHERE false;
 -- QQ 答疑从核对过的答案里学到的自测题；缺表时启动走迁移。
 SELECT question,answer,created_at FROM qq_selftest_cases WHERE false;
+-- SMTP 在 RCPT 阶段永久拒收的目标；缺表时启动走迁移。
+SELECT provider,target_hash,reason,created_at,expires_at FROM auth_delivery_suppressions WHERE false;
 -- QQ 答疑每天的处理结果计数；缺表时启动走迁移。
 SELECT day,outcome,count FROM qq_daily_stats WHERE false;
 -- 被群友说答错的回答；缺表或缺处理状态列时启动走迁移（状态列的命名 CHECK 和列在同一次迁移中加上，只探测列）。
@@ -505,6 +509,28 @@ ORDER BY expires_at LIMIT 1`, provider, subject).Scan(&seed)
 		return "", false, nil
 	}
 	return seed, err == nil, err
+}
+
+// DeliverySuppressed 判断目标是否因 SMTP 永久拒收而暂时禁止再次投递。
+func (s *Store) DeliverySuppressed(ctx context.Context, provider, target string) (bool, error) {
+	var suppressed bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS(
+ SELECT 1 FROM auth_delivery_suppressions
+ WHERE provider=$1 AND target_hash=$2 AND expires_at>clock_timestamp()
+)`, provider, hash(provider+":"+target)).Scan(&suppressed)
+	return suppressed, err
+}
+
+// SuppressDelivery 记录 SMTP 在 RCPT 阶段明确拒收的目标。只保存哈希，抑制期内不再消耗发信额度。
+func (s *Store) SuppressDelivery(ctx context.Context, provider, target, reason string, ttl time.Duration) error {
+	if ttl <= 0 {
+		return errors.New("无效的投递抑制期限")
+	}
+	_, err := s.pool.Exec(ctx, `INSERT INTO auth_delivery_suppressions(provider,target_hash,reason,expires_at)
+VALUES($1,$2,$3,clock_timestamp()+$4::interval)
+ON CONFLICT(provider,target_hash) DO UPDATE SET reason=EXCLUDED.reason,expires_at=GREATEST(auth_delivery_suppressions.expires_at,EXCLUDED.expires_at)`,
+		provider, hash(provider+":"+target), reason, ttl.String())
+	return err
 }
 func (s *Store) Attempt(ctx context.Context, id string) (Challenge, error) {
 	var c Challenge
@@ -904,7 +930,7 @@ SELECT banned,COALESCE((SELECT avatar_key FROM removed),'') FROM locked`, uid).S
 }
 func (s *Store) Prune(ctx context.Context) {
 	batch := &pgx.Batch{}
-	for _, q := range []string{"DELETE FROM admin_login_flows WHERE expires_at<now()", "DELETE FROM admin_sessions WHERE expires_at<now()", "DELETE FROM admin_tokens WHERE expires_at<now()", "DELETE FROM auth_challenges WHERE expires_at<now()", "DELETE FROM auth_rates WHERE expires_at<now()", "DELETE FROM auth_sessions WHERE expires_at<now()", "DELETE FROM skin_jobs WHERE expires_at<now()",
+	for _, q := range []string{"DELETE FROM admin_login_flows WHERE expires_at<now()", "DELETE FROM admin_sessions WHERE expires_at<now()", "DELETE FROM admin_tokens WHERE expires_at<now()", "DELETE FROM auth_challenges WHERE expires_at<now()", "DELETE FROM auth_rates WHERE expires_at<now()", "DELETE FROM auth_delivery_suppressions WHERE expires_at<now()", "DELETE FROM auth_sessions WHERE expires_at<now()", "DELETE FROM skin_jobs WHERE expires_at<now()",
 		// 诊断快照到期即删，访问记录随外键一起删除。
 		"DELETE FROM diagnostic_snapshots WHERE expires_at<now()",
 		// Activity heartbeats and session ends only feed the overview's last 60 days, so they are kept for telemetryActivityRetentionDays. Downloads and crashes stay: the cumulative counters and crash groups read them.

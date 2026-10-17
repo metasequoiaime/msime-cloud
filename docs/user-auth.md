@@ -88,7 +88,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE msime_migrator IN SCHEMA public GRANT USAGE, S
 
 ## 发送下载链接
 
-`POST /v1/users/me/download-link {"platform":"windows|macos|linux|harmony-pc|ios|android|harmony"}` 把固定模板的邮件发到账号已验证的邮箱：邮箱登录身份优先，其次是 `email_verified` 的 Google 邮箱。不接受收件地址，正文里只有 `https://msime.app/download/?release=<platform>`，不放任何用户输入。返回 202 `{"sent_to":"u***@example.com"}`；没有已验证邮箱返回 409 `no_verified_email`（客户端改用复制链接），邮件未配置返回 503 `provider_disabled`，发送失败返回 503 `delivery_failed`（不透传 SMTP 错误）。每个用户每小时 3 次、每天 10 次，同时计入验证码共用的全站每天 450 封。邮件与验证码共用同一套 SMTP 连接、认证和发送代码。收件人是 Apple 隐藏邮箱时，需要先在 Apple 后台登记发件域名的 Private Email Relay。
+`POST /v1/users/me/download-link {"platform":"windows|macos|linux|harmony-pc|ios|android|harmony"}` 把固定模板的邮件发到账号已验证的邮箱：邮箱登录身份优先，其次是 `email_verified` 的 Google 邮箱。不接受收件地址，正文里只有 `https://msime.app/download/?release=<platform>`，不放任何用户输入。返回 202 `{"sent_to":"u***@example.com"}`；没有已验证邮箱返回 409 `no_verified_email`（客户端改用复制链接），邮件未配置返回 503 `provider_disabled`，发送失败返回 503 `delivery_failed`（不透传 SMTP 错误）。每个用户每小时 3 次、每天 10 次，同时计入验证码共用的全站每天 450 封。邮件与验证码共用同一套 SMTP 连接、认证和发送代码。SMTP 在 `RCPT` 阶段明确永久拒收的地址会进入 30 天抑制表，后续请求直接返回 `delivery_failed`，并退回本次全站额度；邮件已被 `DATA` 接受后才产生的异步退信无法由 SMTP 同步接口判断，仍需依赖供应商的退信反馈处理。收件人是 Apple 隐藏邮箱时，需要先在 Apple 后台登记发件域名的 Private Email Relay。
 
 ## 云剪贴板保留与置顶
 

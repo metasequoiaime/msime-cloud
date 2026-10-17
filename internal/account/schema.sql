@@ -34,6 +34,13 @@ CREATE TABLE IF NOT EXISTS auth_rates (
  key text PRIMARY KEY, count integer NOT NULL, expires_at timestamptz NOT NULL
 );
 CREATE INDEX IF NOT EXISTS auth_rates_expiry ON auth_rates(expires_at);
+-- SMTP 在 RCPT 阶段明确拒收的目标进入短期抑制表；只保存哈希，避免把收件地址再复制一份。
+CREATE TABLE IF NOT EXISTS auth_delivery_suppressions (
+ provider text NOT NULL, target_hash text NOT NULL, reason text NOT NULL DEFAULT '',
+ created_at timestamptz NOT NULL DEFAULT now(), expires_at timestamptz NOT NULL,
+ PRIMARY KEY(provider, target_hash)
+);
+CREATE INDEX IF NOT EXISTS auth_delivery_suppressions_expiry ON auth_delivery_suppressions(expires_at);
 -- Google profile claims and the server-exchange flow (additive: old binaries ignore these columns and the defaults keep their inserts valid).
 ALTER TABLE auth_identities ADD COLUMN IF NOT EXISTS email text NOT NULL DEFAULT '';
 ALTER TABLE auth_identities ADD COLUMN IF NOT EXISTS email_verified boolean NOT NULL DEFAULT false;

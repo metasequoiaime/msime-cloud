@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/textproto"
 	"net/url"
 	"strings"
 	"testing"
@@ -57,6 +58,19 @@ func TestAliyunSMSRequestAndProviderRejection(t *testing.T) {
 		}
 	}
 }
+
+func TestSMTPPermanentRecipientFailure(t *testing.T) {
+	if !smtpPermanentError(&textproto.Error{Code: 550, Msg: "recipient rejected"}) {
+		t.Fatal("550 收件人拒收应判定为永久失败")
+	}
+	if smtpPermanentError(&textproto.Error{Code: 451, Msg: "try again later"}) {
+		t.Fatal("451 临时失败不得加入地址抑制表")
+	}
+	if !permanentDeliveryFailure(&deliveryFailure{permanent: true}) {
+		t.Fatal("永久投递失败标记丢失")
+	}
+}
+
 func TestSMTPRequiresSTARTTLSBeforeAuthentication(t *testing.T) {
 	listener, e := net.Listen("tcp", "127.0.0.1:0")
 	if e != nil {

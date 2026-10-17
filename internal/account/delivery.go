@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/smtp"
+	"net/textproto"
 	"os"
 	"strconv"
 	"strings"
@@ -26,6 +27,18 @@ type delivery struct {
 	smtpTLS     *tls.Config
 	smtpAddress string
 }
+
+// deliveryFailure 只在 SMTP 的 RCPT 阶段明确拒收收件地址时标记 permanent；DATA 之后的退信没有同步证据，不能误判成地址永久失效。
+type deliveryFailure struct{ permanent bool }
+
+func (e *deliveryFailure) Error() string { return "邮件发送失败" }
+
+func permanentDeliveryFailure(err error) bool {
+	var failure *deliveryFailure
+	return errors.As(err, &failure) && failure.permanent
+}
+
+const deliverySuppressionTTL = 30 * 24 * time.Hour
 
 // deliveryGlobalDailyLimit 对齐 Lark 的每日免费发信上限，下载链接和验证码共用这份额度。
 const deliveryGlobalDailyLimit = 450
@@ -47,6 +60,9 @@ func (d delivery) Send(ctx context.Context, channel, target, code string) error 
 	}
 	// SDK/SMTP 错误可能包含手机号、验证码或凭据，不向调用者透传。
 	if e != nil {
+		if permanentDeliveryFailure(e) {
+			return e
+		}
 		return errors.New("验证码发送失败")
 	}
 	return nil
@@ -84,7 +100,13 @@ type Mailer interface {
 
 // Mail 发送一封通知邮件；和 Send 一样不透传 SMTP 错误，因为其中可能含收件地址或凭据。
 func (d delivery) Mail(ctx context.Context, target, subject, body string) error {
-	if d.config.Email.From == "" || d.mail(ctx, target, subject, body) != nil {
+	if d.config.Email.From == "" {
+		return errors.New("邮件发送失败")
+	}
+	if e := d.mail(ctx, target, subject, body); e != nil {
+		if permanentDeliveryFailure(e) {
+			return e
+		}
 		return errors.New("邮件发送失败")
 	}
 	return nil
@@ -156,6 +178,9 @@ func (d delivery) smtpSend(client *smtp.Client, target, subject, body string) er
 		return e
 	}
 	if e := client.Rcpt(target); e != nil {
+		if smtpPermanentError(e) {
+			return &deliveryFailure{permanent: true}
+		}
 		return e
 	}
 	message := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n%s\r\n", from, target, mime.QEncoding.Encode("UTF-8", subject), base64.StdEncoding.EncodeToString([]byte(body)))
@@ -173,6 +198,11 @@ func (d delivery) smtpSend(client *smtp.Client, target, subject, body string) er
 	// DATA 已确认即视为成功；QUIT 失败不能触发重复投递。
 	_ = client.Quit()
 	return nil
+}
+
+func smtpPermanentError(err error) bool {
+	var smtpErr *textproto.Error
+	return errors.As(err, &smtpErr) && smtpErr.Code >= 500 && smtpErr.Code < 600
 }
 
 // mail 依次连接、认证、发送。

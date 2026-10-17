@@ -48,7 +48,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE msime_migrator IN SCHEMA public GRANT USAGE, S
 
 ## 登录与账号管理
 
-1. `POST /v1/auth/challenges`：`{"provider":"email","target":"user@example.com","purpose":"login"}`。返回 `challenge_id`，不会返回验证码。第三方登录省略 target。
+1. `POST /v1/auth/challenges`：`{"provider":"email","target":"user@example.com","purpose":"login"}`。返回 `challenge_id`，不会返回验证码。第三方登录省略 target。同一邮箱已有未过期验证码时，服务端为本次请求建立新的挑战但复用原验证码，不重复发送邮件；响应额外带 `reused:true`，首次发送为 `false` 或省略。验证码仍只在各自挑战上可用，5 分钟后失效。
 2. `POST /v1/auth/login`：`{"challenge_id":"...","credential":"..."}`。credential 为验证码、ID Token 或微信 code。首次有效登录自动创建账号，返回 access_token、refresh_token 和 user。
 3. 使用 `Authorization: Bearer <access_token>` 调用在线输入接口及 `GET /v1/users/me`。访问令牌有效期 15 分钟，会话最长 30 天。
 4. `POST /v1/auth/refresh`：提交 refresh_token，原访问令牌和刷新令牌立即失效。客户端应串行刷新。旧刷新令牌在被轮换后 30 秒内再次提交时，视为并发刷新输掉了竞争（官网 BFF、多个浏览器标签页同时刷新），返回 409 `refresh_superseded`，会话不撤销，调用方应改用并发请求已经拿到的新令牌，而不是重新登录；超过 30 秒的重放仍会撤销该会话，返回 401，需重新登录。会话已退出或已撤销时，30 秒内的旧令牌同样返回 401。令牌应存于操作系统安全存储，不放入 URL。轮换时间记在 `auth_used_refresh.used_at`，加列之前已轮换的令牌按超过 30 秒处理。
@@ -88,7 +88,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE msime_migrator IN SCHEMA public GRANT USAGE, S
 
 ## 发送下载链接
 
-`POST /v1/users/me/download-link {"platform":"windows|macos|linux|harmony-pc|ios|android|harmony"}` 把固定模板的邮件发到账号已验证的邮箱：邮箱登录身份优先，其次是 `email_verified` 的 Google 邮箱。不接受收件地址，正文里只有 `https://msime.app/download/?release=<platform>`，不放任何用户输入。返回 202 `{"sent_to":"u***@example.com"}`；没有已验证邮箱返回 409 `no_verified_email`（客户端改用复制链接），邮件未配置返回 503 `provider_disabled`，发送失败返回 503 `delivery_failed`（不透传 SMTP 错误）。每个用户每小时 3 次、每天 10 次，同时计入验证码共用的全站每天 500 封。邮件与验证码共用同一套 SMTP 连接、认证和发送代码。收件人是 Apple 隐藏邮箱时，需要先在 Apple 后台登记发件域名的 Private Email Relay。
+`POST /v1/users/me/download-link {"platform":"windows|macos|linux|harmony-pc|ios|android|harmony"}` 把固定模板的邮件发到账号已验证的邮箱：邮箱登录身份优先，其次是 `email_verified` 的 Google 邮箱。不接受收件地址，正文里只有 `https://msime.app/download/?release=<platform>`，不放任何用户输入。返回 202 `{"sent_to":"u***@example.com"}`；没有已验证邮箱返回 409 `no_verified_email`（客户端改用复制链接），邮件未配置返回 503 `provider_disabled`，发送失败返回 503 `delivery_failed`（不透传 SMTP 错误）。每个用户每小时 3 次、每天 10 次，同时计入验证码共用的全站每天 450 封。邮件与验证码共用同一套 SMTP 连接、认证和发送代码。收件人是 Apple 隐藏邮箱时，需要先在 Apple 后台登记发件域名的 Private Email Relay。
 
 ## 云剪贴板保留与置顶
 
@@ -113,6 +113,6 @@ ALTER DEFAULT PRIVILEGES FOR ROLE msime_migrator IN SCHEMA public GRANT USAGE, S
 
 `POST /v1/voice/contributions` 只在用户打开「贡献语音」后由客户端调用，需要用户会话（匿名账号也可以），设备令牌返回 401。multipart：`payload` 为 JSON `{"language","provider","duration_ms","transcript","app_version"}`（未知字段 400，`duration_ms` 1–60000，`transcript` 最多 2000 字符），`audio` 为 WAV（RIFF 结构校验）或 Ogg（起始页签名校验），最多 2 MiB。`duration_ms` 是客户端声明的时长，服务端只校验这个字段的范围，不解析媒体的实际时长；客户端须在上传前按音频采样计算时长，确保不超过 60 秒。返回 201 `{"id"}`。每个用户每小时 30 次（`auth_rates`，所有副本共享）。样本存在 `voice_contributions` 表，只用于改进语音识别，保留 180 天由清理任务删除，注销账号或删除云端数据的 `voice` 分区时一并删除；音频和文本不写日志。
 
-验证码最多尝试五次，每个目标每分钟一次、每小时五次、每天十次，全服务每天最多发送 500 次。邮箱地址统一转为小写。用户接口按客户端地址每分钟最多 120 次。客户端地址默认是 TCP 对端，不信任转发头；部署在反向代理后，把顶层 `client_ip_header` 设为代理覆盖写入的头（Cloudflare 为 `CF-Connecting-IP`；`X-Forwarded-For` 取最后一段），否则同一代理后的所有请求共享此额度。IPv6 按 /64 归为一个地址。官网的 BFF（Cloudflare Pages Functions）代访客调用接口，所有官网访客都从同一组 Cloudflare 出口过来；配置顶层 `site_proxy_secret_env`（指向保存共享密钥的环境变量，值为 32–256 个可见 ASCII 字符，必须与官网 Pages 的 Secret `SITE_PROXY_SECRET` 相同）后，请求头 `X-MSIME-Site-Proxy` 与该密钥相等（常量时间比较）的请求按 `X-MSIME-Client-IP` 中的访客地址计额度（须是合法 IP，IPv6 同样按 /64 归组），优先于 `client_ip_header`；密钥不符、未配置或地址不合法时这两个头被完全忽略。所有按地址的限额都经过同一个计算，所以账号接口、社区接口、匿名开户、遥测、后台登录和词条投稿都随之生效。匿名开户的每日限额（`auth.anonymous.daily_per_address`，默认 5）也按同一个地址计。公开的 `GET /v1/notices` 和 `GET /v1/site/download-mirrors` 另用一份每分钟 1200 次的额度，匿名的 `POST /v1/telemetry/events` 再用一份每分钟 60 次的额度，它们都不占用这 120 次。
+验证码最多尝试五次，每个目标每分钟一次、每小时五次、每天十次，全服务每天最多发送 450 次。邮箱地址统一转为小写。用户接口按客户端地址每分钟最多 120 次。客户端地址默认是 TCP 对端，不信任转发头；部署在反向代理后，把顶层 `client_ip_header` 设为代理覆盖写入的头（Cloudflare 为 `CF-Connecting-IP`；`X-Forwarded-For` 取最后一段），否则同一代理后的所有请求共享此额度。IPv6 按 /64 归为一个地址。官网的 BFF（Cloudflare Pages Functions）代访客调用接口，所有官网访客都从同一组 Cloudflare 出口过来；配置顶层 `site_proxy_secret_env`（指向保存共享密钥的环境变量，值为 32–256 个可见 ASCII 字符，必须与官网 Pages 的 Secret `SITE_PROXY_SECRET` 相同）后，请求头 `X-MSIME-Site-Proxy` 与该密钥相等（常量时间比较）的请求按 `X-MSIME-Client-IP` 中的访客地址计额度（须是合法 IP，IPv6 同样按 /64 归组），优先于 `client_ip_header`；密钥不符、未配置或地址不合法时这两个头被完全忽略。所有按地址的限额都经过同一个计算，所以账号接口、社区接口、匿名开户、遥测、后台登录和词条投稿都随之生效。匿名开户的每日限额（`auth.anonymous.daily_per_address`，默认 5）也按同一个地址计。公开的 `GET /v1/notices` 和 `GET /v1/site/download-mirrors` 另用一份每分钟 1200 次的额度，匿名的 `POST /v1/telemetry/events` 再用一份每分钟 60 次的额度，它们都不占用这 120 次。
 
 本地设置 `docs_enabled: true` 后，Swagger `/swagger/` 包含所有用户接口。生产环境默认关闭文档。未完成生产提供方配置时，不应宣称相应登录已经可用。测试使用本地签名 JWT、模拟短信和 SMTP 服务以及真实 PostgreSQL，不替代生产供应商联调。

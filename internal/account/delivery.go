@@ -26,6 +26,10 @@ type delivery struct {
 	smtpTLS     *tls.Config
 	smtpAddress string
 }
+
+// deliveryGlobalDailyLimit 对齐 Lark 的每日免费发信上限，下载链接和验证码共用这份额度。
+const deliveryGlobalDailyLimit = 450
+
 type contextTransport struct{ ctx context.Context }
 
 func (t contextTransport) RoundTrip(r *http.Request) (*http.Response, error) {

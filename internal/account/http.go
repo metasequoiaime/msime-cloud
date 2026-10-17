@@ -3,15 +3,14 @@ package account
 import (
 	"context"
 	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"github.com/metasequoiaime/MSIME-Backend/internal/engine"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 	"log/slog"
-	"math/big"
 	"net"
 	"net/http"
 	"net/mail"
@@ -19,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -482,6 +482,14 @@ func (a *Service) codeHash(challenge, code string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
+// verificationCode 使用随机种子和服务端密钥生成六位验证码。相同目标复用有效挑战时，种子保持不变，因此不会再次发送邮件。
+func (a *Service) verificationCode(provider, target, seed string) string {
+	mac := hmac.New(sha256.New, []byte(os.Getenv(a.config.PepperEnv)))
+	mac.Write([]byte("verification-code-v1:" + provider + ":" + target + ":" + seed))
+	n := strconv.FormatUint(uint64(binary.BigEndian.Uint32(mac.Sum(nil)))%1000000, 10)
+	return strings.Repeat("0", 6-len(n)) + n
+}
+
 var phoneTargetPattern = regexp.MustCompile(`^\+[1-9][0-9]{7,14}$`)
 
 func normalize(provider, target string) (string, error) {
@@ -583,18 +591,35 @@ func (a *Service) begin(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if e = a.store.Rate(r.Context(), "delivery-global", 500, 24*time.Hour); e != nil {
-			a.error(w, e)
-			return
-		}
-		n, e := rand.Int(rand.Reader, big.NewInt(1000000))
+		seed, reused, e := a.store.ActiveCodeSeed(r.Context(), v.Provider, target)
 		if e != nil {
 			a.error(w, e)
 			return
 		}
-		code = n.String()
-		code = strings.Repeat("0", 6-len(code)) + code
+		if !reused {
+			if e = a.store.Rate(r.Context(), "delivery-global", deliveryGlobalDailyLimit, 24*time.Hour); e != nil {
+				a.error(w, e)
+				return
+			}
+			seed = "code-v1:" + randomToken()
+		}
+		code = a.verificationCode(v.Provider, target, seed)
+		c.Nonce = seed
 		c.CodeHash = a.codeHash(id, code)
+		response["reused"] = reused
+		if e = a.store.PutChallenge(r.Context(), c); e != nil {
+			a.error(w, e)
+			return
+		}
+		if !reused {
+			if e := a.sender.Send(r.Context(), v.Provider, c.Subject, code); e != nil {
+				a.store.DropChallenge(r.Context(), c.IDHash)
+				a.error(w, e)
+				return
+			}
+		}
+		write(w, 201, response)
+		return
 	} else {
 		c.Nonce = randomToken()
 		response["nonce"] = c.Nonce

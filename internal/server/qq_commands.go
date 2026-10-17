@@ -21,12 +21,12 @@ import (
 const (
 	qqHelpText = `直接 @我 提问就行，可以附截图，也可以引用别人的消息再 @我。
 @我 再打「/」能选命令：
-/ver 各平台最新版本
+/ver 各平台最新版本　/docs 使用文档和下载地址
+/today 今天的农历、节气、假期和调休
 /mcp 查词库、注音、释义和公共数据的用法
 /issues 候选框 左上角　查有没有人报过（/issues 818 看进度）
 /add 扛把子 kang ba zi　某个词打不出来，投稿到词库
 /doc FAQ 没写鸿蒙版怎么下载　文档缺了什么或写错了
-/docs 使用文档和下载地址
 /stats 我的打字数据，先发 /bind 绑定水杉账号
 觉得我答错了，@我 说「不对」，我会重新查。`
 	qqMCPHelpText = `群内可以查发布词库和公共数据，直接 @我 提问，例如：
@@ -203,10 +203,10 @@ func qqIssueRef(text string) []string {
 	return qqIssueRefPattern.FindStringSubmatch(strings.TrimSpace(qqFoldWidth(text)))
 }
 
-// qqFreeCommand 判断消息是不是不调模型的命令：帮助、版本、打字数据和绑定、草稿列表和「#编号」。handleQQFeedback 把它们排在个人和群的额度之前，只按人计一个宽松的 qqBotFreeDaily：群额度用完后，新人发「帮助」原来只能收到「额度用完了」，刚上手多试几个命令也在花自己交给模型的额度。版本和「#编号」要读 GitHub，但读请求有缓存。
+// qqFreeCommand 判断消息是不是不调模型的命令：帮助、版本、今天、打字数据和绑定、草稿列表和「#编号」。handleQQFeedback 把它们排在个人和群的额度之前，只按人计一个宽松的 qqBotFreeDaily：群额度用完后，新人发「帮助」原来只能收到「额度用完了」，刚上手多试几个命令也在花自己交给模型的额度。版本和「#编号」要读 GitHub，但读请求有缓存。
 func qqFreeCommand(text string) bool {
 	compact := qqCompact(text)
-	return slices.Contains(qqHelpAliases, compact) || slices.Contains(qqReleaseAliases, compact) || slices.Contains(qqTypingAliases, compact) || slices.Contains(qqBindAliases, compact) || slices.Contains(qqUnbindAliases, compact) || compact == "草稿" || compact == "草稿列表" || qqIssueRef(text) != nil || qqSlashFreeCommand(text)
+	return slices.Contains(qqHelpAliases, compact) || slices.Contains(qqReleaseAliases, compact) || slices.Contains(qqTodayAliases, compact) || slices.Contains(qqTypingAliases, compact) || slices.Contains(qqBindAliases, compact) || slices.Contains(qqUnbindAliases, compact) || compact == "草稿" || compact == "草稿列表" || qqIssueRef(text) != nil || qqSlashFreeCommand(text)
 }
 
 // qqCommandSeparators 是命令词和参数之间可以有的分隔符。
@@ -344,6 +344,9 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 			reply(qqHelpText)
 		}
 		return "cmd_help"
+	case slices.Contains(qqTodayAliases, compact):
+		s.qqTodayCommand(ctx, reply)
+		return "cmd_today"
 	case slices.Contains(qqReleaseAliases, compact):
 		releases := strings.TrimSpace(qqReleasesForMembers(s.qqLatestReleases(ctx)))
 		if releases == "" {

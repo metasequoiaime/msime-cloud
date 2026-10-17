@@ -3,6 +3,7 @@
   "items": [
     {"type": "command", "name": "/help", "desc": "怎么用我"},
     {"type": "command", "name": "/ver", "desc": "各平台最新版本"},
+    {"type": "command", "name": "/today", "desc": "今天的农历、节气、假期和调休"},
     {"type": "command", "name": "/mcp", "desc": "词库和公共数据查询用法"},
     {"type": "command", "name": "/issues", "desc": "查 issue：后接关键词或编号"},
     {"type": "command", "name": "/add", "desc": "词打不出来：/add 词语 拼音"},

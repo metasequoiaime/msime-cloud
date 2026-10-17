@@ -9,7 +9,7 @@ import (
 	"github.com/6tail/tyme4go/tyme"
 )
 
-// 「今天」卡片（/today）。不调模型，按北京时间给出今天的农历、所处的节气和物候、接下来几天的节日、法定假日和调休，以及水杉最近三天的发版。万象小助手那类早安播报是一年进度条加一串倒数日，这里只写和今天有关、群友用得上的几行：节气写成「寒露第 10 天」而不是倒数，调休写成「明天调休上班」，不画进度条。农历、节气、七十二候和法定假日由 tyme4go 计算；法定假日的数据随库发版，库里还没有下一年的安排时不写假日那一行，不猜。
+// 「今天」卡片（/today）。只在群友 @机器人 时回复：QQ 开放平台从 2025-04-21 起不再提供主动推送，机器人没法每天定时发。群聊发 Markdown 要内邀开通，所以是纯文本，用「【节气】」这样的段标题加空行分段，不用符号画进度条。不调模型，按北京时间给出今天的农历、所处的节气和物候、接下来几天的节日、法定假日和调休，以及水杉最近三天的发版。万象小助手那类早安播报是一年进度条加一串倒数日，这里只写和今天有关、群友用得上的几行：节气写成「寒露第 10 天」而不是倒数，调休写成「明天调休上班」，不画进度条。农历、节气、七十二候和法定假日由 tyme4go 计算；法定假日的数据随库发版，库里还没有下一年的安排时不写假日那一行，不猜。
 
 // qqTodayAliases 是「今天」的各种说法，和 qqCompact 后的消息比较。
 var qqTodayAliases = []string{"今天", "今日", "日历", "农历", "today"}
@@ -38,35 +38,35 @@ func qqTodayCard(now time.Time, releases []qqPlatformRelease) string {
 		lines = append(lines, line)
 	}
 	if line := qqTodayHoliday(*day); line != "" {
-		lines = append(lines, line)
+		lines = append(lines, "【假期】"+line)
 	}
 	if line := qqTodayReleases(*day, releases); line != "" {
 		lines = append(lines, line)
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(lines, "\n\n")
 }
 
-// qqTodayHeadline 是第一行「10月17日 周六 · 农历九月初八 · 丙午马年」，今天是节日时接在后面。
+// qqTodayHeadline 是第一段：「【今天】10月17日 周六」，下一行「农历九月初八 · 丙午马年」，今天是节日时接在农历后面。
 func qqTodayHeadline(day tyme.SolarDay) string {
 	lunar := day.GetLunarDay()
 	// 年份按正月初一换，不用 GetYearSixtyCycle：那是按立春换的干支年，除夕前后会写成下一年。
 	year := lunar.GetLunarMonth().GetLunarYear().GetSixtyCycle()
-	line := fmt.Sprintf("%d月%d日 周%s · 农历%s%s · %s%s年", day.GetMonth(), day.GetDay(), day.GetWeek().GetName(), lunar.GetLunarMonth().GetName(), lunar.GetName(), year.GetName(), year.GetEarthBranch().GetZodiac().GetName())
+	line := fmt.Sprintf("【今天】%d月%d日 周%s\n农历%s%s · %s%s年", day.GetMonth(), day.GetDay(), day.GetWeek().GetName(), lunar.GetLunarMonth().GetName(), lunar.GetName(), year.GetName(), year.GetEarthBranch().GetZodiac().GetName())
 	if names := qqTodayFestivalNames(day); len(names) > 0 {
 		line += " · " + strings.Join(names, "、")
 	}
 	return line
 }
 
-// qqTodaySeason 是节气和物候那一行：「寒露第 10 天，二候『雀入大水为蛤』，6 天后霜降」；交节那天写「今天寒露」。数九和三伏期间接上「一九第 4 天」「初伏第 6 天」。
+// qqTodaySeason 是节气那一段：「【节气】寒露第 10 天」，下一行「二候「雀入大水为蛤」 · 6 天后霜降」；交节那天写「【节气】今天寒露」。数九和三伏期间接在物候后面：「一九第 4 天」「初伏第 6 天」。
 func qqTodaySeason(day tyme.SolarDay) string {
 	termDay := day.GetTermDay()
 	term := termDay.GetSolarTerm()
 	var parts []string
 	if termDay.GetDayIndex() == 0 {
-		parts = append(parts, "今天"+term.GetName())
+		parts = append(parts, "【节气】今天"+term.GetName())
 	} else {
-		parts = append(parts, fmt.Sprintf("%s第 %d 天", term.GetName(), termDay.GetDayIndex()+1))
+		parts = append(parts, fmt.Sprintf("【节气】%s第 %d 天", term.GetName(), termDay.GetDayIndex()+1))
 	}
 	phenology := day.GetPhenologyDay().GetPhenology()
 	parts = append(parts, fmt.Sprintf("%s「%s」", phenology.GetThreePhenology().GetName(), phenology.GetName()))
@@ -78,10 +78,10 @@ func qqTodaySeason(day tyme.SolarDay) string {
 	}
 	next := term.Next(1)
 	parts = append(parts, qqTodayAfter(next.GetSolarDay().Subtract(day))+next.GetName())
-	return strings.Join(parts, "，")
+	return parts[0] + "\n" + strings.Join(parts[1:], " · ")
 }
 
-// qqTodayFestivals 是往后 qqTodayFestivalDays 天里的节日：「明天重阳节」「5 天后中秋节、国庆节」。今天的节日写在第一行，不在这里重复。
+// qqTodayFestivals 是往后 qqTodayFestivalDays 天里的节日：「【近期】明天重阳节，5 天后中秋节、国庆节」。今天的节日写在第一行，不在这里重复。
 func qqTodayFestivals(day tyme.SolarDay) string {
 	var parts []string
 	for n := 1; n <= qqTodayFestivalDays; n++ {
@@ -89,7 +89,10 @@ func qqTodayFestivals(day tyme.SolarDay) string {
 			parts = append(parts, qqTodayAfter(n)+strings.Join(names, "、"))
 		}
 	}
-	return strings.Join(parts, "，")
+	if len(parts) == 0 {
+		return ""
+	}
+	return "【近期】" + strings.Join(parts, "，")
 }
 
 // qqTodayFestivalNames 是这一天的公历和农历节日。
@@ -104,7 +107,7 @@ func qqTodayFestivalNames(day tyme.SolarDay) []string {
 	return names
 }
 
-// qqTodayHoliday 是法定假日那一行，按优先级只写一句：放假中写「国庆节假期第 3 天，还剩 5 天」；今天或明天调休上班时写出来，周末上班最容易忘；否则写下一个假期还有几天。库里没有往后 qqTodayHolidayDays 天的安排时返回空字符串。
+// qqTodayHoliday 是法定假日那一行，按优先级只写一句：放假中写「国庆节假期第 3 天，还剩 5 天」；今天或明天调休上班时写出来，周末上班最容易忘；否则写「下一个是中秋节（9月25日起），还有 67 天」。段标题「【假期】」由 qqTodayCard 加。库里没有往后 qqTodayHolidayDays 天的安排时返回空字符串。
 func qqTodayHoliday(day tyme.SolarDay) string {
 	if h := day.GetLegalHoliday(); h != nil {
 		if h.IsWork() {
@@ -128,7 +131,7 @@ func qqTodayHoliday(day tyme.SolarDay) string {
 	for n := 1; n <= qqTodayHolidayDays; n++ {
 		next := day.Next(n)
 		if h := next.GetLegalHoliday(); h != nil && !h.IsWork() {
-			return fmt.Sprintf("下个假期：%s（%d月%d日起），还有 %d 天", h.GetName(), next.GetMonth(), next.GetDay(), n)
+			return fmt.Sprintf("下一个是%s（%d月%d日起），还有 %d 天", h.GetName(), next.GetMonth(), next.GetDay(), n)
 		}
 	}
 	return ""
@@ -140,7 +143,7 @@ func qqTodayRest(day tyme.SolarDay, name string) bool {
 	return h != nil && !h.IsWork() && h.GetName() == name
 }
 
-// qqTodayReleases 是水杉最近三天（北京时间的今天、昨天、前天）的发版：「水杉动态：Android 0.4.2 今天发布，Windows 预览 0.21.1 昨天发布」。只看 qqLatestReleases 已经挑出来的各平台最新正式版和预览版，版本号去掉 tag 前缀；没有就返回空字符串。
+// qqTodayReleases 是水杉最近三天（北京时间的今天、昨天、前天）的发版：「【水杉】Android 0.4.2 今天发布，Windows 预览 0.21.1 昨天发布」。只看 qqLatestReleases 已经挑出来的各平台最新正式版和预览版，版本号去掉 tag 前缀；没有就返回空字符串。
 func qqTodayReleases(day tyme.SolarDay, releases []qqPlatformRelease) string {
 	today := time.Date(day.GetYear(), time.Month(day.GetMonth()), day.GetDay(), 0, 0, 0, 0, qqStatsZone)
 	var parts []string
@@ -170,7 +173,7 @@ func qqTodayReleases(day tyme.SolarDay, releases []qqPlatformRelease) string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return "水杉动态：" + strings.Join(parts, "，")
+	return "【水杉】" + strings.Join(parts, "，")
 }
 
 // qqTodayAfter 是「明天」「后天」「5 天后」。

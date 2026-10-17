@@ -83,14 +83,10 @@ func TestQQTypingCard(t *testing.T) {
 		{"没上传", account.QQTypingReport{Linked: true, DisplayName: "一号"}, []string{"已绑定「一号」", qqTypingUploadPath}, nil},
 		{"最近 7 天没打字", account.QQTypingReport{Linked: true, DisplayName: "一号", Devices: 1, Days: qqTypingWeek(today, 0, 0, 0, 0, 0, 0, 0, 5)}, []string{"「一号」最近 7 天没有打字记录。"}, nil},
 		{"今天", full, []string{
-			"「一号」今天的打字数据",
-			"983 字，活跃 21 分钟，每分钟 47 字",
-			"最常在 22 点打字；全拼 68%，brandNew 22%，语音 6%",
-			"近 7 天 4,883 字，比上一周少 19%，已经连续 14 天",
-			"首选一次就中 81%，前三个以内 96%（累计）",
+			"【一号 · 今天】\n983 字 · 活跃 21 分钟 · 每分钟 47 字\n\n【习惯】最常在 22 点打字\n全拼 68% · brandNew 22% · 语音 6%\n\n【趋势】近 7 天 4,883 字，比上一周少 19%，已经连续 14 天\n\n【选词】首选一次就中 81%，前三个以内 96%（累计）",
 		}, []string{"五笔", "unknown"}},
 		{"今天没打字，写最近一天", account.QQTypingReport{Linked: true, DisplayName: "一号", Devices: 1, Days: qqTypingWeek(today, 0, 0, 1200, 1100), Selections: account.TypingSelections{Ranks: []int64{5}}},
-			[]string{"「一号」10月15日的打字数据", "1,200 字", "近 7 天 2,300 字，已经连续 2 天"}, []string{"活跃", "最常", "首选", "上一周"}},
+			[]string{"【一号 · 10月15日】\n1,200 字", "近 7 天 2,300 字，已经连续 2 天"}, []string{"活跃", "最常", "首选", "上一周"}},
 		{"和上一周一样", account.QQTypingReport{Linked: true, DisplayName: "一号", Devices: 1, Days: qqTypingWeek(today, 10, 0, 0, 0, 0, 0, 0, 10)}, []string{"近 7 天 10 字，和上一周差不多"}, []string{"连续"}},
 		{"比上一周多", account.QQTypingReport{Linked: true, DisplayName: "一号", Devices: 1, Days: qqTypingWeek(today, 30, 0, 0, 0, 0, 0, 0, 10)}, []string{"比上一周多 200%"}, nil},
 	} {
@@ -110,7 +106,7 @@ func TestQQTypingCard(t *testing.T) {
 	}
 	// 没有字符类别时速度按全部字数算；不认识的来源照写 id；每小时都是 0 时不写最常打字的钟点。
 	line := qqTypingVolume(account.TypingDay{Characters: 120, ActiveSeconds: 120})
-	if line != "120 字，活跃 2 分钟，每分钟 60 字" {
+	if line != "120 字 · 活跃 2 分钟 · 每分钟 60 字" {
 		t.Fatal(line)
 	}
 	if habits := qqTypingHabits(account.TypingDay{Sources: map[string]int64{"mystery": 10}}); habits != "mystery 100%" {
@@ -154,7 +150,7 @@ func TestQQBotTypingCommands(t *testing.T) {
 	}
 	typing.links["GROUP1/MEMBER3"] = true
 	typing.report = account.QQTypingReport{Linked: true, DisplayName: "三号", Devices: 1, Days: []account.TypingDay{{Day: "2026-10-17", Characters: 42}}}
-	if got := send("m-stats-b", "我的数据？"); !strings.Contains(got, "「三号」今天的打字数据\n42 字") || typing.since.Format(time.DateOnly) != "2026-08-19" {
+	if got := send("m-stats-b", "我的数据？"); !strings.Contains(got, "【三号 · 今天】\n42 字") || typing.since.Format(time.DateOnly) != "2026-08-19" {
 		t.Fatal(got, typing.since)
 	}
 	if got := send("m-unbind-a", "/unbind"); !strings.HasPrefix(got, "已解绑") {

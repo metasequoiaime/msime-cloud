@@ -13,14 +13,14 @@ func TestQQTodayCard(t *testing.T) {
 		want     []string
 		absent   []string
 	}{
-		{"寒露中，明天重阳节；库里还没有 2027 年元旦的安排", "2026-10-17T00:30:00Z", []string{"10月17日 周六 · 农历九月初八 · 丙午马年", "寒露第 10 天，二候「雀入大水为蛤」，6 天后霜降", "明天重阳节"}, []string{"调休", "下个假期"}},
-		{"交节当天", "2026-10-08T03:00:00Z", []string{"今天寒露，初候「鸿雁来宾」，15 天后霜降"}, nil},
-		{"放假中", "2026-10-03T03:00:00Z", []string{"国庆节假期第 3 天，还剩 4 天"}, []string{"下个假期"}},
+		{"寒露中，明天重阳节；库里还没有 2027 年元旦的安排", "2026-10-17T00:30:00Z", []string{"【今天】10月17日 周六\n农历九月初八 · 丙午马年\n\n【节气】寒露第 10 天\n二候「雀入大水为蛤」 · 6 天后霜降\n\n【近期】明天重阳节"}, []string{"调休", "【假期】"}},
+		{"交节当天", "2026-10-08T03:00:00Z", []string{"【节气】今天寒露\n初候「鸿雁来宾」 · 15 天后霜降"}, nil},
+		{"放假中", "2026-10-03T03:00:00Z", []string{"【假期】国庆节假期第 3 天，还剩 4 天"}, []string{"下一个是"}},
 		{"假期最后一天", "2026-10-07T03:00:00Z", []string{"国庆节假期最后一天", "明天寒露"}, nil},
-		{"明天调休上班", "2026-10-09T03:00:00Z", []string{"明天周六调休上班（国庆节）"}, []string{"下个假期"}},
+		{"明天调休上班", "2026-10-09T03:00:00Z", []string{"明天周六调休上班（国庆节）"}, []string{"下一个是"}},
 		{"今天调休上班", "2026-10-10T03:00:00Z", []string{"今天调休上班（国庆节）"}, nil},
 		{"除夕还是蛇年", "2026-02-16T03:00:00Z", []string{"农历十二月廿九 · 乙巳蛇年 · 除夕", "七九第 4 天", "明天春节", "春节假期第 2 天，还剩 7 天"}, nil},
-		{"三伏", "2026-07-20T03:00:00Z", []string{"初伏第 6 天", "下个假期：中秋节（9月25日起），还有 67 天"}, nil},
+		{"三伏", "2026-07-20T03:00:00Z", []string{"初伏第 6 天", "【假期】下一个是中秋节（9月25日起），还有 67 天"}, nil},
 		{"UTC 晚上已经是北京的明天，库里还没有 2027 年的假期", "2026-12-31T20:00:00Z", []string{"1月1日 周五", "元旦"}, []string{"假期", "调休"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -39,7 +39,7 @@ func TestQQTodayCard(t *testing.T) {
 					t.Errorf("不该有 %q：\n%s", absent, card)
 				}
 			}
-			if strings.Contains(card, "水杉动态") {
+			if strings.Contains(card, "【水杉】") {
 				t.Errorf("没有发版时不该有动态：\n%s", card)
 			}
 		})
@@ -54,7 +54,7 @@ func TestQQTodayReleases(t *testing.T) {
 		{Name: "Windows", Prefix: "v", Stable: &qqRelease{TagName: "v0.9.5", PublishedAt: "2026-10-14T15:59:00Z"}, NextGenPrefix: "windows-v", NextGen: []qqRelease{{TagName: "windows-v0.2.1", PublishedAt: "2026-10-14T16:00:00Z"}, {TagName: "windows-v0.2.2"}}},
 		{Name: "macOS", Prefix: "macos-v", Stable: &qqRelease{TagName: "macos-v0.52.0", PublishedAt: "坏的时间"}},
 	})
-	want := "水杉动态：Android 0.4.2 今天发布，Android 预览 0.4.3-beta 昨天发布，新版 Windows 预览 0.2.1 前天发布"
+	want := "\n\n【水杉】Android 0.4.2 今天发布，Android 预览 0.4.3-beta 昨天发布，新版 Windows 预览 0.2.1 前天发布"
 	if !strings.HasSuffix(card, want) {
 		t.Fatalf("want suffix %q:\n%s", want, card)
 	}
@@ -75,7 +75,7 @@ func TestQQBotTodayCommand(t *testing.T) {
 		s.qqWorkers.Wait()
 		texts := fake.replyTexts()
 		last := texts[len(texts)-1]
-		for _, want := range []string{"10月17日 周六 · 农历九月初八", "明天重阳节", "水杉动态：Android 0.4.2 昨天发布"} {
+		for _, want := range []string{"【今天】10月17日 周六\n农历九月初八", "【近期】明天重阳节", "【水杉】Android 0.4.2 昨天发布"} {
 			if !strings.Contains(last, want) {
 				t.Errorf("%q 缺少 %q：\n%s", text, want, last)
 			}

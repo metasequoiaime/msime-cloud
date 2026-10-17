@@ -32,9 +32,9 @@ var (
 // qqTypingDays 是读出的天数：近 7 天和上一个 7 天用来比较，再往前是为了数连续打字的天数，不超过服务端的保留期。
 const qqTypingDays = 60
 
-// qqTypingBindPath 是在客户端里输入绑定码的说法，qqTypingUploadPath 是打开上传的位置，写进回复，和客户端的界面名称一致。账号页在 macOS 和 Linux 上叫「账号」，在 Windows 上叫「账号与同步」，所以只说「账号页」并注明 Windows 的叫法。
+// qqTypingBindPath 是在客户端里输入绑定码的说法，qqTypingUploadPath 是打开上传的位置，写进回复，和客户端的界面名称一致。桌面端的账号页在各平台都叫「账号与同步」。这两个入口只在包含它们的桌面端版本里有，手机端暂时没有，所以回复里说清楚设置里还没有这一项时该怎么办，不写具体版本号（发版后会过时）。
 const (
-	qqTypingBindPath   = "打开设置的账号页（Windows 上叫「账号与同步」），在「绑定 QQ 群助手」里输入它"
+	qqTypingBindPath   = "打开设置里的「账号与同步」，在「绑定 QQ 群助手」里输入它（设置里还没有这一项的话，等桌面端更新；手机端暂时没有）"
 	qqTypingUploadPath = "「设置 → 打字统计」里的「上传到云端」"
 )
 
@@ -108,17 +108,23 @@ func qqTypingToday(now time.Time) time.Time {
 
 // qqTypingCard 是 /stats 的回复。没绑定、没上传、最近 7 天没打字时各回一句怎么办；否则写最近一个有数的日子（今天没打字时是之前最近的一天，标上日期）：
 //
-//	「一号」10月17日的打字数据
-//	983 字，活跃 21 分钟，每分钟 47 字
-//	最常在 22 点打字；全拼 92%，语音 8%
-//	近 7 天 5,210 字，比上一周多 12%，已经连续 5 天
-//	首选一次就中 81%，前三个以内 96%（累计）
+//	【一号 · 今天】
+//	983 字 · 活跃 21 分钟 · 每分钟 47 字
+//
+//	【习惯】最常在 22 点打字
+//	全拼 92% · 语音 8%
+//
+//	【趋势】近 7 天 5,210 字，比上一周多 12%，已经连续 5 天
+//
+//	【选词】首选一次就中 81%，前三个以内 96%（累计）
+//
+// 纯文本，段标题加空行分段：群聊发 Markdown 要内邀开通。
 func qqTypingCard(report account.QQTypingReport, today time.Time) string {
 	if !report.Linked {
 		return "还没绑定水杉账号。@我 发 /bind 拿绑定码，在水杉输入法里输入后就能查。"
 	}
 	if report.Devices == 0 {
-		return fmt.Sprintf("已绑定「%s」，但还没有上传过打字统计。在水杉输入法%s打开，过几分钟再来。", report.DisplayName, qqTypingUploadPath)
+		return fmt.Sprintf("已绑定「%s」，但还没有上传过打字统计。在水杉输入法%s打开（设置里还没有的话，等桌面端更新），过几分钟再来。", report.DisplayName, qqTypingUploadPath)
 	}
 	days := map[string]account.TypingDay{}
 	for _, d := range report.Days {
@@ -137,13 +143,13 @@ func qqTypingCard(report account.QQTypingReport, today time.Time) string {
 	}
 	d := day(latest)
 	date := today.AddDate(0, 0, -latest)
-	title := fmt.Sprintf("「%s」%d月%d日的打字数据", report.DisplayName, date.Month(), date.Day())
+	title := fmt.Sprintf("【%s · %d月%d日】", report.DisplayName, date.Month(), date.Day())
 	if latest == 0 {
-		title = fmt.Sprintf("「%s」今天的打字数据", report.DisplayName)
+		title = fmt.Sprintf("【%s · 今天】", report.DisplayName)
 	}
-	lines := []string{title, qqTypingVolume(d)}
+	lines := []string{title + "\n" + qqTypingVolume(d)}
 	if line := qqTypingHabits(d); line != "" {
-		lines = append(lines, line)
+		lines = append(lines, "【习惯】"+line)
 	}
 	var week, previous int64
 	for n := range 7 {
@@ -154,7 +160,7 @@ func qqTypingCard(report account.QQTypingReport, today time.Time) string {
 	for n := latest; n < qqTypingDays && day(n).Characters > 0; n++ {
 		streak++
 	}
-	trend := fmt.Sprintf("近 7 天 %s 字", qqThousands(week))
+	trend := fmt.Sprintf("【趋势】近 7 天 %s 字", qqThousands(week))
 	if previous > 0 {
 		switch change := (week - previous) * 100 / previous; {
 		case change > 0:
@@ -170,16 +176,16 @@ func qqTypingCard(report account.QQTypingReport, today time.Time) string {
 	}
 	lines = append(lines, trend)
 	if line := qqTypingSelections(report.Selections); line != "" {
-		lines = append(lines, line)
+		lines = append(lines, "【选词】"+line)
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(lines, "\n\n")
 }
 
-// qqTypingVolume 是「983 字，活跃 21 分钟，每分钟 47 字」。活跃时间不到一分钟时不算速度：几秒钟的活跃时间算出来的速度没有意义。
+// qqTypingVolume 是「983 字 · 活跃 21 分钟 · 每分钟 47 字」。活跃时间不到一分钟时不算速度：几秒钟的活跃时间算出来的速度没有意义。
 func qqTypingVolume(d account.TypingDay) string {
 	line := qqThousands(d.Characters) + " 字"
 	if d.ActiveSeconds >= 60 {
-		line += fmt.Sprintf("，活跃 %d 分钟", d.ActiveSeconds/60)
+		line += fmt.Sprintf(" · 活跃 %d 分钟", d.ActiveSeconds/60)
 		letters := d.Characters
 		if len(d.Categories) > 0 {
 			letters = 0
@@ -187,12 +193,12 @@ func qqTypingVolume(d account.TypingDay) string {
 				letters += d.Categories[kind]
 			}
 		}
-		line += fmt.Sprintf("，每分钟 %d 字", letters*60/d.ActiveSeconds)
+		line += fmt.Sprintf(" · 每分钟 %d 字", letters*60/d.ActiveSeconds)
 	}
 	return line
 }
 
-// qqTypingHabits 是「最常在 22 点打字；全拼 92%，语音 8%」：字数最多的钟点，和占比不低于 5% 的输入方式（最多三种，按占比从高到低）。两样都没有时返回空字符串。
+// qqTypingHabits 是「最常在 22 点打字」，下一行「全拼 92% · 语音 8%」：字数最多的钟点，和占比不低于 5% 的输入方式（最多三种，按占比从高到低）。两样都没有时返回空字符串。
 func qqTypingHabits(d account.TypingDay) string {
 	var parts []string
 	if len(d.Hours) == 24 {
@@ -227,9 +233,9 @@ func qqTypingHabits(d account.TypingDay) string {
 		sources = append(sources, fmt.Sprintf("%s %d%%", s.name, s.percent))
 	}
 	if len(sources) > 0 {
-		parts = append(parts, strings.Join(sources, "，"))
+		parts = append(parts, strings.Join(sources, " · "))
 	}
-	return strings.Join(parts, "；")
+	return strings.Join(parts, "\n")
 }
 
 // qqTypingSelections 是「首选一次就中 81%，前三个以内 96%（累计）」：客户端只记了全部历史的位次，所以标明是累计。选过不到 20 次时不写，样本太少。

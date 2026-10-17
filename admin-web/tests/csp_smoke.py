@@ -98,6 +98,7 @@ FIXTURES = {
     "/api/overview": {
         "users": 12, "new_users_30d": 3, "session_users": 4, "downloads": 4821, "crashes": 9, "open_crashes": 2, "skins": 5, "skin_downloads": 40, "plugins": 1, "plugin_downloads": 3,
         "dictionaries": 2, "replies": 1, "resource_saves": 6, "range_days": 30,
+        "email_delivery": [],
         "daily": [{"day": f"2026-09-{d:02d}", "users": 0, "downloads": d, "crashes": 0} for d in range(1, 31)],
         "downloads_30d": 410, "downloads_prev_30d": 380,
         "telemetry": {"active": True, "sessions": True},
@@ -340,35 +341,40 @@ def check_bytes(page):
 def check_list_pagination(context, base: str, problems: list[str]):
     from urllib.parse import parse_qs, urlencode, urlsplit
     # 通过真实页面发出的请求核验解析结果、翻页和筛选重置，不依赖工具函数实现。
-    for path, filters, filter_label, reset_filters in (
-        ("users", {"role": "reviewer"}, "维护者", {"role": "maintainer"}),
-        ("feedback", {"type": "bug", "status": "resolved", "platform": "android"}, "待处理", {"type": "bug", "status": "new", "platform": "android"}),
+    for path, filters, filter_label, reset_filters, unlimited_page in (
+        ("users", {"role": "reviewer"}, "维护者", {"role": "maintainer"}, False),
+        ("feedback", {"type": "bug", "status": "resolved", "platform": "android"}, "待处理", {"type": "bug", "status": "new", "platform": "android"}, False),
+        ("community", {"status": "approved"}, "已下架", {"status": "removed"}, True),
     ):
         page = context.new_page()
         page.on("pageerror", lambda error: problems.append(f"列表分页页面异常：{error}"))
-        endpoint = f"/api/{path}"
+        endpoint = "/api/skins" if path == "community" else f"/api/{path}"
         page.route("**/api/auth/session", lambda route: route.fulfill(json=FIXTURES["/api/auth/session"]))
-        page.route(f"**{endpoint}?*", lambda route: route.fulfill(json={**FIXTURES[endpoint], "total": 500000}))
+        page.route(f"**{endpoint}?*", lambda route: route.fulfill(json={**FIXTURES[endpoint], "total": 500000, "has_more": True if unlimited_page else FIXTURES[endpoint]["has_more"]}))
         try:
-            for raw, expected in ((None, 1), ("invalid", 1), ("-2", 1), ("10001", 10000), ("3suffix", 3)):
+            max_page = 10001 if unlimited_page else 10000
+            for raw, expected in ((None, 1), ("invalid", 1), ("-2", 1), ("10001", max_page), ("3suffix", 3)):
                 query = {**filters, **({"page": raw} if raw is not None else {})}
                 with page.expect_request(f"**{endpoint}?*") as sent:
                     page.goto(base + f"/{path}?" + urlencode(query))
                 params = parse_qs(urlsplit(sent.value.url).query)
                 assert params == {"page": [str(expected)], **{key: [value] for key, value in filters.items()}}, params
-                expect(page.get_by_text(f"第 {expected} / 10000 页 · 每页 50 条", exact=True)).to_be_visible()
+                pagination = f"第 {expected} / 10000 页 · " + ("共 500,000 项" if unlimited_page else "每页 50 条")
+                expect(page.get_by_text(pagination, exact=True)).to_be_visible()
                 if expected == 1:
                     expect(page.get_by_role("button", name="上一页", exact=True)).to_be_disabled()
-                if expected == 10000:
+                if expected == 10000 and not unlimited_page:
                     expect(page.get_by_role("button", name="下一页", exact=True)).to_be_disabled()
             with page.expect_request(f"**{endpoint}?*") as sent:
                 page.get_by_role("button", name="下一页", exact=True).click()
             assert parse_qs(urlsplit(sent.value.url).query) == {"page": ["4"], **{key: [value] for key, value in filters.items()}}
-            expect(page.get_by_text("第 4 / 10000 页 · 每页 50 条", exact=True)).to_be_visible()
+            pagination = "第 4 / 10000 页 · " + ("共 500,000 项" if unlimited_page else "每页 50 条")
+            expect(page.get_by_text(pagination, exact=True)).to_be_visible()
             with page.expect_request(f"**{endpoint}?*") as sent:
                 page.get_by_role("radio", name=filter_label, exact=False).click()
             assert parse_qs(urlsplit(sent.value.url).query) == {"page": ["1"], **{key: [value] for key, value in reset_filters.items()}}
-            expect(page.get_by_text("第 1 / 10000 页 · 每页 50 条", exact=True)).to_be_visible()
+            pagination = "第 1 / 10000 页 · " + ("共 500,000 项" if unlimited_page else "每页 50 条")
+            expect(page.get_by_text(pagination, exact=True)).to_be_visible()
             problems.extend(f"列表分页 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
         finally:
             page.close()

@@ -482,7 +482,7 @@ func (a *Service) codeHash(challenge, code string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// refundDeliveryReservation 只在尚未交给邮件供应商，或供应商在 RCPT 阶段明确拒收时退回全站额度。
+// refundDeliveryReservation 只在邮件尚未进入 DATA 阶段时退回全站额度；进入 DATA 后结果可能已经投递。
 func (a *Service) refundDeliveryReservation(parent context.Context, release func(context.Context) error) {
 	if release == nil {
 		return
@@ -645,6 +645,8 @@ func (a *Service) begin(w http.ResponseWriter, r *http.Request) {
 				a.store.DropChallenge(r.Context(), c.IDHash)
 				if permanentDeliveryFailure(e) {
 					a.suppressDeliveryTarget(r.Context(), v.Provider, target)
+				}
+				if deliveryMayRefund(e) {
 					a.refundDeliveryReservation(r.Context(), releaseGlobal)
 				}
 				a.error(w, e)

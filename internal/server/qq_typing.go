@@ -32,9 +32,9 @@ var (
 // qqTypingDays 是读出的天数：近 7 天和上一个 7 天用来比较，再往前是为了数连续打字的天数，不超过服务端的保留期。
 const qqTypingDays = 60
 
-// qqTypingSettingsPath 是客户端里输入绑定码和打开上传的位置，写进回复。
+// qqTypingBindPath 是在客户端里输入绑定码的说法，qqTypingUploadPath 是打开上传的位置，写进回复，和客户端的界面名称一致。账号页在 macOS 和 Linux 上叫「账号」，在 Windows 上叫「账号与同步」，所以只说「账号页」并注明 Windows 的叫法。
 const (
-	qqTypingBindPath   = "「设置 → 账号 → 绑定 QQ 群助手」"
+	qqTypingBindPath   = "打开设置的账号页（Windows 上叫「账号与同步」），在「绑定 QQ 群助手」里输入它"
 	qqTypingUploadPath = "「设置 → 打字统计」里的「上传到云端」"
 )
 
@@ -75,7 +75,7 @@ func (s *Server) qqTypingCommands(ctx context.Context, m qqGroupMessage, text st
 			reply(qqReplyUnavailable)
 			return command
 		}
-		reply(fmt.Sprintf("绑定码 %s，%d 分钟内有效，只能用一次。\n在水杉输入法里登录账号，打开%s输入它；绑好后 @我 发 /stats 看打字数据。\n/stats 的回复群里所有人都看得到，不想公开就别绑，随时可以发 /unbind 解绑。", code, int(account.QQLinkCodeTTL.Minutes()), qqTypingBindPath))
+		reply(fmt.Sprintf("绑定码 %s，%d 分钟内有效，只能用一次。\n在水杉输入法里登录账号，%s；绑好后 @我 发 /stats 看打字数据。\n/stats 的回复群里所有人都看得到，不想公开就别绑，随时可以发 /unbind 解绑。", code, int(account.QQLinkCodeTTL.Minutes()), qqTypingBindPath))
 	case "cmd_unbind":
 		removed, err := s.qqTyping.UnlinkQQ(ctx, subject)
 		switch {

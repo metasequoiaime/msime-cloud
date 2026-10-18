@@ -556,8 +556,36 @@ func qqMarkdownLeadingSpace(line string) string {
 		return trimmed
 	}
 	for offset := 0; offset < len(trimmed); {
-		r, size := utf8.DecodeRuneInString(trimmed[offset:])
-		if !qqMarkdownSpaceIsSpace(r) {
+		b := trimmed[offset]
+		if b < utf8.RuneSelf {
+			if b == ' ' || b == '\t' || b == '\n' || b == '\f' || b == '\r' || b == '\v' {
+				offset++
+				continue
+			}
+			return trimmed[offset:]
+		}
+		size := 0
+		switch b {
+		case 0xc2:
+			if offset+1 < len(trimmed) && (trimmed[offset+1] == 0x85 || trimmed[offset+1] == 0xa0) {
+				size = 2
+			}
+		case 0xe1:
+			if offset+2 < len(trimmed) && trimmed[offset+1] == 0x9a && trimmed[offset+2] == 0x80 {
+				size = 3
+			}
+		case 0xe2:
+			if offset+2 < len(trimmed) && trimmed[offset+1] == 0x80 && (trimmed[offset+2] >= 0x80 && trimmed[offset+2] <= 0x8a || trimmed[offset+2] == 0xa8 || trimmed[offset+2] == 0xa9 || trimmed[offset+2] == 0xaf) {
+				size = 3
+			} else if offset+2 < len(trimmed) && trimmed[offset+1] == 0x81 && trimmed[offset+2] == 0x9f {
+				size = 3
+			}
+		case 0xe3:
+			if offset+2 < len(trimmed) && trimmed[offset+1] == 0x80 && trimmed[offset+2] == 0x80 {
+				size = 3
+			}
+		}
+		if size == 0 {
 			return trimmed[offset:]
 		}
 		offset += size

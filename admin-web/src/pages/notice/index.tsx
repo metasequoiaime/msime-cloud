@@ -1,7 +1,6 @@
 import { formatNumber } from "../../utils/number";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { format } from "date-fns";
 import { errorMessage, useAPI } from "../../api/client";
 import { keys } from "../../api/keys";
 import { noticeChannels, noticePlatforms, noticeBodyMax, noticesSchema } from "../../api/notice";
@@ -9,7 +8,7 @@ import type { Notice, NoticeStatus, NoticeValue } from "../../api/notice";
 import { PageIntro } from "../../shell/page-intro";
 import { usePageSearch } from "../../shell/page-search";
 import { noPermissionHint, usePermissions } from "../../shell/permissions";
-import { relativeTime } from "../../utils/time";
+import { formatDateTime, relativeTime } from "../../utils/time";
 import { Button } from "../../ui/button";
 import { Card, CardHeader } from "../../ui/card";
 import { cn } from "../../ui/cn";
@@ -42,7 +41,7 @@ function channelsLabel(channels: string[]): string {
 // noticeMeta follows the design's "{targets} · {channels} · {MM-DD} 由 {user} 发布 · 触达 {n}"; reach needs client receipts, so it is shown as —.
 function noticeMeta(n: Notice): string {
   const head = `${targetsLabel(n.targets)} · ${channelsLabel(n.channels)}`;
-  const published = n.published_at ? `${format(new Date(n.published_at), "MM-dd")} 由 ${n.author} 发布` : "";
+  const published = n.published_at ? `${formatDateTime(n.published_at, "MM-dd")} 由 ${n.author} 发布` : "";
   if (n.status === "draft") return `${head} · 草稿 · ${relativeTime(n.updated_at)}更新`;
   if (n.status === "archived") return `${head} · ${published ? `${published} · ` : ""}${relativeTime(n.updated_at)}归档`;
   return `${head} · ${published} · 触达 —`;

@@ -427,12 +427,24 @@ func dictionaryLongLineContainsLower(line, query string) bool {
 	return strings.Contains(line, query)
 }
 
-// dictionaryASCIIShortLineContainsLower 在固定栈缓冲里折叠短 ASCII 长行，避免为大小写查询复制整行。
+// dictionaryASCIIShortLineContainsLower 直接搜索全小写的短 ASCII 长行，仅在含大写时用固定栈缓冲折叠，避免不必要的复制。
 func dictionaryASCIIShortLineContainsLower(line, query string) (matched, ok bool) {
+	upper := false
 	for i := range len(line) {
 		if line[i] >= utf8.RuneSelf {
 			return false, false
 		}
+		if 'A' <= line[i] && line[i] <= 'Z' {
+			upper = true
+		}
+	}
+	for i := range len(query) {
+		if query[i] >= utf8.RuneSelf {
+			return false, true
+		}
+	}
+	if !upper {
+		return strings.Contains(line, query), true
 	}
 	var lower [16 << 10]byte
 	for i := range line {

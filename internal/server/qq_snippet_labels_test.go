@@ -6,7 +6,21 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode"
 )
+
+func TestQQListLabelLineTrimMatchesUnicodeSpace(t *testing.T) {
+	for _, input := range []string{
+		"- 换肤：说明",
+		" \t\u3000- 换肤：说明\u00a0\n",
+		"\xff- 换肤：说明\u3000",
+		" \t\u3000",
+	} {
+		if got, want := qqListLabelLineTrim(input), strings.TrimFunc(input, unicode.IsSpace); got != want {
+			t.Fatalf("列表行空白裁剪不兼容：输入=%q，结果=%q，预期=%q", input, got, want)
+		}
+	}
+}
 
 func qqPreviousListSnippet(text string) string {
 	var labels []string

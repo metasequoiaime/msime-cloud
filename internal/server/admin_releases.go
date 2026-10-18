@@ -569,7 +569,7 @@ func checkRunsState(runs ghCheckRuns, match func(string) bool) (string, string) 
 	}
 }
 
-// triggerRelease serves POST /api/releases/{platform}/trigger {version}: a workflow_dispatch of the platform's release workflow on the repository's default branch.
+// triggerRelease 在仓库默认分支上触发平台的发布流水线。
 func (s *Server) triggerRelease(w http.ResponseWriter, r *http.Request, gh *githubapp.Client, p AdminPlatformConfig) {
 	var body struct {
 		Version string `json:"version"`
@@ -615,22 +615,28 @@ func (s *Server) triggerRelease(w http.ResponseWriter, r *http.Request, gh *gith
 	})
 	// 流水线会更新发布列表和提交检查；响应丢失时也可能已经触发，需一并清理缓存。
 	gh.Invalidate("/repos/" + p.Repo + "/")
+	detail := map[string]any{"platform": p.Name, "version": body.Version, "workflow": p.ReleaseWorkflow}
 	switch {
-	case err != nil:
-		failRelease(w, githubapp.ErrUnavailable)
+	case err != nil || resp.Status == 0 || resp.Status >= 500:
+		// 上游可能已触发流水线；请求取消后仍记录尝试，避免把未知结果当成可直接重试的失败。
+		detail["uncertain"] = true
+		auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		s.releaseAudit(auditCtx, "release_trigger", p.ID, detail)
+		fail(w, 502, "workflow_uncertain")
 		return
 	case resp.Status == 404:
 		fail(w, 409, "workflow_not_found")
 		return
 	case resp.Status == 422:
-		// The workflow lacks a workflow_dispatch trigger or a version input.
+		// 流水线缺少 workflow_dispatch 触发器或 version 输入。
 		fail(w, 409, "workflow_rejected")
 		return
 	case !resp.OK():
 		failRelease(w, releaseStatusError(resp))
 		return
 	}
-	s.releaseAudit(ctx, "release_trigger", p.ID, map[string]any{"platform": p.Name, "version": body.Version, "workflow": p.ReleaseWorkflow})
+	s.releaseAudit(ctx, "release_trigger", p.ID, detail)
 	s.releaseNotify(ctx, p, p.Name+" "+body.Version+" 发布流水线已触发", p.ID)
 	respond(w, 200, map[string]any{"ok": true})
 }
@@ -795,7 +801,7 @@ func (s *Server) patchRelease(w http.ResponseWriter, ctx context.Context, gh *gi
 	return true
 }
 
-// releaseAudit records a release write after GitHub accepted it. The write cannot be undone at this point, so a failed audit insert is logged instead of failing the request.
+// releaseAudit 记录 GitHub 已接受或无法确认结果的发布写入；审计失败不改变上游操作结果。
 func (s *Server) releaseAudit(ctx context.Context, action, target string, detail map[string]any) {
 	if err := s.accounts.Audit(ctx, action, target, detail); err != nil {
 		slog.Error("admin audit failed after a GitHub release write", "action", action, "target", target, "reason", err.Error())

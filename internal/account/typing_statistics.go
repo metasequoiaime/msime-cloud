@@ -346,6 +346,10 @@ func (a *Service) CreateQQLinkCode(ctx context.Context, subject string) (string,
 		return "", err
 	}
 	defer tx.Rollback(ctx)
+	// 先按群友摘要串行化删除旧码和插入新码；没有现存行时，普通行锁不能阻止两个副本同时留下两条有效码。
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "qq-link-code:"+hash(subject)); err != nil {
+		return "", err
+	}
 	if _, err = tx.Exec(ctx, `DELETE FROM qq_link_codes WHERE subject=$1`, hash(subject)); err != nil {
 		return "", err
 	}

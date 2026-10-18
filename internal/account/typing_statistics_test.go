@@ -331,3 +331,35 @@ func TestQQLinkAttemptRate(t *testing.T) {
 	}
 	apiRequest(t, mux, "POST", "/v1/users/me/qq-links", `{"code":"00000000"}`, user.AccessToken, 429)
 }
+
+// 并发发绑定码时，同一个群友最终只能留下最新的一条；旧码不能在新码之后继续使用。
+func TestConcurrentQQLinkCodeGenerationKeepsOneCode(t *testing.T) {
+	db := testStore(t)
+	ctx := context.Background()
+	if _, err := db.pool.Exec(ctx, `TRUNCATE qq_link_codes`); err != nil {
+		t.Fatal(err)
+	}
+	const subject = "G/concurrent"
+	start := make(chan struct{})
+	errs := make(chan error, 32)
+	for range cap(errs) {
+		go func() {
+			<-start
+			_, err := (&Service{store: db}).CreateQQLinkCode(ctx, subject)
+			errs <- err
+		}()
+	}
+	close(start)
+	for range cap(errs) {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	var count int
+	if err := db.pool.QueryRow(ctx, `SELECT count(*) FROM qq_link_codes WHERE subject=$1`, hash(subject)).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("并发生成后留下 %d 条绑定码", count)
+	}
+}

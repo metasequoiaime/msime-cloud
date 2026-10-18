@@ -1682,7 +1682,7 @@ func TestQQKnowledgeLoadFailures(t *testing.T) {
 // qqTestMedia 是测试用的附件内容，只有文件头是真的。
 var qqTestMedia = map[string][]byte{
 	"shot.png":  append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 32)...),
-	"clip.mp4":  append([]byte("\x00\x00\x00\x18ftypisom"), make([]byte, 32)...),
+	"clip.mp4":  qqTestFileTypeBox("isom", "mp41"),
 	"evil.png":  []byte("<html><script>alert(1)</script></html>"),
 	"photo.jpg": append([]byte("\xff\xd8\xff\xe0"), make([]byte, 32)...),
 }
@@ -1833,8 +1833,8 @@ func TestQQMediaKindAndURL(t *testing.T) {
 		"jpeg": {"\xff\xd8\xff\xe00000", "image/jpeg", true},
 		"gif":  {"GIF89a000000", "image/gif", true},
 		"webp": {"RIFF0000WEBPVP8 ", "image/webp", true},
-		"mp4":  {"\x00\x00\x00\x18ftypisom0000", "video/mp4", true},
-		"mov":  {"\x00\x00\x00\x14ftypqt  0000", "video/quicktime", true},
+		"mp4":  {"\x00\x00\x00\x10ftypmp420000", "video/mp4", true},
+		"mov":  {"\x00\x00\x00\x10ftypqt  0000", "video/quicktime", true},
 		"webm": {"\x1a\x45\xdf\xa30000", "video/webm", true},
 		"html": {"<!DOCTYPE html><script>", "", false},
 		"svg":  {`<svg xmlns="http://www.w3.org/2000/svg"><script/></svg>`, "", false},

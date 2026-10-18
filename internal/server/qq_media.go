@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -71,11 +72,24 @@ func qqMediaHostAllowed(host string, hosts []string) bool {
 
 // qqMediaKind 按文件头认出附件类型，返回存储用的 Content-Type、扩展名和是否是视频；认不出或不在白名单里时 ok 为 false。
 func qqMediaKind(body []byte) (contentType, ext string, video, ok bool) {
-	if len(body) >= 12 && string(body[4:8]) == "ftyp" {
+	if len(body) >= 8 && string(body[4:8]) == "ftyp" {
+		if len(body) < 16 {
+			return "", "", false, false
+		}
+		boxSize := binary.BigEndian.Uint32(body[:4])
+		if boxSize < 16 || boxSize%4 != 0 || uint64(boxSize) > uint64(len(body)) {
+			return "", "", false, false
+		}
 		if string(body[8:12]) == "qt  " {
 			return "video/quicktime", ".mov", true, true
 		}
-		return "video/mp4", ".mp4", true, true
+		// ftyp 也用于 AVIF、HEIC 和音频；按 MIME 嗅探规则核对 MP4 品牌，跳过版本字段，不读取盒外数据。
+		for offset := 8; offset < int(boxSize); offset += 4 {
+			if offset != 12 && string(body[offset:offset+3]) == "mp4" {
+				return "video/mp4", ".mp4", true, true
+			}
+		}
+		return "", "", false, false
 	}
 	switch http.DetectContentType(body) {
 	case "image/png":

@@ -837,7 +837,11 @@ func (a *Service) communityCandidateReplace(w http.ResponseWriter, r *http.Reque
 		case packageID != pkg.ID:
 			writeError(w, 409, "candidate_skin_package_mismatch")
 		case stored == digest:
-			v, e := scanCandidateSkin(q.QueryRow(r.Context(), candidateSkinSelect(false)+`WHERE s.id=$2`, p.UserID, id))
+			// 快速检查与响应读取可能看到不同快照；重查作者和包摘要，变化后进入锁内覆盖流程。
+			v, e := scanCandidateSkin(q.QueryRow(r.Context(), candidateSkinSelect(false)+`WHERE s.id=$2 AND s.owner_id=$1 AND s.package_id=$3 AND s.request_sha256=$4`, p.UserID, id, pkg.ID, digest))
+			if errors.Is(e, pgx.ErrNoRows) {
+				return false
+			}
 			if e != nil {
 				a.error(w, e)
 			} else {

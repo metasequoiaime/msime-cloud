@@ -29,6 +29,7 @@
     "react-hook-form": "^7.89.0",
     "react-hotkeys-hook": "^5.3.3",
     "recharts": "^3.10.1",
+    "smol-toml": "^1.9.1",
     "tailwind-merge": "^3.7.0",
     "zod": "^4.5.4"
   },

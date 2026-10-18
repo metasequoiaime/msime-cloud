@@ -1,0 +1,269 @@
+{
+  "shuishan": {
+    "light": {
+      "accent": "#7FE08E",
+      "border": "#0000001F",
+      "hover": "#FFFFFF0F",
+      "number": "#9FB5A3",
+      "secondary": "#9FB5A3",
+      "selected": "#7FE08E24",
+      "selected_number": "#9FB5A3",
+      "selected_text": "#7FE08E",
+      "show_selected_bar": null,
+      "surface": "#2A2B27",
+      "text": "#FFFFFF"
+    },
+    "dark": {
+      "accent": "#7FE08E",
+      "border": "#0000001F",
+      "hover": "#FFFFFF0F",
+      "number": "#9FB5A3",
+      "secondary": "#9FB5A3",
+      "selected": "#7FE08E24",
+      "selected_number": "#9FB5A3",
+      "selected_text": "#7FE08E",
+      "show_selected_bar": null,
+      "surface": "#2A2B27",
+      "text": "#FFFFFF"
+    }
+  },
+  "light": {
+    "light": {
+      "accent": "#005FB8",
+      "border": "#0000001F",
+      "hover": "#1A1A1A0F",
+      "number": "#6A6F76",
+      "secondary": "#6A6F76",
+      "selected": "#005FB824",
+      "selected_number": "#6A6F76",
+      "selected_text": "#005FB8",
+      "show_selected_bar": null,
+      "surface": "#FFFFFF",
+      "text": "#1A1A1A"
+    },
+    "dark": {
+      "accent": "#005FB8",
+      "border": "#0000001F",
+      "hover": "#1A1A1A0F",
+      "number": "#6A6F76",
+      "secondary": "#6A6F76",
+      "selected": "#005FB824",
+      "selected_number": "#6A6F76",
+      "selected_text": "#005FB8",
+      "show_selected_bar": null,
+      "surface": "#FFFFFF",
+      "text": "#1A1A1A"
+    }
+  },
+  "paper": {
+    "light": {
+      "accent": "#2C7A4B",
+      "border": "#0000001F",
+      "hover": "#1A1E1B0F",
+      "number": "#6E6A5E",
+      "secondary": "#6E6A5E",
+      "selected": "#2C7A4B24",
+      "selected_number": "#6E6A5E",
+      "selected_text": "#2C7A4B",
+      "show_selected_bar": null,
+      "surface": "#F7F5F0",
+      "text": "#1A1E1B"
+    },
+    "dark": {
+      "accent": "#2C7A4B",
+      "border": "#0000001F",
+      "hover": "#1A1E1B0F",
+      "number": "#6E6A5E",
+      "secondary": "#6E6A5E",
+      "selected": "#2C7A4B24",
+      "selected_number": "#6E6A5E",
+      "selected_text": "#2C7A4B",
+      "show_selected_bar": null,
+      "surface": "#F7F5F0",
+      "text": "#1A1E1B"
+    }
+  },
+  "night": {
+    "light": {
+      "accent": "#4FD1C5",
+      "border": "#0000001F",
+      "hover": "#E6F1F40F",
+      "number": "#86A6B0",
+      "secondary": "#86A6B0",
+      "selected": "#4FD1C524",
+      "selected_number": "#86A6B0",
+      "selected_text": "#4FD1C5",
+      "show_selected_bar": null,
+      "surface": "#16262F",
+      "text": "#E6F1F4"
+    },
+    "dark": {
+      "accent": "#4FD1C5",
+      "border": "#0000001F",
+      "hover": "#E6F1F40F",
+      "number": "#86A6B0",
+      "secondary": "#86A6B0",
+      "selected": "#4FD1C524",
+      "selected_number": "#86A6B0",
+      "selected_text": "#4FD1C5",
+      "show_selected_bar": null,
+      "surface": "#16262F",
+      "text": "#E6F1F4"
+    }
+  },
+  "ink": {
+    "light": {
+      "accent": "#FFFFFF",
+      "border": "#0000001F",
+      "hover": "#9A9A9A0F",
+      "number": "#9A9A9A",
+      "secondary": "#9A9A9A",
+      "selected": "#FFFFFF24",
+      "selected_number": "#9A9A9A",
+      "selected_text": "#FFFFFF",
+      "show_selected_bar": null,
+      "surface": "#1A1A1A",
+      "text": "#9A9A9A"
+    },
+    "dark": {
+      "accent": "#FFFFFF",
+      "border": "#0000001F",
+      "hover": "#9A9A9A0F",
+      "number": "#9A9A9A",
+      "secondary": "#9A9A9A",
+      "selected": "#FFFFFF24",
+      "selected_number": "#9A9A9A",
+      "selected_text": "#FFFFFF",
+      "show_selected_bar": null,
+      "surface": "#1A1A1A",
+      "text": "#9A9A9A"
+    }
+  },
+  "wechat": {
+    "radius": 5.0,
+    "dark": {
+      "surface": "#151515",
+      "border": "#292929",
+      "text": "#B7B7B7",
+      "number": "#858585",
+      "accent": "#07C160",
+      "selected": "#07C160",
+      "hover": "#07C16052",
+      "show_selected_bar": false,
+      "selected_text": "#FFFFFF",
+      "selected_number": "#FFFFFF"
+    },
+    "light": {
+      "surface": "#F7F7F7",
+      "border": "#DEDEDE",
+      "text": "#333333",
+      "number": "#757575",
+      "accent": "#07C160",
+      "selected": "#07C160",
+      "hover": "#07C16024",
+      "show_selected_bar": false,
+      "selected_text": "#FFFFFF",
+      "selected_number": "#FFFFFF"
+    }
+  },
+  "graphite": {
+    "radius": 3.0,
+    "dark": {
+      "surface": "#1C1F23",
+      "border": "#30353B",
+      "text": "#AEB6C2",
+      "number": "#707987",
+      "accent": "#8993A0",
+      "selected": "#00000000",
+      "hover": "#FFFFFF0E",
+      "show_selected_bar": false,
+      "selected_text": "#F1F3F5",
+      "selected_number": "#F1F3F5"
+    },
+    "light": {
+      "surface": "#FBFBFC",
+      "border": "#E2E5E9",
+      "text": "#586476",
+      "number": "#8993A1",
+      "accent": "#5F6B7A",
+      "selected": "#00000000",
+      "hover": "#1F29370E",
+      "show_selected_bar": false,
+      "selected_text": "#111827",
+      "selected_number": "#111827"
+    }
+  },
+  "willow_green": {
+    "radius": 9.0,
+    "dark": {
+      "surface": "#2D2F2E",
+      "border": "#00000000",
+      "text": "#D8DBD8",
+      "number": "#A6ABA7",
+      "accent": "#65C98D",
+      "selected": "#65C98D",
+      "hover": "#65C98D38",
+      "show_selected_bar": false,
+      "selected_text": "#FFFFFF",
+      "selected_number": "#FFFFFF"
+    },
+    "light": {
+      "surface": "#F4F5F3",
+      "border": "#00000000",
+      "text": "#343936",
+      "number": "#686F6A",
+      "accent": "#58B980",
+      "selected": "#58B980",
+      "hover": "#58B98029",
+      "show_selected_bar": false,
+      "selected_text": "#FFFFFF",
+      "selected_number": "#FFFFFF"
+    }
+  },
+  "autumn_osmanthus": {
+    "radius": 10.0,
+    "dark": {
+      "surface": "#7D929F",
+      "border": "#00000000",
+      "text": "#F5F8FA",
+      "number": "#E1E8EC",
+      "accent": "#F97D0A",
+      "selected": "#F97D0A",
+      "hover": "#F97D0A4D",
+      "show_selected_bar": false
+    },
+    "light": {
+      "surface": "#D6ECF0",
+      "border": "#00000000",
+      "text": "#1F3138",
+      "number": "#5B727B",
+      "accent": "#E6A817",
+      "selected": "#FFE399",
+      "hover": "#FFE3998C",
+      "show_selected_bar": false
+    }
+  },
+  "microsoft": {
+    "radius": 8.0,
+    "dark": {
+      "surface": "#2C2C2C",
+      "border": "#1C1C1C",
+      "text": "#FFFFFF",
+      "number": "#CFCFCF",
+      "accent": "#E183D9",
+      "selected": "#383838",
+      "hover": "#353535",
+      "show_selected_bar": true
+    },
+    "light": {
+      "surface": "#F9F9F9",
+      "border": "#0000001A",
+      "text": "#1A1A1A",
+      "number": "#5F5F5F",
+      "accent": "#E183D9",
+      "selected": "#EAEAEA",
+      "hover": "#F0F0F0",
+      "show_selected_bar": true
+    }
+  }
+}

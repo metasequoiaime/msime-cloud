@@ -4,20 +4,9 @@ import { noPermissionHint } from "../../shell/permissions";
 import { Button } from "../../ui/button";
 import { cn } from "../../ui/cn";
 import { Pill } from "../../ui/pill";
-import { itemMeta, miniSkin, previewLines } from "./format";
-
-const keyCount = Array.from({ length: 30 }, (_, index) => index);
-
-// MiniKeyboard is the card preview of a skin: its real background and key colors on a 10 x 3 key grid.
-function MiniKeyboard({ design }: { design: unknown }) {
-  const skin = miniSkin(design);
-  if (!skin) return <div className="grid h-full place-items-center bg-panel-2 text-[12.5px] text-muted">该皮肤格式暂不支持预览</div>;
-  return <div aria-hidden="true" className="flex h-full flex-col justify-end p-3" style={{ background: skin.background }}>
-    <div className="grid grid-cols-10 gap-1">
-      {keyCount.map(key => <span key={key} className="block h-[18px] shadow-[0_1px_0_rgba(0,0,0,.12)]" style={{ background: skin.key, borderRadius: skin.radius }} />)}
-    </div>
-  </div>;
-}
+import { itemMeta, previewLines } from "./format";
+import { KeyboardCardPreview } from "./keyboard-preview";
+import { CandidatePreview } from "./candidate-preview";
 
 export type CardProps = {
   section: Section;
@@ -38,10 +27,10 @@ export function ItemCard({ section, item, canReview, onOpen, onApprove, onRemove
   const hint = canReview ? undefined : noPermissionHint;
   return <article className="group flex min-w-0 flex-col overflow-hidden rounded-[18px] bg-panel ring-1 ring-hair transition hover:shadow-card hover:ring-accent-ring">
     <button type="button" onClick={onOpen} aria-label={`查看「${item.name}」详情`} className="block h-[120px] w-full cursor-pointer overflow-hidden text-left outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset">
-      {section === "skins" ? <MiniKeyboard design={item.design} /> : <div className="h-full bg-panel-2 px-4 py-3 text-[13px] leading-[1.8] text-body">
+      {section === "skins" ? <KeyboardCardPreview item={item} /> : section === "candidate-skins" ? <CandidatePreview id={item.id} name={item.name} revision={item.edit_token ?? item.updated_at ?? item.version} compact /> : <div className="h-full bg-panel-2 px-4 py-3 text-[13px] leading-[1.8] text-body">
         {lines.length ? lines.slice(0, 3).map((line, index) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: preview lines are static text without an identity
-          <div key={index} className={cn("truncate", (section === "candidate-skins" || section === "plugins") && index === 0 && "font-mono text-[12.5px]")}>{line}</div>
+          <div key={index} className={cn("truncate", section === "plugins" && index === 0 && "font-mono text-[12.5px]")}>{line}</div>
         )) : <div className="text-muted">没有可预览的内容</div>}
       </div>}
     </button>

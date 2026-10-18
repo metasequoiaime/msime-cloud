@@ -65,3 +65,5 @@ python3 tests/csp_smoke.py
 社区管理回归测试由 CSP 冒烟测试自动调用，也可运行 `python3 tests/community_management_smoke.py` 单独验证：覆盖默认全部状态、键盘皮肤新增及编辑、插件和候选皮肤文件上传、保存期间的关闭与重复提交保护、失败后保留草稿、删除撤销和只读权限。
 
 开发代理默认连接 `127.0.0.1:18089`，Go 本地配置需设 `admin.host: admin.localhost`。登录方式（Google OIDC、管理员密钥、个人访问令牌）、角色权限、配置项和接口说明见 [管理后台文档](../docs/admin.md)。
+
+皮肤预览回归测试可单独运行 `python3 tests/skin_preview_smoke.py`，也由 CSP 冒烟测试调用。键盘部分用截图像素检查键帽、材质、功能键透明度和照片连续裁切；候选窗部分检查真实清单配色、支持的布局与明暗、背景及装饰资源、编辑预览和版本刷新，上传截图仅作为对照。`src/candidate-palettes.json` 的基础配色来自 msime 的 `packages/ui/src/theme/theme-catalog.json` 与 `crates/client-services/src/skin/catalog/windows_looks.rs`；客户端修改这些基础配色时应同步更新。

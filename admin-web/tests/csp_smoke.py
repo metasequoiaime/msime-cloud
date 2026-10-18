@@ -546,7 +546,8 @@ def check_api_image_pages(browser, base: str, problems: list[str]):
             expect(image).to_have_js_property("naturalWidth", 1)
         assert sorted(paths) == [f"/api/feedback/{feedback_row['id']}/screenshots/{position}" for position in (0, 1)]
         page.goto(base + "/community?tab=candidate-skins&focus=image-skin%2Fone")
-        image = page.get_by_role("img", name="图片测试预览图", exact=True)
+        page.get_by_text("作者上传的预览图", exact=True).click()
+        image = page.get_by_role("img", name="图片测试上传的预览图", exact=True)
         expect(image).to_have_attribute("src", re.compile(r"^data:image/png;base64,"))
         expect(image).to_have_js_property("naturalWidth", 1)
         assert paths[-1] == "/api/candidate-skins/image-skin%2Fone/preview"
@@ -1289,6 +1290,9 @@ def main() -> int:
             try:
                 from community_management_smoke import check_community_management
                 check_community_management(browser, base)
+                from skin_preview_smoke import check_candidate_preview, check_skin_preview
+                check_skin_preview(browser, base)
+                check_candidate_preview(browser, base)
                 context = browser.new_context(viewport={"width": 1280, "height": 860})
                 context.add_init_script("window.__csp = []; document.addEventListener('securitypolicyviolation', e => window.__csp.push(e.violatedDirective + ' ' + (e.blockedURI || 'inline') + ' ' + (e.sourceFile || '') + ':' + e.lineNumber));")
                 page = context.new_page()

@@ -12,6 +12,7 @@ import { KeyboardPreview } from "../../ui/keyboard-preview";
 import { ModalFrame, ModalHeading } from "../../ui/modal";
 import { ErrorState } from "../../ui/states";
 import { useToast } from "../../ui/toast";
+import { CandidateDraftPreview } from "./candidate-preview";
 
 export type EditableSection = Extract<Section, "skins" | "candidate-skins" | "plugins">;
 export const isEditableSection = (section: Section): section is EditableSection => section === "skins" || section === "candidate-skins" || section === "plugins";
@@ -134,6 +135,7 @@ export function ContentEditor({ section, detail, onClose, onSaved }: { section: 
           <Field label="皮肤清单（skin.toml）"><textarea required={!manifestFile} disabled={Boolean(manifestFile)} rows={8} className={`${inputClass} font-mono text-xs`} value={manifestFile ? `将使用文件「${manifestFile.name}」的内容` : manifest} onChange={event => setManifest(event.target.value)} /></Field>
           <Field label={detail ? "替换全部图片（可选）" : "皮肤图片"}><input type="file" multiple accept=".png,.jpg,.jpeg" required={!detail} className={inputClass} onChange={event => setFiles(Array.from(event.target.files ?? []).map(file => ({ file, path: detail?.files?.find(existing => existing.path.split("/").at(-1) === file.name)?.path ?? file.name })))} /></Field>
           {files.map((entry, index) => <Field key={entry.file.name} label={`${entry.file.name} 的包内路径`}><input required className={inputClass} value={entry.path} onChange={event => setFiles(current => current.map((item, at) => at === index ? { ...item, path: event.target.value } : item))} /></Field>)}
+          <CandidateDraftPreview name={name} manifest={manifest} manifestFile={manifestFile} files={files} detail={detail} />
           <p className="m-0 text-xs leading-relaxed text-muted">选择清单引用的全部图片，文件名须与清单一致。最多 3 张，每张不超过 1 MiB，总共不超过 2 MiB。{detail && "不选新图片时保留现有图片。"}</p>
         </>}
       </fieldset>

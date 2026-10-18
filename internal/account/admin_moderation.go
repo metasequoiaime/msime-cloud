@@ -456,15 +456,20 @@ func (a *Service) adminCommunityCounts(w http.ResponseWriter, r *http.Request, _
 	write(w, 200, counts)
 }
 
-// adminCandidateSkinPreview serves GET /api/candidate-skins/{id}/preview: the preview image bytes, so the console can show them under img-src 'self'. Private rows are included, like the rest of the admin candidate-skin API. The bytes were re-encoded on upload.
+// adminCandidateSkinPreview 返回作者上传的预览图，含私有和下架作品；图片在上传时已清理。
 func (a *Service) adminCandidateSkinPreview(w http.ResponseWriter, r *http.Request, id string) {
+	a.adminCandidateSkinPicture(w, r, id, "")
+}
+
+// adminCandidateSkinPicture 只从指定作品读取已存储图片，不访问服务器文件系统或外部地址。
+func (a *Service) adminCandidateSkinPicture(w http.ResponseWriter, r *http.Request, id, resource string) {
 	if !resourceText(id, 1, 128, false) || strings.Contains(id, "/") {
 		writeError(w, 400, "invalid_id")
 		return
 	}
 	var path string
 	var data []byte
-	err := a.store.pool.QueryRow(r.Context(), `SELECT f.path,f.bytes FROM community_candidate_skins s JOIN community_candidate_skin_files f ON f.skin_id=s.id AND f.path=s.preview_path WHERE s.id=$1`, id).Scan(&path, &data)
+	err := a.store.pool.QueryRow(r.Context(), `SELECT f.path,f.bytes FROM community_candidate_skins s JOIN community_candidate_skin_files f ON f.skin_id=s.id AND f.path=CASE WHEN $2='' THEN s.preview_path ELSE $2 END WHERE s.id=$1`, id, resource).Scan(&path, &data)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, 404, "not_found")
 		return

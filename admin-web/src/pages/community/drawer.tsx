@@ -1,4 +1,3 @@
-import { useAPIImage } from "../../hooks/use-api-image";
 import { formatNumber } from "../../utils/number";
 import { useQuery } from "@tanstack/react-query";
 import { useAPI } from "../../api/client";
@@ -11,21 +10,13 @@ import { DetailDrawer } from "../../ui/drawer";
 import type { DrawerAction, DrawerField, DrawerSection } from "../../ui/drawer";
 import { KeyboardPreview } from "../../ui/keyboard-preview";
 import type { Tone } from "../../ui/pill";
-import { ErrorState, Skeleton, SkeletonRows } from "../../ui/states";
+import { ErrorState, SkeletonRows } from "../../ui/states";
 import type { Target } from "./actions";
 import { formatBytes, formatTime } from "./format";
 import { isEditableSection } from "./editor";
 import type { EditableSection } from "./editor";
 
-function CandidatePreview({ id, name }: { id: string; name: string }) {
-  const image = useAPIImage({
-    queryKey: keys.page("community", "preview", id),
-    path: `/api/candidate-skins/${encodeURIComponent(id)}/preview`,
-  });
-  if (image.isPending) return <Skeleton className="mb-5 h-[180px] rounded-[14px]" />;
-  if (image.isError) return <p className="m-0 mb-5 rounded-[14px] bg-panel-2 px-4 py-6 text-center text-[13px] text-muted">预览图加载失败</p>;
-  return <img src={image.data} alt={`${name}预览图`} className="mb-5 block max-h-[260px] w-full rounded-[14px] bg-panel-2 object-contain" />;
-}
+import { CandidatePreview } from "./candidate-preview";
 
 function dataField(detail: Detail): string {
   const parts: string[] = [];
@@ -183,6 +174,6 @@ export function ContentDrawer({ target, onClose, onApprove, onRemove, onRestore,
     {query.isPending && <SkeletonRows rows={6} className="p-0" />}
     {query.isError && <ErrorState error={query.error} onRetry={() => query.refetch()} className="mb-5" />}
     {detail && section === "skins" && <KeyboardPreview design={detail.content} name={detail.name} />}
-    {detail && section === "candidate-skins" && <CandidatePreview id={detail.id} name={detail.name} />}
+    {detail && section === "candidate-skins" && <CandidatePreview id={detail.id} name={detail.name} revision={detail.edit_token ?? detail.updated_at ?? detail.version} manifest={typeof detail.content === "string" ? detail.content : ""} />}
   </DetailDrawer>;
 }

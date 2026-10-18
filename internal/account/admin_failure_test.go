@@ -95,6 +95,7 @@ func TestConsoleEndpointsAnswerEveryDatabaseFailure(t *testing.T) {
 		{"skin", "GET", "/api/skins/fail-skin", nil},
 		{"candidate skin", "GET", "/api/candidate-skins/fa334455-1234-4234-8234-123456789abc", nil},
 		{"candidate skin preview", "GET", "/api/candidate-skins/fa334455-1234-4234-8234-123456789abc/preview", nil},
+		{"candidate skin image", "GET", "/api/candidate-skins/fa334455-1234-4234-8234-123456789abc/image?path=preview.png", nil},
 		{"plugin", "GET", "/api/plugins/fa334455-1234-4234-8234-000000000001", nil},
 		{"dictionary", "GET", "/api/dictionaries/fail-dict", nil},
 		{"sensitive words", "GET", "/api/sensitive-words", nil},

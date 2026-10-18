@@ -57,7 +57,7 @@ func TestAdminRegistryCompleteness(t *testing.T) {
 		}
 		routes[route.method+" "+route.pattern] = true
 	}
-	for _, want := range []string{"GET overview", "GET notifications", "POST notifications/read", "GET me", "POST me", "GET permissions", "POST permissions", "GET users/stats", "GET users/{}", "GET community/counts", "GET candidate-skins/{}/preview", "GET skins/{}", "GET candidate-skins/{}", "GET plugins/{}", "GET dictionaries/{}", "GET replies/{}", "GET phrases/{}", "GET sensitive-words", "GET downloads/summary", "GET notices", "GET crash-groups", "GET crash-groups/{}", "GET feedback/{}"} {
+	for _, want := range []string{"GET overview", "GET notifications", "POST notifications/read", "GET me", "POST me", "GET permissions", "POST permissions", "GET users/stats", "GET users/{}", "GET community/counts", "GET candidate-skins/{}/preview", "GET candidate-skins/{}/image", "GET skins/{}", "GET candidate-skins/{}", "GET plugins/{}", "GET dictionaries/{}", "GET replies/{}", "GET phrases/{}", "GET sensitive-words", "GET downloads/summary", "GET notices", "GET crash-groups", "GET crash-groups/{}", "GET feedback/{}"} {
 		if !routes[want] {
 			t.Errorf("route %s not registered", want)
 		}

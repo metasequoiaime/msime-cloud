@@ -1,7 +1,6 @@
 import { formatNumber } from "../../utils/number";
 import { formatDateTime } from "../../utils/time";
 import { splitBytes } from "../../utils/bytes";
-import { z } from "zod";
 import type { Item, Section } from "../../api/community";
 import { candidateCategoryLabel, pluginKindLabels } from "../../api/community";
 
@@ -45,21 +44,4 @@ export function previewLines(section: Section, item: Item): string[] {
     default:
       return [];
   }
-}
-
-const colorSchema = z.number().int().min(0).max(0xffffff);
-const miniDesignSchema = z.object({ background: colorSchema, keyBackground: colorSchema, cornerRadius: z.number().min(0).max(20), gradientEnd: colorSchema.nullish(), gradientHorizontal: z.boolean().nullish() });
-
-export type MiniSkin = { background: string; key: string; radius: number };
-
-const hex = (value: number) => `#${value.toString(16).padStart(6, "0")}`;
-
-// miniSkin derives the card keyboard's colors from a skin design, or null when the design is not the supported data format.
-export function miniSkin(design: unknown): MiniSkin | null {
-  const parsed = miniDesignSchema.safeParse(design);
-  if (!parsed.success) return null;
-  const d = parsed.data;
-  const start = hex(d.background);
-  const end = hex(d.gradientEnd ?? d.background);
-  return { background: `linear-gradient(${d.gradientHorizontal ? "90deg" : "160deg"},${start},${end})`, key: hex(d.keyBackground), radius: Math.round(d.cornerRadius / 2) };
 }

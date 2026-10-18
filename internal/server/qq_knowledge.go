@@ -631,6 +631,20 @@ func qqMarkdownSpaceIsSpace(r rune) bool {
 	}
 }
 
+const qqCommonMarkdownPadding = " \t\u3000 \t\u3000 \t\u3000 \t\u3000 \t\u3000 \t\u3000 \t\u3000 \t\u3000"
+
+// qqTrimTrailingCommonPadding 按固定块跳过重复的 Markdown 空白填充，剩余不足一块的部分交给逐 rune 裁剪。
+func qqTrimTrailingCommonPadding(text string, start, end int) int {
+	for end-start >= len(qqCommonMarkdownPadding) {
+		offset := end - len(qqCommonMarkdownPadding)
+		if text[offset:end] != qqCommonMarkdownPadding {
+			break
+		}
+		end = offset
+	}
+	return end
+}
+
 // qqTrimSpace 先裁剪 ASCII 空白，再用同一张 Unicode 空白表处理两端的少量非 ASCII 空白。
 func qqTrimSpace(text string) string {
 	trimmed := strings.TrimLeft(text, " \t\n\f\r\v")
@@ -647,6 +661,7 @@ func qqTrimSpace(text string) string {
 		}
 	}
 	if start < end && text[end-1] >= utf8.RuneSelf {
+		end = qqTrimTrailingCommonPadding(text, start, end)
 		for end > start {
 			if end-start >= 3 && text[end-3] == 0xe3 && text[end-2] == 0x80 && text[end-1] == 0x80 {
 				end -= 3
@@ -694,7 +709,7 @@ func qqSplitMarkdown(name, markdown string) []qqSection {
 			body.WriteString(line[:end])
 		}
 		// 上限之后只有空白时，仍需按未截断正文去掉尾部空白。
-		if strings.TrimSpace(line[end:]) != "" {
+		if qqTrimSpace(line[end:]) != "" {
 			bodyTruncated = true
 		}
 		if bodyRunes > 0 && bodyRunes < qqSectionRunes {

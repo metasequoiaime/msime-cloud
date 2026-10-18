@@ -162,7 +162,7 @@ func qqSelfTestFailed(ctx context.Context, result qqSelfTestResult, phase string
 		result.TimedOut, result.Reason = true, "超时，没答完"
 		return result
 	}
-	slog.Warn("qq bot: selftest case failed", "question", result.Case.Question, "phase", phase, "reason", err.Error())
+	slog.Warn("qq bot: selftest case failed", "phase", phase, "reason", err.Error())
 	result.Reason = phase + "出错"
 	return result
 }
@@ -309,7 +309,7 @@ func qqLogSelfTest(results []qqSelfTestResult, version, trigger string) (alert b
 			}
 		}
 		if !r.Pass {
-			slog.Warn("qq bot: selftest case not passed", "version", version, "question", r.Case.Question, "learned", r.Case.Learned, "reason", r.Reason)
+			slog.Warn("qq bot: selftest case not passed", "version", version, "learned", r.Case.Learned, "reason", r.Reason)
 		}
 	}
 	attrs := []any{"passed", passed, "timed_out", timedOut, "total", len(results), "fixed_passed", fixedPassed, "fixed_total", fixed, "version", version, "trigger", trigger}

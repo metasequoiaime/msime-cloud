@@ -6619,6 +6619,13 @@ func TestQQSelfTestSummary(t *testing.T) {
 	if r := qqSelfTestFailed(context.Background(), qqSelfTestResult{}, "判分", errors.New("chat: status 502")); r.TimedOut || r.Reason != "判分出错" {
 		t.Fatal(r)
 	}
+	logs := issueCaptureLogs(t)
+	qqSelfTestFailed(context.Background(), qqSelfTestResult{Case: qqSelfTestCase{Question: "用户提交的题目"}}, "判分", errors.New("chat: status 502"))
+	for _, entry := range logs() {
+		if strings.Contains(fmt.Sprint(entry), "用户提交的题目") || entry["question"] != nil {
+			t.Fatal("自测失败日志泄露题目原文", entry)
+		}
+	}
 }
 
 // 挑段落的提示词说「标成『各平台』的段落适用于所有平台」，不再引用 faq.md 里并不存在的「平台与下载」小节。
@@ -6811,6 +6818,9 @@ func TestQQDeploySelfTest(t *testing.T) {
 			case "qq bot: selftest":
 				line = entry
 			case "qq bot: selftest case not passed":
+				if _, leaked := entry["question"]; leaked {
+					t.Fatal("自测失败日志不应包含题目原文", entry)
+				}
 				failed++
 			}
 		}

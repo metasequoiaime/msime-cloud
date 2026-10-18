@@ -4,7 +4,7 @@ import { z } from "zod";
 
 export const sections = ["skins", "candidate-skins", "plugins", "dictionaries", "replies", "phrases"] as const;
 export type Section = (typeof sections)[number];
-export const sectionLabels: Record<Section, string> = { skins: "皮肤", "candidate-skins": "候选皮肤", plugins: "插件", dictionaries: "词库", replies: "回复模板", phrases: "短语包" };
+export const sectionLabels: Record<Section, string> = { skins: "键盘皮肤", "candidate-skins": "候选窗皮肤", plugins: "插件", dictionaries: "词库", replies: "回复模板", phrases: "短语包" };
 
 export function isSection(value: string | undefined): value is Section {
   return (sections as readonly string[]).includes(value ?? "");
@@ -22,7 +22,7 @@ export const countsSchema = z.object({
 });
 export type Counts = z.infer<typeof countsSchema>;
 
-// 键盘皮肤与候选皮肤共用的图库分类，取值与服务端 candidateSkinCategories 一致。
+// 键盘皮肤与候选窗皮肤共用的图库分类，取值与服务端 candidateSkinCategories 一致。
 export const candidateCategories = ["nature", "guofeng", "acg", "cute", "food", "tech", "minimal", "other"] as const;
 export type CandidateCategory = (typeof candidateCategories)[number];
 export const candidateCategoryLabels: Record<CandidateCategory, string> = { nature: "自然", guofeng: "国风", acg: "二次元", cute: "可爱", food: "美食", tech: "科技夜色", minimal: "简约", other: "其他" };

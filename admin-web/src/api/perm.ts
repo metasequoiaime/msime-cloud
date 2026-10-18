@@ -77,7 +77,7 @@ const prefLabels: Record<string, string> = {
   weekly_digest: "每周摘要邮件",
 };
 
-const sectionLabels: Record<string, string> = { skins: "皮肤", "candidate-skins": "候选框皮肤", plugins: "插件", dictionaries: "社区词库", replies: "回复模板" };
+const sectionLabels: Record<string, string> = { skins: "键盘皮肤", "candidate-skins": "候选窗皮肤", plugins: "插件", dictionaries: "社区词库", replies: "回复模板" };
 const crashStates: Record<string, string> = { open: "未处理", known: "已知问题", fixed: "已修复" };
 
 function text(value: unknown): string {
@@ -104,10 +104,10 @@ export function describeAudit(entry: AuditEntry): string {
     case "approve_content": return `通过了${section}${item}`;
     case "remove_content": return `下架了${section}${item}${suffix}`;
     case "restore_content": return `恢复了${section}${item}`;
-    case "set_skin_category": return `将皮肤${text(d.name) ? `「${text(d.name)}」` : count ? ` ${count} 项` : ""}的分类改为「${candidateCategoryLabel(text(d.category))}」`;
-    case "set_candidate_skin_category": return `将候选框皮肤${text(d.name) ? `「${text(d.name)}」` : count ? ` ${count} 项` : ""}的分类改为「${candidateCategoryLabel(text(d.category))}」`;
-    case "delete_skin": return `删除了皮肤「${target}」${suffix}`;
-    case "delete_candidate_skin": return `删除了候选框皮肤「${target}」${suffix}`;
+    case "set_skin_category": return `将键盘皮肤${text(d.name) ? `「${text(d.name)}」` : count ? ` ${count} 项` : ""}的分类改为「${candidateCategoryLabel(text(d.category))}」`;
+    case "set_candidate_skin_category": return `将候选窗皮肤${text(d.name) ? `「${text(d.name)}」` : count ? ` ${count} 项` : ""}的分类改为「${candidateCategoryLabel(text(d.category))}」`;
+    case "delete_skin": return `删除了键盘皮肤「${target}」${suffix}`;
+    case "delete_candidate_skin": return `删除了候选窗皮肤「${target}」${suffix}`;
     case "delete_plugin": return `删除了插件「${target}」${suffix}`;
     case "delete_dictionary": return `删除了社区词库「${target}」${suffix}`;
     case "delete_reply": return `删除了回复「${target}」${suffix}`;

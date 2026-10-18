@@ -15,7 +15,7 @@ import { useToast } from "../../ui/toast";
 
 export type EditableSection = Extract<Section, "skins" | "candidate-skins" | "plugins">;
 export const isEditableSection = (section: Section): section is EditableSection => section === "skins" || section === "candidate-skins" || section === "plugins";
-const labels = { skins: "皮肤", "candidate-skins": "候选皮肤", plugins: "插件" };
+const labels = { skins: "键盘皮肤", "candidate-skins": "候选窗皮肤", plugins: "插件" };
 const actionKinds = { skins: "skin", "candidate-skins": "candidate_skin", plugins: "plugin" };
 const inputClass = "block w-full rounded-[10px] bg-panel-2 px-3 py-2 text-[13.5px] text-ink outline-none focus:ring-[1.5px] focus:ring-accent";
 const defaultDesign = { background: 15266027, keyBackground: 16777215, keyForeground: 1516829, accent: 1596487, actionBackground: 1596487, cornerRadius: 8, borderWidth: 0, shadow: 0, pattern: 0, monospaced: false };
@@ -75,7 +75,7 @@ export function ContentEditor({ section, detail, onClose, onSaved }: { section: 
         if (manifestFile && manifestFile.size > 65536) throw new Error("皮肤清单不能超过 64 KiB。");
         Object.assign(value, { category, visibility, manifest: manifestFile ? await manifestFile.text() : manifest });
         if (files.length) {
-          if (files.length > 3 || files.reduce((sum, entry) => sum + entry.file.size, 0) > 2 * 1024 * 1024) throw new Error("候选皮肤最多 3 张图片，总大小不超过 2 MiB。");
+          if (files.length > 3 || files.reduce((sum, entry) => sum + entry.file.size, 0) > 2 * 1024 * 1024) throw new Error("候选窗皮肤最多 3 张图片，总大小不超过 2 MiB。");
           const images: Record<string, string> = {};
           for (const { file, path } of files) {
             if (Object.hasOwn(images, path)) throw new Error("图片路径重复，请重新选择。");

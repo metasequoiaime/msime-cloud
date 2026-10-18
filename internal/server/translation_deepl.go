@@ -18,13 +18,18 @@ type deepLTranslationBatch struct {
 	texts []string
 }
 
+// deepLTranslationPrefix 按固定字段顺序编码语言参数，自动检测时省略来源语言。
+func deepLTranslationPrefix(source, target string) string {
+	target = url.QueryEscape(strings.ToUpper(target))
+	if strings.EqualFold(source, "auto") {
+		return "target_lang=" + target
+	}
+	return "source_lang=" + url.QueryEscape(strings.ToUpper(source)) + "&target_lang=" + target
+}
+
 // deepLTranslationBatches 保留文本原序，按实际表单大小分组；单条输入的 8192 字节上限保证它独自编码后也能放进一批。
 func deepLTranslationBatches(v translationRequest) []deepLTranslationBatch {
-	form := url.Values{"target_lang": {strings.ToUpper(v.Target)}}
-	if !strings.EqualFold(v.Source, "auto") {
-		form.Set("source_lang", strings.ToUpper(v.Source))
-	}
-	prefix := form.Encode()
+	prefix := deepLTranslationPrefix(v.Source, v.Target)
 	texts := v.list()
 	if len(texts) == 1 {
 		return []deepLTranslationBatch{{body: prefix + "&text=" + url.QueryEscape(texts[0]), texts: texts}}

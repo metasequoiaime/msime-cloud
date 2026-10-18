@@ -17,9 +17,32 @@ func TestQQSnippetStructuredScanCandidate(t *testing.T) {
 		{"**加粗**", true},
 		{"- 标签：说明", true},
 		{"[链接](https://example.test)", true},
+		{"普通：正文", true},
+		{"普通:正文", true},
+		{"，。\xef\xbc\x99", false},
+		{"\xef", false},
+		{"\xef\xbc", false},
+		{"\xc0\xba", false},
+		{"\xff：正文", true},
 	} {
 		if got := qqSnippetNeedsStructuredScan(tc.input); got != tc.want {
 			t.Errorf("qqSnippetNeedsStructuredScan(%q) = %v，预期 %v", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestQQSnippetMarkerScanKeepsPreviousOutput(t *testing.T) {
+	for _, prefix := range []string{
+		"普通：正文", "普通:正文", "，。\xef\xbc\x99", "\xef", "\xef\xbc", "\xff：正文",
+		strings.Repeat("普通正文", 64), strings.Repeat("普通：正文", 64),
+	} {
+		for _, suffix := range []string{
+			"", "**重点**", "\n- 换肤：说明\n- 隐私：说明", "[链接](https://example.test)",
+		} {
+			input := prefix + suffix
+			if got, want := qqSnippet(input), qqPreviousBoldSnippet(input); got != want {
+				t.Fatalf("标记预筛改变了摘要：输入=%q，结果=%q，期望=%q", input, got, want)
+			}
 		}
 	}
 }
@@ -201,6 +224,28 @@ func BenchmarkQQKnowledgeTOC(b *testing.B) {
 				if qqKnowledgeTOC(sections, tc.snippets) == "" {
 					b.Fatal("目录为空")
 				}
+			}
+		})
+	}
+}
+
+func BenchmarkQQSnippetStructuredScan(b *testing.B) {
+	chinese := strings.Repeat("普通正文", 1000)
+	for _, tc := range []struct{ name, text string }{
+		{"short", "普通正文"},
+		{"chinese", chinese},
+		{"ascii", strings.Repeat("plain text ", 1000)},
+		{"early_ascii", "**重点**" + chinese},
+		{"late_ascii", chinese + "**重点**"},
+		{"early_colon", "普通：" + chinese},
+		{"late_colon", chinese + "普通："},
+		{"fullwidth_punctuation", strings.Repeat("，。", 1000)},
+		{"invalid_utf8", strings.Repeat("\xef\xbcx\x9a", 4096)},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				_ = qqSnippetNeedsStructuredScan(tc.text)
 			}
 		})
 	}

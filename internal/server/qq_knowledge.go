@@ -1057,6 +1057,10 @@ func qqPlainText(md string) string {
 	if qqPlainTextCanReuse(md) {
 		return md
 	}
+	// 只有尾部空白需要裁剪且其余正文已规范化时，直接复用输入前缀。
+	if trimmed := strings.TrimRightFunc(md, unicode.IsSpace); trimmed != md && qqPlainTextCanReuse(trimmed) {
+		return trimmed
+	}
 	text := md
 	if strings.Contains(md, "```") {
 		var body strings.Builder

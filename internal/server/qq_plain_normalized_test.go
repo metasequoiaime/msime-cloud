@@ -55,19 +55,20 @@ func TestQQPlainTextNormalizedKeepsRules(t *testing.T) {
 
 func TestQQPlainTextNormalizedAllocationBudget(t *testing.T) {
 	word := strings.Repeat("水", 32768)
-	for _, tc := range []struct{ name, input string }{
-		{"short", "第一词 第二词 第三词"},
-		{"many_words", strings.TrimSpace(strings.Repeat("词 ", 32768))},
-		{"large_fields", word + " " + word},
-		{"invalid_utf8", "甲\xff 乙\xfe"},
+	for _, tc := range []struct{ name, input, want string }{
+		{"short", "第一词 第二词 第三词", "第一词 第二词 第三词"},
+		{"many_words", strings.TrimSpace(strings.Repeat("词 ", 32768)), strings.TrimSpace(strings.Repeat("词 ", 32768))},
+		{"many_words_trailing_space", strings.Repeat("词 ", 32768), strings.TrimSpace(strings.Repeat("词 ", 32768))},
+		{"large_fields", word + " " + word, word + " " + word},
+		{"invalid_utf8", "甲\xff 乙\xfe", "甲\xff 乙\xfe"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var got string
 			allocations := testing.AllocsPerRun(100, func() {
 				got = qqPlainText(tc.input)
 			})
-			if got != tc.input {
-				t.Fatal("已规范化正文发生变化")
+			if got != tc.want {
+				t.Fatal("正文规范化结果不正确")
 			}
 			t.Logf("已规范化正文分配 %.1f 次", allocations)
 			// 输入已符合输出格式，转换时不应再构建正文副本。

@@ -76,6 +76,9 @@ export type Item = z.infer<typeof itemSchema>;
 
 export const listSchema = z.object({ items: z.array(itemSchema), page: z.number(), total: z.number(), has_more: z.boolean() });
 
+// 卡片预览只读取设计或清单，完整审核信息在打开详情时加载。
+export const contentPreviewSchema = z.object({ content: z.unknown() });
+
 const reportSchema = z.object({ id: z.number(), reason: z.string(), detail: z.string(), reporter: z.string(), created_at: z.string() });
 const flagSchema = z.object({ word_id: z.number(), pattern: z.string(), category: z.string(), level: z.string() });
 const ownerItemSchema = z.object({ section: z.enum(sections), id: z.string(), name: z.string(), moderation: moderationSchema, created_at: z.string() });

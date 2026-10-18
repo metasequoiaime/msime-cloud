@@ -28,7 +28,7 @@ def pixels(page, artwork, points):
 def check_skin_preview(browser, base):
     context = browser.new_context(viewport={"width": 1280, "height": 1000})
     page = context.new_page()
-    errors = []
+    errors, preview_calls, detail_calls = [], [], []
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.add_init_script("window.cspViolations = []; document.addEventListener('securitypolicyviolation', e => window.cspViolations.push(e.violatedDirective));")
     shell = smoke.FIXTURES["/api/shell"]
@@ -36,13 +36,33 @@ def check_skin_preview(browser, base):
     page.route("**/api/shell", lambda route: route.fulfill(json={**shell, "me": {**shell["me"], "permissions": ["review_community"]}}))
     design = {**smoke.SMOKE_DESIGN, "background": 0x102030, "keyBackground": 0xFFFFFF, "accent": 0xFF0000, "gradientEnd": None, "cornerRadius": 0}
     item = {**smoke.FIXTURES["/api/skins"]["items"][0], "design": {**design, "keyShape": "ticket", "pattern": 1}}
-    page.route("**/api/skins/smoke-skin", lambda route: route.fulfill(json={**smoke.FIXTURES["/api/skins/smoke-skin"], "content": item["design"]}))
+    detail = {**smoke.FIXTURES["/api/skins/smoke-skin"], "content": item["design"]}
+    page.route("**/api/skins/smoke-skin", lambda route: (detail_calls.append(route.request.url), route.fulfill(json=detail)))
+    page.route("**/api/skins/smoke-skin?view=preview", lambda route: (preview_calls.append(route.request.url), route.fulfill(json={"content": detail["content"]})))
     page.route("**/api/skins?*", lambda route: route.fulfill(json={"items": [item], "page": 1, "total": 1, "has_more": False}))
     try:
         page.goto(base + "/community")
         card = page.get_by_role("button", name=f"查看「{item['name']}」详情")
         expect(card.locator("svg > defs pattern circle")).to_have_count(1)
         assert "A" in card.locator('[data-key="Q"] clipPath path').get_attribute("d")
+        # 无照片设计直接使用列表数据；照片版本只请求轻量设计，打开抽屉才读完整详情。
+        assert not preview_calls and not detail_calls
+        photo = page.evaluate("""() => {
+            const canvas = document.createElement('canvas'); canvas.width = canvas.height = 10;
+            const ctx = canvas.getContext('2d'); ctx.fillStyle = '#123456'; ctx.fillRect(0, 0, 10, 10);
+            return canvas.toDataURL('image/jpeg').split(',')[1];
+        }""")
+        item["design"] = {**item["design"], "photoPosition": .3, "photoShade": .25}
+        detail["content"] = {**item["design"], "photo": photo}
+        item["edit_token"] = detail["edit_token"] = "photo-revision"
+        page.get_by_role("radio", name="待审核", exact=True).click()
+        expect(card.locator("foreignObject img")).to_have_js_property("naturalWidth", 10)
+        assert len(preview_calls) == 1 and not detail_calls
+        page.get_by_role("button", name=item["name"], exact=True).click()
+        drawer = page.get_by_role("dialog", name=item["name"], exact=True)
+        expect(drawer.locator("foreignObject img")).to_have_js_property("naturalWidth", 10)
+        assert len(detail_calls) == 1
+        page.keyboard.press("Escape")
         page.get_by_role("button", name="新增键盘皮肤", exact=True).click()
         form = page.get_by_role("dialog", name="新增键盘皮肤", exact=True)
         form.locator("summary").click()
@@ -127,7 +147,7 @@ def check_skin_preview(browser, base):
 def check_candidate_preview(browser, base):
     context = browser.new_context(viewport={"width": 1280, "height": 1000})
     page = context.new_page()
-    errors, requests = [], []
+    errors, requests, preview_calls, detail_calls = [], [], [], []
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.add_init_script("window.cspViolations = []; document.addEventListener('securitypolicyviolation', e => window.cspViolations.push(e.violatedDirective));")
     manifest = """schema_version = 1
@@ -170,7 +190,8 @@ surface = '#222333'
     page.route("**/api/auth/session", lambda route: route.fulfill(json=smoke.FIXTURES["/api/auth/session"]))
     page.route("**/api/shell", lambda route: route.fulfill(json={**shell, "me": {**shell["me"], "permissions": ["review_community"]}}))
     page.route("**/api/candidate-skins?*", lambda route: route.fulfill(json={"items": [item], "page": 1, "total": 1, "has_more": False}))
-    page.route("**/api/candidate-skins/candidate-one", lambda route: route.fulfill(json=detail))
+    page.route("**/api/candidate-skins/candidate-one", lambda route: (detail_calls.append(route.request.url), route.fulfill(json=detail)))
+    page.route("**/api/candidate-skins/candidate-one?view=preview", lambda route: (preview_calls.append(route.request.url), route.fulfill(json={"content": detail["content"]})))
 
     def image_response(route):
         path = parse_qs(urlparse(route.request.url).query)["path"][0]
@@ -188,9 +209,11 @@ surface = '#222333'
         expect(card.get_by_alt_text("候选窗背景")).to_have_js_property("naturalWidth", 1)
         expect(card.get_by_alt_text("候选窗装饰")).to_have_js_property("naturalWidth", 1)
         assert not uploaded
+        assert len(preview_calls) == 1 and not detail_calls
         page.get_by_role("button", name="合成候选窗", exact=True).click()
         drawer = page.get_by_role("dialog", name="合成候选窗", exact=True)
         expect(drawer.locator(".candidate-surface")).to_have_css("border-radius", "18px")
+        assert len(detail_calls) == 1 and len(preview_calls) == 1
         expect(drawer.locator(".candidate-surface")).to_have_css("box-shadow", "none")
         expect(drawer.get_by_alt_text("候选窗背景")).to_have_css("object-fit", "contain")
         expect(drawer.get_by_alt_text("候选窗背景")).to_have_css("opacity", "0.4")
@@ -242,6 +265,7 @@ surface = '#222333'
         expect(card.locator(".candidate-surface")).to_have_css("background-color", "rgb(101, 67, 33)")
         expect(card.get_by_alt_text("候选窗背景")).to_have_js_property("naturalWidth", 1)
         assert len(requests) == 4, requests
+        assert len(preview_calls) == 2 and len(detail_calls) == 1
         assert not errors, errors
         assert page.evaluate("window.cspViolations") == []
     finally:

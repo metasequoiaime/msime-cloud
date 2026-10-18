@@ -337,6 +337,22 @@ type CrashIssueSample struct {
 // ErrCrashGroupNotFound is returned for a signature without a crash group.
 var ErrCrashGroupNotFound = errors.New("crash group not found")
 
+// CrashIssueDestination 是探测 Issue 目标所需的最小分组信息。
+type CrashIssueDestination struct {
+	Platform string
+	IssueURL string
+}
+
+// CrashGroupIssueDestination 只按主键读取平台与已有链接，不聚合事件或读取堆栈。
+func (a *Service) CrashGroupIssueDestination(ctx context.Context, signature string) (CrashIssueDestination, error) {
+	var destination CrashIssueDestination
+	err := a.store.pool.QueryRow(ctx, `SELECT platform,COALESCE(issue_url,'') FROM admin_crash_groups WHERE signature=$1`, signature).Scan(&destination.Platform, &destination.IssueURL)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return CrashIssueDestination{}, ErrCrashGroupNotFound
+	}
+	return destination, err
+}
+
 // CrashGroupForIssue reads the crash group signature for a GitHub issue; a missing group is ErrCrashGroupNotFound.
 func (a *Service) CrashGroupForIssue(ctx context.Context, signature string) (CrashIssueSource, error) {
 	return crashGroupForIssue(ctx, a.store.pool, signature)

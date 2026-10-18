@@ -2611,10 +2611,23 @@
         },
         "responses": {
           "200": {
-            "description": "小牛上传响应；成功时 data.fileNo 替换为本服务加签编号，绑定上传身份和媒体类型，其他业务字段保留。code 为 200 却缺少有效 fileNo 时返回 502。",
+            "description": "小牛上传成功响应，顶层整数 code 为 200；data.fileNo 替换为本服务加签编号，绑定上传身份和媒体类型，其他业务字段保留。业务拒绝、缺少成功码或有效 fileNo 时返回统一的 502 upstream_failure，不包含上游错误详情。",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "enum": [
+                        200
+                      ]
+                    }
+                  }
+                }
               }
             }
           },
@@ -2659,7 +2672,7 @@
             }
           },
           "502": {
-            "description": "上游不可用、响应不是有效 JSON 或超过响应上限",
+            "description": "upstream_failure：上游不可用、JSON 控制响应的顶层整数 code 不是 200、响应无效或超过上限；不包含上游错误详情。",
             "content": {
               "application/json": {
                 "schema": {
@@ -2708,10 +2721,23 @@
         ],
         "responses": {
           "200": {
-            "description": "成功转发小牛 JSON，最多 1 MiB；业务状态由上游 JSON 表示。",
+            "description": "成功的小牛 JSON，最多 1 MiB；顶层整数 code 为 200，其他业务字段保留。上游业务错误不透传。",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "enum": [
+                        200
+                      ]
+                    }
+                  }
+                }
               }
             }
           },
@@ -2756,7 +2782,7 @@
             }
           },
           "502": {
-            "description": "上游不可用、响应不是有效 JSON 或超过响应上限",
+            "description": "upstream_failure：上游不可用、JSON 控制响应的顶层整数 code 不是 200、响应无效或超过上限；不包含上游错误详情。",
             "content": {
               "application/json": {
                 "schema": {
@@ -2807,10 +2833,23 @@
         ],
         "responses": {
           "200": {
-            "description": "成功转发小牛 JSON，最多 1 MiB；业务状态由上游 JSON 表示。",
+            "description": "成功的小牛 JSON，最多 1 MiB；顶层整数 code 为 200，其他业务字段保留。上游业务错误不透传。",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "enum": [
+                        200
+                      ]
+                    }
+                  }
+                }
               }
             }
           },
@@ -2855,7 +2894,7 @@
             }
           },
           "502": {
-            "description": "上游不可用、响应不是有效 JSON 或超过响应上限",
+            "description": "upstream_failure：上游不可用、JSON 控制响应的顶层整数 code 不是 200、响应无效或超过上限；不包含上游错误详情。",
             "content": {
               "application/json": {
                 "schema": {
@@ -2908,10 +2947,23 @@
         ],
         "responses": {
           "200": {
-            "description": "成功转发小牛 JSON，最多 1 MiB；业务状态由上游 JSON 表示。",
+            "description": "成功的小牛 JSON，最多 1 MiB；顶层整数 code 为 200，其他业务字段保留。上游业务错误不透传。",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "enum": [
+                        200
+                      ]
+                    }
+                  }
+                }
               }
             }
           },
@@ -2956,7 +3008,7 @@
             }
           },
           "502": {
-            "description": "上游不可用、响应不是有效 JSON 或超过响应上限",
+            "description": "upstream_failure：上游不可用、JSON 控制响应的顶层整数 code 不是 200、响应无效或超过上限；不包含上游错误详情。",
             "content": {
               "application/json": {
                 "schema": {
@@ -3174,10 +3226,23 @@
         },
         "responses": {
           "200": {
-            "description": "小牛上传响应；成功时 data.fileNo 替换为本服务加签编号，绑定上传身份和媒体类型，其他业务字段保留。code 为 200 却缺少有效 fileNo 时返回 502。",
+            "description": "小牛上传成功响应，顶层整数 code 为 200；data.fileNo 替换为本服务加签编号，绑定上传身份和媒体类型，其他业务字段保留。业务拒绝、缺少成功码或有效 fileNo 时返回统一的 502 upstream_failure，不包含上游错误详情。",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "enum": [
+                        200
+                      ]
+                    }
+                  }
+                }
               }
             }
           },
@@ -3222,7 +3287,7 @@
             }
           },
           "502": {
-            "description": "上游不可用、响应不是有效 JSON 或超过响应上限",
+            "description": "upstream_failure：上游不可用、JSON 控制响应的顶层整数 code 不是 200、响应无效或超过上限；不包含上游错误详情。",
             "content": {
               "application/json": {
                 "schema": {
@@ -3271,10 +3336,23 @@
         ],
         "responses": {
           "200": {
-            "description": "成功转发小牛 JSON，最多 1 MiB；业务状态由上游 JSON 表示。",
+            "description": "成功的小牛 JSON，最多 1 MiB；顶层整数 code 为 200，其他业务字段保留。上游业务错误不透传。",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "enum": [
+                        200
+                      ]
+                    }
+                  }
+                }
               }
             }
           },
@@ -3319,7 +3397,7 @@
             }
           },
           "502": {
-            "description": "上游不可用、响应不是有效 JSON 或超过响应上限",
+            "description": "upstream_failure：上游不可用、JSON 控制响应的顶层整数 code 不是 200、响应无效或超过上限；不包含上游错误详情。",
             "content": {
               "application/json": {
                 "schema": {
@@ -3372,10 +3450,23 @@
         ],
         "responses": {
           "200": {
-            "description": "成功转发小牛 JSON，最多 1 MiB；业务状态由上游 JSON 表示。",
+            "description": "成功的小牛 JSON，最多 1 MiB；顶层整数 code 为 200，其他业务字段保留。上游业务错误不透传。",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "enum": [
+                        200
+                      ]
+                    }
+                  }
+                }
               }
             }
           },
@@ -3420,7 +3511,7 @@
             }
           },
           "502": {
-            "description": "上游不可用、响应不是有效 JSON 或超过响应上限",
+            "description": "upstream_failure：上游不可用、JSON 控制响应的顶层整数 code 不是 200、响应无效或超过上限；不包含上游错误详情。",
             "content": {
               "application/json": {
                 "schema": {
@@ -3638,10 +3729,23 @@
         },
         "responses": {
           "200": {
-            "description": "小牛上传响应；成功时 data.fileNo 替换为本服务加签编号，绑定上传身份和媒体类型，其他业务字段保留。code 为 200 却缺少有效 fileNo 时返回 502。",
+            "description": "小牛上传成功响应，顶层整数 code 为 200；data.fileNo 替换为本服务加签编号，绑定上传身份和媒体类型，其他业务字段保留。业务拒绝、缺少成功码或有效 fileNo 时返回统一的 502 upstream_failure，不包含上游错误详情。",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "enum": [
+                        200
+                      ]
+                    }
+                  }
+                }
               }
             }
           },
@@ -3686,7 +3790,7 @@
             }
           },
           "502": {
-            "description": "上游不可用、响应不是有效 JSON 或超过响应上限",
+            "description": "upstream_failure：上游不可用、JSON 控制响应的顶层整数 code 不是 200、响应无效或超过上限；不包含上游错误详情。",
             "content": {
               "application/json": {
                 "schema": {
@@ -3735,10 +3839,23 @@
         ],
         "responses": {
           "200": {
-            "description": "成功转发小牛 JSON，最多 1 MiB；业务状态由上游 JSON 表示。",
+            "description": "成功的小牛 JSON，最多 1 MiB；顶层整数 code 为 200，其他业务字段保留。上游业务错误不透传。",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "enum": [
+                        200
+                      ]
+                    }
+                  }
+                }
               }
             }
           },
@@ -3783,7 +3900,7 @@
             }
           },
           "502": {
-            "description": "上游不可用、响应不是有效 JSON 或超过响应上限",
+            "description": "upstream_failure：上游不可用、JSON 控制响应的顶层整数 code 不是 200、响应无效或超过上限；不包含上游错误详情。",
             "content": {
               "application/json": {
                 "schema": {
@@ -3836,10 +3953,23 @@
         ],
         "responses": {
           "200": {
-            "description": "成功转发小牛 JSON，最多 1 MiB；业务状态由上游 JSON 表示。",
+            "description": "成功的小牛 JSON，最多 1 MiB；顶层整数 code 为 200，其他业务字段保留。上游业务错误不透传。",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "enum": [
+                        200
+                      ]
+                    }
+                  }
+                }
               }
             }
           },
@@ -3884,7 +4014,7 @@
             }
           },
           "502": {
-            "description": "上游不可用、响应不是有效 JSON 或超过响应上限",
+            "description": "upstream_failure：上游不可用、JSON 控制响应的顶层整数 code 不是 200、响应无效或超过上限；不包含上游错误详情。",
             "content": {
               "application/json": {
                 "schema": {
@@ -4057,10 +4187,23 @@
         ],
         "responses": {
           "200": {
-            "description": "成功转发小牛 JSON，最多 1 MiB；业务状态由上游 JSON 表示。",
+            "description": "成功的小牛 JSON，最多 1 MiB；顶层整数 code 为 200，其他业务字段保留。上游业务错误不透传。",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "enum": [
+                        200
+                      ]
+                    }
+                  }
+                }
               }
             }
           },
@@ -4105,7 +4248,7 @@
             }
           },
           "502": {
-            "description": "上游不可用、响应不是有效 JSON 或超过响应上限",
+            "description": "upstream_failure：上游不可用、JSON 控制响应的顶层整数 code 不是 200、响应无效或超过上限；不包含上游错误详情。",
             "content": {
               "application/json": {
                 "schema": {

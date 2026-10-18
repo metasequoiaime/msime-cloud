@@ -88,13 +88,13 @@ result['info']['description']+=' 用户接口详见用户体系标签；登录�
 niutrans_field=string(minLength=1,description='非空，最多 256 UTF-8 字节，不得含 CR 或 LF。')
 niutrans_upload=obj({'file':string(format='binary',description='非空文件，最多 64 MiB。'),'from':niutrans_field,'to':niutrans_field,**{name:niutrans_field for name in ['realmCode','termId','memoryId','processingMode','translationEngine']}},['file','from','to'])
 niutrans_file={'name':'file_no','in':'path','required':True,'schema':string(minLength=1,description='本服务上传响应 data.fileNo 中的加签任务编号，最多 512 字节；只允许上传身份用于同类媒体。请原样保存并对路径段进行一次 URL 编码，不能使用上游原始编号。')}
-niutrans_json={'description':'成功转发小牛 JSON，最多 1 MiB；业务状态由上游 JSON 表示。','content':{'application/json':{'schema':{}}}}
-niutrans_errors={code:{'description':description,'content':{'application/json':{'schema':{'$ref':'#/components/schemas/Error'}}}} for code,description in [('400','请求参数无效'),('401','需要有效设备令牌或用户 access_token'),('403','来源不被允许或账号已封禁'),('429','请求过于频繁或并发已满'),('502','上游不可用、响应不是有效 JSON 或超过响应上限'),('503','niutrans_api_not_configured：该小牛接口未配置，或服务不可用')]}
+niutrans_json={'description':'成功的小牛 JSON，最多 1 MiB；顶层整数 code 为 200，其他业务字段保留。上游业务错误不透传。','content':{'application/json':{'schema':{'type':'object','required':['code'],'properties':{'code':{'type':'integer','enum':[200]}}}}}}
+niutrans_errors={code:{'description':description,'content':{'application/json':{'schema':{'$ref':'#/components/schemas/Error'}}}} for code,description in [('400','请求参数无效'),('401','需要有效设备令牌或用户 access_token'),('403','来源不被允许或账号已封禁'),('429','请求过于频繁或并发已满'),('502','upstream_failure：上游不可用、JSON 控制响应的顶层整数 code 不是 200、响应无效或超过上限；不包含上游错误详情。'),('503','niutrans_api_not_configured：该小牛接口未配置，或服务不可用')]}
 for kind,title in [('documents','文档'),('images','图片'),('voice','语音')]:
     base='/v1/niutrans/'+kind
     paths[base]={'post':{'summary':'创建小牛'+title+'翻译任务','tags':['小牛媒体翻译'],'description':'multipart/form-data 上传 file、from、to，支持领域、术语、记忆、处理模式和翻译引擎参数。单个文件最多 64 MiB，请求体最多 65 MiB，最多 32 个部件；字段名不得为空或重复，非文件字段非空、最多 256 字节且不得含 CR/LF。未列出的字段不会转发。服务端签名请求，客户端不提供供应商凭据。请求期间使用系统临时目录中的私有临时文件，以固定 Content-Length 流式发送；完成、拒绝、上游失败或取消后关闭并删除，不长期保存文件。','requestBody':{'required':True,'content':{'multipart/form-data':{'schema':niutrans_upload}}},'responses':{'200':niutrans_json,**niutrans_errors,'413':{'description':'file_too_large_or_empty 或 too_many_parts：文件为空、超过 64 MiB 或部件超过 32 个'},'415':{'description':'multipart_required：需要 multipart/form-data'}}}}
     paths[base]['post']['responses']['503']={**niutrans_errors['503'],'description':'niutrans_api_not_configured：该小牛接口未配置；upload_storage_unavailable：临时目录不可用或写入失败；或服务不可用。'}
-    paths[base]['post']['responses']['200']={**niutrans_json,'description':'小牛上传响应；成功时 data.fileNo 替换为本服务加签编号，绑定上传身份和媒体类型，其他业务字段保留。code 为 200 却缺少有效 fileNo 时返回 502。'}
+    paths[base]['post']['responses']['200']={**niutrans_json,'description':'小牛上传成功响应，顶层整数 code 为 200；data.fileNo 替换为本服务加签编号，绑定上传身份和媒体类型，其他业务字段保留。业务拒绝、缺少成功码或有效 fileNo 时返回统一的 502 upstream_failure，不包含上游错误详情。'}
     for suffix,method,action in [('', 'get','查询状态'),('/interrupt','put','终止任务'),('/download','get','下载结果')]:
         download=suffix=='/download'
         description='使用本服务上传响应中的 data.fileNo 操作'+title+'翻译任务；不需要请求体。'

@@ -49,7 +49,7 @@ func niuTransTaskFileNo(e NiuTransEndpoint, service, owner, task string) (string
 	return string(fileNo), true
 }
 
-// niuTransUploadResult 只替换成功上传的 fileNo，其他业务字段保持原样；错误响应仍由小牛的业务状态表示。
+// niuTransUploadResult 只替换成功上传的 fileNo，其他业务字段保持原样；业务错误由调用方统一转换，不透传上游详情。
 func niuTransUploadResult(r *http.Request, e NiuTransEndpoint, service string, body []byte) ([]byte, error) {
 	var reply map[string]json.RawMessage
 	if json.Unmarshal(body, &reply) != nil || reply == nil {

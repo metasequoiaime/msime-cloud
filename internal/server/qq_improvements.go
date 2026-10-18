@@ -133,8 +133,14 @@ func qqCountTopics(topics []string) []qqImprovementCounted {
 	}
 	indexes := make(map[string]int, capacity)
 	out := make([]qqImprovementCounted, 0, capacity)
+	var previousTopic, previousKey string
+	previousReady := false
 	for _, t := range topics {
-		key := qqCompactLower(t)
+		key := previousKey
+		if !previousReady || t != previousTopic {
+			key = qqCompactLower(t)
+			previousTopic, previousKey, previousReady = t, key, true
+		}
 		if key == "" {
 			key, t = "（没有概括）", "（没有概括）"
 		}

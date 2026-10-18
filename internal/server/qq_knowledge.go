@@ -714,6 +714,13 @@ func qqSplitMarkdown(name, markdown string) []qqSection {
 		if bodyTruncated {
 			return
 		}
+		if line == "" {
+			if bodyRunes > 0 && bodyRunes < qqSectionRunes {
+				body.WriteByte('\n')
+				bodyRunes++
+			}
+			return
+		}
 		// 正文足够长时一次扩到上限，避免逐行追加造成多次扩容；短段落保留小缓冲。
 		if bodyRunes > 256 && body.Cap() < qqSectionRunes*utf8.UTFMax {
 			body.Grow(qqSectionRunes*utf8.UTFMax - body.Cap())

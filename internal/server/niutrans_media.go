@@ -179,7 +179,7 @@ func (s *Server) niuTransUpload(w http.ResponseWriter, r *http.Request, e NiuTra
 	if err == nil {
 		b, err = niuTransUploadResult(r, e, "niutrans_"+kind, b)
 	}
-	s.settleMeter(call, err == nil)
+	s.settleMeter(call, err == nil && niuTransMediaAccepted(b))
 	if err != nil {
 		upstreamError(w, r, err)
 		return
@@ -247,12 +247,20 @@ func (s *Server) niuTransFileRequest(w http.ResponseWriter, r *http.Request, e N
 	if err == nil {
 		b, err = niuTransFileResult(b, task)
 	}
-	s.settleMeter(call, err == nil)
+	s.settleMeter(call, err == nil && niuTransMediaAccepted(b))
 	if err != nil {
 		upstreamError(w, r, err)
 		return
 	}
 	niuTransJSON(w, r, b)
+}
+
+// niuTransMediaAccepted 只把明确返回成功业务码的 JSON 控制响应计为成功。
+func niuTransMediaAccepted(body []byte) bool {
+	var reply struct {
+		Code int `json:"code"`
+	}
+	return json.Unmarshal(body, &reply) == nil && reply.Code == http.StatusOK
 }
 
 // niuTransDownload 以固定大小缓冲区转发文件，下载上限独立于 JSON 响应上限。

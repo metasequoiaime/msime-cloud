@@ -19,3 +19,8 @@ test('页码始终限制在 1 至 10000，超大输入仍按边界处理', () =>
     assert.equal(parsePage(value), expected, value);
   }
 });
+
+test('页码可选择不设上限，保留社区列表的原有大整数行为', () => {
+  assert.equal(parsePage('9'.repeat(400), Number.POSITIVE_INFINITY), Number.POSITIVE_INFINITY);
+  assert.equal(parsePage('-' + '9'.repeat(400), Number.POSITIVE_INFINITY), 1);
+});

@@ -341,35 +341,40 @@ def check_bytes(page):
 def check_list_pagination(context, base: str, problems: list[str]):
     from urllib.parse import parse_qs, urlencode, urlsplit
     # 通过真实页面发出的请求核验解析结果、翻页和筛选重置，不依赖工具函数实现。
-    for path, filters, filter_label, reset_filters in (
-        ("users", {"role": "reviewer"}, "维护者", {"role": "maintainer"}),
-        ("feedback", {"type": "bug", "status": "resolved", "platform": "android"}, "待处理", {"type": "bug", "status": "new", "platform": "android"}),
+    for path, filters, filter_label, reset_filters, unlimited_page in (
+        ("users", {"role": "reviewer"}, "维护者", {"role": "maintainer"}, False),
+        ("feedback", {"type": "bug", "status": "resolved", "platform": "android"}, "待处理", {"type": "bug", "status": "new", "platform": "android"}, False),
+        ("community", {"status": "approved"}, "已下架", {"status": "removed"}, True),
     ):
         page = context.new_page()
         page.on("pageerror", lambda error: problems.append(f"列表分页页面异常：{error}"))
-        endpoint = f"/api/{path}"
+        endpoint = "/api/skins" if path == "community" else f"/api/{path}"
         page.route("**/api/auth/session", lambda route: route.fulfill(json=FIXTURES["/api/auth/session"]))
-        page.route(f"**{endpoint}?*", lambda route: route.fulfill(json={**FIXTURES[endpoint], "total": 500000}))
+        page.route(f"**{endpoint}?*", lambda route: route.fulfill(json={**FIXTURES[endpoint], "total": 500000, "has_more": True if unlimited_page else FIXTURES[endpoint]["has_more"]}))
         try:
-            for raw, expected in ((None, 1), ("invalid", 1), ("-2", 1), ("10001", 10000), ("3suffix", 3)):
+            max_page = 10001 if unlimited_page else 10000
+            for raw, expected in ((None, 1), ("invalid", 1), ("-2", 1), ("10001", max_page), ("3suffix", 3)):
                 query = {**filters, **({"page": raw} if raw is not None else {})}
                 with page.expect_request(f"**{endpoint}?*") as sent:
                     page.goto(base + f"/{path}?" + urlencode(query))
                 params = parse_qs(urlsplit(sent.value.url).query)
                 assert params == {"page": [str(expected)], **{key: [value] for key, value in filters.items()}}, params
-                expect(page.get_by_text(f"第 {expected} / 10000 页 · 每页 50 条", exact=True)).to_be_visible()
+                pagination = f"第 {expected} / 10000 页 · " + ("共 500,000 项" if unlimited_page else "每页 50 条")
+                expect(page.get_by_text(pagination, exact=True)).to_be_visible()
                 if expected == 1:
                     expect(page.get_by_role("button", name="上一页", exact=True)).to_be_disabled()
-                if expected == 10000:
+                if expected == 10000 and not unlimited_page:
                     expect(page.get_by_role("button", name="下一页", exact=True)).to_be_disabled()
             with page.expect_request(f"**{endpoint}?*") as sent:
                 page.get_by_role("button", name="下一页", exact=True).click()
             assert parse_qs(urlsplit(sent.value.url).query) == {"page": ["4"], **{key: [value] for key, value in filters.items()}}
-            expect(page.get_by_text("第 4 / 10000 页 · 每页 50 条", exact=True)).to_be_visible()
+            pagination = "第 4 / 10000 页 · " + ("共 500,000 项" if unlimited_page else "每页 50 条")
+            expect(page.get_by_text(pagination, exact=True)).to_be_visible()
             with page.expect_request(f"**{endpoint}?*") as sent:
                 page.get_by_role("radio", name=filter_label, exact=False).click()
             assert parse_qs(urlsplit(sent.value.url).query) == {"page": ["1"], **{key: [value] for key, value in reset_filters.items()}}
-            expect(page.get_by_text("第 1 / 10000 页 · 每页 50 条", exact=True)).to_be_visible()
+            pagination = "第 1 / 10000 页 · " + ("共 500,000 项" if unlimited_page else "每页 50 条")
+            expect(page.get_by_text(pagination, exact=True)).to_be_visible()
             problems.extend(f"列表分页 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
         finally:
             page.close()
@@ -847,10 +852,14 @@ def check_preferences_pending(context, base: str, problems: list[str]):
             profile = {**FIXTURES["/api/me"], "prefs": dict(FIXTURES["/api/me"]["prefs"])}
             pending, refresh = [], []
             hold_refresh = False
+            resending = False
 
             def me(route):
                 if route.request.method == "POST":
-                    pending.append(route)
+                    if resending:
+                        route.fulfill(json={"ok": True})
+                    else:
+                        pending.append(route)
                 elif hold_refresh:
                     refresh.append(route)
                 else:
@@ -894,12 +903,13 @@ def check_preferences_pending(context, base: str, problems: list[str]):
                 refresh.clear()
                 expect(preference).to_be_enabled()
                 expect(preference).to_be_checked(checked=status != 200)
+                # 重试请求由路由直接应答，避免请求事件先于路由回调时读取尚未填充的 pending。
+                resending = True
+                value = status == 200
+                profile["prefs"]["notify_dict_pr"] = value
                 with page.expect_request(lambda request: request.method == "POST" and request.url.endswith("/api/me")) as resent:
                     preference.click()
-                value = status == 200
                 assert resent.value.post_data_json == {"action": "set_pref", "key": "notify_dict_pr", "value": value}
-                profile["prefs"]["notify_dict_pr"] = value
-                pending.pop().fulfill(json={"ok": True})
                 expect(preference).to_be_enabled()
                 expect(preference).to_be_checked(checked=value)
                 expect(page.get_by_role("switch", name="每周摘要邮件", exact=True)).to_be_disabled()

@@ -1,4 +1,5 @@
 import { formatNumber } from "../../utils/number";
+import { parsePage } from "../../utils/pagination";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
@@ -55,7 +56,7 @@ export default function CommunityPage() {
   const tab: Section = isSection(search.tab) ? search.tab : "skins";
   const status: Status = isStatus(search.status) ? search.status : "all";
   const visibility = search.visibility === "private" ? "private" : "public";
-  const page = Math.max(1, Number.parseInt(search.page ?? "1", 10) || 1);
+  const page = parsePage(search.page, Number.POSITIVE_INFINITY);
   const [typed, setTyped] = useState("");
   const [q, setQ] = useState("");
   const [open, setOpen] = useState<{ section: Section; id: string } | null>(null);

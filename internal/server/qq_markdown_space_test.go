@@ -60,6 +60,15 @@ func TestQQTrimSpaceMatchesUnicodeTrim(t *testing.T) {
 	}
 }
 
+func TestQQTrimLeadingCommonPaddingFastPath(t *testing.T) {
+	padding := strings.Repeat("\u3000 \t", 32)
+	text := padding + "正文"
+	start := qqTrimLeadingCommonPadding(text, 0, len(text))
+	if got, want := text[start:], "正文"; got != want {
+		t.Fatalf("重复空白块裁剪结果=%q，预期=%q", got, want)
+	}
+}
+
 func TestQQTrimTrailingCommonPaddingFastPath(t *testing.T) {
 	padding := strings.Repeat(" \t\u3000", 32)
 	text := "正文" + padding + "尾"

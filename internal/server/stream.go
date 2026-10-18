@@ -105,6 +105,8 @@ func (s *Server) streamTranscription(w http.ResponseWriter, r *http.Request) {
 		if response != nil && response.Body != nil {
 			_ = response.Body.Close()
 		}
+		// 握手库的协议错误可能包含上游响应头原文，保留错误链但不记录原文。
+		err = upstreamTransportError{cause: err}
 		s.observe("streaming", dialStarted, err, 0)
 		upstreamError(w, r, err)
 		return

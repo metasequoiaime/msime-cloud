@@ -212,7 +212,7 @@ WAV 上传现在校验 RIFF 文件长度、分块边界、fmt/data 必需块和�
 
 管理员配置 `streaming.url` 为豆包 WSS 接口地址，例如 `wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async`，`token_env` 指向供应商 API Key 环境变量，`resource_id` 填写账户对应资源 ID。旧 App Key/Access Key 模式还须设置 `app_key_env`；设备请求无法覆盖这些上游头。空 URL 禁用功能，能力查询返回 `streaming_transcription: false`。
 
-单条消息最大 1 MiB，每个方向每次会话累计最大 32 MiB。`max_seconds` 默认 120，可设为 1–600；会话占用所在副本的一个并发槽（`max_concurrent` 按副本计算）。任一端断开、时限到达或服务关闭时，两个连接均释放。反向代理须允许 WebSocket Upgrade，并设置至少与会话时长一致的空闲超时。不会将供应商 HTTP 错误正文或 WebSocket 关闭原因返回设备。
+单条消息最大 1 MiB，每个方向每次会话累计最大 32 MiB。`max_seconds` 默认 120，可设为 1–600；会话占用所在副本的一个并发槽（`max_concurrent` 按副本计算）。任一端断开、时限到达或服务关闭时，两个连接均释放。反向代理须允许 WebSocket Upgrade，并设置至少与会话时长一致的空闲超时。不会将供应商 HTTP 错误正文或 WebSocket 关闭原因返回设备；握手失败日志也不包含上游响应头或错误原文。
 
 Windows 设置中选择“MSIME 共通后端（实时语音）”，地址填写 `wss://你的服务/v1/audio/stream`，令牌填写设备令牌；无需填写豆包 App Key。保留原有录音、实时预编辑与会话代次校验。服务端 WSS 已通过真实合作服务的合成录音验收，Windows 目标语法检查也已通过；Windows 原生录音宿主仍需独立设备验收。
 

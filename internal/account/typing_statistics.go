@@ -318,11 +318,12 @@ func (a *Service) qqLinkDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	if !qqLinkID.MatchString(id) {
+	linkID, err := strconv.ParseInt(id, 10, 64)
+	if !qqLinkID.MatchString(id) || err != nil {
 		writeError(w, 404, "qq_link_not_found")
 		return
 	}
-	tag, err := a.store.pool.Exec(r.Context(), `DELETE FROM qq_account_links WHERE id=$1::bigint AND user_id=$2`, id, p.UserID)
+	tag, err := a.store.pool.Exec(r.Context(), `DELETE FROM qq_account_links WHERE id=$1::bigint AND user_id=$2`, linkID, p.UserID)
 	if err != nil {
 		a.error(w, err)
 		return

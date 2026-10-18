@@ -35,17 +35,24 @@ func TestCreateAdminSessionChecksMembershipAndInsertsInOneQuery(t *testing.T) {
 	}
 	a := &Service{store: &Store{pool: pool}}
 	for _, tc := range []struct {
-		name                       string
-		member, disabled, rejected bool
+		name                              string
+		member, disabled, rejected, owner bool
 	}{
 		{name: "没有成员记录的账号"},
 		{name: "已启用成员", member: true},
 		{name: "已禁用成员", member: true, disabled: true},
+		{name: "没有成员记录的所有者", owner: true},
+		{name: "保留启用成员记录的所有者", member: true, owner: true},
+		{name: "保留禁用成员记录的所有者", member: true, disabled: true, owner: true},
 		{name: "写入失败", rejected: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := t.Context()
 			email := "session-create-" + randomToken()[:8] + "@example.test"
+			a.ConfigureAdmin(AdminSettings{})
+			if tc.owner {
+				a.ConfigureAdmin(AdminSettings{Owners: []string{email}})
+			}
 			if tc.member {
 				if _, err := db.pool.Exec(ctx, `INSERT INTO admin_members(email,role,enabled) VALUES($1,'reviewer',$2)`, email, !tc.disabled); err != nil {
 					t.Fatal(err)
@@ -70,7 +77,7 @@ func TestCreateAdminSessionChecksMembershipAndInsertsInOneQuery(t *testing.T) {
 				if !errors.As(err, &failure) || failure.Code != "23514" || token != "" {
 					t.Fatal("写入失败未拒绝签发会话", err)
 				}
-			} else if tc.disabled {
+			} else if tc.disabled && !tc.owner {
 				if !errors.Is(err, ErrInvalid) || token != "" {
 					t.Fatal("禁用成员仍可签发会话", err)
 				}
@@ -81,7 +88,7 @@ func TestCreateAdminSessionChecksMembershipAndInsertsInOneQuery(t *testing.T) {
 			if err := db.pool.QueryRow(ctx, `SELECT count(*) FROM admin_sessions WHERE email=$1`, email).Scan(&count); err != nil {
 				t.Fatal(err)
 			}
-			if tc.disabled || tc.rejected {
+			if tc.disabled && !tc.owner || tc.rejected {
 				if count != 0 {
 					t.Fatal("拒绝签发后仍留下了会话", count)
 				}

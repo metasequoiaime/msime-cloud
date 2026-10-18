@@ -14,6 +14,8 @@ func TestQQMarkdownLeadingSpaceFastPathMatchesUnicodeTrim(t *testing.T) {
 		{"plain", "普通正文"},
 		{"ascii", " \t\r\n\f\v普通正文"},
 		{"unicode", "\u3000\u0085\u00a0普通正文"},
+		{"repeated_unicode", strings.Repeat(" \t\u3000", 32) + "普通正文"},
+		{"repeated_unicode_then_ascii", strings.Repeat(" \t\u3000", 32) + "\n普通正文"},
 		{"invalid_utf8", " \xff正文"},
 		{"all_space", " \t\u3000"},
 		{"empty", ""},

@@ -95,6 +95,8 @@ export function describeAudit(entry: AuditEntry): string {
   const section = sectionLabels[text(d.section)] ?? "社区内容";
   const item = target ? `「${target}」` : count ? ` ${count} 项` : "";
   switch (entry.action) {
+    case "create_skin": case "create_candidate_skin": case "create_plugin": return `新增了${section}「${text(d.name) || target}」`;
+    case "update_skin": case "update_candidate_skin": case "update_plugin": return `编辑了${section}「${text(d.name) || target}」`;
     case "dictionary_change": return `为 ${target} 提交了词条变更 PR #${text(d.pull)}（${count} 项）`;
     case "dict_pr_approve": return `通过了词库 PR #${target}${count ? `（${count} 条）` : ""}`;
     case "dict_pr_reject": return `驳回了词库 PR #${target}${suffix}`;

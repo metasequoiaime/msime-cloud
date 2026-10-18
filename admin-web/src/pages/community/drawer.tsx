@@ -14,6 +14,8 @@ import type { Tone } from "../../ui/pill";
 import { ErrorState, Skeleton, SkeletonRows } from "../../ui/states";
 import type { Target } from "./actions";
 import { formatBytes, formatTime } from "./format";
+import { isEditableSection } from "./editor";
+import type { EditableSection } from "./editor";
 
 function CandidatePreview({ id, name }: { id: string; name: string }) {
   const image = useAPIImage({
@@ -115,10 +117,12 @@ export type ContentDrawerProps = {
   onRemove: (target: Target) => void;
   onRestore: (target: Target) => void;
   onCategory: (target: Target, from: CandidateCategory, to: CandidateCategory) => void;
+  onEdit: (section: EditableSection, detail: Detail) => void;
+  onDelete: (target: Target) => void;
 };
 
 // ContentDrawer is the right-hand detail of one community item, with its reports, the live sensitive-word check and the author's other works.
-export function ContentDrawer({ target, onClose, onApprove, onRemove, onRestore, onCategory }: ContentDrawerProps) {
+export function ContentDrawer({ target, onClose, onApprove, onRemove, onRestore, onCategory, onEdit, onDelete }: ContentDrawerProps) {
   const api = useAPI();
   const { can } = usePermissions();
   const section = target?.section ?? "skins";
@@ -134,7 +138,7 @@ export function ContentDrawer({ target, onClose, onApprove, onRemove, onRestore,
   const sections: DrawerSection[] = [];
   const actions: DrawerAction[] = [];
   if (detail) {
-    const item: Target = { section, id: detail.id, name: detail.name, moderation: detail.moderation, moderation_reason: detail.moderation_reason, previous_moderation: detail.previous_moderation, created_at: detail.created_at, updated_at: detail.updated_at };
+    const item: Target = { section, id: detail.id, name: detail.name, moderation: detail.moderation, moderation_reason: detail.moderation_reason, previous_moderation: detail.previous_moderation, created_at: detail.created_at, updated_at: detail.updated_at, edit_token: detail.edit_token };
     pills.push({ text: moderationLabels[detail.moderation], tone: moderationTones[detail.moderation] });
     if (detail.report_count > 0) pills.push({ text: `被举报 ${detail.report_count} 次`, tone: "bad" });
     if (detail.owner_banned) pills.push({ text: "作者已封禁", tone: "bad" });
@@ -162,6 +166,10 @@ export function ContentDrawer({ target, onClose, onApprove, onRemove, onRestore,
     // A banned author's removed work comes back only when the account is unbanned on the users page.
     const bannedRemoval = detail.moderation === "removed" && detail.owner_banned;
     const republish = !canReview || bannedRemoval;
+    if (isEditableSection(section)) {
+      actions.push({ label: "编辑", disabled: !canReview || detail.owner_banned || !detail.edit_token, onClick: () => onEdit(section, detail) });
+      actions.push({ label: "删除", variant: "danger", disabled: !canReview, onClick: () => onDelete(item) });
+    }
     if (detail.moderation === "removed") {
       actions.push({ label: "恢复", disabled: republish, onClick: () => onRestore(item) });
     } else {

@@ -115,7 +115,7 @@ function EmailDelivery({ data }: { data: Overview }) {
 
 function TodoRow({ to, icon, title, sub, count }: { to: "/dictpr" | "/community" | "/issues" | "/crash"; icon: string; title: string; sub: ReactNode; count: number | undefined }) {
   return <li>
-    <Link to={to} className="flex items-center gap-3 rounded-xl px-2.5 py-3 text-body no-underline transition hover:bg-panel-2 hover:text-body">
+    <Link to={to} search={to === "/community" ? { status: "pending" } : {}} className="flex items-center gap-3 rounded-xl px-2.5 py-3 text-body no-underline transition hover:bg-panel-2 hover:text-body">
       <span aria-hidden="true" className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-[10px] bg-accent-soft font-bold text-accent-ink">{icon}</span>
       <span className="min-w-0 flex-1">
         <span className="block truncate font-semibold text-ink">{title}</span>

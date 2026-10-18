@@ -25,7 +25,7 @@ DIST = ROOT / "admin-web" / "dist"
 ADMIN_GO = ROOT / "internal" / "server" / "admin.go"
 
 PAGES = {
-    "/": "数据概览", "/dictionary": "词库管理", "/dictpr": "词库审核", "/community": "社区审核", "/issues": "问题分诊", "/feedback": "用户反馈", "/words": "敏感词库",
+    "/": "数据概览", "/dictionary": "词库管理", "/dictpr": "词库审核", "/community": "社区管理", "/issues": "问题分诊", "/feedback": "用户反馈", "/words": "敏感词库",
     "/users": "用户账号", "/downloads": "下载记录", "/notice": "公告推送", "/release": "发布管理", "/cloud": "云端监控",
     "/crash": "崩溃上报", "/status": "系统状态", "/logs": "服务日志", "/perm": "权限日志", "/me": "个人中心",
 }
@@ -1287,6 +1287,8 @@ def main() -> int:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch()
             try:
+                from community_management_smoke import check_community_management
+                check_community_management(browser, base)
                 context = browser.new_context(viewport={"width": 1280, "height": 860})
                 context.add_init_script("window.__csp = []; document.addEventListener('securitypolicyviolation', e => window.__csp.push(e.violatedDirective + ' ' + (e.blockedURI || 'inline') + ' ' + (e.sourceFile || '') + ':' + e.lineNumber));")
                 page = context.new_page()

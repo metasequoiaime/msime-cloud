@@ -29,6 +29,7 @@ func adminJSONRequest(method, path, body string) *http.Request {
 // The registries are the contract every console unit builds on: each action and route named by the plan is wired, to a handler, behind a known permission.
 func TestAdminRegistryCompleteness(t *testing.T) {
 	actions := []string{
+		"create_skin", "update_skin", "create_plugin", "update_plugin", "create_candidate_skin", "update_candidate_skin",
 		"revoke_session", "revoke_sessions", "ban_user", "unban_user",
 		"delete_skin", "delete_candidate_skin", "delete_plugin", "delete_dictionary", "delete_reply", "delete_phrase", "approve_content", "remove_content", "restore_content", "set_skin_category", "set_candidate_skin_category",
 		"add_sensitive_word", "set_sensitive_word_level", "delete_sensitive_word",

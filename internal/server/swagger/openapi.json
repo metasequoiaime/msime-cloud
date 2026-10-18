@@ -19610,7 +19610,7 @@
         "tags": [
           "皮肤"
         ],
-        "description": "running 时每 5 秒查询一次；succeeded 返回有界 PNG/JPEG 的 base64 数据；failed 不返回上游细节。执行任务的副本关闭或失联时任务以 failed 结束。不同主体、已删除、过期，或未启用数据库时服务重启后的任务均返回 404。",
+        "description": "running 时每 5 秒查询一次；succeeded 返回有界 PNG/JPEG 的 base64 数据；failed 不返回上游细节。执行任务的副本关闭或失联时任务以 failed 结束。任务 ID 必须是 48 位小写十六进制字符串；格式无效、不同主体、已删除、过期，或未启用数据库时服务重启后的任务均返回 404 skin_job_not_found。",
         "responses": {
           "200": {
             "description": "任务状态",
@@ -19687,7 +19687,7 @@
             "description": "需要认证"
           },
           "404": {
-            "description": "任务不存在、已过期或不属于当前主体"
+            "description": "任务 ID 格式无效、不存在、已过期或不属于当前主体（skin_job_not_found）"
           },
           "503": {
             "description": "任务存储暂不可用"

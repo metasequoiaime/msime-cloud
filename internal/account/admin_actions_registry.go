@@ -34,6 +34,8 @@ type actionResult struct {
 	Detail map[string]any
 	// Extra adds fields to the {"ok":true,"affected":n} response, for example the id of a created row.
 	Extra map[string]any
+	// BeforeCommit 在操作与审计 SQL 成功后、提交前执行；返回错误会回滚整个事务。
+	BeforeCommit func(context.Context) error
 }
 
 // adminActionFunc runs one action inside tx. The dispatcher has already checked the spec's permission; the audit row is written by the dispatcher in the same transaction after the function returns without error.

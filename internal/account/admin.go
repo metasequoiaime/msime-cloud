@@ -264,7 +264,7 @@ func actionValueLimit(action string) int {
 	return actionValueMax
 }
 
-// adminAction runs one registered action and its audit record in a single transaction; a failed action leaves no audit record.
+// adminAction 在同一事务内执行操作及审计，再执行可选的提交前步骤；任一步骤失败均回滚。
 func (a *Service) adminAction(w http.ResponseWriter, r *http.Request) {
 	var v actionRequest
 	if !readSized(w, r, &v, actionBodyMax) {
@@ -327,6 +327,12 @@ func (a *Service) adminAction(w http.ResponseWriter, r *http.Request) {
 	if err = auditTx(ctx, tx, v.Action, target, detail); err != nil {
 		a.error(w, err)
 		return
+	}
+	if result.BeforeCommit != nil {
+		if err = result.BeforeCommit(ctx); err != nil {
+			a.writeActionError(w, err)
+			return
+		}
 	}
 	if err = tx.Commit(ctx); err != nil {
 		a.error(w, err)

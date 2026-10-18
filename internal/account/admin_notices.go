@@ -290,7 +290,7 @@ func actionSaveNoticeDraft(a *Service, ctx context.Context, tx pgx.Tx, v actionR
 	return actionResult{Affected: 1, Target: target, Detail: map[string]any{"title": in.Title}, Extra: map[string]any{"id": target}}, nil
 }
 
-// actionPublishNotice publishes the draft id, or a new notice from value, and broadcasts it.
+// actionPublishNotice 准备发布草稿或新公告，广播在调度器写入审计后执行。
 func actionPublishNotice(a *Service, ctx context.Context, tx pgx.Tx, v actionRequest) (actionResult, error) {
 	if err := checkPerm(ctx, PermPublishNotices); err != nil {
 		return actionResult{}, err
@@ -332,18 +332,22 @@ UPDATE admin_notices SET title=$2,body=$3,targets=$4,channels=$5,status='live',p
 			return actionResult{}, err
 		}
 	}
-	// Telegram goes out last, after every database check passed, so a rejected publish never reaches the channel; a failed send rolls the publication back.
+	target := strconv.FormatInt(n.ID, 10)
+	result := actionResult{Affected: 1, Target: target, Detail: map[string]any{"title": n.Title, "targets": n.Targets, "channels": n.Channels}, Extra: map[string]any{"id": target}}
 	if slices.Contains(n.Channels, NoticeChannelTelegram) {
 		if a.broadcaster == nil {
 			return actionResult{}, actionFail(409, "telegram_disabled")
 		}
-		if err := a.broadcaster.BroadcastNotice(ctx, n); err != nil {
-			slog.Warn("notice telegram broadcast failed", "notice", n.ID, "error", err)
-			return actionResult{}, actionFail(502, "telegram_failed")
+		// 先完成公告及审计 SQL，避免数据库已拒绝发布后仍向外部频道发送；发送失败仍回滚。
+		result.BeforeCommit = func(ctx context.Context) error {
+			if err := a.broadcaster.BroadcastNotice(ctx, n); err != nil {
+				slog.Warn("notice telegram broadcast failed", "notice", n.ID, "error", err)
+				return actionFail(502, "telegram_failed")
+			}
+			return nil
 		}
 	}
-	target := strconv.FormatInt(n.ID, 10)
-	return actionResult{Affected: 1, Target: target, Detail: map[string]any{"title": n.Title, "targets": n.Targets, "channels": n.Channels}, Extra: map[string]any{"id": target}}, nil
+	return result, nil
 }
 
 // actionArchiveNotice takes the notice id off the public feed. A draft can be archived too, which is how the console discards one.

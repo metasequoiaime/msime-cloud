@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// overviewPlatform maps a client-reported platform name in column to one canonical key, so that platform_active_7d and the daily platform groups agree: windows (also win), macos (also mac, darwin), linux, android, ios (also ipados), harmonyos (also harmony, ohos); any other name is kept lowercased.
+// overviewPlatform 统一客户端平台别名，让近七天和每日活跃统计使用相同的平台键；未知平台保留小写名称。
 func overviewPlatform(column string) string {
 	return `(CASE lower(` + column + `) WHEN 'win' THEN 'windows' WHEN 'mac' THEN 'macos' WHEN 'darwin' THEN 'macos' WHEN 'ipados' THEN 'ios' WHEN 'harmony' THEN 'harmonyos' WHEN 'ohos' THEN 'harmonyos' ELSE lower(` + column + `) END)`
 }
@@ -107,19 +107,26 @@ func (a *Service) adminOverview(w http.ResponseWriter, r *http.Request, _ string
      SELECT d FROM generate_series(date_trunc('day',now() AT TIME ZONE 'UTC') - ($1::int - 1) * interval '1 day',date_trunc('day',now() AT TIME ZONE 'UTC'),interval '1 day') d
    ), active_devices AS (
      SELECT date_trunc('day',e.created_at AT TIME ZONE 'UTC') AS d,e.install_id,
-       CASE `+overviewPlatform("e.platform")+` WHEN 'windows' THEN 'windows' WHEN 'macos' THEN 'mac_linux' WHEN 'linux' THEN 'mac_linux' WHEN 'android' THEN 'mobile' WHEN 'ios' THEN 'mobile' WHEN 'harmonyos' THEN 'mobile' END AS device_group
+       `+overviewPlatform("e.platform")+` AS platform
      FROM admin_events e
      WHERE e.kind='active' AND e.install_id IS NOT NULL
        AND e.created_at>= (SELECT min(d) AT TIME ZONE 'UTC' FROM active_days)
        AND e.created_at< (SELECT (max(d)+interval '1 day') AT TIME ZONE 'UTC' FROM active_days)
      GROUP BY 1,2,3
    ), active_daily AS (
-     SELECT d,count(*) FILTER (WHERE device_group='windows') AS windows,
-       count(*) FILTER (WHERE device_group='mac_linux') AS mac_linux,
-       count(*) FILTER (WHERE device_group='mobile') AS mobile
+     SELECT d,count(*) FILTER (WHERE platform='windows') AS windows,
+       count(*) FILTER (WHERE platform='macos') AS macos,
+       count(*) FILTER (WHERE platform='linux') AS linux,
+       count(*) FILTER (WHERE platform='android') AS android,
+       count(*) FILTER (WHERE platform='ios') AS ios,
+       count(*) FILTER (WHERE platform='harmonyos') AS harmonyos,
+       count(DISTINCT install_id) FILTER (WHERE platform IN ('macos','linux')) AS mac_linux,
+       count(DISTINCT install_id) FILTER (WHERE platform IN ('android','ios','harmonyos')) AS mobile
      FROM active_devices GROUP BY d
    ) SELECT json_agg(json_build_object('day',to_char(active_days.d,'YYYY-MM-DD'),
-     'windows',COALESCE(active_daily.windows,0),'mac_linux',COALESCE(active_daily.mac_linux,0),'mobile',COALESCE(active_daily.mobile,0)) ORDER BY active_days.d)
+     'windows',COALESCE(active_daily.windows,0),'macos',COALESCE(active_daily.macos,0),'linux',COALESCE(active_daily.linux,0),
+     'android',COALESCE(active_daily.android,0),'ios',COALESCE(active_daily.ios,0),'harmonyos',COALESCE(active_daily.harmonyos,0),
+     'mac_linux',COALESCE(active_daily.mac_linux,0),'mobile',COALESCE(active_daily.mobile,0)) ORDER BY active_days.d)
      FROM active_days LEFT JOIN active_daily USING(d)),
    'active_devices_7d',(SELECT count(DISTINCT install_id) FROM admin_events WHERE kind='active' AND created_at>=now()-interval '7 days'),
    'active_devices_prev_7d',(SELECT count(DISTINCT install_id) FROM admin_events WHERE kind='active' AND created_at>=now()-interval '14 days' AND created_at<now()-interval '7 days'),

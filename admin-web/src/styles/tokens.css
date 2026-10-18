@@ -29,10 +29,13 @@
   --info-soft: rgba(47, 111, 168, .1);
   --pop-shadow: 0 0 0 1px var(--hair), 0 18px 48px rgba(0, 0, 0, .16);
   --scrim: rgba(10, 20, 14, .35);
-  /* Chart series keep fixed hues in every season, so the first series never takes the autumn accent next to the orange third one. */
+  /* 图表在各季节使用固定色相，六个平台的曲线保持独立配色。 */
   --chart-1: #1E8E4E;
   --chart-2: #3C8DBC;
   --chart-3: #E0913A;
+  --chart-4: #8B63BE;
+  --chart-5: #C9517A;
+  --chart-6: #218C91;
   color-scheme: light;
 }
 
@@ -62,6 +65,9 @@
   --chart-1: #6FD08B;
   --chart-2: #6AAFE0;
   --chart-3: #F0B35A;
+  --chart-4: #B798E0;
+  --chart-5: #EF8EAF;
+  --chart-6: #6AC9CE;
   color-scheme: dark;
 }
 

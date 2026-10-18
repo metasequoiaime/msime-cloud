@@ -10,6 +10,7 @@ import { Button } from "../../src/ui/button";
 import { Card, CardHeader, Banner } from "../../src/ui/card";
 import { AreaChart, ChartLegend, Sparkline } from "../../src/ui/charts";
 import { ConfirmProvider, useConfirm } from "../../src/ui/confirm";
+import { CountBar } from "../../src/ui/count-bar";
 import { CellText, DataTable } from "../../src/ui/data-table";
 import type { Column } from "../../src/ui/data-table";
 import { DetailDrawer, DrawerComposer } from "../../src/ui/drawer";
@@ -99,6 +100,17 @@ function BytesHarness() {
   </tr>)}</tbody></table>;
 }
 
+function CountBarHarness() {
+  return <section aria-label="计数占比条" className="w-[240px]">
+    <div data-testid="count-zero"><CountBar value={0} max={0} /></div>
+    <div data-testid="count-half"><CountBar value={1000} max={2000} locale="en-US" /></div>
+    <div data-testid="count-full"><CountBar value={2000} max={2000} /></div>
+    <div data-testid="count-over"><CountBar value={3000} max={2000} tone="warn" barClassName="rounded-full" valueClassName="text-[12.5px] text-body" /></div>
+    <div data-testid="count-bad"><CountBar value={3} max={12} tone="bad" className="gap-2" /></div>
+    <div data-testid="count-long"><CountBar value={1000000000} max={2000000000} /></div>
+  </section>;
+}
+
 function AuthHarness() {
   const auth = useAuth();
   const api = useAPI();
@@ -168,6 +180,7 @@ function Harness() {
     </div>
     <Banner>说明横幅</Banner>
     <BytesHarness />
+    <CountBarHarness />
     <DataTable ariaLabel="测试表格" data={filter === "all" ? rows : rows.filter(row => row.state === "open")} columns={columns} getRowId={row => row.id} selectable searchText={row => row.title}
       toolbar={<FilterChips label="状态" value={filter} onChange={setFilter} options={[{ key: "all", label: "全部", count: 3 }, { key: "open", label: "待处理", count: 2 }]} />}
       onRowClick={() => setDrawer(true)}

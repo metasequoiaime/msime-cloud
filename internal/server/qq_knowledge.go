@@ -1539,7 +1539,10 @@ func qqDropPromoSentences(answer string) string {
 		return strings.TrimSpace(answer)
 	}
 	// 先只扫描切片，不拆分或构建正文；绝大多数模型回答没有引流句。
+	// 记录首次命中的行，过滤时可以直接复用前面的正文，避免再次扫描。
+	matchLineStart := -1
 	for rest := answer; rest != ""; {
+		lineStart := len(answer) - len(rest)
 		line, next, _ := strings.Cut(rest, "\n")
 		rest = next
 		for sentence := line; sentence != ""; {
@@ -1549,6 +1552,7 @@ func qqDropPromoSentences(answer string) string {
 				end = i + size
 			}
 			if qqPromoSentenceCandidate(sentence[:end]) && qqPromoSentence(sentence[:end]) != "" {
+				matchLineStart = lineStart
 				goto filter
 			}
 			sentence = sentence[end:]
@@ -1560,7 +1564,15 @@ filter:
 	var out strings.Builder
 	out.Grow(len(answer))
 	wroteLine := false
-	for rest := answer; ; {
+	rest := answer
+	if matchLineStart > 0 {
+		// matchLineStart 位于换行之后；保留此前没有命中的完整行，并让后续
+		// 第一行照常写入行间换行。
+		out.WriteString(answer[:matchLineStart-1])
+		wroteLine = true
+		rest = answer[matchLineStart:]
+	}
+	for rest != "" {
 		line, next, hasNewline := strings.Cut(rest, "\n")
 		dropped := false
 		keptNonSpace := false

@@ -25,18 +25,35 @@ func deepLTranslationBatches(v translationRequest) []deepLTranslationBatch {
 		form.Set("source_lang", strings.ToUpper(v.Source))
 	}
 	prefix := form.Encode()
-	body, start := prefix, 0
 	texts := v.list()
-	var batches []deepLTranslationBatch
-	for i, text := range texts {
-		field := "&text=" + url.QueryEscape(text)
-		if len(body)+len(field) > deepLRequestBodyBytes && i > start {
-			batches = append(batches, deepLTranslationBatch{body: body, texts: texts[start:i]})
-			body, start = prefix, i
-		}
-		body += field
+	if len(texts) == 1 {
+		return []deepLTranslationBatch{{body: prefix + "&text=" + url.QueryEscape(texts[0]), texts: texts}}
 	}
-	return append(batches, deepLTranslationBatch{body: body, texts: texts[start:]})
+	escaped := make([]string, len(texts))
+	start, bodyBytes := 0, len(prefix)
+	var batches []deepLTranslationBatch
+	appendBatch := func(end int) {
+		var body strings.Builder
+		// 按编码后的确切长度一次分配，避免长正文在拼接或扩容时反复复制。
+		body.Grow(bodyBytes)
+		body.WriteString(prefix)
+		for _, text := range escaped[start:end] {
+			body.WriteString("&text=")
+			body.WriteString(text)
+		}
+		batches = append(batches, deepLTranslationBatch{body: body.String(), texts: texts[start:end]})
+	}
+	for i, text := range texts {
+		escaped[i] = url.QueryEscape(text)
+		fieldBytes := len("&text=") + len(escaped[i])
+		if bodyBytes+fieldBytes > deepLRequestBodyBytes && i > start {
+			appendBatch(i)
+			start, bodyBytes = i, len(prefix)
+		}
+		bodyBytes += fieldBytes
+	}
+	appendBatch(len(texts))
+	return batches
 }
 
 // translateDeepL 为全部分组一次性预留额度，成功后合并响应；额度不足时让调用方直接切换后备。

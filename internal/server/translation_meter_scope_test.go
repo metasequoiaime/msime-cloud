@@ -50,8 +50,9 @@ func TestTranslationRejectedBudgetAllocationBudget(t *testing.T) {
 		}
 	})
 	// 被额度拒绝的服务只需响应记录器，不应为没有发送的调用创建计量对象。
-	if overhead := blocked - direct; overhead > 3 {
-		t.Fatalf("拒绝服务的额外分配为 %.0f 次，期望至多 3 次（拒绝 %.0f，直达 %.0f）", overhead, blocked, direct)
+	// 竞态模式会随机丢弃 `sync.Pool` 缓存，完整 HTTP 路径允许一次分配抖动；旧实现额外六次仍会超限。
+	if overhead := blocked - direct; overhead > 4 {
+		t.Fatalf("拒绝服务的额外分配为 %.0f 次，期望至多 4 次（拒绝 %.0f，直达 %.0f）", overhead, blocked, direct)
 	}
 	s.config.Translation.URL = "https://blocked.example.test/translate"
 	s.config.Admin.Enabled = true

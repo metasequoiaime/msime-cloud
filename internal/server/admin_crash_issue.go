@@ -234,11 +234,15 @@ func crashIssueBody(group account.CrashIssueSource) string {
 	return b.String()
 }
 
-// longestBacktickRun returns the longest run of backticks in s.
+// longestBacktickRun 返回最长的连续反引号长度；先跳过无反引号的前缀，再按字节计数。
 func longestBacktickRun(s string) int {
+	start := strings.IndexByte(s, '`')
+	if start < 0 {
+		return 0
+	}
 	longest, run := 0, 0
-	for _, c := range s {
-		if c == '`' {
+	for i := start; i < len(s); i++ {
+		if s[i] == '`' {
 			run++
 			longest = max(longest, run)
 		} else {

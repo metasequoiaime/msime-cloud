@@ -636,17 +636,17 @@ func (a *Service) communityCandidatePublish(w http.ResponseWriter, r *http.Reque
 
 // candidateWriteRate 把一次包写入计入对应的每小时额度：变为公开的计入图库额度，私有创建、替换和改分类计入私有库额度。官方发布账号的两份额度都是 candidateOfficialWritesPerHour。
 func (a *Service) candidateWriteRate(ctx context.Context, userID, visibility string) error {
-	scope, limit := "candidate-library", candidateLibraryWritesPerHour
-	if visibility == "public" {
-		scope, limit = "candidate-publish", candidatePublishesPerHour
-	}
-	if a.config.Community.officialSkinPublisher(userID) {
-		limit = candidateOfficialWritesPerHour
-	}
+	scope, limit := a.candidateWriteRatePolicy(userID, visibility)
 	return a.RateLimit(ctx, scope, userID, limit, time.Hour)
 }
 
 func (a *Service) candidateWriteRateTx(ctx context.Context, tx pgx.Tx, userID, visibility string) error {
+	scope, limit := a.candidateWriteRatePolicy(userID, visibility)
+	return rateTx(ctx, tx, scope+":"+hash(userID), limit, time.Hour)
+}
+
+// candidateWriteRatePolicy 统一普通与事务写入的额度选择；计数仍由各自的数据库调用执行。
+func (a *Service) candidateWriteRatePolicy(userID, visibility string) (string, int) {
 	scope, limit := "candidate-library", candidateLibraryWritesPerHour
 	if visibility == "public" {
 		scope, limit = "candidate-publish", candidatePublishesPerHour
@@ -654,7 +654,7 @@ func (a *Service) candidateWriteRateTx(ctx context.Context, tx pgx.Tx, userID, v
 	if a.config.Community.officialSkinPublisher(userID) {
 		limit = candidateOfficialWritesPerHour
 	}
-	return rateTx(ctx, tx, scope+":"+hash(userID), limit, time.Hour)
+	return scope, limit
 }
 
 // candidatePublicLimit 返回账号最多可以有几款公开作品：普通账号 maxCandidateSkinsPerUser，官方发布账号只受总数上限 maxCandidateLibraryRows 约束。

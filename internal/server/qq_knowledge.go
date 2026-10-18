@@ -536,17 +536,29 @@ func qqNormalizeListLabel(runes []rune, buf []byte) []byte {
 	return buf
 }
 
-// qqMarkdownLeadingSpace 先用 ASCII 快路径裁剪行首空白；剩余部分以 Unicode 空白开头时才回退到完整的 Unicode 扫描。
+// qqMarkdownLeadingSpace 先用 ASCII 快路径裁剪行首空白，再用小型 Unicode 空白表扫描常见前缀。
 func qqMarkdownLeadingSpace(line string) string {
 	trimmed := strings.TrimLeft(line, " \t\n\f\r\v")
 	if trimmed == "" || trimmed[0] < utf8.RuneSelf {
 		return trimmed
 	}
-	r, _ := utf8.DecodeRuneInString(trimmed)
-	if !unicode.IsSpace(r) {
-		return trimmed
+	for offset := 0; offset < len(trimmed); {
+		r, size := utf8.DecodeRuneInString(trimmed[offset:])
+		if !qqMarkdownSpaceIsSpace(r) {
+			return trimmed[offset:]
+		}
+		offset += size
 	}
-	return strings.TrimLeftFunc(trimmed, unicode.IsSpace)
+	return trimmed[len(trimmed):]
+}
+
+func qqMarkdownSpaceIsSpace(r rune) bool {
+	switch r {
+	case '\t', '\n', '\v', '\f', '\r', ' ', '\u0085', '\u00a0', '\u1680', '\u2000', '\u2001', '\u2002', '\u2003', '\u2004', '\u2005', '\u2006', '\u2007', '\u2008', '\u2009', '\u200a', '\u2028', '\u2029', '\u202f', '\u205f', '\u3000':
+		return true
+	default:
+		return unicode.IsSpace(r)
+	}
 }
 
 // qqSplitMarkdown 按标题把一个 Markdown 文档切成段落。文档名取第一个一级标题，没有时用文件名；一级标题下、第一个二级标题之前的导语成为「概述」一段（适用的版本、系统要求常常只写在这里），文档开头、任何标题之前的文字不收；代码块里以 # 开头的行不算标题；没有正文的标题不成段，过长的正文截断到 qqSectionRunes。

@@ -946,7 +946,14 @@ func validHelpcodeTable(raw []byte) bool {
 	if !ok {
 		return false
 	}
-	seen := map[string]bool{}
+	capacity := strings.Count(text, "\n")
+	if text != "" && text[len(text)-1] != '\n' {
+		capacity++
+	}
+	if capacity > maxHelpcodeEntries {
+		capacity = 0
+	}
+	seen := make(map[string]bool, capacity)
 	for text != "" {
 		text = strings.TrimLeft(text, "\n")
 		if text == "" {
@@ -983,7 +990,14 @@ func validWordbookEntries(raw []byte) bool {
 	bounded := func(s string, max int) bool {
 		return utf8.RuneCountInString(s) <= max && !strings.ContainsFunc(s, unicode.IsControl)
 	}
-	seen := map[string]bool{}
+	capacity := strings.Count(text, "\n")
+	if text != "" && text[len(text)-1] != '\n' {
+		capacity++
+	}
+	if capacity > maxWordbookEntries {
+		capacity = 0
+	}
+	seen := make(map[string]bool, capacity)
 	for text != "" {
 		text = strings.TrimLeft(text, "\n")
 		if text == "" {

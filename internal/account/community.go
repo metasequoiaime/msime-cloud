@@ -644,29 +644,7 @@ func (a *Service) communityDownload(w http.ResponseWriter, r *http.Request) {
 	write(w, 200, map[string]any{"design": design})
 }
 func (a *Service) communityRate(w http.ResponseWriter, r *http.Request) {
-	p, ok := a.principal(w, r, false)
-	if !ok {
-		return
-	}
-	var input struct {
-		Stars int `json:"stars"`
-	}
-	if !read(w, r, &input) {
-		return
-	}
-	if input.Stars < 1 || input.Stars > 5 {
-		writeError(w, 400, "invalid_rating")
-		return
-	}
-	// 登录即可评分，不再要求先下载；仍然不能给自己的作品评分，已下架的作品不能评。
-	var written, own bool
-	tx, e := a.store.userDataTransaction(r.Context(), p.UserID)
-	if e != nil {
-		a.error(w, e)
-		return
-	}
-	defer tx.Rollback(r.Context())
-	e = tx.QueryRow(r.Context(), `WITH eligible AS MATERIALIZED (
+	a.rateCommunityItem(w, r, `WITH eligible AS MATERIALIZED (
  SELECT id FROM community_skins WHERE id=$1 AND owner_id<>$2 AND moderation<>'removed'
 ), written AS (
  INSERT INTO community_skin_ratings(skin_id,user_id,stars)
@@ -674,23 +652,5 @@ func (a *Service) communityRate(w http.ResponseWriter, r *http.Request) {
  ON CONFLICT(skin_id,user_id) DO UPDATE SET stars=excluded.stars
  RETURNING skin_id
 )
-SELECT EXISTS(SELECT 1 FROM written),EXISTS(SELECT 1 FROM community_skins WHERE id=$1 AND owner_id=$2 AND moderation<>'removed')`, r.PathValue("id"), p.UserID, input.Stars).Scan(&written, &own)
-	if e != nil {
-		a.error(w, e)
-		return
-	}
-	if !written {
-		// 不存在或已下架（作者本人除外）时返回 404，与详情接口一致；剩下的只可能是自己的作品，沿用客户端已经认识的错误码。
-		if !own {
-			writeError(w, 404, "skin_not_found")
-			return
-		}
-		writeError(w, 403, "download_before_rating_or_own_skin")
-		return
-	}
-	if e = tx.Commit(r.Context()); e != nil {
-		a.error(w, e)
-		return
-	}
-	write(w, 200, map[string]int{"stars": input.Stars})
+SELECT EXISTS(SELECT 1 FROM written),EXISTS(SELECT 1 FROM community_skins WHERE id=$1 AND owner_id=$2 AND moderation<>'removed')`, "skin_not_found", "download_before_rating_or_own_skin")
 }

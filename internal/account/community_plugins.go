@@ -508,29 +508,7 @@ func writePluginDownload(w http.ResponseWriter, head pluginDownload, archive []b
 }
 
 func (a *Service) communityPluginRate(w http.ResponseWriter, r *http.Request) {
-	p, ok := a.principal(w, r, false)
-	if !ok {
-		return
-	}
-	var input struct {
-		Stars int `json:"stars"`
-	}
-	if !read(w, r, &input) {
-		return
-	}
-	if input.Stars < 1 || input.Stars > 5 {
-		writeError(w, 400, "invalid_rating")
-		return
-	}
-	// 登录即可评分，不再要求先下载；仍然不能给自己的作品评分。
-	var written, exists bool
-	tx, e := a.store.userDataTransaction(r.Context(), p.UserID)
-	if e != nil {
-		a.error(w, e)
-		return
-	}
-	defer tx.Rollback(r.Context())
-	e = tx.QueryRow(r.Context(), `WITH eligible AS MATERIALIZED (
+	a.rateCommunityItem(w, r, `WITH eligible AS MATERIALIZED (
  SELECT id FROM community_plugins WHERE id=$1 AND owner_id<>$2 AND moderation<>'removed'
 ), written AS (
  INSERT INTO community_plugin_ratings(pack_id,user_id,stars)
@@ -538,25 +516,7 @@ func (a *Service) communityPluginRate(w http.ResponseWriter, r *http.Request) {
  ON CONFLICT(pack_id,user_id) DO UPDATE SET stars=excluded.stars
  RETURNING pack_id
 )
-SELECT EXISTS(SELECT 1 FROM written),EXISTS(SELECT 1 FROM community_plugins WHERE id=$1 AND moderation<>'removed')`, r.PathValue("id"), p.UserID, input.Stars).Scan(&written, &exists)
-	if e != nil {
-		a.error(w, e)
-		return
-	}
-	if !written {
-		// 不存在或已下架的插件返回 404；剩下的只可能是自己的作品，沿用客户端已经认识的 403 错误码。
-		if !exists {
-			writeError(w, 404, "plugin_not_found")
-			return
-		}
-		writeError(w, 403, "download_before_rating_or_own_plugin")
-		return
-	}
-	if e = tx.Commit(r.Context()); e != nil {
-		a.error(w, e)
-		return
-	}
-	write(w, 200, map[string]int{"stars": input.Stars})
+SELECT EXISTS(SELECT 1 FROM written),EXISTS(SELECT 1 FROM community_plugins WHERE id=$1 AND moderation<>'removed')`, "plugin_not_found", "download_before_rating_or_own_plugin")
 }
 
 func (a *Service) communityPluginDelete(w http.ResponseWriter, r *http.Request) {

@@ -44,6 +44,9 @@ func cacheablePair(source, gloss string) bool {
 
 // 查缓存。任何一层出问题都返回空表,让调用方照常走上游 —— 缓存不可用不是翻译失败。
 func (s *Server) cachedTranslations(ctx context.Context, source, target string, texts []string) map[string]string {
+	if s.accounts == nil {
+		return nil
+	}
 	wanted := make([]string, 0, len(texts))
 	for _, text := range texts {
 		if cacheableText(text) {
@@ -64,6 +67,9 @@ func (s *Server) cachedTranslations(ctx context.Context, source, target string, 
 
 // 回写。同样是尽力而为:写失败只是下次还得再翻一遍,不影响这次的结果,所以错误不往上报。
 func (s *Server) storeTranslations(ctx context.Context, source, target string, sources, targets []string) {
+	if s.accounts == nil {
+		return
+	}
 	keep, values := make([]string, 0, len(sources)), make([]string, 0, len(sources))
 	for i, text := range sources {
 		if cacheablePair(text, targets[i]) {

@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/pelletier/go-toml/v2"
@@ -26,6 +27,15 @@ var ErrNotFound = errors.New("skin_not_found")
 var ErrInvalid = errors.New("invalid_skin")
 var idPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 var builtinIDs = []string{"fluent", "wechat", "graphite", "willow_green"}
+
+// 内置资源随二进制固定，每款皮肤按需加载一次元数据，返回时再复制可变切片。
+var builtinLoads = func() map[string]func() (Package, error) {
+	loads := make(map[string]func() (Package, error), len(builtinIDs))
+	for _, id := range builtinIDs {
+		loads[id] = sync.OnceValues(func() (Package, error) { return loadPackage("", id) })
+	}
+	return loads
+}()
 
 func SafeID(id string) bool  { return idPattern.MatchString(id) }
 func Builtin(id string) bool { return slices.Contains(builtinIDs, id) }
@@ -211,6 +221,17 @@ func Files(root, id string) (fs.FS, func(), error) {
 	return child.FS(), func() { child.Close() }, nil
 }
 func Load(root, id string) (Package, error) {
+	if load, ok := builtinLoads[id]; ok {
+		p, err := load()
+		p.Supports.Layouts = slices.Clone(p.Supports.Layouts)
+		p.Supports.Themes = slices.Clone(p.Supports.Themes)
+		p.Resources = slices.Clone(p.Resources)
+		return p, err
+	}
+	return loadPackage(root, id)
+}
+
+func loadPackage(root, id string) (Package, error) {
 	files, close, err := Files(root, id)
 	if err != nil {
 		return Package{}, err

@@ -631,15 +631,28 @@ func (a *Service) begin(w http.ResponseWriter, r *http.Request) {
 			}
 			seed = "code-v1:" + randomToken()
 		}
-		code = a.verificationCode(v.Provider, target, seed)
-		c.Nonce = seed
-		c.CodeHash = a.codeHash(id, code)
-		response["reused"] = reused
-		if e = a.store.PutChallenge(r.Context(), c); e != nil {
+		reused, seed, e = a.store.PutVerificationChallenge(r.Context(), c, v.Provider, target, seed, func(actual string) string {
+			code = a.verificationCode(v.Provider, target, actual)
+			return a.codeHash(id, code)
+		})
+		if e != nil {
 			a.refundDeliveryReservation(r.Context(), releaseGlobal)
 			a.error(w, e)
 			return
 		}
+		if reused {
+			a.refundDeliveryReservation(r.Context(), releaseGlobal)
+			releaseGlobal = nil
+		} else if releaseGlobal == nil {
+			// 初次查询到的种子可能在事务锁等待期间过期；此时实际会发新邮件，必须补做全站额度预留。
+			releaseGlobal, _, e = a.reserveRateKey(r.Context(), "delivery-global", deliveryGlobalDailyLimit, 24*time.Hour)
+			if e != nil {
+				a.store.DropChallenge(r.Context(), c.IDHash)
+				a.error(w, e)
+				return
+			}
+		}
+		response["reused"] = reused
 		if !reused {
 			e = a.sender.Send(r.Context(), v.Provider, c.Subject, code)
 			a.recordEmailDelivery(v.Provider, e)

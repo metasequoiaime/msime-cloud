@@ -32,6 +32,25 @@ func TestQQPlainTextLineBuffersKeepContent(t *testing.T) {
 	}
 }
 
+func TestQQPlainTextRepeatedLinesKeepFilteringOrder(t *testing.T) {
+	for _, tc := range []struct{ name, input, want string }{
+		{"重复引用表格", strings.Repeat("> |甲| 乙\n", 32) + "尾词", strings.Repeat("|甲| 乙 ", 32) + "尾词"},
+		{"重复原始表格", strings.Repeat(" |甲| 乙 \n", 32) + "尾词", "尾词"},
+		{"引用与原始表格交错", strings.Repeat("> |甲| 乙\n|甲| 乙\n", 32) + "尾词", strings.Repeat("|甲| 乙 ", 32) + "尾词"},
+		{"嵌套列表与空行", strings.Repeat("\u3000> - 1. ### 甲 \t乙\u00a0\n\n", 32) + "尾词", strings.Repeat("甲 乙 ", 32) + "尾词"},
+		{"保留不完整的列表标记", strings.Repeat("> - \t \n", 32) + "尾词", strings.Repeat("- ", 32) + "尾词"},
+		{"空白与重复正文切换", strings.Repeat(" \t\u3000\n> 正文\n> 正文\n", 32) + "尾词", strings.Repeat("正文 正文 ", 32) + "尾词"},
+		{"被移除的引用标记", strings.Repeat(">>\n", 32) + "尾词", "尾词"},
+		{"重复行保留无效编码", strings.Repeat("> - 甲\xff\u3000乙\xfe\r\n", 32) + "尾词", strings.Repeat("甲\xff 乙\xfe ", 32) + "尾词"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := qqPlainText(tc.input); got != tc.want {
+				t.Fatalf("重复行转换发生变化：结果=%q，预期=%q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestQQPlainTextLineBufferAllocationBudget(t *testing.T) {
 	for _, tc := range []struct {
 		name, input string
@@ -66,6 +85,9 @@ func BenchmarkQQPlainTextLineBuffers(b *testing.B) {
 		{"short_lines", strings.Repeat("正文\n", 16384)},
 		{"many_words", strings.Repeat("词 ", 32768)},
 		{"plain", "普通正文"},
+		{"nested_marker_lines", strings.Repeat("> - 1. ### 正文\n", 1024)},
+		{"quoted_table_lines", strings.Repeat("> |甲| 乙\n", 1024)},
+		{"alternating_marker_lines", strings.Repeat("> - 甲\n> - 乙\n", 512)},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()

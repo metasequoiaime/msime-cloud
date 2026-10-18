@@ -1277,7 +1277,7 @@ func qqPlainText(md string) string {
 	}
 	fields := func(yield func(string) bool) {
 		cacheLines := strings.IndexByte(text, '\n') >= 0
-		previousLine, previousTrimmed := "", ""
+		previousLine, previousBody := "", ""
 		for offset := 0; offset < len(text); {
 			lineEnd := strings.IndexByte(text[offset:], '\n')
 			if lineEnd < 0 {
@@ -1288,26 +1288,32 @@ func qqPlainText(md string) string {
 			line := text[offset:lineEnd]
 			offset = lineEnd + 1
 			if line == "" {
-				// 空行已经是裁剪结果。
-			} else if cacheLines && line == previousLine {
-				line = previousTrimmed
-			} else if cacheLines {
-				previousLine = line
-				line = strings.TrimSpace(line)
-				previousTrimmed = line
-			} else {
-				line = strings.TrimSpace(line)
-			}
-			if strings.HasPrefix(line, "|") {
 				continue
 			}
-			// 「> - 第一条」这类标记只匹配并切掉前缀，避免逐层复制剩余整行。
-			for {
-				end := qqLineMarkerEnd(line)
-				if end == 0 {
-					break
+			if cacheLines && line == previousLine {
+				line = previousBody
+			} else {
+				rawLine := line
+				line = strings.TrimSpace(line)
+				// 原始表格缓存为空正文；引用中的表格在剥离标记后保留，命中缓存时不再过滤。
+				if strings.HasPrefix(line, "|") {
+					line = ""
+				} else {
+					// 「> - 第一条」这类标记只匹配并切掉前缀，避免逐层复制剩余整行。
+					for {
+						end := qqLineMarkerEnd(line)
+						if end == 0 {
+							break
+						}
+						line = strings.TrimSpace(line[end:])
+					}
 				}
-				line = strings.TrimSpace(line[end:])
+				if cacheLines {
+					previousLine, previousBody = rawLine, line
+				}
+			}
+			if line == "" {
+				continue
 			}
 			for field := range strings.FieldsSeq(line) {
 				if !yield(field) {

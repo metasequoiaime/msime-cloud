@@ -179,7 +179,47 @@ var userDataExportFiles = []userDataExportFile{
 	{"sessions.json", `SELECT COALESCE(jsonb_agg(jsonb_build_object('user_agent',user_agent,'created_at',created_at,'revoked',revoked,'expires_at',expires_at) ORDER BY created_at DESC),'[]'::jsonb) FROM auth_sessions WHERE user_id=$1`},
 }
 
-// userDataExport 处理 GET /v1/users/me/data/export：把本人的数据流式写成 zip（profile、preferences、dictionary.ndjson、phrases、clipboard、community、typing_statistics、sessions）。每用户每天 userDataExportsPerDay 次。开始写响应后出错只能中断连接，客户端会拿到不完整的 zip 而不是一个看似完整的包。内容不写日志。
+// streamVoiceContributions 流式导出本人的语音样本；音频用 JSON 的 base64 表示，避免把所有样本一次性读进内存。
+func (s *Store) streamVoiceContributions(ctx context.Context, user string, write func(json.RawMessage) error) error {
+	rows, err := s.pool.Query(ctx, `SELECT id,language,provider,duration_ms,transcript,app_version,audio_mime,audio,created_at
+FROM voice_contributions WHERE user_id=$1 ORDER BY created_at,id`, user)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			id, language, provider, transcript, appVersion, audioMIME string
+			durationMS                                                int
+			audio                                                     []byte
+			createdAt                                                 time.Time
+		)
+		if err := rows.Scan(&id, &language, &provider, &durationMS, &transcript, &appVersion, &audioMIME, &audio, &createdAt); err != nil {
+			return err
+		}
+		record := struct {
+			ID         string    `json:"id"`
+			Language   string    `json:"language"`
+			Provider   string    `json:"provider"`
+			DurationMS int       `json:"duration_ms"`
+			Transcript string    `json:"transcript"`
+			AppVersion string    `json:"app_version"`
+			AudioMIME  string    `json:"audio_mime"`
+			Audio      []byte    `json:"audio_base64"`
+			CreatedAt  time.Time `json:"created_at"`
+		}{id, language, provider, durationMS, transcript, appVersion, audioMIME, audio, createdAt}
+		raw, err := json.Marshal(record)
+		if err != nil {
+			return err
+		}
+		if err := write(raw); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+// userDataExport 处理 GET /v1/users/me/data/export：把本人的数据流式写成 zip（profile、preferences、phrases、clipboard、community、typing_statistics、sessions、voice.ndjson、dictionary.ndjson）。每用户每天 userDataExportsPerDay 次。开始写响应后出错只能中断连接，客户端会拿到不完整的 zip 而不是一个看似完整的包。内容不写日志。
 func (a *Service) userDataExport(w http.ResponseWriter, r *http.Request) {
 	p, ok := a.principal(w, r, false)
 	if !ok {
@@ -223,7 +263,17 @@ func (a *Service) userDataExport(w http.ResponseWriter, r *http.Request) {
 			panic(http.ErrAbortHandler)
 		}
 	}
-	out, err := entry("dictionary.ndjson")
+	out, err := entry("voice.ndjson")
+	if err == nil {
+		err = a.store.streamVoiceContributions(r.Context(), p.UserID, func(raw json.RawMessage) error {
+			_, e := out.Write(append(raw, '\n'))
+			return e
+		})
+	}
+	if err != nil {
+		panic(http.ErrAbortHandler)
+	}
+	out, err = entry("dictionary.ndjson")
 	if err == nil {
 		err = a.store.streamFullDictionarySnapshotWithFooter(r.Context(), p.UserID, func(raw json.RawMessage) error {
 			_, e := out.Write(append(raw, '\n'))

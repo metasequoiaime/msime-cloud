@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -119,7 +120,7 @@ func TestUserDataExportReadsFilesTogether(t *testing.T) {
 			}
 		}
 	}
-	if !slices.Equal(names, []string{"profile.json", "preferences.json", "phrases.json", "clipboard.json", "community.json", "typing_statistics.json", "sessions.json", "dictionary.ndjson"}) {
+	if !slices.Equal(names, []string{"profile.json", "preferences.json", "phrases.json", "clipboard.json", "community.json", "typing_statistics.json", "sessions.json", "voice.ndjson", "dictionary.ndjson"}) {
 		t.Fatalf("导出文件或顺序错误：%v", names)
 	}
 }
@@ -155,5 +156,61 @@ func TestUserDataExportReadFailureReleasesConnection(t *testing.T) {
 	}
 	if err := pool.Ping(ctx); err != nil {
 		t.Fatal("失败后没有释放唯一连接：", err)
+	}
+}
+
+func TestUserDataExportIncludesVoiceContributions(t *testing.T) {
+	db := testStore(t)
+	user := complete(t, db, Identity{"email", "export-voice@example.test"})
+	if _, err := db.pool.Exec(t.Context(), `INSERT INTO voice_contributions(id,user_id,language,provider,duration_ms,transcript,app_version,audio_mime,audio)
+VALUES('voice-export-1',$1,'zh-CN','doubao',1234,'你好','1.2.3','audio/wav',$2)`, user.User.ID, []byte("synthetic-audio")); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	Mount(mux, &Service{store: db})
+	r := httptest.NewRequest("GET", "/v1/users/me/data/export", nil)
+	r.Header.Set("Authorization", "Bearer "+user.AccessToken)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	archive, err := zip.NewReader(bytes.NewReader(w.Body.Bytes()), int64(w.Body.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw []byte
+	for _, f := range archive.File {
+		if f.Name != "voice.ndjson" {
+			continue
+		}
+		reader, err := f.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err = io.ReadAll(reader)
+		reader.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(raw) == 0 {
+		t.Fatal("导出包缺少 voice.ndjson")
+	}
+	var got struct {
+		ID         string `json:"id"`
+		Language   string `json:"language"`
+		Provider   string `json:"provider"`
+		DurationMS int    `json:"duration_ms"`
+		Transcript string `json:"transcript"`
+		AppVersion string `json:"app_version"`
+		AudioMIME  string `json:"audio_mime"`
+		Audio      string `json:"audio_base64"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(raw), &got); err != nil {
+		t.Fatal(err, string(raw))
+	}
+	if got.ID != "voice-export-1" || got.Language != "zh-CN" || got.Provider != "doubao" || got.DurationMS != 1234 || got.Transcript != "你好" || got.AppVersion != "1.2.3" || got.AudioMIME != "audio/wav" || got.Audio != "c3ludGhldGljLWF1ZGlv" {
+		t.Fatalf("语音贡献导出内容不完整：%+v", got)
 	}
 }

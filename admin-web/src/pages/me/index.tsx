@@ -21,7 +21,8 @@ import { Empty, ErrorState, Skeleton, SkeletonRows } from "../../ui/states";
 import { Switch } from "../../ui/switch";
 import { useToast } from "../../ui/toast";
 import { formatDateTime, formatLocaleDateTime, relativeTime } from "../../utils/time";
-import { Avatar, SectionCard, SectionRow } from "./section";
+import { Avatar } from "../../ui/avatar";
+import { SectionCard, SectionRow } from "../../ui/section";
 
 const meKey = keys.page("me");
 

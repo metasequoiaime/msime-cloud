@@ -16,7 +16,8 @@ import { Pill } from "../../ui/pill";
 import { Empty, ErrorState, SkeletonRows } from "../../ui/states";
 import { useToast } from "../../ui/toast";
 import { formatLocaleDateTime, relativeTime } from "../../utils/time";
-import { Avatar, SectionCard, SectionRow } from "../me/section";
+import { Avatar } from "../../ui/avatar";
+import { SectionCard, SectionRow } from "../../ui/section";
 
 const permKey = keys.page("perm", "matrix");
 

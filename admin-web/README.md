@@ -19,7 +19,7 @@ pnpm dev
 - `src/utils/`：不依赖组件的公共工具。`time.ts` 提供本地时区固定格式日期与中文相对时间，无效日期保留原文；`formatLocaleDateTime` 共用中文本地时间（含秒）和旧页面的 `Invalid Date` 文案。个人资料、会话、公告、发布记录、审计与下载镜像设置复用这些方法，空值文案由页面决定；`bytes.ts` 统一字节到 B、KB、MB 的单位换算，页面自行决定精度和空值文案；`number.ts` 提供数字千分位格式化，默认使用 `zh-CN`，页面可指定 `en-US` 和小数位等 `Intl` 选项；`pagination.ts` 共用管理列表的 URL 页码解析，保留十进制整数前缀语义，缺省或无效时回到第一页；用户与反馈列表限制在 1 至 10000，社区列表沿用不设上限的旧行为。
 - `src/hooks/`：共享 React Hook。`use-debounced.ts` 延迟发布输入值，输入或延迟改变时重新计时，卸载时取消等待；`use-api-image.ts` 共用管理接口图片读取、五分钟缓存和 data URL 转换，支持 Cookie 与旧令牌，页面保留各自的缓存键和地址。
 - `src/shell/`：外壳（侧栏、顶栏、全局搜索、通知、外观、权限钩子 `usePermissions`、页面级快捷键）。
-- `src/ui/`：共享组件。`count-bar.tsx` 为下载、崩溃和敏感词表格共用计数占比条，复用 `ProgressBar` 的宽度与颜色计算，保留页面的数字语言、间距、圆角和文字样式；装饰条对读屏隐藏且不启用动画。`data-table.tsx`（选择、批量操作、本页筛选、分页）、`drawer.tsx`、`confirm.tsx`、`toast.tsx`（4 秒撤销与延迟提交）、`filter-chips.tsx`、`segmented.tsx`、`stat-tile.tsx`、`charts.tsx`、`states.tsx` 等。`modal.tsx` 为确认框和发布表单共用弹窗框架与标题说明，保留普通遮罩以适配 CSP。`overlay.ts` 记录打开的弹窗：页面快捷键在弹窗打开时失效，提示条把 Escape 交给最上层弹窗，弹窗不会因点击提示条的「撤销」而关闭。
+- `src/ui/`：共享组件。`section.tsx` 提供个人中心和权限日志共用的 `SectionCard`、`SectionRow`，`avatar.tsx` 提供两页共用的首字头像；页面之间不再交叉引用组件。`count-bar.tsx` 为下载、崩溃和敏感词表格共用计数占比条，复用 `ProgressBar` 的宽度与颜色计算，保留页面的数字语言、间距、圆角和文字样式；装饰条对读屏隐藏且不启用动画。`data-table.tsx`（选择、批量操作、本页筛选、分页）、`drawer.tsx`、`confirm.tsx`、`toast.tsx`（4 秒撤销与延迟提交）、`filter-chips.tsx`、`segmented.tsx`、`stat-tile.tsx`、`charts.tsx`、`states.tsx` 等。`modal.tsx` 为确认框和发布表单共用弹窗框架与标题说明，保留普通遮罩以适配 CSP。`overlay.ts` 记录打开的弹窗：页面快捷键在弹窗打开时失效，提示条把 Escape 交给最上层弹窗，弹窗不会因点击提示条的「撤销」而关闭。
 - `src/auth.tsx`：登录状态、Google 登录与管理员密钥登录页。
 - `tests/csp_smoke.py`、`tests/harness/`：CSP 冒烟测试与共享组件测试页。
 

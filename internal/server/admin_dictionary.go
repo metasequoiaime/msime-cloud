@@ -362,7 +362,25 @@ func dictionaryASCIIContainsFold(line, query string) bool {
 	if len(query) > len(line) {
 		return false
 	}
-	for i := 0; i <= len(line)-len(query); i++ {
+	first := query[0]
+	upper := first
+	if 'a' <= first && first <= 'z' {
+		upper -= 'a' - 'A'
+	}
+	for offset := 0; offset <= len(line)-len(query); {
+		candidate := strings.IndexByte(line[offset:], first)
+		if upper != first {
+			if alternate := strings.IndexByte(line[offset:], upper); candidate < 0 || 0 <= alternate && alternate < candidate {
+				candidate = alternate
+			}
+		}
+		if candidate < 0 {
+			return false
+		}
+		i := offset + candidate
+		if i > len(line)-len(query) {
+			return false
+		}
 		matched := true
 		for j := range query {
 			c := line[i+j]
@@ -377,6 +395,7 @@ func dictionaryASCIIContainsFold(line, query string) bool {
 		if matched {
 			return true
 		}
+		offset = i + 1
 	}
 	return false
 }

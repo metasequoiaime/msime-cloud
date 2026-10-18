@@ -42,23 +42,19 @@ func assetsFS() (fs.FS, error) {
 }
 
 func Handler() http.Handler {
+	root, err := assetsFS()
+	if err != nil {
+		return http.HandlerFunc(unavailableHandler)
+	}
+	index, err := fs.ReadFile(root, "index.html")
+	if err != nil {
+		return http.HandlerFunc(unavailableHandler)
+	}
+	files := http.FileServer(http.FS(root))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "GET" && r.Method != "HEAD" {
-			w.Header().Set("Allow", "GET, HEAD")
-			w.WriteHeader(http.StatusMethodNotAllowed)
+		if !allowMethod(w, r) {
 			return
 		}
-		root, err := assetsFS()
-		if err != nil {
-			http.Error(w, "管理后台静态文件不可用", http.StatusServiceUnavailable)
-			return
-		}
-		index, err := fs.ReadFile(root, "index.html")
-		if err != nil {
-			http.Error(w, "管理后台静态文件不可用", http.StatusServiceUnavailable)
-			return
-		}
-		files := http.FileServer(http.FS(root))
 		if pagePaths[r.URL.Path] {
 			http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(index))
 			return
@@ -74,4 +70,20 @@ func Handler() http.Handler {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		files.ServeHTTP(w, r)
 	})
+}
+
+func allowMethod(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method == "GET" || r.Method == "HEAD" {
+		return true
+	}
+	w.Header().Set("Allow", "GET, HEAD")
+	w.WriteHeader(http.StatusMethodNotAllowed)
+	return false
+}
+
+func unavailableHandler(w http.ResponseWriter, r *http.Request) {
+	if !allowMethod(w, r) {
+		return
+	}
+	http.Error(w, "管理后台静态文件不可用", http.StatusServiceUnavailable)
 }

@@ -632,6 +632,15 @@ func qqMarkdownSpaceIsSpace(r rune) bool {
 }
 
 const qqCommonMarkdownPadding = " \t\u3000 \t\u3000 \t\u3000 \t\u3000 \t\u3000 \t\u3000 \t\u3000 \t\u3000"
+const qqCommonMarkdownPaddingLeading = "\u3000 \t\u3000 \t\u3000 \t\u3000 \t\u3000 \t\u3000 \t\u3000 \t\u3000 \t"
+
+// qqTrimLeadingCommonPadding 按固定块跳过重复的 Markdown 空白填充，剩余不足一块的部分交给逐 rune 裁剪。
+func qqTrimLeadingCommonPadding(text string, start, end int) int {
+	for end-start >= len(qqCommonMarkdownPaddingLeading) && text[start:start+len(qqCommonMarkdownPaddingLeading)] == qqCommonMarkdownPaddingLeading {
+		start += len(qqCommonMarkdownPaddingLeading)
+	}
+	return start
+}
 
 // qqTrimTrailingCommonPadding 按固定块跳过重复的 Markdown 空白填充，剩余不足一块的部分交给逐 rune 裁剪。
 func qqTrimTrailingCommonPadding(text string, start, end int) int {
@@ -652,6 +661,7 @@ func qqTrimSpace(text string) string {
 	trimmed = strings.TrimRight(trimmed, " \t\n\f\r\v")
 	end := start + len(trimmed)
 	if start < end && text[start] >= utf8.RuneSelf {
+		start = qqTrimLeadingCommonPadding(text, start, end)
 		for start < end {
 			r, size := utf8.DecodeRuneInString(text[start:end])
 			if !qqMarkdownSpaceIsSpace(r) {

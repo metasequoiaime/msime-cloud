@@ -123,8 +123,8 @@ func TestNotificationsReadStateIsPerAdmin(t *testing.T) {
 		t.Fatalf("after all: %d %v", n, err)
 	}
 	var markers int
-	if err := a.store.pool.QueryRow(ctx, `SELECT count(*) FROM admin_notification_reads`).Scan(&markers); err != nil || markers != 0 {
-		t.Fatalf("redundant markers %d %v", markers, err)
+	if err := a.store.pool.QueryRow(ctx, `SELECT count(*) FROM admin_notification_reads`).Scan(&markers); err != nil || markers != 3 {
+		t.Fatalf("全部已读标记数 %d %v", markers, err)
 	}
 	if err := a.NotifyNow(ctx, Notification{Kind: NotifyIssue}); err != nil {
 		t.Fatal(err)
@@ -183,10 +183,10 @@ func TestNotificationsReadAllStopsAtShownNewest(t *testing.T) {
 		t.Fatalf("after read all up to the shown newest: %+v", got)
 	}
 	var markers int
-	if err := a.store.pool.QueryRow(ctx, `SELECT count(*) FROM admin_notification_reads`).Scan(&markers); err != nil || markers != 0 {
-		t.Fatalf("redundant markers %d %v", markers, err)
+	if err := a.store.pool.QueryRow(ctx, `SELECT count(*) FROM admin_notification_reads`).Scan(&markers); err != nil || markers != 2 {
+		t.Fatalf("截止到已显示通知的标记数 %d %v", markers, err)
 	}
-	// An older or vanished up_to_id never moves the watermark back.
+	// 更早或已不存在的 up_to_id 不能撤销既有的已读记录。
 	read(`{"all":true,"up_to_id":"`+jsonInt(shown.Items[1].ID)+`"}`, 200)
 	read(`{"all":true,"up_to_id":"999999999"}`, 200)
 	if n, err := a.UnreadNotifications(ctx, "a@example.test"); err != nil || n != 1 {

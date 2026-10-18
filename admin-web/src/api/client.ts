@@ -120,8 +120,9 @@ const codeMessages: Record<string, string> = {
   // Crash group issues.
   issue_exists: "这个分组已经建过 Issue。",
   issue_in_progress: "另一个请求正在为这个分组建 Issue，请稍后刷新。",
+  crash_group_not_open: "分组已标记为已知或已修复，请先核对 GitHub；确认尚未创建 Issue 后，重新打开分组才能创建。",
   platform_not_configured: "该平台未在 admin.github.platforms 中配置仓库，无法建 Issue。",
-  issue_not_recorded: "Issue 已在 GitHub 创建，但未能写回分组，请勿重复创建，稍后将分组标记为已知。",
+  issue_not_recorded: "Issue 已在 GitHub 创建，但未能写回分组；分组已保留为已知问题，请勿重复创建。",
   // 服务日志。
   logs_disabled: "服务端未配置日志来源（admin.logs.loki_url）。",
   logs_unavailable: "暂时无法读取日志：服务端连不上 Loki 或 Loki 返回了错误。",

@@ -107,6 +107,10 @@ func (s *Server) adminCrashIssue(w http.ResponseWriter, r *http.Request) {
 		respond(w, 409, map[string]any{"error": map[string]string{"code": "issue_exists", "message": "issue_exists"}, "issue_url": group.IssueURL})
 		return
 	}
+	if group.Status != "open" {
+		fail(w, 409, "crash_group_not_open")
+		return
+	}
 	if !configured {
 		fail(w, 409, "platform_not_configured")
 		return
@@ -128,21 +132,34 @@ func (s *Server) adminCrashIssue(w http.ResponseWriter, r *http.Request) {
 	if platform.Assignee != "" {
 		request["assignees"] = []string{platform.Assignee}
 	}
+	if err := locked.Start(ctx, platform.Repo); err != nil {
+		if errors.Is(err, account.ErrCrashIssueNotOpen) {
+			fail(w, 409, "crash_group_not_open")
+		} else {
+			fail(w, 503, "auth_unavailable")
+		}
+		return
+	}
 	response, err := client.Do(ctx, token, "POST", "/repos/"+platform.Repo+"/issues", request)
 	// 响应失败或损坏时 issue 也可能已创建，后续读取不能继续使用写入前的缓存。
 	client.Invalidate("/repos/" + platform.Repo + "/issues")
-	if err != nil {
-		slog.Warn("crash issue: create", "repo", platform.Repo, "reason", err.Error())
-		fail(w, 502, "github_unavailable")
+	if err != nil || response.Status == 0 || response.Status >= 500 {
+		slog.Warn("crash issue: create outcome uncertain", "repo", platform.Repo, "status", response.Status)
+		fail(w, 502, "github_uncertain")
 		return
 	}
 	if !response.OK() {
 		slog.Warn("crash issue: create rejected", "repo", platform.Repo, "status", response.Status)
-		if response.Status >= 500 {
-			fail(w, 502, "github_unavailable")
-		} else {
-			fail(w, 502, "github_rejected")
+		// 拒绝已确认，即使原请求取消，也在有限时间内恢复允许重试的状态。
+		rejectCtx, cancelReject := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		rejectErr := locked.Reject(rejectCtx, platform.Repo)
+		cancelReject()
+		if rejectErr != nil {
+			slog.Error("crash issue: rejection record failed", "signature", signature, "reason", rejectErr.Error())
+			fail(w, 503, "auth_unavailable")
+			return
 		}
+		fail(w, 502, "github_rejected")
 		return
 	}
 	var created struct {
@@ -150,7 +167,7 @@ func (s *Server) adminCrashIssue(w http.ResponseWriter, r *http.Request) {
 		HTMLURL string `json:"html_url"`
 	}
 	if response.Decode(&created) != nil || created.Number <= 0 || !strings.HasPrefix(created.HTMLURL, "https://") {
-		fail(w, 502, "github_unavailable")
+		fail(w, 502, "github_uncertain")
 		return
 	}
 	// The issue now exists on GitHub; record it even if the request deadline ran out or the admin went away during the GitHub call. WithoutCancel keeps the actor for the audit row.

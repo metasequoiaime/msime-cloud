@@ -9,7 +9,7 @@ import (
 )
 
 func TestCrashIssueOperationsUseLockedPoolConnection(t *testing.T) {
-	for _, operation := range []string{"read", "record"} {
+	for _, operation := range []string{"read", "start", "reject", "record"} {
 		t.Run(operation, func(t *testing.T) {
 			db := testStore(t)
 			const signature = "abcdef0123456789"
@@ -41,6 +41,24 @@ VALUES($1,'ios','1.0','合成崩溃') ON CONFLICT(signature) DO UPDATE SET statu
 				source, err := locked.Source(ctx)
 				if err != nil || source.Signature != signature || source.Platform != "ios" {
 					t.Fatalf("持锁后重读分组阻塞或失败：source=%+v err=%v", source, err)
+				}
+			} else if operation == "start" || operation == "reject" {
+				if err := locked.Start(ctx, "synthetic/ios"); err != nil {
+					t.Fatalf("持锁后记录创建尝试阻塞或失败：%v", err)
+				}
+				if err := locked.Start(ctx, "synthetic/ios"); err != ErrCrashIssueNotOpen {
+					t.Fatalf("已记录尝试的分组仍可再次开始创建：%v", err)
+				}
+				want := "known"
+				if operation == "reject" {
+					if err := locked.Reject(ctx, "synthetic/ios"); err != nil {
+						t.Fatalf("持锁后恢复拒绝状态阻塞或失败：%v", err)
+					}
+					want = "open"
+				}
+				source, err := locked.Source(ctx)
+				if err != nil || source.Status != want || source.IssueURL != "" {
+					t.Fatalf("创建尝试状态不正确：source=%+v err=%v", source, err)
 				}
 			} else {
 				if err := locked.Record(ctx, "synthetic/ios", 7, "https://example.test/issues/7"); err != nil {

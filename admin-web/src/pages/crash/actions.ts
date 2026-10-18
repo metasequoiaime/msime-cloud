@@ -58,6 +58,11 @@ export function useCrashActions(): CrashActions {
       undo: () => clear(group.signature),
       onCommitError: error => {
         clear(group.signature);
+        void refresh();
+        if (error instanceof APIError && error.code === "github_uncertain") {
+          toast("无法确认 Issue 是否已创建，分组已保留为已知问题。请先在 GitHub 核对，确认未创建后再重新打开分组重试。");
+          return;
+        }
         // The issue exists on GitHub but the group does not point at it: keep its link, or the group would offer 建 Issue again and open a duplicate.
         const url = error instanceof APIError && error.code === "issue_not_recorded" ? error.details.issue_url : undefined;
         if (typeof url === "string" && url.startsWith("https://")) {

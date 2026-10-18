@@ -414,6 +414,41 @@ func (l *CrashIssueLock) Source(ctx context.Context) (CrashIssueSource, error) {
 	return crashGroupForIssue(ctx, l.conn, l.signature)
 }
 
+// ErrCrashIssueNotOpen 表示分组已知、已修复或已有 Issue，不能再次创建。
+var ErrCrashIssueNotOpen = errors.New("crash group is not open")
+
+// Start 在联系 GitHub 前持久标记已知并审计创建尝试，响应丢失或进程退出后仍阻止重复创建。
+func (l *CrashIssueLock) Start(ctx context.Context, repo string) error {
+	changed, err := l.changeAttemptState(ctx, "open", "known", "crash_group_issue_attempt", repo)
+	if err == nil && !changed {
+		return ErrCrashIssueNotOpen
+	}
+	return err
+}
+
+// Reject 仅在 GitHub 明确拒绝创建时恢复未处理；保留等待期间其他管理员设置的状态和 Issue 链接。
+func (l *CrashIssueLock) Reject(ctx context.Context, repo string) error {
+	_, err := l.changeAttemptState(ctx, "known", "open", "crash_group_issue_rejected", repo)
+	return err
+}
+
+func (l *CrashIssueLock) changeAttemptState(ctx context.Context, from, to, action, repo string) (bool, error) {
+	detail, err := auditDetail(map[string]any{"repo": repo, "from": from, "to": to})
+	if err != nil {
+		return false, err
+	}
+	var changed bool
+	err = l.conn.QueryRow(ctx, `WITH updated AS (
+ UPDATE admin_crash_groups SET status=$3
+ WHERE signature=$1 AND status=$2 AND issue_url IS NULL RETURNING signature
+), audited AS (
+ INSERT INTO admin_audit(action,target,actor,detail)
+ SELECT $4,signature,$5,$6::jsonb FROM updated RETURNING 1
+)
+SELECT EXISTS(SELECT 1 FROM audited)`, l.signature, from, to, action, adminActor(ctx), detail).Scan(&changed)
+	return changed, err
+}
+
 // Record 使用持锁连接原子写入 Issue 链接、状态和审计，避免 GitHub 创建成功后因等待池中另一连接而登记失败。
 func (l *CrashIssueLock) Record(ctx context.Context, repo string, number int64, url string) error {
 	return recordCrashGroupIssue(ctx, l.conn, l.signature, repo, number, url)

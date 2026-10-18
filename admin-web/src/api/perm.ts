@@ -122,6 +122,8 @@ export function describeAudit(entry: AuditEntry): string {
     case "archive_notice": return `归档了公告${text(d.title) ? `「${text(d.title)}」` : ""}`;
     case "resolve_crash": return "标记崩溃已解决";
     case "reopen_crash": return "重新打开了崩溃记录";
+    case "crash_group_issue_attempt": return "尝试为崩溃分组创建 Issue，并标记为已知问题";
+    case "crash_group_issue_rejected": return "GitHub 拒绝创建崩溃 Issue，恢复为未处理";
     case "crash_group_status": return `将崩溃分组标记为「${crashStates[text(d.to)] ?? text(d.to)}」`;
     case "open_incident": return `开启了事件${text(d.title) ? `「${text(d.title)}」` : ""}`;
     case "resolve_incident": return "解决了事件";

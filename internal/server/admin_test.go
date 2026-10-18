@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -18,7 +19,6 @@ func TestAdminHostAuthAndIsolation(t *testing.T) {
 		{"admin.msime.app", "/", "", "", 200},
 		{"ADMIN.MSIME.APP:8080", "/users", "", "", 200},
 		{"admin.msime.app", "/crashes", "", "", 200},
-		{"admin.msime.app", "/assets/msime-B8n1ySid.png", "", "", 200},
 		{"admin.msime.app", "/api/overview", "", "", 401},
 		{"admin.msime.app", "/api/system", strings.Repeat("a", 40), "", 200},
 		{"admin.msime.app", "/api/skins/example", "", "", 401},
@@ -40,7 +40,7 @@ func TestAdminHostAuthAndIsolation(t *testing.T) {
 		if w.Code != tc.status {
 			t.Fatalf("%+v: %d %s", tc, w.Code, w.Body.String())
 		}
-		if tc.status == 200 && (!strings.Contains(w.Header().Get("Content-Security-Policy"), "frame-ancestors 'none'") || (strings.HasPrefix(tc.path, "/assets/") && w.Header().Get("Cache-Control") != "public, max-age=31536000, immutable") || (!strings.HasPrefix(tc.path, "/assets/") && w.Header().Get("Cache-Control") != "no-store")) {
+		if tc.status == 200 && (!strings.Contains(w.Header().Get("Content-Security-Policy"), "frame-ancestors 'none'") || w.Header().Get("Cache-Control") != "no-store") {
 			t.Fatal(w.Header())
 		}
 		if tc.path == "/api/system" && strings.Contains(w.Body.String(), "token") {
@@ -53,6 +53,52 @@ func TestAdminHostAuthAndIsolation(t *testing.T) {
 	s.ServeHTTP(w, r)
 	if w.Code == 200 {
 		t.Fatal("disabled admin is exposed")
+	}
+}
+
+func TestAdminStaticAssetCachePolicy(t *testing.T) {
+	s := fixture(t, nil)
+	s.config.Admin = AdminConfig{Enabled: true, Host: "admin.msime.app"}
+	request := func(method, path string) *httptest.ResponseRecorder {
+		t.Helper()
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, httptest.NewRequest(method, "https://admin.msime.app"+path, nil))
+		return w
+	}
+	index := request("GET", "/community")
+	// 从当前构建读取资源地址，不绑定会随前端变更的哈希。
+	assets := regexp.MustCompile(`(?:src|href)="(/assets/[^" ]+)"`).FindAllStringSubmatch(index.Body.String(), -1)
+	if len(assets) < 2 {
+		t.Fatal("页面缺少构建资源")
+	}
+	for _, asset := range assets {
+		for _, method := range []string{"GET", "HEAD"} {
+			w := request(method, asset[1])
+			if w.Code != http.StatusOK || w.Header().Get("Cache-Control") != "public, max-age=31536000, immutable" {
+				t.Fatalf("%s %s: 状态=%d，响应头=%v", method, asset[1], w.Code, w.Header())
+			}
+			if !strings.Contains(w.Header().Get("Content-Security-Policy"), "frame-ancestors 'none'") {
+				t.Fatal("静态资源缺少安全响应头", w.Header())
+			}
+			if method == "HEAD" && w.Body.Len() != 0 {
+				t.Fatal("HEAD 不应返回响应正文")
+			}
+		}
+	}
+	for _, tc := range []struct {
+		method, path string
+		status       int
+	}{
+		{"GET", "/community", 200},
+		{"GET", "/api/overview", 401},
+		{"GET", "/assets/missing.js", 404},
+		{"GET", "/assets/", 404},
+		{"POST", assets[0][1], 405},
+	} {
+		w := request(tc.method, tc.path)
+		if w.Code != tc.status || w.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("%+v: 状态=%d，响应头=%v", tc, w.Code, w.Header())
+		}
 	}
 }
 

@@ -45,16 +45,15 @@ func Handler() http.Handler {
 			http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(index))
 			return
 		}
-		// 构建产物使用内容哈希命名，版本更新会生成新的路径，可以安全地长期缓存。
-		if strings.HasPrefix(r.URL.Path, "/assets/") {
-			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-		}
 		path := strings.TrimPrefix(r.URL.Path, "/")
 		stat, err := fs.Stat(root, path)
 		if !IsPath(r.URL.Path) || err != nil || stat.IsDir() {
 			http.NotFound(w, r)
 			return
 		}
+		// 只缓存存在的构建产物；文件名包含内容哈希，更新后会使用新路径。
+		// 缺失资源保留 no-store，避免滚动发布时把其他副本尚未包含的资源缓存成 404。
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		files.ServeHTTP(w, r)
 	})
 }

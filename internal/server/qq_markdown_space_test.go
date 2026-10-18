@@ -60,6 +60,15 @@ func TestQQTrimSpaceMatchesUnicodeTrim(t *testing.T) {
 	}
 }
 
+func TestQQTrimTrailingCommonPaddingFastPath(t *testing.T) {
+	padding := strings.Repeat(" \t\u3000", 32)
+	text := "正文" + padding + "尾"
+	end := qqTrimTrailingCommonPadding(text, 0, len(text)-len("尾"))
+	if got, want := text[:end], "正文"; got != want {
+		t.Fatalf("重复空白块裁剪结果=%q，预期=%q", got, want)
+	}
+}
+
 func TestQQMarkdownLeadingSpaceKeepsIndentation(t *testing.T) {
 	for _, prefix := range []string{"", " ", "\t", "\r", "\u0085", "\u00a0", "\u1680", "\u2000", "\u200a", "\u2028", "\u2029", "\u202f", "\u205f", "\u3000", "\u200b", "\ufeff", "\xff"} {
 		body := prefix + "首行\n" + prefix + "第二行"

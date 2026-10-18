@@ -22,7 +22,7 @@ const foreground = (value: number) => {
   return .2126 * channel(16) + .7152 * channel(8) + .0722 * channel(0) > .179 ? "#000000" : "#ffffff";
 };
 
-// 与客户端 SkinKeySurfaceView 的轮廓、材质和默认值保持一致。
+// 与客户端 SkinKeySurfaceView 的轮廓、材质、照片居中裁切和默认值保持一致。
 function KeySurface({ design: d, width, action }: { design: Design; width: number; action: boolean }) {
   const id = useId();
   const w = width - 2, h = 41 - (d.keyMaterial === "raised" ? 3 : 0);
@@ -75,7 +75,7 @@ export function SkinPreview({ content, name, compact = false }: { content: unkno
         <clipPath id={clipID}><rect width="390" height="290" rx="14" /></clipPath>
       </defs><g clipPath={`url(#${clipID})`}>
         <rect width="390" height="290" fill={`url(#${gradientID})`} />
-        {d.photo && <><foreignObject width="390" height="290"><img src={`data:image/jpeg;base64,${d.photo}`} alt="" style={{ width: 390, height: 290, objectFit: "cover", objectPosition: `${(d.photoPosition ?? .5) * 100}% ${(d.photoPosition ?? .5) * 100}%` }} /></foreignObject><rect width="390" height="290" fill="#000000" opacity={d.photoShade ?? .25} /></>}
+        {d.photo && <><foreignObject width="390" height="290"><img src={`data:image/jpeg;base64,${d.photo}`} alt="" style={{ width: 390, height: 290, objectFit: "cover", objectPosition: `50% ${(d.photoPosition ?? .5) * 100}%` }} /></foreignObject><rect width="390" height="290" fill="#000000" opacity={d.photoShade ?? .25} /></>}
         {d.pattern > 0 && (d.pattern === 3
           ? <path d={Array.from({ length: 33 }, (_, i) => { const y = -100 + i * 24; return `M0 ${y}C136.5 ${y - 90} 253.5 ${y + 20} 390 ${y - 70}`; }).join(" ")} fill="none" stroke={accent} strokeWidth="2" opacity={d.patternOpacity ?? .15} />
           : <rect width="390" height="290" fill={`url(#${patternID})`} opacity={d.patternOpacity ?? .15} />)}

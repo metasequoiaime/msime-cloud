@@ -149,6 +149,8 @@ func (s *Server) qqReleases(ctx context.Context, repo string) ([]qqRelease, bool
 		slog.Warn("qq bot: release lookup failed", "repo", repo, "reason", githubFailure("releases", r, err).Error())
 		return nil, false
 	}
+	// 修复版本以发布时间为准；列表位置不能代表版本实际发布的先后。
+	slices.SortStableFunc(list, func(a, b qqRelease) int { return strings.Compare(b.PublishedAt, a.PublishedAt) })
 	return list, true
 }
 

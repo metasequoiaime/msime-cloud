@@ -253,10 +253,12 @@ func (s *Server) qqLatestReleases(ctx context.Context) []qqPlatformRelease {
 			slog.Warn("qq bot: release lookup failed", "repo", repo, "reason", githubFailure("releases", r, err).Error())
 			return nil
 		}
+		// 列表顺序不保证与发布时间一致；GitHub 的 UTC 时间可直接按字符串比较。
+		slices.SortStableFunc(list, func(a, b qqRelease) int { return strings.Compare(b.PublishedAt, a.PublishedAt) })
 		cache[repo], failed[repo] = list, false
 		return list
 	}
-	// latest 返回 repo 里前缀为 prefix 的最新正式版和更晚发布的预发布版（Release 列表按创建时间从新到旧）。
+	// latest 在按发布时间倒序排列的记录中，找正式版和比它更晚发布的预发布版。
 	latest := func(repo, prefix string) (stable, preview *qqRelease) {
 		for i, release := range releases(repo) {
 			if release.Draft || !strings.HasPrefix(release.TagName, prefix) {

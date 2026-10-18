@@ -846,9 +846,12 @@ func (s *Server) similarIssues(ctx context.Context, gh *githubapp.Client, row is
 func similarIssueRows(items []issueRow, row issueRow) []issueSimilar {
 	out := []issueSimilar{}
 	target := titleBigrams(row.Title)
+	if len(target) == 0 {
+		return out
+	}
+	// 空标题的相似度为零，初始缓存也适用于空标题。
 	var lastTitle string
-	var lastBigrams map[[2]rune]bool
-	lastValid := false
+	var lastScore float64
 	type scored struct {
 		row   issueRow
 		score float64
@@ -858,16 +861,16 @@ func similarIssueRows(items []issueRow, row issueRow) []issueSimilar {
 		if other.Repo == row.Repo && other.Number == row.Number {
 			continue
 		}
-		otherBigrams := target
+		var score float64
 		switch {
 		case other.Title == row.Title:
-		case lastValid && other.Title == lastTitle:
-			otherBigrams = lastBigrams
+			score = 1
+		case other.Title == lastTitle:
+			score = lastScore
 		default:
-			otherBigrams = titleBigrams(other.Title)
-			lastTitle, lastBigrams, lastValid = other.Title, otherBigrams, true
+			score = bigramSimilarity(target, titleBigrams(other.Title))
+			lastTitle, lastScore = other.Title, score
 		}
-		score := bigramSimilarity(target, otherBigrams)
 		if score < 0.3 {
 			continue
 		}

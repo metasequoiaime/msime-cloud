@@ -969,7 +969,7 @@ const (
 	issueActionBodyMax = issueCommentMax*12 + 64<<10
 )
 
-// issueActionsHTTP serves POST /api/issues/actions {action, items:[{repo,n}], body?}. GitHub has no transactions, so each item is changed on its own and audited right after GitHub accepted it; the answer reports how many items changed and which failed. When no item changed, the first failure is the answer.
+// issueActionsHTTP 逐项执行并审计 Issue 操作，返回成功数量及逐项错误。全部失败时优先报告结果未知，提醒管理员核对 GitHub。
 func (s *Server) issueActionsHTTP(w http.ResponseWriter, r *http.Request) {
 	gh, ok := s.adminGitHubApp(w)
 	if !ok {
@@ -1016,29 +1016,30 @@ func (s *Server) issueActionsHTTP(w http.ResponseWriter, r *http.Request) {
 	var firstErr error
 	for _, item := range v.Items {
 		detail, err := s.issueAction(ctx, gh, v.Action, item, v.Body)
-		if err != nil && detail != nil {
-			// Part of the action reached GitHub and could not be rolled back; the change is recorded even though the item is reported as failed.
-			if auditErr := s.accounts.Audit(ctx, "issue_"+v.Action, item.key(), detail); auditErr != nil {
-				slog.Error("issues: audit failed after a partial GitHub write", "action", v.Action, "issue", item.key(), "reason", auditErr.Error())
+		if detail != nil {
+			// GitHub 可能已写入；即使请求取消也要保留操作者并在有限时间内记录审计。
+			recordCtx, cancelRecord := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			auditErr := s.accounts.Audit(recordCtx, "issue_"+v.Action, item.key(), detail)
+			cancelRecord()
+			if auditErr != nil {
+				slog.Error("issues: audit failed after a GitHub write", "action", v.Action, "issue", item.key(), "reason", auditErr.Error())
+				if err == nil {
+					fail(w, 503, "auth_unavailable")
+					return
+				}
 			}
 		}
 		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
 			code := "github_unavailable"
 			var e *issueError
 			if errors.As(err, &e) {
 				code = e.code
 			}
+			if firstErr == nil || code == "github_uncertain" {
+				firstErr = err
+			}
 			failures = append(failures, issueActionFailure{item.Repo, item.N, code})
 			continue
-		}
-		if err := s.accounts.Audit(ctx, "issue_"+v.Action, item.key(), detail); err != nil {
-			// GitHub already applied this item; stop before changing more without a record, and report the request as failed.
-			slog.Error("issues: audit failed after a GitHub write", "action", v.Action, "issue", item.key(), "reason", err.Error())
-			fail(w, 503, "auth_unavailable")
-			return
 		}
 		affected++
 	}
@@ -1058,7 +1059,7 @@ type issueStep struct {
 	undo         *issueStep
 }
 
-// issueAction applies one action to one issue and returns the audit detail. Every write first reads the issue fresh, so a pull request or a missing issue fails as not_found before anything changes and the audit records the state the action started from. An action of several writes reverses the writes it made when a later one fails, so a failed item leaves the issue as it was; when that reversal fails too, the error comes with the detail (marked partial) so the caller can still record the change that stayed.
+// issueAction 先读取最新 Issue，再执行操作并返回审计详情。后续步骤明确被拒绝时回滚已确认的步骤；写入结果未知时保留现场并标记 uncertain，回滚失败则标记 partial。
 func (s *Server) issueAction(ctx context.Context, gh *githubapp.Client, action string, ref issueRef, body string) (map[string]any, error) {
 	token, err := gh.Token(ctx, ref.Repo, issueTokenPerms)
 	if err != nil {
@@ -1149,16 +1150,35 @@ func (s *Server) issueAction(ctx context.Context, gh *githubapp.Client, action s
 		if err == nil && (resp.OK() || step.allowMissing && resp.Status == 404) {
 			return nil
 		}
+		if err != nil || resp.Status == 0 || resp.Status >= 500 {
+			slog.Warn("issues: GitHub write outcome uncertain", "repo", ref.Repo, "call", step.what, "status", resp.Status)
+			return &issueError{502, "github_uncertain"}
+		}
 		return issueResponseError(ctx, ref.Repo, step.what, resp, err)
 	}
 	for i, step := range steps {
 		if err := call(step); err != nil {
+			var writeErr *issueError
+			if errors.As(err, &writeErr) && writeErr.code == "github_uncertain" {
+				detail["uncertain"] = true
+				detail["step"] = step.what
+				if i > 0 {
+					detail["partial"] = true
+				}
+				return detail, err
+			}
 			partial := false
 			for j := i - 1; j >= 0; j-- {
 				if undo := steps[j].undo; undo != nil {
 					if undoErr := call(undo); undoErr != nil {
 						slog.Error("issues: could not roll back a partial action", "action", action, "issue", ref.key(), "step", undo.what, "reason", undoErr.Error())
 						partial = true
+						if errors.As(undoErr, &writeErr) && writeErr.code == "github_uncertain" {
+							detail["partial"] = true
+							detail["uncertain"] = true
+							detail["step"] = undo.what
+							return detail, undoErr
+						}
 					}
 				}
 			}

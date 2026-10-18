@@ -698,8 +698,8 @@ func TestAdminIssueActions(t *testing.T) {
 	if status, v := act("reopen", item(issuesWinRepo, 99), ""); status != 404 || issueErrorCode(v) != "not_found" {
 		t.Fatal(status, v)
 	}
-	f.status["PATCH /repos/"+issuesWinRepo+"/issues/11"] = 500
-	if status, v := act("reopen", item(issuesWinRepo, 11), ""); status != 502 || issueErrorCode(v) != "github_unavailable" {
+	f.status["PATCH /repos/"+issuesWinRepo+"/issues/11"] = 422
+	if status, v := act("reopen", item(issuesWinRepo, 11), ""); status != 502 || issueErrorCode(v) != "github_rejected" {
 		t.Fatal(status, v)
 	}
 	f.status["POST /repos/"+issuesWinRepo+"/issues/11/comments"] = 403
@@ -784,14 +784,14 @@ func TestIssueHelpers(t *testing.T) {
 	}
 }
 
-// A failed later write rolls back the earlier writes of the same action, so a failed item changes nothing and leaves no audit row; when the rollback fails as well, the change that stayed is audited as partial.
+// 后续写入明确被拒绝时回滚前面的步骤且不记审计；回滚也失败时，记录尚未撤销的部分变更。
 func TestAdminIssueActionRollback(t *testing.T) {
 	s, f, conn, schema := issuesFixture(t)
 	act := func(action string, n int) (int, map[string]any) {
 		return issuesRequest(t, s, "POST", "/api/issues/actions", `{"action":"`+action+`","items":[{"repo":"`+issuesWinRepo+`","n":`+strconv.Itoa(n)+`}]}`)
 	}
-	f.status["POST /repos/"+issuesWinRepo+"/issues/10/assignees"] = 500
-	if status, v := act("triage", 10); status != 502 || issueErrorCode(v) != "github_unavailable" {
+	f.status["POST /repos/"+issuesWinRepo+"/issues/10/assignees"] = 422
+	if status, v := act("triage", 10); status != 502 || issueErrorCode(v) != "github_rejected" {
 		t.Fatal(status, v)
 	}
 	if got := f.get(issuesWinRepo, 10); slices.Contains(got.labels, "triaged") || len(got.assignees) != 0 {
@@ -805,7 +805,7 @@ func TestAdminIssueActionRollback(t *testing.T) {
 	if status, _ := act("mark_dup", 11); status != 200 {
 		t.Fatal(status)
 	}
-	f.status["PATCH /repos/"+issuesWinRepo+"/issues/11"] = 500
+	f.status["PATCH /repos/"+issuesWinRepo+"/issues/11"] = 422
 	if status, _ := act("reopen", 11); status != 502 {
 		t.Fatal(status)
 	}
@@ -816,12 +816,12 @@ func TestAdminIssueActionRollback(t *testing.T) {
 
 	// The rollback of the triaged label fails too: the label stays, so the request fails but the change is audited as partial.
 	f.status["DELETE /repos/"+issuesWinRepo+"/issues/10/labels/triaged"] = 500
-	if status, _ := act("triage", 10); status != 502 {
-		t.Fatal(status)
+	if status, v := act("triage", 10); status != 502 || issueErrorCode(v) != "github_uncertain" {
+		t.Fatal(status, v)
 	}
 	audits := issueAudits(t, conn, schema)
 	last := audits[len(audits)-1]
-	if len(audits) != 2 || last.action != "issue_triage" || last.target != issuesWinRepo+"#10" || last.detail["partial"] != true {
+	if len(audits) != 2 || last.action != "issue_triage" || last.target != issuesWinRepo+"#10" || last.detail["partial"] != true || last.detail["uncertain"] != true {
 		t.Fatal("partial change not audited", audits)
 	}
 }

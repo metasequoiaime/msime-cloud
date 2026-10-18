@@ -123,9 +123,14 @@ def check_skin_preview(browser, base):
             samples = []
             for position in [0, .2, .3, 1]:
                 render(photo=photo, photoPosition=position, photoShade=0)
-                expect(artwork.locator("foreignObject img")).to_have_js_property("complete", True)
+                image = artwork.locator("foreignObject img")
+                expect(image).to_have_js_property("complete", True)
+                expect(image).to_have_css("object-position", f"50% {position * 100:g}%")
                 samples.append(pixels(page, artwork, [(200, 280)])[0])
-            assert samples[0][0] > samples[1][0] > samples[2][0] > samples[3][0], samples
+            if height > width:
+                assert samples[0][0] > samples[1][0] > samples[2][0] > samples[3][0], samples
+            else:
+                assert samples[0] == samples[1] == samples[2] == samples[3], samples
             render(photo=photo, photoPosition=.3)
             shaded = pixels(page, artwork, [(200, 280)])[0]
             assert all(abs(actual - original * .75) < 3 for actual, original in zip(shaded, samples[2])), (shaded, samples[2])

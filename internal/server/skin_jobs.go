@@ -157,7 +157,23 @@ func respondSkinJob(w http.ResponseWriter, id, state, reason string, artwork jso
 	respond(w, 200, payload)
 }
 
+func validSkinJobID(id string) bool {
+	if len(id) != 48 {
+		return false
+	}
+	for i := range len(id) {
+		if !(id[i] >= '0' && id[i] <= '9' || id[i] >= 'a' && id[i] <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Server) getSkinArtworkJob(w http.ResponseWriter, r *http.Request) {
+	if !validSkinJobID(r.PathValue("job")) {
+		fail(w, 404, "skin_job_not_found")
+		return
+	}
 	owner, _ := r.Context().Value(skinJobOwnerKey{}).(string)
 	if s.accounts != nil {
 		s.getSharedSkinJob(w, r, owner)
@@ -177,6 +193,10 @@ func (s *Server) getSkinArtworkJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteSkinArtworkJob(w http.ResponseWriter, r *http.Request) {
+	if !validSkinJobID(r.PathValue("job")) {
+		fail(w, 404, "skin_job_not_found")
+		return
+	}
 	owner, _ := r.Context().Value(skinJobOwnerKey{}).(string)
 	if s.accounts != nil {
 		s.deleteSharedSkinJob(w, r, owner)

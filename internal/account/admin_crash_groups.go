@@ -679,8 +679,11 @@ func normalizeCrashMessage(message string) string {
 	return strings.ToLower(strings.TrimSpace(crashSpaces.ReplaceAllString(line, " ")))
 }
 
-// crashMessageMayChange 保守筛选可能被正则替换的行；八个连续十六进制字母也覆盖不含数字、嵌在单词中的 UUID，单个空格无需替换。
+// crashMessageMayChange 保守筛选可能被正则替换的行；数字和控制空白先用字节查找，八个连续十六进制字母也覆盖不含数字、嵌在单词中的 UUID，单个空格无需替换。
 func crashMessageMayChange(line string) bool {
+	if strings.IndexAny(line, "0123456789\t\n\f\r") >= 0 || strings.Contains(line, "  ") {
+		return true
+	}
 	hexRun := 0
 	for i := 0; i < len(line); i++ {
 		c := line[i]
@@ -689,12 +692,6 @@ func crashMessageMayChange(line string) bool {
 			continue
 		}
 		switch {
-		case c >= '0' && c <= '9':
-			return true
-		case c == '\t' || c == '\n' || c == '\f' || c == '\r':
-			return true
-		case c == ' ' && i > 0 && line[i-1] == ' ':
-			return true
 		case c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F':
 			hexRun++
 			if hexRun == 8 {

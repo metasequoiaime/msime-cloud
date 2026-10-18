@@ -2,7 +2,6 @@ package server
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -70,19 +69,36 @@ func TestQQMaintainerCommentReadsLastHundredAcrossPages(t *testing.T) {
 }
 
 func TestQQMaintainerCommentPreviousPageFailure(t *testing.T) {
-	for _, invalidJSON := range []bool{false, true} {
-		t.Run(fmt.Sprint(invalidJSON), func(t *testing.T) {
+	for _, failure := range []string{"http_error", "invalid_json", "null"} {
+		t.Run(failure, func(t *testing.T) {
 			s, fake, _ := qqServer(t)
 			const path = "/repos/o/r/issues/5/comments"
 			fake.issueComments = map[string]string{path + "?per_page=100&page=2": `[{"body":"谢谢","author_association":"NONE"}]`}
-			if invalidJSON {
+			switch failure {
+			case "invalid_json":
 				fake.issueComments[path+"?per_page=100&page=1"] = `{"invalid":"response"}`
-			} else {
+			case "null":
+				fake.issueComments[path+"?per_page=100&page=1"] = `null`
+			default:
 				fake.issueCommentStatus = map[string]int{path + "?per_page=100&page=1": http.StatusServiceUnavailable}
 			}
 			got, err := s.qqLookupMaintainerComment(t.Context(), "o/r", 5, qqIssueDetail{Comments: 101}, qqMaintainerRunes)
 			if err == nil || got != "" {
 				t.Fatalf("补读上一页失败被当成没有维护者评论：%q，%v", got, err)
+			}
+		})
+	}
+}
+
+// 评论可能在读取 issue 后被删空，空数组有效；null 不是有效的评论列表。
+func TestQQMaintainerCommentDistinguishesNullAndEmptyList(t *testing.T) {
+	for _, body := range []string{`null`, `[]`} {
+		t.Run(body, func(t *testing.T) {
+			s, fake, _ := qqServer(t)
+			fake.issueComments = map[string]string{"/repos/o/r/issues/5/comments": body}
+			got, err := s.qqLookupMaintainerComment(t.Context(), "o/r", 5, qqIssueDetail{Comments: 1}, qqMaintainerRunes)
+			if got != "" || (err != nil) != (body == `null`) {
+				t.Errorf("评论列表 %s 的结果=%q，错误=%v", body, got, err)
 			}
 		})
 	}

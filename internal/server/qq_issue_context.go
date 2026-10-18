@@ -180,7 +180,7 @@ func (s *Server) qqLookupMaintainerComment(ctx context.Context, repo string, num
 			Body              string `json:"body"`
 			AuthorAssociation string `json:"author_association"`
 		}
-		if err != nil || !r.OK() || r.Decode(&comments) != nil {
+		if err != nil || !r.OK() || r.Decode(&comments) != nil || comments == nil {
 			return "", githubFailure("comments", r, err)
 		}
 		for i := len(comments) - 1; i >= 0 && remaining > 0; i-- {

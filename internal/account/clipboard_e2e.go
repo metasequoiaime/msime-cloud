@@ -401,6 +401,10 @@ func (a *Service) clipboardDevice(w http.ResponseWriter, r *http.Request) {
 	}
 	device := r.PathValue("device_id")
 	if r.Method == "DELETE" {
+		if !isLowerHex(device, 32) {
+			writeError(w, 404, "not_found")
+			return
+		}
 		if a.clipboardError(w, a.store.DeleteClipboardDevice(r.Context(), p.UserID, device)) {
 			return
 		}
@@ -440,7 +444,16 @@ func (a *Service) clipboardWrap(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_clipboard_key")
 		return
 	}
-	if a.clipboardError(w, a.store.PutClipboardWrap(r.Context(), p.UserID, r.PathValue("key_id"), r.PathValue("device_id"), v.Wrap)) {
+	key, device := r.PathValue("key_id"), r.PathValue("device_id")
+	if !isLowerHex(key, 32) {
+		writeError(w, 409, "clipboard_key_conflict")
+		return
+	}
+	if !isLowerHex(device, 32) {
+		writeError(w, 404, "not_found")
+		return
+	}
+	if a.clipboardError(w, a.store.PutClipboardWrap(r.Context(), p.UserID, key, device, v.Wrap)) {
 		return
 	}
 	w.WriteHeader(204)

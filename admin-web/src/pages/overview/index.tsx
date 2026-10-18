@@ -18,8 +18,11 @@ import { Empty, ErrorState, Skeleton, SkeletonRows } from "../../ui/states";
 
 const activeSeries = [
   { key: "windows", label: "Windows", color: "var(--chart-1)" },
-  { key: "mac_linux", label: "macOS + Linux", color: "var(--chart-2)" },
-  { key: "mobile", label: "移动端", color: "var(--chart-3)" },
+  { key: "macos", label: "macOS", color: "var(--chart-2)" },
+  { key: "linux", label: "Linux", color: "var(--chart-3)" },
+  { key: "android", label: "Android", color: "var(--chart-4)" },
+  { key: "ios", label: "iOS", color: "var(--chart-5)" },
+  { key: "harmonyos", label: "HarmonyOS", color: "var(--chart-6)" },
 ] as const;
 
 const platformLabels: Record<string, string> = { windows: "Windows", macos: "macOS", linux: "Linux", android: "Android", ios: "iOS", harmonyos: "HarmonyOS" };

@@ -27,10 +27,15 @@ type overviewBody struct {
 		Sessions bool `json:"sessions"`
 	} `json:"telemetry"`
 	ActiveDevicesDaily []struct {
-		Day      string `json:"day"`
-		Windows  int    `json:"windows"`
-		MacLinux int    `json:"mac_linux"`
-		Mobile   int    `json:"mobile"`
+		Day       string `json:"day"`
+		Windows   int    `json:"windows"`
+		MacOS     int    `json:"macos"`
+		Linux     int    `json:"linux"`
+		Android   int    `json:"android"`
+		IOS       int    `json:"ios"`
+		HarmonyOS int    `json:"harmonyos"`
+		MacLinux  int    `json:"mac_linux"`
+		Mobile    int    `json:"mobile"`
 	} `json:"active_devices_daily"`
 	ActiveDevices7d     int            `json:"active_devices_7d"`
 	ActiveDevicesPrev7d int            `json:"active_devices_prev_7d"`
@@ -91,7 +96,7 @@ func TestOverviewWithoutClientTelemetry(t *testing.T) {
 		t.Fatalf("series length %+v", body)
 	}
 	for _, day := range body.ActiveDevicesDaily {
-		if day.Windows+day.MacLinux+day.Mobile != 0 || len(day.Day) != 10 {
+		if day.Windows+day.MacOS+day.Linux+day.Android+day.IOS+day.HarmonyOS+day.MacLinux+day.Mobile != 0 || len(day.Day) != 10 {
 			t.Fatalf("empty day %+v", day)
 		}
 	}
@@ -143,7 +148,7 @@ INSERT INTO admin_incidents(service,title) VALUES('translation','翻译超时'),
 		t.Fatalf("flags %+v", body)
 	}
 	today := body.ActiveDevicesDaily[29]
-	if today.Windows != 2 || today.MacLinux != 3 || today.Mobile != 2 {
+	if today.Windows != 2 || today.MacOS != 2 || today.Linux != 1 || today.Android != 0 || today.IOS != 1 || today.HarmonyOS != 1 || today.MacLinux != 3 || today.Mobile != 2 {
 		t.Fatalf("today %+v", today)
 	}
 	if body.ActiveDevices7d != 8 || body.ActiveDevicesPrev7d != 1 {

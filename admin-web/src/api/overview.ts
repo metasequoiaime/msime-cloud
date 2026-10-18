@@ -16,7 +16,7 @@ export const overviewServiceSchema = z.object({
 });
 export type OverviewService = z.infer<typeof overviewServiceSchema>;
 
-export const activeDaySchema = z.object({ day: z.string(), windows: count, mac_linux: count, mobile: count });
+export const activeDaySchema = z.object({ day: z.string(), windows: count, macos: count, linux: count, android: count, ios: count, harmonyos: count });
 export type ActiveDay = z.infer<typeof activeDaySchema>;
 
 export const emailDeliveryDaySchema = z.object({ day: z.string(), attempted: count, accepted: count, rejected: count, failed: count });

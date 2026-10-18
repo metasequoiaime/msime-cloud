@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
@@ -38,15 +37,8 @@ func (s *Server) generateSkinArtwork(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	var input struct {
-		Prompt string `json:"prompt"`
-	}
-	if !decode(w, r, &input) {
-		return
-	}
-	input.Prompt = strings.TrimSpace(input.Prompt)
-	if !utf8.ValidString(input.Prompt) || utf8.RuneCountInString(input.Prompt) < 1 || utf8.RuneCountInString(input.Prompt) > 1200 || strings.ContainsRune(input.Prompt, 0) {
-		fail(w, 400, "invalid_skin_prompt")
+	input, ok := readSkinArtworkInput(w, r)
+	if !ok {
 		return
 	}
 	// Image inference may outlast the normal JSON endpoint write deadline.

@@ -9,9 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
-	"unicode/utf8"
 )
 
 // Jobs are short-lived drafts, not saved skins: at most eight bounded image responses are retained, for ten minutes. With a database the jobs live in the shared skin_jobs table (skin_jobs_shared.go) and the caps apply to the whole deployment; without one they live in this process, which is only correct for a single replica.
@@ -52,15 +50,8 @@ func (s *Server) createSkinArtworkJob(w http.ResponseWriter, r *http.Request) {
 	if !enabled(w, s.config.Images) {
 		return
 	}
-	var input struct {
-		Prompt string `json:"prompt"`
-	}
-	if !decode(w, r, &input) {
-		return
-	}
-	input.Prompt = strings.TrimSpace(input.Prompt)
-	if !utf8.ValidString(input.Prompt) || utf8.RuneCountInString(input.Prompt) < 1 || utf8.RuneCountInString(input.Prompt) > 1200 || strings.ContainsRune(input.Prompt, 0) {
-		fail(w, 400, "invalid_skin_prompt")
+	input, ok := readSkinArtworkInput(w, r)
+	if !ok {
 		return
 	}
 	owner, _ := r.Context().Value(skinJobOwnerKey{}).(string)

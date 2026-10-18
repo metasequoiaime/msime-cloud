@@ -51,8 +51,8 @@ func TestAdminOverviewActiveDailyUsesBoundedScans(t *testing.T) {
 					if age == 0 || age == 6 || age == 29 {
 						windows, other = 2, 1
 					}
-					if day.Day != wantDate || day.Windows != windows || day.MacLinux != other || day.Mobile != other {
-						t.Errorf("每日活跃设备错误：%+v，期望 %s windows=%d mac_linux=%d mobile=%d", day, wantDate, windows, other, other)
+					if day.Day != wantDate || day.Windows != windows || day.MacOS != other || day.Linux != other || day.Android != other || day.IOS != other || day.HarmonyOS != other || day.MacLinux != other || day.Mobile != other {
+						t.Errorf("每日活跃设备错误：%+v，期望 %s windows=%d，其余平台及兼容分组均为 %d", day, wantDate, windows, other)
 					}
 				}
 				query := <-trace.queries

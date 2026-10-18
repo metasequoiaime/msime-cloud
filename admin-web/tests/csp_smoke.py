@@ -98,11 +98,11 @@ FIXTURES = {
     "/api/overview": {
         "users": 12, "new_users_30d": 3, "session_users": 4, "downloads": 4821, "crashes": 9, "open_crashes": 2, "skins": 5, "skin_downloads": 40, "plugins": 1, "plugin_downloads": 3,
         "dictionaries": 2, "replies": 1, "resource_saves": 6, "range_days": 30,
-        "email_delivery": [],
         "daily": [{"day": f"2026-09-{d:02d}", "users": 0, "downloads": d, "crashes": 0} for d in range(1, 31)],
+        "email_delivery": [{"day": f"2026-09-{d:02d}", "attempted": 4, "accepted": 3, "rejected": 1, "failed": 0} for d in range(1, 31)],
         "downloads_30d": 410, "downloads_prev_30d": 380,
         "telemetry": {"active": True, "sessions": True},
-        "active_devices_daily": [{"day": f"2026-09-{d:02d}", "windows": 50 + d, "mac_linux": 20 + d % 5, "mobile": 10 + d % 7} for d in range(1, 31)],
+        "active_devices_daily": [{"day": f"2026-09-{d:02d}", "windows": 50 + d, "macos": 20 + d % 5, "linux": 5 + d % 3, "android": 10 + d % 7, "ios": 8 + d % 4, "harmonyos": 2 + d % 2} for d in range(1, 31)],
         "active_devices_7d": 131, "active_devices_prev_7d": 120,
         "platform_active_7d": {"windows": 80, "macos": 21, "ios": 18, "harmonyos": 12},
         "crash_free_rate": 0.9962, "crash_free_rate_prev": 0.997,
@@ -852,10 +852,14 @@ def check_preferences_pending(context, base: str, problems: list[str]):
             profile = {**FIXTURES["/api/me"], "prefs": dict(FIXTURES["/api/me"]["prefs"])}
             pending, refresh = [], []
             hold_refresh = False
+            resending = False
 
             def me(route):
                 if route.request.method == "POST":
-                    pending.append(route)
+                    if resending:
+                        route.fulfill(json={"ok": True})
+                    else:
+                        pending.append(route)
                 elif hold_refresh:
                     refresh.append(route)
                 else:
@@ -899,12 +903,13 @@ def check_preferences_pending(context, base: str, problems: list[str]):
                 refresh.clear()
                 expect(preference).to_be_enabled()
                 expect(preference).to_be_checked(checked=status != 200)
+                # 重试请求由路由直接应答，避免请求事件先于路由回调时读取尚未填充的 pending。
+                resending = True
+                value = status == 200
+                profile["prefs"]["notify_dict_pr"] = value
                 with page.expect_request(lambda request: request.method == "POST" and request.url.endswith("/api/me")) as resent:
                     preference.click()
-                value = status == 200
                 assert resent.value.post_data_json == {"action": "set_pref", "key": "notify_dict_pr", "value": value}
-                profile["prefs"]["notify_dict_pr"] = value
-                pending.pop().fulfill(json={"ok": True})
                 expect(preference).to_be_enabled()
                 expect(preference).to_be_checked(checked=value)
                 expect(page.get_by_role("switch", name="每周摘要邮件", exact=True)).to_be_disabled()
@@ -1638,8 +1643,23 @@ def main() -> int:
                 expect(main.get_by_text("近 7 天收到 2 次举报", exact=True)).to_be_visible()
                 expect(main.get_by_text("98.70% · 1.8s", exact=True)).to_be_visible()
                 expect(main.locator(".recharts-surface").first).to_be_visible()
+                # 活跃图按六个平台分别绘制曲线和图例，移动端及桌面端都不再合并。
+                active_card = main.get_by_text("近 30 天活跃设备", exact=True).locator("xpath=../../..")
+                platforms = ["Windows", "macOS", "Linux", "Android", "iOS", "HarmonyOS"]
+                for platform in platforms:
+                    expect(active_card.get_by_text(platform, exact=True)).to_be_visible()
+                expect(active_card.locator(".recharts-line")).to_have_count(6)
+                active_card.locator(".recharts-wrapper").hover()
+                tooltip = active_card.locator(".recharts-tooltip-wrapper")
+                for platform in platforms:
+                    expect(tooltip.get_by_text(platform, exact=True)).to_be_visible()
+                page.mouse.move(0, 0)
+                expect(active_card.get_by_text("macOS + Linux", exact=True)).to_have_count(0)
+                expect(active_card.get_by_text("移动端", exact=True)).to_have_count(0)
                 page.set_viewport_size({"width": 390, "height": 800})
                 expect(main.get_by_text("各平台活跃", exact=True)).to_be_visible()
+                for platform in platforms:
+                    expect(active_card.get_by_text(platform, exact=True)).to_be_visible()
                 # 等待图表的 ResizeObserver 完成尺寸调整，再检查是否存在横向溢出。
                 if not wait_for_no_overflow(page):
                     problems.append("overview scrolls horizontally at 390px")

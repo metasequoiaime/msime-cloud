@@ -151,9 +151,22 @@ func TestVerifiedEmailScansIdentitiesOnce(t *testing.T) {
 }
 
 func TestDownloadLinkRechecksEmailAfterLockWait(t *testing.T) {
-	for _, changed := range []string{"new@example.test", ""} {
+	for _, changed := range []string{"new@example.test", "", "suppressed@example.test"} {
 		t.Run("邮箱变更为"+changed, func(t *testing.T) {
 			db := testStore(t)
+			if _, err := db.pool.Exec(t.Context(), "TRUNCATE auth_delivery_suppressions"); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.SuppressDelivery(t.Context(), "email", "suppressed@example.test", "smtp_rcpt_rejected", deliverySuppressionTTL); err != nil {
+				t.Fatal(err)
+			}
+			cfg := db.pool.Config()
+			cfg.MaxConns = 1
+			pool, err := pgxpool.NewWithConfig(t.Context(), cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(pool.Close)
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
 			user := complete(t, db, Identity{"google", "download-email-change"})
@@ -161,7 +174,7 @@ func TestDownloadLinkRechecksEmailAfterLockWait(t *testing.T) {
 				t.Fatal(err)
 			}
 			mailer := &captureMailer{}
-			a := &Service{store: db, config: Config{Email: MailConfig{From: "noreply@example.test"}}, mailer: mailer}
+			a := &Service{store: &Store{pool: pool}, config: Config{Email: MailConfig{From: "noreply@example.test"}}, mailer: mailer}
 			mux := http.NewServeMux()
 			Mount(mux, a)
 			tx, err := db.userDataTransaction(ctx, user.User.ID)
@@ -191,11 +204,23 @@ func TestDownloadLinkRechecksEmailAfterLockWait(t *testing.T) {
 					if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "no_verified_email") || mailer.sent != 0 {
 						t.Fatalf("邮箱失效后仍发信：状态=%d，发送=%d，响应=%s", w.Code, mailer.sent, w.Body.String())
 					}
+				} else if changed == "suppressed@example.test" {
+					if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "delivery_failed") || mailer.sent != 0 {
+						t.Fatalf("邮箱变为抑制地址后仍发信：状态=%d，发送=%d，响应=%s", w.Code, mailer.sent, w.Body.String())
+					}
 				} else if w.Code != http.StatusAccepted || mailer.sent != 1 || mailer.target != changed || !strings.Contains(w.Body.String(), `"sent_to":"n***@example.test"`) {
 					t.Fatalf("没有使用锁等待期间提交的新邮箱：状态=%d，收件人=%s，发送=%d，响应=%s", w.Code, mailer.target, mailer.sent, w.Body.String())
 				}
 			case <-ctx.Done():
 				t.Fatal("邮箱变更提交后请求未完成")
+			}
+			want := 0
+			if changed == "new@example.test" {
+				want = 1
+			}
+			var count int
+			if err := db.pool.QueryRow(t.Context(), `SELECT count FROM auth_rates WHERE key='delivery-global'`).Scan(&count); err != nil || count != want {
+				t.Fatalf("邮箱变更后的全局额度=%d，期望=%d，错误=%v", count, want, err)
 			}
 		})
 	}

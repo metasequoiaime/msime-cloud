@@ -115,46 +115,58 @@ func (a *Service) downloadLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 限流在事务前独立计数，避免持有连接时再申请同一连接池；发送失败仍消耗额度。
-	tx, err := a.store.userDataTransaction(r.Context(), p.UserID)
+	var tx pgx.Tx
+	var deliveryErr error
+	attempted, refundGlobal := false, false
+	defer func() {
+		// 先释放用户事务的连接，再写统计、抑制记录或退款，确保单连接池也能完成请求。
+		if tx != nil {
+			_ = tx.Rollback(r.Context())
+		}
+		if attempted {
+			a.recordEmailDelivery("email", deliveryErr)
+			if permanentDeliveryFailure(deliveryErr) {
+				a.suppressDeliveryTarget(r.Context(), "email", email)
+			}
+		}
+		if refundGlobal {
+			a.refundDeliveryReservation(r.Context(), releaseGlobal)
+		}
+	}()
+	tx, err = a.store.userDataTransaction(r.Context(), p.UserID)
 	if err != nil {
-		a.refundDeliveryReservation(r.Context(), releaseGlobal)
+		refundGlobal = true
 		a.error(w, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
 	// 发信前在用户锁内重新读取邮箱，保证等待期间提交的封禁或身份变更生效。
 	email, err = verifiedEmailQuery(r.Context(), tx, p.UserID)
 	if err != nil {
-		a.refundDeliveryReservation(r.Context(), releaseGlobal)
+		refundGlobal = true
 		a.error(w, err)
 		return
 	}
 	if email == "" {
-		a.refundDeliveryReservation(r.Context(), releaseGlobal)
+		refundGlobal = true
 		writeError(w, 409, "no_verified_email")
 		return
 	}
-	suppressed, err = a.store.DeliverySuppressed(r.Context(), "email", email)
+	suppressed, err = deliverySuppressedQuery(r.Context(), tx, "email", email)
 	if err != nil {
-		a.refundDeliveryReservation(r.Context(), releaseGlobal)
+		refundGlobal = true
 		a.error(w, err)
 		return
 	}
 	if suppressed {
-		a.refundDeliveryReservation(r.Context(), releaseGlobal)
+		refundGlobal = true
 		writeError(w, 503, "delivery_failed")
 		return
 	}
 	subject, body := downloadLinkMessage(v.Platform)
 	err = a.mailer.Mail(r.Context(), email, subject, body)
-	a.recordEmailDelivery("email", err)
+	attempted, deliveryErr = true, err
 	if err != nil {
-		if permanentDeliveryFailure(err) {
-			a.suppressDeliveryTarget(r.Context(), "email", email)
-		}
-		if deliveryMayRefund(err) {
-			a.refundDeliveryReservation(r.Context(), releaseGlobal)
-		}
+		refundGlobal = deliveryMayRefund(err)
 		writeError(w, 503, "delivery_failed")
 		return
 	}

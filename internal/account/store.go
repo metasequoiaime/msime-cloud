@@ -515,8 +515,13 @@ ORDER BY expires_at LIMIT 1`, provider, subject).Scan(&seed)
 
 // DeliverySuppressed 判断目标是否因 SMTP 永久拒收而暂时禁止再次投递。
 func (s *Store) DeliverySuppressed(ctx context.Context, provider, target string) (bool, error) {
+	return deliverySuppressedQuery(ctx, s.pool, provider, target)
+}
+
+// deliverySuppressedQuery 复用调用方的连接或事务，避免持有事务时再申请连接池。
+func deliverySuppressedQuery(ctx context.Context, q queryRower, provider, target string) (bool, error) {
 	var suppressed bool
-	err := s.pool.QueryRow(ctx, `SELECT EXISTS(
+	err := q.QueryRow(ctx, `SELECT EXISTS(
  SELECT 1 FROM auth_delivery_suppressions
  WHERE provider=$1 AND target_hash=$2 AND expires_at>clock_timestamp()
 )`, provider, hash(provider+":"+target)).Scan(&suppressed)

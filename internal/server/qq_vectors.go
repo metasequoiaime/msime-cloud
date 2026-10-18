@@ -253,11 +253,16 @@ func qqContentHash(parts ...string) string {
 
 // qqDocID 是文档段落在向量索引里的 id：按文档名和标题，内容变了 id 不变。
 func qqDocID(section qqSection) string {
+	id := qqDocIDBytes(section)
+	return string(id[:])
+}
+
+// qqDocIDBytes 返回固定长度的文档 ID，供临时查找使用，避免为每个段落保留字符串副本。
+func qqDocIDBytes(section qqSection) (id [len("doc:") + 24]byte) {
 	sum := qqContentHashSum(section.Doc, section.Title)
-	var id [len("doc:") + 24]byte
 	copy(id[:], "doc:")
 	hex.Encode(id[len("doc:"):], sum[:12])
-	return string(id[:])
+	return id
 }
 
 // qqVectorJob 是同步向量索引的后台任务，运行到 s.lifetime 结束。
@@ -470,6 +475,47 @@ type qqVectorRecall struct {
 	history []account.QQKnowledgeHit
 }
 
+// qqRecallDocSections 只为达到阈值的命中保存位置，避免每次召回都为全部段落建索引。
+func qqRecallDocSections(sections []qqSection, hits []account.QQKnowledgeHit) []int {
+	eligible := 0
+	for _, hit := range hits {
+		if hit.Similarity >= qqVectorMinSimilarity {
+			eligible++
+		}
+	}
+	if eligible == 0 || len(sections) == 0 {
+		return nil
+	}
+	slots := make(map[string]int, eligible)
+	positions := make([]int, 0, eligible)
+	for _, hit := range hits {
+		if hit.Similarity >= qqVectorMinSimilarity {
+			if _, ok := slots[hit.ID]; !ok {
+				slots[hit.ID] = len(positions)
+				positions = append(positions, -1)
+			}
+		}
+	}
+	remaining := len(positions)
+	// 旧索引保留同 ID 的最后一个段落；从末尾查找，全部命中找到后即可停止。
+	for i := len(sections) - 1; i >= 0 && remaining > 0; i-- {
+		id := qqDocIDBytes(sections[i])
+		if slot, ok := slots[string(id[:])]; ok && positions[slot] < 0 {
+			positions[slot] = i
+			remaining--
+		}
+	}
+	var docs []int
+	for _, hit := range hits {
+		if hit.Similarity >= qqVectorMinSimilarity {
+			if position := positions[slots[hit.ID]]; position >= 0 {
+				docs = append(docs, position)
+			}
+		}
+	}
+	return docs
+}
+
 // qqRecall 把问题算成向量并召回；功能关闭或任何一步失败时返回空结果，答疑照旧只用目录挑段落。
 func (s *Server) qqRecall(ctx context.Context, question string, sections []qqSection, history bool) qqVectorRecall {
 	var recall qqVectorRecall
@@ -483,20 +529,12 @@ func (s *Server) qqRecall(ctx context.Context, question string, sections []qqSec
 		slog.Warn("qq bot: question not embedded", "reason", err.Error())
 		return recall
 	}
-	index := make(map[string]int, len(sections))
-	for i, section := range sections {
-		index[qqDocID(section)] = i
-	}
 	hits, err := s.qqVectors.SearchQQKnowledge(ctx, vectors[0], []string{"doc"}, qqVectorDocHits)
 	if err != nil {
 		slog.Warn("qq bot: vector search failed", "reason", err.Error())
 		return recall
 	}
-	for _, hit := range hits {
-		if i, ok := index[hit.ID]; ok && hit.Similarity >= qqVectorMinSimilarity {
-			recall.docs = append(recall.docs, i)
-		}
-	}
+	recall.docs = qqRecallDocSections(sections, hits)
 	if !history {
 		return recall
 	}

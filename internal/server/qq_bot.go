@@ -1490,33 +1490,27 @@ func qqFeedbackMarkupEnd(content string, start int) int {
 		return -1
 	}
 	for _, prefix := range []string{"<qqbot-at-user", "<qqbot-at-everyone"} {
-		if !strings.HasPrefix(rest, prefix) {
-			continue
+		if strings.HasPrefix(rest, prefix) {
+			return qqFeedbackMarkupBodyEnd(content, start+len(prefix), 180)
 		}
-		pos := start + len(prefix)
-		count := 0
-		for pos < len(content) && content[pos] != '>' && content[pos] != '<' && content[pos] != '\n' {
-			_, size := utf8.DecodeRuneInString(content[pos:])
-			pos += size
-			count++
-		}
-		if pos < len(content) && content[pos] == '>' && count <= 180 {
-			return pos + 1
-		}
-		return -1
 	}
 	const prefix = "<faceType="
 	if strings.HasPrefix(rest, prefix) {
-		pos := start + len(prefix)
-		count := 0
-		for pos < len(content) && content[pos] != '>' && content[pos] != '<' && content[pos] != '\n' {
-			_, size := utf8.DecodeRuneInString(content[pos:])
-			pos += size
-			count++
-		}
-		if pos < len(content) && content[pos] == '>' && count <= 191 {
-			return pos + 1
-		}
+		return qqFeedbackMarkupBodyEnd(content, start+len(prefix), 191)
+	}
+	return -1
+}
+
+// qqFeedbackMarkupBodyEnd 扫描允许空白的标签正文，按 Unicode 字符计数并保留原有停止规则。
+func qqFeedbackMarkupBodyEnd(content string, pos, limit int) int {
+	count := 0
+	for pos < len(content) && content[pos] != '>' && content[pos] != '<' && content[pos] != '\n' {
+		_, size := utf8.DecodeRuneInString(content[pos:])
+		pos += size
+		count++
+	}
+	if pos < len(content) && content[pos] == '>' && count <= limit {
+		return pos + 1
 	}
 	return -1
 }

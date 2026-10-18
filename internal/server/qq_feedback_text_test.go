@@ -52,3 +52,40 @@ func BenchmarkQQFeedbackText(b *testing.B) {
 		})
 	}
 }
+
+func TestQQFeedbackMarkupEndBoundaries(t *testing.T) {
+	for _, prefix := range []struct {
+		text  string
+		limit int
+	}{{"<qqbot-at-user", 180}, {"<qqbot-at-everyone", 180}, {"<faceType=", 191}} {
+		for _, unit := range []string{"a", "甲", "😀", string([]byte{0xff})} {
+			for _, count := range []int{0, prefix.limit, prefix.limit + 1} {
+				input := "前" + prefix.text + strings.Repeat(unit, count) + ">后"
+				want := len(input) - len("后")
+				if count > prefix.limit {
+					want = -1
+				}
+				if got := qqFeedbackMarkupEnd(input, len("前")); got != want {
+					t.Fatalf("标签=%q，字符=%q，数量=%d，得到%d，期望%d", prefix.text, unit, count, got, want)
+				}
+			}
+		}
+		for _, body := range []string{"空 格", "\t\r\f", ""} {
+			input := prefix.text + body + ">"
+			if got := qqFeedbackMarkupEnd(input, 0); got != len(input) {
+				t.Fatalf("允许的空白被拒绝：%q，终点%d", input, got)
+			}
+		}
+		for _, tail := range []string{"内容<>", "内容\n>", "内容"} {
+			input := prefix.text + tail
+			if got := qqFeedbackMarkupEnd(input, 0); got != -1 {
+				t.Fatalf("无效标签被接受：%q，终点%d", input, got)
+			}
+		}
+	}
+	for _, input := range []string{"<@>", "<#a b>", "<emoji:a\t>"} {
+		if got := qqFeedbackMarkupEnd(input, 0); got != -1 {
+			t.Fatalf("其他标签校验发生变化：%q，终点%d", input, got)
+		}
+	}
+}

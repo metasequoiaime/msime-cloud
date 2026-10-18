@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
+	segmentjson "github.com/segmentio/encoding/json"
 )
 
 // niutransAuthString 按小牛 v2 协议计算签名，保留空字段和原始字节；URL 编码只用于表单正文。
@@ -117,21 +118,30 @@ func (s *Server) translateNiuTransUpstream(w http.ResponseWriter, r *http.Reques
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
 	req.Header.Set("Accept", "application/json")
 	body, err := s.doUpstream(req)
-	var result map[string]json.RawMessage
-	if err != nil || json.Unmarshal(body, &result) != nil || result == nil {
+	if err != nil {
 		upstreamError(w, r, err)
 		return
 	}
-	if code, hasError := result["errorCode"]; hasError {
-		upstreamError(w, r, niutransError(code))
+	var result struct {
+		Text      json.RawMessage `json:"tgtText"`
+		ErrorCode json.RawMessage `json:"errorCode"`
+		ErrorMsg  json.RawMessage `json:"errorMsg"`
+	}
+	// 只借用本次调用的响应字节，忽略未知字段；精确匹配键名，保留原映射对大小写及 null 错误字段的判断。
+	if rest, decodeErr := segmentjson.Parse(body, &result, segmentjson.DontCopyRawMessage|segmentjson.DontMatchCaseInsensitiveStructFields); decodeErr != nil || len(rest) != 0 {
+		upstreamError(w, r, nil)
 		return
 	}
-	if _, hasError := result["errorMsg"]; hasError {
+	if result.ErrorCode != nil {
+		upstreamError(w, r, niutransError(result.ErrorCode))
+		return
+	}
+	if result.ErrorMsg != nil {
 		upstreamError(w, r, niutransError(nil))
 		return
 	}
 	var translated string
-	if json.Unmarshal(result["tgtText"], &translated) != nil || !bounded(translated, contract.OutputTextBytes) {
+	if json.Unmarshal(result.Text, &translated) != nil || !bounded(translated, contract.OutputTextBytes) {
 		upstreamError(w, r, err)
 		return
 	}

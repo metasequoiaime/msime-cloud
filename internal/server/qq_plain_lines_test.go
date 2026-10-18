@@ -20,6 +20,8 @@ func TestQQPlainTextLineBuffersKeepContent(t *testing.T) {
 		{"table", "\n| a | b |\n\n> | 正文 |\n尾行", "| 正文 | 尾行"},
 		{"invalid_utf8", "前\xff\u0085后\xfe\t末", "前\xff 后\xfe 末"},
 		{"crlf", "首行\r\n- 二行\r\n", "首行 二行"},
+		{"重复行", "正文\n正文\n", "正文 正文"},
+		{"crlf", "首行\r\n- 二行\r\n", "首行 二行"},
 		{"whitespace", "\u3000\n\t\n\u0085", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

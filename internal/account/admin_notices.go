@@ -132,18 +132,6 @@ func nonNilStrings(values []string) []string {
 	return values
 }
 
-// noticeID parses the action id of an existing notice.
-func noticeID(v actionRequest) (int64, error) {
-	if err := requireActionID(v); err != nil {
-		return 0, err
-	}
-	id, err := strconv.ParseInt(v.ID, 10, 64)
-	if err != nil || id < 1 {
-		return 0, actionFail(400, "invalid_id")
-	}
-	return id, nil
-}
-
 // lockNotice locks notice id for the rest of the transaction and returns it, or 404 not_found.
 func lockNotice(ctx context.Context, tx pgx.Tx, id int64) (noticeInput, string, error) {
 	var n noticeInput
@@ -284,7 +272,7 @@ func actionSaveNoticeDraft(a *Service, ctx context.Context, tx pgx.Tx, v actionR
 			return actionResult{}, err
 		}
 	} else {
-		if id, err = noticeID(v); err != nil {
+		if id, err = numericActionID(v); err != nil {
 			return actionResult{}, err
 		}
 		_, status, err := lockNotice(ctx, tx, id)
@@ -318,7 +306,7 @@ func actionPublishNotice(a *Service, ctx context.Context, tx pgx.Tx, v actionReq
 			return actionResult{}, err
 		}
 	} else {
-		id, err := noticeID(v)
+		id, err := numericActionID(v)
 		if err != nil {
 			return actionResult{}, err
 		}
@@ -363,7 +351,7 @@ func actionArchiveNotice(a *Service, ctx context.Context, tx pgx.Tx, v actionReq
 	if err := checkPerm(ctx, PermPublishNotices); err != nil {
 		return actionResult{}, err
 	}
-	id, err := noticeID(v)
+	id, err := numericActionID(v)
 	if err != nil {
 		return actionResult{}, err
 	}

@@ -1196,6 +1196,150 @@ def check_mirror_pending(context, base: str, problems: list[str]):
                 page.close()
 
 
+def check_mirror_navigation(context, base: str, problems: list[str]):
+    # 保存尚未完成时切走再返回，仍须阻止重复写入；成功和失败都应恢复编辑。
+    for status in (200, 500):
+        page = context.new_page()
+        page.on("pageerror", lambda error: problems.append(f"镜像链接跨页面保存测试页面异常：{error}"))
+        pending = []
+        stored = dict(FIXTURES["/api/site-settings"])
+        submitted = "https://example.test/mirror-navigation"
+        page.route("**/api/auth/session", lambda route: route.fulfill(json=FIXTURES["/api/auth/session"]))
+        page.route("**/api/shell", lambda route: route.fulfill(json={**FIXTURES["/api/shell"], "me": {**FIXTURES["/api/shell"]["me"], "permissions": ["publish_notices"]}}))
+
+        def settings(route):
+            if route.request.method == "POST":
+                pending.append(route)
+            else:
+                route.fulfill(json=stored)
+
+        page.route("**/api/site-settings", settings)
+        try:
+            page.goto(base + "/downloads")
+            link = page.get_by_role("textbox", name="蓝奏云盘分享链接", exact=True)
+            expect(link).to_have_value(stored["lanzou_url"])
+            link.fill(submitted)
+            with page.expect_request(lambda request: request.url.endswith("/api/site-settings") and request.method == "POST"):
+                page.get_by_role("button", name="保存", exact=True).click()
+            page.get_by_role("link", name="数据概览", exact=True).click()
+            expect(page.locator("header h1")).to_have_text("数据概览")
+            page.get_by_role("link", name="下载记录", exact=True).click()
+            expect(page.locator("header h1")).to_have_text("下载记录")
+            expect(link).to_be_disabled()
+            expect(page.get_by_role("button", name="正在保存…", exact=True)).to_be_disabled()
+            expect(page.get_by_role("button", name="清空", exact=True)).to_be_disabled()
+            assert len(pending) == 1
+            if status == 200:
+                stored["lanzou_url"] = submitted
+            pending.pop().fulfill(status=status, json=stored if status == 200 else {"error": "admin_auth_unavailable"})
+            expect(link).to_be_enabled()
+            expect(link).to_have_value(stored["lanzou_url"])
+            if status != 200:
+                expect(page.get_by_text(re.compile(r"^保存失败："))).to_be_visible()
+            link.fill(submitted + "-next")
+            expect(page.get_by_role("button", name="保存", exact=True)).to_be_enabled()
+            problems.extend(f"镜像链接跨页面保存测试 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+        finally:
+            for route in pending:
+                route.abort()
+            page.unroute_all(behavior="ignoreErrors")
+            page.close()
+
+
+def check_mirror_read_race(context, base: str, problems: list[str]):
+    # 返回页面触发的旧读取晚于保存完成，也不能把已确认的新链接覆盖掉。
+    page = context.new_page()
+    page.on("pageerror", lambda error: problems.append(f"镜像链接读取竞态测试页面异常：{error}"))
+    pending, reads = [], []
+    hold_reads = False
+    before = dict(FIXTURES["/api/site-settings"])
+    saved = {**before, "lanzou_url": "https://example.test/mirror-saved"}
+    page.route("**/api/auth/session", lambda route: route.fulfill(json=FIXTURES["/api/auth/session"]))
+    page.route("**/api/shell", lambda route: route.fulfill(json={**FIXTURES["/api/shell"], "me": {**FIXTURES["/api/shell"]["me"], "permissions": ["publish_notices"]}}))
+
+    def settings(route):
+        if route.request.method == "POST":
+            pending.append(route)
+        elif hold_reads:
+            reads.append(route)
+        else:
+            route.fulfill(json=before)
+
+    page.route("**/api/site-settings", settings)
+    try:
+        page.clock.install()
+        page.goto(base + "/downloads")
+        link = page.get_by_role("textbox", name="蓝奏云盘分享链接", exact=True)
+        expect(link).to_have_value(before["lanzou_url"])
+        link.fill(saved["lanzou_url"])
+        with page.expect_request(lambda request: request.url.endswith("/api/site-settings") and request.method == "POST"):
+            page.get_by_role("button", name="保存", exact=True).click()
+        page.get_by_role("link", name="数据概览", exact=True).click()
+        page.clock.fast_forward(31_000)
+        hold_reads = True
+        with page.expect_request(lambda request: request.url.endswith("/api/site-settings") and request.method == "GET"):
+            page.get_by_role("link", name="下载记录", exact=True).click()
+        pending.pop().fulfill(json=saved)
+        expect(page.get_by_text("链接已保存，官网约 10 分钟内生效", exact=True)).to_be_visible()
+        expect(link).to_have_value(saved["lanzou_url"])
+        reads.pop().fulfill(json=before)
+        page.get_by_role("link", name="数据概览", exact=True).click()
+        page.get_by_role("link", name="下载记录", exact=True).click()
+        expect(link).to_have_value(saved["lanzou_url"])
+        problems.extend(f"镜像链接读取竞态测试 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+    finally:
+        for route in pending + reads:
+            route.abort()
+        page.unroute_all(behavior="ignoreErrors")
+        page.close()
+
+
+def check_mirror_identity(context, base: str, problems: list[str]):
+    # 旧身份的保存已提交但响应延迟时，新登录读到的更新值不能再被旧响应覆盖。
+    page = context.new_page()
+    page.on("pageerror", lambda error: problems.append(f"镜像链接切换登录测试页面异常：{error}"))
+    pending = []
+    old = {**FIXTURES["/api/site-settings"], "lanzou_url": "https://example.test/mirror-old"}
+    current = {**FIXTURES["/api/site-settings"], "lanzou_url": "https://example.test/mirror-current"}
+    session = {**FIXTURES["/api/auth/session"], "google_enabled": False, "token_enabled": True}
+    page.route("**/api/auth/session", lambda route: route.fulfill(json=session))
+    page.route("**/api/auth/logout", lambda route: route.fulfill(json={"ok": True}))
+    page.route("**/api/shell", lambda route: route.fulfill(json={**FIXTURES["/api/shell"], "me": {**FIXTURES["/api/shell"]["me"], "permissions": ["publish_notices"]}}))
+
+    def settings(route):
+        if route.request.method == "POST":
+            pending.append(route)
+        else:
+            route.fulfill(json=current if "authorization" in route.request.headers else FIXTURES["/api/site-settings"])
+
+    page.route("**/api/site-settings", settings)
+    try:
+        page.goto(base + "/downloads")
+        link = page.get_by_role("textbox", name="蓝奏云盘分享链接", exact=True)
+        expect(link).to_have_value(FIXTURES["/api/site-settings"]["lanzou_url"])
+        link.fill(old["lanzou_url"])
+        with page.expect_request(lambda request: request.url.endswith("/api/site-settings") and request.method == "POST"):
+            page.get_by_role("button", name="保存", exact=True).click()
+        page.locator('a[title="个人中心"]').click()
+        page.get_by_role("button", name="退出登录", exact=True).click()
+        page.get_by_role("dialog").get_by_role("button", name="退出", exact=True).click()
+        page.get_by_label("管理员密钥", exact=True).fill("test-new-admin-token")
+        page.get_by_role("button", name="进入控制台", exact=True).click()
+        page.get_by_role("link", name="下载记录", exact=True).click()
+        expect(link).to_have_value(current["lanzou_url"])
+        expect(link).to_be_enabled()
+        pending.pop().fulfill(json=old)
+        expect(page.get_by_text("链接已保存，官网约 10 分钟内生效", exact=True)).to_be_visible()
+        expect(link).to_have_value(current["lanzou_url"])
+        expect(page.get_by_role("link", name=current["lanzou_url"], exact=True)).to_be_visible()
+        problems.extend(f"镜像链接切换登录测试 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+    finally:
+        for route in pending:
+            route.abort()
+        page.unroute_all(behavior="ignoreErrors")
+        page.close()
+
+
 def check_pending_form_drafts(context, base: str, problems: list[str]):
     # 成功只清理已提交的内容；等待期间继续输入的新草稿和失败时的原文都应保留。
     cases = (
@@ -2039,6 +2183,9 @@ def main() -> int:
                 check_notice_pending(context, base, problems)
                 check_notice_pending_focus(context, base, problems)
                 check_mirror_pending(context, base, problems)
+                check_mirror_navigation(context, base, problems)
+                check_mirror_read_race(context, base, problems)
+                check_mirror_identity(context, base, problems)
                 check_release_pending(context, base, problems)
                 check_dictpr_trim_pending(context, base, problems)
                 check_pending_form_drafts(context, base, problems)

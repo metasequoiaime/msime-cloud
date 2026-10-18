@@ -948,6 +948,10 @@ func validHelpcodeTable(raw []byte) bool {
 	}
 	seen := map[string]bool{}
 	for text != "" {
+		text = strings.TrimLeft(text, "\n")
+		if text == "" {
+			break
+		}
 		line, rest, _ := strings.Cut(text, "\n")
 		text = rest
 		line = strings.TrimSuffix(line, "\r")
@@ -981,6 +985,10 @@ func validWordbookEntries(raw []byte) bool {
 	}
 	seen := map[string]bool{}
 	for text != "" {
+		text = strings.TrimLeft(text, "\n")
+		if text == "" {
+			break
+		}
 		line, rest, _ := strings.Cut(text, "\n")
 		text = rest
 		line = strings.TrimSuffix(line, "\r")

@@ -111,7 +111,7 @@ func (s *Server) streamTranscription(w http.ResponseWriter, r *http.Request) {
 		upstreamError(w, r, err)
 		return
 	}
-	// A session is one call: its latency is the upstream handshake, its usage the session's length in seconds, and it failed when the session ended because reading from or writing to the upstream broke. A client that drops its connection, or sends an oversized or non-binary message, is not an upstream failure.
+	// 一次会话计一次调用，耗时取上游握手，用量取会话秒数；上游读写失败或消息违规计为失败，客户端断开或消息违规不计上游失败。
 	upstreamFailed := false
 	defer func() {
 		s.observeCall("streaming", time.Now(), handshake, upstreamFailed, time.Since(dialStarted).Seconds())
@@ -125,7 +125,7 @@ func (s *Server) streamTranscription(w http.ResponseWriter, r *http.Request) {
 	defer downstream.CloseNow()
 	upstream.SetReadLimit(contract.StreamMessageBytes)
 	downstream.SetReadLimit(contract.StreamMessageBytes)
-	// relayEnd is why one direction of the relay stopped; upstream marks a read or write error on the upstream connection.
+	// 中继结束信息中的 `upstream` 标记上游连接读写失败或上游消息违规。
 	type relayEnd struct {
 		status   websocket.StatusCode
 		upstream bool
@@ -145,11 +145,11 @@ func (s *Server) streamTranscription(w http.ResponseWriter, r *http.Request) {
 			}
 			total += len(data)
 			if kind != websocket.MessageBinary {
-				results <- relayEnd{status: websocket.StatusUnsupportedData}
+				results <- relayEnd{status: websocket.StatusUnsupportedData, upstream: src == upstream}
 				return
 			}
 			if total > contract.StreamSessionBytes {
-				results <- relayEnd{status: websocket.StatusMessageTooBig}
+				results <- relayEnd{status: websocket.StatusMessageTooBig, upstream: src == upstream}
 				return
 			}
 			if err := dst.Write(ctx, kind, data); err != nil {

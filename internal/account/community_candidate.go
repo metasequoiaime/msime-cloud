@@ -623,10 +623,7 @@ func (a *Service) communityCandidatePublish(w http.ResponseWriter, r *http.Reque
 		a.error(w, e)
 		return
 	}
-	v, e := scanCandidateSkin(tx.QueryRow(r.Context(), candidateSkinSelect(false)+`WHERE s.id=$2`, p.UserID, input.ID))
-	if e == nil {
-		e = tx.Commit(r.Context())
-	}
+	v, e := commitCandidateSkin(r.Context(), tx, p.UserID, input.ID)
 	if e != nil {
 		a.error(w, e)
 		return
@@ -925,10 +922,7 @@ func (a *Service) communityCandidateReplace(w http.ResponseWriter, r *http.Reque
 		a.error(w, e)
 		return
 	}
-	v, e := scanCandidateSkin(tx.QueryRow(r.Context(), candidateSkinSelect(false)+`WHERE s.id=$2`, p.UserID, id))
-	if e == nil {
-		e = tx.Commit(r.Context())
-	}
+	v, e := commitCandidateSkin(r.Context(), tx, p.UserID, id)
 	if e != nil {
 		a.error(w, e)
 		return
@@ -1022,10 +1016,7 @@ FROM community_candidate_skins s WHERE s.id=$1 AND s.owner_id=$2 FOR UPDATE`, id
 			return
 		}
 	}
-	v, e := scanCandidateSkin(tx.QueryRow(r.Context(), candidateSkinSelect(false)+`WHERE s.id=$2`, p.UserID, id))
-	if e == nil {
-		e = tx.Commit(r.Context())
-	}
+	v, e := commitCandidateSkin(r.Context(), tx, p.UserID, id)
 	if e != nil {
 		a.error(w, e)
 		return

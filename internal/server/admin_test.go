@@ -18,6 +18,7 @@ func TestAdminHostAuthAndIsolation(t *testing.T) {
 		{"admin.msime.app", "/", "", "", 200},
 		{"ADMIN.MSIME.APP:8080", "/users", "", "", 200},
 		{"admin.msime.app", "/crashes", "", "", 200},
+		{"admin.msime.app", "/assets/msime-B8n1ySid.png", "", "", 200},
 		{"admin.msime.app", "/api/overview", "", "", 401},
 		{"admin.msime.app", "/api/system", strings.Repeat("a", 40), "", 200},
 		{"admin.msime.app", "/api/skins/example", "", "", 401},
@@ -39,7 +40,7 @@ func TestAdminHostAuthAndIsolation(t *testing.T) {
 		if w.Code != tc.status {
 			t.Fatalf("%+v: %d %s", tc, w.Code, w.Body.String())
 		}
-		if tc.status == 200 && (!strings.Contains(w.Header().Get("Content-Security-Policy"), "frame-ancestors 'none'") || w.Header().Get("Cache-Control") != "no-store") {
+		if tc.status == 200 && (!strings.Contains(w.Header().Get("Content-Security-Policy"), "frame-ancestors 'none'") || (strings.HasPrefix(tc.path, "/assets/") && w.Header().Get("Cache-Control") != "public, max-age=31536000, immutable") || (!strings.HasPrefix(tc.path, "/assets/") && w.Header().Get("Cache-Control") != "no-store")) {
 			t.Fatal(w.Header())
 		}
 		if tc.path == "/api/system" && strings.Contains(w.Body.String(), "token") {

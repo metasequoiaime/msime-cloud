@@ -45,6 +45,10 @@ func Handler() http.Handler {
 			http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(index))
 			return
 		}
+		// 构建产物使用内容哈希命名，版本更新会生成新的路径，可以安全地长期缓存。
+		if strings.HasPrefix(r.URL.Path, "/assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		}
 		path := strings.TrimPrefix(r.URL.Path, "/")
 		stat, err := fs.Stat(root, path)
 		if !IsPath(r.URL.Path) || err != nil || stat.IsDir() {

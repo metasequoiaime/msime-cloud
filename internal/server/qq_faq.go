@@ -66,6 +66,8 @@ func qqFAQCategories(faq string) []string {
 // qqInsertFAQ 把一条问答插到第 index 个二级标题那一节的末尾：下一个二级标题之前，或者页尾核对说明（以 footer 开头的段落）之前，都没有时接在文末。
 func qqInsertFAQ(faq string, index int, question, answer, footer string) (string, bool) {
 	seen, insertAt, offset := -1, -1, 0
+	previousBodyLine := ""
+	previousBodyNonEmpty := false
 	for line := range strings.SplitSeq(faq, "\n") {
 		if insertAt < 0 {
 			if strings.HasPrefix(line, "## ") {
@@ -78,8 +80,17 @@ func qqInsertFAQ(faq string, index int, question, answer, footer string) (string
 			if strings.HasPrefix(line, "## ") || strings.HasPrefix(line, footer) {
 				break
 			}
+			if line == previousBodyLine {
+				if previousBodyNonEmpty {
+					insertAt = offset + len(line)
+				}
+				offset += len(line) + 1
+				continue
+			}
+			previousBodyLine = line
 			// 记住节内最后一行非空内容的末尾，原有空行留在新条目之后。
-			if strings.TrimSpace(line) != "" {
+			previousBodyNonEmpty = strings.TrimSpace(line) != ""
+			if previousBodyNonEmpty {
 				insertAt = offset + len(line)
 			}
 		}

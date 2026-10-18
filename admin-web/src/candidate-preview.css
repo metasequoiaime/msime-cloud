@@ -1,0 +1,21 @@
+/* 候选窗几何按客户端设置页样例绘制，所有颜色仅来自已规范化的清单与基础主题。 */
+.candidate-stage { position: relative; display: grid; justify-items: start; padding: 16px; max-height: 560px; overflow: auto; border-radius: 12px; background: var(--color-panel-2); }
+.candidate-stage-compact { height: 100%; max-height: none; overflow: hidden; padding: 0; }
+.candidate-art { position: relative; width: max-content; max-width: 100%; font-size: 16px; line-height: 1.25; font-weight: 400; text-align: left; color: var(--candidate-text); }
+.candidate-stage-compact .candidate-art { max-width: none; }
+.candidate-surface { position: relative; isolation: isolate; overflow: hidden; padding: 2px 1px; border: var(--candidate-border-width) solid var(--candidate-border); border-radius: var(--candidate-radius); background: var(--candidate-surface); box-shadow: var(--candidate-shadow); }
+.candidate-preedit { position: relative; padding: 3px 6px; font-size: 14px; color: var(--candidate-preedit-text, var(--candidate-text)); background: var(--candidate-preedit-background, transparent); border-bottom: 1px solid var(--candidate-preedit-divider, transparent); }
+.candidate-caret { display: inline-block; width: 1.5px; height: 1.2em; margin-left: 1px; vertical-align: -10%; background: var(--candidate-preedit-caret, var(--candidate-accent)); }
+.candidate-rows { position: relative; display: flex; flex-wrap: wrap; }
+.candidate-art[data-layout="vertical"] .candidate-rows { flex-direction: column; }
+.candidate-row { position: relative; display: flex; align-items: baseline; gap: 4px; margin: 2px 0 1px; padding: 2px 8px 2px 6px; border-radius: var(--candidate-item-radius); }
+.candidate-row:hover { background: var(--candidate-hover); }
+.candidate-word { color: var(--candidate-candidate-text, var(--candidate-text)); }
+.candidate-number { font-size: .8em; color: var(--candidate-number); }
+.candidate-selected, .candidate-selected:hover { background: var(--candidate-selected); }
+.candidate-selected .candidate-word { color: var(--candidate-selected-text, var(--candidate-candidate-text, var(--candidate-text))); }
+.candidate-selected .candidate-number { color: var(--candidate-selected-number, var(--candidate-number)); }
+.candidate-selected::before { content: ""; position: absolute; display: var(--candidate-bar); left: 0; top: 50%; transform: translateY(-50%); width: .2em; height: .8em; border-radius: 8px; background: var(--candidate-selected-bar, var(--candidate-accent)); }
+.candidate-pages { position: relative; padding: 2px 6px; text-align: right; font-size: 12px; color: var(--candidate-number); }
+.candidate-background { position: absolute; z-index: -1; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.candidate-decoration { position: absolute; top: 0; object-fit: contain; pointer-events: none; }

@@ -119,6 +119,7 @@ var adminRoutes = []adminRoute{
 	// U2 community moderation: admin_moderation.go, admin_content.go
 	{"GET", "community/counts", (*Service).adminCommunityCounts},
 	{"GET", "candidate-skins/{}/preview", (*Service).adminCandidateSkinPreview},
+	{"GET", "candidate-skins/{}/image", (*Service).adminCandidateSkinImage},
 	{"GET", "skins/{}", contentRoute("skins")},
 	{"GET", "candidate-skins/{}", contentRoute("candidate-skins")},
 	{"GET", "plugins/{}", contentRoute("plugins")},

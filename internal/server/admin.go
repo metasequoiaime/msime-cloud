@@ -188,7 +188,7 @@ func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) bool {
 			respond(w, 200, map[string]any{
 				"version": msimebackend.Version(), "server_time": time.Now().UTC(),
 				"auth": s.config.Auth.Enabled, "engine": s.config.Engine.Binary != "", "engine_resources": s.config.Engine.Resources != "",
-				"services": map[string]bool{"cloud": s.config.Cloud.URL != "", "chat": s.config.Chat.URL != "", "translation": s.config.Translation.URL != "", "transcription": s.config.Transcription.URL != "", "streaming_transcription": s.config.Streaming.URL != ""},
+				"services": map[string]bool{"cloud": s.config.Cloud.URL != "", "chat": s.config.Chat.URL != "", "translation": s.translationEnabled(), "transcription": s.config.Transcription.URL != "", "streaming_transcription": s.config.Streaming.URL != ""},
 			})
 			return true
 		}

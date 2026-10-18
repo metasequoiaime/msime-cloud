@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -490,7 +491,7 @@ func (s *Server) cloud(w http.ResponseWriter, r *http.Request) {
 	}
 	respond(w, 200, map[string]any{"candidates": clean})
 }
-func jsonNumber(n int) string { b, _ := json.Marshal(n); return string(b) }
+func jsonNumber(n int) string { return strconv.Itoa(n) }
 func (s *Server) transcribe(w http.ResponseWriter, r *http.Request) {
 	if !enabled(w, s.config.Transcription) {
 		return

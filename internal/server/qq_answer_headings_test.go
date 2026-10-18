@@ -7,6 +7,15 @@ import (
 	"testing"
 )
 
+func TestQQAnswerHeadingSpaceMatchesPreviousSet(t *testing.T) {
+	for value := 0; value < 256; value++ {
+		want := strings.ContainsRune(" \t\r\f", rune(value))
+		if got := qqAnswerHeadingSpace(byte(value)); got != want {
+			t.Fatalf("qqAnswerHeadingSpace(%d) = %v，预期 %v", value, got, want)
+		}
+	}
+}
+
 func TestQQStripAnswerHeadingsMatchesPreviousSemantics(t *testing.T) {
 	pattern := regexp.MustCompile(`^#{1,6}\s*`)
 	previous := func(text string) string {

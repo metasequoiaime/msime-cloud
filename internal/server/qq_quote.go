@@ -27,22 +27,29 @@ type qqQuote struct {
 	Referenced bool
 }
 
+type qqQuoteEventFields struct {
+	MessageType      json.RawMessage `json:"message_type"`
+	MsgElements      json.RawMessage `json:"msg_elements"`
+	MessageReference json.RawMessage `json:"message_reference"`
+}
+
 // qqQuoteOf 从事件 d 里取出引用的消息。msg_elements 里和这条消息自己相同的文字、附件不算引用：不确定开放平台会不会把消息本身也放进去。
 func qqQuoteOf(raw json.RawMessage, m qqGroupMessage) qqQuote {
-	var fields struct {
-		MessageType      json.RawMessage `json:"message_type"`
-		MsgElements      json.RawMessage `json:"msg_elements"`
-		MessageReference json.RawMessage `json:"message_reference"`
-	}
+	var fields qqQuoteEventFields
 	if json.Unmarshal(raw, &fields) != nil {
 		return qqQuote{}
 	}
+	return qqQuoteFromFields(fields, m)
+}
+
+func qqQuoteFromFields(fields qqQuoteEventFields, m qqGroupMessage) qqQuote {
 	var q qqQuote
 	var elements []struct {
 		Content     string         `json:"content"`
 		Attachments []qqAttachment `json:"attachments"`
 	}
-	if json.Unmarshal(fields.MsgElements, &elements) == nil {
+	// 缺失、null 和标量值不可能解码成引用元素数组，直接跳过，避免为类型错误创建临时对象。
+	if elementsRaw := bytes.TrimSpace(fields.MsgElements); len(elementsRaw) > 0 && elementsRaw[0] == '[' && json.Unmarshal(elementsRaw, &elements) == nil {
 		var own map[string]bool
 		if len(m.Attachments) > 0 {
 			own = make(map[string]bool, len(m.Attachments))

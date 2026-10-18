@@ -542,6 +542,10 @@ type qqGroupMessage struct {
 	} `json:"author"`
 	// Attachments 是消息里的图片、视频等附件：答疑时看截图，管理员提 issue 时附上。引用的消息里的截图也会并进来（见 qq_quote.go）。
 	Attachments []qqAttachment `json:"attachments"`
+	// 引用字段随首次事件解码保留，避免 qqQuoteOf 再扫描整条事件。
+	MessageType      json.RawMessage `json:"message_type"`
+	MsgElements      json.RawMessage `json:"msg_elements"`
+	MessageReference json.RawMessage `json:"message_reference"`
 	// Quote 是群友引用的那条消息，由 acceptQQMessage 另外解析（见 qqQuoteOf），不参与这个结构的解析。
 	Quote qqQuote `json:"-"`
 }
@@ -554,7 +558,7 @@ func (s *Server) acceptQQMessage(ctx context.Context, raw json.RawMessage) bool 
 	}
 	s.qq.probeMemberRole(m.Author.MemberRole)
 	s.qq.probeEventFields(raw)
-	m.Quote = qqQuoteOf(raw, m)
+	m.Quote = qqQuoteFromFields(qqQuoteEventFields{MessageType: m.MessageType, MsgElements: m.MsgElements, MessageReference: m.MessageReference}, m)
 	if groups := s.qq.config.Groups; len(groups) > 0 && !slices.Contains(groups, m.GroupOpenID) {
 		// 开放平台只给 group_openid，不给群号；记下被拦下的群标识，方便把要接受的群填进 qq_bot.groups。
 		slog.Info("qq bot: message from unlisted group", "group_openid", m.GroupOpenID)

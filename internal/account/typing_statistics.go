@@ -237,7 +237,13 @@ func (s *Store) RedeemQQLinkCode(ctx context.Context, user, code string) (QQLink
 	}
 	defer tx.Rollback(ctx)
 	var subject string
-	err = tx.QueryRow(ctx, `DELETE FROM qq_link_codes WHERE code_hash=$1 AND expires_at>now() RETURNING subject`, hash(code)).Scan(&subject)
+	// 用户行锁和绑定码行锁都可能等待到码已过期，取得码的行锁后再用实时时钟校验。
+	err = tx.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+ SELECT code_hash,expires_at FROM qq_link_codes WHERE code_hash=$1 FOR UPDATE
+)
+DELETE FROM qq_link_codes c USING locked x
+ WHERE c.code_hash=x.code_hash AND x.expires_at>clock_timestamp()
+ RETURNING c.subject`, hash(code)).Scan(&subject)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return QQLink{}, ErrQQLinkCodeNotFound
 	}
@@ -355,7 +361,7 @@ func (a *Service) CreateQQLinkCode(ctx context.Context, subject string) (string,
 		return "", err
 	}
 	// 和现存的码撞上（一亿分之几）时什么也不写，返回错误让群友再发一次，不覆盖别人的码。
-	tag, err := tx.Exec(ctx, `INSERT INTO qq_link_codes(code_hash,subject,expires_at) VALUES($1,$2,now()+$3::interval) ON CONFLICT(code_hash) DO NOTHING`, hash(code), hash(subject), QQLinkCodeTTL.String())
+	tag, err := tx.Exec(ctx, `INSERT INTO qq_link_codes(code_hash,subject,expires_at) VALUES($1,$2,clock_timestamp()+$3::interval) ON CONFLICT(code_hash) DO NOTHING`, hash(code), hash(subject), QQLinkCodeTTL.String())
 	if err != nil {
 		return "", err
 	}

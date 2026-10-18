@@ -31,7 +31,7 @@ curl -G -H "Authorization: Bearer $MSIME_CLIENT_TOKEN" \
 
 业务接口除 `GET /healthz`、官网词条提交（见下文）、公告、社区浏览和匿名遥测上报（见 [管理后台文档](docs/admin.md#公开客户端接口)）外均需 Bearer 鉴权；Swagger 和 OpenAPI 文档可匿名访问。响应禁用缓存，输入正文、音频和凭据不写日志或磁盘。
 
-请求日志：每个请求写一行 INFO 级 slog（`msg="http request"`），字段只有 `method`（非标准方法记为 `OTHER`）、`route`（路由模式，例如 `GET /v1/cloud/candidates`，不是原始 URL，路径参数和查询串都不记；管理后台记为 `admin:/api/<第一段>`，后面还有路径时加 `/*`，例如 `admin:/api/users/*`）、`status`、`duration_ms` 和 `bytes`（响应字节数）；5xx 记为 WARN。不记请求正文、音频、凭据、IP 或用户 ID。`/healthz` 和管理后台的日志流 `/api/logs/stream` 不记。顶层 `request_log` 默认开启，设为 `false` 关闭（云候选几乎每次按键请求一次，日志量随之增长；每个请求的额外开销是一次小对象分配和一行日志输出）。旧版本不认识 `request_log`，与 `replicas` 一样，要等所有副本都运行新版本后才能写进配置，回退前先删除。
+请求日志：每个请求写一行 INFO 级 slog（`msg="http request"`），字段只有 `method`（非标准方法记为 `OTHER`）、`route`（路由模式，例如 `GET /v1/cloud/candidates`，不是原始 URL，路径参数和查询串都不记；管理后台只保留已登记的 API 分类，记为 `admin:/api/<分类>`，后面还有路径时加 `/*`，例如 `admin:/api/users/*`；未知分类统一记为 `admin:/api/?`）、`status`、`duration_ms` 和 `bytes`（响应字节数）；5xx 记为 WARN。不记请求正文、音频、凭据、IP 或用户 ID。`/healthz` 和管理后台的日志流 `/api/logs/stream` 不记。顶层 `request_log` 默认开启，设为 `false` 关闭（云候选几乎每次按键请求一次，日志量随之增长；每个请求的额外开销是一次小对象分配和一行日志输出）。旧版本不认识 `request_log`，与 `replicas` 一样，要等所有副本都运行新版本后才能写进配置，回退前先删除。
 
 | 方法与路径 | 请求 | 响应 |
 |---|---|---|

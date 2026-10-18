@@ -419,12 +419,18 @@ func (s *Server) syncQQHistoryVectors(ctx context.Context, repo string) (int, er
 			}
 			body := qqPlainText(qqStripImagesAndHTML(issue.Body))
 			h := qqContentHash(issue.Title, state, body, strconv.Itoa(issue.Comments))
+			if kind == "issue" && issue.Comments > 0 {
+				// 编辑已有评论不会改变评论数，仍需按 issue 的更新时间刷新维护者回复。
+				h = qqContentHash(h, issue.UpdatedAt.UTC().Format(time.RFC3339Nano))
+			}
 			if hashes[ids[i]] == h {
 				continue
 			}
 			// 维护者在 issue 下的回复常常就是答案；PR 的正文已经说明了改了什么，不再读评论。
 			comment := ""
 			if kind == "issue" {
+				// issue 列表已更新，不能把短期缓存里的旧回复写成新版本并推进游标。
+				client.Invalidate("/repos/" + repo + "/issues/" + strconv.FormatInt(issue.Number, 10) + "/comments")
 				comment, err = s.qqLookupMaintainerComment(ctx, repo, issue.Number, issue.qqIssueDetail, qqHistorySummaryRunes)
 				if err != nil {
 					// 不写入这一页的摘要、哈希或游标，下一轮仍会读取这些 issue 并补全评论。

@@ -1,5 +1,5 @@
 @import "tailwindcss";
-/* Tailwind's automatic source detection skips gitignored paths, but dist/ is tracked on purpose, so without this the previous bundle's minified JS feeds class candidates into the next build and the output depends on whether dist/ existed beforehand. */
+/* dist/ 是构建输出目录，明确排除它，避免上一次构建的压缩代码影响下一次扫描。 */
 @source not "../../dist";
 @import "@fontsource/jetbrains-mono/latin-400.css";
 @import "@fontsource/jetbrains-mono/latin-500.css";

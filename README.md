@@ -110,6 +110,7 @@ curl -G -H "Authorization: Bearer $MSIME_CLIENT_TOKEN" \
 ## 验证
 
 ```sh
+pnpm --dir admin-web build
 go test -race ./...
 go vet ./...
 go build ./cmd/msime-server
@@ -220,6 +221,7 @@ Windows 设置中选择“MSIME 共通后端（实时语音）”，地址填写
 `cmd/msime-cloud` 是给 AI 助手（以及人）在终端里使用水杉云的命令行：列出与查看接口、用邮箱或短信验证码或 Google 账号登录、调用任意接口并自动附带和刷新会话。每次后端发版会把 macOS（arm64/x86_64）、Linux（x86_64/arm64）和 Windows x86_64 的构建连同 `SHA256SUMS` 附在对应的 GitHub Release 上。响应写到 stdout（JSON 自动缩进），提示写到 stderr；2xx 且结果输出成功时退出 0，服务端返回错误、调用失败或标准输出写入失败时退出 1（服务端错误正文仍会尝试打印），用法错误退出 2。`call ... -o <文件>` 只支持普通文件，不接受已有的符号链接、目录、管道或设备节点；先把响应写入同目录的临时文件，完整接收并关闭成功后才替换目标，下载中断会保留原文件并清理临时文件。Unix 上保存后的文件权限为 0600，Windows 的文件访问权限取决于目标目录的 ACL。下载回执或登录结果输出失败时会报告错误，但已保存的下载文件和会话仍然保留。
 
 ```sh
+pnpm --dir admin-web build
 go build -o msime-cloud ./cmd/msime-cloud
 ./msime-cloud routes dictionaries                       # 方法、路径、鉴权类型、说明
 ./msime-cloud describe GET /v1/users/me/dictionaries/pinyin   # 参数、请求体与响应 schema
@@ -446,4 +448,4 @@ Android 使用 `platform.android.*` 字段：既有的主题、键盘布局、�
 
 ## 管理后台
 
-新增内嵌 Go 的 [Admin Web 项目](admin-web/README.md)，随同一镜像、同一端口启动，通过 `admin.msime.app` 独立 Host 提供服务。共 16 个页面：数据概览、词库 PR 审核、社区事后审核与举报、GitHub Issue 分诊、App 内用户反馈、敏感词库、用户与封禁、下载记录、公告推送（含 Telegram）、发布管理、云端监控、崩溃分组、系统状态与故障事件、服务日志（来自集群 Loki 的各副本实时日志）、角色权限与操作日志、个人中心与个人访问令牌。默认关闭，需要 PostgreSQL 12 及以上、后台迁移和 Google 管理员白名单（或独立管理员密钥）；GitHub、上游服务额度、Telegram 渠道和服务日志的 Loki 按需配置。角色权限、配置项、公开接口（`/v1/notices`、`/v1/community/reports`、遥测）以及需要客户端配合的改动见 [管理后台文档](docs/admin.md)。
+新增由 Go 服务提供静态文件的 [Admin Web 项目](admin-web/README.md)，随同一镜像、同一端口启动，通过 `admin.msime.app` 独立 Host 提供服务。共 16 个页面：数据概览、词库 PR 审核、社区事后审核与举报、GitHub Issue 分诊、App 内用户反馈、敏感词库、用户与封禁、下载记录、公告推送（含 Telegram）、发布管理、云端监控、崩溃分组、系统状态与故障事件、服务日志（来自集群 Loki 的各副本实时日志）、角色权限与操作日志、个人中心与个人访问令牌。默认关闭，需要 PostgreSQL 12 及以上、后台迁移和 Google 管理员白名单（或独立管理员密钥）；GitHub、上游服务额度、Telegram 渠道和服务日志的 Loki 按需配置。角色权限、配置项、公开接口（`/v1/notices`、`/v1/community/reports`、遥测）以及需要客户端配合的改动见 [管理后台文档](docs/admin.md)。

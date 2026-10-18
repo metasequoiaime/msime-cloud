@@ -11,6 +11,7 @@
 自动化基线：
 
 ```sh
+pnpm --dir admin-web build
 go test -race ./...
 go vet ./...
 python3 scripts/sync_contract.py --check

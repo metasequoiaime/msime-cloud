@@ -35,7 +35,7 @@ jobs:
       - run: pnpm --dir admin-web lint
       - run: pnpm --dir admin-web test
       - run: pnpm --dir admin-web build
-      - run: git diff --exit-code -- admin-web/dist
+      - run: test -f admin-web/dist/index.html
 
   test:
     strategy:
@@ -48,6 +48,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+      - run: npm install --global pnpm@10.15.0
+      - run: pnpm --dir admin-web install --frozen-lockfile
+      - run: pnpm --dir admin-web build
       - run: python3 scripts/sync_contract.py --check
       - run: python3 scripts/generate_openapi.py --check
       - run: python3 -m unittest discover -s scripts/release -p "test_*.py"
@@ -76,6 +82,12 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version-file: go.mod
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+      - run: npm install --global pnpm@10.15.0
+      - run: pnpm --dir admin-web install --frozen-lockfile
+      - run: pnpm --dir admin-web build
       - run: python3 -m unittest discover -s scripts -p 'test_candidate_skins_seed.py'
       - run: python3 -m unittest discover -s scripts -p 'test_go_coverage.py'
       # 拉取请求上的覆盖率门禁在这里：它在每个拉取请求上跑，失败就合不进去。没有原生引擎，只量 internal/account 与 internal/server，下限见 check_go_coverage.py 的 DATABASE_MINIMUMS。`-count=1` 的理由见原生引擎任务；`-p 1` 让两个包不同时改同一个测试库。
@@ -126,6 +138,12 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version-file: go.mod
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+      - run: npm install --global pnpm@10.15.0
+      - run: pnpm --dir admin-web install --frozen-lockfile
+      - run: pnpm --dir admin-web build
       # 引擎子模块和工具链没变时，直接复用上次的编译结果；键里带子模块提交，任何引擎改动都会重新编译。
       - id: engine
         run: echo "commit=$(git -C third_party/msime rev-parse HEAD)" >> "$GITHUB_OUTPUT"

@@ -191,8 +191,8 @@ func TestAdminCrashIssue(t *testing.T) {
 		t.Fatal(w.Code, w.Body.String())
 	}
 
-	// A GitHub failure changes nothing and is not audited.
-	for status, code := range map[int]string{500: "github_unavailable", 410: "github_rejected"} {
+	// GitHub 明确拒绝时恢复未处理，不记录创建成功审计。
+	for status, code := range map[int]string{422: "github_rejected", 410: "github_rejected"} {
 		fake.status = status
 		if w, _ := call("POST", ios); w.Code != 502 || !strings.Contains(w.Body.String(), code) {
 			t.Fatal(status, w.Code, w.Body.String())

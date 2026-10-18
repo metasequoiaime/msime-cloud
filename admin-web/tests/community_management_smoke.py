@@ -68,8 +68,8 @@ def check_community_management(browser, base):
         page.goto(base + "/community")
         expect(page.get_by_role("heading", name="社区管理", exact=True)).to_be_visible()
         expect(page.get_by_role("radio", name="全部", exact=True)).to_have_attribute("data-state", "on")
-        page.get_by_role("button", name="新增皮肤", exact=True).click()
-        form = page.get_by_role("dialog", name="新增皮肤", exact=True)
+        page.get_by_role("button", name="新增键盘皮肤", exact=True).click()
+        form = page.get_by_role("dialog", name="新增键盘皮肤", exact=True)
         form.get_by_label("作者账号", exact=True).select_option("u1")
         form.get_by_label("名称", exact=True).fill("管理测试皮肤")
         form.get_by_label("背景颜色", exact=True).fill("#abcdef")
@@ -93,7 +93,7 @@ def check_community_management(browser, base):
         expect(form).to_be_hidden()
         drawer = page.get_by_role("dialog", name="管理测试皮肤", exact=True)
         drawer.get_by_role("button", name="编辑", exact=True).click()
-        form = page.get_by_role("dialog", name="编辑皮肤", exact=True)
+        form = page.get_by_role("dialog", name="编辑键盘皮肤", exact=True)
         form.get_by_label("简介", exact=True).fill("保留作者的编辑")
         form.get_by_label("发布状态", exact=True).select_option("approved")
         form.get_by_role("button", name="保存", exact=True).click()
@@ -119,7 +119,7 @@ def check_community_management(browser, base):
         commit(pending.pop())
         expect(page.get_by_role("button", name="管理测试皮肤", exact=True)).to_be_hidden()
 
-        for tab, label, archive_label in [("plugins", "插件", "插件 ZIP 包"), ("candidate-skins", "候选皮肤", "皮肤图片")]:
+        for tab, label, archive_label in [("plugins", "插件", "插件 ZIP 包"), ("candidate-skins", "候选窗皮肤", "皮肤图片")]:
             page.goto(base + f"/community?tab={tab}")
             page.get_by_role("button", name=f"新增{label}", exact=True).click()
             form = page.get_by_role("dialog", name=f"新增{label}", exact=True)
@@ -148,7 +148,7 @@ def check_community_management(browser, base):
         assert "status=pending" in requests[-1]
         permissions.clear()
         page.goto(base + "/community")
-        expect(page.get_by_role("button", name="新增皮肤", exact=True)).to_be_disabled()
+        expect(page.get_by_role("button", name="新增键盘皮肤", exact=True)).to_be_disabled()
         assert not errors, errors
         assert page.evaluate("window.cspViolations") == []
     finally:

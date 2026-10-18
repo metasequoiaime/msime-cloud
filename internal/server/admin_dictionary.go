@@ -399,6 +399,12 @@ func dictionaryLongLineContainsLower(line, query string) bool {
 	if query == "" {
 		return true
 	}
+	if len(line) <= 16<<10 {
+		if matched, ok := dictionaryASCIIShortLineContainsLower(line, query); ok {
+			return matched
+		}
+	}
+
 	for i := range len(line) {
 		c := line[i]
 		if c >= utf8.RuneSelf {
@@ -419,6 +425,25 @@ func dictionaryLongLineContainsLower(line, query string) bool {
 		}
 	}
 	return strings.Contains(line, query)
+}
+
+// dictionaryASCIIShortLineContainsLower 在固定栈缓冲里折叠短 ASCII 长行，避免为大小写查询复制整行。
+func dictionaryASCIIShortLineContainsLower(line, query string) (matched, ok bool) {
+	for i := range len(line) {
+		if line[i] >= utf8.RuneSelf {
+			return false, false
+		}
+	}
+	var lower [16 << 10]byte
+	for i := range line {
+		c := line[i]
+		if 'A' <= c && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		lower[i] = c
+	}
+	var needle [1024]byte
+	return bytes.Contains(lower[:len(line)], needle[:copy(needle[:], query)]), true
 }
 
 // dictionaryFoldedLineContains 按固定大小的段搜索小写结果，保留查询长度减一的尾部以覆盖跨段匹配。

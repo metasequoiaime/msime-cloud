@@ -368,9 +368,21 @@ func qqNormalizedPrefix(text string, limit int, stripMarkdown bool) string {
 	return out.String()
 }
 
-// qqSnippetNeedsStructuredScan 判断摘要是否可能含有加粗、列表标签或 Markdown 噪声；普通正文跳过三次结构化扫描。
+// qqSnippetMarkerBytes 标记可以直接按字节识别的 ASCII 摘要结构符号。
+var qqSnippetMarkerBytes = [256]bool{
+	'*': true, '-': true, '_': true, ':': true, '[': true,
+	']': true, '`': true, '>': true, '#': true, '|': true,
+}
+
+// qqSnippetNeedsStructuredScan 判断摘要是否可能含有加粗、列表标签或 Markdown 噪声；仅在全角符号的起始字节处检查全角冒号。
 func qqSnippetNeedsStructuredScan(text string) bool {
-	return strings.ContainsAny(text, "*-_:：[]`>#|")
+	for i := 0; i < len(text); i++ {
+		b := text[i]
+		if qqSnippetMarkerBytes[b] || (b == 0xef && strings.HasPrefix(text[i:], "：")) {
+			return true
+		}
+	}
+	return false
 }
 
 // qqKnowledgeTOC 生成挑段落用的目录；知识库已加载的摘要可直接复用，测试或旧缓存没有摘要时回退到即时计算。

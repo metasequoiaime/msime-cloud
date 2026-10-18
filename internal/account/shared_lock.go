@@ -9,16 +9,28 @@ import (
 // serverKeepalives makes PostgreSQL notice within about a minute that the client of a session holding an advisory lock vanished without closing the connection (node lost, network partition), instead of keeping the lock for the kernel default of two hours. They are ignored on Unix sockets. They are set per session rather than as startup parameters in Open, because a connection pooler in front of PostgreSQL may reject unknown startup parameters.
 const serverKeepalives = `SET tcp_keepalives_idle=30; SET tcp_keepalives_interval=10; SET tcp_keepalives_count=3`
 
-// ErrLockBusy is returned by WaitLock when another request, on this replica or another, still holds the lock after the wait.
+// ErrLockBusy 表示 WaitLock 在等待期限内未能取得共享锁或所需连接。
 var ErrLockBusy = errors.New("lock held by another request")
 
-// WaitLock serialises a critical section across requests and replicas under name, for work that cannot be expressed as one database transaction (for example a read-modify-write on GitHub). It holds a session advisory lock on a pooled connection until the returned release is called, so callers keep the section short and serialise their own process first: the pool is small and every holder occupies one connection. While another holder has the lock it polls with pg_try_advisory_lock and gives the connection back between attempts, so waiting costs no connection; after wait it returns ErrLockBusy.
+// WaitLock 按名称跨请求、跨副本串行执行无法放在一个数据库事务中的操作（如 GitHub 的读改写）。
+// 会话锁占用一个池连接，直到调用返回的 release；调用方应缩短临界区并先在本进程内串行化。
+// 锁被占用时用 pg_try_advisory_lock 轮询，每次尝试后归还连接。正数 wait 同时限制连接获取和锁查询，
+// 到期返回 ErrLockBusy；wait 非正数时只尝试一次，使用调用方的上下文期限。取得锁后仍由 release 控制释放。
 func (a *Service) WaitLock(ctx context.Context, name string, wait time.Duration) (func(), error) {
 	deadline := time.Now().Add(wait)
+	waitCtx := ctx
+	if wait > 0 {
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithDeadline(ctx, deadline)
+		defer cancel()
+	}
 	delay := 50 * time.Millisecond
 	for {
-		release, err := a.tryLock(ctx, name)
+		release, err := a.tryLock(waitCtx, name)
 		if err != nil || release != nil {
+			if err != nil && ctx.Err() == nil && errors.Is(waitCtx.Err(), context.DeadlineExceeded) {
+				return nil, ErrLockBusy
+			}
 			return release, err
 		}
 		remaining := time.Until(deadline)
@@ -27,9 +39,12 @@ func (a *Service) WaitLock(ctx context.Context, name string, wait time.Duration)
 		}
 		timer := time.NewTimer(min(delay, remaining))
 		select {
-		case <-ctx.Done():
+		case <-waitCtx.Done():
 			timer.Stop()
-			return nil, ctx.Err()
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			return nil, ErrLockBusy
 		case <-timer.C:
 		}
 		delay = min(delay*2, 500*time.Millisecond)

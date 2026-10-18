@@ -137,6 +137,28 @@ func TestQQListLabelsReusesNormalizationMemory(t *testing.T) {
 	}
 }
 
+func TestQQListLabelsRepeatedVariantsKeepOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name, repeated string
+		want           []string
+	}{
+		{"短行交错重复", "- 换肤：说明\n- `换肤`：说明\n- [换肤](x):说明\n- _换肤_：说明\n", []string{"换肤", "删除", "隐私"}},
+		{"不同标签交错重复", "- 换肤：说明\n- 设置：说明\n", []string{"换肤", "设置", "删除", "隐私"}},
+		{"重复变体超过缓存容量", "- 换肤：说明\n- `换肤`：说明\n- _换肤_：说明\n- *换肤*：说明\n* 换肤：说明\n- 换肤：不同说明\n", []string{"换肤", "删除", "隐私"}},
+		{"Unicode 行空白", "\u3000- 换肤：说明\u00a0\n\t- `换肤`：说明\r\n- _换肤_：说明\n", []string{"换肤", "删除", "隐私"}},
+		{"无效编码变体", "- 水\xff：说明\n- 水�：说明\n- `水\xff`：说明\n", []string{"水�", "删除", "隐私"}},
+		{"长描述交错重复", "- 换肤：" + strings.Repeat("甲", 128) + "\n- 换肤：" + strings.Repeat("乙", 128) + "\n", []string{"换肤", "删除", "隐私"}},
+		{"长空白前缀后保留不同标签", strings.Repeat("\u3000", 64) + "- 换肤：说明\n" + strings.Repeat("\u3000", 64) + "- 设置：说明\n", []string{"换肤", "设置", "删除", "隐私"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			text := strings.Repeat(tc.repeated, 128) + "- 删除：尾部\n- 隐私：尾部"
+			if got := qqListLabels(text); !slices.Equal(got, tc.want) {
+				t.Fatalf("重复列表标签=%q，期望 %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestQQListLabelsAvoidsAllocatingForUnmatchedText(t *testing.T) {
 	for _, tc := range []struct{ name, text string }{
 		{"长列表行", "- " + strings.Repeat("水", 65536)},
@@ -166,6 +188,9 @@ func BenchmarkQQListLabels(b *testing.B) {
 		{"ordinary_lines", strings.Repeat("普通正文\n", 8192), 0},
 		{"repeated", strings.Repeat("- 换肤：说明\n", 32768), 1},
 		{"late_second", strings.Repeat("- 换肤：说明\n", 32768) + "- 隐私：尾部", 2},
+		{"normalized_duplicates", strings.Repeat("- 换肤：说明\n- `换肤`：说明\n- [换肤](x):说明\n- _换肤_：说明\n", 8192), 1},
+		{"alternating_labels", strings.Repeat("- 换肤：说明\n- 隐私：说明\n", 16384), 2},
+		{"alternating_long_descriptions", strings.Repeat("- 换肤："+long+"甲\n- 换肤："+long+"乙\n", 8), 1},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()

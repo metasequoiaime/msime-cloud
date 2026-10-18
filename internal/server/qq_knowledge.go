@@ -430,10 +430,13 @@ func qqListLabels(text string) []string {
 	previousLine := ""
 	var previousCandidate string
 	var normalizedCandidates [4]struct {
+		line       string
 		candidate  string
 		labelIndex int
 	}
 	normalizedCandidateCount := 0
+	hasRepeatedCandidate := false
+lines:
 	for remaining := text; remaining != ""; {
 		line := remaining
 		if lineEnd := strings.IndexByte(remaining, '\n'); lineEnd >= 0 {
@@ -445,6 +448,15 @@ func qqListLabels(text string) []string {
 			continue
 		}
 		previousLine = line
+		// 遇到重复候选后才复用短行原文，省去交替重复行的裁剪和 `rune` 扫描；长行不参与此缓存查找。
+		if hasRepeatedCandidate && normalizedCandidateCount > 1 && len(line) <= (qqListLabelRunes+1)*utf8.UTFMax {
+			for _, cached := range normalizedCandidates[:normalizedCandidateCount] {
+				if line == cached.line {
+					continue lines
+				}
+			}
+		}
+		rawLine := line
 		line = qqListLabelLineTrim(line)
 		rest, ok := strings.CutPrefix(line, "- ")
 		if !ok {
@@ -466,6 +478,7 @@ func qqListLabels(text string) []string {
 			}
 		}
 		if labelIndex >= 0 {
+			hasRepeatedCandidate = true
 			continue
 		}
 		labelBytes := qqListLabelCandidate(candidate, scratch[:0])
@@ -480,11 +493,13 @@ func qqListLabels(text string) []string {
 			}
 		}
 		if labelIndex >= 0 {
+			hasRepeatedCandidate = true
 			if normalizedCandidateCount < len(normalizedCandidates) {
 				normalizedCandidates[normalizedCandidateCount] = struct {
+					line       string
 					candidate  string
 					labelIndex int
-				}{candidate: candidate, labelIndex: labelIndex}
+				}{line: rawLine, candidate: candidate, labelIndex: labelIndex}
 				normalizedCandidateCount++
 			}
 			continue
@@ -497,9 +512,10 @@ func qqListLabels(text string) []string {
 		labels = append(labels, label)
 		if normalizedCandidateCount < len(normalizedCandidates) {
 			normalizedCandidates[normalizedCandidateCount] = struct {
+				line       string
 				candidate  string
 				labelIndex int
-			}{candidate: candidate, labelIndex: len(labels) - 1}
+			}{line: rawLine, candidate: candidate, labelIndex: len(labels) - 1}
 			normalizedCandidateCount++
 		}
 		summaryRunes += utf8.RuneCountInString(label)

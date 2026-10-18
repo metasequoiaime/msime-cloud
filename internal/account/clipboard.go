@@ -356,6 +356,10 @@ func (a *Service) clipboard(w http.ResponseWriter, r *http.Request) {
 		write(w, 200, item)
 	case "DELETE":
 		id := r.PathValue("id")
+		if id != "" && !isLowerHex(id, 64) {
+			writeError(w, 404, "not_found")
+			return
+		}
 		if e := a.store.DeleteClipboard(r.Context(), p.UserID, id); errors.Is(e, errDataNotFound) {
 			writeError(w, 404, "not_found")
 			return
@@ -407,7 +411,7 @@ func (a *Service) clipboardPin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	if len(id) != 64 {
+	if !isLowerHex(id, 64) {
 		writeError(w, 404, "not_found")
 		return
 	}

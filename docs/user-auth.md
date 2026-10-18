@@ -92,7 +92,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE msime_migrator IN SCHEMA public GRANT USAGE, S
 
 ## 云剪贴板保留与置顶
 
-`GET /v1/users/me/clipboard` 的响应带 `retention_days`（0 表示一直保留），条目带 `pinned` 和 `device`（写入时所用会话的设备名，从登录时的 User-Agent 解析，认不出为空字符串）。置顶的条目排在最前，不受保留期清理，也不会被 50 条上限挤掉。`PUT /v1/users/me/clipboard/retention {"days":0|1|7|30}` 设置保留天数，每小时的清理任务删除超期的未置顶条目；它不改同步开关，`PUT /clipboard/settings` 的请求体保持不变。`PUT /v1/users/me/clipboard/{id}/pin {"pinned":bool}` 置顶或取消，条目不存在或属于别人时 404。
+`GET /v1/users/me/clipboard` 的响应带 `retention_days`（0 表示一直保留），条目带 `pinned` 和 `device`（写入时所用会话的设备名，从登录时的 User-Agent 解析，认不出为空字符串）。置顶的条目排在最前，不受保留期清理，也不会被 50 条上限挤掉。`PUT /v1/users/me/clipboard/retention {"days":0|1|7|30}` 设置保留天数，每小时的清理任务删除超期的未置顶条目；它不改同步开关，`PUT /clipboard/settings` 的请求体保持不变。`PUT /v1/users/me/clipboard/{id}/pin {"pinned":bool}` 置顶或取消，条目 ID 为 64 个小写十六进制字符；删除单条或置顶时，编号格式不对、条目不存在或属于别人都返回 404 `not_found`。
 
 ## 云剪贴板端到端加密
 
@@ -100,9 +100,9 @@ ALTER DEFAULT PRIVILEGES FOR ROLE msime_migrator IN SCHEMA public GRANT USAGE, S
 
 - `GET /v1/users/me/clipboard/keys?device_id=<id>` 返回 `{"enabled","key_id","wrap","devices":[{"device_id","public_key","name","created_at","approved"}]}`。没有密钥时 `key_id` 为 null，`wrap` 是当前密钥给这台设备的封装、没有时为 null，`approved` 表示设备持有当前密钥的封装，设备按登记时间排序。`device_id` 缺失或格式不对返回 400 `invalid_device_id`。顺带记下该设备最近一次来取的时间（`last_seen`，不对外返回）。
 - `PUT /v1/users/me/clipboard/devices/{device_id} {"public_key","name"}` 登记设备，已登记时只改名；`name` 不超过 64 个字符、不含控制字符，可以为空。格式不对返回 400 `invalid_clipboard_device`。每个账号最多 20 台，满了先淘汰最早登记、尚未批准的一台，都已批准时返回 409 `clipboard_device_limit`。云剪贴板关闭时也能登记。
-- `DELETE /v1/users/me/clipboard/devices/{device_id}` 在用户行锁内检查批准状态，删除待批准设备和它的旧封装，不存在返回 404 `not_found`。已持有当前密钥封装的设备返回 409 `clipboard_key_rotation_required`，设备、封装和条目保持不变；必须通过换钥请求的 `revoke` 移除，迟到的拒绝请求不能删除刚被批准的设备。
+- `DELETE /v1/users/me/clipboard/devices/{device_id}` 在用户行锁内检查批准状态，删除待批准设备和它的旧封装，编号格式不对或不存在返回 404 `not_found`。已持有当前密钥封装的设备返回 409 `clipboard_key_rotation_required`，设备、封装和条目保持不变；必须通过换钥请求的 `revoke` 移除，迟到的拒绝请求不能删除刚被批准的设备。
 - `POST /v1/users/me/clipboard/keys {"previous_key_id","key_id","wraps":[{"device_id","wrap"}],"revoke":[]}` 换钥。在持有用户行锁的事务里比较 `previous_key_id` 与当前密钥编号（没有密钥时为 null），不等返回 409 `clipboard_key_conflict`，新 `key_id` 必须与当前编号不同，否则返回 400 `invalid_clipboard_key`，不会删除条目、封装或设备；比较后写入保证并发换钥只有一个成功。然后删除 `revoke` 里的设备、全部条目和全部旧封装，写入新密钥编号和封装。`wraps` 1 到 20 项、设备不重复、都已登记且不在 `revoke` 里，`revoke` 最多 20 项，否则 400 `invalid_clipboard_key`。云剪贴板关闭时返回 403 `clipboard_sync_disabled`。
-- `PUT /v1/users/me/clipboard/keys/{key_id}/wraps/{device_id} {"wrap"}` 批准一台设备，已有封装时替换。封装格式不对 400 `invalid_clipboard_key`，`key_id` 不是当前密钥 409 `clipboard_key_conflict`，设备没登记 404 `not_found`。
+- `PUT /v1/users/me/clipboard/keys/{key_id}/wraps/{device_id} {"wrap"}` 批准一台设备，已有封装时替换。封装格式不对 400 `invalid_clipboard_key`，`key_id` 格式不对或不是当前密钥 409 `clipboard_key_conflict`，设备编号格式不对或没登记 404 `not_found`。
 - `GET /v1/users/me/clipboard` 返回 `{"enabled","retention_days","key_id","items":[{"id","ciphertext","key_id","updated_at","pinned","device"}]}`，只含当前密钥加密的条目。查询参数 `q` 被忽略，搜索由客户端解密后进行。
 - `POST /v1/users/me/clipboard {"ciphertext","key_id","dedup"}` 返回一条条目。带非空 `text` 返回 400 `clipboard_e2e_required`（旧版本客户端），密文或 `dedup` 格式不对 400 `invalid_clipboard_ciphertext`，云剪贴板关闭 403 `clipboard_sync_disabled`，`key_id` 不是当前密钥（包括还没有密钥）409 `clipboard_key_conflict`。`dedup` 相同的条目只保留一条：保留 ID 和置顶状态，换成新密文并移到最前。已有 50 条且全部置顶时，上传新 `dedup` 返回 409 `clipboard_limit`，原条目保持不变；更新已有 `dedup` 仍可成功，取消一条置顶或删除一条后可继续上传新内容。
 - `PUT /v1/users/me/clipboard/settings {"enabled":false}` 除了条目，还删除当前密钥、封装和全部设备登记；再次打开后由第一台设备重新生成密钥。`DELETE /v1/users/me/data` 选了 `clipboard` 分区时同样删除这些，但保留同步开关和保留天数。清空、删除单条、置顶和保留天数的接口不变。

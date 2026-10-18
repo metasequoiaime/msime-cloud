@@ -224,6 +224,18 @@ func requireActionID(v actionRequest) error {
 	return nil
 }
 
+// numericActionID 在通用 ID 校验后解析正的十进制整数，供公告和故障操作共用。
+func numericActionID(v actionRequest) (int64, error) {
+	if err := requireActionID(v); err != nil {
+		return 0, err
+	}
+	id, err := strconv.ParseInt(v.ID, 10, 64)
+	if err != nil || id < 1 {
+		return 0, actionFail(400, "invalid_id")
+	}
+	return id, nil
+}
+
 // Action value limits, in bytes of the raw JSON value. Most actions carry a small object; a notice carries a body of up to noticeBodyMax characters, which JSON may send as \u escapes (12 bytes for a character outside the BMP), so notice actions get room for that.
 const (
 	actionValueMax       = 8 << 10

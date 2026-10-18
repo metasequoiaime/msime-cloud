@@ -493,17 +493,6 @@ func decodeIncidentValue(raw json.RawMessage) (incidentValue, error) {
 	return v, nil
 }
 
-func incidentID(v actionRequest) (int64, error) {
-	if err := requireActionID(v); err != nil {
-		return 0, err
-	}
-	id, err := strconv.ParseInt(v.ID, 10, 64)
-	if err != nil || id < 1 {
-		return 0, actionFail(400, "invalid_id")
-	}
-	return id, nil
-}
-
 // actionOpenIncident opens an incident from value {service, title, description}.
 // monitoredService reports whether key is a service the status page shows: its own database probe, admin.services, or without them the derived upstreams. When the console knows of no service at all, any well-formed key is accepted, as before services were passed in.
 func (a *Service) monitoredService(key string) bool {
@@ -558,7 +547,7 @@ SELECT id FROM incident`, *value.Service, *value.Title, description, n.Kind, n.T
 
 // actionResolveIncident 解决指定事件，锁定后的状态判断和更新共用一条语句。
 func actionResolveIncident(a *Service, ctx context.Context, tx pgx.Tx, v actionRequest) (actionResult, error) {
-	id, err := incidentID(v)
+	id, err := numericActionID(v)
 	if err != nil {
 		return actionResult{}, err
 	}
@@ -590,7 +579,7 @@ SELECT service,title,EXISTS(SELECT 1 FROM updated) FROM locked`, id).Scan(&servi
 
 // actionUpdateIncident changes the title or description of the incident id from value.
 func actionUpdateIncident(a *Service, ctx context.Context, tx pgx.Tx, v actionRequest) (actionResult, error) {
-	id, err := incidentID(v)
+	id, err := numericActionID(v)
 	if err != nil {
 		return actionResult{}, err
 	}

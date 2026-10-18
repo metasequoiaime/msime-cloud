@@ -1590,6 +1590,15 @@ var qqAllowedDomains = []string{"msime.app", "github.com"}
 // qqSentenceEnds 是 qqDropPromoSentences 切句子用的句末标点。英文句号不算，否则会把域名切开。
 const qqSentenceEnds = "。！？!?；;"
 
+// qqPromoSentenceEnd 返回第一句包含句末标点的字节终点；没有句末标点时保留整段。
+func qqPromoSentenceEnd(text string) int {
+	if i := strings.IndexAny(text, qqSentenceEnds); i >= 0 {
+		_, size := utf8.DecodeRuneInString(text[i:])
+		return i + size
+	}
+	return len(text)
+}
+
 // qqPromoSentence 判断一句话是不是在引流：带 QQ 群号、微信号，或者不在 qqAllowedDomains 里的裸域名。返回命中的种类，没有命中时为空。
 func qqPromoSentence(sentence string) string {
 	if !qqPromoSentenceCandidate(sentence) {
@@ -1638,11 +1647,7 @@ func qqDropPromoSentences(answer string) string {
 		line, next, _ := strings.Cut(rest, "\n")
 		rest = next
 		for sentence := line; sentence != ""; {
-			end := len(sentence)
-			if i := strings.IndexAny(sentence, qqSentenceEnds); i >= 0 {
-				_, size := utf8.DecodeRuneInString(sentence[i:])
-				end = i + size
-			}
+			end := qqPromoSentenceEnd(sentence)
 			if qqPromoSentenceCandidate(sentence[:end]) && qqPromoSentence(sentence[:end]) != "" {
 				matchLineStart = lineStart
 				goto filter
@@ -1669,11 +1674,7 @@ filter:
 		dropped := false
 		keptNonSpace := false
 		for sentenceRest := line; sentenceRest != ""; {
-			end := len(sentenceRest)
-			if i := strings.IndexAny(sentenceRest, qqSentenceEnds); i >= 0 {
-				_, size := utf8.DecodeRuneInString(sentenceRest[i:])
-				end = i + size
-			}
+			end := qqPromoSentenceEnd(sentenceRest)
 			sentence := sentenceRest[:end]
 			sentenceRest = sentenceRest[end:]
 			if kind := qqPromoSentence(sentence); kind != "" {
@@ -1696,11 +1697,7 @@ filter:
 				out.WriteByte('\n')
 			}
 			for sentenceRest := line; sentenceRest != ""; {
-				end := len(sentenceRest)
-				if i := strings.IndexAny(sentenceRest, qqSentenceEnds); i >= 0 {
-					_, size := utf8.DecodeRuneInString(sentenceRest[i:])
-					end = i + size
-				}
+				end := qqPromoSentenceEnd(sentenceRest)
 				sentence := sentenceRest[:end]
 				sentenceRest = sentenceRest[end:]
 				if qqPromoSentence(sentence) == "" {

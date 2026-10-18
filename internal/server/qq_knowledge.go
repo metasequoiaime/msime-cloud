@@ -1558,13 +1558,32 @@ type qqAnswerCandidateResult struct {
 
 // qqAnswerCandidateMarkerPrefilter 只查找候选扫描真正关心的字节序列，普通中文不触发逐字节扫描。
 func qqAnswerCandidateMarkerPrefilter(answer string) bool {
-	return strings.ContainsRune(answer, '\t') ||
-		strings.Contains(answer, "“") || strings.Contains(answer, "”") ||
-		strings.Contains(answer, "‘") || strings.Contains(answer, "’") ||
-		strings.Contains(answer, "资") || strings.Contains(answer, "料") ||
-		strings.Contains(answer, "文") || strings.Contains(answer, "档") ||
-		strings.Contains(answer, "里") || strings.Contains(answer, "截") ||
-		strings.Contains(answer, "断")
+	for i := 0; i < len(answer); i++ {
+		switch answer[i] {
+		case '\t':
+			return true
+		case 0xe2:
+			if i+2 < len(answer) && answer[i+1] == 0x80 {
+				switch answer[i+2] {
+				case 0x98, 0x99, 0x9c, 0x9d:
+					return true
+				}
+			}
+		case 0xe6:
+			if i+2 < len(answer) && ((answer[i+1] == 0x96 && (answer[i+2] == 0x99 || answer[i+2] == 0x87 || answer[i+2] == 0xad)) || (answer[i+1] == 0xa1 && answer[i+2] == 0xa3) || (answer[i+1] == 0x88 && answer[i+2] == 0xaa)) {
+				return true
+			}
+		case 0xe8:
+			if i+2 < len(answer) && answer[i+1] == 0xb5 && answer[i+2] == 0x84 {
+				return true
+			}
+		case 0xe9:
+			if i+2 < len(answer) && answer[i+1] == 0x87 && answer[i+2] == 0x8c {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // qqScanAnswerCandidates 一次扫描答案中的提示词泄漏、替换和标题候选标记，避免重复逐字节扫描正文。

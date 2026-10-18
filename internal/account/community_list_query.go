@@ -29,3 +29,16 @@ func communityListScope(r *http.Request) (string, bool) {
 	scope := r.URL.Query().Get("scope")
 	return scope, scope == "" || scope == "mine" || scope == "saved"
 }
+
+// communitySkinListCategory 共用两类皮肤列表的分类筛选与声明，先报分类错误，再报声明错误。
+func communitySkinListCategory(r *http.Request) (category string, withCategory bool, code string) {
+	category = r.URL.Query().Get("category")
+	if category != "" && !validCandidateSkinCategory(category) {
+		return "", false, "invalid_category"
+	}
+	withCategory, ok := candidateIncludeCategory(r)
+	if !ok {
+		return "", false, "invalid_include"
+	}
+	return category, withCategory, ""
+}

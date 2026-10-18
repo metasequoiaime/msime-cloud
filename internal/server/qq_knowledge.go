@@ -1392,6 +1392,16 @@ func qqAnswerCandidates(answer string) (promptLeak, replacement bool) {
 	return result.promptLeak, result.replacement
 }
 
+// qqAnswerHeadingSpace 判断答案标题标记后允许的 ASCII 空白。
+func qqAnswerHeadingSpace(c byte) bool {
+	switch c {
+	case ' ', '\t', '\r', '\f':
+		return true
+	default:
+		return false
+	}
+}
+
 // qqStripAnswerHeadings 沿用原正则的井号数量和 ASCII 空白规则，只在确需移除行首标记时构建正文。
 func qqStripAnswerHeadings(answer string) string {
 	if !strings.HasPrefix(answer, "#") && !strings.Contains(answer, "\n#") {
@@ -1406,13 +1416,13 @@ func qqStripAnswerHeadings(answer string) string {
 				lineEnd += offset
 			}
 			line := answer[offset:lineEnd]
-			if strings.HasPrefix(line, "#") {
+			if len(line) > 0 && line[0] == '#' {
 				end := 1
 				for end < len(line) && end < 6 && line[end] == '#' {
 					end++
 				}
 				hashes := end
-				for end < len(line) && strings.IndexByte(" \t\r\f", line[end]) >= 0 {
+				for end < len(line) && qqAnswerHeadingSpace(line[end]) {
 					end++
 				}
 				// 没有分隔空白且后接数字时是 issue 编号，保持原样。

@@ -80,7 +80,12 @@ func normalizeNotificationTitle(text string) string {
 		if c == utf8.RuneError && size == 1 {
 			continue
 		}
-		if unicode.IsSpace(c) || unicode.IsControl(c) {
+		if c < utf8.RuneSelf {
+			if c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r' || c < 0x20 || c == 0x7f {
+				pendingSpace = count > 0
+				continue
+			}
+		} else if unicode.IsSpace(c) || unicode.IsControl(c) {
 			pendingSpace = count > 0
 			continue
 		}

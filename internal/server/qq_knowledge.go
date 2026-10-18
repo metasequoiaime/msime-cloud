@@ -561,6 +561,33 @@ func qqMarkdownSpaceIsSpace(r rune) bool {
 	}
 }
 
+// qqTrimSpace 先裁剪 ASCII 空白，再用同一张 Unicode 空白表处理两端的少量非 ASCII 空白。
+func qqTrimSpace(text string) string {
+	trimmed := strings.TrimLeft(text, " \t\n\f\r\v")
+	start := len(text) - len(trimmed)
+	trimmed = strings.TrimRight(trimmed, " \t\n\f\r\v")
+	end := start + len(trimmed)
+	if start < end && text[start] >= utf8.RuneSelf {
+		for start < end {
+			r, size := utf8.DecodeRuneInString(text[start:end])
+			if !qqMarkdownSpaceIsSpace(r) {
+				break
+			}
+			start += size
+		}
+	}
+	if start < end && text[end-1] >= utf8.RuneSelf {
+		for end > start {
+			r, size := utf8.DecodeLastRuneInString(text[start:end])
+			if !qqMarkdownSpaceIsSpace(r) {
+				break
+			}
+			end -= size
+		}
+	}
+	return text[start:end]
+}
+
 // qqSplitMarkdown 按标题把一个 Markdown 文档切成段落。文档名取第一个一级标题，没有时用文件名；一级标题下、第一个二级标题之前的导语成为「概述」一段（适用的版本、系统要求常常只写在这里），文档开头、任何标题之前的文字不收；代码块里以 # 开头的行不算标题；没有正文的标题不成段，过长的正文截断到 qqSectionRunes。
 func qqSplitMarkdown(name, markdown string) []qqSection {
 	doc := name
@@ -737,7 +764,7 @@ var qqLinkPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[!-~]*`)
 
 // qqCompactLower 流式合并字段，只为保留的正文分配空间；无需合并时直接转小写。
 func qqCompactLower(text string) string {
-	text = strings.TrimSpace(text)
+	text = qqTrimSpace(text)
 	outputBytes := 0
 	for field := range strings.FieldsSeq(text) {
 		if len(field) == len(text) {
@@ -756,7 +783,7 @@ func qqCompactLower(text string) string {
 
 // qqNormalizeWhitespace 按原有 Fields、Join 的规则合并空白，只为保留的正文分配空间。
 func qqNormalizeWhitespace(text string) string {
-	text = strings.TrimSpace(text)
+	text = qqTrimSpace(text)
 	// 中等长度正文用一次字段遍历写入结果；长正文仍先精确计算容量，避免为大量空白预留输入大小的缓冲。
 	if len(text) <= 128<<10 {
 		var out strings.Builder
@@ -841,9 +868,9 @@ func qqStripLinks(text string) string {
 	}
 	// 没有链接和连续 ASCII 空白的候选时，只需裁掉首尾空白。
 	if !hadLink && !strings.Contains(text, "  ") && !strings.ContainsRune(text, '\t') {
-		return strings.TrimSpace(text)
+		return qqTrimSpace(text)
 	}
-	return strings.TrimSpace(qqCollapseSpaceRuns(text))
+	return qqTrimSpace(qqCollapseSpaceRuns(text))
 }
 
 // qqRemoveLinks 按 qqLinkPattern 的规则扫描链接并合并留下的空格，避免删除链接后再建立一次正文副本。

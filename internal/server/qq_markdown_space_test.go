@@ -35,6 +35,20 @@ func TestQQMarkdownSpaceClassifierMatchesUnicode(t *testing.T) {
 	}
 }
 
+func TestQQTrimSpaceMatchesUnicodeTrim(t *testing.T) {
+	for _, input := range []string{
+		"",
+		" \t\u3000正文\u00a0\n",
+		"\u0085\u2000正文\u2029",
+		" \xff正文\u3000",
+		" \t\u3000",
+	} {
+		if got, want := qqTrimSpace(input), strings.TrimSpace(input); got != want {
+			t.Fatalf("空白裁剪不兼容：输入=%q，结果=%q，预期=%q", input, got, want)
+		}
+	}
+}
+
 func TestQQMarkdownLeadingSpaceKeepsIndentation(t *testing.T) {
 	for _, prefix := range []string{"", " ", "\t", "\r", "\u0085", "\u00a0", "\u1680", "\u2000", "\u200a", "\u2028", "\u2029", "\u202f", "\u205f", "\u3000", "\u200b", "\ufeff", "\xff"} {
 		body := prefix + "首行\n" + prefix + "第二行"

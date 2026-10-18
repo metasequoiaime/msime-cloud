@@ -222,7 +222,7 @@ func qqGapTopicMayContainContact(text string) bool {
 
 // qqNormalizeWhitespacePrefix 合并空白并截取前 maxRunes 个字符；调用方已确认文本不可能含联系方式，所以达到上限后可以停止读取尾部。
 func qqNormalizeWhitespacePrefix(text string, maxRunes int) (string, bool) {
-	text = strings.TrimSpace(text)
+	text = qqTrimSpace(text)
 	var out strings.Builder
 	fields := 0
 	runes := 0

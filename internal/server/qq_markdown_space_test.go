@@ -27,6 +27,15 @@ func TestQQMarkdownLeadingSpaceFastPathMatchesUnicodeTrim(t *testing.T) {
 	}
 }
 
+func TestQQMarkdownLeadingSpaceFastPathCoversUnicodeSpaces(t *testing.T) {
+	for _, r := range []rune{'\u0085', '\u00a0', '\u1680', '\u2000', '\u2001', '\u2002', '\u2003', '\u2004', '\u2005', '\u2006', '\u2007', '\u2008', '\u2009', '\u200a', '\u2028', '\u2029', '\u202f', '\u205f', '\u3000'} {
+		input := string(r) + "正文"
+		if got, want := qqMarkdownLeadingSpace(input), strings.TrimLeftFunc(input, unicode.IsSpace); got != want {
+			t.Fatalf("Unicode 空白裁剪不兼容：r=%U，结果=%q，预期=%q", r, got, want)
+		}
+	}
+}
+
 func TestQQMarkdownSpaceClassifierMatchesUnicode(t *testing.T) {
 	for _, r := range []rune{'\t', '\n', '\v', '\f', '\r', ' ', '\u0085', '\u00a0', '\u1680', '\u2000', '\u2001', '\u2002', '\u2003', '\u2004', '\u2005', '\u2006', '\u2007', '\u2008', '\u2009', '\u200a', '\u2028', '\u2029', '\u202f', '\u205f', '\u3000', '水', '\u200b', '\ufeff', '\ufffd'} {
 		if got, want := qqMarkdownSpaceIsSpace(r), unicode.IsSpace(r); got != want {

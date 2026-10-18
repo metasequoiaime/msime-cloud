@@ -105,15 +105,23 @@ func (a *Service) AdminSession(ctx context.Context, token string) (AdminIdentity
 	if len(token) != 64 {
 		return identity, ErrInvalid
 	}
+	// 近期活跃会话直接读取；需要刷新时先锁行，再用锁后的状态和实时时钟校验，避免返回已撤销或过期的旧快照。
 	err := a.store.pool.QueryRow(ctx, `WITH session AS MATERIALIZED (
- SELECT id,subject,email,name,user_agent,last_seen_at<now()-make_interval(secs=>$2) AS stale
- FROM admin_sessions WHERE token_hash=$1 AND expires_at>now()
+ SELECT id,subject,email,name,user_agent,expires_at,last_seen_at<clock_timestamp()-make_interval(secs=>$2) AS stale
+ FROM admin_sessions WHERE token_hash=$1 AND expires_at>clock_timestamp()
+), locked AS MATERIALIZED (
+ SELECT s.id,s.subject,s.email,s.name,s.user_agent,s.expires_at,s.last_seen_at
+ FROM admin_sessions s JOIN session x ON s.id=x.id
+ WHERE x.stale FOR UPDATE OF s
 ), touched AS (
- UPDATE admin_sessions s SET last_seen_at=now()
- FROM session x WHERE s.id=x.id AND x.stale
+ UPDATE admin_sessions s SET last_seen_at=clock_timestamp()
+ FROM locked x WHERE s.id=x.id AND x.expires_at>clock_timestamp()
+ AND x.last_seen_at<clock_timestamp()-make_interval(secs=>$2)
  RETURNING s.id
 )
-SELECT subject,email,name,user_agent FROM session`, hash(token), adminSessionTouch.Seconds()).Scan(&identity.Subject, &identity.Email, &identity.Name, &identity.UserAgent)
+SELECT subject,email,name,user_agent FROM session WHERE NOT stale AND expires_at>clock_timestamp()
+UNION ALL
+SELECT subject,email,name,user_agent FROM locked WHERE expires_at>clock_timestamp()`, hash(token), adminSessionTouch.Seconds()).Scan(&identity.Subject, &identity.Email, &identity.Name, &identity.UserAgent)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return identity, ErrInvalid
 	}

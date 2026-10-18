@@ -90,6 +90,8 @@ server {
 
 Google 登录时，后端校验 ID Token 的签名、issuer、audience、有效期、nonce、`email_verified`，以及邮箱是否在白名单或 `admin_members` 中。授权码流程使用 PKCE S256 和一次性 state；state 与浏览器 HttpOnly Cookie 绑定，在数据库中保留 10 分钟。管理员会话在 PostgreSQL 中只存令牌哈希，有效期固定 8 小时；浏览器使用 Secure、HttpOnly、SameSite=Lax、无 Domain 的 `__Host-` Cookie。会话另外记录创建时间、最近活动时间（每 5 分钟最多更新一次）、截断到 256 字符的 User-Agent 和 Google 名字，供个人中心显示和吊销。Cookie 会话发起的写请求要求 `Origin` 与回调地址的来源完全相同，否则返回 403 `origin_required`；后台的访问地址（协议和域名）与 `admin.google.redirect_uri` 不一致时，所有写操作都会因此失败。普通 Google 用户不会因此成为管理员，也不会自动创建输入法用户账户。Google Cloud 项目处于测试发布状态时，需要把管理员加入测试用户。此处遵循 [Google OpenID Connect 服务端流程](https://developers.google.com/identity/openid-connect/openid-connect)。
 
+会话需要刷新最近活动时间时，会在取得行锁后重新校验：等待期间过期、被吊销或退出的会话返回 `401 unauthorized`，不刷新活动时间；有效会话按锁后的实际时间记录活动，其他请求已经刷新过时不重复写入。近期活跃会话仍直接读取，不等待活动时间刷新所用的行锁。
+
 | 端点 | 用途 |
 | --- | --- |
 | `GET /api/auth/session` | 登录状态、版本号、管理员邮箱和启用的登录方式 |

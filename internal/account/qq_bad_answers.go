@@ -35,7 +35,12 @@ func (a *Service) UpdateQQBadAnswerFeedback(ctx context.Context, question, feedb
 
 // RecentQQBadAnswers 列出 since 以来被说答错的回答（不论处理了没有，周报按它计数），最新的在前。
 func (a *Service) RecentQQBadAnswers(ctx context.Context, since time.Duration, limit int) ([]QQBadAnswer, error) {
-	rows, err := a.store.pool.Query(ctx, `SELECT id,question,answer,feedback,retry,created_at FROM qq_bad_answers WHERE created_at>now()-$1::interval ORDER BY created_at DESC LIMIT $2`, since.String(), limit)
+	return a.queryQQBadAnswers(ctx, `SELECT id,question,answer,feedback,retry,created_at FROM qq_bad_answers WHERE created_at>now()-$1::interval ORDER BY created_at DESC LIMIT $2`, since.String(), limit)
+}
+
+// queryQQBadAnswers 共用六列差评查询与扫描；空结果保留 nil，扫描失败丢弃结果，迭代失败仍返回此前已读到的记录。
+func (a *Service) queryQQBadAnswers(ctx context.Context, query string, args ...any) ([]QQBadAnswer, error) {
+	rows, err := a.store.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

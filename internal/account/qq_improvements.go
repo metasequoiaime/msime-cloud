@@ -39,18 +39,5 @@ func (a *Service) QQImprovementEvents(ctx context.Context, from, to time.Time) (
 
 // QQBadAnswersBetween 列出 [from, to) 之间被说答错的回答，按时间从早到晚，周报用。
 func (a *Service) QQBadAnswersBetween(ctx context.Context, from, to time.Time) ([]QQBadAnswer, error) {
-	rows, err := a.store.pool.Query(ctx, `SELECT id,question,answer,feedback,retry,created_at FROM qq_bad_answers WHERE created_at>=$1 AND created_at<$2 ORDER BY created_at`, from, to)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []QQBadAnswer
-	for rows.Next() {
-		var b QQBadAnswer
-		if err := rows.Scan(&b.ID, &b.Question, &b.Answer, &b.Feedback, &b.Retry, &b.CreatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, b)
-	}
-	return out, rows.Err()
+	return a.queryQQBadAnswers(ctx, `SELECT id,question,answer,feedback,retry,created_at FROM qq_bad_answers WHERE created_at>=$1 AND created_at<$2 ORDER BY created_at`, from, to)
 }

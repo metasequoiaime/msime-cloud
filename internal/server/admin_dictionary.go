@@ -340,6 +340,12 @@ func dictionaryLineContainsLower(line, query string) bool {
 
 // dictionaryUnicodeLineContainsLower 处理最多 256 字节的短行；每个输入字节最多映射为四字节编码。
 func dictionaryUnicodeLineContainsLower(line, query string) bool {
+	if strings.Contains(line, query) {
+		return true
+	}
+	if dictionaryASCIIContainsFold(line, query) {
+		return true
+	}
 	for i, c := range line {
 		r := unicode.ToLower(c)
 		if r == c && c != utf8.RuneError {
@@ -361,6 +367,38 @@ func dictionaryUnicodeLineContainsLower(line, query string) bool {
 		return dictionaryShortBytesContain(folded, query)
 	}
 	return strings.Contains(line, query)
+}
+
+// dictionaryASCIIContainsFold 判断 ASCII 查询词是否命中，不必为前面的 Unicode 字符构造整行折叠副本。
+func dictionaryASCIIContainsFold(line, query string) bool {
+	if query == "" {
+		return true
+	}
+	for i := range query {
+		if query[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	if len(query) > len(line) {
+		return false
+	}
+	for i := 0; i <= len(line)-len(query); i++ {
+		matched := true
+		for j := range query {
+			c := line[i+j]
+			if 'A' <= c && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			if c != query[j] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
 }
 
 // dictionaryShortBytesContain 搜索最多 1024 字节的短行结果，避免长查询转换成字节切片时分配。

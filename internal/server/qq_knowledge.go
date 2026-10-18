@@ -630,6 +630,10 @@ func qqTrimSpace(text string) string {
 	}
 	if start < end && text[end-1] >= utf8.RuneSelf {
 		for end > start {
+			if end-start >= 3 && text[end-3] == 0xe3 && text[end-2] == 0x80 && text[end-1] == 0x80 {
+				end -= 3
+				continue
+			}
 			r, size := utf8.DecodeLastRuneInString(text[start:end])
 			if !qqMarkdownSpaceIsSpace(r) {
 				break

@@ -374,10 +374,8 @@ func (s *Server) qqGapsIssue(ctx context.Context, token string) (int64, error) {
 	}
 	if number == 0 {
 		// 写入结果可能在响应返回前丢失；先失效缓存，避免不确定时继续读到旧 issue 列表。
-		client.Invalidate("/repos/" + repo + "/issues")
 		defer client.Invalidate("/repos/" + repo + "/issues")
-		r, err := client.Do(ctx, token, "POST", "/repos/"+repo+"/issues", map[string]any{"title": qqGapsTitle, "body": qqGapsBody})
-		client.Invalidate("/repos/" + repo + "/issues")
+		r, err := qqWriteIssue(ctx, client, token, repo, "POST", "/repos/"+repo+"/issues", map[string]any{"title": qqGapsTitle, "body": qqGapsBody})
 		var created struct {
 			Number int64 `json:"number"`
 		}
@@ -446,10 +444,8 @@ func (s *Server) recordQQGapIn(ctx context.Context, dailyScope string, daily int
 		release()
 		return false
 	}
-	client.Invalidate("/repos/" + repo + "/issues")
 	defer client.Invalidate("/repos/" + repo + "/issues")
-	r, err := client.Do(ctx, token, "POST", "/repos/"+repo+"/issues/"+strconv.FormatInt(number, 10)+"/comments", map[string]string{"body": prefix + githubReferenceBreaker.Replace(topic)})
-	client.Invalidate("/repos/" + repo + "/issues")
+	r, err := qqWriteIssue(ctx, client, token, repo, "POST", "/repos/"+repo+"/issues/"+strconv.FormatInt(number, 10)+"/comments", map[string]string{"body": prefix + githubReferenceBreaker.Replace(topic)})
 	if err != nil || !r.OK() {
 		// 汇总 issue 可能已经被关闭或删除；清掉缓存，下一次重新查找或新建。
 		s.qq.mu.Lock()

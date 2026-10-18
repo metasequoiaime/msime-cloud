@@ -286,14 +286,9 @@ func (s *Server) fileQQImprovementReport(ctx context.Context, from, to time.Time
 	if err != nil {
 		return 0, false, err
 	}
-	var labels []string
-	if slices.Contains(s.qqRepoLabels(ctx, client, token, repo), qqImprovementLabel) {
-		labels = []string{qqImprovementLabel}
-	}
-	client.Invalidate("/repos/" + repo + "/issues")
+	labels := s.qqImprovementLabels(ctx, client, token, repo)
 	defer client.Invalidate("/repos/" + repo + "/issues")
-	r, err := client.Do(ctx, token, "POST", "/repos/"+repo+"/issues", map[string]any{"title": title, "body": body, "labels": labels})
-	client.Invalidate("/repos/" + repo + "/issues")
+	r, err := qqWriteIssue(ctx, client, token, repo, "POST", "/repos/"+repo+"/issues", map[string]any{"title": title, "body": body, "labels": labels})
 	var created struct {
 		Number int64 `json:"number"`
 	}

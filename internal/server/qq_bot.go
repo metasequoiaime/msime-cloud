@@ -317,14 +317,25 @@ func (b *qqBot) probeEventFields(raw json.RawMessage) {
 func qqNestedFields(fields map[string]json.RawMessage) []string {
 	var out []string
 	for _, name := range qqQuoteFields {
-		var object map[string]json.RawMessage
-		var array []map[string]json.RawMessage
-		switch {
-		case json.Unmarshal(fields[name], &object) == nil:
+		raw := fields[name]
+		if len(raw) == 0 {
+			continue
+		}
+		// 字段值已由 `qqEventFields` 解码验证，只按实际类型解析，避免为缺失字段和类型试探创建错误。
+		switch raw[0] {
+		case '{':
+			var object map[string]json.RawMessage
+			if json.Unmarshal(raw, &object) != nil {
+				continue
+			}
 			for _, k := range slices.Sorted(maps.Keys(object)) {
 				out = append(out, name+"."+k)
 			}
-		case json.Unmarshal(fields[name], &array) == nil:
+		case '[':
+			var array []map[string]json.RawMessage
+			if json.Unmarshal(raw, &array) != nil {
+				continue
+			}
 			seen := map[string]bool{}
 			for _, item := range array {
 				for k := range item {

@@ -97,7 +97,7 @@ func saveCommunityContent(section string, create bool) adminActionFunc {
 			return actionResult{}, err
 		}
 		// 包体和设计数据不进入审计，只记操作对象与发布状态。
-		_, err = tx.Exec(ctx, `UPDATE `+table+` SET moderation=$2,previous_moderation=CASE WHEN $2='removed' THEN COALESCE(previous_moderation,'approved') END,moderation_reason=CASE WHEN $2='removed' THEN COALESCE(moderation_reason,'管理员保存为下架') END,moderated_by=$3,moderated_at=now() WHERE id=$1`, v.ID, input.Moderation, adminActor(ctx))
+		_, err = tx.Exec(ctx, `UPDATE `+table+` SET moderation=$2,previous_moderation=CASE WHEN $2='removed' THEN CASE WHEN $4 THEN 'approved' WHEN moderation='removed' THEN COALESCE(previous_moderation,'approved') ELSE moderation END END,moderation_reason=CASE WHEN $2='removed' THEN COALESCE(moderation_reason,'管理员保存为下架') END,moderated_by=$3,moderated_at=now() WHERE id=$1`, v.ID, input.Moderation, adminActor(ctx), create)
 		return actionResult{Affected: 1, Detail: map[string]any{"section": section, "name": input.Name, "moderation": input.Moderation}, Extra: map[string]any{"id": v.ID}}, err
 	}
 }

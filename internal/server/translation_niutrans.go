@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"crypto/md5" // #nosec G501 -- NiuTrans v2 requires MD5 for authStr.
 	"encoding/hex"
 	"encoding/json"
@@ -106,7 +105,7 @@ func (s *Server) translateNiuTransUpstream(w http.ResponseWriter, r *http.Reques
 		"srcText":   {v.Text},
 	}
 	form.Set("authStr", niutransAuthString(e.appID, e.apiKey, source, target, timestamp, v.Text))
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, e.URL, bytes.NewBufferString(form.Encode()))
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, e.URL, strings.NewReader(form.Encode()))
 	if err != nil {
 		upstreamError(w, r, err)
 		return

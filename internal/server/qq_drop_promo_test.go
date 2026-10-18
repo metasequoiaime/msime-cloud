@@ -29,6 +29,7 @@ func TestQQDropPromoSentencesKeepsRules(t *testing.T) {
 		{"plain", "普通回答。", "普通回答。"},
 		{"lines", "第一行\n第二行", "第一行\n第二行"},
 		{"promo", "普通回答。加群 12345678 下载。后续说明。", "普通回答。后续说明。"},
+		{"promo_late_line", "前一行\n加群 12345678。\n后一行", "前一行\n后一行"},
 		{"all_promo_line", "加群 12345678。\n保留。", "保留。"},
 		{"empty", "", ""},
 		{"invalid_utf8", "甲\xff。乙\xfe", "甲\xff。乙\xfe"},
@@ -71,6 +72,7 @@ func BenchmarkQQDropPromoSentences(b *testing.B) {
 		{"long_plain", strings.Repeat("普通回答。", 8192)},
 		{"long_lines", strings.Repeat("普通回答。\n", 8192)},
 		{"promo", strings.Repeat("普通回答。", 1024) + "加群 12345678。后续说明。"},
+		{"promo_late_line", strings.Repeat("普通回答。\n", 8192) + "加群 12345678。后续说明。"},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()

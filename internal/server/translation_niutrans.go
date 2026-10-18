@@ -34,6 +34,17 @@ func niutransAuthString(appID, apiKey, source, target, timestamp, text string) s
 	return hex.EncodeToString(checksum[:])
 }
 
+// niutransTextForm 保留字段顺序及 URL 转义，一次拼成正文；签名按原始值生成，十六进制摘要直接写入。
+func niutransTextForm(appID, apiKey, source, target, timestamp, text string) string {
+	auth := niutransAuthString(appID, apiKey, source, target, timestamp, text)
+	return "appId=" + url.QueryEscape(appID) +
+		"&authStr=" + auth +
+		"&from=" + url.QueryEscape(source) +
+		"&srcText=" + url.QueryEscape(text) +
+		"&timestamp=" + url.QueryEscape(timestamp) +
+		"&to=" + url.QueryEscape(target)
+}
+
 // niutransDefaultRequestsPerSecond 是小牛文本翻译当前账号的每秒请求上限：超过时它返回错误码 10001（The QPS Exceeds Maximum Limit 5）。升级套餐后用 requests_per_second 覆盖。
 const niutransDefaultRequestsPerSecond = 5
 
@@ -97,15 +108,8 @@ func (s *Server) translateNiuTrans(w http.ResponseWriter, r *http.Request, v tra
 func (s *Server) translateNiuTransUpstream(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint) {
 	source, target := niutransLanguage(v.Source), niutransLanguage(v.Target)
 	timestamp := strconv.FormatInt(time.Now().UnixMilli(), 10)
-	form := url.Values{
-		"from":      {source},
-		"to":        {target},
-		"appId":     {e.appID},
-		"timestamp": {timestamp},
-		"srcText":   {v.Text},
-	}
-	form.Set("authStr", niutransAuthString(e.appID, e.apiKey, source, target, timestamp, v.Text))
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, e.URL, strings.NewReader(form.Encode()))
+	payload := niutransTextForm(e.appID, e.apiKey, source, target, timestamp, v.Text)
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, e.URL, strings.NewReader(payload))
 	if err != nil {
 		upstreamError(w, r, err)
 		return

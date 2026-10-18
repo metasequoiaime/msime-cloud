@@ -14,7 +14,7 @@ import (
 
 // 评论读取失败不能把不完整的摘要标成已同步；下一轮必须能在 issue 内容未改变时补上维护者的回答。
 func TestQQHistoryVectorsRetryFailedComments(t *testing.T) {
-	for _, failure := range []string{"http_error", "invalid_json"} {
+	for _, failure := range []string{"http_error", "invalid_json", "null"} {
 		t.Run(failure, func(t *testing.T) {
 			s, fake, _ := qqServer(t)
 			s.qq.config.EmbeddingModel = defaultQQEmbeddingModel
@@ -30,9 +30,12 @@ func TestQQHistoryVectorsRetryFailedComments(t *testing.T) {
 			failing.Store(true)
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == commentsPath && failing.Load() {
-					if failure == "http_error" {
+					switch failure {
+					case "http_error":
 						w.WriteHeader(http.StatusServiceUnavailable)
-					} else {
+					case "null":
+						_, _ = w.Write([]byte(`null`))
+					default:
 						_, _ = w.Write([]byte(`{"body":"合成的错误响应"}`))
 					}
 					return

@@ -1192,6 +1192,8 @@ func qqPlainText(md string) string {
 		text = qqPlainInlineText(text)
 	}
 	fields := func(yield func(string) bool) {
+		cacheLines := strings.IndexByte(text, '\n') >= 0
+		previousLine, previousTrimmed := "", ""
 		for offset := 0; offset < len(text); {
 			lineEnd := strings.IndexByte(text[offset:], '\n')
 			if lineEnd < 0 {
@@ -1201,7 +1203,17 @@ func qqPlainText(md string) string {
 			}
 			line := text[offset:lineEnd]
 			offset = lineEnd + 1
-			line = strings.TrimSpace(line)
+			if line == "" {
+				// 空行已经是裁剪结果。
+			} else if cacheLines && line == previousLine {
+				line = previousTrimmed
+			} else if cacheLines {
+				previousLine = line
+				line = strings.TrimSpace(line)
+				previousTrimmed = line
+			} else {
+				line = strings.TrimSpace(line)
+			}
 			if strings.HasPrefix(line, "|") {
 				continue
 			}

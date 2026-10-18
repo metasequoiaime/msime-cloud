@@ -130,6 +130,8 @@ func TestRequestLogRoutesAndLevels(t *testing.T) {
 	serve(httptest.NewRequest("GET", "https://admin.msime.app/api/users/u-1234567", nil))
 	serve(httptest.NewRequest("GET", "https://admin.msime.app/api/Bad%20Seg/x", nil))
 	serve(httptest.NewRequest("GET", "https://admin.msime.app/api/system", nil))
+	serve(httptest.NewRequest("GET", "https://admin.msime.app/api/auth/session", nil))
+	serve(httptest.NewRequest("GET", "https://admin.msime.app/api/site-settings", nil))
 	serve(httptest.NewRequest("GET", "https://admin.msime.app/assets/app.js", nil))
 	serve(httptest.NewRequest("GET", "https://admin.msime.app/users", nil))
 	serve(httptest.NewRequest("GET", "/swagger", nil))
@@ -146,6 +148,8 @@ func TestRequestLogRoutesAndLevels(t *testing.T) {
 		{"INFO", "GET", "admin:/api/users/*", 401},
 		{"INFO", "GET", "admin:/api/?", 401},
 		{"INFO", "GET", "admin:/api/system", 401},
+		{"INFO", "GET", "admin:/api/auth/*", 200},
+		{"INFO", "GET", "admin:/api/site-settings", 401},
 		{"INFO", "GET", "admin:asset", 404},
 		{"INFO", "GET", "admin:page", 200},
 		{"INFO", "GET", "docs", 404},
@@ -180,6 +184,33 @@ func TestRequestLogRoutesAndLevels(t *testing.T) {
 	call(s, "GET", "/v1/capabilities", "")
 	if lines := logs.requestLogLines(t); len(lines) != 0 {
 		t.Fatal(lines)
+	}
+}
+
+func TestRequestLogUnknownAdminSectionPrivacy(t *testing.T) {
+	s := fixture(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(500) })
+	s.config.Admin = AdminConfig{Enabled: true, Host: "admin.msime.app"}
+	logs := captureLogs(t)
+	for _, path := range []string{
+		"/api/private-secret",
+		"/api/private-secret/details",
+		"/api/private_secret_2/details",
+		"/api/%70rivate-secret/details",
+	} {
+		logs.reset()
+		r := httptest.NewRequest(http.MethodGet, "https://admin.msime.app"+path, nil)
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		lines := logs.requestLogLines(t)
+		if w.Code != http.StatusUnauthorized || len(lines) != 1 {
+			t.Fatalf("未知后台路径请求结果错误：status=%d，日志=%v", w.Code, lines)
+		}
+		if lines[0]["route"] != "admin:/api/?" {
+			t.Errorf("未知路径首段进入路由标签：%v", lines[0]["route"])
+		}
+		if strings.Contains(logs.String(), "private") {
+			t.Errorf("未经认证的未知路径泄露到日志：%s", logs.String())
+		}
 	}
 }
 

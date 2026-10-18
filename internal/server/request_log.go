@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
@@ -103,7 +104,7 @@ func logMethod(method string) string {
 	return "OTHER"
 }
 
-// adminRouteLabel 把管理后台的路径归并成不含 ID 的标签：只保留 /api/ 后的第一段，后面还有内容时记为 /*。例如 /api/users/123 记为 admin:/api/users/*，用户 ID 不进日志。
+// adminRouteLabel 把管理后台的路径归并成不含 ID 的标签：只保留已登记的 /api/ 分类，后面还有内容时记为 /*。例如 /api/users/123 记为 admin:/api/users/*；未知分类不记录原文。
 func adminRouteLabel(path string) string {
 	rest, ok := strings.CutPrefix(path, "/api/")
 	if !ok {
@@ -122,14 +123,20 @@ func adminRouteLabel(path string) string {
 	return "admin:/api/" + first
 }
 
-func adminRouteSegment(v string) bool {
-	if v == "" || len(v) > 32 {
-		return false
-	}
-	for _, c := range v {
-		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
-			return false
+// adminLogSections 从实际路由表收集固定分类；登录路由由独立处理器分发，不在 AdminRouteList 中。
+var adminLogSections = sync.OnceValue(func() map[string]bool {
+	sections := map[string]bool{"auth": true}
+	for _, route := range AdminRouteList() {
+		rest, ok := strings.CutPrefix(route.Path, "/api/")
+		if !ok {
+			continue
 		}
+		first, _, _ := strings.Cut(rest, "/")
+		sections[first] = true
 	}
-	return true
+	return sections
+})
+
+func adminRouteSegment(v string) bool {
+	return adminLogSections()[v]
 }

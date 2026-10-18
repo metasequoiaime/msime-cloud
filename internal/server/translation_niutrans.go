@@ -15,11 +15,23 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
 )
 
-// niutransAuthString is the NiuTrans v2 authStr algorithm. The signature uses
-// raw UTF-8 parameter values; URL encoding is applied only to the form body.
+// niutransAuthString 按小牛 v2 协议计算签名，保留空字段和原始字节；URL 编码只用于表单正文。
 func niutransAuthString(appID, apiKey, source, target, timestamp, text string) string {
-	canonical := "apikey=" + apiKey + "&appId=" + appID + "&from=" + source + "&srcText=" + text + "&timestamp=" + timestamp + "&to=" + target
-	checksum := md5.Sum([]byte(canonical)) // #nosec G401 -- required by the provider protocol.
+	size := len("apikey=&appId=&from=&srcText=&timestamp=&to=") + len(apiKey) + len(appID) + len(source) + len(text) + len(timestamp) + len(target)
+	canonical := make([]byte, 0, size)
+	canonical = append(canonical, "apikey="...)
+	canonical = append(canonical, apiKey...)
+	canonical = append(canonical, "&appId="...)
+	canonical = append(canonical, appID...)
+	canonical = append(canonical, "&from="...)
+	canonical = append(canonical, source...)
+	canonical = append(canonical, "&srcText="...)
+	canonical = append(canonical, text...)
+	canonical = append(canonical, "&timestamp="...)
+	canonical = append(canonical, timestamp...)
+	canonical = append(canonical, "&to="...)
+	canonical = append(canonical, target...)
+	checksum := md5.Sum(canonical) // #nosec G401 -- 上游协议要求使用 MD5。
 	return hex.EncodeToString(checksum[:])
 }
 

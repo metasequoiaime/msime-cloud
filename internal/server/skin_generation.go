@@ -106,5 +106,14 @@ func (s *Server) generateSkinArtwork(w http.ResponseWriter, r *http.Request) {
 		fail(w, 502, "invalid_skin_artwork")
 		return
 	}
+	// 尺寸和 JPEG 扫描数通过后再完整解码，避免把只有有效文件头的损坏图片当作成功插画。
+	if format == "jpeg" && account.JPEGScanLimitExceeded(data) {
+		fail(w, 502, "invalid_skin_artwork")
+		return
+	}
+	if _, _, err := image.Decode(bytes.NewReader(data)); err != nil {
+		fail(w, 502, "invalid_skin_artwork")
+		return
+	}
 	respond(w, 200, map[string]any{"b64_json": output.Data[0].Image, "mime_type": "image/" + format, "width": cfg.Width, "height": cfg.Height})
 }

@@ -222,12 +222,14 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request) {
 			budget = s.translationBudget(e)
 		}
 		rr := httptest.NewRecorder()
-		// Every provider answers 502/504 through upstreamError when it rejects the upstream response, so the recorder's status settles the call.
-		mr, call := metered(r, "translation", textChars(v.list()))
-		if !s.translateEndpoint(rr, mr, v, e, budget) {
+		call, handled := s.translateEndpoint(rr, r, v, e, budget)
+		if !handled {
 			continue
 		}
-		s.settleMeter(call, rr.Code < 500)
+		// 批量和分段在内部按实际调用计量；普通单条按最终响应状态结算。
+		if call != nil {
+			s.settleMeter(call, rr.Code < 500)
+		}
 		last = rr
 		if rr.Code < 500 {
 			copyResponse(w, rr)
@@ -299,30 +301,31 @@ func (s *Server) translationBudget(e TranslationEndpoint) *providerBudget {
 	return b
 }
 
-// translateEndpoint 执行一次翻译；额度不足时返回 false，未写响应，由调用方尝试后备。
-func (s *Server) translateEndpoint(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint, budget *providerBudget) bool {
+// translateEndpoint 执行一次翻译，返回需要外层结算的单条计量；额度不足时第二个返回值为 false，未写响应，由调用方尝试后备。
+func (s *Server) translateEndpoint(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint, budget *providerBudget) (*meterCall, bool) {
 	if e.Provider == "tencent" {
 		// 腾讯先查缓存，再按未命中文本实际分组数预留请求额度。
-		return s.translateTencent(w, r, v, e, budget)
+		return nil, s.translateTencent(w, r, v, e, budget)
 	}
 	if e.Provider == "deepl" {
-		return s.translateDeepL(w, r, v, e, budget)
+		return nil, s.translateDeepL(w, r, v, e, budget)
 	}
 	if e.Provider == "niutrans" {
-		return s.translateNiuTrans(w, r, v, e, budget)
+		return nil, s.translateNiuTrans(w, r, v, e, budget)
 	}
 	requests := len(v.list())
 	if budget != nil && !budget.take(time.Now(), requests) {
-		return false
+		return nil, false
 	}
 	if len(v.Texts) > 0 {
 		if texts, ok := s.translateEach(w, r, v, e); ok {
 			respondTranslations(w, v, texts)
 		}
-		return true
+		return nil, true
 	}
-	s.translateSingle(w, r, v, e)
-	return true
+	mr, call := metered(r, "translation", textChars(v.list()))
+	s.translateSingle(w, mr, v, e)
+	return call, true
 }
 
 // translateSingle 为一条已按上游限制拆好的文本执行实际 HTTP 调用。
@@ -367,8 +370,7 @@ func (s *Server) translateEach(w http.ResponseWriter, r *http.Request, v transla
 			defer wg.Done()
 			defer func() { <-slots }()
 			rr := httptest.NewRecorder()
-			// 每条单独计量:外层 translate 打在请求上的计量只能记一次上游调用,几条并发写它会互相覆盖。
-			// 这里的计量把外层的遮住,外层因此看不到上游调用、什么也不记,用量按条记下。
+			// 每条实际请求单独计量，避免并发调用互相覆盖结果和用量。
 			mr, call := metered(r, "translation", textChars([]string{text}))
 			s.translateSingle(rr, mr, translationRequest{Text: text, Source: v.Source, Target: v.Target}, e)
 			s.settleMeter(call, rr.Code < 500)

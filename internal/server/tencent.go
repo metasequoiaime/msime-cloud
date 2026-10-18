@@ -57,7 +57,7 @@ func (s *Server) translateTencent(w http.ResponseWriter, r *http.Request, v tran
 			return false
 		}
 		for _, batch := range batches {
-			// 逐个实际 HTTP 请求计量；外层未发送请求，不会重复记录。
+			// 逐个实际 HTTP 请求计量，只记录未命中的文本。
 			mr, call := metered(r, "translation", textChars(batch.texts))
 			translated, ok := s.translateTencentUpstream(w, mr, source, target, batch.texts, e)
 			s.settleMeter(call, ok)

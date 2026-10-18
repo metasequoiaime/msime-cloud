@@ -47,7 +47,7 @@ func (s *Server) translateDeepL(w http.ResponseWriter, r *http.Request, v transl
 	}
 	translated := make([]string, 0, len(v.list()))
 	for _, batch := range batches {
-		// 每批单独计量，外层没有实际调用，不会把最后一批重复计入。
+		// 每批单独计量，按实际上游调用记录次数和字符用量。
 		mr, call := metered(r, "translation", textChars(batch.texts))
 		texts, ok := s.translateDeepLBatch(w, mr, batch, e)
 		s.settleMeter(call, ok)

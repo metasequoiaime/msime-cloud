@@ -419,6 +419,19 @@ func qqKnowledgeTOC(sections []qqSection, snippets []string) string {
 // qqListLabelRunes 是列表项里标签的冒号最晚出现的位置（按字数，从列表符号后面算起）：再往后的冒号多半是句子里的，不是标签。
 const qqListLabelRunes = 12
 
+// qqListLabelLineTrim 裁剪列表行两端空白，复用已验证的 ASCII 和 Unicode 快路径。
+func qqListLabelLineTrim(line string) string {
+	if line == "" {
+		return line
+	}
+	first, _ := utf8.DecodeRuneInString(line)
+	last, _ := utf8.DecodeLastRuneInString(line)
+	if !qqMarkdownSpaceIsSpace(first) && !qqMarkdownSpaceIsSpace(last) {
+		return line
+	}
+	return qqTrimSpace(line)
+}
+
 // qqListLabels 逐行找「- 标签：说明」「* 标签: 说明」这样的列表项，返回去掉 Markdown 符号、去重后的摘要标签前缀。安卓指南「常用操作」一段把换皮肤、删除、隐私写在列表里，原来摘要只取正文前 50 字，目录里只露出「选择候选：…」，问「安卓版能换皮肤吗」挑不中这一段。冒号后面紧跟「/」的是链接（https://），不算标签。
 func qqListLabels(text string) []string {
 	var labels []string
@@ -431,7 +444,7 @@ func qqListLabels(text string) []string {
 	}
 	normalizedCandidateCount := 0
 	for line := range strings.SplitSeq(text, "\n") {
-		line = strings.TrimSpace(line)
+		line = qqListLabelLineTrim(line)
 		rest, ok := strings.CutPrefix(line, "- ")
 		if !ok {
 			if rest, ok = strings.CutPrefix(line, "* "); !ok {

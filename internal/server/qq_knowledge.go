@@ -1092,6 +1092,33 @@ func qqPlainTextCanReuse(md string) bool {
 		return false
 	}
 	previousSpace := false
+	fast := true
+	for i := 0; i < len(md); i++ {
+		b := md[i]
+		if b >= utf8.RuneSelf {
+			switch b {
+			case 0xc2, 0xe1, 0xe2, 0xe3:
+				fast = false
+			}
+			previousSpace = false
+			continue
+		}
+		if b == ' ' {
+			if previousSpace || i == 0 || i+1 == len(md) {
+				return false
+			}
+			previousSpace = true
+			continue
+		}
+		if b == '\t' || b == '\n' || b == '\v' || b == '\f' || b == '\r' {
+			return false
+		}
+		previousSpace = false
+	}
+	if fast {
+		return true
+	}
+	previousSpace = false
 	for offset := 0; offset < len(md); {
 		r, size := utf8.DecodeRuneInString(md[offset:])
 		if unicode.IsSpace(r) {

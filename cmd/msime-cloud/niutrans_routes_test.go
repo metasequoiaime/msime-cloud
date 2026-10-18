@@ -109,8 +109,24 @@ func TestNiuTransMediaRoutesAndDescriptions(t *testing.T) {
 				if content["*/*"].Schema["format"] != "binary" {
 					t.Error("download must describe the upstream binary content")
 				}
-			} else if media, ok := content["application/json"]; !ok || media.Schema["type"] != nil {
-				t.Error("upstream JSON must allow values other than objects")
+			} else {
+				media, ok := content["application/json"]
+				if !ok || media.Schema["type"] != "object" {
+					t.Fatal("小牛 JSON 成功响应必须是对象")
+				}
+				var schema struct {
+					Required   []string `json:"required"`
+					Properties struct {
+						Code struct {
+							Type string `json:"type"`
+							Enum []int  `json:"enum"`
+						} `json:"code"`
+					} `json:"properties"`
+				}
+				encoded, err := json.Marshal(media.Schema)
+				if err != nil || json.Unmarshal(encoded, &schema) != nil || !slices.Contains(schema.Required, "code") || schema.Properties.Code.Type != "integer" || !slices.Equal(schema.Properties.Code.Enum, []int{200}) {
+					t.Error("小牛 JSON 成功响应必须要求整数 code 为 200")
+				}
 			}
 		})
 	}

@@ -21,7 +21,7 @@ func TestNiuTransMediaMetricsRejectBusinessErrors(t *testing.T) {
 				body := `{"code":200,"data":{"fileNo":"synthetic-task","transStatus":105}}`
 				if failed {
 					outcome = "业务拒绝"
-					body = `{"code":10001,"msg":"synthetic failure"}`
+					body = `{"code":10001,"msg":"synthetic-private-upstream-details"}`
 				}
 				t.Run(kind+"/"+operation+"/"+outcome, func(t *testing.T) {
 					s := fixture(t, func(w http.ResponseWriter, r *http.Request) {
@@ -32,6 +32,7 @@ func TestNiuTransMediaMetricsRejectBusinessErrors(t *testing.T) {
 					e := NiuTransEndpoint{URL: s.config.Chat.URL + "/upload", appID: "synthetic-app", apiKey: "synthetic-key"}
 					s.config.NiuTrans.Document, s.config.NiuTrans.Image, s.config.NiuTrans.Voice = e, e, e
 					path := "/v1/niutrans/" + kind
+					logs := captureLogs(t)
 					var responseCode int
 					var responseBody string
 					if operation == "upload" {
@@ -58,8 +59,15 @@ func TestNiuTransMediaMetricsRejectBusinessErrors(t *testing.T) {
 						w := call(s, method, path, "")
 						responseCode, responseBody = w.Code, w.Body.String()
 					}
-					if responseCode != http.StatusOK || failed && strings.TrimSpace(responseBody) != body {
-						t.Fatalf("业务响应被改变：%d %s", responseCode, responseBody)
+					if failed {
+						if responseCode != http.StatusBadGateway || !strings.Contains(responseBody, "upstream_failure") {
+							t.Fatalf("业务拒绝没有返回统一错误：%d %s", responseCode, responseBody)
+						}
+						if strings.Contains(responseBody, "synthetic-private-upstream-details") || strings.Contains(logs.String(), "synthetic-private-upstream-details") {
+							t.Fatal("业务拒绝泄露了上游错误详情")
+						}
+					} else if responseCode != http.StatusOK {
+						t.Fatalf("成功响应被拒绝：%d %s", responseCode, responseBody)
 					}
 					service := map[string]string{"documents": "niutrans_document", "images": "niutrans_image", "voice": "niutrans_voice"}[kind]
 					wantErrors := int64(0)
@@ -80,7 +88,7 @@ func TestNiuTransMediaMetricsRejectBusinessErrors(t *testing.T) {
 }
 
 func TestNiuTransMediaMetricsRequireSuccessCode(t *testing.T) {
-	for _, body := range []string{`{}`, `null`, `[]`, `{"code":"200"}`, `{"code":null}`} {
+	for _, body := range []string{`{}`, `null`, `[]`, `{"code":"200"}`, `{"code":null}`, `{"code":200,"code":null}`, `{"CODE":200}`} {
 		t.Run(body, func(t *testing.T) {
 			s := fixture(t, func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = io.WriteString(w, body)
@@ -88,8 +96,8 @@ func TestNiuTransMediaMetricsRequireSuccessCode(t *testing.T) {
 			s.config.Admin.Enabled = true
 			s.config.NiuTrans.Document = NiuTransEndpoint{URL: s.config.Chat.URL + "/upload", appID: "synthetic-app", apiKey: "synthetic-key"}
 			w := call(s, http.MethodGet, "/v1/niutrans/documents/"+niuTransTestTask(s, "documents", "synthetic-task"), "")
-			if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != body {
-				t.Fatal("改变了既有响应", w.Code, w.Body.String())
+			if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), "upstream_failure") {
+				t.Fatal("缺少成功码的响应没有转换成统一错误", w.Code, w.Body.String())
 			}
 			if counts := pendingCalls(&s.metrics, "niutrans_document"); counts.calls != 1 || counts.errors != 1 {
 				t.Fatal("没有成功确认仍计为成功", counts)

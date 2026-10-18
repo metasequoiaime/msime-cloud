@@ -58,8 +58,8 @@ func (s *Server) niuTransEndpoint(w http.ResponseWriter, e NiuTransEndpoint) boo
 }
 
 func niuTransJSON(w http.ResponseWriter, r *http.Request, body []byte) {
-	if !json.Valid(body) {
-		upstreamError(w, r, errors.New("invalid upstream JSON"))
+	if !niuTransMediaAccepted(body) {
+		upstreamError(w, r, errors.New("invalid upstream media response"))
 		return
 	}
 	respond(w, http.StatusOK, json.RawMessage(body))
@@ -257,10 +257,12 @@ func (s *Server) niuTransFileRequest(w http.ResponseWriter, r *http.Request, e N
 
 // niuTransMediaAccepted 只把明确返回成功业务码的 JSON 控制响应计为成功。
 func niuTransMediaAccepted(body []byte) bool {
-	var reply struct {
-		Code int `json:"code"`
+	var reply map[string]json.RawMessage
+	if json.Unmarshal(body, &reply) != nil {
+		return false
 	}
-	return json.Unmarshal(body, &reply) == nil && reply.Code == http.StatusOK
+	var code int
+	return json.Unmarshal(reply["code"], &code) == nil && code == http.StatusOK
 }
 
 // niuTransDownload 以固定大小缓冲区转发文件，下载上限独立于 JSON 响应上限。
@@ -348,9 +350,7 @@ func (s *Server) niuTransResources(w http.ResponseWriter, r *http.Request) {
 	if !s.niuTransEndpoint(w, s.config.NiuTrans.Resource) {
 		return
 	}
-	// Resource management is an account-level API. Keep the upstream response
-	// opaque while forwarding the signed request; clients select the documented
-	// resource action with `action` and may provide only scalar parameters.
+	// 资源管理使用账号级签名；客户端只选择单段动作，成功响应保留业务字段，错误由 niuTransJSON 统一处理。
 	action := r.URL.Query().Get("action")
 	if action == "" || len(action) > 64 || strings.ContainsAny(action, "/\\\r\n") {
 		fail(w, http.StatusBadRequest, "resource_action_required")

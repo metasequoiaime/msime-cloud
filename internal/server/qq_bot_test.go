@@ -2013,8 +2013,8 @@ func TestQQBotProbesEventFields(t *testing.T) {
 	}
 
 	// d 不是对象时什么都不带。
-	if keys, numbers := qqEventFields(json.RawMessage(`[1,2]`)); keys != nil || numbers != nil {
-		t.Fatal(keys, numbers)
+	if keys, numbers, nested := qqEventFields(json.RawMessage(`[1,2]`)); keys != nil || numbers != nil || nested != nil {
+		t.Fatal(keys, numbers, nested)
 	}
 }
 

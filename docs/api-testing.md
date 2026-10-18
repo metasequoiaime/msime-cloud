@@ -15,6 +15,7 @@
 必须使用独立的 PostgreSQL 数据库，名称包含 `msime_auth_test`；账号测试会清空测试表。不要复用本地开发或生产数据库，也不要并行运行多个使用同一测试数据库的 `go test` 进程。
 
 ```sh
+pnpm --dir admin-web build
 git submodule update --init
 (cd third_party/msime && cargo build -p msime-backend-engine --release --locked)
 install -D third_party/msime/target/release/msime-backend-engine bin/native/msime-engine

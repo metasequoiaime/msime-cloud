@@ -1,19 +1,20 @@
-// Package adminweb embeds the Vite production build in the Go service.
+// Package adminweb 从构建时生成的 Vite 目录提供管理后台静态文件。
 package adminweb
 
 import (
 	"bytes"
-	"embed"
+	"errors"
 	"io/fs"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
-//go:embed dist
-var assets embed.FS
+const assetsDirEnv = "MSIME_ADMIN_WEB_DIR"
 
-// pagePaths are the SPA routes served with index.html; keep in sync with src/routes/router.tsx.
+// pagePaths 是由 index.html 响应的 SPA 路由；修改路由表时同步更新这里。
 var pagePaths = map[string]bool{
 	"/": true, "/dictpr": true, "/community": true, "/issues": true, "/feedback": true, "/words": true,
 	"/users": true, "/downloads": true, "/notice": true, "/release": true, "/cloud": true,
@@ -25,20 +26,33 @@ var pagePaths = map[string]bool{
 
 func IsPath(path string) bool { return pagePaths[path] || strings.HasPrefix(path, "/assets/") }
 
+func assetsFS() (fs.FS, error) {
+	candidates := make([]string, 0, 4)
+	if dir := os.Getenv(assetsDirEnv); dir != "" {
+		candidates = append(candidates, dir)
+	}
+	// 本地运行时分别覆盖仓库根目录、admin-web 包目录和 internal/server 包目录。
+	candidates = append(candidates, "admin-web/dist", "dist", "../../admin-web/dist", "/usr/share/msime/admin-web")
+	for _, dir := range candidates {
+		if _, err := os.Stat(filepath.Join(dir, "index.html")); err == nil {
+			return os.DirFS(dir), nil
+		}
+	}
+	return nil, errors.New("管理后台静态文件未生成")
+}
+
 func Handler() http.Handler {
-	root, err := fs.Sub(assets, "dist")
+	root, err := assetsFS()
 	if err != nil {
-		panic(err)
+		return http.HandlerFunc(unavailableHandler)
 	}
 	index, err := fs.ReadFile(root, "index.html")
 	if err != nil {
-		panic(err)
+		return http.HandlerFunc(unavailableHandler)
 	}
 	files := http.FileServer(http.FS(root))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "GET" && r.Method != "HEAD" {
-			w.Header().Set("Allow", "GET, HEAD")
-			w.WriteHeader(http.StatusMethodNotAllowed)
+		if !allowMethod(w, r) {
 			return
 		}
 		if pagePaths[r.URL.Path] {
@@ -56,4 +70,20 @@ func Handler() http.Handler {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		files.ServeHTTP(w, r)
 	})
+}
+
+func allowMethod(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method == "GET" || r.Method == "HEAD" {
+		return true
+	}
+	w.Header().Set("Allow", "GET, HEAD")
+	w.WriteHeader(http.StatusMethodNotAllowed)
+	return false
+}
+
+func unavailableHandler(w http.ResponseWriter, r *http.Request) {
+	if !allowMethod(w, r) {
+		return
+	}
+	http.Error(w, "管理后台静态文件不可用", http.StatusServiceUnavailable)
 }

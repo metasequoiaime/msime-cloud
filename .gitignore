@@ -10,9 +10,8 @@ __pycache__/
 
 /admin-web/node_modules/
 
-# Keep the generated build so plain Go builds work after checkout.
-!/admin-web/dist/
-!/admin-web/dist/**
+# 管理后台构建产物由 Docker 和 CI 在构建时生成。
+/admin-web/dist/
 
 /.env.admin.local
 /config.admin.local.json

@@ -23,7 +23,7 @@
 
 - `cmd/msime-server`：服务端入口；`cmd/msime-cloud`：给人和 AI 助手用的命令行（见 README「命令行」）。
 - `internal/server`：HTTP 服务、在线输入接口、管理后台路由与鉴权；`internal/account`：用户体系、社区、管理后台数据，依赖 PostgreSQL；`internal/engine`：引擎进程查询；`internal/githubapp`：管理后台与官网词条投稿使用的 GitHub App 客户端；`internal/skins`：内置皮肤目录；`internal/contract`：由契约生成的常量。
-- `admin-web/`：管理后台前端，`dist/` 是提交进版本库的构建产物，由 `admin-web/embed.go` 嵌入服务端。
+- `admin-web/`：管理后台前端，`dist/` 是构建时生成的产物，由 Docker 构建阶段复制到运行镜像；本地 Go 测试前先生成它。
 - `contracts/protocol.json`：客户端接口的权威来源。它原是 MSIME-Engine `contracts/backend/protocol.json` 的副本，Engine 归档后由本仓维护；改语义要同时顾及已发布的客户端。
 - `native/`、`third_party/`：引擎进程说明与 msime 主仓库子模块。引擎（`msime-backend-engine`）和词库锁文件都来自子模块，只在 Docker 镜像和原生集成测试中构建。
 
@@ -35,6 +35,7 @@
 python3 scripts/sync_contract.py --check
 python3 scripts/generate_openapi.py --check
 python3 -m unittest discover -s scripts/release -p "test_*.py"
+pnpm --dir admin-web build
 go test -race ./...
 go vet ./...
 gofmt -l ./cmd ./internal
@@ -43,8 +44,8 @@ gofmt -l ./cmd ./internal
 - 依赖 PostgreSQL 的测试在没有 `MSIME_TEST_DATABASE_URL` 时会跳过，`go test` 显示 ok 不代表它们跑过。改动 `internal/account` 或 `internal/server` 中涉及数据库的代码时，本地起一个 PostgreSQL 并设置该变量再跑这两个包，CI 的「用户体系 PostgreSQL 集成测试」用的是 `postgres:17-alpine`。
 - `go test` 在 CI 中同时跑 ubuntu 和 windows。测试不能假设 Unix 专有行为，例如文件权限位（Windows 上 `0600` 读回来是 `0666`）、路径分隔符或 shell 命令；确实只在 Unix 上成立的断言要按 `runtime.GOOS` 区分并写明原因。
 - CI 有两道 Go 语句覆盖率门禁（`scripts/check_go_coverage.py`）。每个拉取请求上，「用户体系 PostgreSQL 集成测试」不带原生引擎只量 `internal/account` 和 `internal/server`，下限是脚本里的 `DATABASE_MINIMUMS`（85% 和 88%），不过就合不进去。「公共引擎与发布词库集成测试」带真实引擎量全仓、`internal/account`、`internal/server`，各自不低于 90%；这个任务只在改到原生引擎（引擎子模块、`internal/engine`、`internal/server` 里调用引擎的 `input.go`、`word_submissions.go` 和依赖引擎的测试、`native/`、Dockerfile、引擎相关脚本）时运行，拉取请求和 main 上的推送都一样。main 上的推送不等它，发版工作流同时就推出了镜像，所以改到引擎的拉取请求要等它在拉取请求上跑过。新增的代码要带测试；新增可执行包时，同时把它加进该脚本要求出现的包清单及 `scripts/test_go_coverage.py`。
-- 改动 `admin-web/` 后执行 `pnpm --dir admin-web lint` 和 `pnpm --dir admin-web build`，把重新生成的 `dist/` 一起提交，CI 会用 `git diff --exit-code -- admin-web/dist` 检查。后台的 CSP 限制和冒烟测试见 [admin-web/README.md](admin-web/README.md)。
-- Docker 构建只复制 `go.mod`、`go.sum`、`cmd`、`internal`、`VERSION`、`version.go` 和 `admin-web`（见 `Dockerfile`）。服务端不能依赖这些路径之外的文件：新增的 `go:embed` 资源要放在会被复制的目录里，或者像 `docs/docs.go` 那样放进只有命令行引用的独立包。
+- 改动 `admin-web/` 后执行 `pnpm --dir admin-web lint` 和 `pnpm --dir admin-web build`；本地 Go 测试和构建前也要先生成 `dist/`。CI 会在 Go 检查前构建后台，并确认 `dist/index.html` 存在。后台的 CSP 限制和冒烟测试见 [admin-web/README.md](admin-web/README.md)。
+- Docker 构建只复制 `go.mod`、`go.sum`、`cmd`、`internal`、`VERSION`、`version.go` 和 `admin-web`（见 `Dockerfile`）。服务端不能依赖这些路径之外的文件；前端构建产物必须在 Docker 构建阶段生成并复制到运行镜像。
 
 ## 接口与契约
 

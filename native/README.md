@@ -9,6 +9,7 @@
 依赖：Rust 工具链（版本由子模块的 `rust-toolchain.toml` 固定，rustup 会自动安装）。
 
 ```sh
+pnpm --dir admin-web build
 git submodule update --init
 (cd third_party/msime && cargo build -p msime-backend-engine --release --locked)
 python3 scripts/fetch_engine_resources.py bin/resources

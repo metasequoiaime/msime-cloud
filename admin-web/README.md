@@ -60,7 +60,9 @@ python3 tests/csp_smoke.py
 
 ## 构建产物
 
-`src/` 为前端源码，`dist/` 为提交到版本库的生成产物，每次前端变更都需重新 build 并一起提交。Go 的 `embed.go` 嵌入 `dist/`；Docker 的 Node 构建阶段会自动重建，然后编入 Go 二进制，运行容器不需要 Node。
+`src/` 为前端源码，`dist/` 是本地和 CI 构建时生成的临时产物，不提交到版本库。Go 服务从 `MSIME_ADMIN_WEB_DIR` 指定的目录读取它；未设置时会依次查找本地开发目录。Docker 的 Node 构建阶段生成 `dist/`，再把它复制到运行镜像，运行容器不需要 Node。
+
+本地运行 Go 测试或服务前先执行 `pnpm --dir admin-web build`。CI 会在 Go 检查前自动完成同样的构建。
 
 社区管理回归测试由 CSP 冒烟测试自动调用，也可运行 `python3 tests/community_management_smoke.py` 单独验证：覆盖默认全部状态、键盘皮肤新增及编辑、插件和候选皮肤文件上传、保存期间的关闭与重复提交保护、失败后保留草稿、删除撤销和只读权限。
 

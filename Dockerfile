@@ -17,7 +17,6 @@ COPY VERSION version.go ./
 COPY cmd ./cmd
 COPY internal ./internal
 COPY admin-web/embed.go ./admin-web/embed.go
-COPY --from=admin-build /src/dist ./admin-web/dist
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -trimpath -ldflags="-s -w" -o /msime-server ./cmd/msime-server
 # The query process msime-cloud runs per request: msime-backend-engine from the msime submodule, the same Rust engine the clients ship. The toolchain is the submodule's rust-toolchain.toml; the image is the one msime's own Linux build gate uses.
 # 引擎在构建机自己的架构上交叉编译到目标架构：在 QEMU 里给 linux/arm64 跑 rustc，单这一步就让发布镜像的 job 超过 30 分钟上限被取消。ring 和内置的 SQLite 要编译 C 代码，所以目标架构不同时还要装 Debian 的交叉 gcc，它链接的 bookworm glibc 与 distroless 运行镜像一致。
@@ -51,9 +50,11 @@ RUN python3 scripts/fetch_engine_resources.py /resources
 FROM gcr.io/distroless/cc-debian12:nonroot
 COPY --from=native-build /build/msime-engine /usr/local/bin/msime-engine
 COPY --from=resources --chown=65532:65532 /resources /usr/share/msime
+COPY --from=admin-build /src/dist /usr/share/msime/admin-web
 COPY third_party/msime/LICENSE /licenses/msime-LICENSE
 COPY third_party/msime/resources/licenses/msime-engine-dictionary-NOTICE.md /licenses/msime-dictionary-NOTICE.md
 COPY --from=build /msime-server /msime-server
 COPY THIRD_PARTY_NOTICES.txt /licenses/MSIME-Server-THIRD-PARTY.txt
 EXPOSE 8080
+ENV MSIME_ADMIN_WEB_DIR=/usr/share/msime/admin-web
 ENTRYPOINT ["/msime-server", "-config", "/config/config.json"]

@@ -2,12 +2,14 @@ package adminweb
 
 import (
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 )
 
-func TestEmbeddedBuildAndDeepLinks(t *testing.T) {
+func TestGeneratedBuildAndDeepLinks(t *testing.T) {
 	handler := Handler()
 	for _, path := range []string{
 		"/", "/dictpr", "/community", "/issues", "/feedback", "/words", "/users", "/downloads", "/notice", "/release", "/cloud", "/crash", "/status", "/perm", "/me",
@@ -41,5 +43,39 @@ func TestEmbeddedBuildAndDeepLinks(t *testing.T) {
 	handler.ServeHTTP(w, httptest.NewRequest("POST", "/users", nil))
 	if w.Code != 405 {
 		t.Fatal(w.Code)
+	}
+}
+
+func TestGeneratedBuildDirectoryOverride(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte(`<div id="root"></div>`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(assetsDirEnv, dir)
+	w := httptest.NewRecorder()
+	Handler().ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `id="root"`) {
+		t.Fatalf("override: status %d, body %q", w.Code, w.Body.String())
+	}
+}
+
+func TestGeneratedBuildMissing(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv(assetsDirEnv, filepath.Join(t.TempDir(), "missing"))
+	w := httptest.NewRecorder()
+	Handler().ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+	if w.Code != 503 {
+		t.Fatalf("missing build: status %d", w.Code)
+	}
+
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "index.html"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(assetsDirEnv, dir)
+	w = httptest.NewRecorder()
+	Handler().ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+	if w.Code != 503 {
+		t.Fatalf("invalid index: status %d", w.Code)
 	}
 }

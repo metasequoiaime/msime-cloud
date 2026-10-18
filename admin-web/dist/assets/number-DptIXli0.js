@@ -1,1 +1,0 @@
-function e(e,t=`zh-CN`,n){return e.toLocaleString(t,n)}export{e as t};

@@ -121,7 +121,12 @@ func (a *Service) downloadLink(w http.ResponseWriter, r *http.Request) {
 		a.error(w, err)
 		return
 	}
-	defer tx.Rollback(r.Context())
+	rollback := func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 3*time.Second)
+		defer cancel()
+		_ = tx.Rollback(ctx)
+	}
+	defer rollback()
 	// 发信前在用户锁内重新读取邮箱，保证等待期间提交的封禁或身份变更生效。
 	email, err = verifiedEmailQuery(r.Context(), tx, p.UserID)
 	if err != nil {
@@ -134,7 +139,7 @@ func (a *Service) downloadLink(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "no_verified_email")
 		return
 	}
-	suppressed, err = a.store.DeliverySuppressed(r.Context(), "email", email)
+	suppressed, err = deliverySuppressedQuery(r.Context(), tx, "email", email)
 	if err != nil {
 		a.refundDeliveryReservation(r.Context(), releaseGlobal)
 		a.error(w, err)
@@ -147,8 +152,10 @@ func (a *Service) downloadLink(w http.ResponseWriter, r *http.Request) {
 	}
 	subject, body := downloadLinkMessage(v.Platform)
 	err = a.mailer.Mail(r.Context(), email, subject, body)
-	a.recordEmailDelivery("email", err)
 	if err != nil {
+		// 下面的抑制、统计和退款都会从连接池取连接；先释放持有用户锁的事务，避免单连接池自我等待。
+		rollback()
+		a.recordEmailDelivery("email", err)
 		if permanentDeliveryFailure(err) {
 			a.suppressDeliveryTarget(r.Context(), "email", email)
 		}
@@ -159,8 +166,12 @@ func (a *Service) downloadLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err = tx.Commit(r.Context()); err != nil {
+		// 邮件已经成功交给供应商，即使用户锁事务提交失败也要记录这次投递。
+		rollback()
+		a.recordEmailDelivery("email", nil)
 		a.error(w, err)
 		return
 	}
+	a.recordEmailDelivery("email", nil)
 	write(w, 202, map[string]any{"sent_to": maskEmail(email)})
 }

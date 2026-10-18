@@ -40,6 +40,26 @@ func TestQQIssueIntentCompactMatchesPrevious(t *testing.T) {
 	}
 }
 
+func TestQQIssueIntentStartFindsFirstPossibleWord(t *testing.T) {
+	for _, tc := range []struct {
+		name, text string
+		want       int
+		ok         bool
+	}{
+		{"prefix", "普通正文 提 ISSUE", strings.Index("普通正文 提 ISSUE", "提"), true},
+		{"leading_candidate", "提 ISSUE", 0, true},
+		{"none", "普通问题", 0, false},
+		{"invalid", "普通\xff提 ISSUE", len("普通\xff"), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := qqIssueIntentStart(tc.text)
+			if got != tc.want || ok != tc.ok {
+				t.Fatalf("意图起点=(%d, %t)，期望=(%d, %t)", got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
 func qqIssueIntentAllocationCases() []struct {
 	name, text string
 	want       bool

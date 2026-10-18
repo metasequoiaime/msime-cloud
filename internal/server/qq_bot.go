@@ -1026,7 +1026,8 @@ const qqIssueIntentWordCount = 18
 
 // qqIssueIntent 判断消息里有没有明确要求记成 issue 的说法，是模型判断 intent 之外的兜底，不受空白和大小写影响。
 func qqIssueIntent(text string) bool {
-	if !qqIssueIntentMayContain(text) {
+	start, ok := qqIssueIntentStart(text)
+	if !ok {
 		return false
 	}
 	// 无效 UTF-8 在原流程中先去空白再转小写，分开的字节可能重新组成有效字符；保留原流程处理这类边界输入。
@@ -1035,7 +1036,7 @@ func qqIssueIntent(text string) bool {
 		return slices.ContainsFunc(qqIssueIntentWords, func(word string) bool { return strings.Contains(compact, word) })
 	}
 	var states [qqIssueIntentWordCount]uint8
-	for _, r := range text {
+	for _, r := range text[start:] {
 		if unicode.IsSpace(r) {
 			continue
 		}
@@ -1091,16 +1092,16 @@ func qqIssueIntentByteOffset(word string, runeIndex int) int {
 	return offset
 }
 
-// qqIssueIntentMayContain 先找意图词里出现过的字符；完全没有这些字符时无需构造去空白、转小写后的正文。
-func qqIssueIntentMayContain(text string) bool {
-	for _, r := range text {
+// qqIssueIntentStart 找到意图词可能的首个字符；前面的正文不可能构成完整意图词，可以跳过后再做状态匹配。
+func qqIssueIntentStart(text string) (int, bool) {
+	for offset, r := range text {
 		switch r {
 		case '提', '个', '一', '交', '建', '开', '记', '成', '到', '录', '下', '帮', '忙', '我', '反', '馈', '给', '发',
 			'i', 'I', 's', 'S', 'u', 'U', 'e', 'E':
-			return true
+			return offset, true
 		}
 	}
-	return false
+	return 0, false
 }
 
 // fileAdminFeedback 处理管理员的一条消息。explicit 表示来自「提issue」命令。先整理成 bug 或需求：不是具体反馈、或者没有明确要求记录时转去答疑（命令不是具体反馈时请管理员写具体些）；用「记一下」这类说法要求记录的先对照知识库，文档说明功能已经有了或现象是正常的就回复文档的说法、不提交；「提issue」命令是管理员已经判断过要提，不对照知识库；其余的按平台选仓库、查重、带上附件和标签提交。转去答疑时 chat 原样交给 answerQQQuestion，「提issue」命令不答疑，传 nil。

@@ -151,7 +151,7 @@ export default function IssuesPage() {
   });
   const runAction = mutation.mutateAsync;
 
-  // apply runs an action and shows its toast. The rows it changed that pass reverse.undoable get 撤销, which runs the reverse action on exactly those rows (reverse.ref adds per-row options), so each row returns to its own previous state. It resolves to false when no selected row applies, which keeps a batch selection.
+  // apply 执行操作并提示结果；只对确认成功且允许撤销的条目提供反向操作。没有适用条目时返回 false，保留批量选择。
   const apply = useCallback(async (action: IssueAction, rows: readonly IssueRow[], text: (count: number) => string, reverse?: { action: IssueAction; undoable: (row: IssueRow) => boolean; ref?: (row: IssueRow) => IssueRef }) => {
     if (rows.length === 0) {
       toast("所选 Issue 都不适用这个操作");
@@ -159,9 +159,18 @@ export default function IssuesPage() {
     }
     const result = await runAction({ action, items: rows.map(issueRef) });
     const failed = new Set(result.failed.map(item => `${item.repo}#${item.n}`));
-    const message = failed.size ? `${text(result.affected)}，${failed.size} 个失败` : text(result.affected);
+    const uncertain = result.failed.some(item => item.code === "github_uncertain");
+    const message = (failed.size ? `${text(result.affected)}，${failed.size} 个失败` : text(result.affected))
+      + (uncertain ? "；部分操作结果未确认，请先在 GitHub 核对后再重试" : "");
     const undoRows = reverse ? rows.filter(row => !failed.has(issueKey(row)) && reverse.undoable(row)) : [];
-    if (reverse && undoRows.length) toast({ text: message, undo: () => runAction({ action: reverse.action, items: undoRows.map(reverse.ref ?? issueRef) }) });
+    if (reverse && undoRows.length) toast({
+      text: message,
+      undo: async () => {
+        const undone = await runAction({ action: reverse.action, items: undoRows.map(reverse.ref ?? issueRef) });
+        if (undone.failed.some(item => item.code === "github_uncertain")) throw new Error("部分操作结果未确认，请先在 GitHub 核对后再重试");
+        if (undone.failed.length) throw new Error(`已撤销 ${undone.affected} 个，${undone.failed.length} 个失败，请核对后重试`);
+      },
+    });
     else toast(message);
     return true;
   }, [runAction, toast]);

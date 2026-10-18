@@ -32,6 +32,10 @@ func uncertainAdminWriteUpstream(t *testing.T, handler http.Handler, method, pat
 				return
 			}
 			_ = conn.Close()
+		case "响应截断":
+			w.Header().Set("Content-Length", "16")
+			w.WriteHeader(response.Code)
+			_, _ = w.Write([]byte("{"))
 		case "上游错误":
 			w.WriteHeader(http.StatusServiceUnavailable)
 		case "响应损坏":

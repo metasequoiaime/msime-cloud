@@ -1,6 +1,7 @@
 package server
 
 import (
+	"iter"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -14,41 +15,57 @@ type translationPart struct {
 }
 
 // translationTextChunks 优先在后半段的空白或标点处断开，找不到时按完整 Unicode 字符切分。
-func translationTextChunks(text string, limit int) []string {
-	var chunks []string
-	for len(text) > 0 {
-		end, boundary, units := len(text), 0, 0
-		for i, r := range text {
-			size := 1
-			if r > 0xffff {
-				size = 2
+func translationTextChunks(text string, limit int) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		for len(text) > 0 {
+			// UTF-16 码元数不会超过字节数，短文本和最后一段无需解码。
+			if len(text) <= limit {
+				yield(text)
+				return
 			}
-			if units+size > limit {
-				end = i
-				break
+			end, boundary, units := len(text), 0, 0
+			for i, r := range text {
+				size := 1
+				if r > 0xffff {
+					size = 2
+				}
+				if units+size > limit {
+					end = i
+					break
+				}
+				units += size
+				if units >= limit/2 {
+					switch r {
+					case '。', '！', '？', '.', '!', '?', ';', '；':
+						boundary = i + utf8.RuneLen(r)
+					default:
+						if unicode.IsSpace(r) {
+							boundary = i + utf8.RuneLen(r)
+						}
+					}
+				}
 			}
-			units += size
-			if units >= limit/2 && (unicode.IsSpace(r) || strings.ContainsRune("。！？.!?;；", r)) {
-				boundary = i + utf8.RuneLen(r)
+			if end < len(text) && boundary > 0 {
+				end = boundary
 			}
+			if !yield(text[:end]) {
+				return
+			}
+			text = text[end:]
 		}
-		if end < len(text) && boundary > 0 {
-			end = boundary
-		}
-		chunks = append(chunks, text[:end])
-		text = text[end:]
 	}
-	return chunks
 }
 
 // translationParts 保留原条目下标及分段空白；空白片段留在本地，不调用上游。
 func translationParts(texts []string, limit int) []translationPart {
 	var parts []translationPart
 	for index, text := range texts {
-		chunks := translationTextChunks(text, limit)
-		for _, chunk := range chunks {
+		for chunk := range translationTextChunks(text, limit) {
+			if parts == nil {
+				parts = make([]translationPart, 0, len(texts)-index)
+			}
 			part := translationPart{index: index, text: chunk}
-			if len(chunks) > 1 {
+			if len(chunk) < len(text) {
 				part.text = strings.TrimLeftFunc(chunk, unicode.IsSpace)
 				part.prefix = chunk[:len(chunk)-len(part.text)]
 				trimmed := strings.TrimRightFunc(part.text, unicode.IsSpace)

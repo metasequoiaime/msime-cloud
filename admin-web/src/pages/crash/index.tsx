@@ -11,6 +11,7 @@ import { noPermissionHint, usePermissions } from "../../shell/permissions";
 import { Button } from "../../ui/button";
 import { Banner } from "../../ui/card";
 import { cn } from "../../ui/cn";
+import { CountBar } from "../../ui/count-bar";
 import { CellText, DataTable } from "../../ui/data-table";
 import type { Column } from "../../ui/data-table";
 import { FilterChips } from "../../ui/filter-chips";
@@ -97,12 +98,7 @@ export default function CrashPage() {
     { id: "platform", header: "平台 / 版本", width: "120px", cell: group => <CellText strong={false} title={platformName(group.platform)} sub={<span className="font-mono">{group.version}</span>} /> },
     {
       id: "count", header: "7 天次数", width: "minmax(120px,1fr)",
-      cell: group => <div className="flex items-center gap-2">
-        <div className="h-1.5 flex-1 overflow-hidden rounded-[3px] bg-panel-2">
-          <div className={cn("h-full rounded-[3px]", group.status === "fixed" ? "bg-accent" : "bg-bad")} style={{ width: `${(group.count_7d / max) * 100}%` }} />
-        </div>
-        <span className="min-w-10 text-right text-xs text-muted tabular-nums">{formatNumber(group.count_7d)}</span>
-      </div>,
+      cell: group => <CountBar value={group.count_7d} max={max} tone={group.status === "fixed" ? "accent" : "bad"} className="gap-2" />,
     },
     {
       id: "trend", header: "趋势", width: "70px",

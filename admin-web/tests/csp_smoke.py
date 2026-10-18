@@ -338,6 +338,67 @@ def check_bytes(page):
         expect(rows.nth(index).locator("td")).to_have_text(values)
 
 
+def check_count_bar(container, text: str, pct: float, tone: str):
+    # 同时检查可见数字、真实填充宽度和读屏内容，避免只验证组件自身的计算。
+    expect(container).to_have_text(text)
+    expect(container.get_by_role("progressbar")).to_have_count(0)
+    bar = container.get_by_role("progressbar", include_hidden=True)
+    expect(bar).to_have_count(1)
+    fill = bar.locator(":scope > div")
+    expect(fill).to_have_css("transition-property", "none")
+    measurements = fill.evaluate("""(element, tone) => {
+      const style = getComputedStyle(element);
+      const track = element.parentElement.getBoundingClientRect();
+      const probe = document.createElement('span');
+      probe.style.color = `var(--${tone})`;
+      element.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return {width: element.getBoundingClientRect().width / track.width * 100, color: style.backgroundColor, expectedColor: color};
+    }""", tone)
+    assert abs(measurements["width"] - pct) < 0.2, measurements
+    assert measurements["color"] == measurements["expectedColor"], measurements
+
+
+def check_count_bars(page):
+    for case, text, pct, tone in (
+        ("zero", "0", 0, "accent"), ("half", "1,000", 50, "accent"),
+        ("full", "2,000", 100, "accent"), ("over", "3,000", 100, "warn"),
+        ("bad", "3", 25, "bad"), ("long", "1,000,000,000", 50, "accent"),
+    ):
+        container = page.get_by_test_id(f"count-{case}")
+        check_count_bar(container, text, pct, tone)
+        assert container.evaluate("element => element.scrollWidth <= element.clientWidth"), case
+    expect(page.get_by_test_id("count-over").locator("span")).to_have_css("font-size", "12.5px")
+    expect(page.get_by_test_id("count-bad").locator(":scope > div")).to_have_css("column-gap", "8px")
+    # 原有进度组件的语义和动画不受装饰条影响。
+    progress = page.get_by_role("progressbar", name="进度", exact=True)
+    expect(progress).to_have_attribute("aria-valuenow", "40")
+    expect(progress.locator(":scope > div")).to_have_css("transition-property", "width")
+
+
+def check_count_bar_pages(context, base: str, problems: list[str]):
+    page = context.new_page()
+    page.on("pageerror", lambda error: problems.append(f"计数占比条页面异常：{error}"))
+    page.route("**/api/auth/session", lambda route: route.fulfill(json=FIXTURES["/api/auth/session"]))
+    crash = FIXTURES["/api/crash-groups"]
+    page.route("**/api/crash-groups", lambda route: route.fulfill(json={**crash, "items": [{**crash["items"][0], "status": "fixed"}, crash["items"][1]]}))
+    try:
+        for path, table, column, cases in (
+            ("downloads", "下载记录", 4, (("5,120", 100, "accent"), ("2,410", 2410 / 5120 * 100, "accent"), ("3", 3 / 5120 * 100, "accent"))),
+            ("crash", "崩溃分组", 2, (("12", 100, "accent"), ("3", 25, "bad"))),
+            ("words", "敏感词列表", 4, (("41", 100, "warn"), ("0", 0, "warn"))),
+        ):
+            page.goto(base + "/" + path)
+            rows = page.get_by_role("table", name=table, exact=True).locator("tbody tr")
+            expect(rows).to_have_count(len(cases))
+            for index, (text, pct, tone) in enumerate(cases):
+                check_count_bar(rows.nth(index).get_by_role("cell").nth(column), text, pct, tone)
+            problems.extend(f"计数占比条 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+    finally:
+        page.close()
+
+
 def check_list_pagination(context, base: str, problems: list[str]):
     from urllib.parse import parse_qs, urlencode, urlsplit
     # 通过真实页面发出的请求核验解析结果、翻页和筛选重置，不依赖工具函数实现。
@@ -1887,6 +1948,8 @@ def main() -> int:
                 page.get_by_role("button", name="取消选择").click()
                 violations("ui harness")
                 check_bytes(page)
+                check_count_bars(page)
+                check_count_bar_pages(context, base, problems)
                 check_api_images(browser, base, problems)
                 check_api_image_pages(browser, base, problems)
                 check_list_pagination(context, base, problems)

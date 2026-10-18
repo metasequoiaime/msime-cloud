@@ -14,6 +14,7 @@ import { Button } from "../../ui/button";
 import { cn } from "../../ui/cn";
 import { useConfirm } from "../../ui/confirm";
 import { CellText, DataTable } from "../../ui/data-table";
+import { CountBar } from "../../ui/count-bar";
 import type { BatchAction, Column } from "../../ui/data-table";
 import { FilterChips } from "../../ui/filter-chips";
 import { Pill } from "../../ui/pill";
@@ -170,12 +171,7 @@ export default function WordsPage() {
       { id: "level", header: "处理方式", width: "100px", cell: word => <Pill tone={word.level === "block" ? "bad" : "warn"}>{levelLabels[word.level]}</Pill> },
       {
         id: "hits", header: "近 7 天命中", width: "minmax(140px,1fr)",
-        cell: word => <div className="flex items-center gap-2.5">
-          <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-panel-2" aria-hidden="true">
-            <div className="h-full rounded-full bg-warn" style={{ width: `${Math.min(word.hits_7d / maxHits, 1) * 100}%` }} />
-          </div>
-          <span className="min-w-10 text-right text-[12.5px] text-body tabular-nums">{formatNumber(word.hits_7d)}</span>
-        </div>,
+        cell: word => <CountBar value={word.hits_7d} max={maxHits} tone="warn" barClassName="rounded-full" valueClassName="text-[12.5px] text-body" />,
       },
       {
         id: "actions", header: "", width: "190px", align: "right",

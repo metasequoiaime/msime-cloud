@@ -9,6 +9,7 @@ import { PageIntro } from "../../shell/page-intro";
 import { MirrorSettings } from "./mirror";
 import { usePageSearch, useSetPageSearch } from "../../shell/page-search";
 import { Banner } from "../../ui/card";
+import { CountBar } from "../../ui/count-bar";
 import { CellText, DataTable } from "../../ui/data-table";
 import type { Column } from "../../ui/data-table";
 import { FilterChips } from "../../ui/filter-chips";
@@ -26,16 +27,6 @@ function rowSearchText(row: DownloadRow): string {
   return `${platformLabel(row.platform)} ${row.platform} ${row.version} ${row.artifact ?? ""} ${channelLabel(row)} ${row.repo ?? ""} ${row.tag ?? ""}`;
 }
 
-// WeekBar is the design's 7-day bar: a 6px accent fill relative to the busiest row, followed by the count.
-function WeekBar({ value, max }: { value: number; max: number }) {
-  return <div className="flex min-w-0 items-center gap-2.5">
-    <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-[3px] bg-panel-2" aria-hidden="true">
-      <div className="h-full rounded-[3px] bg-accent" style={{ width: `${max > 0 ? (value / max) * 100 : 0}%` }} />
-    </div>
-    <span className="min-w-10 text-right text-xs text-muted tabular-nums">{formatNumber(value, "en-US")}</span>
-  </div>;
-}
-
 function columnsFor(max: number): Column<DownloadRow>[] {
   return [
     { id: "platform", header: "平台 / 版本", width: "minmax(140px,1fr)", cell: row => <CellText title={platformLabel(row.platform)} sub={row.version} /> },
@@ -47,7 +38,7 @@ function columnsFor(max: number): Column<DownloadRow>[] {
     },
     { id: "channel", header: "渠道", width: "minmax(140px,1fr)", cell: row => <span className="block truncate text-muted">{channelLabel(row)}</span> },
     { id: "today", header: "今日", width: "70px", align: "right", cell: row => <span className="tabular-nums">{formatNumber(row.today, "en-US")}</span> },
-    { id: "week", header: "近 7 天", width: "minmax(160px,1.3fr)", cell: row => <WeekBar value={row.week} max={max} /> },
+    { id: "week", header: "近 7 天", width: "minmax(160px,1.3fr)", cell: row => <CountBar value={row.week} max={max} locale="en-US" /> },
   ];
 }
 

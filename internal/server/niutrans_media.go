@@ -30,18 +30,24 @@ const (
 
 func niuTransAuth(params map[string]string, apiKey string) string {
 	keys := make([]string, 0, len(params)+1)
+	size := len("apikey=") + len(apiKey)
 	for key, value := range params {
 		if key != "authStr" && key != "apikey" && value != "" {
 			keys = append(keys, key)
+			size += 2 + len(key) + len(value)
 		}
 	}
 	sort.Strings(keys)
-	parts := make([]string, 0, len(keys)+1)
-	parts = append(parts, "apikey="+apiKey)
+	canonical := make([]byte, 0, size)
+	canonical = append(canonical, "apikey="...)
+	canonical = append(canonical, apiKey...)
 	for _, key := range keys {
-		parts = append(parts, key+"="+params[key])
+		canonical = append(canonical, '&')
+		canonical = append(canonical, key...)
+		canonical = append(canonical, '=')
+		canonical = append(canonical, params[key]...)
 	}
-	sum := md5.Sum([]byte(strings.Join(parts, "&"))) // #nosec G401 -- required by provider.
+	sum := md5.Sum(canonical) // #nosec G401 -- 上游协议要求使用 MD5。
 	return hex.EncodeToString(sum[:])
 }
 

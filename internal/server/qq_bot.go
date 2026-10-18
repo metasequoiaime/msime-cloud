@@ -290,6 +290,13 @@ const qqFieldsProbeMax = 32
 
 // probeEventFields 每遇到一种新的字段组合就记一行日志，列出事件 d 排好序的顶层字段名、message_type 这类值是数字的字段，以及 qqQuoteFields 里那几个对象下一层的字段名：开放平台的群 @ 事件里引用的消息放在哪个字段、长什么样，生产上没确认过（见 qq_quote.go）。曾经只记每个副本收到的第一条，可第一条多半是普通消息，引用消息的字段永远记不到。只记字段名和数字，不记消息内容、群和成员的标识。
 func (b *qqBot) probeEventFields(raw json.RawMessage) {
+	b.mu.Lock()
+	full := len(b.fieldsSeen) >= qqFieldsProbeMax
+	b.mu.Unlock()
+	// 达到本副本的探测上限后不再解码消息；下方仍在锁内检查容量，避免并发超过上限。
+	if full {
+		return
+	}
 	keys, numbers := qqEventFields(raw)
 	nested := qqNestedFields(raw)
 	signature := strings.Join(keys, ",") + "|" + strings.Join(nested, ",")

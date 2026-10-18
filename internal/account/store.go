@@ -501,6 +501,42 @@ func (s *Store) PutChallenge(ctx context.Context, c Challenge) error {
 	return e
 }
 
+// PutVerificationChallenge 在同一目标的事务锁内重查有效验证码并插入挑战，避免多个副本同时看到空结果后各自发送邮件。
+// codeHash 根据最终种子生成挑战的验证码摘要；调用方在事务内只计算摘要，不做外部操作。
+func (s *Store) PutVerificationChallenge(ctx context.Context, c Challenge, provider, subject, seed string, codeHash func(string) string) (bool, string, error) {
+	if codeHash == nil || seed == "" {
+		return false, "", ErrInvalid
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, "", err
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "verification-code:"+provider+":"+subject); err != nil {
+		return false, "", err
+	}
+	var actual string
+	err = tx.QueryRow(ctx, `SELECT nonce FROM auth_challenges
+WHERE provider=$1 AND subject=$2 AND code_hash<>'' AND nonce LIKE 'code-v1:%' AND expires_at>clock_timestamp()
+ORDER BY expires_at LIMIT 1`, provider, subject).Scan(&actual)
+	reused := err == nil
+	if !reused && !errors.Is(err, pgx.ErrNoRows) {
+		return false, "", err
+	}
+	if !reused {
+		actual = seed
+	}
+	c.Nonce = actual
+	c.CodeHash = codeHash(actual)
+	if _, err = tx.Exec(ctx, `INSERT INTO auth_challenges(id_hash,provider,subject,nonce,code_hash,link_user,code_verifier,redirect_uri,expires_at) VALUES($1,$2,$3,$4,$5,NULLIF($6,''),$7,$8,now()+interval '5 minutes')`, c.IDHash, c.Provider, c.Subject, c.Nonce, c.CodeHash, c.LinkUser, c.CodeVerifier, c.RedirectURI); err != nil {
+		return false, "", err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return false, "", err
+	}
+	return reused, actual, nil
+}
+
 // ActiveCodeSeed 返回同一目标仍有效的最新验证码种子。种子只用于在验证码有效期内复用邮件内容，不能直接作为验证码或挑战 ID。
 func (s *Store) ActiveCodeSeed(ctx context.Context, provider, subject string) (string, bool, error) {
 	var seed string

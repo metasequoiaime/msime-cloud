@@ -1092,9 +1092,20 @@ func qqIssueIntentByteOffset(word string, runeIndex int) int {
 	return offset
 }
 
+const qqIssueIntentASCIIWhitespaceBlock = "                                "
+
+// qqIssueIntentASCIIWhitespacePrefix 按固定块跳过长的 ASCII 空格前缀，再交给意图候选扫描。
+func qqIssueIntentASCIIWhitespacePrefix(text string) int {
+	offset := 0
+	for len(text)-offset >= len(qqIssueIntentASCIIWhitespaceBlock) && text[offset:offset+len(qqIssueIntentASCIIWhitespaceBlock)] == qqIssueIntentASCIIWhitespaceBlock {
+		offset += len(qqIssueIntentASCIIWhitespaceBlock)
+	}
+	return offset
+}
+
 // qqIssueIntentStart 找到意图词可能的首个字符；前面的正文不可能构成完整意图词，可以跳过后再做状态匹配。
 func qqIssueIntentStart(text string) (int, bool) {
-	for offset := 0; offset < len(text); {
+	for offset := qqIssueIntentASCIIWhitespacePrefix(text); offset < len(text); {
 		b := text[offset]
 		if b < utf8.RuneSelf {
 			switch b {

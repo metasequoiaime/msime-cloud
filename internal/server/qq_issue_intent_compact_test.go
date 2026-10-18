@@ -60,6 +60,13 @@ func TestQQIssueIntentStartFindsFirstPossibleWord(t *testing.T) {
 	}
 }
 
+func TestQQIssueIntentASCIIWhitespacePrefixFastPath(t *testing.T) {
+	text := strings.Repeat(" ", 64) + "提 ISSUE"
+	if got, want := qqIssueIntentASCIIWhitespacePrefix(text), 64; got != want {
+		t.Fatalf("ASCII 空白前缀=%d，预期=%d", got, want)
+	}
+}
+
 func qqIssueIntentAllocationCases() []struct {
 	name, text string
 	want       bool

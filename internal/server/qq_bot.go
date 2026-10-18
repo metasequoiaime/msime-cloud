@@ -1094,12 +1094,30 @@ func qqIssueIntentByteOffset(word string, runeIndex int) int {
 
 // qqIssueIntentStart 找到意图词可能的首个字符；前面的正文不可能构成完整意图词，可以跳过后再做状态匹配。
 func qqIssueIntentStart(text string) (int, bool) {
-	for offset, r := range text {
+	for offset := 0; offset < len(text); {
+		b := text[offset]
+		if b < utf8.RuneSelf {
+			switch b {
+			case ' ', '\t', '\n', '\v', '\f', '\r':
+				offset++
+				continue
+			case 'i', 'I', 's', 'S', 'u', 'U', 'e', 'E':
+				return offset, true
+			default:
+				offset++
+				continue
+			}
+		}
+		if b == 0xe3 && offset+2 < len(text) && text[offset+1] == 0x80 && text[offset+2] == 0x80 {
+			offset += 3
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(text[offset:])
 		switch r {
-		case '提', '个', '一', '交', '建', '开', '记', '成', '到', '录', '下', '帮', '忙', '我', '反', '馈', '给', '发',
-			'i', 'I', 's', 'S', 'u', 'U', 'e', 'E':
+		case '提', '个', '一', '交', '建', '开', '记', '成', '到', '录', '下', '帮', '忙', '我', '反', '馈', '给', '发':
 			return offset, true
 		}
+		offset += size
 	}
 	return 0, false
 }

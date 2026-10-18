@@ -1486,11 +1486,22 @@ type qqAnswerCandidateResult struct {
 	headingCandidate bool
 }
 
+// qqAnswerCandidateMarkerPrefilter 只查找候选扫描真正关心的字节序列，普通中文不触发逐字节扫描。
+func qqAnswerCandidateMarkerPrefilter(answer string) bool {
+	return strings.ContainsRune(answer, '\t') ||
+		strings.Contains(answer, "“") || strings.Contains(answer, "”") ||
+		strings.Contains(answer, "‘") || strings.Contains(answer, "’") ||
+		strings.Contains(answer, "资") || strings.Contains(answer, "料") ||
+		strings.Contains(answer, "文") || strings.Contains(answer, "档") ||
+		strings.Contains(answer, "里") || strings.Contains(answer, "截") ||
+		strings.Contains(answer, "断")
+}
+
 // qqScanAnswerCandidates 一次扫描答案中的提示词泄漏、替换和标题候选标记，避免重复逐字节扫描正文。
 func qqScanAnswerCandidates(answer string) (result qqAnswerCandidateResult) {
 	// 先用字节查找标题和其他候选字符；长答案通常只有标题标记，不必逐字节扫描整段正文。
 	result.headingCandidate = strings.IndexByte(answer, '#') >= 0
-	if strings.IndexByte(answer, '\t') < 0 && strings.IndexByte(answer, 0xe2) < 0 && strings.IndexByte(answer, 0xe6) < 0 && strings.IndexByte(answer, 0xe8) < 0 && strings.IndexByte(answer, 0xe9) < 0 {
+	if !qqAnswerCandidateMarkerPrefilter(answer) {
 		return result
 	}
 	for i := 0; i < len(answer); i++ {

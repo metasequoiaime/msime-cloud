@@ -74,6 +74,23 @@ func TestQQPromptLeakCandidate(t *testing.T) {
 	}
 }
 
+func TestQQAnswerCandidateMarkerPrefilter(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  bool
+	}{
+		{"普通标题", false},
+		{"## 操作说明", false},
+		{"资料", true},
+		{"“引号”", true},
+		{"甲\t乙", true},
+	} {
+		if got := qqAnswerCandidateMarkerPrefilter(tc.input); got != tc.want {
+			t.Errorf("qqAnswerCandidateMarkerPrefilter(%q) = %v，预期 %v", tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestQQAnswerCandidatesMatchesUnicodeRules(t *testing.T) {
 	inputs := []string{"", "普通回答", "资料里写着", "文档说明", "已截断", "\xff资料", "\xe6\x96\xff", "\xe6\x96\x99", "“设置”", "甲\t乙", "\t", "\xe2\x80\xff"}
 	random := rand.New(rand.NewSource(11))

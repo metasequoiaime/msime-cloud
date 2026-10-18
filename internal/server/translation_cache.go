@@ -82,9 +82,23 @@ func (s *Server) storeTranslations(ctx context.Context, source, target string, s
 // 这批文本里还需要上游翻的那些,去重后保持首次出现的顺序。同一个词在一批里出现两次没必要翻两遍,
 // 而顺序必须稳定 —— 上游按 SourceTextList 的下标返回结果,mergeTranslations 要靠它对回去。
 func missingTexts(wanted []string, cached map[string]string) []string {
+	first := 0
+	for first < len(wanted) {
+		if _, hit := cached[wanted[first]]; !hit {
+			break
+		}
+		first++
+	}
+	if first == len(wanted) {
+		return []string{}
+	}
+	// 已命中的前缀无需去重；整批命中时也不必创建任何缓冲区。
+	wanted = wanted[first:]
 	seen := make(map[string]bool, len(wanted))
+	seen[wanted[0]] = true
 	missing := make([]string, 0, len(wanted))
-	for _, text := range wanted {
+	missing = append(missing, wanted[0])
+	for _, text := range wanted[1:] {
 		if _, hit := cached[text]; hit || seen[text] {
 			continue
 		}

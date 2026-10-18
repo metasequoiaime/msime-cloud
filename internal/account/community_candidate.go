@@ -494,27 +494,16 @@ func (a *Service) communityCandidatePublish(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	// Extend only this upload's socket deadlines, as the dictionary snapshot restore does; Mount gives the route the matching context.
-	controller := http.NewResponseController(w)
-	_ = controller.SetReadDeadline(time.Now().Add(candidatePublishTimeout))
-	_ = controller.SetWriteDeadline(time.Now().Add(candidatePublishTimeout + 5*time.Second))
 	var input struct {
-		ID          string            `json:"id"`
-		Name        string            `json:"name"`
-		Description string            `json:"description"`
-		Manifest    string            `json:"manifest"`
-		Files       map[string][]byte `json:"files"`
+		candidateUpload
+		ID string `json:"id"`
 		// Absent means public. Sending it is also the client's opt-in to the sync fields in the response.
 		Visibility *string `json:"visibility"`
 		// 缺省为 other。分类不计入 request_sha256：同一内容的重试无论带什么分类都返回已存的作品，之后改分类走 PATCH。
 		Category *string `json:"category"`
 	}
-	withCategory, ok := candidateIncludeCategory(r)
+	withCategory, ok := readCandidateUpload(w, r, &input)
 	if !ok {
-		writeError(w, 400, "invalid_include")
-		return
-	}
-	if !readSized(w, r, &input, maxCandidatePublishBytes) {
 		return
 	}
 	sync, visibility := input.Visibility != nil, "public"
@@ -541,19 +530,7 @@ func (a *Service) communityCandidatePublish(w http.ResponseWriter, r *http.Reque
 		writeError(w, 400, "invalid_community_id")
 		return
 	}
-	input.Name = strings.TrimSpace(input.Name)
-	input.Description = strings.TrimSpace(input.Description)
-	// Clients reject a listed name with any control character and a description with one other than newline or tab.
-	if !resourceText(input.Name, 1, 32, false) || !resourceText(input.Description, 0, 280, true) {
-		writeError(w, 400, "invalid_skin_metadata")
-		return
-	}
-	if code := validCandidateFiles(input.Manifest, input.Files); code != "" {
-		writeError(w, 400, code)
-		return
-	}
-	digest := candidateRequestDigest(input.Name, input.Description, input.Manifest, input.Files)
-	pkg, code := validCandidatePackage(input.Manifest, input.Files, visibility == "public")
+	pkg, digest, code := input.prepare(visibility == "public")
 	if code != "" {
 		writeError(w, 400, code)
 		return
@@ -581,17 +558,8 @@ func (a *Service) communityCandidatePublish(w http.ResponseWriter, r *http.Reque
 		a.error(w, e)
 		return
 	}
-	flag, ok := a.screenUpload(w, r, input.Name, input.Description, input.Manifest)
+	clean, flag, ok := a.screenCandidateUpload(w, r, input.candidateUpload, pkg.Preview)
 	if !ok {
-		return
-	}
-	var clean map[string][]byte
-	if !withCandidateImageSlot(r.Context(), func() { clean, code = sanitizeCandidateImages(input.Files, pkg.Preview) }) {
-		writeError(w, 503, "candidate_skin_busy")
-		return
-	}
-	if code != "" {
-		writeError(w, 400, code)
 		return
 	}
 	tx, e := a.store.userDataTransaction(r.Context(), p.UserID)
@@ -887,36 +855,13 @@ func (a *Service) communityCandidateReplace(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	controller := http.NewResponseController(w)
-	_ = controller.SetReadDeadline(time.Now().Add(candidatePublishTimeout))
-	_ = controller.SetWriteDeadline(time.Now().Add(candidatePublishTimeout + 5*time.Second))
-	var input struct {
-		Name        string            `json:"name"`
-		Description string            `json:"description"`
-		Manifest    string            `json:"manifest"`
-		Files       map[string][]byte `json:"files"`
-	}
-	withCategory, ok := candidateIncludeCategory(r)
+	var input candidateUpload
+	withCategory, ok := readCandidateUpload(w, r, &input)
 	if !ok {
-		writeError(w, 400, "invalid_include")
-		return
-	}
-	if !readSized(w, r, &input, maxCandidatePublishBytes) {
 		return
 	}
 	id := r.PathValue("id")
-	input.Name = strings.TrimSpace(input.Name)
-	input.Description = strings.TrimSpace(input.Description)
-	if !resourceText(input.Name, 1, 32, false) || !resourceText(input.Description, 0, 280, true) {
-		writeError(w, 400, "invalid_skin_metadata")
-		return
-	}
-	if code := validCandidateFiles(input.Manifest, input.Files); code != "" {
-		writeError(w, 400, code)
-		return
-	}
-	digest := candidateRequestDigest(input.Name, input.Description, input.Manifest, input.Files)
-	pkg, code := validCandidatePackage(input.Manifest, input.Files, false)
+	pkg, digest, code := input.prepare(false)
 	if code != "" {
 		writeError(w, 400, code)
 		return
@@ -955,17 +900,8 @@ func (a *Service) communityCandidateReplace(w http.ResponseWriter, r *http.Reque
 		a.error(w, e)
 		return
 	}
-	flag, ok := a.screenUpload(w, r, input.Name, input.Description, input.Manifest)
+	clean, flag, ok := a.screenCandidateUpload(w, r, input, pkg.Preview)
 	if !ok {
-		return
-	}
-	var clean map[string][]byte
-	if !withCandidateImageSlot(r.Context(), func() { clean, code = sanitizeCandidateImages(input.Files, pkg.Preview) }) {
-		writeError(w, 503, "candidate_skin_busy")
-		return
-	}
-	if code != "" {
-		writeError(w, 400, code)
 		return
 	}
 	tx, e := a.store.userDataTransaction(r.Context(), p.UserID)

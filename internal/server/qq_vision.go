@@ -86,20 +86,17 @@ func (s *Server) qqDescribeImages(ctx context.Context, attachments []qqAttachmen
 	return qqShotMarker + strings.Join(parts, "；另一张：") + "）"
 }
 
-// qqDescribeImage 下载一张截图交给模型描述。
+// qqDescribeImage 在下载时应用模型的大小上限，合格的截图再交给模型描述。
 func (s *Server) qqDescribeImage(ctx context.Context, a qqAttachment) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, qqVisionTimeout)
 	defer cancel()
-	body, err := s.qq.downloadMedia(ctx, a.URL, qqImageBytes)
+	body, err := s.qq.downloadMedia(ctx, a.URL, qqVisionBytes)
 	if err != nil {
 		return "", err
 	}
 	contentType, _, video, ok := qqMediaKind(body)
 	if !ok || video {
 		return "", errors.New("unsupported image")
-	}
-	if len(body) > qqVisionBytes {
-		return "", errors.New("image too large for the model")
 	}
 	content := []map[string]any{
 		{"type": "text", "text": "请描述这张截图。"},

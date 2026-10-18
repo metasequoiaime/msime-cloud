@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { formatDateTime, relativeTime } from '../src/utils/time.ts';
+import { formatDateTime, formatLocaleDateTime, relativeTime } from '../src/utils/time.ts';
 
 test('日期和日志时间按本地时间显示，支持各页面使用的格式', () => {
   const value = '2026-10-14T09:05:07.123';
@@ -26,4 +26,16 @@ test('相对时间使用中文，并区分过去和未来', context => {
   assert.equal(relativeTime('2026-10-14T08:00:00Z'), '大约 1 小时前');
   assert.equal(relativeTime('2026-10-14T10:00:00Z'), '大约 1 小时内');
   assert.equal(relativeTime('2026-10-14T09:00:00Z'), '不到 1 分钟前');
+});
+
+test('中文本地日期保留年月日顺序、秒数和本地时区跨日', () => {
+  const date = new Date(2026, 0, 1, 0, 5, 7);
+  const digits = formatLocaleDateTime(date.toISOString()).match(/\d+/g).map(Number);
+  assert.deepEqual(digits, [2026, 1, 1, 0, 5, 7]);
+});
+
+test('中文本地日期保留页面既有的无效日期文案', () => {
+  for (const value of ['', '无效日期', '2026-99-99']) {
+    assert.equal(formatLocaleDateTime(value), 'Invalid Date');
+  }
 });

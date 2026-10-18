@@ -15,7 +15,7 @@ import { useConfirm } from "../../ui/confirm";
 import { Pill } from "../../ui/pill";
 import { Empty, ErrorState, SkeletonRows } from "../../ui/states";
 import { useToast } from "../../ui/toast";
-import { relativeTime } from "../../utils/time";
+import { formatLocaleDateTime, relativeTime } from "../../utils/time";
 import { Avatar, SectionCard, SectionRow } from "../me/section";
 
 const permKey = keys.page("perm", "matrix");
@@ -105,7 +105,7 @@ function AuditLog() {
           <Avatar letter={initial(who)} />
           <div className="min-w-0 flex-1">
             <div className="break-words text-ink"><b className="font-semibold">{who}</b> {describeAudit(entry)}</div>
-            <div className="mt-0.5 text-xs text-muted" title={new Date(entry.created_at).toLocaleString("zh-CN")}>{relativeTime(entry.created_at)}</div>
+            <div className="mt-0.5 text-xs text-muted" title={formatLocaleDateTime(entry.created_at)}>{relativeTime(entry.created_at)}</div>
           </div>
         </SectionRow>;
       })}

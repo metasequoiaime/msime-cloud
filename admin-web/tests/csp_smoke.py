@@ -399,6 +399,70 @@ def check_count_bar_pages(context, base: str, problems: list[str]):
         page.close()
 
 
+def check_date_formats(browser, base: str, problems: list[str]):
+    # 用跨年时差核验真实页面；浏览器语言设为英文，中文日期仍由页面约定决定。
+    from urllib.parse import urlsplit
+    for timezone, day, month, short, clock in (
+        ("Pacific/Kiritimati", "2026-01-01", "2026-01", "01-01", "14:05"),
+        ("America/Los_Angeles", "2025-12-31", "2025-12", "12-31", "16:05"),
+    ):
+        context = browser.new_context(locale="en-US", timezone_id=timezone, viewport={"width": 1280, "height": 860})
+        try:
+            for stamp in ("2026-01-01T00:05:07Z", "", "无效日期"):
+                fixtures = json.loads(json.dumps(FIXTURES))
+                me = fixtures["/api/me"]
+                me["joined_at"] = stamp or None
+                me["sessions"][0]["created_at"] = stamp
+                me["recent"][0]["created_at"] = stamp
+                fixtures["/api/audit"]["items"][0]["created_at"] = stamp
+                fixtures["/api/site-settings"]["updated_at"] = stamp
+                fixtures["/api/notices"]["items"][0]["published_at"] = stamp or None
+                fixtures["/api/releases"]["platforms"][0]["latest"]["published_at"] = stamp or None
+                page = context.new_page()
+                page.on("pageerror", lambda error: problems.append(f"日期格式页面异常：{error}"))
+                page.add_init_script("window.__csp = []; document.addEventListener('securitypolicyviolation', e => window.__csp.push(e.violatedDirective));")
+
+                def respond(route):
+                    fixture = fixtures.get(urlsplit(route.request.url).path)
+                    if fixture is None:
+                        route.continue_()
+                    else:
+                        route.fulfill(json=fixture)
+
+                def visit(path):
+                    if page.url != "about:blank":
+                        problems.extend(f"日期格式 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+                    page.goto(base + path)
+
+                page.route("**/api/**", respond)
+                try:
+                    visit("/me")
+                    # 本地化文本由运行时决定，避免把某个 ICU 版本的标点写死。
+                    local = page.evaluate("value => new Date(value).toLocaleString('zh-CN')", stamp)
+                    valid = bool(stamp and stamp != "无效日期")
+                    expect(page.get_by_text(f"{month if valid else stamp} 加入", exact=False) if stamp else page.get_by_text("部署配置的所有者", exact=False)).to_be_visible()
+                    sessions = page.locator("section").filter(has=page.get_by_role("heading", name="登录设备", exact=True))
+                    expect(sessions).to_contain_text(f"登录于 {short} {clock}" if valid else f"登录于 {stamp}".strip())
+                    recent = page.locator("section").filter(has=page.get_by_role("heading", name="我的最近操作", exact=True))
+                    expect(recent.locator("[title]")).to_have_attribute("title", local)
+                    visit("/perm")
+                    audit = page.locator("section").filter(has=page.get_by_role("heading", name="操作日志", exact=True))
+                    expect(audit.locator("[title]")).to_have_attribute("title", local)
+                    visit("/downloads")
+                    expected = f"{local} · google:1:owner@example.com" if stamp else "从未修改"
+                    expect(page.locator("dt").filter(has_text="最近修改").locator("+ dd")).to_have_text(expected)
+                    visit("/notice")
+                    published = f"{short if valid else stamp} 由 owner@example.com 发布"
+                    expect(page.get_by_text(published, exact=False)).to_have_count(1 if stamp else 0)
+                    visit("/release")
+                    expect(page.get_by_text(day if valid else stamp or "未发布", exact=True)).to_be_visible()
+                    problems.extend(f"日期格式 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+                finally:
+                    page.close()
+        finally:
+            context.close()
+
+
 def check_list_pagination(context, base: str, problems: list[str]):
     from urllib.parse import parse_qs, urlencode, urlsplit
     # 通过真实页面发出的请求核验解析结果、翻页和筛选重置，不依赖工具函数实现。
@@ -1950,6 +2014,7 @@ def main() -> int:
                 check_bytes(page)
                 check_count_bars(page)
                 check_count_bar_pages(context, base, problems)
+                check_date_formats(browser, base, problems)
                 check_api_images(browser, base, problems)
                 check_api_image_pages(browser, base, problems)
                 check_list_pagination(context, base, problems)

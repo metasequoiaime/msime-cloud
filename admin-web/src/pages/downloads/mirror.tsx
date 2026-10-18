@@ -10,6 +10,7 @@ import { Card, CardHeader } from "../../ui/card";
 import { useConfirm } from "../../ui/confirm";
 import { useToast } from "../../ui/toast";
 import { Skeleton } from "../../ui/states";
+import { formatLocaleDateTime } from "../../utils/time";
 
 const settingsKey = keys.page("downloads", "site-settings");
 
@@ -59,7 +60,7 @@ export function MirrorSettings() {
           <dt className="text-muted">当前链接</dt>
           <dd className="m-0 min-w-0 truncate">{query.isPending ? <Skeleton className="h-4 w-48" /> : current ? <a href={current} target="_blank" rel="noopener noreferrer" className="text-accent">{current}</a> : <span className="text-muted">未设置</span>}</dd>
           <dt className="text-muted">最近修改</dt>
-          <dd className="m-0 min-w-0 truncate text-body">{query.isPending ? <Skeleton className="h-4 w-32" /> : query.data?.updated_at ? `${new Date(query.data.updated_at).toLocaleString("zh-CN")} · ${query.data.updated_by}` : "从未修改"}</dd>
+          <dd className="m-0 min-w-0 truncate text-body">{query.isPending ? <Skeleton className="h-4 w-32" /> : query.data?.updated_at ? `${formatLocaleDateTime(query.data.updated_at)} · ${query.data.updated_by}` : "从未修改"}</dd>
         </dl>
         <form onSubmit={submit} className="flex flex-wrap gap-2">
           <input value={value} onChange={event => { setDraft(event.target.value); setInvalid(null); }} disabled={!canEdit || !query.data || mutation.isPending} title={disabledTitle}

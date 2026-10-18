@@ -1,4 +1,4 @@
-import { format } from "date-fns";
+import { formatDateTime } from "../../utils/time";
 import { codeMessage } from "../../api/client";
 import { splitBytes } from "../../utils/bytes";
 import type { Release, ReleaseStatus } from "../../api/release";
@@ -22,7 +22,7 @@ export function platformErrorText(code: string): string {
 }
 
 export function releaseDate(release: Release): string {
-  return release.published_at ? format(new Date(release.published_at), "yyyy-MM-dd") : "未发布";
+  return release.published_at ? formatDateTime(release.published_at, "yyyy-MM-dd") : "未发布";
 }
 
 export function repoShortName(repo: string): string {

@@ -267,7 +267,18 @@ func qqBoldSnippetPrefix(text string) (string, bool) {
 		end := start + span
 		if end == start || text[end] != '*' || end+1 == len(text) || text[end+1] != '*' {
 			// 匹配失败后从第二个星号继续，保留连续星号中重叠起点的原有语义。
-			offset = start - 1
+			if end == start {
+				runEnd := start
+				for runEnd < len(text) && text[runEnd] == '*' {
+					runEnd++
+				}
+				if runEnd == len(text) {
+					break
+				}
+				offset = max(start-1, runEnd-2)
+			} else {
+				offset = start - 1
+			}
 			continue
 		}
 		offset = end + 2

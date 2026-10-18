@@ -40,28 +40,39 @@ func (s *Server) noticeBroadcaster() account.NoticeBroadcaster {
 	}
 }
 
-// telegramText is the plain-text message: the title, a blank line and the body, cut to Telegram's limit on a character boundary with an ellipsis.
+// telegramText 拼接标题和正文，只扫描需要保留的前缀，按 UTF-16 码元上限在字符边界追加省略号。
 func telegramText(n account.Notice) string {
-	text := n.Title
+	separator := ""
 	if n.Body != "" {
-		text += "\n\n" + n.Body
+		separator = "\n\n"
 	}
-	if telegramLength(text) <= telegramMessageMax {
-		return text
+	// UTF-16 码元数不超过字节数，每个码元最多占三个 UTF-8 字节；只对中间长度的消息计数。
+	bytes := len(n.Title) + len(separator) + len(n.Body)
+	if bytes <= telegramMessageMax || (bytes <= 3*telegramMessageMax && utf16Length(n.Title)+len(separator)+utf16Length(n.Body) <= telegramMessageMax) {
+		return n.Title + separator + n.Body
 	}
-	// Reserve one unit for the ellipsis and stop before the character that would cross the limit.
+	parts := [3]string{n.Title, separator, n.Body}
 	used := 0
-	for i, r := range text {
-		size := utf16.RuneLen(r)
-		if size < 0 {
-			size = 1
+	for partIndex, part := range parts {
+		for offset, r := range part {
+			size := 1
+			if r > 0xffff {
+				size++
+			}
+			if used+size > telegramMessageMax-1 {
+				switch partIndex {
+				case 0:
+					return parts[0][:offset] + "…"
+				case 1:
+					return parts[0] + parts[1][:offset] + "…"
+				default:
+					return parts[0] + parts[1] + parts[2][:offset] + "…"
+				}
+			}
+			used += size
 		}
-		if used+size > telegramMessageMax-1 {
-			return text[:i] + "…"
-		}
-		used += size
 	}
-	return text
+	return n.Title + separator + n.Body
 }
 
 // telegramLength counts text in UTF-16 code units.

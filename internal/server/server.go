@@ -158,40 +158,7 @@ func New(c Config) (*Server, error) {
 		s.words = newWordSubmitter(c.WordSubmissions, c.AllowedOrigins, s.accounts)
 		s.words.locks = s.accounts
 	}
-	if c.QQBot.enabled() && s.limits != nil {
-		s.qq = newQQBot(c.QQBot)
-		s.adminJobs.Add(1)
-		go func() {
-			defer s.adminJobs.Done()
-			s.warmQQKnowledge(s.lifetime)
-			s.warmQQAppLogin(s.lifetime)
-			// 知识库预热完再跑发版后的自测，同一版本只有一个副本跑一次（见 qqDeploySelfTest）。
-			s.qqDeploySelfTest(s.lifetime, msimebackend.Version())
-		}()
-		if s.accounts != nil {
-			s.media = s.accounts
-			s.qqHistory = s.accounts
-			s.qqLocks = s.accounts
-			s.qqVectors = s.accounts
-			s.qqDrafts = s.accounts
-			s.qqFAQCandidates = s.accounts
-			s.qqBadAnswers = s.accounts
-			s.qqStats = s.accounts
-			s.qqTyping = s.accounts
-			s.adminJobs.Add(1)
-			go func() {
-				defer s.adminJobs.Done()
-				s.qqVectorJob(s.lifetime)
-			}()
-			s.qqImprovements = s.accounts
-			s.qqLearnedCases = s.accounts
-			s.adminJobs.Add(1)
-			go func() {
-				defer s.adminJobs.Done()
-				s.qqImprovementJob(s.lifetime)
-			}()
-		}
-	}
+
 	mux := http.NewServeMux()
 	// Anonymous website endpoints: the /v1/community/ prefix skips Bearer authentication in the middleware, and the handlers apply their own origin, Turnstile and rate checks.
 	mux.HandleFunc("GET "+wordSubmissionsPath, s.wordSubmissionSettings)
@@ -246,6 +213,43 @@ func New(c Config) (*Server, error) {
 	mux.HandleFunc("GET "+contract.CloudPath, s.cloud)
 	s.mux = mux
 	s.handler = s.middleware(recordRoute(mux))
+	if c.QQBot.enabled() && s.limits != nil {
+		s.qq = newQQBot(c.QQBot)
+		if s.accounts != nil {
+			s.media = s.accounts
+			s.qqHistory = s.accounts
+			s.qqLocks = s.accounts
+			s.qqVectors = s.accounts
+			s.qqDrafts = s.accounts
+			s.qqFAQCandidates = s.accounts
+			s.qqBadAnswers = s.accounts
+			s.qqStats = s.accounts
+			s.qqTyping = s.accounts
+			s.qqImprovements = s.accounts
+			s.qqLearnedCases = s.accounts
+		}
+		// 后台任务会立即读取接口和主路由，必须在依赖初始化与路由注册完成后启动。
+		s.adminJobs.Add(1)
+		go func() {
+			defer s.adminJobs.Done()
+			s.warmQQKnowledge(s.lifetime)
+			s.warmQQAppLogin(s.lifetime)
+			// 知识库预热完再跑发版后的自测，同一版本只有一个副本跑一次（见 qqDeploySelfTest）。
+			s.qqDeploySelfTest(s.lifetime, msimebackend.Version())
+		}()
+		if s.accounts != nil {
+			s.adminJobs.Add(1)
+			go func() {
+				defer s.adminJobs.Done()
+				s.qqVectorJob(s.lifetime)
+			}()
+			s.adminJobs.Add(1)
+			go func() {
+				defer s.adminJobs.Done()
+				s.qqImprovementJob(s.lifetime)
+			}()
+		}
+	}
 	return s, nil
 }
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {

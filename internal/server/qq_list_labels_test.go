@@ -24,6 +24,9 @@ func TestQQListLabelsKeepsBoundariesAndOrder(t *testing.T) {
 		{"四字节字符", "- " + strings.Repeat("😀", 11) + ":说明", []string{strings.Repeat("😀", 11)}},
 		{"空标签和链接", "- :说明\n- **：说明\n- https://example.test\n* 没有冒号", nil},
 		{"清理符号并保留首次顺序", "- **换肤**：说明\n* [删除](x):说明\n- 换肤：重复", []string{"换肤", "删除"}},
+		{"无末尾换行仍处理最后一行", "- 换肤：说明\n- 删除：说明", []string{"换肤", "删除"}},
+		{"连续空行和末尾空行", "\n\n- 换肤：说明\n\n- 删除：说明\n\n", []string{"换肤", "删除"}},
+		{"只有空行", "\n\n", nil},
 		{"无效编码", "- 水\xff\xfe：说明", []string{"水��"}},
 		{"空文本", "", nil},
 	} {
@@ -161,6 +164,8 @@ func BenchmarkQQListLabels(b *testing.B) {
 		{"no_colon", "- " + long, 0},
 		{"late_colon", "- " + long + "：说明", 0},
 		{"ordinary_lines", strings.Repeat("普通正文\n", 8192), 0},
+		{"repeated", strings.Repeat("- 换肤：说明\n", 32768), 1},
+		{"late_second", strings.Repeat("- 换肤：说明\n", 32768) + "- 隐私：尾部", 2},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()

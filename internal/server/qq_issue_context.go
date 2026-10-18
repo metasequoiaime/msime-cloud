@@ -105,13 +105,14 @@ func (s *Server) qqFixRelease(ctx context.Context, repo string, issue qqIssueDet
 	if !ok {
 		return ""
 	}
-	var first *qqRelease
+	var first, oldest *qqRelease
 	matched := 0
 	for i, release := range releases {
 		if release.Draft || release.PublishedAt == "" || !strings.HasPrefix(release.TagName, prefix) {
 			continue
 		}
 		matched++
+		oldest = &releases[i]
 		// Release 列表从新到旧，GitHub 的时间都是 UTC 的 RFC 3339，可以直接按字符串比较。
 		if release.PublishedAt > issue.ClosedAt {
 			first = &releases[i]
@@ -123,8 +124,8 @@ func (s *Server) qqFixRelease(ctx context.Context, repo string, issue qqIssueDet
 		return ""
 	case first == nil:
 		return "已经修好（" + closed + "），还没发新版，等下个版本就有了"
-	case len(releases) >= qqReleasePage && first == &releases[len(releases)-1]:
-		// 只读了最近一页 Release，关闭时间比这一页都早时说不准是哪个版本。
+	case len(releases) >= qqReleasePage && first == oldest:
+		// 满页时，同平台最旧的有效记录仍晚于关闭时间，就无法确定首个修复版本；页尾可能是其他平台或草稿。
 		return "已经修好（" + closed + "），更新到最新版就有"
 	default:
 		suffix := ""

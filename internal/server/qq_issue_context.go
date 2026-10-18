@@ -171,27 +171,31 @@ func (s *Server) qqLookupMaintainerComment(ctx context.Context, repo string, num
 	if err != nil {
 		return "", err
 	}
-	// 评论按时间从旧到新，最多读最近的 100 条：从最后一页读起。
+	// 评论从旧到新排列，末页可能不足 100 条；最多补读前一页，倒序检查最近 100 条。
 	page := (issue.Comments + 99) / 100
-	r, err := client.Get(ctx, token, "/repos/"+repo+"/issues/"+strconv.FormatInt(number, 10)+"/comments?per_page=100&page="+strconv.Itoa(page))
-	var comments []struct {
-		Body              string `json:"body"`
-		AuthorAssociation string `json:"author_association"`
-	}
-	if err != nil || !r.OK() || r.Decode(&comments) != nil {
-		return "", githubFailure("comments", r, err)
-	}
-	for i := len(comments) - 1; i >= 0; i-- {
-		switch comments[i].AuthorAssociation {
-		case "OWNER", "MEMBER", "COLLABORATOR":
-		default:
-			continue
+	remaining := 100
+	for pages := 0; pages < 2 && page > 0 && remaining > 0; pages, page = pages+1, page-1 {
+		r, err := client.Get(ctx, token, "/repos/"+repo+"/issues/"+strconv.FormatInt(number, 10)+"/comments?per_page=100&page="+strconv.Itoa(page))
+		var comments []struct {
+			Body              string `json:"body"`
+			AuthorAssociation string `json:"author_association"`
 		}
-		text := qqPlainText(qqStripImagesAndHTML(comments[i].Body))
-		if text == "" {
-			continue
+		if err != nil || !r.OK() || r.Decode(&comments) != nil {
+			return "", githubFailure("comments", r, err)
 		}
-		return qqTruncateSentence(text, limit), nil
+		for i := len(comments) - 1; i >= 0 && remaining > 0; i-- {
+			remaining--
+			switch comments[i].AuthorAssociation {
+			case "OWNER", "MEMBER", "COLLABORATOR":
+			default:
+				continue
+			}
+			text := qqPlainText(qqStripImagesAndHTML(comments[i].Body))
+			if text == "" {
+				continue
+			}
+			return qqTruncateSentence(text, limit), nil
+		}
 	}
 	return "", nil
 }

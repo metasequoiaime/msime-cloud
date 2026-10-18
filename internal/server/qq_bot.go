@@ -1022,13 +1022,73 @@ func (s *Server) qqBacklogReply(ctx context.Context, admin string, reply func(st
 // qqIssueIntentWords 是表示「请把这条记成 issue」的说法，与去掉空白、转成小写后的消息比较。只收祈使的说法：单独的「记录」会误中「历史记录丢了」这类 bug 描述。
 var qqIssueIntentWords = []string{"提issue", "提个issue", "提一个issue", "提交issue", "建issue", "建个issue", "建一个issue", "开issue", "开个issue", "开一个issue", "记个issue", "记成issue", "记到issue", "记一下", "记录一下", "帮忙记录", "帮我记录", "反馈给开发"}
 
+const qqIssueIntentWordCount = 18
+
 // qqIssueIntent 判断消息里有没有明确要求记成 issue 的说法，是模型判断 intent 之外的兜底，不受空白和大小写影响。
 func qqIssueIntent(text string) bool {
 	if !qqIssueIntentMayContain(text) {
 		return false
 	}
-	compact := qqCompactLower(text)
-	return slices.ContainsFunc(qqIssueIntentWords, func(word string) bool { return strings.Contains(compact, word) })
+	// 无效 UTF-8 在原流程中先去空白再转小写，分开的字节可能重新组成有效字符；保留原流程处理这类边界输入。
+	if !utf8.ValidString(text) {
+		compact := qqCompactLower(text)
+		return slices.ContainsFunc(qqIssueIntentWords, func(word string) bool { return strings.Contains(compact, word) })
+	}
+	var states [qqIssueIntentWordCount]uint8
+	for _, r := range text {
+		if unicode.IsSpace(r) {
+			continue
+		}
+		r = unicode.ToLower(r)
+		for i, word := range qqIssueIntentWords {
+			state := states[i]
+			if state == 0 {
+				continue
+			}
+			next, _ := utf8.DecodeRuneInString(word[qqIssueIntentByteOffset(word, int(state)):])
+			if r != next {
+				states[i] = 0
+				continue
+			}
+			state++
+			if state == qqIssueIntentWordLengths[i] {
+				return true
+			}
+			states[i] = state
+		}
+		switch r {
+		case '提':
+			states[0], states[1], states[2], states[3] = 1, 1, 1, 1
+		case '建':
+			states[4], states[5], states[6] = 1, 1, 1
+		case '开':
+			states[7], states[8], states[9] = 1, 1, 1
+		case '记':
+			states[10], states[11], states[12], states[13], states[14] = 1, 1, 1, 1, 1
+		case '帮':
+			states[15], states[16] = 1, 1
+		case '反':
+			states[17] = 1
+		}
+	}
+	return false
+}
+
+var qqIssueIntentWordLengths = func() [qqIssueIntentWordCount]uint8 {
+	var lengths [qqIssueIntentWordCount]uint8
+	for i, word := range qqIssueIntentWords {
+		lengths[i] = uint8(utf8.RuneCountInString(word))
+	}
+	return lengths
+}()
+
+func qqIssueIntentByteOffset(word string, runeIndex int) int {
+	offset := 0
+	for range runeIndex {
+		_, size := utf8.DecodeRuneInString(word[offset:])
+		offset += size
+	}
+	return offset
 }
 
 // qqIssueIntentMayContain 先找意图词里出现过的字符；完全没有这些字符时无需构造去空白、转小写后的正文。

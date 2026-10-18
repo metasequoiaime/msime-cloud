@@ -51,6 +51,9 @@ func Handler() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
+		// 只缓存存在的构建产物；文件名包含内容哈希，更新后会使用新路径。
+		// 缺失资源保留 no-store，避免滚动发布时把其他副本尚未包含的资源缓存成 404。
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		files.ServeHTTP(w, r)
 	})
 }

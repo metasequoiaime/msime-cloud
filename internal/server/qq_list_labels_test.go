@@ -35,6 +35,24 @@ func TestQQListLabelsKeepsBoundariesAndOrder(t *testing.T) {
 	}
 }
 
+func TestQQListLabelCandidateNormalizesMarkdown(t *testing.T) {
+	for _, tc := range []struct {
+		name, candidate, want string
+	}{
+		{"plain", "换肤：说明", "换肤"},
+		{"markdown", "**换肤**：说明", "换肤"},
+		{"link", "[删除](x):说明", "删除"},
+		{"empty", "**：说明", ""},
+		{"link_candidate", "https://example.test", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := string(qqListLabelCandidate(tc.candidate, nil)); got != tc.want {
+				t.Fatalf("列表标签候选=%q，期望 %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestQQListLabelsMatchesPreviousSemantics(t *testing.T) {
 	previous := func(text string) []string {
 		var labels []string

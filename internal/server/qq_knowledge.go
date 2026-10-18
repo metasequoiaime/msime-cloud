@@ -425,6 +425,11 @@ func qqListLabels(text string) []string {
 	summaryRunes := 0
 	var scratch [qqListLabelRunes * utf8.UTFMax]byte
 	var previousCandidate string
+	var normalizedCandidates [4]struct {
+		candidate  string
+		labelIndex int
+	}
+	normalizedCandidateCount := 0
 	for line := range strings.SplitSeq(text, "\n") {
 		line = strings.TrimSpace(line)
 		rest, ok := strings.CutPrefix(line, "- ")
@@ -439,24 +444,35 @@ func qqListLabels(text string) []string {
 			continue
 		}
 		previousCandidate = candidate
-		runes := []rune(candidate)
-		i := slices.IndexFunc(runes, func(r rune) bool { return r == '：' || r == ':' })
-		if i < 0 || i >= qqListLabelRunes || (i+1 < len(runes) && runes[i+1] == '/') {
-			continue
-		}
-		labelBytes := qqNormalizeListLabel(runes[:i], scratch[:0])
-		if len(labelBytes) == 0 {
-			continue
-		}
-		duplicate := false
-		// 直接在比较表达式中转换，避免为重复标签分配临时字符串。
-		for _, label := range labels {
-			if label == string(labelBytes) {
-				duplicate = true
+		labelIndex := -1
+		for i := 0; i < normalizedCandidateCount; i++ {
+			if candidate == normalizedCandidates[i].candidate {
+				labelIndex = normalizedCandidates[i].labelIndex
 				break
 			}
 		}
-		if duplicate {
+		if labelIndex >= 0 {
+			continue
+		}
+		labelBytes := qqListLabelCandidate(candidate, scratch[:0])
+		if len(labelBytes) == 0 {
+			continue
+		}
+		for i, label := range labels {
+			// 直接在比较表达式中转换，避免为重复标签分配临时字符串。
+			if label == string(labelBytes) {
+				labelIndex = i
+				break
+			}
+		}
+		if labelIndex >= 0 {
+			if normalizedCandidateCount < len(normalizedCandidates) {
+				normalizedCandidates[normalizedCandidateCount] = struct {
+					candidate  string
+					labelIndex int
+				}{candidate: candidate, labelIndex: labelIndex}
+				normalizedCandidateCount++
+			}
 			continue
 		}
 		if len(labels) > 0 {
@@ -465,6 +481,13 @@ func qqListLabels(text string) []string {
 		// 只为首次保留的标签复制字符串，下一行可继续覆盖清理缓冲。
 		label := string(labelBytes)
 		labels = append(labels, label)
+		if normalizedCandidateCount < len(normalizedCandidates) {
+			normalizedCandidates[normalizedCandidateCount] = struct {
+				candidate  string
+				labelIndex int
+			}{candidate: candidate, labelIndex: len(labels) - 1}
+			normalizedCandidateCount++
+		}
 		summaryRunes += utf8.RuneCountInString(label)
 		// 连同分隔符超过摘要长度后，后续标签不会影响截断结果。
 		if summaryRunes > qqSnippetRunes {
@@ -472,6 +495,16 @@ func qqListLabels(text string) []string {
 		}
 	}
 	return labels
+}
+
+// qqListLabelCandidate 返回列表项中冒号前的 Markdown 标签；候选过短且只在少数重复变体中复用，结果可安全缓存。
+func qqListLabelCandidate(candidate string, scratch []byte) []byte {
+	runes := []rune(candidate)
+	i := slices.IndexFunc(runes, func(r rune) bool { return r == '：' || r == ':' })
+	if i < 0 || i >= qqListLabelRunes || (i+1 < len(runes) && runes[i+1] == '/') {
+		return nil
+	}
+	return qqNormalizeListLabel(runes[:i], scratch)
 }
 
 // qqNormalizeListLabel 在可复用缓冲中清理短标签的 Markdown 并合并空白；输入已按原有规则转换为 rune。

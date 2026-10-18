@@ -412,7 +412,7 @@ func decodeSized(w http.ResponseWriter, r *http.Request, v any, maxBytes int64) 
 	return httpjson.Decode(w, r, v, maxBytes, fail)
 }
 func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
-	respond(w, 200, map[string]any{"api_version": contract.APIVersion, "cloud": s.config.Cloud.URL != "", "chat": s.config.Chat.URL != "", "translation": s.config.Translation.URL != "", "transcription": s.config.Transcription.URL != "", "streaming_transcription": s.config.Streaming.URL != ""})
+	respond(w, 200, map[string]any{"api_version": contract.APIVersion, "cloud": s.config.Cloud.URL != "", "chat": s.config.Chat.URL != "", "translation": s.translationEnabled(), "transcription": s.config.Transcription.URL != "", "streaming_transcription": s.config.Streaming.URL != ""})
 }
 func (s *Server) upstream(r *http.Request, e Endpoint, method, contentType string, body io.Reader) ([]byte, error) {
 	req, err := http.NewRequestWithContext(r.Context(), method, e.URL, body)

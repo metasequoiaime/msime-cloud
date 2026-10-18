@@ -190,11 +190,7 @@ func respondTranslations(w http.ResponseWriter, v translationRequest, texts []st
 
 func (s *Server) translate(w http.ResponseWriter, r *http.Request) {
 	endpoints := append([]TranslationEndpoint{s.config.Translation}, s.config.TranslationFallbacks...)
-	configured := false
-	for _, e := range endpoints {
-		configured = configured || e.URL != ""
-	}
-	if !configured {
+	if !s.translationEnabled() {
 		if !enabled(w, s.config.Translation.Endpoint) {
 			return
 		}
@@ -242,6 +238,11 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fail(w, 503, "translation_disabled")
+}
+
+// translationEnabled 与实际路由共用启用条件，只配置了可用的后备服务时也能翻译。
+func (s *Server) translationEnabled() bool {
+	return s.config.Translation.URL != "" || hasTranslationEndpoint(s.config.TranslationFallbacks)
 }
 
 func hasTranslationEndpoint(endpoints []TranslationEndpoint) bool {

@@ -114,3 +114,34 @@ func TestCommunityListScope(t *testing.T) {
 		})
 	}
 }
+
+func TestCommunitySkinListCategory(t *testing.T) {
+	for _, tc := range []struct {
+		name, query, category string
+		withCategory          bool
+		code                  string
+	}{
+		{"默认值", "", "", false, ""},
+		{"空分类", "category=", "", false, ""},
+		{"筛选分类", "category=food", "food", false, ""},
+		{"声明分类", "include=category", "", true, ""},
+		{"筛选并声明", "category=tech&include=category", "tech", true, ""},
+		{"分类大小写", "category=Food", "", false, "invalid_category"},
+		{"分类空白", "category=+food", "", false, "invalid_category"},
+		{"未知声明", "include=categories", "", false, "invalid_include"},
+		{"分类错误优先", "category=bad&include=bad", "", false, "invalid_category"},
+		{"首个分类", "category=food&category=bad&include=category", "food", true, ""},
+		{"首个空分类", "category=&category=bad", "", false, ""},
+		{"首个错误分类", "category=bad&category=food", "", false, "invalid_category"},
+		{"首个声明", "include=category&include=bad", "", true, ""},
+		{"首个空声明", "include=&include=bad", "", false, ""},
+		{"首个错误声明", "include=bad&include=category", "", false, "invalid_include"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			category, withCategory, code := communitySkinListCategory(httptest.NewRequest(http.MethodGet, "/?"+tc.query, nil))
+			if category != tc.category || withCategory != tc.withCategory || code != tc.code {
+				t.Fatalf("分类查询不符：category=%q withCategory=%v code=%q", category, withCategory, code)
+			}
+		})
+	}
+}

@@ -301,14 +301,9 @@ func (a *Service) communityList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_fields")
 		return
 	}
-	category := r.URL.Query().Get("category")
-	if category != "" && !validCandidateSkinCategory(category) {
-		writeError(w, 400, "invalid_category")
-		return
-	}
-	withCategory, ok := candidateIncludeCategory(r)
-	if !ok {
-		writeError(w, 400, "invalid_include")
+	category, withCategory, code := communitySkinListCategory(r)
+	if code != "" {
+		writeError(w, 400, code)
 		return
 	}
 	viewer := a.communityViewer(r)

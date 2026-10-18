@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"iter"
 	"log/slog"
 	"maps"
 	"net/url"
@@ -1224,6 +1225,38 @@ func qqPlainTextCanReuse(md string) bool {
 	return true
 }
 
+// qqPlainTextFields 按 FieldsSeq 的规则分词，只对可能属于 Unicode 空白的首字节解码。
+func qqPlainTextFields(text string) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		start := 0
+		for i := 0; i < len(text); {
+			size := 1
+			switch text[i] {
+			case '\t', '\n', '\v', '\f', '\r', ' ':
+			case 0xc2, 0xe1, 0xe2, 0xe3:
+				// Unicode 空白只可能以这四种字节开头；其余 UTF-8 字节保留原样。
+				r, n := utf8.DecodeRuneInString(text[i:])
+				if !unicode.IsSpace(r) {
+					i += n
+					continue
+				}
+				size = n
+			default:
+				i++
+				continue
+			}
+			if start < i && !yield(text[start:i]) {
+				return
+			}
+			i += size
+			start = i
+		}
+		if start < len(text) {
+			yield(text[start:])
+		}
+	}
+}
+
 // qqPlainText 把 GitHub 上的 Markdown（维护者评论、issue 正文）变成一行纯文本，直接发到群里或交给模型都不再带 **、反引号、## 和半截链接：去掉代码块，链接只留文字，删掉裸链接和加粗、代码的符号，逐行去掉行首的标题、引用、列表标记，丢掉表格行，最后合并空白。图片和 HTML 标签由调用方先用 qqStripImagesAndHTML 去掉。
 func qqPlainText(md string) string {
 	if qqPlainTextCanReuse(md) {
@@ -1315,7 +1348,7 @@ func qqPlainText(md string) string {
 			if line == "" {
 				continue
 			}
-			for field := range strings.FieldsSeq(line) {
+			for field := range qqPlainTextFields(line) {
 				if !yield(field) {
 					return
 				}

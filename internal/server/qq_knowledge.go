@@ -370,17 +370,7 @@ func qqNormalizedPrefix(text string, limit int, stripMarkdown bool) string {
 
 // qqSnippetNeedsStructuredScan 判断摘要是否可能含有加粗、列表标签或 Markdown 噪声；普通正文跳过三次结构化扫描。
 func qqSnippetNeedsStructuredScan(text string) bool {
-	for i := 0; i < len(text); i++ {
-		switch text[i] {
-		case '*', '-', '_', ':', '[', ']', '`', '>', '#', '|':
-			return true
-		case 0xef:
-			if i+2 < len(text) && text[i+1] == 0xbc && text[i+2] == 0x9a {
-				return true
-			}
-		}
-	}
-	return false
+	return strings.ContainsAny(text, "*-_:：[]`>#|")
 }
 
 // qqKnowledgeTOC 生成挑段落用的目录；知识库已加载的摘要可直接复用，测试或旧缓存没有摘要时回退到即时计算。

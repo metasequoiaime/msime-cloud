@@ -81,6 +81,14 @@ func translationParts(texts []string, limit int) []translationPart {
 func joinTranslationParts(parts []translationPart, count int) ([]string, bool) {
 	texts := make([]string, count)
 	for _, part := range parts {
+		if texts[part.index] == "" && part.prefix == "" && part.suffix == "" {
+			texts[part.index] = part.translated
+			continue
+		}
+		// 先检查累计字节数，避免为必然超限的结果分配并复制正文。
+		if len(part.prefix)+len(part.translated)+len(part.suffix) > contract.OutputTextBytes-len(texts[part.index]) {
+			return nil, false
+		}
 		texts[part.index] += part.prefix + part.translated + part.suffix
 	}
 	for _, text := range texts {

@@ -89,6 +89,18 @@ func TestQQAnswerCandidateMarkerPrefilter(t *testing.T) {
 			t.Errorf("qqAnswerCandidateMarkerPrefilter(%q) = %v，预期 %v", tc.input, got, tc.want)
 		}
 	}
+	random := rand.New(rand.NewSource(23))
+	for range 2000 {
+		data := make([]byte, random.Intn(256))
+		for i := range data {
+			data[i] = byte(random.Intn(256))
+		}
+		input := string(data)
+		want := strings.ContainsRune(input, '\t') || strings.ContainsAny(input, "“”‘’资料文档里截断")
+		if got := qqAnswerCandidateMarkerPrefilter(input); got != want {
+			t.Fatalf("随机答案候选预筛不兼容：输入=%q，结果=%v，期望=%v", input, got, want)
+		}
+	}
 }
 
 func TestQQAnswerCandidatesMatchesUnicodeRules(t *testing.T) {

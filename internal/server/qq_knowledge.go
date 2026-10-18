@@ -437,6 +437,7 @@ func qqListLabels(text string) []string {
 	var labels []string
 	summaryRunes := 0
 	var scratch [qqListLabelRunes * utf8.UTFMax]byte
+	previousLine := ""
 	var previousCandidate string
 	var normalizedCandidates [4]struct {
 		candidate  string
@@ -444,6 +445,10 @@ func qqListLabels(text string) []string {
 	}
 	normalizedCandidateCount := 0
 	for line := range strings.SplitSeq(text, "\n") {
+		if line == previousLine {
+			continue
+		}
+		previousLine = line
 		line = qqListLabelLineTrim(line)
 		rest, ok := strings.CutPrefix(line, "- ")
 		if !ok {

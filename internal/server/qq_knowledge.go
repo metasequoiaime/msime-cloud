@@ -434,7 +434,13 @@ func qqListLabels(text string) []string {
 		labelIndex int
 	}
 	normalizedCandidateCount := 0
-	for line := range strings.SplitSeq(text, "\n") {
+	for remaining := text; remaining != ""; {
+		line := remaining
+		if lineEnd := strings.IndexByte(remaining, '\n'); lineEnd >= 0 {
+			line, remaining = remaining[:lineEnd], remaining[lineEnd+1:]
+		} else {
+			remaining = ""
+		}
 		if line == previousLine {
 			continue
 		}

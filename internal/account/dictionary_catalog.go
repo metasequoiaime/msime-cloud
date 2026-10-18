@@ -1,9 +1,6 @@
 package account
 
 import (
-	"context"
-	"encoding/json"
-	"io"
 	"net/http"
 	"strings"
 )
@@ -43,18 +40,5 @@ func (a *Service) dictionaryCatalog(w http.ResponseWriter, r *http.Request) {
 	query["operation"] = "dictionary"
 	query["kind"] = kind
 	query["offset"] = offset
-	out, err := a.engine.QuerySnapshot(r.Context(), map[string]any{"operation": "personal_query", "query": query}, func(ctx context.Context, writer io.Writer) error {
-		return streamDictionaryQuerySnapshot(ctx, a.store.pool, p.UserID, query, func(raw json.RawMessage) error {
-			if _, err := writer.Write(raw); err != nil {
-				return err
-			}
-			_, err := writer.Write([]byte{'\n'})
-			return err
-		})
-	})
-	if err != nil {
-		a.dictionaryError(w, err)
-		return
-	}
-	write(w, 200, out)
+	a.queryPersonalDictionary(w, r, p.UserID, query)
 }

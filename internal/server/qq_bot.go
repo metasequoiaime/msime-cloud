@@ -297,8 +297,7 @@ func (b *qqBot) probeEventFields(raw json.RawMessage) {
 	if full {
 		return
 	}
-	keys, numbers := qqEventFields(raw)
-	nested := qqNestedFields(raw)
+	keys, numbers, nested := qqEventFields(raw)
 	signature := strings.Join(keys, ",") + "|" + strings.Join(nested, ",")
 	b.mu.Lock()
 	if b.fieldsSeen == nil {
@@ -315,11 +314,7 @@ func (b *qqBot) probeEventFields(raw json.RawMessage) {
 }
 
 // qqNestedFields 返回 qqQuoteFields 里每个字段下一层的字段名，写成「message_reference.message_id」「msg_elements[].content」；值不带出来。
-func qqNestedFields(raw json.RawMessage) []string {
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(raw, &fields) != nil {
-		return nil
-	}
+func qqNestedFields(fields map[string]json.RawMessage) []string {
 	var out []string
 	for _, name := range qqQuoteFields {
 		var object map[string]json.RawMessage
@@ -344,11 +339,11 @@ func qqNestedFields(raw json.RawMessage) []string {
 	return out
 }
 
-// qqEventFields 返回事件 d 排好序的顶层字段名，以及值是数字的顶层字段，写成「字段名=值」；字符串、对象、数组、布尔和 null 的值一律不带出来。d 不是对象时都返回空。
-func qqEventFields(raw json.RawMessage) (keys, numbers []string) {
+// qqEventFields 解码一次事件 d，返回排好序的顶层字段名、写成「字段名=值」的顶层数字字段和引用对象下一层的字段名。字符串、对象、数组、布尔和 null 的值不带出来；d 不是对象时都返回空。
+func qqEventFields(raw json.RawMessage) (keys, numbers, nested []string) {
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(raw, &fields) != nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	keys = slices.Sorted(maps.Keys(fields))
 	for _, k := range keys {
@@ -356,7 +351,7 @@ func qqEventFields(raw json.RawMessage) (keys, numbers []string) {
 			numbers = append(numbers, k+"="+string(v))
 		}
 	}
-	return keys, numbers
+	return keys, numbers, qqNestedFields(fields)
 }
 
 func newQQBot(c QQBotConfig) *qqBot {

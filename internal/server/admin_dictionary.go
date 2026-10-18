@@ -58,18 +58,8 @@ func (s *Server) adminDictionary(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) dictionaryTree(w http.ResponseWriter, r *http.Request, gh *githubapp.Client) {
 	repo := s.dictRepo()
-	token, err := gh.Token(r.Context(), repo, dictionaryReadPermissions)
-	if err != nil {
-		dictGitHubError(w, err)
-		return
-	}
-	meta, err := gh.Get(r.Context(), token, "/repos/"+repo)
-	if err != nil {
-		dictGitHubError(w, err)
-		return
-	}
-	if !meta.OK() {
-		dictGitHubStatus(w, "repository metadata", meta.Status)
+	token, meta, ok := dictionaryRepositoryMetadata(w, r, gh, repo)
+	if !ok {
 		return
 	}
 	var repository struct {
@@ -144,18 +134,8 @@ func (s *Server) dictionaryFile(w http.ResponseWriter, r *http.Request, gh *gith
 		return
 	}
 	repo := s.dictRepo()
-	token, err := gh.Token(r.Context(), repo, dictionaryReadPermissions)
-	if err != nil {
-		dictGitHubError(w, err)
-		return
-	}
-	meta, err := gh.Get(r.Context(), token, "/repos/"+repo)
-	if err != nil {
-		dictGitHubError(w, err)
-		return
-	}
-	if !meta.OK() {
-		dictGitHubStatus(w, "repository metadata", meta.Status)
+	token, meta, ok := dictionaryRepositoryMetadata(w, r, gh, repo)
+	if !ok {
 		return
 	}
 	var repository struct {

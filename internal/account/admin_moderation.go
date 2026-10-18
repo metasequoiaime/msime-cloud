@@ -559,6 +559,19 @@ func sensitiveFlagText(patterns []string) string {
 		if len(pattern) <= limit-8 || len(pattern) <= (limit-8)*utf8.UTFMax && utf8.RuneCountInString(pattern) <= limit-8 {
 			return "命中敏感词：「" + pattern + "」"
 		}
+		var buffer [utf8.UTFMax * (limit + 1)]byte
+		length := copy(buffer[:], "命中敏感词：「")
+		for offset, count := 0, 0; count < limit-8 && offset < len(pattern); count++ {
+			r, size := utf8.DecodeRuneInString(pattern[offset:])
+			if r == utf8.RuneError && size == 1 {
+				length += copy(buffer[length:], "�")
+			} else {
+				length += copy(buffer[length:], pattern[offset:offset+size])
+			}
+			offset += size
+		}
+		length += copy(buffer[length:], "…")
+		return string(buffer[:length])
 	}
 	// 每字最多 4 字节，保留这些字节足以确认是否超过 500 字；被切开的末尾字符不会落在保留的 499 字内。
 	var buffer [utf8.UTFMax * (limit + 1)]byte

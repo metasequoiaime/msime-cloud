@@ -69,6 +69,15 @@ func TestQQTrimLeadingCommonPaddingFastPath(t *testing.T) {
 	}
 }
 
+func TestQQTrimLeadingCommonASCIIPaddingFastPath(t *testing.T) {
+	padding := strings.Repeat(" \t", 64)
+	text := padding + "正文"
+	start := qqTrimLeadingCommonASCIIPadding(text)
+	if got, want := text[start:], "正文"; got != want {
+		t.Fatalf("重复 ASCII 空白块裁剪结果=%q，预期=%q", got, want)
+	}
+}
+
 func TestQQTrimTrailingCommonPaddingFastPath(t *testing.T) {
 	padding := strings.Repeat(" \t\u3000", 32)
 	text := "正文" + padding + "尾"

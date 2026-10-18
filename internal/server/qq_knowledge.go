@@ -554,6 +554,17 @@ func qqNormalizeListLabel(runes []rune, buf []byte) []byte {
 	return buf
 }
 
+const qqCommonASCIIPadding = " \t \t \t \t \t \t \t \t \t \t \t \t \t \t \t \t"
+
+// qqTrimLeadingCommonASCIIPadding 按固定块跳过重复的 ASCII Markdown 空白，剩余部分交给标准裁剪。
+func qqTrimLeadingCommonASCIIPadding(line string) int {
+	start := 0
+	for len(line)-start >= len(qqCommonASCIIPadding) && line[start:start+len(qqCommonASCIIPadding)] == qqCommonASCIIPadding {
+		start += len(qqCommonASCIIPadding)
+	}
+	return start
+}
+
 // qqMarkdownLeadingSpace 先用 ASCII 快路径裁剪行首空白，再用小型 Unicode 空白表扫描常见前缀。
 func qqMarkdownLeadingSpace(line string) string {
 	if line == "" {
@@ -569,7 +580,11 @@ func qqMarkdownLeadingSpace(line string) string {
 	} else if first != 0xc2 && first != 0xe1 && first != 0xe2 && first != 0xe3 {
 		return line
 	}
-	trimmed := strings.TrimLeft(line, " \t\n\f\r\v")
+	start := 0
+	if first == ' ' || first == '\t' {
+		start = qqTrimLeadingCommonASCIIPadding(line)
+	}
+	trimmed := strings.TrimLeft(line[start:], " \t\n\f\r\v")
 	if trimmed == "" || trimmed[0] < utf8.RuneSelf {
 		return trimmed
 	}

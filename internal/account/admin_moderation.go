@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -35,19 +36,21 @@ const authorColumn = `COALESCE(NULLIF(btrim(u.display_name),''),'水杉小鹿·'
 var (
 	// The skin design travels without its photo, so the console can draw the keyboard preview on each card. 也可以按图库分类筛选。
 	skinsList = adminList{
-		query:      `SELECT s.id,s.name,s.description,s.owner_id,` + authorColumn + `,s.created_at,s.design-'photo' AS design,(SELECT count(*) FROM community_skin_downloads WHERE skin_id=s.id) AS downloads,s.category,` + moderationColumns("s", "skins") + ` FROM community_skins s JOIN auth_users u ON u.id=s.owner_id`,
+		query:      `SELECT s.id,s.name,s.description,s.owner_id,` + authorColumn + `,s.created_at,s.design-'photo' AS design,` + contentEditToken("skins", "s") + ` AS edit_token,(SELECT count(*) FROM community_skin_downloads WHERE skin_id=s.id) AS downloads,s.category,` + moderationColumns("s", "skins") + ` FROM community_skins s JOIN auth_users u ON u.id=s.owner_id`,
 		filters:    []listFilter{candidateCategoryFilter(), statusFilter},
-		unsearched: []string{"design"},
+		unsearched: []string{"design", "edit_token"},
 	}
 	// Candidate skins hold both the public gallery and each account's private library, so moderation can list either one. 也可以按图库分类筛选。
 	candidateSkinsList = adminList{
 		// 文件大小和数量共用一次按作品聚合，避免列表页对每个作品重复扫描文件表。
-		query:   `SELECT s.id,s.package_id,s.name,s.description,s.owner_id,` + authorColumn + `,s.version,files.size,files.file_count,(SELECT count(*) FROM community_candidate_skin_downloads WHERE skin_id=s.id) AS downloads,s.visibility,s.category,s.created_at,s.updated_at,` + moderationColumns("s", "candidate-skins") + ` FROM community_candidate_skins s JOIN auth_users u ON u.id=s.owner_id LEFT JOIN LATERAL (SELECT COALESCE(sum(f.size),0) AS size,count(*) AS file_count FROM community_candidate_skin_files f WHERE f.skin_id=s.id) files ON true`,
-		filters: []listFilter{{param: "visibility", field: "visibility", max: 7, values: map[string]string{"public": "public", "private": "private"}}, candidateCategoryFilter(), statusFilter},
+		query:      `SELECT s.id,s.package_id,s.name,s.description,s.owner_id,` + authorColumn + `,s.version,` + contentEditToken("candidate-skins", "s") + ` AS edit_token,files.size,files.file_count,(SELECT count(*) FROM community_candidate_skin_downloads WHERE skin_id=s.id) AS downloads,s.visibility,s.category,s.created_at,s.updated_at,` + moderationColumns("s", "candidate-skins") + ` FROM community_candidate_skins s JOIN auth_users u ON u.id=s.owner_id LEFT JOIN LATERAL (SELECT COALESCE(sum(f.size),0) AS size,count(*) AS file_count FROM community_candidate_skin_files f WHERE f.skin_id=s.id) files ON true`,
+		filters:    []listFilter{{param: "visibility", field: "visibility", max: 7, values: map[string]string{"public": "public", "private": "private"}}, candidateCategoryFilter(), statusFilter},
+		unsearched: []string{"edit_token"},
 	}
 	pluginsList = adminList{
-		query:   `SELECT p.id,p.kind,p.plugin_id,p.name,p.description,p.version,` + authorColumn + `,p.owner_id,p.size,p.sha256,(SELECT count(*) FROM community_plugin_downloads WHERE pack_id=p.id) AS downloads,p.created_at,` + moderationColumns("p", "plugins") + ` FROM community_plugins p JOIN auth_users u ON u.id=p.owner_id`,
-		filters: []listFilter{statusFilter},
+		query:      `SELECT p.id,p.kind,p.plugin_id,p.name,p.description,p.version,` + authorColumn + `,p.owner_id,p.size,p.sha256,` + contentEditToken("plugins", "p") + ` AS edit_token,(SELECT count(*) FROM community_plugin_downloads WHERE pack_id=p.id) AS downloads,p.created_at,` + moderationColumns("p", "plugins") + ` FROM community_plugins p JOIN auth_users u ON u.id=p.owner_id`,
+		filters:    []listFilter{statusFilter},
+		unsearched: []string{"edit_token"},
 	}
 	// preview is the first three entries, for the card's content lines.
 	dictionariesList = adminList{
@@ -257,9 +260,8 @@ func bannedOwnerGuard(ctx context.Context, tx pgx.Tx, section moderationTable, i
 	return nil
 }
 
-// actionApproveContent approves the items ids (or id) of section. A pending row keeps its automatic flag in moderation_reason, so undoing the approval brings the warning back; a removed row's removal reason is cleared.
-//
-// With value {"from":"pending"|"removed","created_at":"<RFC 3339>","updated_at":"<RFC 3339>"} the approval applies only to rows still in the state the moderator saw, still the same row (created_at, since an author can delete an item and publish different content under the same id) and, for sections the author can edit, still at the version the moderator reviewed (updated_at), each as the list or detail returned it. Otherwise nothing changes and the action fails with 409 conflict, so a stale card can neither republish an item another moderator just removed nor publish content nobody reviewed.
+// 审核通过可固定原状态、创建时间、更新时间和编辑凭据；作品被重发、修改或审核后返回冲突，避免通过未看过的内容。
+// 待审核作品保留自动检查标记以支持撤销，下架作品则清除原下架原因。
 func actionApproveContent(a *Service, ctx context.Context, tx pgx.Tx, v actionRequest) (actionResult, error) {
 	section, ids, err := moderationRequest(v)
 	if err != nil {
@@ -269,6 +271,7 @@ func actionApproveContent(a *Service, ctx context.Context, tx pgx.Tx, v actionRe
 		From      string     `json:"from"`
 		CreatedAt *time.Time `json:"created_at"`
 		UpdatedAt *time.Time `json:"updated_at"`
+		EditToken string     `json:"edit_token"`
 	}
 	pinned := len(v.Value) > 0 && string(v.Value) != "null"
 	if pinned {
@@ -291,6 +294,13 @@ func actionApproveContent(a *Service, ctx context.Context, tx pgx.Tx, v actionRe
 	if section.editable {
 		condition += ` AND ($5::timestamptz IS NULL OR updated_at=$5)`
 		args = append(args, expect.UpdatedAt)
+	}
+	if expect.EditToken != "" {
+		if v.Section != "skins" && v.Section != "plugins" && v.Section != "candidate-skins" {
+			return actionResult{}, actionFail(400, "invalid_value")
+		}
+		args = append(args, expect.EditToken)
+		condition += ` AND ` + contentEditToken(v.Section, section.table) + `=$` + strconv.Itoa(len(args))
 	}
 	changed, err := moderationUpdate(ctx, tx, `UPDATE `+section.table+` SET moderation='approved',previous_moderation=NULL,moderation_reason=CASE WHEN moderation='pending' THEN moderation_reason END,moderated_by=$2,moderated_at=now()`+section.match()+condition+` RETURNING id,name`, args...)
 	if err != nil {

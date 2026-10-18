@@ -6,7 +6,7 @@ import { ToggleGroup } from "radix-ui";
 import { Search } from "lucide-react";
 import { useAPI } from "../../api/client";
 import { keys } from "../../api/keys";
-import type { Item, Section } from "../../api/community";
+import type { Detail, Item, Section } from "../../api/community";
 import { countsSchema, isSection, listSchema, sectionLabels, sections } from "../../api/community";
 import { usePageSearch, useSetPageSearch } from "../../shell/page-search";
 import { PageIntro } from "../../shell/page-intro";
@@ -18,6 +18,8 @@ import { useModeration } from "./actions";
 import type { Target } from "./actions";
 import { ItemCard } from "./card";
 import { ContentDrawer } from "./drawer";
+import { ContentEditor, isEditableSection } from "./editor";
+import type { EditableSection } from "./editor";
 
 type Status = "pending" | "approved" | "removed" | "all";
 const statusOptions = [{ key: "pending", label: "待审核" }, { key: "approved", label: "已上架" }, { key: "removed", label: "已下架" }, { key: "all", label: "全部" }] as const;
@@ -51,13 +53,14 @@ export default function CommunityPage() {
   const search = usePageSearch();
   const setSearch = useSetPageSearch();
   const tab: Section = isSection(search.tab) ? search.tab : "skins";
-  const status: Status = isStatus(search.status) ? search.status : "pending";
+  const status: Status = isStatus(search.status) ? search.status : "all";
   const visibility = search.visibility === "private" ? "private" : "public";
   const page = Math.max(1, Number.parseInt(search.page ?? "1", 10) || 1);
   const [typed, setTyped] = useState("");
   const [q, setQ] = useState("");
   const [open, setOpen] = useState<{ section: Section; id: string } | null>(null);
-  const { approve, remove, restore, setCategory } = useModeration();
+  const [editor, setEditor] = useState<{ section: EditableSection; detail?: Detail } | null>(null);
+  const { approve, remove, restore, setCategory, deleteItem } = useModeration();
   const canReview = can("review_community");
 
   // The server search runs on what was typed after a short pause, not on every keystroke, and starts again from the first page.
@@ -106,7 +109,7 @@ export default function CommunityPage() {
   useEffect(() => {
     if (lastPage !== null) setSearch({ page: lastPage > 1 ? String(lastPage) : undefined });
   }, [lastPage, setSearch]);
-  const target = (item: Item): Target => ({ section: tab, id: item.id, name: item.name, moderation: item.moderation, moderation_reason: item.moderation_reason, previous_moderation: item.previous_moderation, created_at: item.created_at, updated_at: item.updated_at });
+  const target = (item: Item): Target => ({ section: tab, id: item.id, name: item.name, moderation: item.moderation, moderation_reason: item.moderation_reason, previous_moderation: item.previous_moderation, created_at: item.created_at, updated_at: item.updated_at, edit_token: item.edit_token });
 
   let body: ReactNode;
   if (list.isError && !list.data) {
@@ -119,7 +122,7 @@ export default function CommunityPage() {
       ))}
     </div>;
   } else if (items.length === 0) {
-    body = <div className="rounded-[18px] bg-panel-2 p-12 text-center text-muted" role="status">{q ? `没有匹配「${q}」的内容` : "这一栏已经清空了"}</div>;
+    body = <div className="rounded-[18px] bg-panel-2 p-12 text-center text-muted" role="status">{q ? `没有匹配「${q}」的内容` : status === "pending" ? "暂无待审核内容，可切换到全部查看已有作品" : "暂无符合条件的内容"}</div>;
   } else {
     body = <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3.5">
       {items.map(item => <ItemCard key={item.id} section={tab} item={item} canReview={canReview}
@@ -131,10 +134,12 @@ export default function CommunityPage() {
   }
 
   return <>
-    <PageIntro page="community" />
+    <PageIntro page="community">
+      {isEditableSection(tab) && <Button variant="primary" disabled={!canReview} title={canReview ? undefined : "需要审核社区内容权限"} onClick={() => { if (isEditableSection(tab)) setEditor({ section: tab }); }}>新增{sectionLabels[tab]}</Button>}
+    </PageIntro>
     <div className="mb-3.5 flex flex-wrap items-center gap-2.5">
       <SectionTabs value={tab} pending={pending} onChange={next => setSearch({ tab: next === "skins" ? undefined : next, page: undefined, visibility: undefined })} />
-      <FilterChips label="审核状态" value={status} options={statusOptions} onChange={next => setSearch({ status: next === "pending" ? undefined : next, page: undefined })} />
+      <FilterChips label="审核状态" value={status} options={statusOptions} onChange={next => setSearch({ status: next === "all" ? undefined : next, page: undefined })} />
       {tab === "candidate-skins" && <FilterChips label="可见性" value={visibility} options={visibilityOptions} onChange={next => setSearch({ visibility: next === "public" ? undefined : next, page: undefined })} />}
       <label className="relative flex h-9 w-full min-[820px]:ml-auto min-[820px]:w-[220px]">
         <span className="sr-only">搜索名称、作者</span>
@@ -156,6 +161,10 @@ export default function CommunityPage() {
     </nav>}
 
     <ContentDrawer target={open} onClose={() => { setOpen(null); if (focus) setSearch({ focus: undefined }); }}
-      onApprove={approve} onRemove={remove} onRestore={restore} onCategory={setCategory} />
+      onApprove={approve} onRemove={remove} onRestore={restore} onCategory={setCategory}
+      onEdit={(section, detail) => setEditor({ section, detail })}
+      onDelete={async target => { if (await deleteItem(target)) { setOpen(null); if (focus) setSearch({ focus: undefined }); } }} />
+    {editor && <ContentEditor section={editor.section} detail={editor.detail} onClose={() => setEditor(null)}
+      onSaved={id => { setOpen({ section: editor.section, id }); setEditor(null); }} />}
   </>;
 }

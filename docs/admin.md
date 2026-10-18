@@ -126,7 +126,7 @@ Google 登录时，后端校验 ID Token 的签名、issuer、audience、有效�
 | 权限键 | 含义 |
 | --- | --- |
 | `review_dict_pr` | 词库 PR 的精简、通过和驳回 |
-| `review_community` | 社区内容的通过、下架、恢复和删除；敏感词库的增删改 |
+| `review_community` | 社区皮肤、候选皮肤和插件的新增、编辑，以及社区内容的通过、下架、恢复和删除；敏感词库的增删改 |
 | `triage_issues` | Issue 分诊与回复；崩溃分组状态和为崩溃分组建 Issue；旧崩溃列表的处理；故障事件的开启、更新和恢复 |
 | `ban_users` | 封禁、解封用户，吊销用户会话 |
 | `publish_notices` | 发布、归档公告；修改官网下载镜像链接（`POST /api/site-settings`） |
@@ -165,7 +165,7 @@ Google 登录时，后端校验 ID Token 的签名、issuer、audience、有效�
 - 限流按身份分桶：`admin:<actor>`，每分钟 300 次，超限返回 429 `rate_limit_exceeded` 并带 `Retry-After: 60`。以前是所有管理员共享一个每分钟 120 次的桶；外壳每 60 秒轮询一次，多人同时在线会互相挤占，所以改为按人计。同一个人的多个 Google 会话共享一个桶，PAT 另算一个桶。
 - 登录相关端点（`/api/auth/*`）仍按来源地址计（见「客户端地址」：配置了 `client_ip_header` 时取代理写入的地址，否则是 TCP 对端），每分钟 120 次；其中发起 Google 登录的 `/api/auth/google/start` 和命令行登录的 `/api/auth/cli/start` 共用每个来源地址每分钟 10 次的限额，超限同样返回 429 并带 `Retry-After: 60`。
 - 以上三项限额在启用数据库（`auth.enabled`）时记在 PostgreSQL 的 `auth_rates` 表（作用域分别为 `admin`、`admin-auth`、`admin-login`，身份和 IP 只存摘要），为所有副本共享的固定一分钟窗口，所以多副本轮询负载均衡不会把限额放大成副本数倍；窗口边界前后最多可连续用掉两个窗口的额度。计数失败时返回 503 `admin_auth_unavailable` 并带 `Retry-After: 30`，不放行请求。未启用数据库时退回各进程内存中的令牌桶，限额按副本各自计算，只适合单副本。
-- 每个后台请求有 15 秒的服务端超时。
+- 后台请求的服务端超时通常为 15 秒；`POST /api/actions` 可上传完整社区包，超时与连接期限放宽为 90 秒。
 - 数据库写操作统一经过 `POST /api/actions`，请求体为 `{"action","id"?,"user_id"?,"ids"?: [≤100],"reason"?: ≤500 字,"section"?,"value"?: JSON}`，拒绝未知字段。`value` 一般不超过 8 KiB，`save_notice_draft` 和 `publish_notice` 放宽到 256 KiB，以容纳 20000 字的公告正文。批量操作在单个事务内完成，审计与变更同事务写入，失败不部分生效。涉及 GitHub 的操作走各自的 REST 子路径，例如 `POST /api/dict-prs/{n}/approve`。
 - 错误响应形如 `{"error":{"code","message"}}` 或 `{"error":"code"}`。前端的中文提示集中在 `admin-web/src/api/client.ts` 的 `codeMessages` 里，页面只在语境需要不同措辞时覆盖个别代码。
 - 可逆操作（社区状态、Issue 标签、封禁、崩溃状态）完成后，提示条提供 4 秒「撤销」，调用服务端的反向操作。不可逆操作（合并、驳回词库 PR，为崩溃分组建 Issue）延迟 4 秒才真正发出，期间点「撤销」即取消。在此期间又做了一个可撤销或延迟的操作时，前一个立即发出；普通提示（包括前一个延迟操作的失败提示）显示在它上方，不会提前发出它，也不会遮住它的「撤销」。退出登录前会先发出并等它完成；关闭页面时立即以 keepalive 请求发出。
@@ -186,7 +186,7 @@ Google 登录时，后端校验 ID Token 的签名、issuer、audience、有效�
 | 数据概览 | `/` | `GET /api/overview` | — |
 | 词库管理 | `/dictionary` | `GET /api/dictionary`、`GET /api/dictionary/file`、`GET /api/dictionary/search`、`POST /api/dictionary/changes`（GitHub） | 读取需 GitHub App；提交变更需 `review_dict_pr` |
 | 词库审核 | `/dictpr` | `GET /api/dict-prs`、`/api/dict-prs/{n}`（GitHub） | `review_dict_pr` |
-| 社区审核 | `/community` | `GET /api/{skins,candidate-skins,plugins,dictionaries,replies,phrases}`、`/api/community/counts` | `review_community` |
+| 社区管理 | `/community` | `GET /api/{skins,candidate-skins,plugins,dictionaries,replies,phrases}`、`/api/community/counts` | `review_community` |
 | 问题分诊 | `/issues` | `GET /api/issues`、`/api/issues/{owner}/{repo}/{n}`（GitHub） | `triage_issues` |
 | 用户反馈 | `/feedback` | `GET /api/feedback`、`/api/feedback/{id}/screenshots/{n}` | `triage_issues` |
 | 敏感词库 | `/words` | `GET /api/sensitive-words` | `review_community` |
@@ -212,7 +212,7 @@ Google 登录时，后端校验 ID Token 的签名、issuer、audience、有效�
 
   `custom/{words,english,translations}.txt` 只允许追加；`packs/<name>/{quanpin,english,translations}.txt` 支持逐行增删改；`sources/` 及其他文件只读。`POST /api/dictionary/changes` 需要 `review_dict_pr`，请求例如 `{"path":"custom/words.txt","sha":"<原文件 blob SHA>","changes":[{"operation":"add","line":0,"columns":["水杉","shui'shan","1"]}]}`。`changes` 为 1–100 项，请求体最多 128 KiB；`replace` 和 `delete` 的 `line` 为原文件行号，`delete` 的 `columns` 必须为空数组。服务端核对默认分支上最新文件的 SHA、词条格式、重复项和权重范围，在随机的 `dictionary-admin/` 分支创建 PR，写入 `dictionary_change` 审计。成功返回 `{"number","url","branch"}`，维护者在 GitHub 中检查仓库 CI 和翻译覆盖后合入；这类 PR 不混入只审核官网投稿的 `/dictpr` 页面。每次请求使用独立分支，无跨副本的可变草稿或进程锁。文件已更新返回 409 `dictionary_changed`；写入结果不确定返回 `dictionary_uncertain`，前端停止再次提交，先检查仓库分支和 PR。PR 已创建但审计写入失败返回 503 `dictionary_not_recorded` 并附 `pull_url`，前端保留链接且停止再次提交。仓库的上游字节锁定和发布约束以 `msime-dictionary/AGENTS.md` 为准。
 - **词库审核**：只列词库仓库自身 `community-words/` 分支上的 PR（忽略 fork），读最近 100 个。详情比较 PR 基准提交与头部提交的 `custom/{words,english,translations}.txt`，逐条标记：`ad` 命中敏感词，`bad` 不符合官网校验规则，`dup` 已在基准文件或内置词库中、或在 PR 内重复，`new` 可收录。可以只保留勾选项（逐个文件以 blob SHA 做比较交换后重写分支，并改写 PR 标题），可以通过（先精简，再以头部 SHA 为条件 squash 合并；只有 GitHub 响应确认 `merged: true` 且带有合并提交 SHA 时才返回成功并记录通过审计；上游返回 2xx 但缺少有效确认时返回 `502 github_uncertain`，保留此前已完成的精简及其审计，需先检查 PR 实际状态），也可以驳回（先评论「审核未通过：原因」再关闭）。三种操作都带上审核时看到的头部 SHA，PR 此后有了新提交（例如官网又追加了投稿）就返回 409 `pr_changed`，不会对没人看过的词条生效；精简时每个新提交的父提交也必须是上一个头部，否则说明分支在精简途中被追加了投稿，立即停止，不再继续写入或合并。精简和通过前会读取 PR 的改动文件列表，只要改动了这三个文件之外的任何文件就返回 409 `unexpected_files`，以免审核只看到词条而合并带进别的改动。页面显示每次投稿的补充说明和时间，来自 `word_submissions` 表。PR 作者是提交用的 GitHub App 时显示为「官网机器人」。
-- **社区审核**：皮肤、候选皮肤、插件、词库、回复模板、短语包 6 个分类（短语包卡片显示条数和前三条正文，抽屉显示全部短语及分组），按待复核、已通过、已下架筛选。卡片显示自动检查标记和被举报次数；详情抽屉显示举报记录、实时敏感词检查、作者的其他作品和皮肤键盘预览，候选皮肤的预览图由 `GET /api/candidate-skins/{id}/preview` 提供。操作为 `approve_content`、`remove_content`（需要原因）、`restore_content`（恢复下架前的状态）和永久删除。候选皮肤另有图库分类：`GET /api/candidate-skins` 可用 `category=<分类>` 筛选，列表行和详情都带 `category`；详情抽屉的「分类」下拉框调用 `set_candidate_skin_category`（需要 `review_community`），请求体为 `{"action":"set_candidate_skin_category","id":"…"（或 "ids":[…] 最多 100 个）,"section":"candidate-skins"（可省略）,"value":{"category":"<分类>"}}`，分类取值见 [皮肤社区 · 分类](skin-community.md#分类)，未知分类 400 `invalid_category`，section 不是 `candidate-skins` 时 400 `invalid_section`，没有一个 id 存在时 404 `not_found`。修改不改变审核状态，也不更新 `updated_at`（不影响「通过并上架」固定的版本）；审计记录 `category`、`ids`、`count`，单项时还有 `name` 和原分类 `from`。键盘皮肤（`skins`）用同一组分类：`GET /api/skins` 可用 `category=<分类>` 筛选，列表行和详情都带 `category`，详情抽屉的「分类」下拉框调用 `set_skin_category`（需要 `review_community`），请求体为 `{"action":"set_skin_category","id":"…"（或 "ids":[…] 最多 100 个）,"section":"skins"（可省略）,"value":{"category":"<分类>"}}`，错误码、审计字段与 `set_candidate_skin_category` 相同，section 不是 `skins` 时 400 `invalid_section`；修改不改变审核状态。作者因封禁被下架的内容只能通过解封恢复（409 `owner_banned`）。审核规则见「社区事后审核」。
+- **社区管理**：皮肤、候选皮肤、插件、词库、回复模板、短语包 6 个分类（短语包卡片显示条数和前三条正文，抽屉显示全部短语及分组），按待复核、已通过、已下架筛选。卡片显示自动检查标记和被举报次数；详情抽屉显示举报记录、实时敏感词检查、作者的其他作品和皮肤键盘预览，候选皮肤的预览图由 `GET /api/candidate-skins/{id}/preview` 提供。操作为 `approve_content`、`remove_content`（需要原因）、`restore_content`（恢复下架前的状态）和永久删除。候选皮肤另有图库分类：`GET /api/candidate-skins` 可用 `category=<分类>` 筛选，列表行和详情都带 `category`；详情抽屉的「分类」下拉框调用 `set_candidate_skin_category`（需要 `review_community`），请求体为 `{"action":"set_candidate_skin_category","id":"…"（或 "ids":[…] 最多 100 个）,"section":"candidate-skins"（可省略）,"value":{"category":"<分类>"}}`，分类取值见 [皮肤社区 · 分类](skin-community.md#分类)，未知分类 400 `invalid_category`，section 不是 `candidate-skins` 时 400 `invalid_section`，没有一个 id 存在时 404 `not_found`。修改不改变审核状态，也不更新 `updated_at`；使用 `edit_token` 固定审核版本时，分类变化也会使旧凭据失效；审计记录 `category`、`ids`、`count`，单项时还有 `name` 和原分类 `from`。键盘皮肤（`skins`）用同一组分类：`GET /api/skins` 可用 `category=<分类>` 筛选，列表行和详情都带 `category`，详情抽屉的「分类」下拉框调用 `set_skin_category`（需要 `review_community`），请求体为 `{"action":"set_skin_category","id":"…"（或 "ids":[…] 最多 100 个）,"section":"skins"（可省略）,"value":{"category":"<分类>"}}`，错误码、审计字段与 `set_candidate_skin_category` 相同，section 不是 `skins` 时 400 `invalid_section`；修改不改变审核状态。作者因封禁被下架的内容只能通过解封恢复（409 `owner_banned`）。审核规则见「社区事后审核」。
 - **问题分诊**：遍历 `admin.github.issue_repos`，按平台 label 归类。状态映射：open 且无 `triaged` 标签为「新」，有 `triaged` 为「已分类」，closed 为「已关闭」，closed 且有 `duplicate` 标签为「重复」。可以分类（加 `triaged` 并指派给平台的 `assignee`）、标记重复、关闭、重新打开和回复。分类、标记重复和关闭完成后提示条提供「撤销」（分类的撤销即取消分类，平台的 `assignee` 在分类前已被指派的保留指派）；重新打开和回复没有撤销，需要时手动关闭或在 GitHub 上删除回复。每个仓库最多读 3 页共 300 个 open Issue，以及最近更新的 100 个 closed Issue。列表页还读最近 30 天的 Issue 评论（最多 3 页）计算首次响应时间；这三组读取对每个仓库并发进行。侧栏的待分诊角标只读 open Issue，不读评论和 closed Issue，在外壳给 GitHub 的 5 秒预算内完成。
 - **用户反馈**：App 内「反馈」提交的内容（`POST /v1/feedback`，见 [用户体系](user-auth.md#app-内反馈)），按状态（`new` 待处理、`resolved` 已处理）、类型（`bug`、`suggestion`、`dictionary`）和平台（`android`、`ios`、`macos`、`windows`、`linux`、`harmony`）筛选，其他筛选值返回 400 `invalid_filter`。每行带提交者昵称、是否匿名账号（只有设备匿名身份的账号）、截图张数和用户勾选附带的诊断信息（只含服务端白名单里的键）。截图经 `GET /api/feedback/{id}/screenshots/{0–2}` 读取，响应 `Cache-Control: no-store`、`Content-Security-Policy: sandbox; default-src 'none'`，页面转成 `data:` URL 显示；截图不进头像存储，也没有公开地址。操作 `resolve_feedback`、`reopen_feedback`（`{"id"}`，需要 `triage_issues`，写审计，互为撤销）。反馈保留 180 天，由 `Store.Prune` 连同截图一起删除，注销账号时级联删除。
 - **敏感词库**：规则是普通词或 RE2 正则（不超过 200 个字符，不能匹配空文本；`{n}`、`{n,m}` 这类计数重复展开后合计不超过 100 步，例如 `[\pL\pN]{101}` 会被拒绝，以免一条规则拖慢所有上传的检查），分类为广告导流、低俗、辱骂、违法、自定义，处理方式为「拦截」或「需复核」，并显示近 7 天命中次数。只在大小写、全半角或空白上不同的普通词视为重复（409 `exists`）。匹配器缓存在内存中，修改最多 30 秒后在所有副本生效；词库 PR 审核这类只读预览不计入命中次数；命中计数在内存中累积，每 30 秒批量写回一次，进程正常退出时写回剩余计数；进程被强制终止时可能丢失最近 30 秒的计数。规则作用于词库投稿和社区上传，见下文。
@@ -235,6 +235,24 @@ Google 登录时，后端校验 ID Token 的签名、issuer、audience、有效�
 - **个人中心**：资料、本月处理量（词库 PR、社区审核、Issue）、社区审核的平均处理时长、通知偏好、最近 6 条本人操作、登录会话（可吊销其他会话）和个人访问令牌。`POST /api/me {"action":"regenerate_token"}` 在签发事务中重新验证并锁定本次请求的来源会话；等待期间会话已被撤销、退出或过期时返回 `401 unauthorized`，不生成令牌，也不清除原有个人访问令牌。浏览器 Cookie 会话和命令行 Bearer 会话均可签发，个人访问令牌不能为自己续期。「每周摘要」邮件尚未接入，开关置灰。
 
 旧接口仍保留：`/api/overview?days=7|30`、`/api/users`、`/api/downloads`、`/api/crashes` 及 `resolve_crash` / `reopen_crash`、各社区列表与详情、`/api/audit`、`/api/admins`（仅所有者），以及只读的 `/api/system`（版本和各能力是否已配置，不返回上游 URL、模型名或密钥）。所有列表每页 50 条，支持 `q` 和 `page`，返回 `total` 和 `has_more`；`q` 只匹配字段的值（不匹配字段名），皮肤的设计 JSON 不参与搜索。
+
+### 皮肤与插件管理
+
+`/community` 默认展示全部状态，保留「待审核」「已上架」「已下架」筛选；概览页的社区待办直接打开 `?status=pending`。皮肤、候选皮肤和插件分区提供新增入口及详情里的编辑、删除、上下架操作。新增和编辑需要 `review_community`，只读角色仍可查看列表与详情。新作品由管理员选择已有的未封禁用户作为作者，编辑不能转移作者；表单默认将新作品保存为下架，也可选择上架或待审核。
+
+新增和编辑通过 `POST /api/actions` 完成，通用字段为 `id`（新增时为客户端生成的小写 UUID）、`section` 和 `value`：
+
+| `action` | `section` | `value` 中的内容字段 |
+| --- | --- | --- |
+| `create_skin` / `update_skin` | `skins` | `design`：键盘皮肤设计 JSON；`category`：图库分类 |
+| `create_candidate_skin` / `update_candidate_skin` | `candidate-skins` | `manifest`：`skin.toml` 文本；`files`：包内相对路径到图片 base64 的对象；`category`；`visibility`：`public` / `private` |
+| `create_plugin` / `update_plugin` | `plugins` | `archive`：插件 ZIP 的标准 base64；类型、插件 ID、版本、许可从包内 `plugin.toml` 解析 |
+
+三类 `value` 都要求 `owner_id`、`name`（1–32 字）、`description`（可省略，最多 280 字）和 `moderation`（`pending` / `approved` / `removed`）。编辑还必须传入详情返回的 `edit_token`。作品的内容、分类、可见性或审核状态已变化时返回 409 `content_changed`，保留表单供复制，关闭并重新打开详情后再编辑。列表和详情同时返回 `edit_token`；`approve_content.value` 也可带它，过期审核返回 409 `conflict`。新增 ID 已存在时分别返回 409 `skin_id_conflict` / `candidate_skin_id_conflict` / `plugin_id_conflict`，不会覆盖旧作品。
+
+编辑插件时可省略 `archive` 以保留原 ZIP；编辑候选皮肤时可省略 `files` 以保留原图片，传入时替换全部图片。键盘设计、候选皮肤清单和图片、插件 ZIP 均沿用公共上传接口的格式、许可及大小校验。`create_skin` / `update_skin` 的 `value` 上限为 710000 字节，候选皮肤为 3200000 字节，插件为 11300000 字节，其他操作仍按各自原有限制。管理员维护不扣客户端的发布频率及数量配额；仍锁定作者行防止绕过并发封禁，封禁作者不能新增或编辑。管理员具有直接发布权限，保存时以指定的状态写入并记录审核人，不运行客户端上传的敏感词拦截；详情的实时检查仍会展示命中项。
+
+删除沿用 `delete_skin` / `delete_candidate_skin` / `delete_plugin`，永久删除作品以及关联的下载、评分、收藏和包文件；界面先确认，再提供 4 秒撤销窗口。新增、编辑和删除都与审计记录在同一事务内提交；审计只包含作品名称、分区及发布状态，不记录设计、清单、图片或 ZIP。
 
 ## 配置
 

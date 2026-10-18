@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-// 社区审核（U2）：六类内容分区、各自的审核列表、计数和抽屉详情。
+// 社区管理：六类内容分区、各自的列表、计数和抽屉详情。
 
 export const sections = ["skins", "candidate-skins", "plugins", "dictionaries", "replies", "phrases"] as const;
 export type Section = (typeof sections)[number];
@@ -40,6 +40,7 @@ export type Entry = z.infer<typeof entrySchema>;
 
 // itemSchema is one list row of any section; the fields after reports exist only for some sections.
 export const itemSchema = z.object({
+  edit_token: z.string().optional(),
   id: z.string(),
   name: z.string(),
   description: z.string().nullish(),
@@ -81,6 +82,7 @@ const ownerItemSchema = z.object({ section: z.enum(sections), id: z.string(), na
 
 // detailSchema is GET /api/<section>/<id>: the stored item with its moderation state, user reports, live sensitive-word hits and the author's other works.
 export const detailSchema = z.object({
+	edit_token: z.string().optional(),
   id: z.string(),
   name: z.string(),
   description: z.string().nullish(),

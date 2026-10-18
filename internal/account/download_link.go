@@ -35,7 +35,7 @@ type queryRower interface {
 
 func verifiedEmailQuery(ctx context.Context, q queryRower, user string) (string, error) {
 	var email string
-	err := q.QueryRow(ctx, `SELECT CASE WHEN provider='email' THEN subject ELSE email END
+	err := q.QueryRow(ctx, `SELECT lower(CASE WHEN provider='email' THEN subject ELSE email END)
  FROM auth_identities WHERE user_id=$1 AND (provider='email' OR (provider='google' AND email_verified AND email<>''))
  ORDER BY CASE WHEN provider='email' THEN 0 ELSE 1 END,created_at LIMIT 1`, user).Scan(&email)
 	if errors.Is(err, pgx.ErrNoRows) {

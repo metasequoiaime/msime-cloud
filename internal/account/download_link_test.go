@@ -78,3 +78,29 @@ func TestDownloadLink(t *testing.T) {
 		t.Fatal("unconfigured", w.Code)
 	}
 }
+
+// 已验证的 Google 邮箱大小写不同于请求时的规范形式时，永久拒收抑制仍应生效。
+func TestDownloadLinkSuppressesCaseVariantVerifiedEmail(t *testing.T) {
+	s := testStore(t)
+	mailer := &captureMailer{}
+	a := &Service{store: s, config: Config{Email: MailConfig{From: "noreply@example.test"}}, mailer: mailer}
+	mux := http.NewServeMux()
+	Mount(mux, a)
+	google := complete(t, s, Identity{"google", "case-variant-google"})
+	if _, err := s.pool.Exec(t.Context(), `UPDATE auth_identities SET email='User@Example.test',email_verified=true WHERE provider='google' AND subject='case-variant-google'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SuppressDelivery(t.Context(), "email", "user@example.test", "smtp_rcpt_rejected", deliverySuppressionTTL); err != nil {
+		t.Fatal(err)
+	}
+	var stored string
+	if err := s.pool.QueryRow(t.Context(), `SELECT email FROM auth_identities WHERE provider='google' AND subject='case-variant-google'`).Scan(&stored); err != nil || stored != "User@Example.test" {
+		t.Fatalf("测试邮箱未按预期保存：%q，错误=%v", stored, err)
+	}
+	if w := userDataRequest(mux, "POST", "/v1/users/me/download-link", google.AccessToken, `{"platform":"windows"}`); w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "delivery_failed") {
+		t.Fatalf("永久拒收抑制未命中：状态=%d，响应=%s", w.Code, w.Body.String())
+	}
+	if mailer.sent != 0 {
+		t.Fatalf("被抑制的地址不应再次投递：发送次数=%d", mailer.sent)
+	}
+}

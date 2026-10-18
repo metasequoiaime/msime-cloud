@@ -1340,39 +1340,56 @@ func qqPromptLeakCandidate(answer string) bool {
 	return promptLeak
 }
 
-// qqAnswerCandidates 一次扫描答案中的提示词泄漏和替换候选标记，避免重复逐 rune 解码正文。
-func qqAnswerCandidates(answer string) (promptLeak, replacement bool) {
+type qqAnswerCandidateResult struct {
+	promptLeak       bool
+	replacement      bool
+	headingCandidate bool
+}
+
+// qqScanAnswerCandidates 一次扫描答案中的提示词泄漏、替换和标题候选标记，避免重复逐字节扫描正文。
+func qqScanAnswerCandidates(answer string) (result qqAnswerCandidateResult) {
 	for i := 0; i < len(answer); i++ {
+		if answer[i] == '#' {
+			result.headingCandidate = true
+		}
 		switch answer[i] {
 		case '\t':
-			replacement = true
+			result.replacement = true
 		case 0xe2:
 			if i+2 < len(answer) && answer[i+1] == 0x80 {
 				switch answer[i+2] {
 				case 0x98, 0x99, 0x9c, 0x9d:
-					replacement = true
+					result.replacement = true
 				}
 			}
 		case 0xe6:
 			if i+2 < len(answer) && (answer[i+1] == 0x96 && (answer[i+2] == 0x99 || answer[i+2] == 0x87 || answer[i+2] == 0xad) ||
 				answer[i+1] == 0xa1 && answer[i+2] == 0xa3 ||
 				answer[i+1] == 0x88 && answer[i+2] == 0xaa) {
-				promptLeak = true
+				result.promptLeak = true
 			}
 		case 0xe8:
 			if i+2 < len(answer) && answer[i+1] == 0xb5 && answer[i+2] == 0x84 {
-				promptLeak = true
+				result.promptLeak = true
 			}
 		case 0xe9:
 			if i+2 < len(answer) && answer[i+1] == 0x87 && answer[i+2] == 0x8c {
-				promptLeak = true
+				result.promptLeak = true
 			}
 		}
-		if promptLeak && replacement {
-			return true, true
+		if result.promptLeak && result.replacement {
+			// 尚未扫完正文时保守进入标题清理，保留原有提前结束的候选扫描路径。
+			result.headingCandidate = true
+			return result
 		}
 	}
-	return promptLeak, replacement
+	return result
+}
+
+// qqAnswerCandidates 保留提示词候选扫描的简洁返回形式。
+func qqAnswerCandidates(answer string) (promptLeak, replacement bool) {
+	result := qqScanAnswerCandidates(answer)
+	return result.promptLeak, result.replacement
 }
 
 // qqStripAnswerHeadings 沿用原正则的井号数量和 ASCII 空白规则，只在确需移除行首标记时构建正文。
@@ -1433,7 +1450,8 @@ func qqNormalizeAnswer(answer string) string {
 	if strings.ContainsRune(answer, '’') && qqApostrophe.MatchString(answer) {
 		answer = qqApostrophe.ReplaceAllString(answer, "$1'$2")
 	}
-	promptLeak, replacement := qqAnswerCandidates(answer)
+	candidates := qqScanAnswerCandidates(answer)
+	promptLeak, replacement := candidates.promptLeak, candidates.replacement
 	if promptLeak {
 		if word := qqPromptLeak.FindString(answer); word != "" {
 			slog.Info("qq bot: prompt leak", "word", word)
@@ -1446,7 +1464,9 @@ func qqNormalizeAnswer(answer string) string {
 	if strings.Contains(answer, `\t`) && !qqWindowsPath.MatchString(answer) {
 		answer = strings.ReplaceAll(answer, `\t`, " ")
 	}
-	answer = qqStripAnswerHeadings(answer)
+	if candidates.headingCandidate {
+		answer = qqStripAnswerHeadings(answer)
+	}
 	if strings.Contains(answer, "\n\n\n") {
 		answer = qqBlankLines.ReplaceAllString(answer, "\n\n")
 	}

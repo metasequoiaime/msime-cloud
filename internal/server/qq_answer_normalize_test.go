@@ -7,6 +7,22 @@ import (
 	"testing"
 )
 
+func TestQQAnswerCandidateScanFindsHeadingMarker(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  bool
+	}{
+		{"普通回答", false},
+		{"第一行\n第二行", false},
+		{"行内 # 标记", true},
+		{"## 标题", true},
+	} {
+		if got := qqScanAnswerCandidates(tc.input).headingCandidate; got != tc.want {
+			t.Errorf("qqScanAnswerCandidates(%q).headingCandidate = %v，预期 %v", tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestQQNormalizeAnswerConditionalRules(t *testing.T) {
 	for _, tc := range []struct{ name, input, want string }{
 		{"empty", "", ""},

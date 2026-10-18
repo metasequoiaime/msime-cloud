@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAPI } from "../../api/client";
-import { detailSchema } from "../../api/community";
+import { contentPreviewSchema } from "../../api/community";
 import type { Detail } from "../../api/community";
 import { keys } from "../../api/keys";
 import { CandidateArtwork } from "../../candidate-preview";
@@ -26,7 +26,7 @@ export function CandidatePreview({ id, name, revision, manifest, compact = false
   const [uploaded, setUploaded] = useState(false);
   const detail = useQuery({
     queryKey: keys.page("community", "candidate-preview", id, revision), enabled: visible && manifest === undefined, staleTime: 5 * 60_000,
-    queryFn: ({ signal }) => api.get(`candidate-skins/${encodeURIComponent(id)}`, detailSchema, { signal }),
+    queryFn: ({ signal }) => api.get(`candidate-skins/${encodeURIComponent(id)}?view=preview`, contentPreviewSchema, { signal }),
   });
   const content = manifest ?? detail.data?.content;
   const design = typeof content === "string" ? parseCandidateDesign(content) : null;

@@ -160,6 +160,30 @@ func TestAdminCrashIssue(t *testing.T) {
 	if w, body := call("GET", android); w.Code != 200 || body["target"] != nil {
 		t.Fatal(w.Code, w.Body.String())
 	}
+	t.Run("目标探测不读取事件表", func(t *testing.T) {
+		lockCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		tx, err := db.Begin(lockCtx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(ctx)
+		if _, err := tx.Exec(lockCtx, `LOCK TABLE admin_events IN ACCESS EXCLUSIVE MODE`); err != nil {
+			t.Fatal(err)
+		}
+		requestCtx, cancelRequest := context.WithTimeout(ctx, 2*time.Second)
+		defer cancelRequest()
+		r := httptest.NewRequest("GET", "https://admin.example.com/api/crash-groups/"+ios+"/issue", nil).WithContext(requestCtx)
+		r.Header.Set("Authorization", "Bearer "+strings.Repeat("q", 48))
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		if w.Code != 200 || !strings.Contains(w.Body.String(), "metasequoiaime/msime-ios") {
+			t.Fatal("目标探测仍依赖事件表", w.Code, w.Body.String())
+		}
+	})
+	if w, _ := call("GET", "00000000000000aa"); w.Code != 404 {
+		t.Fatal(w.Code, w.Body.String())
+	}
 	if w, _ := call("POST", android); w.Code != 409 || !strings.Contains(w.Body.String(), "platform_not_configured") {
 		t.Fatal(w.Code, w.Body.String())
 	}

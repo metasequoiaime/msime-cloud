@@ -66,4 +66,6 @@ python3 tests/csp_smoke.py
 
 开发代理默认连接 `127.0.0.1:18089`，Go 本地配置需设 `admin.host: admin.localhost`。登录方式（Google OIDC、管理员密钥、个人访问令牌）、角色权限、配置项和接口说明见 [管理后台文档](../docs/admin.md)。
 
+卡片进入视口后，照片键盘皮肤与候选窗皮肤通过详情接口的 `?view=preview` 只读取设计或清单；无照片键盘皮肤直接使用列表内设计。打开详情抽屉时再请求完整审核信息。预览查询按作品版本缓存，编辑后会读取新设计及图片。
+
 皮肤预览回归测试可单独运行 `python3 tests/skin_preview_smoke.py`，也由 CSP 冒烟测试调用。键盘部分用截图像素检查键帽、材质、功能键透明度和照片连续裁切；候选窗部分检查真实清单配色、支持的布局与明暗、背景及装饰资源、编辑预览和版本刷新，上传截图仅作为对照。`src/candidate-palettes.json` 的基础配色来自 msime 的 `packages/ui/src/theme/theme-catalog.json` 与 `crates/client-services/src/skin/catalog/windows_looks.rs`；客户端修改这些基础配色时应同步更新。

@@ -240,6 +240,8 @@ Google 登录时，后端校验 ID Token 的签名、issuer、audience、有效�
 
 `/community` 默认展示全部状态，保留「待审核」「已上架」「已下架」筛选；概览页的社区待办直接打开 `?status=pending`。皮肤、候选皮肤和插件分区提供新增入口及详情里的编辑、删除、上下架操作。新增和编辑需要 `review_community`，只读角色仍可查看列表与详情。新作品由管理员选择已有的未封禁用户作为作者，编辑不能转移作者；表单默认将新作品保存为下架，也可选择上架或待审核。
 
+`GET /api/skins/{id}?view=preview` 和 `GET /api/candidate-skins/{id}?view=preview` 供卡片预览使用，仅返回 `{"content":…}`：分别是完整键盘设计 JSON（含照片）和 `skin.toml` 文本。它们沿用详情接口的管理员鉴权，可读取私有、待审核和下架内容，但不加载举报、作者作品、互动统计或敏感词检查。打开详情仍请求不带 `view` 的原接口。未知的非空 `view`，或其他社区详情接口使用非空 `view`，返回 400 `invalid_request`；作品不存在返回 404 `not_found`。
+
 新增和编辑通过 `POST /api/actions` 完成，通用字段为 `id`（新增时为客户端生成的小写 UUID）、`section` 和 `value`：
 
 | `action` | `section` | `value` 中的内容字段 |

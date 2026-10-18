@@ -64,7 +64,7 @@ func (s *Server) adminCrashIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	group, err := s.accounts.CrashGroupForIssue(ctx, signature)
+	destination, err := s.accounts.CrashGroupIssueDestination(ctx, signature)
 	if errors.Is(err, account.ErrCrashGroupNotFound) {
 		fail(w, 404, "not_found")
 		return
@@ -73,16 +73,16 @@ func (s *Server) adminCrashIssue(w http.ResponseWriter, r *http.Request) {
 		fail(w, 503, "auth_unavailable")
 		return
 	}
-	platform, configured := s.crashIssuePlatform(group.Platform)
+	platform, configured := s.crashIssuePlatform(destination.Platform)
 	if r.Method == "GET" {
 		var target *crashIssueTarget
 		if configured {
 			target = &crashIssueTarget{Platform: platform.ID, Name: platform.Name, Repo: platform.Repo}
 		}
-		respond(w, 200, map[string]any{"target": target, "issue_url": nilIfEmpty(group.IssueURL)})
+		respond(w, 200, map[string]any{"target": target, "issue_url": nilIfEmpty(destination.IssueURL)})
 		return
 	}
-	// Hold the group's issue lock from the duplicate check until the issue is recorded, and re-read the group under it, so two concurrent requests cannot both open an issue.
+	// 从查重到登记始终持有分组锁；完整统计和堆栈只在锁内读取一次，防止并发创建重复 Issue。
 	locked, err := s.accounts.LockCrashGroupIssue(ctx, signature)
 	if errors.Is(err, account.ErrCrashIssueBusy) {
 		fail(w, 409, "issue_in_progress")
@@ -93,7 +93,8 @@ func (s *Server) adminCrashIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer locked.Release()
-	if group, err = locked.Source(ctx); err != nil {
+	group, err := locked.Source(ctx)
+	if err != nil {
 		if errors.Is(err, account.ErrCrashGroupNotFound) {
 			fail(w, 404, "not_found")
 		} else {

@@ -17,6 +17,14 @@ func (a *Service) adminContent(w http.ResponseWriter, r *http.Request, section, 
 		writeError(w, 400, "invalid_id")
 		return
 	}
+	if view := r.URL.Query().Get("view"); view != "" {
+		if view != "preview" || (section != "skins" && section != "candidate-skins") {
+			writeError(w, 400, "invalid_request")
+			return
+		}
+		a.adminContentPreview(w, r, section, id)
+		return
+	}
 	var query string
 	args := []any{id}
 	if section == "skins" {
@@ -81,6 +89,25 @@ func (a *Service) adminContent(w http.ResponseWriter, r *http.Request, section, 
 		return
 	}
 	write(w, 200, detail)
+}
+
+// adminContentPreview 只为卡片读取设计或清单，不加载审核、互动和作者信息，也不执行敏感词检查。
+func (a *Service) adminContentPreview(w http.ResponseWriter, r *http.Request, section, id string) {
+	query := `SELECT json_build_object('content',design) FROM community_skins WHERE id=$1`
+	if section == "candidate-skins" {
+		query = `SELECT json_build_object('content',convert_from(manifest,'UTF8')) FROM community_candidate_skins WHERE id=$1`
+	}
+	var result json.RawMessage
+	err := a.store.pool.QueryRow(r.Context(), query, id).Scan(&result)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, 404, "not_found")
+		return
+	}
+	if err != nil {
+		a.error(w, err)
+		return
+	}
+	write(w, 200, result)
 }
 
 // contentReport is one user report shown in the moderation drawer; reporter is the display name only, never an account identifier.

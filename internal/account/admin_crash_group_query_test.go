@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,6 +105,32 @@ func TestCrashGroupUsesOneDatabaseCall(t *testing.T) {
 	checkCalls()
 	if err != nil || source.Sample == nil || source.Sample.Version != want.Version || source.Sample.Message != want.Message || source.Sample.Stack != want.Stack || source.Sample.CreatedAt.Format(time.RFC3339Nano) != want.CreatedAt.Format(time.RFC3339Nano) || source.Devices7d != 2 {
 		t.Fatalf("issue 来源不正确：%+v %v", source, err)
+	}
+	resetTrace()
+	destination, err := a.CrashGroupIssueDestination(ctx, signature)
+	checkCalls()
+	if err != nil || destination.Platform != "ios" || destination.IssueURL != "https://example.test/issue/1" {
+		t.Fatal("Issue 目标字段不正确", destination, err)
+	}
+	trace.mu.Lock()
+	statements := append([]string(nil), trace.statements...)
+	trace.mu.Unlock()
+	if len(statements) != 1 || strings.Contains(statements[0], "admin_events") || !strings.Contains(statements[0], "WHERE signature=$1") {
+		t.Fatal("Issue 目标仍在读取事件或堆栈", statements)
+	}
+	if _, err := db.pool.Exec(ctx, `UPDATE admin_crash_groups SET issue_url=NULL WHERE signature=$1`, signature); err != nil {
+		t.Fatal(err)
+	}
+	if destination, err := a.CrashGroupIssueDestination(ctx, signature); err != nil || destination.IssueURL != "" {
+		t.Fatal("空 Issue 链接处理错误", destination, err)
+	}
+	if _, err := a.CrashGroupIssueDestination(ctx, "0123456789abcdef"); !errors.Is(err, ErrCrashGroupNotFound) {
+		t.Fatal("缺失 Issue 目标未返回 not found", err)
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := a.CrashGroupIssueDestination(cancelled, signature); err == nil || errors.Is(err, ErrCrashGroupNotFound) {
+		t.Fatal("数据库错误被误判为缺失分组", err)
 	}
 	if group, samples, err := read(signature, 0); err != nil || group.Count7d != 6 || samples == nil || len(samples) != 0 {
 		t.Fatal("零样本上限改变了统计或空数组", group, samples, err)

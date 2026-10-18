@@ -34,17 +34,17 @@ func TestNotificationsReadAllUsesOneRoundTrip(t *testing.T) {
 				t.Fatal(err)
 			}
 			body := `{"all":true}`
-			wantMarkers, wantUnread := 0, 0
+			wantMarkers, wantUnread := 3, 0
 			switch mode {
 			case "shown":
 				body = fmt.Sprintf(`{"all":true,"up_to_id":"%d"}`, ids[1])
-				wantUnread = 1
+				wantMarkers, wantUnread = 2, 1
 			case "missing":
 				if _, err := db.pool.Exec(t.Context(), `INSERT INTO admin_preferences(email,read_all_before) SELECT 'read-all@example.test',created_at FROM admin_notifications WHERE id=$1`, ids[0]); err != nil {
 					t.Fatal(err)
 				}
 				body = `{"all":true,"up_to_id":"999999999999"}`
-				wantMarkers, wantUnread = 1, 1
+				wantMarkers, wantUnread = 2, 1
 			case "missing-empty":
 				body = `{"all":true,"up_to_id":"999999999999"}`
 				wantMarkers, wantUnread = 2, 1

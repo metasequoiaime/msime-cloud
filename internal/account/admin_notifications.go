@@ -115,7 +115,7 @@ func normalizeNotificationTitle(text string) string {
 	return string(buffer[:length])
 }
 
-// insertNotification stamps created_at with clock_timestamp() rather than the transaction start, so a notification written late in a long transaction is not already covered by a 全部已读 watermark set while that transaction was running.
+// insertNotification 使用实际写入时间，避免长事务中的通知按事务开始时间排序。
 const insertNotification = `INSERT INTO admin_notifications(kind,title,target_page,target_id,created_at) VALUES($1,$2,$3,$4,clock_timestamp())`
 
 // Notify records n inside tx, so it exists exactly when the write that caused it commits.
@@ -154,7 +154,7 @@ func (a *Service) NotifyOnce(ctx context.Context, n Notification) error {
 // notificationVisible is the condition shared by the list and the unread count, with $1 the admin's email: a kind is hidden when the admin switched off its personal preference (the admin_preferences.prefs key "notify_"+kind that POST /api/me set_pref writes, see adminPrefDefaults; a missing key means on). Kinds without a preference are always shown.
 const notificationVisible = `COALESCE((SELECT prefs FROM admin_preferences WHERE email=$1)->>(CASE WHEN n.kind IN ('` + NotifyDictPR + `','` + NotifyReport + `','` + NotifyCrashSpike + `') THEN 'notify_'||n.kind END),'true')<>'false'`
 
-// notificationRead is true when $1 has read n, one by one or through 全部已读 (admin_preferences.read_all_before).
+// notificationRead 同时识别逐条已读记录和旧版本留下的全部已读水位。
 const notificationRead = `(n.created_at<=COALESCE((SELECT read_all_before FROM admin_preferences WHERE email=$1),'-infinity') OR EXISTS(SELECT 1 FROM admin_notification_reads r WHERE r.email=$1 AND r.notification_id=n.id))`
 
 // UnreadNotifications counts the notifications email has not read, for the console shell. The legacy token has no email and so no notifications.
@@ -217,7 +217,9 @@ func (a *Service) adminNotifications(w http.ResponseWriter, r *http.Request, _ s
 	write(w, 200, map[string]any{"items": items, "unread": unread})
 }
 
-// adminNotificationsRead serves POST /api/notifications/read {ids}|{all:true,up_to_id?}. 全部已读 marks read every notification up to and including up_to_id (by created_at), the newest one the console has on screen, so one that arrived after the list was fetched stays unread; without up_to_id it covers everything up to now(). It only changes the caller's own read markers, so it needs no permission and is not an audited admin action; the legacy token has no email and gets a no-op.
+// adminNotificationsRead 处理 POST /api/notifications/read {ids}|{all:true,up_to_id?}。
+// 全部已读只记录本次语句可见、创建时间不晚于 up_to_id 的通知；省略 up_to_id 时使用当前时间。
+// 未提交的通知不能提前标为已读。操作只修改本人标记，不需要额外权限，也不写审计；旧令牌没有邮箱时直接返回成功。
 func (a *Service) adminNotificationsRead(w http.ResponseWriter, r *http.Request, _ string) {
 	var v struct {
 		IDs    []json.RawMessage `json:"ids"`
@@ -258,15 +260,11 @@ func (a *Service) adminNotificationsRead(w http.ResponseWriter, r *http.Request,
 	ctx := r.Context()
 	var err error
 	if v.All {
-		// 用写入返回的水位清理冗余标记，避免读取同语句快照中的旧值；缺失目标产生的 NULL 不回退既有水位。
-		_, err = a.store.pool.Exec(ctx, `WITH advanced AS (
- INSERT INTO admin_preferences(email,read_all_before)
- VALUES($1,CASE WHEN $2::bigint IS NULL THEN now() ELSE (SELECT created_at FROM admin_notifications WHERE id=$2) END)
- ON CONFLICT(email) DO UPDATE SET read_all_before=GREATEST(admin_preferences.read_all_before,EXCLUDED.read_all_before)
- RETURNING email,read_all_before
-)
-DELETE FROM admin_notification_reads r USING admin_notifications n,advanced p
-WHERE r.email=p.email AND n.id=r.notification_id AND n.created_at<=p.read_all_before`, email, upTo)
+		// 时间水位会把稍后提交的旧通知一起吞掉，改为只给当前快照内尚未读过的通知写标记。
+		_, err = a.store.pool.Exec(ctx, `INSERT INTO admin_notification_reads(email,notification_id)
+SELECT $1,n.id FROM admin_notifications n
+WHERE n.created_at<=CASE WHEN $2::bigint IS NULL THEN now() ELSE (SELECT created_at FROM admin_notifications WHERE id=$2) END
+ AND NOT `+notificationRead+` ON CONFLICT DO NOTHING`, email, upTo)
 	} else {
 		_, err = a.store.pool.Exec(ctx, `INSERT INTO admin_notification_reads(email,notification_id) SELECT $1,n.id FROM admin_notifications n WHERE n.id=ANY($2) ON CONFLICT DO NOTHING`, email, ids)
 	}

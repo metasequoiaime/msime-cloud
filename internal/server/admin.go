@@ -131,7 +131,15 @@ func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) bool {
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/") {
 		base := r.Context()
-		ctx, cancel := context.WithTimeout(base, 15*time.Second)
+		timeout := 15 * time.Second
+		if r.Method == http.MethodPost && r.URL.Path == "/api/actions" {
+			// 社区编辑可携带完整插件包，为上传延长上下文与连接期限。
+			timeout = 90 * time.Second
+			controller := http.NewResponseController(w)
+			_ = controller.SetReadDeadline(time.Now().Add(timeout))
+			_ = controller.SetWriteDeadline(time.Now().Add(timeout + 5*time.Second))
+		}
+		ctx, cancel := context.WithTimeout(base, timeout)
 		defer cancel()
 		r = r.WithContext(ctx)
 		if s.adminAuthRoute(w, r) {

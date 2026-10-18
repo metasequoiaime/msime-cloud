@@ -47,6 +47,13 @@ type adminActionSpec struct {
 
 // adminActions lists every POST /api/actions action. The comment after each group names the owning unit and file.
 var adminActions = map[string]adminActionSpec{
+	// 社区作品的新增与编辑：admin_content_edit.go。
+	"create_skin":           {PermReviewCommunity, saveCommunityContent("skins", true)},
+	"update_skin":           {PermReviewCommunity, saveCommunityContent("skins", false)},
+	"create_plugin":         {PermReviewCommunity, saveCommunityContent("plugins", true)},
+	"update_plugin":         {PermReviewCommunity, saveCommunityContent("plugins", false)},
+	"create_candidate_skin": {PermReviewCommunity, saveCommunityContent("candidate-skins", true)},
+	"update_candidate_skin": {PermReviewCommunity, saveCommunityContent("candidate-skins", false)},
 	// U5 users: admin_users_ext.go
 	"revoke_session":  {PermBanUsers, actionRevokeSession},
 	"revoke_sessions": {PermBanUsers, actionRevokeSessions},

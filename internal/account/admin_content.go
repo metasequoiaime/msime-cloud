@@ -58,6 +58,13 @@ func (a *Service) adminContent(w http.ResponseWriter, r *http.Request, section, 
  CROSS JOIN LATERAL (SELECT count(*) AS count,COALESCE(avg(stars),0) AS average FROM community_resource_ratings WHERE resource_id=s.id) rating_stats
  WHERE s.id=$1 AND s.kind=$2`
 	}
+	if section == "skins" || section == "plugins" || section == "candidate-skins" {
+		alias := "s"
+		if section == "plugins" {
+			alias = "p"
+		}
+		query = strings.Replace(query, "json_build_object(", "json_build_object('edit_token',"+contentEditToken(section, alias)+",", 1)
+	}
 	var result json.RawMessage
 	err := a.store.pool.QueryRow(r.Context(), query, args...).Scan(&result)
 	if errors.Is(err, pgx.ErrNoRows) {

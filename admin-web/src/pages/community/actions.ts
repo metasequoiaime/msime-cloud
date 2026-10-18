@@ -13,11 +13,11 @@ function failure(error: unknown): string {
 }
 
 // Target is what an action needs to know about an item, from a list row or a detail. updated_at is the version the moderator is looking at (only editable sections have one) and previous_moderation is a removed item's restore state. created_at tells the row apart from one the author published under the same id after deleting it.
-export type Target = { section: Section; id: string; name: string; moderation: Moderation; moderation_reason?: string | null; previous_moderation?: Moderation | null; created_at?: string; updated_at?: string | null };
+export type Target = { section: Section; id: string; name: string; moderation: Moderation; moderation_reason?: string | null; previous_moderation?: Moderation | null; created_at?: string; updated_at?: string | null; edit_token?: string };
 
 // approveValue pins an approval to the state, row and version the moderator saw, so a stale card cannot republish a removed item or publish content nobody reviewed.
 function approveValue(target: Target) {
-  return { from: target.moderation, ...(target.created_at ? { created_at: target.created_at } : {}), ...(target.updated_at ? { updated_at: target.updated_at } : {}) };
+  return { from: target.moderation, ...(target.created_at ? { created_at: target.created_at } : {}), ...(target.updated_at ? { updated_at: target.updated_at } : {}), ...(target.edit_token ? { edit_token: target.edit_token } : {}) };
 }
 
 // useModeration wraps approve_content, remove_content and restore_content with the confirm dialog, toasts and the 撤销 that calls the reverse action. setCategory 修改键盘皮肤或候选皮肤的图库分类，撤销即改回原分类。
@@ -102,5 +102,22 @@ export function useModeration() {
     toast({ text: `「${target.name}」的分类已改为「${candidateCategoryLabels[to]}」`, undo: () => change(from) });
   }, [run, toast]);
 
-  return { approve, remove, restore, setCategory };
+  const deleteItem = useCallback(async (target: Target) => {
+    const actions: Partial<Record<Section, string>> = { skins: "delete_skin", "candidate-skins": "delete_candidate_skin", plugins: "delete_plugin" };
+    const action = actions[target.section];
+    if (!action) return false;
+    const reason = await confirm({ title: `删除「${target.name}」？`, description: "作品及其下载、评分、收藏记录将永久删除。确认后有 4 秒可以撤销。", okLabel: "删除" });
+    if (reason === null) return false;
+    toast({ text: `即将删除「${target.name}」`, delayCommit: async ({ keepalive }) => {
+      try {
+        await api.action({ action, section: target.section, id: target.id }, { keepalive });
+      } finally {
+        await refresh();
+        await client.invalidateQueries({ queryKey: keys.page("users") });
+      }
+    } });
+    return true;
+  }, [api, client, confirm, refresh, toast]);
+
+  return { approve, remove, restore, setCategory, deleteItem };
 }

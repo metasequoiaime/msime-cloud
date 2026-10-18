@@ -228,14 +228,20 @@ func requireActionID(v actionRequest) error {
 const (
 	actionValueMax       = 8 << 10
 	noticeActionValueMax = 256 << 10
-	// actionBodyMax bounds the whole request: the largest value plus the generic fields (100 ids, reason, section).
-	actionBodyMax = noticeActionValueMax + 16<<10
+	// 请求上限包含最大的插件包和通用操作字段；各操作仍分别检查自己的 value 上限。
+	actionBodyMax = maxPluginPublishBytes + 16<<10
 )
 
 // actionValueLimits raises the value limit for the actions that need more than actionValueMax.
 var actionValueLimits = map[string]int{
-	"save_notice_draft": noticeActionValueMax,
-	"publish_notice":    noticeActionValueMax,
+	"create_skin":           710000,
+	"update_skin":           710000,
+	"create_plugin":         maxPluginPublishBytes,
+	"update_plugin":         maxPluginPublishBytes,
+	"create_candidate_skin": maxCandidatePublishBytes,
+	"update_candidate_skin": maxCandidatePublishBytes,
+	"save_notice_draft":     noticeActionValueMax,
+	"publish_notice":        noticeActionValueMax,
 }
 
 // actionValueLimit is the largest value, in bytes, the action accepts.

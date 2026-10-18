@@ -112,6 +112,7 @@ const codeMessages: Record<string, string> = {
   no_workflow: "该平台没有配置发布流水线（admin.github.platforms[].release_workflow）。",
   workflow_not_found: "GitHub 上找不到这个平台的发布流水线文件。",
   workflow_rejected: "发布流水线拒绝了这次触发：需要 workflow_dispatch 触发器和 version 输入。",
+  workflow_uncertain: "无法确认发布流水线是否已触发，请先到仓库 GitHub Actions 核对，勿直接重复触发。",
   invalid_version: "版本号格式不正确，例如 v0.5.5。",
   invalid_tag: "tag 与平台的前缀不匹配。",
   not_published: "草稿还没有发布，不能撤回。",

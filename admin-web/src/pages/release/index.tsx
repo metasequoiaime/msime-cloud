@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { errorMessage, useAPI } from "../../api/client";
+import { APIError, errorMessage, useAPI } from "../../api/client";
 import { keys } from "../../api/keys";
 import type { Release, ReleasePlatform } from "../../api/release";
 import { releaseHistorySchema, releaseOkSchema, releasePath, releasesSchema, withdrawResultSchema } from "../../api/release";
@@ -50,7 +50,12 @@ export default function ReleasePage() {
   const trigger = useMutation({
     mutationFn: (v: { platform: ReleasePlatform; version: string }) => api.post(releasePath(v.platform.id, undefined, "trigger"), releaseOkSchema, { version: v.version }),
     onSuccess: (_, v) => { setDialog(null); toast(`${v.platform.name} ${v.version} 发布流水线已触发`); },
-    onError: fail,
+    onError: error => {
+      if (error instanceof APIError && error.code === "workflow_uncertain") {
+        setDialog(null);
+        toast(errorMessage(error));
+      } else fail(error);
+    },
     onSettled: refresh,
   });
   const notes = useMutation({

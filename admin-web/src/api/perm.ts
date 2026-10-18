@@ -128,7 +128,9 @@ export function describeAudit(entry: AuditEntry): string {
     case "open_incident": return `开启了事件${text(d.title) ? `「${text(d.title)}」` : ""}`;
     case "resolve_incident": return "解决了事件";
     case "update_incident": return "更新了事件说明";
-    case "release_trigger": return `触发了 ${[text(d.platform), text(d.version)].filter(Boolean).join(" ") || target} 发布`;
+    case "release_trigger": return d.uncertain === true
+      ? `尝试触发 ${[text(d.platform), text(d.version)].filter(Boolean).join(" ") || target} 发布，结果未确认`
+      : `触发了 ${[text(d.platform), text(d.version)].filter(Boolean).join(" ") || target} 发布`;
     case "admin_add": return `添加管理员 ${who}${text(d.role) ? `（${roleLabel(text(d.role))}）` : ""}`;
     case "admin_enable": return `重新启用了管理员 ${who}`;
     case "admin_disable": return `停用了管理员 ${who}`;

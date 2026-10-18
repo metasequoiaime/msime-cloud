@@ -1275,13 +1275,13 @@ def check_issue_reply_draft_switch(context, base: str, problems: list[str]):
 
 
 def check_release_pending(context, base: str, problems: list[str]):
-    # 挂起发布操作，提交期间锁定正文；失败后保留原文并允许修改后重试。
+    # 挂起发布操作，提交期间锁定正文；明确失败可重试，触发结果未知则先核对。
     cases = (
         ("trigger", "版本号", "触发发布", "**/api/releases/windows/trigger", "version", "v0.5.5", "v0.5.6"),
         ("notes", "发布说明", "保存说明", "**/api/releases/windows/windows-v0.5.4/notes", "body", "### 修复\n- 已提交内容", "### 修复\n- 修改后重试"),
     )
     for kind, label, button, endpoint, key, draft, retry in cases:
-        for status in (200, 500):
+        for status in ((200, 500, 502) if kind == "trigger" else (200, 500)):
             page = context.new_page()
             page.on("pageerror", lambda error: problems.append(f"发布等待请求测试页面异常：{error}"))
             pending = []
@@ -1304,7 +1304,16 @@ def check_release_pending(context, base: str, problems: list[str]):
                 expect(dialog.get_by_role("button", name="取消", exact=True)).to_be_disabled()
                 page.keyboard.press("Escape")
                 expect(dialog).to_be_visible()
-                pending.pop().fulfill(status=status, json={"ok": True} if status == 200 else {"error": "admin_auth_unavailable"})
+                response = {"ok": True} if status == 200 else {"error": {"code": "workflow_uncertain"}} if status == 502 else {"error": "admin_auth_unavailable"}
+                pending.pop().fulfill(status=status, json=response)
+                if status == 502:
+                    expect(dialog).to_have_count(0)
+                    expect(page.get_by_text("无法确认发布流水线是否已触发，请先到仓库 GitHub Actions 核对，勿直接重复触发。", exact=True)).to_be_visible()
+                    expect(page.get_by_text(re.compile(r"^操作失败："))).to_have_count(0)
+                    expect(page.get_by_text(f"Windows {draft} 发布流水线已触发", exact=True)).to_have_count(0)
+                    assert not pending, "触发结果未知后自动重试"
+                    problems.extend(f"发布等待请求测试 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+                    continue
                 if status != 200:
                     expect(page.get_by_text(re.compile(r"^操作失败："))).to_be_visible()
                     expect(field).to_be_enabled()

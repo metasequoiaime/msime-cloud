@@ -1909,10 +1909,8 @@ func (s *Server) fileQQReport(ctx context.Context, repo, platformLabel string, r
 	}
 	if duplicate > 0 {
 		// 写入结果可能在响应返回前丢失；先失效缓存，避免不确定时继续读到旧 issue。
-		client.Invalidate("/repos/" + repo + "/issues")
 		defer client.Invalidate("/repos/" + repo + "/issues")
-		r, err := client.Do(ctx, token, "POST", "/repos/"+repo+"/issues/"+strconv.FormatInt(duplicate, 10)+"/comments", map[string]string{"body": qqCommentBody(report, mediaSection, published)})
-		client.Invalidate("/repos/" + repo + "/issues")
+		r, err := qqWriteIssue(ctx, client, token, repo, "POST", "/repos/"+repo+"/issues/"+strconv.FormatInt(duplicate, 10)+"/comments", map[string]string{"body": qqCommentBody(report, mediaSection, published)})
 		if err != nil || !r.OK() {
 			return 0, false, githubFailure("comment", r, err)
 		}
@@ -1925,10 +1923,8 @@ func (s *Server) fileQQReport(ctx context.Context, repo, platformLabel string, r
 	noteLabels, noteSection := qqNoteLabels(repoLabels, notes)
 	labels = append(labels, noteLabels...)
 	request := map[string]any{"title": qqIssueTitle(report), "body": qqIssueBody(report, noteSection+mediaSection, published), "labels": labels}
-	client.Invalidate("/repos/" + repo + "/issues")
 	defer client.Invalidate("/repos/" + repo + "/issues")
-	r, err := client.Do(ctx, token, "POST", "/repos/"+repo+"/issues", request)
-	client.Invalidate("/repos/" + repo + "/issues")
+	r, err := qqWriteIssue(ctx, client, token, repo, "POST", "/repos/"+repo+"/issues", request)
 	if err != nil || !r.OK() {
 		return 0, false, githubFailure("create", r, err)
 	}

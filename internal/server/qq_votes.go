@@ -130,10 +130,8 @@ func (s *Server) qqAddVote(ctx context.Context, token, repo string, number int64
 		}
 		n, _ := strconv.Atoi(m[1])
 		// 写入结果可能在响应返回前丢失；先失效缓存，避免不确定时继续读到旧评论。
-		client.Invalidate("/repos/" + repo + "/issues")
 		defer client.Invalidate("/repos/" + repo + "/issues")
-		r, err := client.Do(ctx, token, "PATCH", "/repos/"+repo+"/issues/comments/"+strconv.FormatInt(c.ID, 10), map[string]string{"body": qqVoteBody(n + 1)})
-		client.Invalidate("/repos/" + repo + "/issues")
+		r, err := qqWriteIssue(ctx, client, token, repo, "PATCH", "/repos/"+repo+"/issues/comments/"+strconv.FormatInt(c.ID, 10), map[string]string{"body": qqVoteBody(n + 1)})
 		if err != nil || !r.OK() {
 			failure := githubFailure("vote update", r, err)
 			if err != nil || r.Status == 0 || r.Status >= 500 {
@@ -146,10 +144,8 @@ func (s *Server) qqAddVote(ctx context.Context, token, repo string, number int64
 	if unknown {
 		return 0, errors.New("vote comments: app login unavailable")
 	}
-	client.Invalidate("/repos/" + repo + "/issues")
 	defer client.Invalidate("/repos/" + repo + "/issues")
-	r, err = client.Do(ctx, token, "POST", issuePath+"/comments", map[string]string{"body": qqVoteBody(1)})
-	client.Invalidate("/repos/" + repo + "/issues")
+	r, err = qqWriteIssue(ctx, client, token, repo, "POST", issuePath+"/comments", map[string]string{"body": qqVoteBody(1)})
 	if err != nil || !r.OK() {
 		failure := githubFailure("vote create", r, err)
 		if err != nil || r.Status == 0 || r.Status >= 500 {

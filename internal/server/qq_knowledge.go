@@ -912,7 +912,7 @@ var qqLinkPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[!-~]*`)
 func qqCompactLower(text string) string {
 	text = qqTrimSpace(text)
 	outputBytes := 0
-	for field := range strings.FieldsSeq(text) {
+	for field := range qqTextFields(text) {
 		if len(field) == len(text) {
 			return strings.ToLower(text)
 		}
@@ -920,7 +920,7 @@ func qqCompactLower(text string) string {
 	}
 	var out strings.Builder
 	out.Grow(outputBytes)
-	for field := range strings.FieldsSeq(text) {
+	for field := range qqTextFields(text) {
 		out.WriteString(field)
 	}
 	// 先合并再转小写，保留被空白拆开的无效 UTF-8 字节重新组成有效字符的行为。
@@ -934,7 +934,7 @@ func qqNormalizeWhitespace(text string) string {
 	if len(text) <= 128<<10 {
 		var out strings.Builder
 		fields := 0
-		for field := range strings.FieldsSeq(text) {
+		for field := range qqTextFields(text) {
 			if fields == 0 {
 				if len(field) == len(text) {
 					return field
@@ -949,7 +949,7 @@ func qqNormalizeWhitespace(text string) string {
 		return out.String()
 	}
 	outputBytes := 0
-	for field := range strings.FieldsSeq(text) {
+	for field := range qqTextFields(text) {
 		if len(field) == len(text) {
 			return field
 		}
@@ -960,7 +960,7 @@ func qqNormalizeWhitespace(text string) string {
 	}
 	var out strings.Builder
 	out.Grow(outputBytes)
-	for field := range strings.FieldsSeq(text) {
+	for field := range qqTextFields(text) {
 		if out.Len() > 0 {
 			out.WriteByte(' ')
 		}
@@ -1225,8 +1225,8 @@ func qqPlainTextCanReuse(md string) bool {
 	return true
 }
 
-// qqPlainTextFields 按 FieldsSeq 的规则分词，只对可能属于 Unicode 空白的首字节解码。
-func qqPlainTextFields(text string) iter.Seq[string] {
+// qqTextFields 按 FieldsSeq 的规则分词，只对可能属于 Unicode 空白的首字节解码。
+func qqTextFields(text string) iter.Seq[string] {
 	return func(yield func(string) bool) {
 		start := 0
 		for i := 0; i < len(text); {
@@ -1348,7 +1348,7 @@ func qqPlainText(md string) string {
 			if line == "" {
 				continue
 			}
-			for field := range qqPlainTextFields(line) {
+			for field := range qqTextFields(line) {
 				if !yield(field) {
 					return
 				}

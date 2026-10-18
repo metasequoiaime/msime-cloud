@@ -1,6 +1,6 @@
 # 管理后台
 
-管理后台是挂在独立域名（默认 `admin.msime.app`）上的单页应用，源码在 `admin-web/`。技术栈：React 19、TypeScript、Vite 8、Tailwind CSS v4、TanStack Router / Query / Table、Radix UI、Recharts、Zod、react-hook-form、cmdk、date-fns、lucide-react、pnpm 10.15 和 Biome，不再使用 Sass。Vite 生成 `admin-web/dist/`，`admin-web/embed.go` 把产物嵌入 Go 二进制；Docker 在 Node 构建阶段重新构建前端，再编译进 Go 镜像。后台与现有 HTTP 服务共用端口，不需要单独启动 Node、前端容器或静态文件服务器。
+管理后台是挂在独立域名（默认 `admin.msime.app`）上的单页应用，源码在 `admin-web/`。技术栈：React 19、TypeScript、Vite 8、Tailwind CSS v4、TanStack Router / Query / Table、Radix UI、Recharts、Zod、react-hook-form、cmdk、date-fns、lucide-react、pnpm 10.15 和 Biome，不再使用 Sass。Vite 在构建时生成 `admin-web/dist/`，Go 服务从 `MSIME_ADMIN_WEB_DIR` 指定的目录读取产物；Docker 在 Node 构建阶段重新构建前端并复制到运行镜像。后台与现有 HTTP 服务共用端口，不需要单独启动 Node、前端容器或静态文件服务器。
 
 后台页面受严格 CSP 约束：`default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`。不允许 eval、内联样式表和外链图片，所以不显示 Google 头像，Zod 以 jitless 模式运行，也不使用会注入 `<style>` 的 Radix Overlay。
 
@@ -473,11 +473,11 @@ go test ./...
 go build -o /tmp/msime-server ./cmd/msime-server
 ```
 
-修改 `admin-web/src/` 后执行 `pnpm --dir admin-web build`，再重新编译 Go。生成的 `dist/` 随源码提交，保证直接 `go build` 也可用；CI 会重新构建并核对产物。运行镜像不需要 Node.js。
+修改 `admin-web/src/` 后执行 `pnpm --dir admin-web build`，再重新编译 Go；本地 Go 测试和构建前也要先生成 `dist/`。CI 会在 Go 检查前自动构建。运行镜像由 Docker 把构建阶段的 `dist/` 复制到 `/usr/share/msime/admin-web`，不需要 Node.js。
 
 `tests/csp_smoke.py` 用 Python 版 Playwright 和 Chromium，在模拟后端上逐页打开构建产物，检查 CSP 违规、旧路径重定向和外壳弹层，并单独构建 `tests/harness` 测试共享组件（表格、确认框、提示条、抽屉、图表）。改动依赖、共享组件或构建配置后都要运行。
 
-开发时把 Go 的 `admin.host` 设为 `admin.localhost`、`listen` 设为 `127.0.0.1:18089`，然后运行 `pnpm --dir admin-web dev`；Vite 把 `/api` 请求代理到该 Go 服务，并设置开发用的 Host 和 Origin。也可以直接访问 `http://admin.localhost:18089` 验证实际嵌入的产物。生产必须通过 HTTPS 入口访问。
+开发时把 Go 的 `admin.host` 设为 `admin.localhost`、`listen` 设为 `127.0.0.1:18089`，然后运行 `pnpm --dir admin-web dev`；Vite 把 `/api` 请求代理到该 Go 服务，并设置开发用的 Host 和 Origin。也可以直接访问 `http://admin.localhost:18089` 验证实际生成的产物。生产必须通过 HTTPS 入口访问。
 
 PostgreSQL 集成测试需要设置 `MSIME_TEST_DATABASE_URL`，数据库名必须含 `msime_auth_test`，只能使用一次性测试库，测试会清空测试表。多个包共用一个库时，用 `go test -p 1 ./...` 串行运行。
 

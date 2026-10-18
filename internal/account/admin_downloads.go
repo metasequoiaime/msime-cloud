@@ -206,7 +206,7 @@ var releaseTag = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9]*)-(v?[0-9][0-9A-Za-z.
 // releaseTagPlatforms are the tag prefixes that name a platform; any other prefix (a product name such as msime-v1.2.3) is not a platform, so such tags fall back to the installer extension.
 var releaseTagPlatforms = map[string]string{"windows": "windows", "win": "windows", "macos": "macos", "mac": "macos", "osx": "macos", "linux": "linux", "android": "android", "ios": "ios", "harmony": "harmony", "harmonyos": "harmony", "ohos": "harmony"}
 
-// releaseTagPlatform derives the platform and version of a release asset: from the tag when it follows the platform prefix convention, otherwise the whole tag is the version and the installer extension names the platform. An unknown platform is empty.
+// releaseTagPlatform 优先按平台标签识别平台和版本，否则保留完整标签作为版本，并按安装包的最后一个扩展名识别平台；未知平台返回空字符串。
 func releaseTagPlatform(tag, asset string) (string, string) {
 	if m := releaseTag.FindStringSubmatch(tag); m != nil {
 		if platform, ok := releaseTagPlatforms[strings.ToLower(m[1])]; ok {
@@ -214,18 +214,20 @@ func releaseTagPlatform(tag, asset string) (string, string) {
 		}
 	}
 	name := strings.ToLower(asset)
-	for _, rule := range []struct{ platform, suffixes string }{
-		{"windows", ".exe .msi .msix .appx"},
-		{"macos", ".dmg .pkg"},
-		{"linux", ".deb .rpm .appimage .flatpak .snap"},
-		{"android", ".apk .aab"},
-		{"ios", ".ipa"},
-		{"harmony", ".hap .app"},
-	} {
-		for _, suffix := range strings.Fields(rule.suffixes) {
-			if strings.HasSuffix(name, suffix) {
-				return rule.platform, tag
-			}
+	if dot := strings.LastIndexByte(name, '.'); dot >= 0 {
+		switch name[dot:] {
+		case ".exe", ".msi", ".msix", ".appx":
+			return "windows", tag
+		case ".dmg", ".pkg":
+			return "macos", tag
+		case ".deb", ".rpm", ".appimage", ".flatpak", ".snap":
+			return "linux", tag
+		case ".apk", ".aab":
+			return "android", tag
+		case ".ipa":
+			return "ios", tag
+		case ".hap", ".app":
+			return "harmony", tag
 		}
 	}
 	return "", tag

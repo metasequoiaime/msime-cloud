@@ -556,6 +556,19 @@ func qqNormalizeListLabel(runes []rune, buf []byte) []byte {
 
 // qqMarkdownLeadingSpace 先用 ASCII 快路径裁剪行首空白，再用小型 Unicode 空白表扫描常见前缀。
 func qqMarkdownLeadingSpace(line string) string {
+	if line == "" {
+		return line
+	}
+	first := line[0]
+	if first < utf8.RuneSelf {
+		switch first {
+		case ' ', '\t', '\n', '\f', '\r', '\v':
+		default:
+			return line
+		}
+	} else if first != 0xc2 && first != 0xe1 && first != 0xe2 && first != 0xe3 {
+		return line
+	}
 	trimmed := strings.TrimLeft(line, " \t\n\f\r\v")
 	if trimmed == "" || trimmed[0] < utf8.RuneSelf {
 		return trimmed

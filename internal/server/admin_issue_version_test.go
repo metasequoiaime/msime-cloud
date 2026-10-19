@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -147,7 +148,7 @@ func TestIssueVersionRejectsInvalidTimeline(t *testing.T) {
 			f := newFakeIssuesGitHub(t)
 			gh := f.client()
 			gh.APIURL, gh.HTTP = upstream.URL, upstream.Client()
-			version, err := issueVersion(context.Background(), gh, "synthetic-token", issueRef{Repo: issuesWinRepo, N: 10}, issueGitHub{ID: 1, State: "closed", CreatedAt: time.Now()})
+			version, err := new(Server).issueVersion(context.Background(), gh, "synthetic-token", issueRef{Repo: issuesWinRepo, N: 10}, issueGitHub{ID: 1, State: "closed", CreatedAt: time.Now()})
 			if err == nil || version != "" {
 				t.Fatal("无效时间线生成了可撤销版本", version, err)
 			}
@@ -246,7 +247,7 @@ func TestIssueVersionIgnoresLabelAndAssigneeOrder(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		version, err := issueVersion(t.Context(), gh, "ghs_synthetic", ref, issue)
+		version, err := new(Server).issueVersion(t.Context(), gh, "ghs_synthetic", ref, issue)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -265,6 +266,28 @@ func TestIssueVersionIgnoresLabelAndAssigneeOrder(t *testing.T) {
 	f.mu.Unlock()
 	if read() == before {
 		t.Fatal("负责人改变未使撤销失效")
+	}
+}
+
+func TestAdminIssueUndoRejectsChangedPlatformAssignee(t *testing.T) {
+	first, f, _, _ := issuesFixture(t)
+	f.mu.Lock()
+	f.issues[issuesWinRepo][10].assignees = []string{"fanlusky"}
+	f.mu.Unlock()
+	undo := issueUndoBody(t, issueActionReply(t, first, "triage", 10))
+	config := first.config
+	config.Admin.GitHub.Platforms = slices.Clone(config.Admin.GitHub.Platforms)
+	config.Admin.GitHub.Platforms[0].Assignee = "fanlusky"
+	second, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { second.CloseAccounts(); second.Close() })
+	second.adminGitHub = f.client()
+	writes := len(f.writeLog())
+	status, reply := issuesRequest(t, second, "POST", "/api/issues/actions", undo)
+	if status != 409 || issueErrorCode(reply) != "conflict" || len(f.writeLog()) != writes || !slices.Contains(f.get(issuesWinRepo, 10).assignees, "fanlusky") {
+		t.Fatal("负责人配置变化后撤销删除了原有指派", status, reply)
 	}
 }
 

@@ -1126,7 +1126,7 @@ func (s *Server) issueAction(ctx context.Context, gh *githubapp.Client, action s
 		return nil, nil, err
 	}
 	if ref.Version != "" {
-		version, err := issueVersion(ctx, gh, token, ref, issue)
+		version, err := s.issueVersion(ctx, gh, token, ref, issue)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1270,7 +1270,7 @@ func (s *Server) issueAction(ctx context.Context, gh *githubapp.Client, action s
 		current, readErr := issueFetch(ctx, gh, token, ref, false)
 		if readErr != nil {
 			undo = nil
-		} else if version, versionErr := issueVersion(ctx, gh, token, ref, current); versionErr != nil {
+		} else if version, versionErr := s.issueVersion(ctx, gh, token, ref, current); versionErr != nil {
 			undo = nil
 		} else {
 			undo.Version = version

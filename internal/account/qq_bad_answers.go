@@ -29,7 +29,13 @@ func (a *Service) AddQQBadAnswer(ctx context.Context, question, answer, feedback
 
 // UpdateQQBadAnswerFeedback 把群友对同一个问题又说的一句「不对」并进 within 以内最新的那条还没处理的差评（feedback 后面接上这句，最长 200 字），不新增一行；返回是否找到了这样的差评。同一个问题按 question 全文比较，调用方存差评时已经截到同样的长度。群友连说几次「不对」时，「差评」列表曾经被同一个问题刷满。
 func (a *Service) UpdateQQBadAnswerFeedback(ctx context.Context, question, feedback string, within time.Duration) (bool, error) {
-	tag, err := a.store.pool.Exec(ctx, `UPDATE qq_bad_answers SET feedback=left(feedback||'；'||$2,200) WHERE id=(SELECT id FROM qq_bad_answers WHERE question=$1 AND state='open' AND created_at>now()-$3::interval ORDER BY created_at DESC, id DESC LIMIT 1)`, question, feedback, within.String())
+	// 先锁定最新的未处理记录，再检查锁后的状态和时间窗口，避免反馈被并入已处理或过期的差评。
+	tag, err := a.store.pool.Exec(ctx, `WITH locked AS MATERIALIZED (
+ SELECT id,state,created_at FROM qq_bad_answers WHERE question=$1 AND state='open'
+ ORDER BY created_at DESC,id DESC LIMIT 1 FOR UPDATE
+)
+UPDATE qq_bad_answers b SET feedback=left(b.feedback||'；'||$2,200)
+FROM locked l WHERE b.id=l.id AND l.state='open' AND l.created_at>clock_timestamp()-$3::interval`, question, feedback, within.String())
 	return tag.RowsAffected() == 1, err
 }
 

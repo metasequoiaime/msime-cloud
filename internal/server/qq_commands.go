@@ -351,7 +351,28 @@ func qqCommandArg(text string, words ...string) (string, bool) {
 func qqCommandPrefixEqualFold(prefix, word string) bool {
 	wordOffset := 0
 	for prefixOffset := 0; prefixOffset < len(prefix) && wordOffset < len(word); {
+		// ASCII 直接转小写并比较字节，避免解码、重新编码和临时数组。
+		if c := prefix[prefixOffset]; c < utf8.RuneSelf {
+			if c >= 'A' && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			if c != word[wordOffset] {
+				return false
+			}
+			prefixOffset++
+			wordOffset++
+			continue
+		}
 		r, size := utf8.DecodeRuneInString(prefix[prefixOffset:])
+		// 基本汉字没有大小写变化，直接比较原始 UTF-8 字节。
+		if r >= 0x4E00 && r <= 0x9FFF {
+			if wordOffset+size > len(word) || prefix[prefixOffset:prefixOffset+size] != word[wordOffset:wordOffset+size] {
+				return false
+			}
+			prefixOffset += size
+			wordOffset += size
+			continue
+		}
 		var lower [utf8.UTFMax]byte
 		lowerSize := utf8.EncodeRune(lower[:], unicode.ToLower(r))
 		if wordOffset+lowerSize > len(word) {

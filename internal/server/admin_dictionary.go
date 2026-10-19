@@ -254,12 +254,18 @@ func dictionaryRows(name, text, query string, page int) ([]dictionaryRow, int) {
 	q := strings.ToLower(query)
 	yamlHeader := strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml")
 	lineNumber := 0
+	previousRaw := ""
+	previousTrimmed := ""
 	previousQueryLine := ""
 	previousQueryMatch := false
 	previousQueryReady := false
 	for raw := range strings.SplitSeq(text, "\n") {
 		lineNumber++
-		line := strings.TrimSpace(raw)
+		line := previousTrimmed
+		if raw != previousRaw {
+			line = strings.TrimSpace(raw)
+			previousRaw, previousTrimmed = raw, line
+		}
 		if yamlHeader {
 			if line == "..." {
 				yamlHeader = false

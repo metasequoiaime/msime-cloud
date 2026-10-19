@@ -297,8 +297,9 @@ func dictionaryRows(name, text, query string, page int) ([]dictionaryRow, int) {
 }
 
 func dictionaryLineContainsLower(line, query string) bool {
-	// 短词条在栈上转小写，长行分段转换并搜索。
+	// 短词条在栈上转小写；全小写行直接搜索，长行分段转换并搜索。
 	var lower [256]byte
+	upper := false
 	if len(line) > len(lower) {
 		return dictionaryLongLineContainsLower(line, query)
 	}
@@ -309,8 +310,12 @@ func dictionaryLineContainsLower(line, query string) bool {
 		}
 		if 'A' <= c && c <= 'Z' {
 			c += 'a' - 'A'
+			upper = true
 		}
 		lower[i] = c
+	}
+	if !upper {
+		return strings.Contains(line, query)
 	}
 	if len(query) <= 32 {
 		return bytes.Contains(lower[:len(line)], []byte(query))

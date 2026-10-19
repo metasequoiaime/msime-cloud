@@ -139,6 +139,19 @@ func TestQQRecallDocSectionsMatchesPrevious(t *testing.T) {
 	}
 }
 
+func TestQQRecallDocSectionsWithCachedIDsMatchesPrevious(t *testing.T) {
+	sections := []qqSection{{Doc: "指南", Title: "甲"}, {Doc: "指南", Title: "乙"}, {Doc: "指南", Title: "甲"}}
+	ids := []string{qqDocID(sections[0]), qqDocID(sections[1]), qqDocID(sections[2])}
+	hits := []account.QQKnowledgeHit{
+		{QQKnowledgeItem: account.QQKnowledgeItem{ID: ids[0]}, Similarity: 0.9},
+		{QQKnowledgeItem: account.QQKnowledgeItem{ID: ids[1]}, Similarity: qqVectorMinSimilarity},
+		{QQKnowledgeItem: account.QQKnowledgeItem{ID: "doc:missing"}, Similarity: 0.9},
+	}
+	if got, want := qqRecallDocSectionsWithCachedIDs(sections, ids, hits), previousQQRecallDocSections(sections, hits); !reflect.DeepEqual(got, want) {
+		t.Fatalf("缓存文档 ID 改变召回位置：结果=%v，预期=%v", got, want)
+	}
+}
+
 func TestQQRecallIndexKeepsHistoryAndFailureFlow(t *testing.T) {
 	server, store, sections := qqRecallIndexFixture(8)
 	store.history = []account.QQKnowledgeHit{
@@ -178,4 +191,16 @@ func BenchmarkQQRecallIndex(b *testing.B) {
 			}
 		})
 	}
+	b.Run("cached_head_hit", func(b *testing.B) {
+		server, store, sections := qqRecallIndexFixture(8192)
+		store.docs = []account.QQKnowledgeHit{{QQKnowledgeItem: account.QQKnowledgeItem{ID: qqDocID(sections[0])}, Similarity: 0.9}}
+		ids := make([]string, len(sections))
+		for i, section := range sections {
+			ids[i] = qqDocID(section)
+		}
+		b.ReportAllocs()
+		for b.Loop() {
+			_ = server.qqRecallWithCachedIDs(context.Background(), "合成问题", sections, ids, false)
+		}
+	})
 }

@@ -477,6 +477,11 @@ type qqVectorRecall struct {
 
 // qqRecallDocSections 只为达到阈值的命中保存位置，避免每次召回都为全部段落建索引。
 func qqRecallDocSections(sections []qqSection, hits []account.QQKnowledgeHit) []int {
+	return qqRecallDocSectionsWithCachedIDs(sections, nil, hits)
+}
+
+// qqRecallDocSectionsWithCachedIDs 复用知识库缓存里的文档 ID；缓存缺失时退回按段落计算，兼容测试和旧缓存。
+func qqRecallDocSectionsWithCachedIDs(sections []qqSection, cachedIDs []string, hits []account.QQKnowledgeHit) []int {
 	eligible := 0
 	for _, hit := range hits {
 		if hit.Similarity >= qqVectorMinSimilarity {
@@ -499,8 +504,14 @@ func qqRecallDocSections(sections []qqSection, hits []account.QQKnowledgeHit) []
 	remaining := len(positions)
 	// 旧索引保留同 ID 的最后一个段落；从末尾查找，全部命中找到后即可停止。
 	for i := len(sections) - 1; i >= 0 && remaining > 0; i-- {
-		id := qqDocIDBytes(sections[i])
-		if slot, ok := slots[string(id[:])]; ok && positions[slot] < 0 {
+		id := ""
+		if len(cachedIDs) == len(sections) {
+			id = cachedIDs[i]
+		} else {
+			idBytes := qqDocIDBytes(sections[i])
+			id = string(idBytes[:])
+		}
+		if slot, ok := slots[id]; ok && positions[slot] < 0 {
 			positions[slot] = i
 			remaining--
 		}
@@ -518,6 +529,11 @@ func qqRecallDocSections(sections []qqSection, hits []account.QQKnowledgeHit) []
 
 // qqRecall 把问题算成向量并召回；功能关闭或任何一步失败时返回空结果，答疑照旧只用目录挑段落。
 func (s *Server) qqRecall(ctx context.Context, question string, sections []qqSection, history bool) qqVectorRecall {
+	return s.qqRecallWithCachedIDs(ctx, question, sections, nil, history)
+}
+
+// qqRecallWithCachedIDs 把问题算成向量并召回，复用知识库缓存里的段落 ID。
+func (s *Server) qqRecallWithCachedIDs(ctx context.Context, question string, sections []qqSection, cachedIDs []string, history bool) qqVectorRecall {
 	var recall qqVectorRecall
 	if s.qqVectors == nil || s.qqEmbeddingURL() == "" {
 		return recall
@@ -534,7 +550,7 @@ func (s *Server) qqRecall(ctx context.Context, question string, sections []qqSec
 		slog.Warn("qq bot: vector search failed", "reason", err.Error())
 		return recall
 	}
-	recall.docs = qqRecallDocSections(sections, hits)
+	recall.docs = qqRecallDocSectionsWithCachedIDs(sections, cachedIDs, hits)
 	if !history {
 		return recall
 	}

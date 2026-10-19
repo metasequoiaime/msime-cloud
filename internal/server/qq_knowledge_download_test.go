@@ -149,6 +149,14 @@ func TestQQKnowledgeDownloadsBoundedAndOrdered(t *testing.T) {
 			t.Fatalf("第 %d 段顺序或平台标记改变：%+v，期望 %+v", i, section, want)
 		}
 	}
+	if len(s.qq.knowledge.docIDs) != len(loaded.sections) {
+		t.Fatalf("知识库没有缓存文档 ID：%d，期望 %d", len(s.qq.knowledge.docIDs), len(loaded.sections))
+	}
+	for i, section := range loaded.sections {
+		if got, want := s.qq.knowledge.docIDs[i], qqDocID(section); got != want {
+			t.Fatalf("第 %d 段缓存文档 ID=%q，期望 %q", i, got, want)
+		}
+	}
 	cached, err := s.qqKnowledgeSections(ctx)
 	if err != nil || !reflect.DeepEqual(cached, loaded.sections) {
 		t.Fatal("知识库缓存改变", err)

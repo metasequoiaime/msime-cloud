@@ -58,6 +58,7 @@ type qqSection struct {
 type qqKnowledge struct {
 	mu       sync.Mutex
 	sections []qqSection
+	docIDs   []string
 	snippets []string
 	toc      string
 	loaded   time.Time
@@ -65,25 +66,40 @@ type qqKnowledge struct {
 
 // qqKnowledgeSections 返回知识库的段落，过期时先刷新。刷新失败但有旧数据时继续用旧数据，一次都没加载成功时返回错误。
 func (s *Server) qqKnowledgeSections(ctx context.Context) ([]qqSection, error) {
+	sections, _, _, _, err := s.qqKnowledgeSnapshot(ctx)
+	return sections, err
+}
+
+// qqKnowledgeSnapshot 原子返回知识库段落及其派生缓存，避免刷新与答疑请求交错时使用不同版本的缓存。
+func (s *Server) qqKnowledgeSnapshot(ctx context.Context) ([]qqSection, []string, []string, string, error) {
 	k := &s.qq.knowledge
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if k.sections != nil && s.qq.now().Sub(k.loaded) < qqKnowledgeTTL {
-		return k.sections, nil
+		return k.sections, k.docIDs, k.snippets, k.toc, nil
 	}
 	sections, err := s.loadQQKnowledge(ctx)
 	if err != nil {
 		if k.sections != nil {
-			return k.sections, nil
+			return k.sections, k.docIDs, k.snippets, k.toc, nil
 		}
-		return nil, err
+		return nil, nil, nil, "", err
 	}
 	snippets := make([]string, len(sections))
 	for i, section := range sections {
 		snippets[i] = qqSnippet(section.Text)
 	}
-	k.sections, k.snippets, k.toc, k.loaded = sections, snippets, qqKnowledgeTOC(sections, snippets), s.qq.now()
-	return sections, nil
+	docIDs := make([]string, len(sections))
+	for i, section := range sections {
+		if i > 0 && section.Doc == sections[i-1].Doc && section.Title == sections[i-1].Title {
+			docIDs[i] = docIDs[i-1]
+		} else {
+			docIDs[i] = qqDocID(section)
+		}
+	}
+	toc := qqKnowledgeTOC(sections, snippets)
+	k.sections, k.docIDs, k.snippets, k.toc, k.loaded = sections, docIDs, snippets, toc, s.qq.now()
+	return sections, docIDs, snippets, toc, nil
 }
 
 // warmQQKnowledge 在副本启动时加载一次知识库，不等第一条答疑才去拉：新副本第一次加载就碰上 GitHub 出错时，那条答疑只能带着空段落回答（见 qqKnowledgeMaterial）。失败只记日志，答疑时会再拉。
@@ -1949,7 +1965,7 @@ func qqAppendKnowledgeSections(material *strings.Builder, sections []qqSection, 
 func (s *Server) qqKnowledgeMaterial(ctx context.Context, question string, ask *qqAsk) (string, string, error) {
 	github := ask.github
 	degraded := false
-	sections, err := s.qqKnowledgeSections(ctx)
+	sections, docIDs, snippets, toc, err := s.qqKnowledgeSnapshot(ctx)
 	if err != nil {
 		if !github || ctx.Err() != nil {
 			return "", "", err
@@ -1957,10 +1973,6 @@ func (s *Server) qqKnowledgeMaterial(ctx context.Context, question string, ask *
 		slog.Warn("qq bot: knowledge unavailable, answering without it", "reason", err.Error())
 		degraded = true
 	}
-	s.qq.knowledge.mu.Lock()
-	snippets := s.qq.knowledge.snippets
-	toc := s.qq.knowledge.toc
-	s.qq.knowledge.mu.Unlock()
 	if toc == "" {
 		toc = qqKnowledgeTOC(sections, snippets)
 	}
@@ -1976,7 +1988,7 @@ func (s *Server) qqKnowledgeMaterial(ctx context.Context, question string, ask *
 	var picked selection
 	// 向量召回和模型挑段落同时进行，不拖慢回答（见 qq_vectors.go）。
 	recalled := make(chan qqVectorRecall, 1)
-	go func() { recalled <- s.qqRecall(ctx, question, sections, github) }()
+	go func() { recalled <- s.qqRecallWithCachedIDs(ctx, question, sections, docIDs, github) }()
 	began := time.Now()
 	err = s.qqChat(ctx, qqSelectPrompt+"\n\n目录：\n"+toc, question, &picked)
 	qqTimingFrom(ctx).selectMs.Add(time.Since(began).Milliseconds())

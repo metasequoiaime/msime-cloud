@@ -2,13 +2,16 @@ package server
 
 import (
 	"math/rand"
+	"regexp"
 	"strings"
 	"testing"
 	"unicode/utf8"
 )
 
+var previousQQCommandPolite = regexp.MustCompile(`^(?:帮我|帮忙|请|麻烦你?|我想|我要|想)\s*`)
+
 func referenceQQPoliteCommandArg(text string, words ...string) (content string, glued, ok bool) {
-	trimmed := qqCommandPolite.ReplaceAllString(strings.TrimSpace(text), "")
+	trimmed := previousQQCommandPolite.ReplaceAllString(strings.TrimSpace(text), "")
 	if content, ok = qqCommandArg(trimmed, words...); !ok || content == "" {
 		return content, false, ok
 	}
@@ -54,8 +57,7 @@ func TestQQPolitePrefixAvoidsAllocation(t *testing.T) {
 			if content != wantContent || glued != wantGlued || ok != wantOK {
 				t.Fatalf("客气命令解析变化：结果=(%q,%t,%t)，期望=(%q,%t,%t)", content, glued, ok, wantContent, wantGlued, wantOK)
 			}
-			// race 模式会随机丢弃正则对象池，零分配只在普通模式下断言。
-			if !raceEnabled && allocations != 0 {
+			if allocations != 0 {
 				t.Fatalf("去掉客气前缀分配 %.1f 次，期望零分配", allocations)
 			}
 		})
@@ -72,6 +74,14 @@ func TestQQPolitePrefixMatchesPrevious(t *testing.T) {
 		}
 	}
 	wordSets := [][]string{{"加词", "添加词条", "加个词"}, {"提文档", "文档反馈"}, {"记录答案", "记答案"}, nil}
+	for _, prefix := range []string{"帮我", "帮忙", "请", "麻烦", "麻烦你", "我想", "我要", "想"} {
+		for i := range len(prefix) {
+			check(prefix[:i]+"加词 内容", wordSets[0])
+		}
+		for value := range 256 {
+			check(prefix+string([]byte{byte(value)})+"加词 内容", wordSets[0])
+		}
+	}
 	for _, prefix := range []string{"", "帮我", "帮忙", "请", "麻烦", "麻烦你", "我想", "我要", "想", "请帮我", "我想请", "麻烦你你"} {
 		for _, space := range []string{"", " ", "\t\n\v\f\r", "\u0085", "\u00a0", "\u2002", "\u3000"} {
 			for _, body := range []string{"", "加词", "加词 扛把子 kang ba zi", "加词扛把子 kang ba zi", "添加词条：内容", "提文档: 内容", "提文档的格式", "文档反馈\u3000内容", "记录答案 问：问题 答：回答", "普通问题", "加词 \xff", "提文档 \xe4\xb8"} {
@@ -102,6 +112,8 @@ func TestQQPolitePrefixRemovesOneLayer(t *testing.T) {
 	}{
 		{"帮我加词 扛把子", "扛把子", false, true},
 		{"麻烦你加词扛把子", "扛把子", true, true},
+		{"麻烦加词 扛把子", "扛把子", false, true},
+		{"帮忙\t\n\f\r 加词 扛把子", "扛把子", false, true},
 		{"请帮我加词 扛把子", "", false, false},
 		{"我想请加词 扛把子", "", false, false},
 	} {

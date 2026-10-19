@@ -9,10 +9,14 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/engine"
 )
+
+// dictionaryDownloadTimeout 为完整快照和 TSV 下载保留大词库传输时间，与整包数据导出一致。
+const dictionaryDownloadTimeout = 2 * time.Minute
 
 // dictionaryKinds 是个人词库词条的全部种类，顺序即社区词库分组校验的顺序：`wubi` 是 86 版五笔，`wubi98` 是 98 版。数据库里的同一份清单是 userdata_schema.sql 的 `user_dictionary_entries_kind_check`，两边要一起改。
 var dictionaryKinds = []string{"pinyin", "wubi", "wubi98", "english", "quick"}
@@ -253,6 +257,8 @@ func (a *Service) dictionaryExport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_dictionary_format")
 		return
 	}
+	// 路由上下文和连接写期限需要同时延长，否则慢速下载仍会被全局连接超时截断。
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(dictionaryDownloadTimeout + 5*time.Second))
 	stream := a.store.StreamDictionary
 	if format == "windows" {
 		stream = a.store.StreamWindowsDictionary

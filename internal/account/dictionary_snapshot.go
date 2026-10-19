@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"time"
 )
 
 // StreamFullDictionarySnapshot 从同一条 SQL 的快照读取数据记录，不包含来源账户或凭据。
@@ -59,6 +60,8 @@ func (a *Service) dictionarySnapshot(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// 完整快照可能较大，连接写期限必须覆盖路由允许的整个传输时间。
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(dictionaryDownloadTimeout + 5*time.Second))
 	started := false
 	err := a.store.streamFullDictionarySnapshotWithFooter(r.Context(), p.UserID, func(raw json.RawMessage) error {
 		if !started {

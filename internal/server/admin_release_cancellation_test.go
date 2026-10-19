@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
 
 // releaseCancelResponseTransport 在指定写入的响应读取完成后取消请求，重现管理员断开连接。
@@ -50,6 +51,12 @@ func TestReleaseRecordsSurviveCancellation(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, f, admin, schema := releaseDBServer(t)
+			const email = "release-admin@example.test"
+			const token = account.AdminTokenPrefix + "release-cancellation"
+			s.adminStore = &adminMemoryStore{
+				tokens:  map[string]account.AdminIdentity{token: {Email: email}},
+				allowed: map[string]bool{email: true},
+			}
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			base := s.adminGitHub.HTTP.Transport
@@ -58,7 +65,9 @@ func TestReleaseRecordsSurviveCancellation(t *testing.T) {
 			}
 			s.adminGitHub.HTTP.Transport = releaseCancelResponseTransport{base: base, method: tc.method, path: tc.upstreamPath, cancel: cancel}
 			var result map[string]any
-			serveAdminJSON(t, s, releaseWrite(tc.path, tc.body).WithContext(ctx), 200, &result)
+			r := releaseWrite(tc.path, tc.body).WithContext(ctx)
+			r.Header.Set("Authorization", "Bearer "+token)
+			serveAdminJSON(t, s, r, 200, &result)
 			if ctx.Err() == nil || f.count(tc.method+" "+tc.upstreamPath) != 1 {
 				t.Fatal("未在上游写入成功后取消请求，或重复发送写入")
 			}
@@ -78,7 +87,7 @@ func TestReleaseRecordsSurviveCancellation(t *testing.T) {
 			}
 			var actor string
 			err := admin.QueryRow(t.Context(), `SELECT actor FROM `+pgx.Identifier{schema, "admin_audit"}.Sanitize()+` WHERE action=$1`, tc.action).Scan(&actor)
-			if err != nil || actor != "legacy-token" {
+			if err != nil || actor != "pat:"+email {
 				t.Errorf("审计未保留操作者：actor=%q err=%v", actor, err)
 			}
 			if got := notificationRows(t, admin, schema); len(got) != tc.notifications {

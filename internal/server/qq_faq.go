@@ -56,14 +56,9 @@ type qqFAQEntry struct {
 func qqFAQCategories(faq string) []string {
 	var categories []string
 	for offset := 0; offset < len(faq); {
-		index := strings.Index(faq[offset:], "## ")
+		index := qqNextFAQCategory(faq, offset)
 		if index < 0 {
 			break
-		}
-		index += offset
-		if index != 0 && faq[index-1] != '\n' {
-			offset = index + 3
-			continue
 		}
 		end := strings.IndexByte(faq[index:], '\n')
 		if end < 0 {
@@ -77,31 +72,33 @@ func qqFAQCategories(faq string) []string {
 	return categories
 }
 
+// qqNextFAQCategory 按标题标记查找下一个分类，并核对标记是否位于行首。
+func qqNextFAQCategory(faq string, start int) int {
+	next := strings.Index(faq[start:], "## ")
+	if next < 0 {
+		return -1
+	}
+	start += next
+	if start == 0 || faq[start-1] == '\n' {
+		return start
+	}
+	// 行内标记出现后改查完整行首模式，避免反复命中同一行的大量伪标题。
+	next = strings.Index(faq[start:], "\n## ")
+	if next < 0 {
+		return -1
+	}
+	return start + next + 1
+}
+
 // qqInsertFAQ 把一条问答插到第 index 个二级标题那一节的末尾：下一个二级标题之前，或者页尾核对说明（以 footer 开头的段落）之前，都没有时接在文末。
 func qqInsertFAQ(faq string, index int, question, answer, footer string) (string, bool) {
 	if index < 0 {
 		return faq, false
 	}
 	// 按标题标记定位并核对行首，避免先统计全部分类或逐行扫描前面的正文。
-	nextCategory := func(start int) int {
-		next := strings.Index(faq[start:], "## ")
-		if next < 0 {
-			return -1
-		}
-		start += next
-		if start == 0 || faq[start-1] == '\n' {
-			return start
-		}
-		// 行内标记出现后改查完整行首模式，避免反复命中同一行的大量伪标题。
-		next = strings.Index(faq[start:], "\n## ")
-		if next < 0 {
-			return -1
-		}
-		return start + next + 1
-	}
-	offset := nextCategory(0)
+	offset := qqNextFAQCategory(faq, 0)
 	for ; offset >= 0 && index > 0; index-- {
-		offset = nextCategory(offset + 3)
+		offset = qqNextFAQCategory(faq, offset+3)
 	}
 	if offset < 0 {
 		return faq, false

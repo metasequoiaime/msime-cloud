@@ -216,21 +216,43 @@ func qqGapTopic(topic string) string {
 
 // qqGapTopicMayContainContact 判断原文是否含有联系方式正则可能用到的特征；没有时可以在达到概括长度后停止扫描。
 func qqGapTopicMayContainContact(text string) bool {
-	for offset, runes := 0, 0; offset < len(text); {
-		r, size := utf8.DecodeRuneInString(text[offset:])
-		if runes >= qqGapRunes && unicode.IsSpace(r) {
-			text = text[:offset]
-			break
-		}
-		offset += size
+	end, runes := 0, 0
+	for end < len(text) && runes < qqGapRunes {
+		r, size := utf8.DecodeRuneInString(text[end:])
+		end += size
 		if !unicode.IsSpace(r) {
 			runes++
 		}
 	}
-	if strings.ContainsAny(text, "@+0123456789qQvVwWxX") {
+	prefix := text[:end]
+	if strings.ContainsAny(prefix, "@+0123456789qQvVwWxX") {
 		return true
 	}
-	return strings.Contains(text, "扣扣") || strings.Contains(text, "群") || strings.Contains(text, "微信")
+	if strings.Contains(prefix, "扣扣") || strings.Contains(prefix, "群") || strings.Contains(prefix, "微信") {
+		return true
+	}
+	if runes < qqGapRunes || end == len(text) {
+		return false
+	}
+	// 只有摘要边界落在连续词中时，才需检查边界之后的邮箱符号；否则边界后的联系方式不会影响摘要。
+	r, _ := utf8.DecodeRuneInString(text[end:])
+	if unicode.IsSpace(r) {
+		return false
+	}
+	at := strings.IndexByte(text[end:], '@')
+	if at < 0 {
+		return false
+	}
+	start := end + at
+	for start > 0 {
+		b := text[start-1]
+		if (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') || b == '.' || b == '_' || b == '%' || b == '+' || b == '-' {
+			start--
+			continue
+		}
+		break
+	}
+	return start < end
 }
 
 // qqNormalizeWhitespacePrefix 合并空白并截取前 maxRunes 个字符；调用方已确认文本不可能含联系方式，所以达到上限后可以停止读取尾部。

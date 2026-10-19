@@ -857,6 +857,7 @@ func similarIssueRows(items []issueRow, row issueRow) []issueSimilar {
 	// 空标题的相似度为零，初始缓存也适用于空标题。
 	var lastTitle string
 	var lastScore float64
+	var otherBigrams map[[2]rune]bool
 	type scored struct {
 		row   issueRow
 		score float64
@@ -873,7 +874,8 @@ func similarIssueRows(items []issueRow, row issueRow) []issueSimilar {
 		case other.Title == lastTitle:
 			score = lastScore
 		default:
-			score = bigramSimilarity(target, titleBigrams(other.Title))
+			otherBigrams = titleBigramsInto(other.Title, otherBigrams)
+			score = bigramSimilarity(target, otherBigrams)
 			lastTitle, lastScore = other.Title, score
 		}
 		if score < 0.3 {
@@ -905,7 +907,16 @@ func similarIssueRows(items []issueRow, row issueRow) []issueSimilar {
 
 // titleBigrams 收集小写标题中相邻的字母或数字对；标点和空格分隔词语，不跨边界组合。
 func titleBigrams(title string) map[[2]rune]bool {
-	set := map[[2]rune]bool{}
+	return titleBigramsInto(title, nil)
+}
+
+// titleBigramsInto 清空后复用调用方的临时集合，每次只保留当前标题的二元组。
+func titleBigramsInto(title string, set map[[2]rune]bool) map[[2]rune]bool {
+	if set == nil {
+		set = map[[2]rune]bool{}
+	} else {
+		clear(set)
+	}
 	var prev rune
 	for _, c := range strings.ToLower(title) {
 		if !unicode.IsLetter(c) && !unicode.IsDigit(c) {

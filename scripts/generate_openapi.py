@@ -103,10 +103,11 @@ for kind,title in [('documents','文档'),('images','图片'),('voice','语音')
         errors=dict(niutrans_errors)
         errors['404']={'description':'niutrans_task_not_found：编号未加签、已被篡改、属于其他身份或媒体类型，或上游应用/密钥已更换。','content':{'application/json':{'schema':{'$ref':'#/components/schemas/Error'}}}}
         if download:
-            description+=' type 取 0..5，省略或为空时使用 1。最多流式转发 64 MiB，Content-Type 沿用上游，缺失时使用 application/octet-stream。已发送响应后遇到超限或读取失败会中断连接，不追加 JSON；调用方应将残缺下载视为失败。'
+            description+=' type 取 0..5，省略或为空时使用 1。非 JSON 文件最多流式转发 64 MiB，Content-Type 沿用上游，缺失时使用 application/octet-stream。application/json 或 +json 控制响应最多 1 MiB，完整读取并确认顶层整数 code 为 200 后才返回；业务错误、无效 JSON 或读取失败不透传上游详情。已发送文件响应后遇到超限或读取失败会中断连接，不追加 JSON；调用方应将残缺下载视为失败。'
             parameters.append({'name':'type','in':'query','schema':string(enum=['0','1','2','3','4','5'],default='1')})
-            response={'description':'小牛返回的文件，最多 64 MiB。','content':{'*/*':{'schema':string(format='binary')}}}
-            errors['502']={'description':'上游不可用，或在发送文件前发现响应超过 64 MiB。','content':{'application/json':{'schema':{'$ref':'#/components/schemas/Error'}}}}
+            response={'description':'小牛返回的文件最多 64 MiB；JSON 控制响应最多 1 MiB，顶层整数 code 必须为 200。','content':{'application/json':niutrans_json['content']['application/json'],'*/*':{'schema':string(format='binary')}}}
+            errors['502']={'description':'upstream_failure：上游不可用、文件超过 64 MiB，或 JSON 控制响应的业务码、格式、大小及完整性不符合要求；不包含上游错误详情。','content':{'application/json':{'schema':{'$ref':'#/components/schemas/Error'}}}}
+            errors['504']={'description':'upstream_timeout：上游读取超时或请求截止时间已到。','content':{'application/json':{'schema':{'$ref':'#/components/schemas/Error'}}}}
         paths.setdefault(base+'/{file_no}'+suffix,{})[method]={'summary':'小牛'+title+'翻译：'+action,'tags':['小牛媒体翻译'],'description':description,'parameters':parameters,'responses':{'200':response,**errors}}
 paths['/v1/niutrans/documents/{file_no}']['delete']={'summary':'删除小牛文档翻译任务','tags':['小牛媒体翻译'],'description':'使用本服务上传响应中的 data.fileNo 删除文档任务；不需要请求体。','parameters':[niutrans_file],'responses':{'200':niutrans_json,**niutrans_errors}}
 paths['/v1/niutrans/documents/{file_no}']['delete']['responses']['404']=paths['/v1/niutrans/documents/{file_no}']['get']['responses']['404']

@@ -1799,7 +1799,28 @@ func qqPromoSentence(sentence string) string {
 
 // qqPromoSentenceCandidate 判断句子是否含有引流规则可能命中的字面字符；普通句子跳过三组正则扫描。
 func qqPromoSentenceCandidate(sentence string) bool {
-	return strings.ContainsAny(sentence, "群微信vV.")
+	if len(sentence) < 64 {
+		return strings.ContainsAny(sentence, "群微信vV.")
+	}
+	for i := 0; i < len(sentence); i++ {
+		switch sentence[i] {
+		case 'v', 'V', '.':
+			return true
+		case 0xe4:
+			if i+2 < len(sentence) && sentence[i+1] == 0xbf && sentence[i+2] == 0xa1 {
+				return true
+			}
+		case 0xe5:
+			if i+2 < len(sentence) && sentence[i+1] == 0xbe && sentence[i+2] == 0xae {
+				return true
+			}
+		case 0xe7:
+			if i+2 < len(sentence) && sentence[i+1] == 0xbe && sentence[i+2] == 0xa4 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // qqDropPromoSentences 删掉答案里引流的整句（见 qqPromoSentence）：资料里的 issue 正文和网页是任何人都能写的，模型偶尔会把里面的「加群」「加微信」「去某网址下载」转述出来，提示词之外再在输出端兜一道。一行里的句子都删光时整行去掉。

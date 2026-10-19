@@ -22,6 +22,18 @@ func TestQQPromoSentenceCandidate(t *testing.T) {
 			t.Errorf("qqPromoSentenceCandidate(%q) = %v，预期 %v", tc.input, got, tc.want)
 		}
 	}
+	random := rand.New(rand.NewSource(31))
+	for range 2000 {
+		data := make([]byte, random.Intn(256))
+		for i := range data {
+			data[i] = byte(random.Intn(256))
+		}
+		input := string(data)
+		want := strings.ContainsAny(input, "群微信vV.")
+		if got := qqPromoSentenceCandidate(input); got != want {
+			t.Fatalf("随机引流候选预筛不兼容：输入=%q，结果=%v，期望=%v", input, got, want)
+		}
+	}
 }
 
 func TestQQDropPromoSentencesKeepsRules(t *testing.T) {

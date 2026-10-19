@@ -22,6 +22,7 @@ import (
 
 // fakeIssue is one issue (or pull request) in fakeIssuesGitHub.
 type fakeIssue struct {
+	id          int64
 	number      int
 	title, body string
 	author      string
@@ -54,6 +55,7 @@ type fakeIssuesGitHub struct {
 	writes []string
 	bodies map[string]map[string]any
 	tokens map[string]int
+	nextID int64
 	// before 在处理每个请求之前、不持有 mu 时调用，测试用它让某些读取阻塞或记录读取顺序。
 	before func(r *http.Request)
 }
@@ -71,7 +73,19 @@ func (f *fakeIssuesGitHub) add(repo string, issue *fakeIssue) {
 	if f.issues[repo] == nil {
 		f.issues[repo] = map[int]*fakeIssue{}
 	}
+	f.nextID++
+	issue.id = f.nextID
+	for _, event := range issue.timeline {
+		f.nextID++
+		event["id"] = f.nextID
+	}
 	f.issues[repo][issue.number] = issue
+}
+
+// event 在持有 mu 时追加唯一事件；保留秒粒度时间，避免测试依赖时间戳区分连续操作。
+func (f *fakeIssuesGitHub) event(issue *fakeIssue, kind string) {
+	f.nextID++
+	issue.timeline = append(issue.timeline, map[string]any{"id": f.nextID, "event": kind, "created_at": time.Now().UTC().Truncate(time.Second).Format(time.RFC3339)})
 }
 
 func (f *fakeIssuesGitHub) get(repo string, n int) fakeIssue {
@@ -103,6 +117,7 @@ func (i *fakeIssue) json(repo string) map[string]any {
 		assignees = append(assignees, map[string]any{"login": a, "type": "User"})
 	}
 	v := map[string]any{
+		"id":     i.id,
 		"number": i.number, "title": i.title, "body": i.body, "state": i.state, "state_reason": i.stateReason,
 		"html_url": "https://github.com/" + repo + "/issues/" + strconv.Itoa(i.number),
 		"user":     map[string]any{"login": i.author, "type": "User"}, "labels": labels, "assignees": assignees, "comments": 0,
@@ -211,7 +226,7 @@ func (f *fakeIssuesGitHub) serve(w http.ResponseWriter, r *http.Request) {
 	case r.Method == "GET" && sub == "":
 		reply(200, issue.json(repo))
 	case r.Method == "GET" && sub == "timeline":
-		// Paginated like GitHub: per_page events per page, a Link header with rel="last" when there is more than one page.
+		// 与 GitHub 一样按 per_page 分页，多页时用 Link 指向最后一页。
 		perPage, _ := strconv.Atoi(r.URL.Query().Get("per_page"))
 		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 		page = max(page, 1)
@@ -225,13 +240,22 @@ func (f *fakeIssuesGitHub) serve(w http.ResponseWriter, r *http.Request) {
 		start := min((page-1)*perPage, len(events))
 		reply(200, events[start:min(start+perPage, len(events))])
 	case r.Method == "PATCH" && sub == "":
+		oldState, oldReason := issue.state, issue.stateReason
 		issue.state, _ = body["state"].(string)
 		issue.stateReason, _ = body["state_reason"].(string)
+		if issue.state != oldState || issue.stateReason != oldReason {
+			kind := "closed"
+			if issue.state == "open" {
+				kind = "reopened"
+			}
+			f.event(issue, kind)
+		}
 		reply(200, issue.json(repo))
 	case r.Method == "POST" && sub == "labels":
 		for _, l := range body["labels"].([]any) {
 			if !slices.Contains(issue.labels, l.(string)) {
 				issue.labels = append(issue.labels, l.(string))
+				f.event(issue, "labeled")
 			}
 		}
 		reply(200, []any{})
@@ -242,16 +266,26 @@ func (f *fakeIssuesGitHub) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		issue.labels = slices.DeleteFunc(issue.labels, func(l string) bool { return l == name })
+		f.event(issue, "unlabeled")
 		reply(200, []any{})
 	case sub == "assignees" && (r.Method == "POST" || r.Method == "DELETE"):
 		for _, a := range body["assignees"].([]any) {
+			had := slices.Contains(issue.assignees, a.(string))
 			issue.assignees = slices.DeleteFunc(issue.assignees, func(x string) bool { return x == a.(string) })
 			if r.Method == "POST" {
 				issue.assignees = append(issue.assignees, a.(string))
 			}
+			if had != (r.Method == "POST") {
+				kind := "unassigned"
+				if r.Method == "POST" {
+					kind = "assigned"
+				}
+				f.event(issue, kind)
+			}
 		}
 		reply(201, issue.json(repo))
 	case r.Method == "POST" && sub == "comments":
+		f.event(issue, "commented")
 		reply(201, map[string]any{"id": 1, "body": body["body"]})
 	default:
 		reply(404, map[string]string{"message": "Not Found"})

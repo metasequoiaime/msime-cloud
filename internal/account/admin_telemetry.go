@@ -175,7 +175,9 @@ func (a *Service) Telemetry(w http.ResponseWriter, r *http.Request) {
 	), grouped AS (
 	 INSERT INTO admin_crash_groups(signature,platform,version,title)
 SELECT signature,$11,version,$12 FROM inserted WHERE signature IS NOT NULL
-	ON CONFLICT(signature) DO UPDATE SET version=EXCLUDED.version,last_seen=GREATEST(admin_crash_groups.last_seen,EXCLUDED.last_seen)
+	ON CONFLICT(signature) DO UPDATE SET first_seen=LEAST(admin_crash_groups.first_seen,EXCLUDED.first_seen),
+	 last_seen=GREATEST(admin_crash_groups.last_seen,EXCLUDED.last_seen),
+	 version=CASE WHEN EXCLUDED.last_seen>admin_crash_groups.last_seen THEN EXCLUDED.version ELSE admin_crash_groups.version END
 	)
 	SELECT EXISTS(SELECT 1 FROM inserted)`,
 		v.ID, v.Kind, v.Platform, v.Version, v.Message, v.Stack, telemetryNull(v.Artifact), telemetryNull(v.Channel), telemetryNull(v.InstallID), telemetryNull(signature), crashPlatform(v.Platform), crashGroupTitle(v.Message)).Scan(&inserted)

@@ -763,34 +763,40 @@ func (s *Server) adminLogsStream(w http.ResponseWriter, r *http.Request) {
 		}
 		return send("pods", "", map[string]any{"pods": pods})
 	}
+	backfillPending := cursor == 0 && backfill > 0
+	backfillStart := now.Add(-since).UnixNano()
 	if cursor > 0 {
 		t.cursor, t.floor = cursor, cursor
 	} else {
-		start := now.Add(-since).UnixNano()
-		t.cursor, t.floor = now.UnixNano(), start-1
+		t.cursor, t.floor = now.UnixNano(), backfillStart-1
 		if backfill == 0 {
 			// 不回填时，轮询回看也不能补发连接建立之前的日志。
 			t.floor = t.cursor - 1
-		} else {
-			entries, err := s.lokiQueryRange(ctx, t.query, start, now.UnixNano(), backfill, "backward")
-			if err != nil {
-				if ctx.Err() != nil || !lokiFailed(err) {
-					return
-				}
-			} else {
-				sortLogEntries(entries)
-				for _, e := range entries {
-					t.seen[e.key()] = struct{}{}
-				}
-				if len(entries) > 0 {
-					// 回填只取了最新的 backfill 行，更早的行不再补发，否则会乱序出现在已显示的行之前。
-					t.floor = entries[0].ns - 1
-				}
-				if !send("lines", strconv.FormatInt(t.cursor, 10), map[string]any{"lines": logLinesJSON(entries)}) {
-					return
-				}
-			}
 		}
+	}
+	// 初次回填失败时保留原窗口重试，不能先推进实时游标而永久跳过历史日志。
+	sendBackfill := func() bool {
+		if !backfillPending {
+			return true
+		}
+		entries, err := s.lokiQueryRange(ctx, t.query, backfillStart, now.UnixNano(), backfill, "backward")
+		if err != nil {
+			return ctx.Err() == nil && lokiFailed(err)
+		}
+		sortLogEntries(entries)
+		for _, e := range entries {
+			t.seen[e.key()] = struct{}{}
+		}
+		if len(entries) > 0 {
+			// 回填只取了最新的 backfill 行，更早的行不再补发，否则会乱序出现在已显示的行之前。
+			t.floor = entries[0].ns - 1
+		}
+		backfillPending = false
+		failures = 0
+		return send("lines", strconv.FormatInt(t.cursor, 10), map[string]any{"lines": logLinesJSON(entries)})
+	}
+	if !sendBackfill() {
+		return
 	}
 	if !sendPods(now) {
 		return
@@ -812,6 +818,15 @@ func (s *Server) adminLogsStream(w http.ResponseWriter, r *http.Request) {
 			if reason := s.logStreamAccess(ctx, r); reason != "" {
 				send("end", "", map[string]string{"reason": reason})
 				return
+			}
+			if backfillPending {
+				if !sendBackfill() {
+					return
+				}
+				if time.Since(lastWrite) >= s.logHeartbeat && !write(": ping\n\n") {
+					return
+				}
+				continue
 			}
 			entries, gaps, err := s.pollLogs(ctx, t, tick.UnixNano())
 			if ctx.Err() != nil {

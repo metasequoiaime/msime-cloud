@@ -664,7 +664,16 @@ func qqMarkdownLeadingSpace(line string) string {
 	if first == ' ' || first == '\t' {
 		start = qqTrimLeadingCommonASCIIPadding(line)
 	}
-	trimmed := strings.TrimLeft(line[start:], " \t\n\f\r\v")
+asciiLoop:
+	for start < len(line) {
+		switch line[start] {
+		case ' ', '\t', '\n', '\f', '\r', '\v':
+			start++
+		default:
+			break asciiLoop
+		}
+	}
+	trimmed := line[start:]
 	if trimmed == "" || trimmed[0] < utf8.RuneSelf {
 		return trimmed
 	}

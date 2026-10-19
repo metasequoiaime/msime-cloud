@@ -179,6 +179,20 @@ func TestQQGapTopicAllocationBudget(t *testing.T) {
 	}
 }
 
+func TestQQGapTopicAllWhitespaceFastPath(t *testing.T) {
+	text := strings.Repeat(" \t\u3000", 10000)
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			if got := qqGapTopic(text); got != "" {
+				t.Fatal("全空白概括应为空")
+			}
+		}
+	})
+	if result.NsPerOp() > 250_000 {
+		t.Fatalf("全空白概括扫描过慢：%s", result.MemString())
+	}
+}
+
 func BenchmarkQQGapTopic(b *testing.B) {
 	cases := qqGapTopicAllocationCases()
 	cases = append(cases, struct {

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAPI } from "../../api/client";
 import type { PRFilter, PRState, PRSummary } from "../../api/dictpr";
-import { authorLabel, prListSchema, stateLabels, stateTones } from "../../api/dictpr";
+import { authorLabel, prDetailSchema, prListSchema, stateLabels, stateTones } from "../../api/dictpr";
 import { keys } from "../../api/keys";
 import { PageIntro } from "../../shell/page-intro";
 import { usePageSearch, useSetPageSearch } from "../../shell/page-search";
@@ -38,15 +38,28 @@ export default function DictprPage() {
     queryFn: ({ signal }) => api.get("dict-prs", prListSchema, { signal }),
   });
 
-  const items = useMemo(() => (list.data?.items ?? []).map(pr => optimistic[pr.number] ? { ...pr, state: optimistic[pr.number] } : pr), [list.data, optimistic]);
+  const focus = Number(search.focus);
+  const validFocus = Number.isInteger(focus) && focus > 0 && focus <= 2 ** 30 && String(focus) === search.focus;
+  const recent = list.data?.items;
+  const listedFocus = recent?.some(pr => pr.number === focus);
+  const focused = useQuery({
+    queryKey: keys.page("dictpr", "detail", focus),
+    queryFn: ({ signal }) => api.get(`dict-prs/${focus}`, prDetailSchema, { signal }),
+    enabled: validFocus && list.isSuccess && !list.isFetching && !listedFocus,
+  });
+  const historical = !listedFocus && validFocus ? focused.data?.pull : undefined;
+  const items = useMemo(() => {
+    const all = historical ? [...(recent ?? []), historical] : recent ?? [];
+    return all.map(pr => optimistic[pr.number] ? { ...pr, state: optimistic[pr.number] } : pr);
+  }, [recent, historical, optimistic]);
   const counts = useMemo(() => {
     const result: Record<PRFilter, number> = { open: 0, merged: 0, closed: 0, all: items.length };
     for (const pr of items) result[pr.state]++;
     return result;
   }, [items]);
   const visible = useMemo(() => filter === "all" ? items : items.filter(pr => pr.state === filter), [items, filter]);
-  const focus = Number(search.focus);
-  const selected: PRSummary | undefined = visible.find(pr => pr.number === focus) ?? visible[0] ?? items[0];
+  // 指定目标时只能展示该 PR；没有定位目标时，只从当前筛选结果中选择审核对象。
+  const selected: PRSummary | undefined = search.focus ? (validFocus ? items.find(pr => pr.number === focus) : undefined) : visible[0];
 
   // A link from the global search or a notification may point at a pull request outside the current filter; show it under 全部 instead of silently opening another one.
   useEffect(() => {
@@ -108,7 +121,11 @@ export default function DictprPage() {
       </Card>
       {selected ? <PRDetailCard key={selected.number} pr={selected} repo={repo ?? ""} overrides={overrides} setOverrides={setOverrides}
         onNext={() => step(1)} onPrevious={() => step(-1)} markOptimistic={markOptimistic} /> :
-        <Card>{list.isPending ? <SkeletonRows rows={6} /> : <Empty title="还没有词库 PR">官网的词库投稿会以 GitHub PR 的形式出现在这里。</Empty>}</Card>}
+        <Card>{search.focus
+          ? !validFocus ? <Empty title="定位的词库 PR 编号无效" />
+            : list.isError ? <ErrorState error={list.error} onRetry={() => list.refetch()} />
+              : focused.isError ? <ErrorState error={focused.error} onRetry={() => focused.refetch()} /> : <SkeletonRows rows={6} />
+          : list.isPending ? <SkeletonRows rows={6} /> : <Empty title={items.length ? "当前状态下没有词库 PR" : "还没有词库 PR"}>{items.length ? "可切换状态查看其他投稿。" : "官网的词库投稿会以 GitHub PR 的形式出现在这里。"}</Empty>}</Card>}
     </div>
   </>;
 }

@@ -735,10 +735,19 @@ func crashPlatform(platform string) string {
 func crashSignature(platform, message, stack string) string {
 	normalized := normalizeCrashMessage(message)
 	frame := ""
+	previousLine, previousFrame := "", ""
+	previousFrameValid := false
 	lineCount := 0
 	for line := range strings.SplitSeq(stack, "\n") {
 		lineCount++
-		if candidate := normalizeCrashFrame(line); candidate != "" && !crashSystemFrame(candidate) {
+		candidate := ""
+		if previousFrameValid && line == previousLine {
+			candidate = previousFrame
+		} else {
+			candidate = normalizeCrashFrame(line)
+			previousLine, previousFrame, previousFrameValid = line, candidate, true
+		}
+		if candidate != "" && !crashSystemFrame(candidate) {
 			frame = candidate
 			break
 		}

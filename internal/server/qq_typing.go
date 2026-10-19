@@ -83,9 +83,9 @@ func (s *Server) qqTypingCommands(ctx context.Context, m qqGroupMessage, compact
 			slog.Warn("qq bot: unlink failed", "reason", err.Error())
 			reply(qqReplyUnavailable)
 		case removed:
-			reply("已解绑，/stats 不会再显示你的数据。云端的打字统计还在，要删的话在水杉输入法里关掉" + qqTypingUploadPath + "。")
+			reply("已解绑，已有绑定码已作废，/stats 不会再显示你的数据。云端的打字统计还在，要删的话在水杉输入法里关掉" + qqTypingUploadPath + "。")
 		default:
-			reply("你在这个群里没有绑定水杉账号。")
+			reply("你在这个群里没有绑定水杉账号，已有绑定码已作废。")
 		}
 	default:
 		today := qqTypingToday(s.qq.now())

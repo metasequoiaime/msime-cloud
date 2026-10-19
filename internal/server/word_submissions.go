@@ -28,6 +28,7 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"github.com/metasequoiaime/MSIME-Backend/internal/engine"
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
+	"golang.org/x/sync/semaphore"
 )
 
 // Anonymous dictionary submissions from the website (msime-web#213). A visitor proposes words with their quanpin reading, English words with the form to show, or candidate-window translations; after Cloudflare Turnstile and a per-address PostgreSQL rate limit, the server appends them to custom/words.txt, custom/english.txt or custom/translations.txt in metasequoiaime/msime-dictionary on one rolling pull request that maintainers review. Nothing about the visitor is stored, and entries, notes and tokens are never logged.
@@ -219,8 +220,8 @@ type wordSubmitter struct {
 	limiter   rateLimiter
 	client    *http.Client
 	now       func() time.Time
-	// Serialises the read-modify-write on GitHub within this process so two local requests never race for the same blob SHA. Without a database this is the only serialisation, which is correct for a single replica only.
-	writes sync.Mutex
+	// 在本进程内串行执行 GitHub 读改写，排队时响应请求取消；没有数据库时只适用于单副本。
+	writes *semaphore.Weighted
 	// locks extends that serialisation to every replica through a PostgreSQL advisory lock keyed by the target repository; nil without a database.
 	locks sharedLocker
 	// Installation tokens minted for the dictionary repository, shared by every call through app().
@@ -232,7 +233,7 @@ type wordSubmitter struct {
 }
 
 func newWordSubmitter(c WordSubmissionsConfig, origins []string, limiter rateLimiter) *wordSubmitter {
-	ws := &wordSubmitter{config: c, origins: origins, limiter: limiter, now: time.Now,
+	ws := &wordSubmitter{config: c, origins: origins, limiter: limiter, now: time.Now, writes: semaphore.NewWeighted(1),
 		client: &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 	for _, o := range origins {
 		if u, err := url.Parse(o); err == nil {

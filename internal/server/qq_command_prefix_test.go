@@ -108,6 +108,8 @@ func BenchmarkQQCommandArgPrefix(b *testing.B) {
 		{"short_plain", "Windows 候选框位置错误", []string{"查", "搜索", "搜"}},
 		{"short_chinese_plain", "候选框在哪里？", []string{"查", "搜索", "搜"}},
 		{"chinese_message_plain", strings.Repeat("候选框在哪里", 333), []string{"查", "搜索", "搜"}},
+		{"unicode_fallback", "Σ：ABC", []string{"σ", "ȿ", "ⱥ", "�"}},
+		{"invalid_utf8_fallback", "\xff：ABC", []string{"�"}},
 		{"message_match", "提ISSUE：" + strings.Repeat("Windows 候选框位置错误 ", 100), []string{"提issue", "提 issue", "提交issue"}},
 		{"message_plain", strings.Repeat("Windows 候选框位置错误 ", 100), []string{"查", "搜索", "搜"}},
 		{"long_tail", "提ISSUE：" + strings.Repeat("ABC 候选框 ", 1<<14), []string{"提issue", "提 issue", "提交issue"}},

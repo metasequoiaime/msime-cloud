@@ -446,6 +446,8 @@ func (s *Server) submitWords(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), wordSubmissionTimeout)
 	defer cancel()
+	// 上游处理最多 45 秒，成功后还可用 5 秒记录投稿，再留 5 秒写响应，不能被全局连接写期限提前截断。
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(wordSubmissionTimeout + 10*time.Second))
 	if err = ws.verifyTurnstile(ctx, input.Token); err != nil {
 		if errors.Is(err, errTurnstileRejected) {
 			wordsFail(w, 403, "verification_failed", "验证已失效，请重新验证后提交。")

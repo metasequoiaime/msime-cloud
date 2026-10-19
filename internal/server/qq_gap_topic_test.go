@@ -115,6 +115,24 @@ func TestQQGapTopicBoundedContactSemantics(t *testing.T) {
 	}
 }
 
+func TestQQNormalizeWhitespacePrefixStopsAtLimit(t *testing.T) {
+	input := strings.Repeat("字", qqGapRunes) + strings.Repeat(" ", 1<<20)
+	got, truncated := qqNormalizeWhitespacePrefix(input, qqGapRunes)
+	if got != strings.Repeat("字", qqGapRunes) || !truncated {
+		t.Fatalf("达到摘要上限后的空白应视为已截断：结果长度=%d，截断=%v", len([]rune(got)), truncated)
+	}
+}
+
+func TestQQGapTopicContactScanStopsAtLimit(t *testing.T) {
+	leading := strings.Repeat("字", qqGapRunes)
+	if qqGapTopicMayContainContact(leading + " reader@example.test") {
+		t.Fatal("摘要上限之后的联系方式不应触发整段脱敏")
+	}
+	if !qqGapTopicMayContainContact(leading[:len(leading)-len("字")] + " reader@example.test") {
+		t.Fatal("摘要上限之前的联系方式必须触发脱敏")
+	}
+}
+
 func TestQQGapTopicRateLimitSubject(t *testing.T) {
 	s, fake, limiter := qqServer(t)
 	s.qq.config.GapsRepo = "o/docs"
@@ -139,6 +157,7 @@ func qqGapTopicAllocationCases() []struct {
 		{"末尾联系方式", strings.Repeat("普通正文", 20000) + " reader@example.test", 512 << 10},
 		{"密集空白", strings.Repeat("普通 \t正文\u3000", 10000), (140 << 10) + (64 << 10)},
 		{"大量首尾空白", strings.Repeat(" ", 1<<20) + "普通问题" + strings.Repeat("\u3000", 1<<18), 64 << 10},
+		{"达到上限后长空白", strings.Repeat("字", qqGapRunes) + strings.Repeat(" ", 1<<20), 64 << 10},
 		{"全部空白", strings.Repeat(" \t\u3000", 10000), 0},
 	}
 }

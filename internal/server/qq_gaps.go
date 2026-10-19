@@ -214,6 +214,17 @@ func qqGapTopic(topic string) string {
 
 // qqGapTopicMayContainContact 判断原文是否含有联系方式正则可能用到的特征；没有时可以在达到概括长度后停止扫描。
 func qqGapTopicMayContainContact(text string) bool {
+	for offset, runes := 0, 0; offset < len(text); {
+		r, size := utf8.DecodeRuneInString(text[offset:])
+		if runes >= qqGapRunes && unicode.IsSpace(r) {
+			text = text[:offset]
+			break
+		}
+		offset += size
+		if !unicode.IsSpace(r) {
+			runes++
+		}
+	}
 	if strings.ContainsAny(text, "@+0123456789qQvVwWxX") {
 		return true
 	}
@@ -222,7 +233,6 @@ func qqGapTopicMayContainContact(text string) bool {
 
 // qqNormalizeWhitespacePrefix 合并空白并截取前 maxRunes 个字符；调用方已确认文本不可能含联系方式，所以达到上限后可以停止读取尾部。
 func qqNormalizeWhitespacePrefix(text string, maxRunes int) (string, bool) {
-	text = qqTrimSpace(text)
 	var out strings.Builder
 	fields := 0
 	runes := 0
@@ -256,14 +266,7 @@ func qqNormalizeWhitespacePrefix(text string, maxRunes int) (string, bool) {
 			offset += size
 			runes++
 			if runes == maxRunes {
-				for rest := offset; rest < len(text); {
-					next, nextSize := utf8.DecodeRuneInString(text[rest:])
-					if !unicode.IsSpace(next) {
-						return out.String(), true
-					}
-					rest += nextSize
-				}
-				return out.String(), false
+				return out.String(), true
 			}
 		}
 	}

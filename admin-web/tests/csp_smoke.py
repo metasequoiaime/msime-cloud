@@ -791,6 +791,59 @@ def check_auth_logout_flush(context, base: str, problems: list[str]):
         page.close()
 
 
+def check_auth_logout_inflight(context, base: str, problems: list[str]):
+    # 先让计时器或下一条操作发出提交，再挂起响应；退出必须等待所有已发出的提交。
+    for trigger in ("timer", "replacement"):
+        for response_status in (200, 500):
+            page = context.new_page()
+            page.clock.install()
+            page.on("pageerror", lambda error: problems.append(f"退出等待在途提交测试页面异常：{error}"))
+            pending = []
+            logout_requests = []
+            page.route("**/api/auth/session", lambda route: route.fulfill(json=FIXTURES["/api/auth/session"]))
+            page.route("**/api/auth-test/delayed", lambda route: pending.append(route))
+
+            def logout(route):
+                logout_requests.append(route.request)
+                route.fulfill(json={"ok": True})
+
+            page.route("**/api/auth/logout", logout)
+            try:
+                page.goto(base + "/harness/?auth")
+                expect(page.get_by_test_id("auth-status")).to_have_text("已登录")
+                queue = page.get_by_role("button", name="排队延迟提交", exact=True)
+                queue.click()
+                with page.expect_request("**/api/auth-test/delayed"):
+                    if trigger == "timer":
+                        page.clock.fast_forward(4001)
+                    else:
+                        queue.click()
+                if trigger == "replacement":
+                    with page.expect_request("**/api/auth-test/delayed"):
+                        page.get_by_role("button", name="测试退出", exact=True).click()
+                else:
+                    page.get_by_role("button", name="测试退出", exact=True).click()
+                expect(page.get_by_test_id("auth-result")).to_have_text("正在退出")
+                assert not logout_requests, "在途提交尚未完成，不应发送退出请求"
+                if trigger == "replacement":
+                    # 后发出的提交先完成，也不能越过仍在途的第一个提交。
+                    pending.pop().fulfill(json={"ok": True})
+                    expect(page.get_by_test_id("auth-commits")).to_have_text("1")
+                    expect(page.get_by_test_id("auth-result")).to_have_text("正在退出")
+                    assert not logout_requests
+                pending.pop().fulfill(status=response_status, json={"ok": True} if response_status == 200 else {"error": "github_unavailable"})
+                expect(page.get_by_test_id("auth-result")).to_have_text("退出完成")
+                expect(page.get_by_test_id("auth-status")).to_have_text("未登录")
+                assert len(logout_requests) == 1
+                assert not pending, "提交不能被重复发送"
+                if response_status == 500:
+                    expect(page.get_by_text("操作失败：GitHub 暂时无法访问，请稍后重试。", exact=True)).to_be_visible()
+                problems.extend(f"退出等待在途提交测试 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+            finally:
+                page.unroute_all(behavior="ignoreErrors")
+                page.close()
+
+
 def wait_for_no_overflow(page, timeout_ms: int = 3000) -> bool:
     # 直接执行函数并逐帧检查布局，避免 wait_for_function 的轮询 eval 触发生产 CSP。
     return page.evaluate("""timeout => new Promise(resolve => {
@@ -2176,6 +2229,7 @@ def main() -> int:
                 check_auth_generation(context, base, problems)
                 check_auth_logout(context, base, problems)
                 check_auth_logout_flush(context, base, problems)
+                check_auth_logout_inflight(context, base, problems)
                 check_profile_rollback(context, base, problems)
                 check_dictionary_editor_actions(context, base, problems)
                 check_dictionary_editor_navigation(context, base, problems)

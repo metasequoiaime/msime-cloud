@@ -839,7 +839,7 @@ func qqSplitMarkdown(name, markdown string) []qqSection {
 		}
 		if m != nil {
 			flush()
-			if len(m[1]) > 1 && strings.TrimSpace(markdown[nextOffset:]) == "" {
+			if len(m[1]) > 1 && qqTrimSpace(markdown[nextOffset:]) == "" {
 				break
 			}
 			level := len(m[1])

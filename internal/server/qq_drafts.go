@@ -721,8 +721,71 @@ func (s *Server) qqDraftDetail(ctx context.Context, draft account.QQDraft, admin
 	return b.String()
 }
 
-// qqOwnCodePattern 匹配问题里提到的草稿编号「D3」「d 12」：前后不能紧挨着字母和数字，免得把「3D」「AD3」「D3D11」当成编号。
-var qqOwnCodePattern = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])D\s?([0-9]{1,6})(?:[^A-Za-z0-9]|$)`)
+// qqOwnCodeIDs 按原正则的非重叠规则读取草稿编号，凑齐三个不同的正编号后停止，不收集全文匹配。
+func qqOwnCodeIDs(question string) []int64 {
+	var ids []int64
+	matchedEnd := 0
+	for offset := 0; offset < len(question); {
+		next := strings.IndexAny(question[offset:], "Dd")
+		if next < 0 {
+			break
+		}
+		start := offset + next
+		offset = start + 1
+		if start > 0 {
+			// 前一次匹配已消耗的分隔符不能作为下一个编号的前缀。
+			if start == matchedEnd {
+				continue
+			}
+			before, _ := utf8.DecodeLastRuneInString(question[:start])
+			if qqOwnCodeLetterOrDigit(before) {
+				continue
+			}
+		}
+		end := start + 1
+		if end < len(question) {
+			// 原正则的 \s? 只允许一个 ASCII 空白，不含垂直制表符。
+			switch question[end] {
+			case ' ', '\t', '\n', '\r', '\f':
+				end++
+			}
+		}
+		digits := end
+		var id int64
+		for end < len(question) && end-digits < 6 && question[end] >= '0' && question[end] <= '9' {
+			id = id*10 + int64(question[end]-'0')
+			end++
+		}
+		if end == digits {
+			continue
+		}
+		if end < len(question) {
+			after, size := utf8.DecodeRuneInString(question[end:])
+			if qqOwnCodeLetterOrDigit(after) {
+				continue
+			}
+			end += size
+		}
+		offset, matchedEnd = end, end
+		if id == 0 || slices.Contains(ids, id) {
+			continue
+		}
+		if ids == nil {
+			ids = make([]int64, 0, 3)
+		}
+		ids = append(ids, id)
+		if len(ids) == 3 {
+			break
+		}
+	}
+	return ids
+}
+
+// qqOwnCodeLetterOrDigit 沿用 (?i)[A-Za-z0-9]；长 s 和开尔文符号也属于 ASCII 字母的 Unicode 简单折叠集合。
+func qqOwnCodeLetterOrDigit(r rune) bool {
+	lower := r | 0x20
+	return r >= '0' && r <= '9' || lower >= 'a' && lower <= 'z' || r == 'ſ' || r == 'K'
+}
 
 // qqOwnCodes 是答疑资料里「机器人自己的编号」一节：问题里提到 D编号时，说明这是机器人给群友报的问题记下的编号，并写上报的是什么、现在的状态。群友收到「已记下（D3）」后来问「D3 是什么」「D3 怎么样了」，机器人曾经不认得自己的编号，去 GitHub 搜了一圈说「D3 不像水杉里的功能名」。只写模型整理的标题和状态，不写原话；最多 3 个；没有提到、没有草稿存储时返回空字符串。
 func (s *Server) qqOwnCodes(ctx context.Context, question string) string {
@@ -730,13 +793,7 @@ func (s *Server) qqOwnCodes(ctx context.Context, question string) string {
 		return ""
 	}
 	var b strings.Builder
-	var seen []int64
-	for _, match := range qqOwnCodePattern.FindAllStringSubmatch(question, -1) {
-		id, err := strconv.ParseInt(match[1], 10, 64)
-		if err != nil || id <= 0 || slices.Contains(seen, id) || len(seen) == 3 {
-			continue
-		}
-		seen = append(seen, id)
+	for _, id := range qqOwnCodeIDs(question) {
 		code := qqDraftCode(id)
 		draft, err := s.qqDrafts.QQDraft(ctx, id)
 		switch {

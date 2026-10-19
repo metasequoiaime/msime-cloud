@@ -613,11 +613,32 @@ func (s *Server) qqIssueStatus(ctx context.Context, name, number string, comment
 	return strings.Join(lines, "\n")
 }
 
+// qqRewriteIssueLinks 把本组织的链接改成仓库名和编号，没有匹配时复用原字符串。
+func qqRewriteIssueLinks(question string) string {
+	match := qqIssueLinkPattern.FindStringSubmatchIndex(question)
+	if match == nil {
+		return question
+	}
+	var result strings.Builder
+	for match != nil {
+		result.WriteString(question[:match[0]])
+		result.WriteByte(' ')
+		result.WriteString(question[match[2]:match[3]])
+		result.WriteString(" #")
+		result.WriteString(question[match[4]:match[5]])
+		result.WriteByte(' ')
+		question = question[match[1]:]
+		match = qqIssueLinkPattern.FindStringSubmatchIndex(question)
+	}
+	result.WriteString(question)
+	return result.String()
+}
+
 // qqMentionedIssues 查普通提问里提到的 issue（最多 qqMentionedIssueLimit 个）的状态，作为答疑资料；没有提到时为空。只靠挑段落的模型把编号写进搜索词的话，结果不稳定。
 func (s *Server) qqMentionedIssues(ctx context.Context, question string) string {
 	var lines []string
 	seen := map[string]bool{}
-	question = qqIssueLinkPattern.ReplaceAllString(qqFoldWidth(question), " $1 #$2 ")
+	question = qqRewriteIssueLinks(qqFoldWidth(question))
 	const matchBatchSize = 8
 	mentions := qqIssueMentionPattern.FindAllStringSubmatchIndex(question, matchBatchSize)
 	// 按原始匹配次数决定是否附正文，重复引用也计数；首批不足三个时已读到全文末尾。

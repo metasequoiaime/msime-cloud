@@ -497,14 +497,14 @@ func qqDraftNoContent(text string) bool {
 	return stripped == "" || qqDraftAck.MatchString(stripped) || qqBadAnswerPattern.MatchString(stripped)
 }
 
-// qqSupplementFollowUp 处理机器人追问草稿缺的信息之后群友的直接回答，补进那份草稿，返回处理结果的名字；不算补充时返回空字符串，调用方照常答疑。原来只认「补充 D编号 内容」，群友多半直接回「Windows 11，0.9.5」，被当成新问题去答，模型的历史里也没有草稿编号，常常又判成报问题、再开一份草稿，原来那份一直缺信息。同时满足才算补充：上一轮回复是追问（qqDraftFollowUp，草稿编号从这里取，比扫待处理的草稿更不容易补错）；消息不超过 qqDraftFollowUpRunes 字，不是问句（qqCommandQuestion），也不是只有客气话或否定（qqDraftNoContent）；草稿还在、没提交，而且是这位群友发起的。补充成功时这一轮记进对话历史，还缺信息时下一句照样能接上；补充失败时 qqSupplementDraft 已经回复过，不记这一轮，上一轮的追问还在，群友再说一句仍能补上。
+// qqSupplementFollowUp 处理机器人追问草稿缺的信息之后群友的直接回答，补进那份草稿，返回处理结果的名字；不算补充时返回空字符串，调用方照常答疑。原来只认「补充 D编号 内容」，群友多半直接回「Windows 11，0.9.5」，被当成新问题去答，模型的历史里也没有草稿编号，常常又判成报问题、再开一份草稿，原来那份一直缺信息。同时满足才算补充：上一轮回复是追问（qqDraftFollowUp，草稿编号从这里取，比扫待处理的草稿更不容易补错）；消息不超过 qqDraftFollowUpRunes 字，不是问句（qqContainsQuestion），也不是只有客气话或否定（qqDraftNoContent）；草稿还在、没提交，而且是这位群友发起的。补充成功时这一轮记进对话历史，还缺信息时下一句照样能接上；补充失败时 qqSupplementDraft 已经回复过，不记这一轮，上一轮的追问还在，群友再说一句仍能补上。
 func (s *Server) qqSupplementFollowUp(ctx context.Context, subject string, history []account.QQTurn, text string, reply func(string)) string {
 	if s.qqDrafts == nil || s.qqHistory == nil || len(history) == 0 {
 		return ""
 	}
 	id, ok := qqDraftFollowUpID(history[len(history)-1].Answer)
 	text = strings.TrimSpace(text)
-	if !ok || utf8.RuneCountInString(text) > qqDraftFollowUpRunes || qqCommandQuestion.MatchString(text) || qqDraftNoContent(text) {
+	if !ok || utf8.RuneCountInString(text) > qqDraftFollowUpRunes || qqContainsQuestion(text) || qqDraftNoContent(text) {
 		return ""
 	}
 	draft, err := s.qqDrafts.QQDraft(ctx, id)

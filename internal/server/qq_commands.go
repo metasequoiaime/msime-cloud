@@ -283,10 +283,13 @@ func qqFreeCommand(text string) (compact string, free bool) {
 const qqCommandSeparators = ":： \n\t,，、"
 
 var (
-	// qqCommandQuestion 匹配问句的说法。「加词」「提文档」「查」后面跟的是问句时，群友是在问这个功能怎么用，不是在下命令，交给答疑：「加词后不生效怎么办」曾被当成词条「后不生效怎么办」提交到公开的词库 PR。
-	qqCommandQuestion = regexp.MustCompile(`怎么|怎样|如何|为什么|为啥|吗|呢|吧|在哪|哪里|哪儿|什么|是不是|能不能|可不可以|不了|不生效|没用|失败|[?？]`)
-	// 前缀判断与全文判断共用问句规则，锚定开头以免扫描后续正文。
-	qqCommandQuestionPrefix = regexp.MustCompile(`\A(?:` + qqCommandQuestion.String() + `)`)
+	// qqCommandQuestionTerms 按首字节归类问句说法，供前缀和全文判断共用。「加词后不生效怎么办」曾被当成词条「后不生效怎么办」提交到公开的词库 PR，识别出问句后应交给答疑。
+	qqCommandQuestionTerms = func() (terms [256][]string) {
+		for _, term := range []string{"怎么", "怎样", "如何", "为什么", "为啥", "吗", "呢", "吧", "在哪", "哪里", "哪儿", "什么", "是不是", "能不能", "可不可以", "不了", "不生效", "没用", "失败", "?", "？"} {
+			terms[term[0]] = append(terms[term[0]], term)
+		}
+		return terms
+	}()
 	// qqExplicitPinyin 匹配 qqNormalizePinyin 规范过的全拼。写了拼音的「加词」一定是在加词：「加词 酒吧 jiu ba」里的「吧」不是问句。
 	qqExplicitPinyin = regexp.MustCompile(`^[a-z]+(?:'[a-z]+)*$`)
 )
@@ -316,10 +319,23 @@ func qqPoliteCommandArg(text string, words ...string) (content string, glued, ok
 
 // qqCommandAsks 判断命令词后面的内容是不是在问这个命令本身：开头就是问句的说法（「加词 怎么用」「提文档在哪」），或者紧接命令词、和它连成一句话（「加词后不生效怎么办」「加词条怎么用」）。只看开头：文档反馈本来就常写问句，「提文档 FAQ 没写鸿蒙版怎么下载」是命令。
 func qqCommandAsks(content string, glued bool) bool {
-	if qqCommandQuestionPrefix.MatchString(content) {
+	if len(content) > 0 && slices.ContainsFunc(qqCommandQuestionTerms[content[0]], func(term string) bool { return strings.HasPrefix(content, term) }) {
 		return true
 	}
 	return glued && slices.ContainsFunc(qqCommandGluedPrefixes, func(prefix string) bool { return strings.HasPrefix(content, prefix) })
+}
+
+// qqContainsQuestion 判断正文任意位置是否包含问句说法，从前往后扫描以便遇到问句立即停止。
+func qqContainsQuestion(content string) bool {
+	for start := range len(content) {
+		// 词表全是有效 UTF-8，首字节分组跳过无关字节，也保留原正则处理无效输入的结果。
+		for _, term := range qqCommandQuestionTerms[content[start]] {
+			if strings.HasPrefix(content[start:], term) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // qqWordsQuestion 判断「加词」后面的内容是不是提问。有一条写了拼音就是在加词；都没写拼音时，除了 qqCommandAsks，任何位置出现问句的说法也算提问（「加词扛把子怎么不生效」），因为误提交会进公开的词库 PR，而含「吧」「吗」的词（酒吧、吗啡）写上拼音照样能加。
@@ -330,7 +346,7 @@ func qqWordsQuestion(content string, glued bool) bool {
 			return false
 		}
 	}
-	return qqCommandAsks(content, glued) || qqCommandQuestion.MatchString(content)
+	return qqCommandAsks(content, glued) || qqContainsQuestion(content)
 }
 
 // qqCommandArg 判断 text 是不是以某个命令词开头、后面跟着分隔符（qqLooseCommands 和以 ASCII 字母结尾的命令词不要求），返回去掉命令词后的参数；「查不到词库怎么办」这类以同一个字开头的普通提问不算命令。
@@ -449,7 +465,7 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text, compact 
 		return "cmd_releases"
 	}
 	// 「查 为什么打不了字」是在提问，交给答疑。
-	if terms, ok := qqCommandArg(text, "查", "搜索", "搜"); ok && !qqCommandQuestion.MatchString(terms) {
+	if terms, ok := qqCommandArg(text, "查", "搜索", "搜"); ok && !qqContainsQuestion(terms) {
 		if terms == "" {
 			reply("请在「查」后面写要搜的关键词，例如 @我 发「查 候选框 左上角」。")
 			return "cmd_search"

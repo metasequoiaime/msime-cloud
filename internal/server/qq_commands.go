@@ -53,8 +53,6 @@ const (
 var (
 	// qqIssueRefPattern 匹配「#818」「msime-windows #818」「metasequoiaime/msime-windows #818」这样的 issue 编号查询（全角的「＃８１８」先用 qqFoldWidth 折成半角）。
 	qqIssueRefPattern = regexp.MustCompile(`^(?:([A-Za-z0-9._/-]{1,100})\s*)?#([0-9]{1,7})$`)
-	// qqIssueLinkPattern 匹配本组织 issue 和 PR 的网页地址，提到编号时先换成「仓库名 #编号」再找。
-	qqIssueLinkPattern = regexp.MustCompile(`https?://github\.com/metasequoiaime/([A-Za-z0-9._-]{1,100})/(?:issues|pull)/([0-9]{1,7})`)
 	// qqPriorityPattern、qqEffortPattern 匹配管理员在反馈里写的优先级和工作量。
 	// 优先级的值后面要是空白、标点或结尾，「自定义短语的优先级高于词库」不算标注。
 	qqPriorityPattern = regexp.MustCompile(`(?i)(?:优先级|priority)\s*[:：]?\s*(紧急|高|中|低|p[0-3])(?:[\s,，.。;；、!！?？)）]|$)`)
@@ -612,14 +610,66 @@ func (s *Server) qqIssueStatus(ctx context.Context, name, number string, comment
 	return strings.Join(lines, "\n")
 }
 
+// qqFindIssueLink 返回本组织 issue/PR 链接的完整匹配、仓库名和编号下标。
+// 先定位固定网址前缀，再校验协议及路径，避免为外部链接和残缺路径启动正则匹配。
+func qqFindIssueLink(question string) ([6]int, bool) {
+	const prefix = "://github.com/metasequoiaime/"
+	for search := 0; search < len(question); {
+		found := strings.Index(question[search:], prefix)
+		if found < 0 {
+			break
+		}
+		root := search + found
+		search = root + len(prefix)
+		start := root
+		switch {
+		case strings.HasSuffix(question[:root], "https"):
+			start -= len("https")
+		case strings.HasSuffix(question[:root], "http"):
+			start -= len("http")
+		default:
+			continue
+		}
+		nameStart, nameEnd := search, search
+		for nameEnd < len(question) && nameEnd-nameStart < 100 {
+			c := question[nameEnd]
+			if !qqIssueMentionWordByte(c) && c != '.' && c != '-' {
+				break
+			}
+			nameEnd++
+		}
+		if nameStart == nameEnd {
+			continue
+		}
+		numberStart := nameEnd
+		switch {
+		case strings.HasPrefix(question[nameEnd:], "/issues/"):
+			numberStart += len("/issues/")
+		case strings.HasPrefix(question[nameEnd:], "/pull/"):
+			numberStart += len("/pull/")
+		default:
+			continue
+		}
+		end := numberStart
+		for end < len(question) && end-numberStart < 7 && question[end] >= '0' && question[end] <= '9' {
+			end++
+		}
+		// 旧链接正则没有词边界要求：八位编号仍只替换前七位，后续字母也不影响匹配。
+		if end > numberStart {
+			return [6]int{start, end, nameStart, nameEnd, numberStart, end}, true
+		}
+	}
+	return [6]int{}, false
+}
+
 // qqRewriteIssueLinks 把本组织的链接改成仓库名和编号，没有匹配时复用原字符串。
 func qqRewriteIssueLinks(question string) string {
-	match := qqIssueLinkPattern.FindStringSubmatchIndex(question)
-	if match == nil {
+	match, found := qqFindIssueLink(question)
+	if !found {
 		return question
 	}
 	var result strings.Builder
-	for match != nil {
+	for found {
 		result.WriteString(question[:match[0]])
 		result.WriteByte(' ')
 		result.WriteString(question[match[2]:match[3]])
@@ -627,7 +677,7 @@ func qqRewriteIssueLinks(question string) string {
 		result.WriteString(question[match[4]:match[5]])
 		result.WriteByte(' ')
 		question = question[match[1]:]
-		match = qqIssueLinkPattern.FindStringSubmatchIndex(question)
+		match, found = qqFindIssueLink(question)
 	}
 	result.WriteString(question)
 	return result.String()

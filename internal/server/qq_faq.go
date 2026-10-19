@@ -82,12 +82,14 @@ func qqInsertFAQ(faq string, index int, question, answer, footer string) (string
 	if index < 0 {
 		return faq, false
 	}
-	headingCount := strings.Count(faq, "\n## ")
-	if strings.HasPrefix(faq, "## ") {
-		headingCount++
-	}
-	if headingCount <= index {
-		return faq, false
+	if index > 0 {
+		headingCount := strings.Count(faq, "\n## ")
+		if strings.HasPrefix(faq, "## ") {
+			headingCount++
+		}
+		if headingCount <= index {
+			return faq, false
+		}
 	}
 	seen, insertAt, offset := -1, -1, 0
 	previousBodyLine := ""

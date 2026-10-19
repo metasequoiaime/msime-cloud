@@ -13,6 +13,9 @@ import (
 // 固定全文匹配方式，对照引用顺序、去重以及按原始匹配次数决定是否附正文的规则。
 var previousQQIssueMentionPattern = regexp.MustCompile(`(?:([A-Za-z0-9._/-]{1,100})\s*)?#([0-9]{1,7})\b`)
 
+// 固定旧链接正则，核对协议、仓库名、路径和编号截取规则。
+var previousQQIssueLinkPattern = regexp.MustCompile(`https?://github\.com/metasequoiaime/([A-Za-z0-9._-]{1,100})/(?:issues|pull)/([0-9]{1,7})`)
+
 func checkQQIssueMentionIndexes(t *testing.T, question string) {
 	t.Helper()
 	for _, limit := range []int{-1, 0, 1, 2, 8} {
@@ -112,7 +115,7 @@ func BenchmarkQQIssueMentionScan(b *testing.B) {
 func (s *Server) previousQQMentionedIssues(ctx context.Context, question string) string {
 	var lines []string
 	seen := map[string]bool{}
-	question = qqIssueLinkPattern.ReplaceAllString(qqFoldWidth(question), " $1 #$2 ")
+	question = previousQQIssueLinkPattern.ReplaceAllString(qqFoldWidth(question), " $1 #$2 ")
 	mentions := previousQQIssueMentionPattern.FindAllStringSubmatch(question, -1)
 	for _, m := range mentions {
 		key := strings.ToLower(m[1]) + "#" + m[2]
@@ -150,6 +153,121 @@ func qqIssueMentionTestServer(t *testing.T) *Server {
 	return s
 }
 
+func previousQQRewriteIssueLinks(question string) string {
+	match := previousQQIssueLinkPattern.FindStringSubmatchIndex(question)
+	if match == nil {
+		return question
+	}
+	var result strings.Builder
+	for match != nil {
+		result.WriteString(question[:match[0]])
+		result.WriteByte(' ')
+		result.WriteString(question[match[2]:match[3]])
+		result.WriteString(" #")
+		result.WriteString(question[match[4]:match[5]])
+		result.WriteByte(' ')
+		question = question[match[1]:]
+		match = previousQQIssueLinkPattern.FindStringSubmatchIndex(question)
+	}
+	result.WriteString(question)
+	return result.String()
+}
+
+func checkQQIssueLinkIndexes(t *testing.T, question string) {
+	t.Helper()
+	for remaining := question; ; {
+		got, found := qqFindIssueLink(remaining)
+		want := previousQQIssueLinkPattern.FindStringSubmatchIndex(remaining)
+		if found != (want != nil) || found && !slices.Equal(got[:], want) {
+			t.Fatalf("链接捕获下标变化：匹配=%t，结果=%v，旧实现=%v；输入=%q", found, got, want, remaining)
+		}
+		if !found {
+			break
+		}
+		remaining = remaining[want[1]:]
+	}
+	if got, want := qqRewriteIssueLinks(question), previousQQIssueLinkPattern.ReplaceAllString(question, " $1 #$2 "); got != want {
+		t.Fatalf("链接替换变化：结果=%q，旧实现=%q；输入=%q", got, want, question)
+	}
+}
+
+func TestQQIssueLinkScanIndexesCompatibility(t *testing.T) {
+	root := "://github.com/metasequoiaime/"
+	link := "https" + root + "r/issues/1"
+	for _, text := range []string{
+		"", root + "r/issues/1", "ftp" + root + "r/issues/1", "httpss" + root + "r/issues/1",
+		"x" + link, "http" + link, "https" + root + link, strings.Repeat(link, 10),
+		"https" + root + "r/Issues/1", "https://github.com/METASEQUOIAIME/r/issues/1",
+		"https" + root + strings.Repeat("r", 99) + "/issues/1",
+		"https" + root + strings.Repeat("r", 100) + "/issues/12345678x",
+		"https" + root + strings.Repeat("r", 101) + "/issues/1" + link,
+		strings.Repeat("https://github.com/example/r/issues/1 ", 4096) + link,
+	} {
+		checkQQIssueLinkIndexes(t, text)
+	}
+	for c := range 256 {
+		checkQQIssueLinkIndexes(t, "http"+string(byte(c))+root+"r/issues/1")
+		checkQQIssueLinkIndexes(t, "https"+root+"r"+string(byte(c))+"/issues/12345678x")
+		checkQQIssueLinkIndexes(t, link+string(byte(c))+link)
+	}
+	random := rand.New(rand.NewSource(97))
+	units := []string{link, "http", "https", "HTTP", root, "r", "/issues/", "/pull/", "1", "12345678", "_", ".-", "/", " ", "#", "\xff", "😀", strings.Repeat("r", 101)}
+	for range 2000 {
+		var text strings.Builder
+		for range random.Intn(32) {
+			text.WriteString(units[random.Intn(len(units))])
+		}
+		checkQQIssueLinkIndexes(t, text.String())
+		data := make([]byte, random.Intn(256))
+		_, _ = random.Read(data)
+		checkQQIssueLinkIndexes(t, string(data))
+	}
+}
+
+func FuzzQQIssueLinkScanIndexes(f *testing.F) {
+	for _, text := range []string{
+		"", "https://github.com/metasequoiaime/r/issues/1",
+		"http://github.com/metasequoiaime/a._-/pull/12345678x",
+		"https://github.com/metasequoiaime/r/issues/",
+		"https://github.com/metasequoiaime/https://github.com/metasequoiaime/r/issues/1",
+		"\xffhttps://github.com/metasequoiaime/r/issues/1\xfe",
+	} {
+		f.Add(text)
+	}
+	f.Fuzz(func(t *testing.T, question string) {
+		if len(question) > 4096 {
+			t.Skip()
+		}
+		checkQQIssueLinkIndexes(t, question)
+	})
+}
+
+func BenchmarkQQIssueLinkRewrite(b *testing.B) {
+	link := "https://github.com/metasequoiaime/r/issues/1"
+	for _, tc := range []struct{ name, question string }{
+		{"short", link},
+		{"sparse", strings.Repeat("普通说明。", 4096) + link},
+		{"dense", strings.Repeat(link+" ", 512)},
+		{"external", strings.Repeat("https://github.com/example/r/issues/1 ", 55)},
+		{"incomplete", strings.Repeat("https://github.com/metasequoiaime/r/issues/ ", 48)},
+	} {
+		for _, implementation := range []struct {
+			name string
+			run  func(string) string
+		}{
+			{"regexp", previousQQRewriteIssueLinks},
+			{"scan", qqRewriteIssueLinks},
+		} {
+			b.Run(tc.name+"/"+implementation.name, func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					_ = implementation.run(tc.question)
+				}
+			})
+		}
+	}
+}
+
 func TestQQRewriteIssueLinksCompatibility(t *testing.T) {
 	link := "https://github.com/metasequoiaime/r/issues/1"
 	units := []string{
@@ -164,7 +282,7 @@ func TestQQRewriteIssueLinksCompatibility(t *testing.T) {
 	}
 	check := func(question string) {
 		t.Helper()
-		want := qqIssueLinkPattern.ReplaceAllString(question, " $1 #$2 ")
+		want := previousQQIssueLinkPattern.ReplaceAllString(question, " $1 #$2 ")
 		if got := qqRewriteIssueLinks(question); got != want {
 			t.Fatalf("链接替换=%q，旧实现=%q；输入=%q", got, want, question)
 		}
@@ -353,5 +471,60 @@ func TestQQIssueMentionSparseScanBudget(t *testing.T) {
 				t.Fatalf("稀疏引用仍承担全文正则扫描：基线=%s，实际=%s", baseline, result)
 			}
 		})
+	}
+}
+
+func TestQQIssueLinkNonmatchScanBudget(t *testing.T) {
+	external := "https://github.com/example/r/issues/1 "
+	incomplete := "https://github.com/metasequoiaime/r/issues/ "
+	for _, tc := range []struct{ name, question string }{
+		{"external_message_limit", strings.Repeat(external, qqBotMaxRunes/len(external))},
+		{"incomplete_message_limit", strings.Repeat(incomplete, qqBotMaxRunes/len(incomplete))},
+		{"external_stress", strings.Repeat(external, 4096)},
+		{"incomplete_stress", strings.Repeat(incomplete, 4096)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			baseline := testing.Benchmark(func(b *testing.B) {
+				for b.Loop() {
+					_ = previousQQIssueLinkPattern.FindStringSubmatchIndex(tc.question)
+				}
+			})
+			var got string
+			result := testing.Benchmark(func(b *testing.B) {
+				got = qqRewriteIssueLinks(tc.question)
+				for b.Loop() {
+					got = qqRewriteIssueLinks(tc.question)
+				}
+			})
+			if got != tc.question {
+				t.Fatalf("无有效链接时正文变化：结果=%q，输入=%q", got, tc.question)
+			}
+			t.Logf("链接正则基线：%s；链接替换：%s", baseline, result)
+			// 竞态插桩改变各阶段相对耗时，只在普通模式检查扫描预算。
+			if !raceEnabled && result.NsPerOp() >= baseline.NsPerOp()/2 {
+				t.Fatalf("无有效链接时仍承担完整正则匹配：基线=%s，实际=%s", baseline, result)
+			}
+		})
+	}
+}
+
+func TestQQIssueLinkDenseAllocationBudget(t *testing.T) {
+	question := strings.Repeat("https://github.com/metasequoiaime/r/issues/1 ", 512)
+	want := previousQQIssueLinkPattern.ReplaceAllString(question, " $1 #$2 ")
+	var got string
+	result := testing.Benchmark(func(b *testing.B) {
+		got = qqRewriteIssueLinks(question)
+		b.ReportAllocs()
+		for b.Loop() {
+			got = qqRewriteIssueLinks(question)
+		}
+	})
+	if got != want {
+		t.Fatalf("密集链接替换变化：结果=%q，期望=%q", got, want)
+	}
+	t.Logf("512 个链接：%s，%s", result, result.MemString())
+	// 构建缓冲区可以随输出增长分配，但不应为每个链接分配捕获切片。
+	if !raceEnabled && result.AllocsPerOp() > 32 {
+		t.Fatalf("512 个链接产生 %d 次分配，超过 32 次预算", result.AllocsPerOp())
 	}
 }

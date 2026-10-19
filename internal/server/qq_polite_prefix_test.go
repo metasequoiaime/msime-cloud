@@ -114,6 +114,8 @@ func TestQQPolitePrefixRemovesOneLayer(t *testing.T) {
 		{"麻烦你加词扛把子", "扛把子", true, true},
 		{"麻烦加词 扛把子", "扛把子", false, true},
 		{"帮忙\t\n\f\r 加词 扛把子", "扛把子", false, true},
+		{"帮我\v加词 扛把子", "扛把子", false, true},
+		{"请\u0085加词\u2002扛把子", "扛把子", true, true},
 		{"请帮我加词 扛把子", "", false, false},
 		{"我想请加词 扛把子", "", false, false},
 	} {

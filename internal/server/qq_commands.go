@@ -285,6 +285,8 @@ const qqCommandSeparators = ":： \n\t,，、"
 var (
 	// qqCommandQuestion 匹配问句的说法。「加词」「提文档」「查」后面跟的是问句时，群友是在问这个功能怎么用，不是在下命令，交给答疑：「加词后不生效怎么办」曾被当成词条「后不生效怎么办」提交到公开的词库 PR。
 	qqCommandQuestion = regexp.MustCompile(`怎么|怎样|如何|为什么|为啥|吗|呢|吧|在哪|哪里|哪儿|什么|是不是|能不能|可不可以|不了|不生效|没用|失败|[?？]`)
+	// 前缀判断与全文判断共用问句规则，锚定开头以免扫描后续正文。
+	qqCommandQuestionPrefix = regexp.MustCompile(`\A(?:` + qqCommandQuestion.String() + `)`)
 	// qqExplicitPinyin 匹配 qqNormalizePinyin 规范过的全拼。写了拼音的「加词」一定是在加词：「加词 酒吧 jiu ba」里的「吧」不是问句。
 	qqExplicitPinyin = regexp.MustCompile(`^[a-z]+(?:'[a-z]+)*$`)
 )
@@ -314,7 +316,7 @@ func qqPoliteCommandArg(text string, words ...string) (content string, glued, ok
 
 // qqCommandAsks 判断命令词后面的内容是不是在问这个命令本身：开头就是问句的说法（「加词 怎么用」「提文档在哪」），或者紧接命令词、和它连成一句话（「加词后不生效怎么办」「加词条怎么用」）。只看开头：文档反馈本来就常写问句，「提文档 FAQ 没写鸿蒙版怎么下载」是命令。
 func qqCommandAsks(content string, glued bool) bool {
-	if loc := qqCommandQuestion.FindStringIndex(content); loc != nil && loc[0] == 0 {
+	if qqCommandQuestionPrefix.MatchString(content) {
 		return true
 	}
 	return glued && slices.ContainsFunc(qqCommandGluedPrefixes, func(prefix string) bool { return strings.HasPrefix(content, prefix) })

@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
@@ -76,7 +77,11 @@ func (s *Server) dictionaryChanges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.accounts != nil {
-		if err := s.accounts.Audit(r.Context(), "dictionary_change", input.Path, map[string]any{"repo": s.dictRepo(), "pull": result.Number, "count": len(input.Changes)}); err != nil {
+		// PR 已经创建，请求取消后仍保留操作者，并在有限时间内记录审计。
+		auditCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+		err := s.accounts.Audit(auditCtx, "dictionary_change", input.Path, map[string]any{"repo": s.dictRepo(), "pull": result.Number, "count": len(input.Changes)})
+		cancel()
+		if err != nil {
 			slog.Error("dictionary management: audit unavailable", "pull", result.Number)
 			respond(w, 503, map[string]any{"error": map[string]string{"code": "dictionary_not_recorded", "message": "PR 已创建，但审计暂未写入。"}, "pull_url": result.URL})
 			return

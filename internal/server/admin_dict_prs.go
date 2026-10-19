@@ -807,8 +807,10 @@ func trimFailure(w http.ResponseWriter, err error) {
 	}
 }
 
-// auditDictPR records a review write after GitHub accepted it. The write cannot be taken back at this point, so an audit failure is logged rather than reported as a failed review that the reviewer would repeat.
+// auditDictPR 在 GitHub 已接受审核写入后保留操作者，并在请求取消后继续限时记录审计；审计失败只记日志，避免管理员重复执行已完成的审核。
 func (s *Server) auditDictPR(ctx context.Context, action string, number int, detail map[string]any) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
 	if err := s.accounts.Audit(ctx, action, strconv.Itoa(number), detail); err != nil {
 		slog.Error("dictionary pull requests: audit not recorded", "action", action, "pull", number, "reason", err.Error())
 	}

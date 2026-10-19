@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { APIError } from "./client";
 
-// 一行日志。ts 是 Loki 的纳秒时间戳（十进制字符串，也是续传游标）；time 和 stream 来自 CRI 前缀；level 是解析出的 slog 级别，无法识别时为空；message 已去掉 CRI 前缀和 slog 的时间与级别。
+// 一行日志。id 用于重连去重，旧副本可省略；ts 是 Loki 的纳秒时间戳（十进制字符串，也是续传游标）；time 和 stream 来自 CRI 前缀；level 是解析出的 slog 级别，无法识别时为空；message 已去掉 CRI 前缀和 slog 的时间与级别。
 export const logLineSchema = z.object({
+  id: z.string().optional(),
   ts: z.string(),
   time: z.string(),
   pod: z.string(),

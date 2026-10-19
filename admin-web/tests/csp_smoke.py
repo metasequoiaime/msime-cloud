@@ -1619,6 +1619,8 @@ def main() -> int:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch()
             try:
+                from log_stream_smoke import check_log_stream_replay
+                check_log_stream_replay(browser, base)
                 from community_management_smoke import check_community_management
                 check_community_management(browser, base)
                 from skin_preview_smoke import check_candidate_preview, check_skin_preview

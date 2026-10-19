@@ -440,7 +440,10 @@ func (s *Server) sendNiuTrans(r *http.Request, target, method, contentType strin
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, niuTransResponseBytes+1))
-	if err != nil || len(data) > niuTransResponseBytes {
+	if err != nil {
+		return nil, "", upstreamTransportError{cause: err}
+	}
+	if len(data) > niuTransResponseBytes {
 		return nil, "", errors.New("upstream response too large")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

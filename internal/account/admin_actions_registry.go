@@ -36,6 +36,8 @@ type actionResult struct {
 	Extra map[string]any
 	// BeforeCommit 在操作与审计 SQL 成功后、提交前执行；返回错误会回滚整个事务。
 	BeforeCommit func(context.Context) error
+	// CommitOnCancel 用于提交前步骤已确认外部写入的操作；步骤成功后继续限时提交，不因原请求取消丢失记录。
+	CommitOnCancel bool
 }
 
 // adminActionFunc runs one action inside tx. The dispatcher has already checked the spec's permission; the audit row is written by the dispatcher in the same transaction after the function returns without error.

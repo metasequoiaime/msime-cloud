@@ -350,6 +350,7 @@ UPDATE admin_notices SET title=$2,body=$3,targets=$4,channels=$5,status='live',p
 		if a.broadcaster == nil {
 			return actionResult{}, actionFail(409, "telegram_disabled")
 		}
+		result.CommitOnCancel = true
 		// 先完成公告及审计 SQL，避免数据库已拒绝发布后仍向外部频道发送；发送失败仍回滚。
 		result.BeforeCommit = func(ctx context.Context) error {
 			if err := a.broadcaster.BroadcastNotice(ctx, n); err != nil {

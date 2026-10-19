@@ -1239,53 +1239,47 @@ func qqPlainTextCanReuse(md string) bool {
 	if md == "" {
 		return true
 	}
-	// 这些字面量可能触发行内 Markdown、链接或裸链接转换；保守地交给完整转换器处理。
-	if strings.Contains(md, "](") || strings.Contains(md, "://") || strings.Contains(md, "**") || strings.Contains(md, "__") || strings.ContainsRune(md, '`') {
-		return false
-	}
 	if md[0] == '|' || qqLineMarkerEnd(md) != 0 {
 		return false
 	}
 	previousSpace := false
-	fast := true
-	for i := 0; i < len(md); i++ {
+	for i := 0; i < len(md); {
 		b := md[i]
-		if b >= utf8.RuneSelf {
-			switch b {
-			case 0xc2, 0xe1, 0xe2, 0xe3:
-				fast = false
+		switch b {
+		case ']', ':', '*', '_':
+			if i+1 < len(md) {
+				next := md[i+1]
+				if (b == ']' && next == '(') || ((b == '*' || b == '_') && next == b) || (b == ':' && next == '/' && i+2 < len(md) && md[i+2] == '/') {
+					return false
+				}
 			}
-			previousSpace = false
-			continue
-		}
-		if b == ' ' {
+		case '`':
+			return false
+		case ' ':
 			if previousSpace || i == 0 || i+1 == len(md) {
 				return false
 			}
 			previousSpace = true
+			i++
 			continue
-		}
-		if b == '\t' || b == '\n' || b == '\v' || b == '\f' || b == '\r' {
+		case '\t', '\n', '\v', '\f', '\r':
 			return false
 		}
-		previousSpace = false
-	}
-	if fast {
-		return true
-	}
-	previousSpace = false
-	for offset := 0; offset < len(md); {
-		r, size := utf8.DecodeRuneInString(md[offset:])
-		if unicode.IsSpace(r) {
-			// 输出只保留词间的单个 ASCII 空格。
-			if r != ' ' || previousSpace || offset == 0 || offset+size == len(md) {
-				return false
+		if b >= utf8.RuneSelf {
+			if b == 0xc2 || b == 0xe1 || b == 0xe2 || b == 0xe3 {
+				r, size := utf8.DecodeRuneInString(md[i:])
+				if unicode.IsSpace(r) {
+					return false
+				}
+				i += size
+			} else {
+				i++
 			}
-			previousSpace = true
-		} else {
 			previousSpace = false
+			continue
 		}
-		offset += size
+		previousSpace = false
+		i++
 	}
 	return true
 }

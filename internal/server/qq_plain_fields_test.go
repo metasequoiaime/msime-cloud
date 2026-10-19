@@ -4,6 +4,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 	"unsafe"
 )
 
@@ -26,6 +28,84 @@ func TestQQPlainTextFieldOutputKeepsRules(t *testing.T) {
 				t.Fatalf("正文分词拼接发生变化：结果=%q，预期=%q", got, tc.want)
 			}
 		})
+	}
+}
+
+func previousQQPlainTextCanReuse(md string) bool {
+	if md == "" {
+		return true
+	}
+	if strings.Contains(md, "](") || strings.Contains(md, "://") || strings.Contains(md, "**") || strings.Contains(md, "__") || strings.ContainsRune(md, '`') {
+		return false
+	}
+	if md[0] == '|' || qqLineMarkerEnd(md) != 0 {
+		return false
+	}
+	previousSpace := false
+	fast := true
+	for i := 0; i < len(md); i++ {
+		b := md[i]
+		if b >= utf8.RuneSelf {
+			switch b {
+			case 0xc2, 0xe1, 0xe2, 0xe3:
+				fast = false
+			}
+			previousSpace = false
+			continue
+		}
+		if b == ' ' {
+			if previousSpace || i == 0 || i+1 == len(md) {
+				return false
+			}
+			previousSpace = true
+			continue
+		}
+		if b == '\t' || b == '\n' || b == '\v' || b == '\f' || b == '\r' {
+			return false
+		}
+		previousSpace = false
+	}
+	if fast {
+		return true
+	}
+	previousSpace = false
+	for offset := 0; offset < len(md); {
+		r, size := utf8.DecodeRuneInString(md[offset:])
+		if unicode.IsSpace(r) {
+			if r != ' ' || previousSpace || offset == 0 || offset+size == len(md) {
+				return false
+			}
+			previousSpace = true
+		} else {
+			previousSpace = false
+		}
+		offset += size
+	}
+	return true
+}
+
+func TestQQPlainTextCanReuseAvoidsRepeatedScans(t *testing.T) {
+	for _, text := range []string{
+		"", "普通正文", "普通 正文", "普通\n正文", "普通\t正文", "**加粗**", "[链接](https://example.test)",
+		"reader@example.test", "甲\u3000乙", "甲\u0085乙", "甲\xff乙", "- 列表", "|表格|", "普通://网址",
+	} {
+		if got, want := qqPlainTextCanReuse(text), previousQQPlainTextCanReuse(text); got != want {
+			t.Fatalf("可复用判定变化：输入=%q，结果=%t，期望=%t", text, got, want)
+		}
+	}
+	text := strings.Repeat("词\n", 32768)
+	baseline := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			_ = previousQQPlainTextCanReuse(text)
+		}
+	})
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			_ = qqPlainTextCanReuse(text)
+		}
+	})
+	if result.NsPerOp() >= baseline.NsPerOp()*8/10 {
+		t.Fatalf("长多行正文仍重复扫描：原=%s，新=%s", baseline, result)
 	}
 }
 

@@ -33,6 +33,13 @@ func TestQQStripAnswerHeadingsMatchesPreviousSemantics(t *testing.T) {
 		return strings.Join(lines, "\n")
 	}
 	texts := []string{"", "#", "#\n", "#123\n## 标题\n#456", "## 标题\r\n正文\r\n##", "#\n##\n###", "普通\n\n## 标题\n\n"}
+	for _, body := range []string{"普通正文\n", "正文中的 # 不算标题\n", "\n", "\xff\n"} {
+		text := strings.Repeat(body, 1024)
+		texts = append(texts, text+"## 末行标题", "#123\n"+text+"##\t\n#456\n####### 标题\n#")
+	}
+	for _, prefix := range []string{"", "普通正文"} {
+		texts = append(texts, prefix+strings.Repeat("#", 65536)+"\n## 标题")
+	}
 	for hashes := 0; hashes <= 8; hashes++ {
 		for _, space := range []string{"", " ", "\t", "\r", "\f", "\v", " \r\t\f", "\u0085", "\u3000", "\xff"} {
 			for _, rest := range []string{"", "123", "标题", "#123", "\xff尾"} {
@@ -105,6 +112,22 @@ func BenchmarkQQAnswerHeadings(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
 				_ = qqNormalizeAnswer(tc.text)
+			}
+		})
+	}
+}
+
+func BenchmarkQQStripAnswerHeadings(b *testing.B) {
+	for _, tc := range []struct{ name, text string }{
+		{"short", "## 操作说明\n第一步\n## 后续步骤\n第二步"},
+		{"sparse", strings.Repeat("普通回答\n", 32768) + "## 操作说明"},
+		{"inline_hashes", strings.Repeat("普通 # 回答\n", 32768) + "## 操作说明"},
+		{"hash_run", strings.Repeat("#", 1<<18)},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				_ = qqStripAnswerHeadings(tc.text)
 			}
 		})
 	}

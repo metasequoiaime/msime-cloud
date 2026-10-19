@@ -167,6 +167,14 @@ func communitySavedFields(fields map[string]bool, saved bool, saves int) (*bool,
 	return &saved, &saves
 }
 
+// communityMineCondition 让通用缓存计划也能按作者索引筛选；`alias` 和 `parameter` 只接收调用处的固定 SQL 片段。
+func communityMineCondition(scope, alias, parameter string) string {
+	if scope == "mine" {
+		return alias + ".owner_id=$1 AND " + parameter + "::text='mine'"
+	}
+	return parameter + "::text<>'mine'"
+}
+
 // communitySavedScope 返回列表查询接在 FROM 之后的联接和 ORDER BY：`scope=saved` 时只留下当前用户（$1）收藏的条目，按收藏时间倒序；其他 scope 联接为空，仍按发布时间倒序。saves 是收藏表，column 是其中指向条目的列，alias 是条目表的别名。
 func communitySavedScope(scope, saves, column, alias string) (join, order string) {
 	if scope != "saved" {
@@ -315,7 +323,7 @@ func (a *Service) communityList(w http.ResponseWriter, r *http.Request) {
 	// 先选本页皮肤，再读取互动统计；收藏范围在两层查询中都沿用收藏时间排序。
 	rows, e := a.store.pool.Query(r.Context(), `WITH skin_page AS MATERIALIZED (
  SELECT s.id FROM community_skins s JOIN auth_users u ON u.id=s.owner_id `+join+`
- WHERE strpos(lower(s.name),lower($2))>0 AND ($4<>'mine' OR s.owner_id=$1) AND (s.moderation<>'removed' OR s.owner_id=$1) AND ($5='' OR s.category=$5)
+ WHERE strpos(lower(s.name),lower($2))>0 AND (`+communityMineCondition(scope, "s", "$4")+`) AND (s.moderation<>'removed' OR s.owner_id=$1) AND ($5='' OR s.category=$5)
  ORDER BY `+order+` LIMIT 21 OFFSET $3
 ) `+communitySkinSelectQuery(fields["saved"], true)+join+`ORDER BY `+order, viewer, search, offset, scope, category)
 	if e != nil {

@@ -47,7 +47,7 @@ func TestWordSubmissionOutlivesServerWriteTimeout(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			s, upstream, _ := wordsFixture(t)
-			// 同时覆盖生产请求日志包装器的 Unwrap，不绕过真实中间件。
+			// 同时覆盖生产请求日志包装器的 `Unwrap`，不绕过真实中间件。
 			s.config.logRequests = true
 			srv := httptest.NewUnstartedServer(s)
 			listener := &wordDeadlineListener{Listener: srv.Listener, deadline: make(chan time.Time, 1)}

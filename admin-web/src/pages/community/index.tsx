@@ -2,7 +2,7 @@ import { formatNumber } from "../../utils/number";
 import { parsePage } from "../../utils/pagination";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { ToggleGroup } from "radix-ui";
 import { Search } from "lucide-react";
 import { useAPI } from "../../api/client";
@@ -98,7 +98,8 @@ export default function CommunityPage() {
   const list = useQuery({
     queryKey: keys.page("community", "list", tab, query),
     queryFn: ({ signal }) => api.get(`${tab}?${query}`, listSchema, { signal }),
-    placeholderData: keepPreviousData,
+    // 只保留同一分类的翻页或筛选结果，避免旧卡片绑定到新分类执行审核。
+    placeholderData: (previous, previousQuery) => previousQuery?.queryKey[3] === tab ? previous : undefined,
   });
 
   const pending = counts.data ? Object.fromEntries(sections.map(section => [section, counts.data[section].pending])) as Record<Section, number> : undefined;

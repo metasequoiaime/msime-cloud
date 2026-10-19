@@ -78,3 +78,37 @@ func BenchmarkSimilarIssueScoreReuse(b *testing.B) {
 		})
 	}
 }
+
+func TestSimilarIssueRowsDistinctCandidateAllocationBudget(t *testing.T) {
+	row := issueRow{Number: 1, Title: "候选窗口位置偏移"}
+	items := make([]issueRow, 1000)
+	for i := range items {
+		items[i] = issueRow{Number: i + 2, Title: "候选窗口位置异常" + strconv.Itoa(i)}
+	}
+	want := previousSimilarIssueRows(items, row)
+	var got []issueSimilar
+	allocations := testing.AllocsPerRun(3, func() { got = similarIssueRows(items, row) })
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("不同标题的相似问题结果发生变化：结果=%+v，期望=%+v", got, want)
+	}
+	// 为目标集合、结果和临时集合的扩容留出余量，排除逐候选分配集合。
+	if allocations > 64 {
+		t.Fatalf("筛选 1000 个不同标题分配 %.0f 次，超过 64 次预算", allocations)
+	}
+}
+
+func TestSimilarIssueRowsVaryingCandidatesKeepScores(t *testing.T) {
+	row := issueRow{Repo: "example/ime", Number: 1, Title: "候选窗口位置偏移"}
+	titles := []string{
+		strings.Repeat("候选窗口位置偏移", 32) + "甲乙丙丁戊己庚辛壬癸",
+		"毫无关联", "毫无关联", "", "a", row.Title, "候选窗口异常", "毫无关联",
+		"候选窗口异常", row.Title, "𠀀𠀁𠀂", "WINDOWS 候选窗口", "\xff", "候选窗口位置偏移尾部",
+	}
+	items := make([]issueRow, len(titles))
+	for i, title := range titles {
+		items[i] = issueRow{Repo: row.Repo, Number: i + 2, Title: title, CreatedAt: time.Unix(int64(i), 0)}
+	}
+	if got, want := similarIssueRows(items, row), previousSimilarIssueRows(items, row); !reflect.DeepEqual(got, want) {
+		t.Fatalf("连续处理不同长度和重复标题后分数变化：结果=%+v，期望=%+v", got, want)
+	}
+}

@@ -128,12 +128,17 @@ func qqCompact(text string) string {
 			// 连续基本汉字不需要规范化，整段复制以免逐字查表和重编码。
 			if r >= 0x4E00 {
 				end := size
-				for end < len(text) {
-					next, width := utf8.DecodeRuneInString(text[end:])
-					if next < 0x4E00 || next > 0x9FFF {
+				// 基本汉字固定占三个 UTF-8 字节，范围是 E4 B8 80 到 E9 BF BF。
+				for len(text)-end >= 3 {
+					first, second, third := text[end], text[end+1], text[end+2]
+					if first < 0xE4 || first > 0xE9 || first == 0xE4 && second < 0xB8 {
 						break
 					}
-					end += width
+					// 两个续字节都必须有效，无效序列继续交给逐字符处理。
+					if second&0xC0 != 0x80 || third&0xC0 != 0x80 {
+						break
+					}
+					end += 3
 				}
 				compactBuilder.WriteString(text[:end])
 				text = text[end:]

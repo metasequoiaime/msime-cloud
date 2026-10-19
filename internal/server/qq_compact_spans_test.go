@@ -57,11 +57,36 @@ func TestQQCompactSpansMatchesReference(t *testing.T) {
 	}
 }
 
+func TestQQCompactHanContinuationMatchesReference(t *testing.T) {
+	check := func(middle string) {
+		t.Helper()
+		for _, input := range []string{" / 水" + middle + "杉Ａ？", " / 水" + middle} {
+			if got, want := qqCompact(input), referenceQQCompactSpans(input); got != want {
+				t.Fatalf("汉字片段边界不兼容：输入=%q，结果=%q，期望=%q", input, got, want)
+			}
+		}
+	}
+	for r := rune(0x4DFF); r <= 0xA000; r++ {
+		check(string(r))
+	}
+	// 分别遍历三个字节位置，验证无效序列不能作为基本汉字原样复制。
+	for value := range 256 {
+		check(string([]byte{byte(value), 0xB8, 0x80}))
+		check(string([]byte{0xE4, byte(value), 0x80}))
+		check(string([]byte{0xE4, 0xB8, byte(value)}))
+	}
+	for _, middle := range []string{"\xe4", "\xe4\xb8", "\xe9", "\xe9\xbf", "\U00020000", "\ufffd", "\ud7ff", "\ue000"} {
+		check(middle)
+	}
+}
+
 func qqCompactSpanCases() []struct{ name, input string } {
 	body := strings.Repeat("候选框在哪里", 8192)
 	return []struct{ name, input string }{
 		{"短命令", "/Help？"},
 		{"短中文空白", "候选 框 在哪 里"},
+		{"两千字全角正文", "ＨＥＬＰ　" + strings.Repeat("候选框在哪里", 333)},
+		{"常见长度大小写混排", strings.Repeat("候选框 ABC123 ", 100)},
 		{"中文后大写", body + "HELP"},
 		{"中文后空白", body + " "},
 		{"中文与ASCII混排", strings.Repeat("候选框 abc123", 8192)},

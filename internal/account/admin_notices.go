@@ -171,15 +171,27 @@ func noticeAuthor(actor string) string {
 	return actor
 }
 
-// adminNotices serves GET /api/notices.
+// adminNotices 返回各状态最近的公告，focus 指定的历史公告额外补入且不重复。
 func (a *Service) adminNotices(w http.ResponseWriter, r *http.Request, _ string) {
+	var focus int64
+	if value := r.URL.Query().Get("focus"); value != "" {
+		var err error
+		focus, err = numericActionID(actionRequest{ID: value})
+		if err != nil {
+			writeError(w, 400, "invalid_id")
+			return
+		}
+	}
 	// 各状态分别限量，避免大量新草稿或归档把仍在展示的公告挤出后台，导致无法从列表归档。
-	rows, err := a.store.pool.Query(r.Context(), `SELECT * FROM ((SELECT id,title,body,targets,channels,status,created_by,created_at,published_at,updated_at FROM admin_notices WHERE status='live' ORDER BY COALESCE(published_at,updated_at) DESC,id DESC LIMIT $1)
+	rows, err := a.store.pool.Query(r.Context(), `WITH recent AS ((SELECT id,title,body,targets,channels,status,created_by,created_at,published_at,updated_at FROM admin_notices WHERE status='live' ORDER BY COALESCE(published_at,updated_at) DESC,id DESC LIMIT $1)
 UNION ALL
 (SELECT id,title,body,targets,channels,status,created_by,created_at,published_at,updated_at FROM admin_notices WHERE status='draft' ORDER BY COALESCE(published_at,updated_at) DESC,id DESC LIMIT $1)
 UNION ALL
-(SELECT id,title,body,targets,channels,status,created_by,created_at,published_at,updated_at FROM admin_notices WHERE status='archived' ORDER BY COALESCE(published_at,updated_at) DESC,id DESC LIMIT $1)) n
-ORDER BY COALESCE(published_at,updated_at) DESC,id DESC`, noticeAdminLimit)
+(SELECT id,title,body,targets,channels,status,created_by,created_at,published_at,updated_at FROM admin_notices WHERE status='archived' ORDER BY COALESCE(published_at,updated_at) DESC,id DESC LIMIT $1))
+SELECT * FROM (SELECT * FROM recent
+UNION ALL
+(SELECT id,title,body,targets,channels,status,created_by,created_at,published_at,updated_at FROM admin_notices WHERE id=$2 AND NOT EXISTS (SELECT 1 FROM recent WHERE id=$2))) n
+ORDER BY COALESCE(published_at,updated_at) DESC,id DESC`, noticeAdminLimit, focus)
 	if err != nil {
 		a.error(w, err)
 		return

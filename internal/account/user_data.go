@@ -225,6 +225,8 @@ func (a *Service) userDataExport(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// 导出允许持续两分钟，响应写期限也要同步延长，避免全局连接超时截断 ZIP。
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(userDataExportTimeout + 5*time.Second))
 	if err := a.store.Rate(r.Context(), "export:"+hash(p.UserID), userDataExportsPerDay, 24*time.Hour); err != nil {
 		if errors.Is(err, ErrLimited) {
 			w.Header().Set("Retry-After", "3600")

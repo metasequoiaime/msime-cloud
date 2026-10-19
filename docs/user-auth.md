@@ -67,7 +67,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE msime_migrator IN SCHEMA public GRANT USAGE, S
 
 ## App 内反馈
 
-`POST /v1/feedback` 需要用户会话，设备的匿名账号也可以提交。请求是 multipart：`payload` 部分是 JSON `{"type":"bug|suggestion|dictionary","text","platform","app_version","edition","diagnostics"?}`，`text` 1–500 个字符；`diagnostics` 可选，只允许 `device`、`os`、`app_version`、`edition`、`scheme`、`keyboard_layout`、`skin`、`ime_enabled`、`ime_default` 这些键，值是不超过 256 字节的字符串，出现其他键或值类型不对时整份 400。可附最多 3 个 `screenshots` 部分（PNG 或 JPEG，单张不超过 1 MiB、JPEG 最多 32 个扫描段），服务端解码后重新编码，丢掉 EXIF 等元数据，再存进 `feedback_screenshots` 表，不进头像存储、不提供公开地址。成功返回 201 `{"id","status":"received"}`。限流：每个用户每小时 5 次、每天 20 次，每个客户端地址每天 50 次，计数在 `auth_rates`，所有副本共享，超出返回 429 和 `Retry-After`。反馈保存 180 天，由 `Store.Prune` 清理，注销账号时级联删除；管理后台的「用户反馈」页查看和标记处理（见 [管理后台](admin.md)）。
+`POST /v1/feedback` 需要用户会话，设备的匿名账号也可以提交。请求是 multipart：`payload` 部分是 JSON `{"type":"bug|suggestion|dictionary","text","platform","app_version","edition","diagnostics"?}`，`text` 1–500 个字符；`diagnostics` 可选，只允许 `device`、`os`、`app_version`、`edition`、`scheme`、`keyboard_layout`、`skin`、`ime_enabled`、`ime_default` 这些键，值是不超过 256 字节的字符串，出现其他键或值类型不对时整份 400。可附最多 3 个 `screenshots` 部分（PNG 或 JPEG，单张不超过 1 MiB、JPEG 最多 32 个扫描段），服务端解码后重新编码，丢掉 EXIF 等元数据，再存进 `feedback_screenshots` 表，不进头像存储、不提供公开地址。成功返回 201 `{"id","status":"received"}`。请求时限为 60 秒，并同步延长本次上传连接的读写期限，避免慢速截图上传被全局超时提前截断。限流：每个用户每小时 5 次、每天 20 次，每个客户端地址每天 50 次，计数在 `auth_rates`，所有副本共享，超出返回 429 和 `Retry-After`。反馈保存 180 天，由 `Store.Prune` 清理，注销账号时级联删除；管理后台的「用户反馈」页查看和标记处理（见 [管理后台](admin.md)）。
 
 ## Apple 网页登录（安卓）
 
@@ -83,7 +83,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE msime_migrator IN SCHEMA public GRANT USAGE, S
 ## 云端数据
 
 - `GET /v1/users/me/data` 返回 `{"bytes","sections":[{"id","bytes","items"}]}`，分区依次为 `preferences`、`dictionary`、`phrases`、`clipboard`、`community`、`voice`、`avatar`。大小由一条 SQL 用 `pg_column_size` / `octet_length` 汇总，是统计信息而不是磁盘占用；头像在对象存储里，只报告有没有。
-- `GET /v1/users/me/data/export` 流式返回 `msime-data-<日期>.zip`：`profile.json`（ID、昵称、创建时间、只含 provider 名的身份列表）、`preferences.json`、`dictionary.ndjson`（与词库快照同一格式）、`phrases.json`、`clipboard.json`（云剪贴板的密文和登记设备）、`community.json`（作品元数据）、`typing_statistics.json`（打字统计与 QQ 绑定）、`sessions.json`（设备信息与时间，不含令牌摘要）、`voice.ndjson`（语音贡献的元数据、转写文本和 base64 音频）。每个用户每天 3 次（`auth_rates` 键 `export:<uid 摘要>`），超出 429 带 `Retry-After`；路由时限 2 分钟。除词库和语音贡献外的 7 个 JSON 文件先一次批量读取，全部成功后才开始发送 ZIP，词库和语音贡献仍流式写入。开始传输后出错只能中断连接，客户端拿到的是不完整的 zip。导出内容不写日志。
+- `GET /v1/users/me/data/export` 流式返回 `msime-data-<日期>.zip`：`profile.json`（ID、昵称、创建时间、只含 provider 名的身份列表）、`preferences.json`、`dictionary.ndjson`（与词库快照同一格式）、`phrases.json`、`clipboard.json`（云剪贴板的密文和登记设备）、`community.json`（作品元数据）、`typing_statistics.json`（打字统计与 QQ 绑定）、`sessions.json`（设备信息与时间，不含令牌摘要）、`voice.ndjson`（语音贡献的元数据、转写文本和 base64 音频）。每个用户每天 3 次（`auth_rates` 键 `export:<uid 摘要>`），超出 429 带 `Retry-After`；路由时限 2 分钟，并同步延长本次响应连接的写期限，避免大导出包在慢网络上被全局超时提前截断。除词库和语音贡献外的 7 个 JSON 文件先一次批量读取，全部成功后才开始发送 ZIP，词库和语音贡献仍流式写入。开始传输后出错只能中断连接，客户端拿到的是不完整的 zip。导出内容不写日志。
 - `DELETE /v1/users/me/data {"sections":[…]}` 要求最近登录，分区取 `preferences`、`dictionary`、`phrases`、`clipboard`、`voice`，至少一个、不能重复，返回 204。一个事务内完成：偏好和常用语清空并推进 `revision`，从未同步过的分区也会创建 `revision=1` 的空文档，重复清空继续推进版本号；其他设备拿旧 `revision`（包括首次同步前的 `0`）写入会 409 并拉到空文档；词库删除条目、覆盖层、位置、选择次数和包含词条原文的历史变更，只保留本次新写入的 `reset` 变更并推进 `revision`，旧游标会直接读到它，开着同步的设备会整份重载，而不是把旧数据推回来；剪贴板删除条目、当前密钥、封装和全部设备登记（设备名、公钥、登记时间），保留同步开关和保留天数，开着同步的设备之后重新登记，由第一台设备重新生成密钥。账号、会话和社区作品不在其中，分别走注销账号、我的设备和作品管理。
 
 ## 发送下载链接

@@ -29,6 +29,13 @@ var qqSlashFree = []string{"help", "h", "ver", "version", "today", "stats", "bin
 
 // qqSlashParse 拆出斜杠命令：命令名（小写）和后面的参数；不是斜杠命令时 ok 为 false。只认「/」后面紧跟字母的写法，「/ 」「//」不算。
 func qqSlashParse(text string) (name, args string, ok bool) {
+	// 已有斜杠前缀时直接解析；其他消息先检查边界空白后的前缀，避免折叠普通正文。
+	if !strings.HasPrefix(text, "/") && !strings.HasPrefix(text, "／") {
+		text = strings.TrimSpace(text)
+		if !strings.HasPrefix(text, "/") && !strings.HasPrefix(text, "／") {
+			return "", "", false
+		}
+	}
 	text = strings.TrimSpace(qqFoldWidth(text))
 	rest, found := strings.CutPrefix(text, "/")
 	if !found || rest == "" || !(rest[0] >= 'a' && rest[0] <= 'z' || rest[0] >= 'A' && rest[0] <= 'Z') {

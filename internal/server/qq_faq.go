@@ -65,6 +65,16 @@ func qqFAQCategories(faq string) []string {
 
 // qqInsertFAQ 把一条问答插到第 index 个二级标题那一节的末尾：下一个二级标题之前，或者页尾核对说明（以 footer 开头的段落）之前，都没有时接在文末。
 func qqInsertFAQ(faq string, index int, question, answer, footer string) (string, bool) {
+	if index < 0 {
+		return faq, false
+	}
+	headingCount := strings.Count(faq, "\n## ")
+	if strings.HasPrefix(faq, "## ") {
+		headingCount++
+	}
+	if headingCount <= index {
+		return faq, false
+	}
 	seen, insertAt, offset := -1, -1, 0
 	previousBodyLine := ""
 	previousBodyNonEmpty := false

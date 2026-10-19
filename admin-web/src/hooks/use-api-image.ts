@@ -15,7 +15,10 @@ export function useAPIImage({ queryKey, path, enabled = true }: APIImageOptions)
     staleTime: 5 * 60_000,
     queryFn: async ({ signal }) => {
       const response = await fetch(path, { signal, credentials: "same-origin", headers: token ? { Authorization: `Bearer ${token}` } : {} });
-      if (!response.ok) throw new APIError(response.status, "");
+      if (!response.ok) {
+        if (response.status === 401) credentials?.onUnauthorized();
+        throw new APIError(response.status, "");
+      }
       const blob = await response.blob();
       return await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();

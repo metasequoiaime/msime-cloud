@@ -23,8 +23,6 @@ const (
 	qqReportsDaily = 50
 	// qqGapRunes 是一条概括的长度上限。
 	qqGapRunes = 200
-	// qqGapTopicFastPathBytes 限制流式快路径的输入大小；超大输入交给标准库的批量空白扫描，避免逐 rune 检查边缘空白反而变慢。
-	qqGapTopicFastPathBytes = 512 << 10
 	// qqGapsIssueTTL 是汇总 issue 编号的缓存时间：维护者关闭它后，最多这么久之后新的问题会记到新开的 issue 上，不会一直评论在已关闭的 issue 下。
 	qqGapsIssueTTL = time.Hour
 	// qqGapRecordTimeout 是记一条汇总的时限（见 recordQQGapIn）。要拿令牌、查汇总 issue、可能新建、再评论，几次 GitHub 调用，3 秒不够；也不能长：副本关停时 Close 等满 qqCloseGrace 取消 lifetime 之后还要等它，preStop、HTTP 关停、qqCloseGrace 加上它要落在部署的 terminationGracePeriodSeconds（100 秒）以内。
@@ -188,7 +186,8 @@ func qqGapTopic(topic string) string {
 	// 先裁掉两端空白；全空白正文和两端填充很常见，避免快路径逐个检查这些本来不会进入概括的字符。
 	topic = qqTrimSpace(topic)
 	truncated := false
-	fast := len(topic) <= qqGapTopicFastPathBytes && !qqGapTopicMayContainContact(topic)
+	// 联系方式扫描只检查摘要前缀和跨边界的邮箱；没有联系方式特征时，长正文也可以只归一化摘要前缀。
+	fast := !qqGapTopicMayContainContact(topic)
 	if !fast {
 		topic = qqRedactContactsBefore(qqNormalizeWhitespace(topic), qqGapRunes)
 	} else {

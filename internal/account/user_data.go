@@ -38,7 +38,8 @@ const userDataSummaryQuery = `SELECT id,bytes,items FROM (
  UNION ALL SELECT 4,'clipboard',COALESCE(sum(pg_column_size(t.*)),0),count(*) FROM user_clipboard t WHERE user_id=$1
  UNION ALL SELECT 5,'community',sum(bytes)::bigint,sum(items)::bigint FROM (
   SELECT COALESCE(sum(pg_column_size(t.*)),0) AS bytes,count(*) AS items FROM community_skins t WHERE owner_id=$1
-  UNION ALL SELECT COALESCE(sum(pg_column_size(t.*)),0),count(*) FROM community_candidate_skins t WHERE owner_id=$1
+  UNION ALL SELECT COALESCE(sum(pg_column_size(t.*)),0)+COALESCE(sum(files.bytes),0),count(*) FROM community_candidate_skins t
+  CROSS JOIN LATERAL (SELECT COALESCE(sum(pg_column_size(f.*)),0) AS bytes FROM community_candidate_skin_files f WHERE f.skin_id=t.id) files WHERE t.owner_id=$1
   UNION ALL SELECT COALESCE(sum(pg_column_size(t.*)),0),count(*) FROM community_resources t WHERE owner_id=$1
   UNION ALL SELECT COALESCE(sum(pg_column_size(t.*)),0),count(*) FROM community_plugins t WHERE owner_id=$1
  ) community

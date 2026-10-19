@@ -2250,6 +2250,8 @@ def main() -> int:
                 check_mirror_read_race(context, base, problems)
                 check_mirror_identity(context, base, problems)
                 check_release_pending(context, base, problems)
+                from release_focus_smoke import check_release_focus
+                check_release_focus(browser, base)
                 check_dictpr_trim_pending(context, base, problems)
                 check_pending_form_drafts(context, base, problems)
                 check_issue_reply_draft_switch(context, base, problems)

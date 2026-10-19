@@ -92,14 +92,15 @@ export default function ReleasePage() {
 
   const platforms = list.data?.platforms ?? [];
   const selected = history.data?.platform ?? platforms.find(p => p.id === platformID);
+  const selectedFocusTag = focusPlatform === selected?.id && focusTag ? focusTag : undefined;
 
   let content: ReactNode;
   if (platformID) {
     content = <div className="flex flex-col gap-3.5">
       {selected ? <DetailHeader platform={selected} platforms={platforms.length ? platforms : [selected]} onBack={() => openPlatform(undefined)} onPick={openPlatform} />
         : <Skeleton className="h-[34px] w-64" />}
-      {selected ? <DetailBody key={selected.id} platform={selected} history={history.data} loading={history.isPending} error={history.error} onRetry={() => history.refetch()}
-        focusTag={focusPlatform === selected.id && focusTag ? focusTag : undefined} handlers={handlers} />
+      {selected ? <DetailBody key={`${selected.id}:${selectedFocusTag ?? ""}`} platform={selected} history={history.data} loading={history.isPending} error={history.error} onRetry={() => history.refetch()}
+        focusTag={selectedFocusTag} handlers={handlers} />
         : history.isError ? <ErrorState error={history.error} onRetry={() => history.refetch()} /> : <Skeleton className="h-64" />}
     </div>;
   } else if (list.isPending) {

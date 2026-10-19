@@ -92,14 +92,14 @@ export function useModeration() {
   const setCategory = useCallback(async (target: Target, from: CandidateCategory, to: CandidateCategory) => {
     if (from === to) return;
     const action = target.section === "skins" ? "set_skin_category" : "set_candidate_skin_category";
-    const change = (category: CandidateCategory) => run({ action, section: target.section, id: target.id, value: { category } });
+    const change = (category: CandidateCategory, expected?: CandidateCategory) => run({ action, section: target.section, id: target.id, value: { category, ...(expected ? { expected } : {}) } });
     try {
       await change(to);
     } catch (error) {
       toast(`操作失败：${errorMessage(error)}`);
       return;
     }
-    toast({ text: `「${target.name}」的分类已改为「${candidateCategoryLabels[to]}」`, undo: () => change(from) });
+    toast({ text: `「${target.name}」的分类已改为「${candidateCategoryLabels[to]}」`, undo: () => change(from, to) });
   }, [run, toast]);
 
   const deleteItem = useCallback(async (target: Target) => {

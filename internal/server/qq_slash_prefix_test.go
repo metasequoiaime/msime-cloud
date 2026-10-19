@@ -110,8 +110,8 @@ func BenchmarkQQNonSlashCommandChecks(b *testing.B) {
 		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
-				_ = qqFreeCommand(tc.input)
-				_ = s.qqCommand(ctx, qqGroupMessage{}, tc.input, false, reply, reply)
+				compact, _ := qqFreeCommand(tc.input)
+				_ = s.qqCommand(ctx, qqGroupMessage{}, tc.input, compact, false, reply, reply)
 			}
 		})
 	}

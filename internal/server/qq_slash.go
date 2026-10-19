@@ -88,7 +88,7 @@ func (s *Server) qqSlashCommand(ctx context.Context, m qqGroupMessage, text stri
 		return qqNormalizeWhitespace(tail)
 	}
 	chineseWith := func(command string, reply func(string)) string {
-		return s.qqCommand(ctx, m, command, admin, reply, progress)
+		return s.qqCommand(ctx, m, command, qqCompact(command), admin, reply, progress)
 	}
 	chinese := func(command string) string { return chineseWith(command, reply) }
 	adminOnly := func() bool {

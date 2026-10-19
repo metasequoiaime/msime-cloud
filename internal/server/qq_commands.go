@@ -267,9 +267,10 @@ func qqIssueRef(text string) []string {
 }
 
 // qqFreeCommand 判断消息是不是不调模型的命令：帮助、版本、今天、打字数据和绑定、草稿列表和「#编号」。handleQQFeedback 把它们排在个人和群的额度之前，只按人计一个宽松的 qqBotFreeDaily：群额度用完后，新人发「帮助」原来只能收到「额度用完了」，刚上手多试几个命令也在花自己交给模型的额度。版本和「#编号」要读 GitHub，但读请求有缓存。
-func qqFreeCommand(text string) bool {
-	compact := qqCompact(text)
-	return slices.Contains(qqHelpAliases, compact) || slices.Contains(qqReleaseAliases, compact) || slices.Contains(qqTodayAliases, compact) || slices.Contains(qqTypingAliases, compact) || slices.Contains(qqBindAliases, compact) || slices.Contains(qqUnbindAliases, compact) || compact == "草稿" || compact == "草稿列表" || qqIssueRef(text) != nil || qqSlashFreeCommand(text)
+// 同时返回规范化正文，供后续命令分发复用。
+func qqFreeCommand(text string) (compact string, free bool) {
+	compact = qqCompact(text)
+	return compact, slices.Contains(qqHelpAliases, compact) || slices.Contains(qqReleaseAliases, compact) || slices.Contains(qqTodayAliases, compact) || slices.Contains(qqTypingAliases, compact) || slices.Contains(qqBindAliases, compact) || slices.Contains(qqUnbindAliases, compact) || compact == "草稿" || compact == "草稿列表" || qqIssueRef(text) != nil || qqSlashFreeCommand(text)
 }
 
 // qqCommandSeparators 是命令词和参数之间可以有的分隔符。
@@ -367,12 +368,12 @@ func qqCommandPrefixEqualFold(prefix, word string) bool {
 }
 
 // qqCommand 处理群里的命令，返回处理结果的名字（写进每条消息的处理日志，见 handleQQFeedback），不是命令时返回空字符串。progress 发过渡语，同一条消息只发一句（见 handleQQFeedback）。
-func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, admin bool, reply, progress func(string)) string {
+// `compact` 是与原文 `text` 对应的规范化结果，由分类或斜杠命令改写时计算。
+func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text, compact string, admin bool, reply, progress func(string)) string {
 	if command := s.qqSlashCommand(ctx, m, text, admin, reply, progress); command != "" {
 		return command
 	}
 	// 各命令分支共用规范化结果，参数解析继续使用原文。
-	compact := qqCompact(text)
 	if command := s.qqTypingCommands(ctx, m, compact, reply); command != "" {
 		return command
 	}

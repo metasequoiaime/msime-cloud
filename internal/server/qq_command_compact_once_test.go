@@ -21,17 +21,20 @@ func TestQQCommandCompactAllocationBudget(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &Server{}
 			var outcome string
+			var free bool
 			replies := 0
 			reply := func(string) { replies++ }
 			allocations := testing.AllocsPerRun(100, func() {
-				outcome = s.qqCommand(context.Background(), qqGroupMessage{}, tc.input, false, reply, reply)
+				var compact string
+				compact, free = qqFreeCommand(tc.input)
+				outcome = s.qqCommand(context.Background(), qqGroupMessage{}, tc.input, compact, false, reply, reply)
 			})
-			if outcome != "" || replies != 0 {
-				t.Fatalf("普通消息误触命令：结果=%q，回复=%d 次", outcome, replies)
+			if free || outcome != "" || replies != 0 {
+				t.Fatalf("普通消息误触命令：免费命令=%t，结果=%q，回复=%d 次", free, outcome, replies)
 			}
-			// race 模式会随机丢弃正则对象池，普通模式的预算排除重复规范化的分配。
+			// race 模式会随机丢弃正则对象池，普通模式的预算排除分类与分发之间的重复规范化。
 			if !raceEnabled && allocations > tc.maximum {
-				t.Fatalf("命令分发分配 %.1f 次，超过 %.0f 次预算", allocations, tc.maximum)
+				t.Fatalf("命令分类和分发分配 %.1f 次，超过 %.0f 次预算", allocations, tc.maximum)
 			}
 		})
 	}
@@ -52,7 +55,8 @@ func TestQQCommandSharedCompactKeepsRawCommands(t *testing.T) {
 			s := &Server{qqDrafts: &memoryDrafts{}, qqFAQCandidates: &memoryFAQCandidates{}}
 			var replies []string
 			reply := func(text string) { replies = append(replies, text) }
-			outcome := s.qqCommand(context.Background(), qqGroupMessage{}, tc.input, tc.admin, reply, reply)
+			compact, _ := qqFreeCommand(tc.input)
+			outcome := s.qqCommand(context.Background(), qqGroupMessage{}, tc.input, compact, tc.admin, reply, reply)
 			if outcome != tc.outcome || strings.Join(replies, "\n") != tc.reply {
 				t.Fatalf("原始命令或参数变化：结果=%q，回复=%q，期望结果=%q，回复=%q", outcome, replies, tc.outcome, tc.reply)
 			}
@@ -63,23 +67,27 @@ func TestQQCommandSharedCompactKeepsRawCommands(t *testing.T) {
 func TestQQCommandCompactRoutes(t *testing.T) {
 	for _, tc := range []struct {
 		input, outcome, reply string
-		admin                 bool
+		admin, free           bool
 	}{
-		{"帮 助？🙏", "cmd_help", qqHelpText, false},
-		{"ＨｅＬｐ！", "cmd_help", qqHelpText + qqAdminHelpText, true},
-		{"周\u3000报！", "cmd_digest", "只有管理员能用「周报」。", false},
-		{"差\t评🙏", "cmd_bad_answers", "只有管理员能看差评。觉得我答错了，@我 说一句「不对」，我会重新查。", false},
-		{"答 错 的？", "cmd_bad_answers", "只有管理员能看差评。觉得我答错了，@我 说一句「不对」，我会重新查。", false},
-		{"打字数据？", "cmd_stats", "打字数据暂时用不了。", false},
-		{"草 稿！", "cmd_drafts", "只有管理员能看草稿列表。", false},
-		{"文档 缺口？", "cmd_faq_candidates", "只有管理员能处理文档缺口。", false},
-		{"候选框在哪里？", "", "", false},
+		{"帮 助？🙏", "cmd_help", qqHelpText, false, true},
+		{"ＨｅＬｐ！", "cmd_help", qqHelpText + qqAdminHelpText, true, true},
+		{"周\u3000报！", "cmd_digest", "只有管理员能用「周报」。", false, false},
+		{"差\t评🙏", "cmd_bad_answers", "只有管理员能看差评。觉得我答错了，@我 说一句「不对」，我会重新查。", false, false},
+		{"答 错 的？", "cmd_bad_answers", "只有管理员能看差评。觉得我答错了，@我 说一句「不对」，我会重新查。", false, false},
+		{"打字数据？", "cmd_stats", "打字数据暂时用不了。", false, true},
+		{"草 稿！", "cmd_drafts", "只有管理员能看草稿列表。", false, true},
+		{"文档 缺口？", "cmd_faq_candidates", "只有管理员能处理文档缺口。", false, false},
+		{"候选框在哪里？", "", "", false, false},
 	} {
 		t.Run(tc.input, func(t *testing.T) {
 			s := &Server{}
 			var replies []string
 			reply := func(text string) { replies = append(replies, text) }
-			outcome := s.qqCommand(context.Background(), qqGroupMessage{}, tc.input, tc.admin, reply, reply)
+			compact, free := qqFreeCommand(tc.input)
+			if free != tc.free {
+				t.Fatalf("免费命令分类变化：结果=%t，期望=%t", free, tc.free)
+			}
+			outcome := s.qqCommand(context.Background(), qqGroupMessage{}, tc.input, compact, tc.admin, reply, reply)
 			if outcome != tc.outcome || strings.Join(replies, "\n") != tc.reply {
 				t.Fatalf("命令分发变化：结果=%q，回复=%q，期望结果=%q，回复=%q", outcome, replies, tc.outcome, tc.reply)
 			}

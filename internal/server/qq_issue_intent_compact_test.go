@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func previousQQIssueIntent(text string) bool {
@@ -64,6 +65,38 @@ func TestQQIssueIntentASCIIWhitespacePrefixFastPath(t *testing.T) {
 	text := strings.Repeat(" ", 64) + "提 ISSUE"
 	if got, want := qqIssueIntentASCIIWhitespacePrefix(text), 64; got != want {
 		t.Fatalf("ASCII 空白前缀=%d，预期=%d", got, want)
+	}
+}
+
+func TestQQIssueIntentStartMatchesRuneScan(t *testing.T) {
+	const candidates = "iIsSuUeE提个一交建开记成到录下帮忙我反馈给发"
+	check := func(text string) {
+		t.Helper()
+		want, found := 0, false
+		for offset, r := range text {
+			if strings.ContainsRune(candidates, r) {
+				want, found = offset, true
+				break
+			}
+		}
+		if got, ok := qqIssueIntentStart(text); got != want || ok != found {
+			t.Fatalf("候选起点变化：输入=%q，结果=%d/%t，期望=%d/%t", text, got, ok, want, found)
+		}
+	}
+	// 全码点覆盖三字节快路径中的候选字和相邻的普通汉字。
+	for r := rune(0); r <= utf8.MaxRune; r++ {
+		check("普通" + string(r) + "正文")
+	}
+	for _, prefix := range []string{"", "普通正文", "\xff", "\xe4", "\xe4\xb8", "\xe5\x80x", strings.Repeat(" ", 1100)} {
+		for _, r := range candidates {
+			check(prefix + string(r) + "正文")
+		}
+	}
+	random := rand.New(rand.NewSource(1008))
+	for range 4000 {
+		raw := make([]byte, random.Intn(256))
+		_, _ = random.Read(raw)
+		check(string(raw))
 	}
 }
 

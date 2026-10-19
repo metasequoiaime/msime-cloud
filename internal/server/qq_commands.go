@@ -51,9 +51,8 @@ const (
 )
 
 var (
-	// qqIssueRefPattern 匹配「#818」「msime-windows #818」「metasequoiaime/msime-windows #818」这样的 issue 编号查询（全角的「＃８１８」先用 qqFoldWidth 折成半角）；qqIssueMentionPattern 找出普通提问里提到的编号，例如「#818 修好了吗」。
-	qqIssueRefPattern     = regexp.MustCompile(`^(?:([A-Za-z0-9._/-]{1,100})\s*)?#([0-9]{1,7})$`)
-	qqIssueMentionPattern = regexp.MustCompile(`(?:([A-Za-z0-9._/-]{1,100})\s*)?#([0-9]{1,7})\b`)
+	// qqIssueRefPattern 匹配「#818」「msime-windows #818」「metasequoiaime/msime-windows #818」这样的 issue 编号查询（全角的「＃８１８」先用 qqFoldWidth 折成半角）。
+	qqIssueRefPattern = regexp.MustCompile(`^(?:([A-Za-z0-9._/-]{1,100})\s*)?#([0-9]{1,7})$`)
 	// qqIssueLinkPattern 匹配本组织 issue 和 PR 的网页地址，提到编号时先换成「仓库名 #编号」再找。
 	qqIssueLinkPattern = regexp.MustCompile(`https?://github\.com/metasequoiaime/([A-Za-z0-9._-]{1,100})/(?:issues|pull)/([0-9]{1,7})`)
 	// qqPriorityPattern、qqEffortPattern 匹配管理员在反馈里写的优先级和工作量。
@@ -634,17 +633,76 @@ func qqRewriteIssueLinks(question string) string {
 	return result.String()
 }
 
+// qqFindIssueMentions 保留旧正则的完整匹配、仓库名、编号六个下标，以及非重叠匹配规则。
+// 先定位井号，再向左回看仓库名，避免从正文的每个位置尝试可选前缀；`limit` 为负时取全部匹配。
+func qqFindIssueMentions(question string, limit int) [][]int {
+	var matches [][]int
+	search, previousEnd := 0, 0
+	for search < len(question) && (limit < 0 || len(matches) < limit) {
+		found := strings.IndexByte(question[search:], '#')
+		if found < 0 {
+			break
+		}
+		hash := search + found
+		search = hash + 1
+		end := search
+		for end < len(question) && end-search < 7 && question[end] >= '0' && question[end] <= '9' {
+			end++
+		}
+		// 编号必须有 1–7 位数字；沿用正则的 ASCII 词边界，字母、数字和下划线不能紧随其后。
+		if end == search || end < len(question) && qqIssueMentionWordByte(question[end]) {
+			continue
+		}
+		nameEnd := hash
+	trimSpace:
+		for nameEnd > previousEnd {
+			// 正则的 \s 只含这五种 ASCII 空白，不含垂直制表符或 Unicode 空白。
+			switch question[nameEnd-1] {
+			case ' ', '\t', '\n', '\r', '\f':
+				nameEnd--
+			default:
+				break trimSpace
+			}
+		}
+		nameStart := nameEnd
+		for nameStart > previousEnd && nameEnd-nameStart < 100 {
+			c := question[nameStart-1]
+			if !qqIssueMentionWordByte(c) && c != '.' && c != '/' && c != '-' {
+				break
+			}
+			nameStart--
+		}
+		matchStart := hash
+		if nameStart < nameEnd {
+			matchStart = nameStart
+		} else {
+			nameStart, nameEnd = -1, -1
+		}
+		if matches == nil {
+			capacity := 8
+			if limit > 0 {
+				capacity = min(capacity, limit)
+			}
+			matches = make([][]int, 0, capacity)
+		}
+		matches = append(matches, []int{matchStart, end, nameStart, nameEnd, hash + 1, end})
+		search, previousEnd = end, end
+	}
+	return matches
+}
+
+func qqIssueMentionWordByte(c byte) bool {
+	lower := c | 0x20
+	return lower >= 'a' && lower <= 'z' || c >= '0' && c <= '9' || c == '_'
+}
+
 // qqMentionedIssues 查普通提问里提到的 issue（最多 qqMentionedIssueLimit 个）的状态，作为答疑资料；没有提到时为空。只靠挑段落的模型把编号写进搜索词的话，结果不稳定。
 func (s *Server) qqMentionedIssues(ctx context.Context, question string) string {
 	var lines []string
 	seen := map[string]bool{}
 	question = qqRewriteIssueLinks(qqFoldWidth(question))
-	// 全角编号和网页链接归一化后，引用必含井号；普通提问无需执行引用正则。
-	if strings.IndexByte(question, '#') < 0 {
-		return ""
-	}
 	const matchBatchSize = 8
-	mentions := qqIssueMentionPattern.FindAllStringSubmatchIndex(question, matchBatchSize)
+	mentions := qqFindIssueMentions(question, matchBatchSize)
 	// 按原始匹配次数决定是否附正文，重复引用也计数；首批不足三个时已读到全文末尾。
 	includeBody := len(mentions) <= 2
 	offset := 0
@@ -681,7 +739,7 @@ scanMentions:
 			}
 		}
 		offset += mentions[len(mentions)-1][1]
-		mentions = qqIssueMentionPattern.FindAllStringSubmatchIndex(question[offset:], matchBatchSize)
+		mentions = qqFindIssueMentions(question[offset:], matchBatchSize)
 	}
 	return strings.Join(lines, "\n")
 }

@@ -399,7 +399,7 @@ SELECT moderation,previous_moderation,moderation_reason,moderated_by,moderated_a
 SELECT moderation,previous_moderation,moderation_reason,moderated_by,moderated_at FROM community_candidate_skins WHERE false;
 SELECT moderation,previous_moderation,moderation_reason,moderated_by,moderated_at FROM community_plugins WHERE false;
 SELECT id,kind,item_id,reporter_id,reason,detail,created_at FROM community_reports WHERE false;
-SELECT banned_at,ban_reason,banned_by FROM auth_users WHERE false;
+SELECT banned_at,ban_reason,banned_by,ban_revision FROM auth_users WHERE false;
 SELECT user_agent FROM auth_sessions WHERE false;
 SELECT id,pr_number,kind,entries,note,created_at FROM word_submissions WHERE false;
 SELECT artifact,channel,install_id,signature FROM admin_events WHERE false;
@@ -410,6 +410,8 @@ SELECT word_id,day,count FROM admin_sensitive_hits WHERE false`); e != nil {
 		return e
 	}
 	return s.checkReadinessMetadata(ctx, []readinessMetadataCheck{
+		// 旧副本和直接 SQL 的封禁写入也必须更新撤销版本。
+		{`SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='auth_users'::regclass AND tgname='auth_user_ban_revision' AND tgenabled IN ('O','A'))`, "user ban revision trigger missing or disabled"},
 		// 状态写入必须更新版本，缺少或停用触发器时先迁移再接受管理操作。
 		{`SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='admin_crash_groups'::regclass AND tgname='admin_crash_status_token' AND tgenabled IN ('O','A'))`, "crash status token trigger missing or disabled"},
 		// 遥测种类由 CHECK 约束限定，普通列探测无法发现旧约束。

@@ -85,3 +85,10 @@ export type UserDetail = z.infer<typeof userDetailSchema>;
 // ban_user answers how many sessions it revoked and how many community items it removed; unban_user how many it restored.
 export const banResultSchema = z.looseObject({ ok: z.literal(true), affected: z.number(), sessions: z.number(), removed: z.number() });
 export const unbanResultSchema = z.looseObject({ ok: z.literal(true), affected: z.number(), restored: z.number() });
+
+export const banUndoSchema = z.object({
+  action: z.literal("undo_user_ban"),
+  id: z.string(),
+  value: z.object({ token: z.string().regex(/^[a-f0-9]{32}$/), banned: z.boolean() }),
+  reason: z.string().min(1).optional(),
+}).refine(v => v.value.banned ? !!v.reason?.trim() : v.reason === undefined);

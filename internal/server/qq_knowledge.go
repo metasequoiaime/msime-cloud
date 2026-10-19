@@ -839,6 +839,9 @@ func qqSplitMarkdown(name, markdown string) []qqSection {
 		}
 		if m != nil {
 			flush()
+			if len(m[1]) > 1 && strings.TrimSpace(markdown[nextOffset:]) == "" {
+				break
+			}
 			level := len(m[1])
 			// 标题随段落进入缓存，复制捕获结果以免引用整份 Markdown 的底层内存。
 			heading := strings.Clone(m[2])

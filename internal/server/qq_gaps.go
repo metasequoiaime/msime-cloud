@@ -185,6 +185,8 @@ func qqContactPatternsOverlap(text string, first, second *regexp.Regexp) bool {
 
 // qqGapTopic 先合并空白并完整脱敏，再截取概括前缀，保持去重键和公开评论正文一致。
 func qqGapTopic(topic string) string {
+	// 先裁掉两端空白；全空白正文和两端填充很常见，避免快路径逐个检查这些本来不会进入概括的字符。
+	topic = qqTrimSpace(topic)
 	truncated := false
 	fast := len(topic) <= qqGapTopicFastPathBytes && !qqGapTopicMayContainContact(topic)
 	if !fast {

@@ -13,10 +13,10 @@ func TestQQCommandCompactAllocationBudget(t *testing.T) {
 		maximum     float64
 	}{
 		{"普通中文", body + "？", 0},
-		{"ASCII空白", "Help me", 4},
-		{"正文斜杠", body + " /help", 4},
-		{"全角长正文", "ＨＥＬＰ　" + body, 4},
-		{"无效UTF8", "\xff" + body + "？\xe4\xb8", 4},
+		{"ASCII空白", "Help me", 1},
+		{"正文斜杠", body + " /help", 1},
+		{"全角长正文", "ＨＥＬＰ　" + body, 1},
+		{"无效UTF8", "\xff" + body + "？\xe4\xb8", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &Server{}
@@ -32,6 +32,29 @@ func TestQQCommandCompactAllocationBudget(t *testing.T) {
 			// race 模式会随机丢弃正则对象池，普通模式的预算排除重复规范化的分配。
 			if !raceEnabled && allocations > tc.maximum {
 				t.Fatalf("命令分发分配 %.1f 次，超过 %.0f 次预算", allocations, tc.maximum)
+			}
+		})
+	}
+}
+
+func TestQQCommandSharedCompactKeepsRawCommands(t *testing.T) {
+	for _, tc := range []struct {
+		input, outcome, reply string
+		admin                 bool
+	}{
+		{"补充：D1 Windows 11，ＡＢＣ？", "cmd_draft", "没有找到草稿 D1，可能已经过期了。", false},
+		{"写进FAQ F3 答：Windows 11 保留 ＡＢＣ？", "cmd_faq_candidate", "没有找到 F3，可能已经处理过或过期了。", true},
+		{"看 Ｄ１", "", "", false},
+		{"写进ＦＡＱ Ｆ３ 答：Windows 11", "", "", true},
+		{"看 F3？", "", "", true},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			s := &Server{qqDrafts: &memoryDrafts{}, qqFAQCandidates: &memoryFAQCandidates{}}
+			var replies []string
+			reply := func(text string) { replies = append(replies, text) }
+			outcome := s.qqCommand(context.Background(), qqGroupMessage{}, tc.input, tc.admin, reply, reply)
+			if outcome != tc.outcome || strings.Join(replies, "\n") != tc.reply {
+				t.Fatalf("原始命令或参数变化：结果=%q，回复=%q，期望结果=%q，回复=%q", outcome, replies, tc.outcome, tc.reply)
 			}
 		})
 	}

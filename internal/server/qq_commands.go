@@ -371,17 +371,17 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 	if command := s.qqSlashCommand(ctx, m, text, admin, reply, progress); command != "" {
 		return command
 	}
-	if command := s.qqTypingCommands(ctx, m, text, reply); command != "" {
-		return command
-	}
-	if command := s.qqDraftCommands(ctx, m, text, admin, reply); command != "" {
-		return command
-	}
-	if command := s.qqFAQCandidateCommands(ctx, text, admin, reply); command != "" {
-		return command
-	}
-	// 后续精确命令共用规范化结果，避免重复扫描和复制普通消息全文。
+	// 各命令分支共用规范化结果，参数解析继续使用原文。
 	compact := qqCompact(text)
+	if command := s.qqTypingCommands(ctx, m, compact, reply); command != "" {
+		return command
+	}
+	if command := s.qqDraftCommands(ctx, m, text, compact, admin, reply); command != "" {
+		return command
+	}
+	if command := s.qqFAQCandidateCommands(ctx, text, compact, admin, reply); command != "" {
+		return command
+	}
 	if compact == "周报" {
 		if admin {
 			s.qqWeeklyDigest(ctx, reply)

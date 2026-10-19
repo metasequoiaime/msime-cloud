@@ -54,6 +54,38 @@ func qqIssueMentionTestServer(t *testing.T) *Server {
 	return s
 }
 
+func TestQQRewriteIssueLinksCompatibility(t *testing.T) {
+	link := "https://github.com/metasequoiaime/r/issues/1"
+	units := []string{
+		link,
+		"http://github.com/metasequoiaime/a._-/pull/12345678",
+		"https://github.com/metasequoiaime/" + strings.Repeat("r", 100) + "/issues/1",
+		"https://github.com/metasequoiaime/" + strings.Repeat("r", 101) + "/issues/1",
+		"https://github.com/example/r/issues/1",
+		"https://github.com/metasequoiaime/r/issues/",
+		"https://github.com/metasequoiaime/r/issues/０",
+		"正文", " ", "\n", "\xff", "\xe4\xb8", "😀",
+	}
+	check := func(question string) {
+		t.Helper()
+		want := qqIssueLinkPattern.ReplaceAllString(question, " $1 #$2 ")
+		if got := qqRewriteIssueLinks(question); got != want {
+			t.Fatalf("链接替换=%q，旧实现=%q；输入=%q", got, want, question)
+		}
+	}
+	for _, question := range append(units, "", link+link, strings.Repeat(link+" ", 512)) {
+		check(question)
+	}
+	random := rand.New(rand.NewSource(83))
+	for range 1000 {
+		var question strings.Builder
+		for range random.Intn(32) {
+			question.WriteString(units[random.Intn(len(units))])
+		}
+		check(question.String())
+	}
+}
+
 func TestQQIssueMentionTraversalCompatibility(t *testing.T) {
 	s := qqIssueMentionTestServer(t)
 	ctx := context.Background()
@@ -72,6 +104,12 @@ func TestQQIssueMentionTraversalCompatibility(t *testing.T) {
 		{"#1 #2 #3 #4", 0},
 		{"＃１ ＃２", 2},
 		{"https://github.com/metasequoiaime/r/issues/1", 1},
+		{"ｈｔｔｐｓ://github.com/metasequoiaime/ｒ/issues/１", 1},
+		{"https://github.com/metasequoiaime/r/issues/1https://github.com/metasequoiaime/r/pull/2", 2},
+		{"https://github.com/example/r/issues/1", 0},
+		{"https://github.com/metasequoiaime/r/issues/", 0},
+		{"https://github.com/metasequoiaime/" + strings.Repeat("r", 101) + "/issues/1", 0},
+		{"\xffhttps://github.com/metasequoiaime/r/issues/1\xfe", 1},
 		{"http://github.com/metasequoiaime/r/pull/2 #2", 2},
 		{"#12345678 #1x #2_ #3ſ #4K", 2},
 		{"\xffr #1\xfeR #2\xe4\xb8", 2},
@@ -118,5 +156,36 @@ func TestQQIssueMentionAllocationBudget(t *testing.T) {
 	// 竞态检测会随机丢弃正则对象池，分配预算在普通模式检查。
 	if !raceEnabled && result.AllocedBytesPerOp() > 128<<10 {
 		t.Fatalf("首批已凑齐三个引用时分配 %d 字节，超过 128 KiB 预算", result.AllocedBytesPerOp())
+	}
+}
+
+func TestQQIssueMentionNoLinkAllocationBudget(t *testing.T) {
+	s := &Server{}
+	ctx := context.Background()
+	for _, tc := range []struct{ name, question string }{
+		{"plain_ascii", strings.Repeat("ordinary question ", 4096)},
+		{"plain_chinese", strings.Repeat("普通输入法问题。", 4096)},
+		{"other_organization", strings.Repeat("https://github.com/example/r/issues/1 ", 4096)},
+		{"incomplete_link", strings.Repeat("https://github.com/metasequoiaime/r/issues/ ", 4096)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got string
+			result := testing.Benchmark(func(b *testing.B) {
+				// 在计时前预热同尺寸输入的正则状态，避免首次分配被低迭代次数放大。
+				got = s.qqMentionedIssues(ctx, tc.question)
+				b.ReportAllocs()
+				for b.Loop() {
+					got = s.qqMentionedIssues(ctx, tc.question)
+				}
+			})
+			if got != "" {
+				t.Fatalf("没有 issue 引用时资料应为空，结果=%q", got)
+			}
+			t.Logf("%s：%s，%s", tc.name, result.String(), result.MemString())
+			// 竞态检测会随机丢弃正则对象池，沿用引用遍历测试的做法，在普通模式检查分配预算。
+			if !raceEnabled && result.AllocedBytesPerOp() > 1024 {
+				t.Fatalf("无链接替换时分配 %d 字节，超过 1024 字节预算", result.AllocedBytesPerOp())
+			}
+		})
 	}
 }

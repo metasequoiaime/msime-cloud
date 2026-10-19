@@ -19,8 +19,8 @@ type moderationSnapshot struct {
 	Reason     *string `json:"reason"`
 }
 
-// xmin 标识主行版本；时间与表标识避免事务编号循环或跨分区时复用凭据。
-const moderationVersionSQL = `md5(jsonb_build_array(tableoid::text,id,xmin::text,extract(epoch FROM created_at),moderation,extract(epoch FROM moderated_at))::text)`
+// moderationVersionSQL 用 `xmin` 固定主行版本，并包含作者的封禁时间，防止撤销恢复已经结束的封禁原因；时间与表标识避免事务编号循环或跨表复用凭据。
+const moderationVersionSQL = `md5(jsonb_build_array(tableoid::text,id,xmin::text,extract(epoch FROM created_at),moderation,extract(epoch FROM moderated_at),(SELECT extract(epoch FROM u.banned_at) FROM auth_users u WHERE u.id=owner_id))::text)`
 
 func readModerationSnapshot(ctx context.Context, tx pgx.Tx, section moderationTable, id string) (snapshot moderationSnapshot, err error) {
 	err = tx.QueryRow(ctx, `SELECT `+moderationVersionSQL+`,moderation,previous_moderation,moderation_reason FROM `+section.table+section.where(`id=$1`), id).Scan(&snapshot.Token, &snapshot.Moderation, &snapshot.Previous, &snapshot.Reason)
@@ -102,11 +102,11 @@ func actionUndoModeration(a *Service, ctx context.Context, tx pgx.Tx, v actionRe
 	if err != nil {
 		return actionResult{}, err
 	}
-	if current.Token != value.Token {
-		return actionResult{}, actionFail(409, "conflict")
-	}
 	if value.Moderation != "removed" && banned {
 		return actionResult{}, actionFail(409, "owner_banned")
+	}
+	if current.Token != value.Token {
+		return actionResult{}, actionFail(409, "conflict")
 	}
 	changed, err := moderationUpdate(ctx, tx, `UPDATE `+section.table+` SET moderation=$2,previous_moderation=$3,moderation_reason=$4,moderated_by=$5,moderated_at=now()`+section.where(`id=$1`)+` RETURNING id,name`, v.ID, value.Moderation, value.Previous, value.Reason, adminActor(ctx))
 	if err != nil {

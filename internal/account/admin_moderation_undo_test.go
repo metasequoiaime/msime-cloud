@@ -272,3 +272,30 @@ func TestModerationUndoWaitsForConcurrentChanges(t *testing.T) {
 		})
 	}
 }
+
+func TestModerationUndoRejectsEndedOwnerBan(t *testing.T) {
+	db, _, owner, _, call := moderationFixture(t)
+	if w := call("POST", "/api/actions", `{"action":"ban_user","id":"`+owner.User.ID+`","reason":"封禁原因"}`); w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	undo := moderationUndoBody(t, call("POST", "/api/actions", `{"action":"remove_content","section":"skins","id":"skin-a","reason":"单独下架原因"}`))
+	// 封禁仍有效时，可以撤销单独下架，恢复原封禁原因。
+	if w := call("POST", "/api/actions", undo); w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	_, _, originalReason, _ := moderationState(t, db, "community_skins", "skin-a")
+	if originalReason == nil || *originalReason != banModerationReason {
+		t.Fatal(originalReason)
+	}
+	undo = moderationUndoBody(t, call("POST", "/api/actions", `{"action":"remove_content","section":"skins","id":"skin-a","reason":"单独下架原因"}`))
+	if w := call("POST", "/api/actions", `{"action":"unban_user","id":"`+owner.User.ID+`"}`); w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	if w := call("POST", "/api/actions", undo); w.Code != 409 || !strings.Contains(w.Body.String(), "conflict") {
+		t.Fatal("撤销恢复了已结束封禁的下架原因", w.Code, w.Body.String())
+	}
+	state, _, reason, _ := moderationState(t, db, "community_skins", "skin-a")
+	if state != "removed" || reason == nil || *reason != "单独下架原因" {
+		t.Fatal(state, reason)
+	}
+}

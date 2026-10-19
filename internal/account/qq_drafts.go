@@ -61,9 +61,11 @@ func (a *Service) CreateQQDraftOnce(ctx context.Context, subject, original, repo
 		return 0, err
 	}
 	var id int64
-	err = tx.QueryRow(ctx, `SELECT id FROM qq_drafts WHERE subject=$1 AND original=$2 AND report=$3 AND created_at>now()-$4::interval ORDER BY id LIMIT 1`, subject, original, report, QQDraftIdempotencyWindow.String()).Scan(&id)
+	// 等锁期间幂等窗口可能已经结束；查询和新建时间都使用锁后的数据库实时时钟。
+	err = tx.QueryRow(ctx, `SELECT id FROM qq_drafts WHERE subject=$1 AND original=$2 AND report=$3 AND created_at>clock_timestamp()-$4::interval ORDER BY id LIMIT 1`, subject, original, report, QQDraftIdempotencyWindow.String()).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
-		err = tx.QueryRow(ctx, `INSERT INTO qq_drafts(subject,original,report) VALUES($1,$2,$3) RETURNING id`, subject, original, report).Scan(&id)
+		err = tx.QueryRow(ctx, `INSERT INTO qq_drafts(subject,original,report,created_at,updated_at)
+SELECT $1,$2,$3,stamp.now,stamp.now FROM (SELECT clock_timestamp() AS now) stamp RETURNING id`, subject, original, report).Scan(&id)
 	}
 	if err != nil {
 		return 0, err

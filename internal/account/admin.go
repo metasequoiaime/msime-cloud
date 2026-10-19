@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -334,7 +335,13 @@ func (a *Service) adminAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err = tx.Commit(ctx); err != nil {
+	commitCtx := ctx
+	if result.CommitOnCancel {
+		var cancel context.CancelFunc
+		commitCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+	}
+	if err = tx.Commit(commitCtx); err != nil {
 		a.error(w, err)
 		return
 	}

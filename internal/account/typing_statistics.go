@@ -371,10 +371,29 @@ func (a *Service) CreateQQLinkCode(ctx context.Context, subject string) (string,
 	return code, tx.Commit(ctx)
 }
 
-// UnlinkQQ 解除群友的绑定，返回原来有没有绑定。
+// UnlinkQQ 解除群友的绑定并作废未使用的绑定码，返回原来有没有绑定。
 func (a *Service) UnlinkQQ(ctx context.Context, subject string) (bool, error) {
-	tag, err := a.store.pool.Exec(ctx, `DELETE FROM qq_account_links WHERE subject=$1`, hash(subject))
-	return tag.RowsAffected() > 0, err
+	tx, err := a.store.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+	// 和发码共用群友锁；锁后用新语句读取，才能清除等待期间刚生成的码。
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "qq-link-code:"+hash(subject)); err != nil {
+		return false, err
+	}
+	// 先删除绑定码，等待正在兑换的事务结束，再用独立语句的新快照删除它刚写入的绑定。
+	if _, err := tx.Exec(ctx, `DELETE FROM qq_link_codes WHERE subject=$1`, hash(subject)); err != nil {
+		return false, err
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM qq_account_links WHERE subject=$1`, hash(subject))
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 // QQTypingReport 是机器人 /stats 用的数据：群友绑定的账号、这个账号从 since 起每天的计数（各设备相加，按日期从早到晚），以及各设备候选位次的合计。没有绑定或账号被封禁时 Linked 为 false；Devices 是上传过的设备数，为 0 表示还没打开上传。

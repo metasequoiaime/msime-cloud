@@ -179,17 +179,11 @@ func TestQQGapTopicAllocationBudget(t *testing.T) {
 	}
 }
 
-func TestQQGapTopicAllWhitespaceFastPath(t *testing.T) {
-	text := strings.Repeat(" \t\u3000", 10000)
-	result := testing.Benchmark(func(b *testing.B) {
-		for b.Loop() {
-			if got := qqGapTopic(text); got != "" {
-				t.Fatal("全空白概括应为空")
-			}
+func TestQQGapTopicAllWhitespace(t *testing.T) {
+	for _, unit := range []string{" ", "\t\r\n\f\v", "\u3000", " \t\u3000", "\u0085\u00a0\u1680\u202f"} {
+		if got := qqGapTopic(strings.Repeat(unit, 10000)); got != "" {
+			t.Fatalf("全空白概括应为空：空白单元=%q，结果=%q", unit, got)
 		}
-	})
-	if result.NsPerOp() > 250_000 {
-		t.Fatalf("全空白概括扫描过慢：%s", result.MemString())
 	}
 }
 

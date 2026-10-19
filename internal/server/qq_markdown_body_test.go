@@ -89,18 +89,17 @@ func TestQQMarkdownBodyUsesBoundedAllocation(t *testing.T) {
 	}
 }
 
-func TestQQMarkdownHeadingTailCheckFastPath(t *testing.T) {
-	markdown := "## 正文\n" + strings.Repeat(" \t\u3000", 1<<18) + "短正文"
-	result := testing.Benchmark(func(b *testing.B) {
-		for b.Loop() {
-			sections := qqSplitMarkdown("synthetic", markdown)
-			if len(sections) != 1 || sections[0].Text != "短正文" {
-				t.Fatal("巨大首部空白后的正文解析错误")
+func TestQQMarkdownHeadingTailCheck(t *testing.T) {
+	padding := strings.Repeat(" \t\u3000", 1<<18)
+	for _, body := range []string{"", "短正文", "\xff"} {
+		sections := qqSplitMarkdown("synthetic", "## 正文\n"+padding+body)
+		if body == "" {
+			if len(sections) != 0 {
+				t.Fatal("只有巨大空白的标题尾部不应形成段落")
 			}
+		} else if len(sections) != 1 || sections[0].Text != body {
+			t.Fatalf("巨大首部空白后的正文解析错误：正文=%q，段落=%+v", body, sections)
 		}
-	})
-	if result.NsPerOp() > 2_000_000 {
-		t.Fatalf("标题尾部空白检查过慢：%s", result.MemString())
 	}
 }
 

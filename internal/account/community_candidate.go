@@ -413,7 +413,7 @@ func (a *Service) communityCandidateList(w http.ResponseWriter, r *http.Request)
 	// 先选本页皮肤，再计算文件与互动统计，避免处理 OFFSET 跳过的包。
 	rows, e := a.store.pool.Query(r.Context(), `WITH candidate_page AS MATERIALIZED (
  SELECT s.id FROM community_candidate_skins s JOIN auth_users u ON u.id=s.owner_id `+join+`
- WHERE strpos(lower(s.name),lower($2))>0 AND (`+communityMineCondition(scope, "s", "$3")+`) AND (s.visibility='public' OR ($3<>'' AND $5 AND s.owner_id=$1)) AND (s.moderation<>'removed' OR s.owner_id=$1) AND ($6='' OR s.category=$6)
+ WHERE strpos(lower(s.name),lower($2))>0 AND (`+communityMineCondition(scope, "s", "$3")+`) AND (s.visibility='public' OR ($3<>'' AND $5 AND s.owner_id=$1)) AND (s.moderation<>'removed' OR s.owner_id=$1) AND (`+communityTextFilter(category, "s.category", "$6")+`)
  ORDER BY `+order+` LIMIT 21 OFFSET $4
 ) `+candidateSkinSelectQuery(fields["saved"], true)+join+`ORDER BY `+order, viewer, search, scope, offset, sync, category)
 	if e != nil {

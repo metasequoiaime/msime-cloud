@@ -233,7 +233,7 @@ func (a *Service) communityPluginList(w http.ResponseWriter, r *http.Request) {
 	// 先选本页插件，再读取互动统计，避免为 OFFSET 跳过的插件执行逐条子查询。
 	rows, e := a.store.pool.Query(r.Context(), `WITH plugin_page AS MATERIALIZED (
  SELECT p.id FROM community_plugins p JOIN auth_users u ON u.id=p.owner_id `+join+`
- WHERE strpos(lower(p.name),lower($2))>0 AND ($3='' OR p.kind=$3) AND (`+communityMineCondition(scope, "p", "$5")+`) AND (p.moderation<>'removed' OR p.owner_id=$1) AND p.kind=ANY($6)
+ WHERE strpos(lower(p.name),lower($2))>0 AND (`+communityTextFilter(kind, "p.kind", "$3")+`) AND (`+communityMineCondition(scope, "p", "$5")+`) AND (p.moderation<>'removed' OR p.owner_id=$1) AND p.kind=ANY($6)
  ORDER BY `+order+` LIMIT 21 OFFSET $4
 ) `+communityPluginSelectQuery(fields["saved"], true)+join+`ORDER BY `+order, viewer, search, kind, offset, scope, pluginVisibleKinds(r, kind))
 	if e != nil {

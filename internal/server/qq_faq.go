@@ -105,27 +105,18 @@ func qqInsertFAQ(faq string, index int, question, answer, footer string) (string
 	}
 	heading, body, _ := strings.Cut(faq[offset:], "\n")
 	insertAt := offset + len(heading)
-	offset = insertAt + 1
-	previousBodyLine := ""
-	previousBodyNonEmpty := false
-	for line := range strings.SplitSeq(body, "\n") {
-		if strings.HasPrefix(line, "## ") || strings.HasPrefix(line, footer) {
-			break
-		}
-		if line == previousBodyLine {
-			if previousBodyNonEmpty {
-				insertAt = offset + len(line)
+	if bodyEnd := qqFAQInsertBodyEnd(body, footer); bodyEnd > 0 {
+		body = body[:bodyEnd]
+		for end := len(body); end > 0; {
+			lineEnd := end
+			lineStart := strings.LastIndexByte(body[:lineEnd], '\n') + 1
+			// 只裁剪行首来判断是否为空行，原有行尾空白和后续空行都保留。
+			if qqMarkdownLeadingSpace(body[lineStart:lineEnd]) != "" {
+				insertAt = insertAt + 1 + lineEnd
+				break
 			}
-			offset += len(line) + 1
-			continue
+			end = lineStart - 1
 		}
-		previousBodyLine = line
-		// 只裁剪行首来判断是否为空行，原有行尾空白和后续空行都保留。
-		previousBodyNonEmpty = qqMarkdownLeadingSpace(line) != ""
-		if previousBodyNonEmpty {
-			insertAt = offset + len(line)
-		}
-		offset += len(line) + 1
 	}
 	answer = strings.TrimSpace(answer)
 	var out strings.Builder
@@ -146,6 +137,29 @@ func qqInsertFAQ(faq string, index int, question, answer, footer string) (string
 		out.WriteString(tail)
 	}
 	return out.String(), true
+}
+
+// qqFAQInsertBodyEnd 找到分类正文中应扫描到的边界；不能直接识别的页尾格式交给原有逐行规则处理。
+func qqFAQInsertBodyEnd(body, footer string) int {
+	if body == "" || footer == "" {
+		return 0
+	}
+	end := len(body)
+	if strings.HasPrefix(body, "## ") {
+		return 0
+	}
+	if marker := strings.Index(body, "\n## "); marker >= 0 && marker < end {
+		end = marker
+	}
+	if !strings.Contains(footer, "\n") {
+		if strings.HasPrefix(body, footer) {
+			return 0
+		}
+		if marker := strings.Index(body, "\n"+footer); marker >= 0 && marker < end {
+			end = marker
+		}
+	}
+	return end
 }
 
 // qqSyncFAQSources 在译文核对记录（zh-TW/sources.json）里 faq.md 的 sourceSha256 等于旧简体原文的哈希时，把它换成新原文的哈希，返回新的文件内容；不一致（译文本来就没同步）或格式不对时返回 false。只替换这一个哈希字符串，不重新序列化，文件的键顺序和缩进保持原样。

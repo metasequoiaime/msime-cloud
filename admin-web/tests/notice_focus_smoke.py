@@ -167,6 +167,81 @@ def check_notice_focus_unsaved(browser, base):
                 context.close()
 
 
+def check_notice_focus_unavailable(browser, base):
+    for outcome in ("retry", "missing"):
+        context = browser.new_context(viewport={"width": 1280, "height": 1000})
+        page = context.new_page()
+        errors, pending = [], []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        fixture = smoke.FIXTURES["/api/notices"]
+        target = {**fixture["items"][1], "id": "4", "title": "更早的目标公告", "body": "历史公告正文"}
+        page.route("**/api/auth/session", lambda route: route.fulfill(json=smoke.FIXTURES["/api/auth/session"]))
+        page.route("**/api/notices", lambda route: route.fulfill(json=fixture))
+        page.route("**/api/notices?focus=4", lambda route: pending.append(route))
+        try:
+            page.goto(base + '/notice?focus=%224%22')
+            expect(page.get_by_text("正在读取定位的公告…", exact=True)).to_be_visible()
+            expect(page.locator("#notice-2")).to_be_visible()
+            assert len(pending) == 1, pending
+            if outcome == "retry":
+                pending.pop().fulfill(status=500, json={"error": {"code": "internal_error", "message": "internal_error"}})
+                with page.expect_request("**/api/notices?focus=4"):
+                    page.get_by_role("alert").get_by_role("button", name="重试", exact=True).click()
+                expect(page.get_by_text("正在读取定位的公告…", exact=True)).to_be_visible()
+                expect(page.get_by_role("alert")).not_to_be_visible()
+                assert len(pending) == 1, pending
+                pending.pop().fulfill(json={**fixture, "items": [*fixture["items"], target]})
+                expect(page.locator("#notice-4")).to_be_visible()
+                expect(page.locator("#notice-4 button[aria-expanded]")).to_have_attribute("aria-expanded", "true")
+                expect(page.locator("#notice-title")).to_have_value(target["title"])
+            else:
+                pending.pop().fulfill(json=fixture)
+                expect(page.get_by_text("搜索定位的公告已不存在。", exact=True)).to_be_visible()
+                expect(page.locator("#notice-2")).to_be_visible()
+            expect(page.get_by_text("正在读取定位的公告…", exact=True)).not_to_be_visible()
+            assert not errors, errors
+        finally:
+            for route in pending:
+                route.abort()
+            page.unroute_all(behavior="ignoreErrors")
+            context.close()
+
+
+def check_notice_focus_older(browser, base):
+    for status in ("draft", "live", "archived"):
+        context = browser.new_context(viewport={"width": 1280, "height": 1000})
+        page = context.new_page()
+        errors, focused_reads = [], []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        fixture = smoke.FIXTURES["/api/notices"]
+        target = {**fixture["items"][1], "id": "4", "title": "更早的目标公告", "body": "历史公告正文", "status": status}
+        page.route("**/api/auth/session", lambda route: route.fulfill(json=smoke.FIXTURES["/api/auth/session"]))
+        page.route("**/api/notices", lambda route: route.fulfill(json=fixture))
+
+        def focused(route):
+            focused_reads.append(route.request.url)
+            route.fulfill(json={**fixture, "items": [*fixture["items"], target]})
+
+        page.route("**/api/notices?focus=4", focused)
+        page.route("**/api/search?*", lambda route: route.fulfill(json={"items": [{"kind": "notice", "id": target["id"], "title": target["title"], "where": "公告", "target": "notice"}]}))
+        try:
+            page.goto(base + "/notice")
+            expect(page.locator("#notice-2")).to_be_visible()
+            page.get_by_role("combobox", name="全局搜索").fill(target["title"])
+            page.get_by_role("option", name=target["title"] + " 公告", exact=True).click()
+            row = page.locator("#notice-4")
+            expect(row).to_be_visible()
+            expect(row.locator("button[aria-expanded]")).to_have_attribute("aria-expanded", "true")
+            expect(row.get_by_text(target["body"], exact=True)).to_be_visible()
+            if status == "draft":
+                expect(page.locator("#notice-title")).to_have_value(target["title"])
+            assert len(focused_reads) == 1, focused_reads
+            assert not errors, errors
+        finally:
+            page.unroute_all(behavior="ignoreErrors")
+            context.close()
+
+
 if __name__ == "__main__":
     smoke.Handler.csp = smoke.production_csp()
     server = smoke.Server(("127.0.0.1", 0), smoke.Handler)
@@ -177,6 +252,8 @@ if __name__ == "__main__":
             try:
                 check_notice_focus_refresh(browser, f"http://127.0.0.1:{server.server_port}")
                 check_notice_focus_unsaved(browser, f"http://127.0.0.1:{server.server_port}")
+                check_notice_focus_older(browser, f"http://127.0.0.1:{server.server_port}")
+                check_notice_focus_unavailable(browser, f"http://127.0.0.1:{server.server_port}")
                 print("公告缓存刷新和未保存修改跳转回归通过")
             finally:
                 browser.close()

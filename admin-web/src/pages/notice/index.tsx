@@ -72,7 +72,14 @@ export default function NoticePage() {
     queryKey: keys.page("notice", "list"),
     queryFn: ({ signal }) => api.get("notices", noticesSchema, { signal }),
   });
-  const items = query.data?.items;
+  const recent = query.data?.items;
+  const listedFocus = recent?.some(n => n.id === focus);
+  const focused = useQuery({
+    queryKey: keys.page("notice", "focus", focus),
+    queryFn: ({ signal }) => api.get(`notices?focus=${encodeURIComponent(focus ?? "")}`, noticesSchema, { signal }),
+    enabled: Boolean(focus) && query.isSuccess && !query.isFetching && !listedFocus,
+  });
+  const items = listedFocus ? recent : focused.data?.items ?? recent;
   const telegram = query.data?.telegram;
 
   const refresh = () => client.invalidateQueries({ queryKey: keys.page("notice") });
@@ -232,6 +239,9 @@ export default function NoticePage() {
         <CardHeader title="已发布与草稿" className="mb-0 border-b border-hair px-5 py-4"
           actions={<FilterChips label="公告状态" value={filter} onChange={setFilter}
             options={[{ key: "current", label: "当前", count: items ? counts.current : undefined }, { key: "archived", label: "已归档", count: items ? counts.archived : undefined }]} />} />
+        {focus && !listedFocus && focused.isFetching && <p role="status" className="px-5 text-sm text-muted">正在读取定位的公告…</p>}
+        {focus && !listedFocus && focused.isError && <ErrorState className="m-4" error={focused.error} onRetry={() => focused.refetch()} />}
+        {focus && focused.isSuccess && !items?.some(n => n.id === focus) && <p role="status" className="px-5 text-sm text-muted">搜索定位的公告已不存在。</p>}
         {list}
       </Card>
     </div>

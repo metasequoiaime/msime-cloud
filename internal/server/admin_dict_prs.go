@@ -187,7 +187,8 @@ func (s *Server) adminDictPRs(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	parts := strings.Split(rest, "/")
+	// 路由最多接受编号和操作两段，第三段只用于拒绝多余路径。
+	parts := strings.SplitN(rest, "/", 3)
 	number, err := strconv.Atoi(parts[0])
 	if err != nil || number <= 0 || number > 1<<30 || strconv.Itoa(number) != parts[0] {
 		fail(w, 400, "invalid_id")

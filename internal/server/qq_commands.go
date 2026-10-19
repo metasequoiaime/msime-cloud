@@ -276,7 +276,10 @@ var qqCommandGluedPrefixes = []string{"后", "了", "的", "条", "功能", "库
 
 // qqPoliteCommandArg 是「加词」「提文档」用的 qqCommandArg：先去掉一层客气前缀（qqCommandPolite），另外返回内容是不是直接接在命令词后面、中间没有分隔符。
 func qqPoliteCommandArg(text string, words ...string) (content string, glued, ok bool) {
-	trimmed := qqCommandPolite.ReplaceAllString(strings.TrimSpace(text), "")
+	trimmed := strings.TrimSpace(text)
+	// 正则只匹配开头，直接截掉匹配前缀，保留参数正文。
+	prefix := qqCommandPolite.FindString(trimmed)
+	trimmed = trimmed[len(prefix):]
 	if content, ok = qqCommandArg(trimmed, words...); !ok || content == "" {
 		return content, false, ok
 	}

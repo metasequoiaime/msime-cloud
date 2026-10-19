@@ -44,6 +44,11 @@ export function FileDetail({ path, initialQuery = "", onDirty, focused, onToggle
     staleTime: 60_000, refetchOnWindowFocus: false,
   });
   const data = content.data;
+  // 没有草稿或输入时直接接受新文件版本，同时清除只适用于旧行号的撤销和重做记录。
+  if (!dirty && data && sha && sha !== data.sha) {
+    setSHA("");
+    setHistory(emptyHistory);
+  }
   useEffect(() => { if (editing && data) setSHA(current => current || data.sha); }, [editing, data]);
   const editable = Boolean(data?.editable) && permitted;
   const labels = useMemo(() => columnLabels(path, Math.max(0, ...(data?.rows.map(row => row.columns.length) ?? []))), [path, data?.rows]);

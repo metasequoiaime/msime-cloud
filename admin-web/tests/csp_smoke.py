@@ -2238,6 +2238,8 @@ def main() -> int:
                 check_profile_rollback(context, base, problems)
                 check_dictionary_editor_actions(context, base, problems)
                 check_dictionary_editor_navigation(context, base, problems)
+                from dictionary_revision_smoke import check_dictionary_revisions
+                check_dictionary_revisions(browser, base)
                 check_preferences_pending(context, base, problems)
                 check_notice_pending(context, base, problems)
                 check_notice_pending_focus(context, base, problems)

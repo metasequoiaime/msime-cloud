@@ -1851,6 +1851,9 @@ func qqDropPromoSentences(answer string) string {
 		lineStart := len(answer) - len(rest)
 		line, next, _ := strings.Cut(rest, "\n")
 		rest = next
+		if !qqPromoSentenceCandidate(line) {
+			continue
+		}
 		for sentence := line; sentence != ""; {
 			end := qqPromoSentenceEnd(sentence)
 			if qqPromoSentenceCandidate(sentence[:end]) && qqPromoSentence(sentence[:end]) != "" {

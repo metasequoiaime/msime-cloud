@@ -9,8 +9,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
 )
 
 func TestStreamingHandshakeFailuresDoNotLogUpstreamHeaders(t *testing.T) {
@@ -46,9 +44,7 @@ func TestStreamingHandshakeFailuresDoNotLogUpstreamHeaders(t *testing.T) {
 			s.config.Admin.Enabled = true
 			s.config.Streaming = StreamingEndpoint{URL: strings.Replace(s.config.Cloud.URL, "https:", "wss:", 1), token: "synthetic-provider-key", ResourceID: "synthetic-resource", MaxSeconds: 5}
 			logs := captureLogs(t)
-			r := httptest.NewRequest(http.MethodGet, contract.StreamingTranscriptionPath, nil)
-			r.Header.Set("Authorization", "Bearer "+testToken)
-			r.Header.Set("Upgrade", "websocket")
+			r := newStreamingHandshakeRequest()
 			w := httptest.NewRecorder()
 			s.ServeHTTP(w, r)
 			if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), "upstream_failure") || !strings.Contains(logs.String(), "upstream failed") {
@@ -84,9 +80,7 @@ func TestStreamingHandshakeErrorsKeepClassification(t *testing.T) {
 				return nil, fmt.Errorf("synthetic-private-transport-details: %w", tc.cause)
 			})
 			logs := captureLogs(t)
-			r := httptest.NewRequest(http.MethodGet, contract.StreamingTranscriptionPath, nil)
-			r.Header.Set("Authorization", "Bearer "+testToken)
-			r.Header.Set("Upgrade", "websocket")
+			r := newStreamingHandshakeRequest()
 			w := httptest.NewRecorder()
 			s.ServeHTTP(w, r)
 			if w.Code != tc.status || !strings.Contains(w.Body.String(), tc.code) {

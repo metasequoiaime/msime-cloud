@@ -453,7 +453,7 @@ func (s *Server) qqSupplementDraft(ctx context.Context, draft account.QQDraft, e
 	return report, true
 }
 
-// qqSupplementedNote 是补充成功后的回复，asked 表示还在追问：还缺信息时接着问（qqDraftAsk，和起草稿的说明同一个写法），群友下一句直接回答也能补进草稿（qqDraftFollowUp）；信息齐了就说等管理员提交。
+// qqSupplementedNote 是补充成功后的回复，asked 表示还在追问：还缺信息时接着问（qqDraftAsk，和起草稿的说明同一个写法），群友下一句直接回答也能补进草稿（qqDraftFollowUpID）；信息齐了就说等管理员提交。
 func (s *Server) qqSupplementedNote(ctx context.Context, draft account.QQDraft, report qqReport, extra string) (note string, asked bool) {
 	code := qqDraftCode(draft.ID)
 	if missing := s.qqDraftMissing(ctx, report, draft.Original+"\n补充："+extra); missing != "" {
@@ -466,10 +466,6 @@ func (s *Server) qqSupplementedNote(ctx context.Context, draft account.QQDraft, 
 const qqDraftFollowUpRunes = 80
 
 var (
-	// qqDraftFollowUp 匹配机器人追问草稿缺的信息的回复，分组是草稿编号：说明开头的「已记下（D编号）」「已补充到 D编号」（旧文案是「编号 D编号」），后面跟着「还差」（旧文案是「还想知道」）。起草稿的说明（qqDraftReport）和补充后还缺信息的回复（qqSupplementedNote）都是这个写法，两者都会记进对话历史。
-	qqDraftFollowUp = regexp.MustCompile(`(?:编号 |已补充到 |已记下（)D([0-9]{1,9})[\s\S]*(?:还想知道|还差)`)
-	// qqDraftFollowUpLegacy 是改文案之前的写法：「还想知道：…」后面教群友发的「补充 D编号 …」。对话历史里已经存下的旧回复靠它接上。
-	qqDraftFollowUpLegacy = regexp.MustCompile(`还想知道[\s\S]*「补充 D([0-9]{1,9})`)
 	// qqDraftTurn 匹配已经起过草稿、补充过草稿或者在已有需求下记过票的一轮回复：这一轮之前群友说的话已经在那份草稿或那个需求里了。
 	qqDraftTurn = regexp.MustCompile(`编号 D[0-9]+|已补充到 D[0-9]+|已记下（D[0-9]+|这个需求已经有人提过`)
 	// qqDraftAck 匹配去掉 qqBadAnswerFiller 之后只剩客气话或应答的消息：「好的」「谢谢」「收到」「知道了」「OK」。追问之后群友回一句「谢谢」很常见，这不是补充。
@@ -497,7 +493,7 @@ func qqDraftNoContent(text string) bool {
 	return stripped == "" || qqDraftAck.MatchString(stripped) || qqBadAnswerPattern.MatchString(stripped)
 }
 
-// qqSupplementFollowUp 处理机器人追问草稿缺的信息之后群友的直接回答，补进那份草稿，返回处理结果的名字；不算补充时返回空字符串，调用方照常答疑。原来只认「补充 D编号 内容」，群友多半直接回「Windows 11，0.9.5」，被当成新问题去答，模型的历史里也没有草稿编号，常常又判成报问题、再开一份草稿，原来那份一直缺信息。同时满足才算补充：上一轮回复是追问（qqDraftFollowUp，草稿编号从这里取，比扫待处理的草稿更不容易补错）；消息不超过 qqDraftFollowUpRunes 字，不是问句（qqContainsQuestion），也不是只有客气话或否定（qqDraftNoContent）；草稿还在、没提交，而且是这位群友发起的。补充成功时这一轮记进对话历史，还缺信息时下一句照样能接上；补充失败时 qqSupplementDraft 已经回复过，不记这一轮，上一轮的追问还在，群友再说一句仍能补上。
+// qqSupplementFollowUp 处理机器人追问草稿缺的信息之后群友的直接回答，补进那份草稿，返回处理结果的名字；不算补充时返回空字符串，调用方照常答疑。原来只认「补充 D编号 内容」，群友多半直接回「Windows 11，0.9.5」，被当成新问题去答，模型的历史里也没有草稿编号，常常又判成报问题、再开一份草稿，原来那份一直缺信息。同时满足才算补充：上一轮回复是追问（qqDraftFollowUpID，草稿编号从这里取，比扫待处理的草稿更不容易补错）；消息不超过 qqDraftFollowUpRunes 字，不是问句（qqContainsQuestion），也不是只有客气话或否定（qqDraftNoContent）；草稿还在、没提交，而且是这位群友发起的。补充成功时这一轮记进对话历史，还缺信息时下一句照样能接上；补充失败时 qqSupplementDraft 已经回复过，不记这一轮，上一轮的追问还在，群友再说一句仍能补上。
 func (s *Server) qqSupplementFollowUp(ctx context.Context, subject string, history []account.QQTurn, text string, reply func(string)) string {
 	if s.qqDrafts == nil || s.qqHistory == nil || len(history) == 0 {
 		return ""
@@ -527,17 +523,58 @@ func (s *Server) qqSupplementFollowUp(ctx context.Context, subject string, histo
 	return "cmd_draft_supplement_followup"
 }
 
-// qqDraftFollowUpID 从机器人上一轮的回复里取追问的草稿编号：先认现在的写法（qqDraftFollowUp），再认旧写法（qqDraftFollowUpLegacy）；不是追问时 ok 为 false。
+// qqDraftFollowUpID 从上一轮回复取追问的草稿编号，先认当前文案，再认旧文案。
+// 当前文案取追问之前最早的编号，旧文案的贪婪匹配则取追问之后最后一个有效的「补充 D编号」。
 func qqDraftFollowUpID(answer string) (int64, bool) {
-	match := qqDraftFollowUp.FindStringSubmatch(answer)
-	if match == nil {
-		match = qqDraftFollowUpLegacy.FindStringSubmatch(answer)
-	}
-	if match == nil {
+	first := strings.IndexByte(answer, 'D')
+	if first < 0 {
 		return 0, false
 	}
-	id, err := strconv.ParseInt(match[1], 10, 64)
-	return id, err == nil
+	lastAsk := max(strings.LastIndex(answer, "还差"), strings.LastIndex(answer, "还想知道"))
+	for search := first; search < lastAsk; {
+		i := strings.IndexByte(answer[search:lastAsk], 'D')
+		if i < 0 {
+			break
+		}
+		i += search
+		search = i + 1
+		prefix := answer[:i]
+		if !strings.HasSuffix(prefix, "编号 ") && !strings.HasSuffix(prefix, "已补充到 ") && !strings.HasSuffix(prefix, "已记下（") {
+			continue
+		}
+		if id, ok := qqDraftFollowUpNumber(answer[i+1 : lastAsk]); ok {
+			return id, true
+		}
+	}
+	firstAsk := strings.Index(answer, "还想知道")
+	if firstAsk < 0 {
+		return 0, false
+	}
+	legacy := answer[firstAsk+len("还想知道"):]
+	const marker = "「补充 D"
+	for end := len(legacy); end > 0; {
+		i := strings.LastIndex(legacy[:end], marker)
+		if i < 0 {
+			break
+		}
+		end = i
+		if id, ok := qqDraftFollowUpNumber(legacy[i+len(marker):]); ok {
+			return id, true
+		}
+	}
+	return 0, false
+}
+
+// qqDraftFollowUpNumber 直接读最多九位 ASCII 数字，保留前导零及十位编号只取前九位的规则。
+func qqDraftFollowUpNumber(number string) (int64, bool) {
+	if len(number) == 0 || number[0] < '0' || number[0] > '9' {
+		return 0, false
+	}
+	var id int64
+	for i := 0; i < min(len(number), 9) && number[i] >= '0' && number[i] <= '9'; i++ {
+		id = id*10 + int64(number[i]-'0')
+	}
+	return id, true
 }
 
 // qqQuestionEnd 给模型写的追问补上句末的问号，后面好直接接下一句；已经以标点结尾时原样返回。

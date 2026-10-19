@@ -1668,6 +1668,8 @@ def main() -> int:
                 check_log_stream_replay(browser, base)
                 from community_management_smoke import check_community_management
                 check_community_management(browser, base)
+                from community_undo_smoke import check_community_undo
+                check_community_undo(browser, base)
                 from community_category_smoke import check_community_categories
                 check_community_categories(browser, base)
                 from community_section_smoke import check_community_pagination_placeholder, check_community_section_switch

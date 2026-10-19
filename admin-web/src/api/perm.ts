@@ -104,6 +104,7 @@ export function describeAudit(entry: AuditEntry): string {
     case "approve_content": return `通过了${section}${item}`;
     case "remove_content": return `下架了${section}${item}${suffix}`;
     case "restore_content": return `恢复了${section}${item}`;
+    case "undo_moderation": return `撤销了${section}「${text(d.name) || target}」的审核操作`;
     case "set_skin_category": return `将键盘皮肤${text(d.name) ? `「${text(d.name)}」` : count ? ` ${count} 项` : ""}的分类改为「${candidateCategoryLabel(text(d.category))}」`;
     case "set_candidate_skin_category": return `将候选窗皮肤${text(d.name) ? `「${text(d.name)}」` : count ? ` ${count} 项` : ""}的分类改为「${candidateCategoryLabel(text(d.category))}」`;
     case "delete_skin": return `删除了键盘皮肤「${target}」${suffix}`;

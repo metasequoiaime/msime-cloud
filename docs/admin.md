@@ -367,7 +367,9 @@ GitHub 读请求在内存中缓存 60 秒，并使用 ETag 条件请求，以免
 
 - 新上传的皮肤、候选皮肤、插件、词库和回复模板立即公开，状态为「待复核」（`pending`），由审核员随后复核。只有「已下架」（`removed`）的内容对作者以外的所有人隐藏：公开列表、详情、下载和评分接口都会排除它。已有内容在迁移时一律设为「已通过」。
 - 上传时用敏感词库检查名称、描述等文本：命中「拦截」级规则返回 422 `blocked_content`，不保存；命中「需复核」级规则照常发布，并在待复核卡片上标出命中的词。与已发布内容完全相同的重试在检查之前直接返回成功，所以词库后来新增的规则不会让已上线内容的重试失败，也不会重复计入命中次数。
-- 下架需要原因，可以撤销，撤销会恢复下架前的状态。撤销对已下架内容的通过或恢复时，后台用 `remove_content` 的 `value: {"previous":"pending"|"approved"}` 一并带回它原来的恢复状态，之后再恢复仍回到原来的状态（例如被驳回的待复核内容回到待复核）。
+- 下架需要原因。单项 `approve_content`、`remove_content`、`restore_content`（使用 `id`，不带 `ids`）成功响应额外返回 `undo: {"action":"undo_moderation","id":"…","section":"…","value":{"token":"…","moderation":"pending|approved|removed","previous":null,"reason":null}}`。`previous` 也可为 `pending` / `approved`，`reason` 也可为字符串。服务端在同一事务内先锁作者、再锁作品，保存操作前真实审核状态、原恢复状态与原因；前端直接把 `undo` 提交到 `POST /api/actions`，需要 `review_community` 权限。批量审核不返回单项撤销。
+- `undo_moderation` 仅接受单个 `id`。`value.token` 固定操作完成后的主行版本和作者封禁状态，作品又被审核、作者或管理员编辑、修改分类、删除重发，或作者封禁状态变化时返回 409 `conflict`；失败不修改作品、不写成功审计。成功恢复原审核状态、原恢复状态与原因，待复核内容重新检查敏感词提示，并记录本次撤销管理员与时间；重复撤销也返回冲突。封禁作者的作品不能借此重新公开（409 `owner_banned`）。版本凭据用于并发检查，不是额外授权凭据。
+- 滚动升级时，旧副本缺少有效 `undo` 的响应不显示撤销；新撤销请求落到旧副本会以 400 `invalid_action` 拒绝。旧页面仍使用旧撤销方式，应在全部副本升级后刷新页面。原 `restore_content.value.to`、`remove_content.value.previous` 继续兼容直接调用，后台新版撤销统一使用 `undo_moderation`。
 - 后台的「通过并上架」带上审核员看到的状态和版本：`approve_content` 的 `value: {"from":"pending"|"removed","created_at":"…","updated_at":"…"}`，`created_at` 区分作者删除后用同一 id 重新发布的内容，`updated_at` 只用于作者可以修改的候选皮肤、词库和回复模板。内容已被其他审核员处理，或作者在此期间改过、删除重发过内容，接口返回 409 `conflict` 且不做改动，审核员需要查看最新内容后再操作。不带 `value` 的调用不做这项检查。
 - 封禁作者会以 `owner_banned` 下架其全部内容，只有解封能恢复。
 - 举报：登录用户通过 `POST /v1/community/reports` 举报，后台卡片显示被举报次数，详情列出举报原因，每条新举报生成一条通知。

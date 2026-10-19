@@ -729,7 +729,7 @@ func TestRestoredPendingItemsAreScreenedAgain(t *testing.T) {
 	}
 }
 
-// An approval racing a ban waits for the ban (both lock the author's row) and then refuses, so the banned author's item is not published again.
+// 审核通过等待并发封禁持有的作者行锁，封禁提交后拒绝重新公开作品。
 func TestApproveWaitsForConcurrentBan(t *testing.T) {
 	db, _, owner, _, call := moderationFixture(t)
 	ctx := t.Context()
@@ -751,24 +751,7 @@ func TestApproveWaitsForConcurrentBan(t *testing.T) {
 	go func() {
 		result <- call("POST", "/api/actions", `{"action":"approve_content","section":"skins","id":"skin-a"}`)
 	}()
-	for deadline := time.Now().Add(10 * time.Second); ; {
-		var waiting bool
-		if err = db.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT u.banned_at IS NOT NULL%')`).Scan(&waiting); err != nil {
-			t.Fatal(err)
-		}
-		if waiting {
-			break
-		}
-		select {
-		case w := <-result:
-			t.Fatal("approval finished before the ban committed", w.Code, w.Body.String())
-		default:
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("approval never waited on the ban")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForAdminDatabaseLock(t, db, ban.Conn().PgConn().PID())
 	if err = ban.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}

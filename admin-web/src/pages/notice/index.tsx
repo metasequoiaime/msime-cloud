@@ -1,12 +1,12 @@
 import { formatNumber } from "../../utils/number";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { errorMessage, useAPI } from "../../api/client";
 import { keys } from "../../api/keys";
 import { noticeChannels, noticePlatforms, noticeBodyMax, noticesSchema } from "../../api/notice";
 import type { Notice, NoticeStatus, NoticeValue } from "../../api/notice";
 import { PageIntro } from "../../shell/page-intro";
-import { usePageSearch } from "../../shell/page-search";
+import { usePageSearch, useSetPageSearch } from "../../shell/page-search";
 import { noPermissionHint, usePermissions } from "../../shell/permissions";
 import { formatDateTime, relativeTime } from "../../utils/time";
 import { Button } from "../../ui/button";
@@ -58,9 +58,13 @@ export default function NoticePage() {
   const confirm = useConfirm();
   const { can } = usePermissions();
   const { focus } = usePageSearch();
+  const setSearch = useSetPageSearch();
   const canPublish = can("publish_notices");
 
   const [form, setForm] = useState<Form>(emptyForm);
+  // 编辑基线只随表单载入或成功写入更新，列表刷新与保存失败仍保留本地修改状态。
+  const [savedForm, setSavedForm] = useState<Form>(emptyForm);
+  const resetForm = useCallback((next: Form) => { setForm(next); setSavedForm(next); }, []);
   const [filter, setFilter] = useState<ListFilter>("current");
   const [expanded, setExpanded] = useState<string | null>(null);
 
@@ -85,20 +89,33 @@ export default function NoticePage() {
     onSettled: refresh,
   });
   const busy = save.isPending || publish.isPending || archive.isPending;
+  const dirty = JSON.stringify(formValue(form)) !== JSON.stringify(formValue(savedForm));
 
   // 搜索和通知通过 ?focus=<id> 打开草稿或展开公告；等待当前写入完成后再切换编辑器。
   const handledFocus = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (busy || !focus || !items || handledFocus.current === focus) return;
+    if (!focus) { handledFocus.current = undefined; return; }
+    if (busy || !items || handledFocus.current === focus) return;
     const notice = items.find(n => n.id === focus);
     if (!notice) return;
-    // 旧缓存可能还没有目标；找到公告后才消耗跳转，等待刷新时不能提前忽略它。
-    handledFocus.current = focus;
-    if (notice.status === "draft") setForm(formFromNotice(notice));
-    setFilter(notice.status === "archived" ? "archived" : "current");
-    setExpanded(notice.id);
-    window.requestAnimationFrame(() => document.getElementById(`notice-${notice.id}`)?.scrollIntoView({ block: "center" }));
-  }, [busy, focus, items]);
+    let active = true;
+    const open = async () => {
+      if (notice.status === "draft" && form.id !== notice.id && dirty) {
+        const ok = await confirm({ title: "放弃未保存的修改？", description: "编辑器里有还没保存的内容，打开这条草稿会丢弃它们。", okLabel: "放弃修改" });
+        if (!active) return;
+        if (ok === null) { setSearch({ focus: undefined }); return; }
+      }
+      if (!active) return;
+      // 旧缓存可能还没有目标；确认切换后才消耗跳转，等待刷新时不能提前忽略它。
+      handledFocus.current = focus;
+      if (notice.status === "draft" && form.id !== notice.id) resetForm(formFromNotice(notice));
+      setFilter(notice.status === "archived" ? "archived" : "current");
+      setExpanded(notice.id);
+      window.requestAnimationFrame(() => document.getElementById(`notice-${notice.id}`)?.scrollIntoView({ block: "center" }));
+    };
+    void open();
+    return () => { active = false; };
+  }, [busy, confirm, dirty, focus, form.id, items, resetForm, setSearch]);
 
   const counts = useMemo(() => ({
     current: items?.filter(n => n.status !== "archived").length ?? 0,
@@ -131,7 +148,7 @@ export default function NoticePage() {
       return;
     }
     // Saving keeps the chosen targets and channels for the next notice, as in the design.
-    setForm({ ...form, id: undefined, title: "", body: "" });
+    resetForm({ ...form, id: undefined, title: "", body: "" });
     toast("已存为草稿");
   };
 
@@ -148,7 +165,7 @@ export default function NoticePage() {
       toast(`操作失败：${errorMessage(error)}`);
       return;
     }
-    setForm(emptyForm);
+    resetForm(emptyForm);
     toast("公告已发布");
   };
 
@@ -166,20 +183,18 @@ export default function NoticePage() {
       toast(`操作失败：${errorMessage(error)}`);
       return;
     }
-    if (form.id === notice.id) setForm(emptyForm);
+    if (form.id === notice.id) resetForm(emptyForm);
     toast(draft ? "草稿已丢弃" : "公告已归档");
   };
 
   // edit loads a draft into the editor; unsaved changes to whatever is open there are only dropped after a confirm.
   const edit = async (notice: Notice) => {
     if (form.id === notice.id) return;
-    const loaded = form.id ? items?.find(n => n.id === form.id) : undefined;
-    const saved = loaded ? formFromNotice(loaded) : emptyForm;
-    if (JSON.stringify(formValue(form)) !== JSON.stringify(formValue(saved))) {
+    if (dirty) {
       const ok = await confirm({ title: "放弃未保存的修改？", description: "编辑器里有还没保存的内容，打开这条草稿会丢弃它们。", okLabel: "放弃修改" });
       if (ok === null) return;
     }
-    setForm(formFromNotice(notice));
+    resetForm(formFromNotice(notice));
     document.getElementById("notice-title")?.focus();
   };
 
@@ -201,7 +216,7 @@ export default function NoticePage() {
       <Card>
         <fieldset disabled={busy} aria-label="编辑公告" className="m-0 min-w-0 border-0 p-0">
           <CardHeader title={form.id ? "编辑草稿" : "新建公告"}
-            actions={form.id ? <Button size="sm" variant="ghost" onClick={() => setForm(emptyForm)}>取消编辑</Button> : undefined} />
+            actions={form.id ? <Button size="sm" variant="ghost" onClick={() => resetForm(emptyForm)}>取消编辑</Button> : undefined} />
           <NoticeFields form={form} onChange={setForm} telegram={telegram} />
           <div className="mt-5 flex flex-wrap justify-end gap-2">
             <Button size="lg" variant="outline" disabled={busy} onClick={onDraft}>{save.isPending ? "保存中…" : "存为草稿"}</Button>

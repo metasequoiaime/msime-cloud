@@ -2243,8 +2243,9 @@ def main() -> int:
                 check_preferences_pending(context, base, problems)
                 check_notice_pending(context, base, problems)
                 check_notice_pending_focus(context, base, problems)
-                from notice_focus_smoke import check_notice_focus_refresh
+                from notice_focus_smoke import check_notice_focus_refresh, check_notice_focus_unsaved
                 check_notice_focus_refresh(browser, base)
+                check_notice_focus_unsaved(browser, base)
                 check_mirror_pending(context, base, problems)
                 check_mirror_navigation(context, base, problems)
                 check_mirror_read_race(context, base, problems)

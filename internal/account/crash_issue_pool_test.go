@@ -61,7 +61,7 @@ VALUES($1,'ios','1.0','合成崩溃') ON CONFLICT(signature) DO UPDATE SET statu
 					t.Fatalf("创建尝试状态不正确：source=%+v err=%v", source, err)
 				}
 			} else {
-				if err := locked.Record(ctx, "synthetic/ios", 7, "https://example.test/issues/7"); err != nil {
+				if _, err := locked.Record(ctx, "synthetic/ios", 7, "https://example.test/issues/7"); err != nil {
 					t.Fatalf("持锁后登记 Issue 阻塞或失败：%v", err)
 				}
 				var status, issueURL string

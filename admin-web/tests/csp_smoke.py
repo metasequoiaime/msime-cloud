@@ -1670,6 +1670,8 @@ def main() -> int:
                 check_community_management(browser, base)
                 from community_undo_smoke import check_community_undo
                 check_community_undo(browser, base)
+                from crash_undo_smoke import check_crash_undo
+                check_crash_undo(browser, base)
                 from community_category_smoke import check_community_categories
                 check_community_categories(browser, base)
                 from community_section_smoke import check_community_pagination_placeholder, check_community_section_switch

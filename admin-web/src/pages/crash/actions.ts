@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { APIError, useAPI } from "../../api/client";
 import type { API } from "../../api/client";
 import { keys } from "../../api/keys";
-import { crashIssueCreatedSchema, crashStatusSchema } from "../../api/crash";
+import { crashIssueCreatedSchema, crashStatusUndoSchema } from "../../api/crash";
 import type { CrashGroup, CrashStatus } from "../../api/crash";
 import { useToast } from "../../ui/toast";
 
@@ -21,7 +21,7 @@ export type CrashActions = {
   createIssue: (group: CrashGroup) => void;
 };
 
-// useCrashActions holds the page's two writes: a status change runs at once and its undo sends the reverse change; opening a GitHub issue cannot be reversed, so it is sent after the 4s undo window.
+// useCrashActions 立即提交状态并用服务端版本撤销；创建 Issue 延迟到 4 秒撤销窗口结束后提交。
 export function useCrashActions(): CrashActions {
   const api = useAPI();
   const client = useQueryClient();
@@ -36,18 +36,26 @@ export function useCrashActions(): CrashActions {
   const refresh = useCallback(() => client.invalidateQueries({ queryKey: keys.page("crash") }), [client]);
 
   const setStatus = useCallback(async (group: CrashGroup, to: CrashStatus, text: string) => {
-    let from: CrashStatus = group.status;
+    let undo: (() => Promise<void>) | undefined;
     setOverrides(previous => ({ ...previous, [group.signature]: to }));
     try {
       const result = await api.action({ action: "crash_group_status", id: group.signature, value: to });
-      // Undo restores what the server replaced, which differs from the shown status when another admin changed it meanwhile.
-      const previous = crashStatusSchema.safeParse(result.previous);
-      if (previous.success) from = previous.data;
+      // 旧副本没有有效版本时不提供撤销，不能从页面状态或 previous 猜反向操作。
+      const parsed = crashStatusUndoSchema.safeParse(result.undo);
+      if (parsed.success && parsed.data.id === group.signature) {
+        undo = async () => {
+          try {
+            await api.action(parsed.data);
+          } finally {
+            await refresh();
+          }
+        };
+      }
       await refresh();
     } finally {
       clear(group.signature);
     }
-    toast({ text, undo: () => api.action({ action: "crash_group_status", id: group.signature, value: from }).then(refresh) });
+    toast({ text, undo });
   }, [api, clear, refresh, toast]);
 
   const createIssue = useCallback((group: CrashGroup) => {

@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""验证公告跳转等待新列表，以及刷新后保留已打开草稿的输入。"""
+
+import threading
+
+from playwright.sync_api import expect, sync_playwright
+
+import csp_smoke as smoke
+
+
+def check_notice_focus_refresh(browser, base):
+    for status in ("draft", "live", "archived"):
+        context = browser.new_context(viewport={"width": 1280, "height": 1000})
+        page = context.new_page()
+        errors, pending = [], []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.add_init_script("window.cspViolations = []; document.addEventListener('securitypolicyviolation', event => window.cspViolations.push(event.violatedDirective));")
+        page.clock.install()
+        fixture = smoke.FIXTURES["/api/notices"]
+        target = {**fixture["items"][1], "id": "4", "title": f"新到的{status}公告", "body": "刷新后才收到的正文", "status": status}
+        if status != "draft":
+            target["published_at"] = "2026-10-01T00:00:00Z"
+        loaded = False
+        refreshed = None
+
+        def listing(route):
+            nonlocal loaded
+            if not loaded:
+                loaded = True
+                route.fulfill(json=fixture)
+            elif refreshed is not None:
+                route.fulfill(json=refreshed)
+            else:
+                pending.append(route)
+
+        page.route("**/api/notices", listing)
+        page.route("**/api/auth/session", lambda route: route.fulfill(json=smoke.FIXTURES["/api/auth/session"]))
+        page.route("**/api/search?*", lambda route: route.fulfill(json={"items": [{"kind": "notice", "id": target["id"], "title": target["title"], "where": "公告", "target": "notice"}]}))
+        page.route("**/api/actions", lambda route: route.fulfill(status=500, json={"error": {"code": "internal_error", "message": "internal_error"}}))
+        try:
+            page.goto(base + "/notice")
+            expect(page.locator("#notice-2")).to_be_visible()
+            page.locator('a[href="/users"]').first.click()
+            expect(page).to_have_url(base + "/users")
+            # 让缓存超过实际的 30 秒新鲜期，返回公告页时先显示旧列表并刷新。
+            page.clock.fast_forward(31_000)
+            page.get_by_role("combobox", name="全局搜索").fill(target["title"])
+            page.get_by_role("option", name=target["title"] + " 公告", exact=True).click()
+            expect(page).to_have_url(base + '/notice?focus=%224%22')
+            expect(page.locator("#notice-2")).to_be_visible()
+            # 等待旧列表完成绘制及其 effect，随后才让新列表返回。
+            page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+            assert len(pending) == 1, "返回公告页时没有刷新过期列表"
+            pending.pop().fulfill(json={**fixture, "items": [*fixture["items"], target]})
+            row = page.locator("#notice-4")
+            expect(row).to_be_visible()
+            expect(row.locator("button[aria-expanded]")).to_have_attribute("aria-expanded", "true")
+            expect(row.get_by_text(target["body"], exact=True)).to_be_visible()
+            if status == "draft":
+                title = page.get_by_role("textbox", name="标题", exact=True)
+                expect(title).to_have_value(target["title"])
+                body = page.get_by_role("textbox", name="内容", exact=True)
+                expect(body).to_have_value(target["body"])
+                title.fill("尚未保存的本地标题")
+                body.fill("尚未保存的本地正文")
+                # 保存失败仍会刷新列表；同一次已完成的跳转不能重新载入远端草稿。
+                updated = {**target, "title": "远端标题已更新", "body": "远端正文已更新"}
+                refreshed = {**fixture, "items": [*fixture["items"], updated]}
+                with page.expect_response("**/api/notices"):
+                    page.get_by_role("button", name="存为草稿", exact=True).click()
+                expect(row.locator("button[aria-expanded]")).to_contain_text(updated["title"])
+                expect(title).to_be_enabled()
+                expect(title).to_have_value("尚未保存的本地标题")
+                expect(body).to_have_value("尚未保存的本地正文")
+            assert not errors, errors
+            assert page.evaluate("window.cspViolations") == []
+        finally:
+            for route in pending:
+                route.abort()
+            page.unroute_all(behavior="ignoreErrors")
+            context.close()
+
+
+if __name__ == "__main__":
+    smoke.Handler.csp = smoke.production_csp()
+    server = smoke.Server(("127.0.0.1", 0), smoke.Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            try:
+                check_notice_focus_refresh(browser, f"http://127.0.0.1:{server.server_port}")
+                print("公告缓存刷新跳转回归通过")
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()

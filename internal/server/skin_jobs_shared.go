@@ -90,27 +90,46 @@ func (s *Server) runSharedSkinJob(ctx context.Context, cancel context.CancelFunc
 		delete(s.skinRunning, id)
 		s.mu.Unlock()
 	}()
+	renew := func() (bool, error, time.Time) {
+		// 从请求开始计时，响应等待不能延长数据库已经确认的心跳期限。
+		deadline := time.Now().Add(account.SkinJobStaleAfter)
+		beatCtx, beatCancel := context.WithTimeout(ctx, skinJobWriteTimeout)
+		defer beatCancel()
+		alive, err := s.accounts.SkinJobHeartbeat(beatCtx, id)
+		return alive, err, deadline
+	}
 	beating := make(chan struct{})
-	go func() {
-		defer close(beating)
-		ticker := time.NewTicker(s.skinHeartbeat)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
+	alive, err, deadline := renew()
+	if err != nil || !alive {
+		// 首次心跳确认成功后才访问付费上游，避免启动前已经失效或断开数据库。
+		cancel()
+		close(beating)
+	} else {
+		// 独立计时器在数据库请求阻塞或持续报错时也会停止上游；只有成功续约才能重置。
+		lease := time.AfterFunc(time.Until(deadline), cancel)
+		go func() {
+			defer close(beating)
+			defer lease.Stop()
+			ticker := time.NewTicker(s.skinHeartbeat)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+				alive, err, deadline := renew()
+				if err != nil {
+					continue
+				}
+				if !alive {
+					cancel()
+					return
+				}
+				lease.Reset(time.Until(deadline))
 			}
-			beatCtx, beatCancel := context.WithTimeout(ctx, skinJobWriteTimeout)
-			alive, err := s.accounts.SkinJobHeartbeat(beatCtx, id)
-			beatCancel()
-			// A failed heartbeat (the database briefly unreachable) keeps the upstream call going; if the outage outlasts account.SkinJobStaleAfter, the next heartbeat is refused and stops it, because other replicas already report the job failed.
-			if err == nil && !alive {
-				cancel()
-				return
-			}
-		}
-	}()
+		}()
+	}
 	response := s.runSkinArtwork(ctx, body)
 	ctxErr := ctx.Err()
 	cancel()

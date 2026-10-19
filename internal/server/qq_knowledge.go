@@ -1000,34 +1000,21 @@ func qqCompactLowerASCII(text string) (string, bool) {
 // qqNormalizeWhitespace 按原有 Fields、Join 的规则合并空白，只为保留的正文分配空间。
 func qqNormalizeWhitespace(text string) string {
 	text = qqTrimSpace(text)
-	// 中等长度正文用一次字段遍历写入结果；长正文仍先精确计算容量，避免为大量空白预留输入大小的缓冲。
-	if len(text) <= 128<<10 {
+	for first := range qqTextFields(text) {
+		// 单字段直接复用裁剪后的正文；确认需要合并空白后再分配缓冲。
+		if len(first) == len(text) {
+			return first
+		}
 		var out strings.Builder
-		fields := 0
-		for field := range qqTextFields(text) {
-			if fields == 0 {
-				if len(field) == len(text) {
-					return field
-				}
-				out.Grow(len(text))
-			} else {
-				out.WriteByte(' ')
-			}
+		out.Grow(len(text))
+		out.WriteString(first)
+		for field := range qqTextFields(text[len(first):]) {
+			out.WriteByte(' ')
 			out.WriteString(field)
-			fields++
 		}
 		return out.String()
 	}
-	var out strings.Builder
-	// 只保留字段和单个分隔空格；输入已裁剪，两遍扫描的容量估算不再必要。
-	out.Grow(len(text))
-	for field := range qqTextFields(text) {
-		if out.Len() > 0 {
-			out.WriteByte(' ')
-		}
-		out.WriteString(field)
-	}
-	return out.String()
+	return ""
 }
 
 // qqCollapseSpaceRuns 将连续的 ASCII 空格或制表符合并为一个空格，单个制表符保持原样。

@@ -1928,23 +1928,40 @@ func qqPromoSentence(sentence string) string {
 	if qqGroupNumberPattern.MatchString(sentence) {
 		return "group"
 	}
-	for _, m := range qqWeChatPattern.FindAllStringSubmatchIndex(sentence, -1) {
-		// vx 前面紧挨着英文字母时是别的词的一部分。
-		if start := m[0]; start > 0 {
-			if c := sentence[start-1] | 0x20; c >= 'a' && c <= 'z' {
-				continue
+	// 小批量读取非空匹配，避免收集全文结果，也减少逐个调用正则的开销。
+	const matchBatchSize = 8
+	for offset := 0; offset < len(sentence); {
+		remaining := sentence[offset:]
+		matches := qqWeChatPattern.FindAllStringSubmatchIndex(remaining, matchBatchSize)
+		if len(matches) == 0 {
+			break
+		}
+		for _, m := range matches {
+			// vx 前面紧挨着英文字母时是别的词的一部分。
+			if start := offset + m[0]; start > 0 {
+				if c := sentence[start-1] | 0x20; c >= 'a' && c <= 'z' {
+					continue
+				}
+			}
+			separator, id := strings.TrimSpace(remaining[m[2]:m[3]]), remaining[m[4]:m[5]]
+			if separator != "" || strings.ContainsAny(id, "0123456789") {
+				return "wechat"
 			}
 		}
-		separator, id := strings.TrimSpace(sentence[m[2]:m[3]]), sentence[m[4]:m[5]]
-		if separator != "" || strings.ContainsAny(id, "0123456789") {
-			return "wechat"
-		}
+		offset += matches[len(matches)-1][1]
 	}
-	for _, m := range qqDomainPattern.FindAllStringSubmatchIndex(sentence, -1) {
-		host := strings.ToLower(sentence[m[2]:m[3]])
-		if !slices.ContainsFunc(qqAllowedDomains, func(d string) bool { return host == d || strings.HasSuffix(host, "."+d) }) {
-			return "domain"
+	for remaining := sentence; remaining != ""; {
+		matches := qqDomainPattern.FindAllStringSubmatchIndex(remaining, matchBatchSize)
+		if len(matches) == 0 {
+			break
 		}
+		for _, m := range matches {
+			host := strings.ToLower(remaining[m[2]:m[3]])
+			if !slices.ContainsFunc(qqAllowedDomains, func(d string) bool { return host == d || strings.HasSuffix(host, "."+d) }) {
+				return "domain"
+			}
+		}
+		remaining = remaining[matches[len(matches)-1][1]:]
 	}
 	return ""
 }

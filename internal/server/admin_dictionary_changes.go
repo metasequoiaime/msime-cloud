@@ -286,6 +286,46 @@ func applyDictionaryChanges(name, text string, changes []dictionaryEdit) (string
 			updates[edit.Line] = &value
 		}
 	}
+	// 先按本次删改的原键和新键判断重复，避免为明显冲突构造整份词库结果。
+	removedKeys := make(map[string]int, len(updates))
+	addedKeys := make(map[string]int, len(updates)+len(additions))
+	for line, value := range updates {
+		if key := dictionaryEntryKey(originals[line].text); key != "" {
+			removedKeys[key]++
+		}
+		if value != nil {
+			if key := dictionaryEntryKey(*value); key != "" {
+				addedKeys[key]++
+			}
+		}
+	}
+	for _, value := range additions {
+		addedKeys[dictionaryEntryKey(value)]++
+	}
+	for key, count := range addedKeys {
+		if count <= removedKeys[key] {
+			delete(addedKeys, key)
+		}
+	}
+	if len(addedKeys) > 0 {
+		lineNumber := 0
+		for line := range strings.SplitSeq(text, "\n") {
+			lineNumber++
+			if _, edited := updates[lineNumber]; edited {
+				continue
+			}
+			if key := dictionaryEntryKey(line); key != "" {
+				if count, exists := addedKeys[key]; exists && count > removedKeys[key] {
+					return "", dictionaryChangeFail(409, "dictionary_duplicate")
+				}
+			}
+		}
+		for _, count := range addedKeys {
+			if count > 1 {
+				return "", dictionaryChangeFail(409, "dictionary_duplicate")
+			}
+		}
+	}
 	// 按删改后的字节数预留空间，追加前可能需要补一个换行。
 	outputBytes := len(text)
 	for line, value := range updates {
@@ -340,35 +380,7 @@ func applyDictionaryChanges(name, text string, changes []dictionaryEdit) (string
 			out.WriteString(newline)
 		}
 	}
-	result := out.String()
-	// 翻译允许覆盖同一源词，其他文件按前两列去重。
-	remainingCapacity := 0
-	if lineCount <= 10000 {
-		// 中等词库预留去重表空间，超大词库可能有大量重复键，避免按行数一次性占满内存。
-		remainingCapacity = lineCount
-	}
-	remaining := make(map[string]int, remainingCapacity)
-
-	for line := range strings.SplitSeq(text, "\n") {
-		if k := dictionaryEntryKey(line); k != "" {
-			remaining[k]++
-		}
-	}
-	for line := range strings.SplitSeq(result, "\n") {
-		k := dictionaryEntryKey(line)
-		if k == "" {
-			continue
-		}
-		if count, exists := remaining[k]; !exists {
-			// 新键只允许出现一次；保留零值以拒绝后续重复。
-			remaining[k] = 0
-		} else if count > 0 {
-			remaining[k] = count - 1
-		} else {
-			return "", dictionaryChangeFail(409, "dictionary_duplicate")
-		}
-	}
-	return result, nil
+	return out.String(), nil
 }
 
 // dictionaryEntryKey 从原行截取前两列作为去重键，避免拆分再拼接。

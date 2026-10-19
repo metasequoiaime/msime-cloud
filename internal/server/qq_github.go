@@ -232,7 +232,6 @@ type qqPlatformRelease struct {
 
 // qqLatestReleases 查各平台的最新版本：按 admin.github.platforms 的仓库和 tag_prefix 找最新的正式版，以及比它更新的预发布版；平台仓库不是 qq_bot.repo 时，再到 qq_bot.repo 里找以「平台 id-v」开头的预览版（例如 msime 里的 windows-v）。平台仓库查询失败时不返回这个平台：查不到不等于没发布。交给模型的写法见 qqReleasesMaterial，发给群友的见 qqReleasesForMembers。
 func (s *Server) qqLatestReleases(ctx context.Context) []qqPlatformRelease {
-	client := s.adminGitHub
 	cache := map[string][]qqRelease{}
 	// failed 记下查询失败的仓库：查不到不等于没发布，这些仓库的平台不写进结果。
 	failed := map[string]bool{}
@@ -242,19 +241,10 @@ func (s *Server) qqLatestReleases(ctx context.Context) []qqPlatformRelease {
 		}
 		cache[repo] = nil
 		failed[repo] = true
-		token, err := client.Token(ctx, repo, qqGitHubReadPerms)
-		if err != nil {
-			slog.Warn("qq bot: release lookup skipped", "repo", repo, "reason", err.Error())
+		list, ok := s.qqReleases(ctx, repo)
+		if !ok {
 			return nil
 		}
-		r, err := client.Get(ctx, token, "/repos/"+repo+"/releases?per_page="+strconv.Itoa(qqReleasePage))
-		var list []qqRelease
-		if err != nil || !r.OK() || r.Decode(&list) != nil {
-			slog.Warn("qq bot: release lookup failed", "repo", repo, "reason", githubFailure("releases", r, err).Error())
-			return nil
-		}
-		// 列表顺序不保证与发布时间一致；GitHub 的 UTC 时间可直接按字符串比较。
-		slices.SortStableFunc(list, func(a, b qqRelease) int { return strings.Compare(b.PublishedAt, a.PublishedAt) })
 		cache[repo], failed[repo] = list, false
 		return list
 	}

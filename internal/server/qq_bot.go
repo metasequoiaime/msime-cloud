@@ -1812,16 +1812,8 @@ func (s *Server) qqWindowsProduct(ctx context.Context, version [3]int, text stri
 
 // qqNewestRelease 返回 repo 里前缀为 prefix 的 Release（含预发布，不含草稿）中最大的版本号；查询失败或没有时 ok 为 false。读请求带 ETag 缓存。
 func (s *Server) qqNewestRelease(ctx context.Context, repo, prefix string) (newest [3]int, ok bool) {
-	client := s.adminGitHub
-	token, err := client.Token(ctx, repo, qqGitHubReadPerms)
-	if err != nil {
-		slog.Warn("qq bot: release lookup skipped", "repo", repo, "reason", err.Error())
-		return newest, false
-	}
-	r, err := client.Get(ctx, token, "/repos/"+repo+"/releases?per_page="+strconv.Itoa(qqReleasePage))
-	var list []qqRelease
-	if err != nil || !r.OK() || r.Decode(&list) != nil {
-		slog.Warn("qq bot: release lookup failed", "repo", repo, "reason", githubFailure("releases", r, err).Error())
+	list, available := s.qqReadReleases(ctx, repo)
+	if !available {
 		return newest, false
 	}
 	for _, release := range list {

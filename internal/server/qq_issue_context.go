@@ -136,25 +136,6 @@ func (s *Server) qqFixRelease(ctx context.Context, repo string, issue qqIssueDet
 	}
 }
 
-// qqReleases 读 repo 最近一页 Release（读请求带 ETag 缓存）。
-func (s *Server) qqReleases(ctx context.Context, repo string) ([]qqRelease, bool) {
-	client := s.adminGitHub
-	token, err := client.Token(ctx, repo, qqGitHubReadPerms)
-	if err != nil {
-		slog.Warn("qq bot: release lookup skipped", "repo", repo, "reason", err.Error())
-		return nil, false
-	}
-	r, err := client.Get(ctx, token, "/repos/"+repo+"/releases?per_page="+strconv.Itoa(qqReleasePage))
-	var list []qqRelease
-	if err != nil || !r.OK() || r.Decode(&list) != nil {
-		slog.Warn("qq bot: release lookup failed", "repo", repo, "reason", githubFailure("releases", r, err).Error())
-		return nil, false
-	}
-	// 修复版本以发布时间为准；列表位置不能代表版本实际发布的先后。
-	slices.SortStableFunc(list, func(a, b qqRelease) int { return strings.Compare(b.PublishedAt, a.PublishedAt) })
-	return list, true
-}
-
 // qqMaintainerComment 返回维护者在 issue 下最近的一条评论（去掉图片后转成纯文本，见 qqPlainText，按句子截到 limit 字以内）；没有评论或读取失败时为空。
 func (s *Server) qqMaintainerComment(ctx context.Context, repo string, number int64, issue qqIssueDetail, limit int) string {
 	comment, err := s.qqLookupMaintainerComment(ctx, repo, number, issue, limit)

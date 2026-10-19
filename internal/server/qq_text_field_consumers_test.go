@@ -5,6 +5,29 @@ import (
 	"testing"
 )
 
+func TestQQCompactLowerASCIIFastPath(t *testing.T) {
+	for _, tc := range []struct {
+		name, input, want string
+		fast              bool
+	}{
+		{"spaces", " BODY \tTEXT \n", "bodytext", true},
+		{"controls", "A\x00 B\x7f C", "a\x00b\x7fc", true},
+		{"plain", "AlreadyLower", "alreadylower", true},
+		{"unicode", "BODY 水", "", false},
+		{"invalid", "BODY \xff", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, fast := qqCompactLowerASCII(tc.input)
+			if fast != tc.fast {
+				t.Fatalf("ASCII 快路径标记=%t，期望 %t", fast, tc.fast)
+			}
+			if fast && got != tc.want {
+				t.Fatalf("ASCII 快路径结果=%q，期望 %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestQQTextFieldConsumersKeepStandardLibraryRules(t *testing.T) {
 	for _, tc := range []struct{ name, text string }{
 		{"ordinary", "普通 正文\t备用 资料\n"},

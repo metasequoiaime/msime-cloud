@@ -1,4 +1,5 @@
 import { formatNumber } from "../../utils/number";
+import { waitOrAbort } from "../../utils/wait";
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { formatDateTime } from "../../utils/time";
 import { useDebounced } from "../../hooks/use-debounced";
@@ -83,13 +84,6 @@ const pageCodeMessages: Record<string, string> = { invalid_level: "日志级别�
 function streamError(error: unknown): string {
   if (error instanceof APIError && Object.hasOwn(pageCodeMessages, error.code)) return pageCodeMessages[error.code];
   return errorMessage(error);
-}
-
-function waitOrAbort(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise(resolve => {
-    const timer = window.setTimeout(resolve, ms);
-    signal.addEventListener("abort", () => { window.clearTimeout(timer); resolve(); }, { once: true });
-  });
 }
 
 // PodChips 是按副本筛选的单选按钮，样式同 FilterChips，每个副本前加上它的色点。

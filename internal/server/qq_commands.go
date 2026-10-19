@@ -639,6 +639,10 @@ func (s *Server) qqMentionedIssues(ctx context.Context, question string) string 
 	var lines []string
 	seen := map[string]bool{}
 	question = qqRewriteIssueLinks(qqFoldWidth(question))
+	// 全角编号和网页链接归一化后，引用必含井号；普通提问无需执行引用正则。
+	if strings.IndexByte(question, '#') < 0 {
+		return ""
+	}
 	const matchBatchSize = 8
 	mentions := qqIssueMentionPattern.FindAllStringSubmatchIndex(question, matchBatchSize)
 	// 按原始匹配次数决定是否附正文，重复引用也计数；首批不足三个时已读到全文末尾。

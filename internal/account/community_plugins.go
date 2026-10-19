@@ -195,11 +195,15 @@ func extendPluginTransfer(w http.ResponseWriter) {
 // pluginVisibleKinds 返回本次请求能看到的类型：冻结的 legacyPluginKinds，加上客户端在 `kinds`（逗号分隔）里声明能安装的类型，再加上 `kind` 参数指定的类型。不认识的名字直接忽略而不是返回 400：声明只能放宽结果，不会让响应多出客户端不认识的类型，忽略未知值让声明了未来类型的客户端在后端认识它之前也能正常浏览。不带 `kinds` 或为空时只有旧类型，响应与引入这个参数之前逐字节相同。
 func pluginVisibleKinds(r *http.Request, kind string) []string {
 	visible := slices.Clone(legacyPluginKinds)
-	for _, name := range append(strings.Split(r.URL.Query().Get("kinds"), ","), kind) {
+	add := func(name string) {
 		if slices.Contains(pluginKinds, name) && !slices.Contains(visible, name) {
 			visible = append(visible, name)
 		}
 	}
+	for name := range strings.SplitSeq(r.URL.Query().Get("kinds"), ",") {
+		add(name)
+	}
+	add(kind)
 	return visible
 }
 

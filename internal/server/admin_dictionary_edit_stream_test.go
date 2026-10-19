@@ -276,6 +276,19 @@ func TestApplyDictionaryStreamingAllocationBudget(t *testing.T) {
 	}
 }
 
+func TestApplyDictionaryChangesRejectsInvalidOperationEarly(t *testing.T) {
+	text := strings.Repeat("synthetic\t合成条目\t3\n", 50000)
+	edit := []dictionaryEdit{{Operation: "invalid"}}
+	allocs := testing.AllocsPerRun(100, func() {
+		if _, err := applyDictionaryChanges("packs/demo/english.txt", text, edit); err == nil {
+			t.Fatal("非法操作必须拒绝")
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("非法操作提前拒绝应不分配，实际 %.0f 次", allocs)
+	}
+}
+
 func BenchmarkApplyDictionaryStreaming(b *testing.B) {
 	text := strings.Repeat("synthetic\t合成条目\t3\n", 50000)
 	for _, implementation := range []struct {

@@ -93,6 +93,8 @@ type dictionaryChangeError struct {
 func (e *dictionaryChangeError) Error() string           { return e.code }
 func dictionaryChangeFail(status int, code string) error { return &dictionaryChangeError{status, code} }
 
+var errInvalidDictionaryChanges = &dictionaryChangeError{400, "invalid_dictionary_changes"}
+
 type dictionaryChangeResult struct {
 	Number int    `json:"number"`
 	URL    string `json:"url"`
@@ -205,7 +207,16 @@ func dictionaryBlobSHA(raw []byte) string {
 }
 
 func applyDictionaryChanges(name, text string, changes []dictionaryEdit) (string, error) {
-	if !dictionaryEditablePath(name) || !utf8.ValidString(text) {
+	if !dictionaryEditablePath(name) {
+		return "", dictionaryChangeFail(400, "dictionary_readonly")
+	}
+	if len(changes) > 0 {
+		edit := changes[0]
+		if edit.Operation != "add" && edit.Operation != "replace" && edit.Operation != "delete" {
+			return "", errInvalidDictionaryChanges
+		}
+	}
+	if !utf8.ValidString(text) {
 		return "", dictionaryChangeFail(400, "dictionary_readonly")
 	}
 	lineCount := strings.Count(text, "\n") + 1
@@ -242,8 +253,8 @@ func applyDictionaryChanges(name, text string, changes []dictionaryEdit) (string
 	updates := map[int]*string{}
 	additions := []string{}
 	for _, edit := range changes {
-		if !slices.Contains([]string{"add", "replace", "delete"}, edit.Operation) || (edit.Operation != "add" && strings.HasPrefix(name, "custom/")) {
-			return "", dictionaryChangeFail(400, "invalid_dictionary_changes")
+		if edit.Operation != "add" && edit.Operation != "replace" && edit.Operation != "delete" || edit.Operation != "add" && strings.HasPrefix(name, "custom/") {
+			return "", errInvalidDictionaryChanges
 		}
 		if edit.Operation == "add" {
 			if edit.Line != 0 {

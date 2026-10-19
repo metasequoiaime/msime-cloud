@@ -55,10 +55,24 @@ type qqFAQEntry struct {
 // qqFAQCategories 列出 FAQ 的二级标题。
 func qqFAQCategories(faq string) []string {
 	var categories []string
-	for line := range strings.SplitSeq(faq, "\n") {
-		if strings.HasPrefix(line, "## ") {
-			categories = append(categories, strings.TrimSpace(line[3:]))
+	for offset := 0; offset < len(faq); {
+		index := strings.Index(faq[offset:], "## ")
+		if index < 0 {
+			break
 		}
+		index += offset
+		if index != 0 && faq[index-1] != '\n' {
+			offset = index + 3
+			continue
+		}
+		end := strings.IndexByte(faq[index:], '\n')
+		if end < 0 {
+			end = len(faq)
+		} else {
+			end += index
+		}
+		categories = append(categories, strings.TrimSpace(faq[index+3:end]))
+		offset = end + 1
 	}
 	return categories
 }

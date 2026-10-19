@@ -103,12 +103,14 @@ type issueRow struct {
 	ClosedAt  *time.Time `json:"closed_at"`
 }
 
-// issueRef names one issue in an action request.
+// issueRef 标识操作请求中的一个 Issue。
 type issueRef struct {
 	Repo string `json:"repo"`
 	N    int    `json:"n"`
-	// KeepAssignee, only for untriage, leaves the platform assignee assigned: undoing a triage sets it when the assignee was already assigned before the triage, so the undo does not drop that earlier assignment.
+	// KeepAssignee 仅用于 untriage，保留分类前已有的平台负责人。
 	KeepAssignee bool `json:"keep_assignee,omitempty"`
+	// KeepDuplicate 仅用于 reopen，保留关闭前已有的重复标签。
+	KeepDuplicate bool `json:"keep_duplicate,omitempty"`
 }
 
 func (ref issueRef) key() string { return ref.Repo + "#" + strconv.Itoa(ref.N) }
@@ -999,8 +1001,8 @@ func (s *Server) issueActionsHTTP(w http.ResponseWriter, r *http.Request) {
 	seen := map[string]bool{}
 	for i, item := range v.Items {
 		repo, ok := s.issueRepo(item.Repo)
-		ref := issueRef{Repo: repo, N: item.N, KeepAssignee: item.KeepAssignee}
-		if !ok || item.N < 1 || seen[ref.key()] || item.KeepAssignee && v.Action != "untriage" {
+		ref := issueRef{Repo: repo, N: item.N, KeepAssignee: item.KeepAssignee, KeepDuplicate: item.KeepDuplicate}
+		if !ok || item.N < 1 || seen[ref.key()] || item.KeepAssignee && v.Action != "untriage" || item.KeepDuplicate && v.Action != "reopen" {
 			fail(w, 400, "invalid_items")
 			return
 		}
@@ -1019,9 +1021,11 @@ func (s *Server) issueActionsHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	affected := 0
 	failures := []issueActionFailure{}
+	var undo *issueUndo
+	undoAction := map[string]string{"triage": "untriage", "close": "reopen", "mark_dup": "reopen"}[v.Action]
 	var firstErr error
 	for _, item := range v.Items {
-		detail, err := s.issueAction(ctx, gh, v.Action, item, v.Body)
+		detail, undoRef, err := s.issueAction(ctx, gh, v.Action, item, v.Body)
 		if detail != nil {
 			// GitHub 可能已写入；即使请求取消也要保留操作者并在有限时间内记录审计。
 			recordCtx, cancelRecord := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
@@ -1048,12 +1052,24 @@ func (s *Server) issueActionsHTTP(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		affected++
+		if undoRef != nil {
+			if undo == nil {
+				undo = &issueUndo{Action: undoAction}
+			}
+			undo.Items = append(undo.Items, *undoRef)
+		}
 	}
 	if affected == 0 {
 		issueFail(w, firstErr)
 		return
 	}
-	respond(w, 200, map[string]any{"ok": true, "affected": affected, "failed": failures})
+	respond(w, 200, map[string]any{"ok": true, "affected": affected, "failed": failures, "undo": undo})
+}
+
+// issueUndo 只包含已确认成功、且可依据操作前最新快照撤销的条目。
+type issueUndo struct {
+	Action string     `json:"action"`
+	Items  []issueRef `json:"items"`
 }
 
 // issueStep is one GitHub write of an action, with the write that reverses it when a later step of the same action fails; undo is nil for the last step and for a write that needs no reversal.
@@ -1067,22 +1083,22 @@ type issueStep struct {
 
 // issueAction 在跨副本的 Issue 锁内读取最新状态、执行操作及必要的回滚，避免失败请求撤销另一请求的成功结果。
 // 后续步骤明确被拒绝时回滚已确认的步骤；写入结果未知时保留现场并标记 uncertain，回滚失败则标记 partial。
-func (s *Server) issueAction(ctx context.Context, gh *githubapp.Client, action string, ref issueRef, body string) (map[string]any, error) {
+func (s *Server) issueAction(ctx context.Context, gh *githubapp.Client, action string, ref issueRef, body string) (map[string]any, *issueRef, error) {
 	unlock, err := s.accounts.WaitLock(ctx, "admin-issues:"+strings.ToLower(ref.key()), 0)
 	if errors.Is(err, account.ErrLockBusy) {
-		return nil, &issueError{503, "server_busy"}
+		return nil, nil, &issueError{503, "server_busy"}
 	}
 	if err != nil {
-		return nil, &issueError{503, "auth_unavailable"}
+		return nil, nil, &issueError{503, "auth_unavailable"}
 	}
 	defer unlock()
 	token, err := gh.Token(ctx, ref.Repo, issueTokenPerms)
 	if err != nil {
-		return nil, issueTokenError(ctx, ref.Repo, err)
+		return nil, nil, issueTokenError(ctx, ref.Repo, err)
 	}
 	issue, err := issueFetch(ctx, gh, token, ref, false)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// Whatever part of the action reached GitHub, the cached listing and detail of this repository are stale now.
 	defer gh.Invalidate("/repos/" + ref.Repo + "/issues")
@@ -1107,8 +1123,12 @@ func (s *Server) issueAction(ctx context.Context, gh *githubapp.Client, action s
 	hasTriaged, hasDuplicate := issueHasLabel(row.Labels, issueTriagedLabel), issueHasLabel(row.Labels, issueDuplicateLabel)
 	platform := s.issuePlatform(ref.Repo, row.Labels)
 	var steps []*issueStep
+	var undo *issueRef
 	switch action {
 	case "triage":
+		if row.State == "new" {
+			undo = &issueRef{Repo: ref.Repo, N: ref.N, KeepAssignee: platform != nil && hasAssignee(platform.Assignee)}
+		}
 		step := addLabel(issueTriagedLabel)
 		if !hasTriaged {
 			step.undo = removeLabel(issueTriagedLabel)
@@ -1134,6 +1154,9 @@ func (s *Server) issueAction(ctx context.Context, gh *githubapp.Client, action s
 		}
 		detail["to"] = "new"
 	case "mark_dup":
+		if issue.State == "open" {
+			undo = &issueRef{Repo: ref.Repo, N: ref.N, KeepDuplicate: hasDuplicate}
+		}
 		step := addLabel(issueDuplicateLabel)
 		if !hasDuplicate {
 			step.undo = removeLabel(issueDuplicateLabel)
@@ -1141,11 +1164,14 @@ func (s *Server) issueAction(ctx context.Context, gh *githubapp.Client, action s
 		steps = append(steps, step, setState("closed", "not_planned"))
 		detail["to"] = "dup"
 	case "close":
+		if issue.State == "open" {
+			undo = &issueRef{Repo: ref.Repo, N: ref.N, KeepDuplicate: hasDuplicate}
+		}
 		steps = append(steps, setState("closed", "completed"))
 		detail["to"] = "done"
 	case "reopen":
-		// The duplicate label goes first so that a failed reopen can put it back and leave the issue closed as a duplicate.
-		if hasDuplicate {
+		// 先移除重复标签，重新打开失败时可恢复；撤销关闭时保留原有标签。
+		if hasDuplicate && !ref.KeepDuplicate {
 			step := removeLabel(issueDuplicateLabel)
 			step.undo = addLabel(issueDuplicateLabel)
 			steps = append(steps, step)
@@ -1180,7 +1206,7 @@ func (s *Server) issueAction(ctx context.Context, gh *githubapp.Client, action s
 				if i > 0 {
 					detail["partial"] = true
 				}
-				return detail, err
+				return detail, nil, err
 			}
 			partial := false
 			for j := i - 1; j >= 0; j-- {
@@ -1192,19 +1218,19 @@ func (s *Server) issueAction(ctx context.Context, gh *githubapp.Client, action s
 							detail["partial"] = true
 							detail["uncertain"] = true
 							detail["step"] = undo.what
-							return detail, undoErr
+							return detail, nil, undoErr
 						}
 					}
 				}
 			}
 			if partial {
 				detail["partial"] = true
-				return detail, err
+				return detail, nil, err
 			}
-			return nil, err
+			return nil, nil, err
 		}
 	}
-	return detail, nil
+	return detail, undo, nil
 }
 
 // searchIssues matches q against the cached issues for the global search; it never calls GitHub.

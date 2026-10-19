@@ -109,7 +109,7 @@ func TestIssueActionLockUnavailable(t *testing.T) {
 	s, f, _, _ := issuesFixture(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	detail, err := s.issueAction(ctx, s.adminGitHub, "close", issueRef{Repo: issuesWinRepo, N: 10}, "")
+	detail, _, err := s.issueAction(ctx, s.adminGitHub, "close", issueRef{Repo: issuesWinRepo, N: 10}, "")
 	var failure *issueError
 	if detail != nil || !errors.As(err, &failure) || failure.status != 503 || failure.code != "auth_unavailable" {
 		t.Fatalf("无法加锁时应在访问 GitHub 前返回数据库错误：detail=%v err=%v", detail, err)

@@ -620,9 +620,7 @@ func (s *Server) triggerRelease(w http.ResponseWriter, r *http.Request, gh *gith
 	case err != nil || resp.Status == 0 || resp.Status >= 500:
 		// 上游可能已触发流水线；请求取消后仍记录尝试，避免把未知结果当成可直接重试的失败。
 		detail["uncertain"] = true
-		auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer cancel()
-		s.releaseAudit(auditCtx, "release_trigger", p.ID, detail)
+		s.releaseAudit(ctx, "release_trigger", p.ID, detail)
 		fail(w, 502, "workflow_uncertain")
 		return
 	case resp.Status == 404:
@@ -803,12 +801,18 @@ func (s *Server) patchRelease(w http.ResponseWriter, ctx context.Context, gh *gi
 
 // releaseAudit 记录 GitHub 已接受或无法确认结果的发布写入；审计失败不改变上游操作结果。
 func (s *Server) releaseAudit(ctx context.Context, action, target string, detail map[string]any) {
+	// 请求取消后仍保留操作者，并在有限时间内记录已经发生的写入。
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
 	if err := s.accounts.Audit(ctx, action, target, detail); err != nil {
 		slog.Error("admin audit failed after a GitHub release write", "action", action, "target", target, "reason", err.Error())
 	}
 }
 
 func (s *Server) releaseNotify(ctx context.Context, p AdminPlatformConfig, title, target string) {
+	// 发布已确认成功，通知不随管理员断开连接而取消。
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
 	if err := s.accounts.NotifyNow(ctx, account.Notification{Kind: account.NotifyRelease, Title: title, TargetPage: "release", TargetID: target}); err != nil {
 		slog.Warn("release notification not recorded", "platform", p.ID, "reason", err.Error())
 	}

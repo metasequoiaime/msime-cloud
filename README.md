@@ -239,6 +239,9 @@ echo '{"display_name":"昵称"}' | ./msime-cloud call PATCH /v1/users/me -
 
 `/v1` 接口的列表和说明直接取自内嵌的 `internal/server/swagger/openapi.json`，随规范自动更新；匿名接口不发送令牌。`/api` 路径发往管理后台，使用 `login admin` 保存的管理员会话，设置了 `MSIME_ADMIN_TOKEN`（管理员密钥或个人访问令牌）时改用它；登录方式和启用条件见 [管理后台文档](docs/admin.md#命令行登录)。后台路由直接取自服务端分发用的路由表，`describe` 一个 `/api` 路由时附上 `docs/admin.md` 中提到它的段落（请求体、权限）。遇到 429 且 `Retry-After` 不超过一分钟时等待后重试一次；实时语音 WebSocket 不在命令行支持范围内。默认连接 `https://api.msime.app` 与 `https://admin.msime.app`，可用 `MSIME_CLOUD_URL`、`MSIME_ADMIN_URL` 改为本地服务；设置 `MSIME_CLOUD_TOKEN` 时改用该设备令牌或访问令牌。Google 登录沿用桌面端的回环流程：命令在 `127.0.0.1` 上临时监听，只打开指向 `accounts.google.com`、回调为本机监听地址的授权页，收到 `state` 匹配的回调后再用授权码登录；`--browser false` 只打印地址，由用户自行打开。Apple 和微信登录依赖官方 SDK 或已登记的 HTTPS 回调，命令行不支持。./msime-cloud login finish --challenge <id> --code 123456
 ./msime-cloud login google                              # 打开浏览器登录 Google，最多等待 5 分钟
+
+命令行 HTTP 请求不自动跟随重定向，包括同源跳转；收到 3xx 时按失败处理，避免向跳转目标发送令牌、登录验证码、刷新令牌或上传正文。服务地址发生变化时，请把 `MSIME_CLOUD_URL` 或 `MSIME_ADMIN_URL` 显式改为最终地址。下载接口也遵循此规则，重定向响应不会覆盖 `-o` 指定的已有文件。
+
 用户登录和刷新响应必须包含非空的访问令牌、刷新令牌，以及为正且可安全换算为时长的 `expires_in`；管理员登录必须包含非空会话令牌和同样有效的 `expires_in`。响应不完整或有效期无效时返回错误，不覆盖原凭据。会话保存在用户配置目录下 `msime-cloud/credentials.json`（权限 0600，可用 `MSIME_CLOUD_CONFIG_DIR` 指定目录）。`logout` 退出并清理本地保存的用户会话，`logout --all` 撤销该会话所属用户的全部会话；这两个命令始终使用保存的会话（需要时自动刷新），不使用 `MSIME_CLOUD_TOKEN`。要退出环境访问令牌对应的会话，可用 `call POST /v1/auth/logout '{"all":false}'`。登录、刷新、退出和失效会话清理共用操作系统文件锁，避免并发修改丢失其他服务的会话；失效清理只删除请求实际使用的会话，不会删除并发完成的新登录。每次登录保存独立的 `login_id`，刷新保留该标识；用户退出时也会清理等待退出响应期间由同一次登录刷新的凭据，并发完成的另一次登录继续保留。旧格式凭据首次刷新时自动补上。旧命令需要刷新时若发现另一个命令已重新登录（包括同一用户），会报错并保留新登录，请重新发起命令。锁等待最多 15 秒，持锁进程退出后由操作系统释放，不会按文件年龄抢占仍在刷新的进程。`credentials.lock` 文件会保留，请勿在命令运行时删除它。升级命令行时先结束旧版本进程，避免两种锁协议同时操作同一凭据文件。
 
 Google 用户登录和管理员登录在打开浏览器前检查挑战有效期，预留 30 秒供授权码交换，最多等待 5 分钟；剩余有效期不足时立即报错。等待上限在秒数换算前应用，极大正数不会溢出，负数也不会被误当成可用挑战。

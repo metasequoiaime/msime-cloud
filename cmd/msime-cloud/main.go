@@ -484,7 +484,10 @@ func (c cli) doOnce(server string, r request, token string) (*http.Response, err
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	return c.client.Do(req)
+	// 不跟随重定向，避免将令牌、验证码或上传正文发送到其他地址。
+	isolated := *c.client
+	isolated.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return isolated.Do(req)
 }
 
 // print 把响应写入文件或标准输出；文件下载完整接收并关闭成功后才替换目标。

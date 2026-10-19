@@ -142,3 +142,26 @@ func TestCrashIssueRejectionPreservesConcurrentStatus(t *testing.T) {
 		t.Fatalf("明确拒绝的恢复覆盖了并发状态：%d %s 状态=%s 错误=%v", w.Code, w.Body.String(), state, err)
 	}
 }
+
+func TestCrashIssueSuccessPreservesConcurrentStatus(t *testing.T) {
+	for _, state := range []string{"open", "fixed"} {
+		t.Run(state, func(t *testing.T) {
+			s, f, db, schema := crashOutcomeFixture(t)
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == "POST" && r.URL.Path == crashOutcomeGitHubPath {
+					if _, err := db.Exec(t.Context(), "UPDATE "+pgx.Identifier{schema, "admin_crash_groups"}.Sanitize()+" SET status=$2 WHERE signature=$1", crashOutcomeSignature, state); err != nil {
+						t.Error(err)
+					}
+				}
+				f.ServeHTTP(w, r)
+			}))
+			t.Cleanup(upstream.Close)
+			s.adminGitHub.APIURL, s.adminGitHub.HTTP = upstream.URL, upstream.Client()
+			w := crashOutcomeRequest(s)
+			var got string
+			if err := db.QueryRow(t.Context(), "SELECT status FROM "+pgx.Identifier{schema, "admin_crash_groups"}.Sanitize()+" WHERE signature=$1", crashOutcomeSignature).Scan(&got); err != nil || got != state || w.Code != 200 || !strings.Contains(w.Body.String(), `"status":"`+state+`"`) {
+				t.Fatalf("成功登记或响应覆盖了并发状态：%d %s 状态=%s 错误=%v", w.Code, w.Body.String(), got, err)
+			}
+		})
+	}
+}

@@ -152,6 +152,20 @@ CREATE TABLE IF NOT EXISTS admin_crash_groups (
 );
 CREATE INDEX IF NOT EXISTS admin_crash_groups_seen ON admin_crash_groups(last_seen DESC);
 
+-- 状态版本独立于上报统计；默认值区分删除重建，触发器也覆盖滚动升级期间旧副本的写入。
+ALTER TABLE admin_crash_groups ADD COLUMN IF NOT EXISTS status_token text NOT NULL DEFAULT md5(random()::text||clock_timestamp()::text);
+CREATE OR REPLACE FUNCTION admin_crash_status_token() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ NEW.status_token := md5(random()::text||clock_timestamp()::text);
+ RETURN NEW;
+END $$;
+DO $$ BEGIN
+ IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid='admin_crash_groups'::regclass AND tgname='admin_crash_status_token') THEN
+  CREATE TRIGGER admin_crash_status_token BEFORE UPDATE OF status,issue_url ON admin_crash_groups FOR EACH ROW EXECUTE FUNCTION admin_crash_status_token();
+ END IF;
+END $$;
+ALTER TABLE admin_crash_groups ENABLE TRIGGER admin_crash_status_token;
+
 CREATE TABLE IF NOT EXISTS admin_notices (
  id bigserial PRIMARY KEY,
  title text NOT NULL DEFAULT '' CHECK(length(title)<=200),

@@ -403,13 +403,15 @@ SELECT banned_at,ban_reason,banned_by FROM auth_users WHERE false;
 SELECT user_agent FROM auth_sessions WHERE false;
 SELECT id,pr_number,kind,entries,note,created_at FROM word_submissions WHERE false;
 SELECT artifact,channel,install_id,signature FROM admin_events WHERE false;
-SELECT signature,platform,version,title,status,issue_url,first_seen,last_seen FROM admin_crash_groups WHERE false;
+SELECT signature,platform,version,title,status,issue_url,first_seen,last_seen,status_token FROM admin_crash_groups WHERE false;
 SELECT id,title,body,targets,channels,status,created_by,created_at,published_at,updated_at FROM admin_notices WHERE false;
 SELECT id,pattern,is_regex,category,level,created_by,created_at FROM admin_sensitive_words WHERE false;
 SELECT word_id,day,count FROM admin_sensitive_hits WHERE false`); e != nil {
 		return e
 	}
 	return s.checkReadinessMetadata(ctx, []readinessMetadataCheck{
+		// 状态写入必须更新版本，缺少或停用触发器时先迁移再接受管理操作。
+		{`SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='admin_crash_groups'::regclass AND tgname='admin_crash_status_token' AND tgenabled IN ('O','A'))`, "crash status token trigger missing or disabled"},
 		// 遥测种类由 CHECK 约束限定，普通列探测无法发现旧约束。
 		{`SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='admin_events'::regclass AND conname='admin_events_kind_check' AND pg_get_constraintdef(oid) LIKE '%session_crash%')`, "admin_events kind constraint predates the active and session kinds"},
 		// 权限键约束需要支持 view_logs。

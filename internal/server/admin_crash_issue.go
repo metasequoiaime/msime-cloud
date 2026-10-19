@@ -173,13 +173,14 @@ func (s *Server) adminCrashIssue(w http.ResponseWriter, r *http.Request) {
 	// The issue now exists on GitHub; record it even if the request deadline ran out or the admin went away during the GitHub call. WithoutCancel keeps the actor for the audit row.
 	recordCtx, cancelRecord := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancelRecord()
-	if err = locked.Record(recordCtx, platform.Repo, created.Number, created.HTMLURL); err != nil {
+	status, err := locked.Record(recordCtx, platform.Repo, created.Number, created.HTMLURL)
+	if err != nil {
 		// The issue exists on GitHub but the group does not point at it; hand the link back so it is not lost.
 		slog.Error("crash issue: record", "signature", signature, "issue", created.HTMLURL, "reason", err.Error())
 		respond(w, 503, map[string]any{"error": map[string]string{"code": "issue_not_recorded", "message": "issue_not_recorded"}, "issue_url": created.HTMLURL})
 		return
 	}
-	respond(w, 200, map[string]any{"ok": true, "status": "known", "issue_url": created.HTMLURL, "number": created.Number, "repo": platform.Repo})
+	respond(w, 200, map[string]any{"ok": true, "status": status, "issue_url": created.HTMLURL, "number": created.Number, "repo": platform.Repo})
 }
 
 func nilIfEmpty(s string) *string {

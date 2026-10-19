@@ -89,6 +89,21 @@ func TestQQMarkdownBodyUsesBoundedAllocation(t *testing.T) {
 	}
 }
 
+func TestQQMarkdownHeadingTailCheckFastPath(t *testing.T) {
+	markdown := "## 正文\n" + strings.Repeat(" \t\u3000", 1<<18) + "短正文"
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			sections := qqSplitMarkdown("synthetic", markdown)
+			if len(sections) != 1 || sections[0].Text != "短正文" {
+				t.Fatal("巨大首部空白后的正文解析错误")
+			}
+		}
+	})
+	if result.NsPerOp() > 2_000_000 {
+		t.Fatalf("标题尾部空白检查过慢：%s", result.MemString())
+	}
+}
+
 func BenchmarkQQMarkdownBody(b *testing.B) {
 	for _, tc := range []struct{ name, markdown string }{
 		{"long_body", "## 正文\n" + strings.Repeat("水", 1<<20)},

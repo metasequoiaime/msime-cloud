@@ -89,7 +89,8 @@ func TestQQFAQAnswerValidationMatchesPrevious(t *testing.T) {
 		"# 标题\n" + strings.Repeat("合成答案。", 20), "普通正文\n## 标题", "普通正文\r\n### 标题\r\n",
 		"#### 四级标题\n" + strings.Repeat("合成答案。", 20), "\t## 缩进标题\n" + strings.Repeat("合成答案。", 20),
 		"#\t制表符标题\n" + strings.Repeat("合成答案。", 20), "##\u3000全角空格标题\n" + strings.Repeat("合成答案。", 20),
-		"https://example.test\n## 删除链接后保留标题", "```\n## 代码块内标题\n```", "\xff\x00合成正文\n# 标题",
+		"https://example.test\n## 删除链接后保留标题",
+		strings.Repeat("合成答案。", 20) + ":// 7://无效协议 http:/不完整协议", "```\n## 代码块内标题\n```", "\xff\x00合成正文\n# 标题",
 		strings.Repeat("字", qqFAQRunes+1),
 	}
 	random := rand.New(rand.NewSource(650))
@@ -133,8 +134,8 @@ func TestQQFAQAnswerValidationAllocationBudget(t *testing.T) {
 	if previousErr != nil || currentErr != nil || previous != current {
 		t.Fatalf("校验结果变化：旧=%v，新=%v", previousErr, currentErr)
 	}
-	if saved := baseline.AllocedBytesPerOp() - result.AllocedBytesPerOp(); saved < 32<<10 {
-		t.Fatalf("旧分配=%s，新分配=%s，每次节省 %d 字节，期望至少 32 KiB", baseline.MemString(), result.MemString(), saved)
+	if saved := baseline.AllocedBytesPerOp() - result.AllocedBytesPerOp(); saved < 64<<10 {
+		t.Fatalf("旧分配=%s，新分配=%s，每次节省 %d 字节，期望至少 64 KiB", baseline.MemString(), result.MemString(), saved)
 	}
 }
 

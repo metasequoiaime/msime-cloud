@@ -102,19 +102,11 @@ func (s *Store) PutPhrases(ctx context.Context, user string, expected int64, lis
 		return Phrases{}, e
 	}
 	defer tx.Rollback(ctx)
-	raw, e := json.Marshal(list)
-	if e != nil {
-		return Phrases{}, e
-	}
 	// 用户行锁保证版本检查和覆盖写入串行；没有常用语行时只允许以版本 0 创建。
-	tag, e := tx.Exec(ctx, `INSERT INTO user_phrases(user_id,revision,phrases)
+	if e := writeRevisionJSON(ctx, tx, `INSERT INTO user_phrases(user_id,revision,phrases)
  SELECT $1,$3::bigint,$4::jsonb WHERE COALESCE((SELECT revision FROM user_phrases WHERE user_id=$1),0)=$2
- ON CONFLICT(user_id) DO UPDATE SET revision=excluded.revision,phrases=excluded.phrases`, user, expected, expected+1, raw)
-	if e != nil {
+ ON CONFLICT(user_id) DO UPDATE SET revision=excluded.revision,phrases=excluded.phrases`, user, expected, list); e != nil {
 		return Phrases{}, e
-	}
-	if tag.RowsAffected() == 0 {
-		return Phrases{}, errRevisionConflict
 	}
 	return Phrases{Revision: expected + 1, Phrases: list}, tx.Commit(ctx)
 }

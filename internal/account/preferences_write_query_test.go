@@ -45,6 +45,9 @@ func TestPutPreferencesCombinesRevisionCheckAndWrite(t *testing.T) {
 				if !errors.Is(err, errRevisionConflict) {
 					t.Fatalf("版本冲突未被拒绝：%v", err)
 				}
+				if !reflect.DeepEqual(got, Preferences{}) {
+					t.Fatalf("版本冲突应返回零值，实际=%+v", got)
+				}
 			} else if err != nil || !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("同步结果=%+v，期望=%+v，错误=%v", got, tc.want, err)
 			}

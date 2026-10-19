@@ -35,8 +35,6 @@ var preferenceFields = func() map[string]preferenceField {
 	return fields
 }()
 
-var errRevisionConflict = errors.New("revision_conflict")
-
 type Preferences struct {
 	Revision int64                      `json:"revision"`
 	Settings map[string]json.RawMessage `json:"settings"`
@@ -94,19 +92,11 @@ func (s *Store) PutPreferences(ctx context.Context, user string, expected int64,
 		return Preferences{}, e
 	}
 	defer tx.Rollback(ctx)
-	raw, e := json.Marshal(settings)
-	if e != nil {
-		return Preferences{}, e
-	}
 	// 用户行锁保证版本检查和覆盖写入串行；没有设置行时只允许以版本 0 创建。
-	tag, e := tx.Exec(ctx, `INSERT INTO user_preferences(user_id,revision,settings)
+	if e := writeRevisionJSON(ctx, tx, `INSERT INTO user_preferences(user_id,revision,settings)
  SELECT $1,$3::bigint,$4::jsonb WHERE COALESCE((SELECT revision FROM user_preferences WHERE user_id=$1),0)=$2
- ON CONFLICT(user_id) DO UPDATE SET revision=excluded.revision,settings=excluded.settings`, user, expected, expected+1, raw)
-	if e != nil {
+ ON CONFLICT(user_id) DO UPDATE SET revision=excluded.revision,settings=excluded.settings`, user, expected, settings); e != nil {
 		return Preferences{}, e
-	}
-	if tag.RowsAffected() == 0 {
-		return Preferences{}, errRevisionConflict
 	}
 	return Preferences{Revision: expected + 1, Settings: settings}, tx.Commit(ctx)
 }

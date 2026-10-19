@@ -1109,7 +1109,7 @@ func qqIssueIntentByteOffset(word string, runeIndex int) int {
 	return offset
 }
 
-const qqIssueIntentASCIIWhitespaceBlock = "                                "
+const qqIssueIntentASCIIWhitespaceBlock = "                                                                "
 
 // qqIssueIntentASCIIWhitespacePrefix 按固定块跳过长的 ASCII 空格前缀，再交给意图候选扫描。
 func qqIssueIntentASCIIWhitespacePrefix(text string) int {

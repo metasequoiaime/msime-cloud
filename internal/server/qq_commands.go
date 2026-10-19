@@ -99,7 +99,47 @@ func qqCompact(text string) string {
 	var compactBuilder strings.Builder
 	compactBuilder.Grow(len(text))
 	for len(text) > 0 {
+		// ASCII 的空白和大小写规则可直接按字节处理，无需 Unicode 查表和重编码。
+		if c := text[0]; c < utf8.RuneSelf {
+			text = text[1:]
+			if c == ' ' || c >= '\t' && c <= '\r' {
+				continue
+			}
+			if c >= 'A' && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			compactBuilder.WriteByte(c)
+			continue
+		}
 		r, size := utf8.DecodeRuneInString(text)
+		if r <= 0x9FFF {
+			if r <= unicode.MaxLatin1 {
+				text = text[size:]
+				if unicode.IsSpace(r) {
+					continue
+				}
+				// Latin-1 的非 ASCII 大写字母与小写字母相差 32 个码点。
+				if unicode.IsUpper(r) {
+					r += 'a' - 'A'
+				}
+				compactBuilder.WriteRune(r)
+				continue
+			}
+			// 连续基本汉字不需要规范化，整段复制以免逐字查表和重编码。
+			if r >= 0x4E00 {
+				end := size
+				for end < len(text) {
+					next, width := utf8.DecodeRuneInString(text[end:])
+					if next < 0x4E00 || next > 0x9FFF {
+						break
+					}
+					end += width
+				}
+				compactBuilder.WriteString(text[:end])
+				text = text[end:]
+				continue
+			}
+		}
 		text = text[size:]
 		if unicode.IsSpace(r) {
 			continue

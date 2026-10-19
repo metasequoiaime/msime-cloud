@@ -26,6 +26,9 @@ func writeStreamProtocolViolation(ctx context.Context, c *websocket.Conn, text b
 }
 
 func TestStreamingProtocolViolationsMeterTheirSource(t *testing.T) {
+	// 边界用例须经两段 TLS 转发 32 MiB；race 模式的共享 runner 需要留出吞吐余量。
+	// 此测试验证字节上限、关闭状态和计量归因，期限不承担性能门禁。
+	const timeout = time.Minute
 	for _, upstream := range []bool{false, true} {
 		for _, text := range []bool{false, true} {
 			name := "客户端/"
@@ -46,7 +49,7 @@ func TestStreamingProtocolViolationsMeterTheirSource(t *testing.T) {
 					}
 					defer c.CloseNow()
 					c.SetReadLimit(contract.StreamMessageBytes)
-					ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+					ctx, cancel := context.WithTimeout(r.Context(), timeout)
 					defer cancel()
 					if upstream {
 						// 等设备消息通过中继后再发送非法响应，确保连接已完成升级。
@@ -62,12 +65,12 @@ func TestStreamingProtocolViolationsMeterTheirSource(t *testing.T) {
 					}
 				})
 				s.config.Admin.Enabled = true
-				s.config.Streaming = StreamingEndpoint{URL: strings.Replace(s.config.Cloud.URL, "https:", "wss:", 1), token: "synthetic-key", ResourceID: "synthetic-resource", MaxSeconds: 30}
+				s.config.Streaming = StreamingEndpoint{URL: strings.Replace(s.config.Cloud.URL, "https:", "wss:", 1), token: "synthetic-key", ResourceID: "synthetic-resource", MaxSeconds: int(timeout/time.Second) + 30}
 				live := httptest.NewTLSServer(s)
 				t.Cleanup(func() { s.Close(); live.Close() })
 				c := dialStream(t, live)
 				c.SetReadLimit(contract.StreamMessageBytes)
-				ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+				ctx, cancel := context.WithTimeout(t.Context(), timeout)
 				defer cancel()
 				if upstream {
 					if err := c.Write(ctx, websocket.MessageBinary, []byte{0}); err != nil {
@@ -81,7 +84,7 @@ func TestStreamingProtocolViolationsMeterTheirSource(t *testing.T) {
 					_, data, err := c.Read(ctx)
 					if err != nil {
 						if websocket.CloseStatus(err) != wantStatus {
-							t.Fatal("非法消息的关闭状态不正确", err)
+							t.Fatalf("转发 %d 字节后非法消息的关闭状态不正确：%v", forwarded, err)
 						}
 						break
 					}

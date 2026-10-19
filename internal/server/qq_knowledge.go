@@ -970,18 +970,9 @@ func qqNormalizeWhitespace(text string) string {
 		}
 		return out.String()
 	}
-	outputBytes := 0
-	for field := range qqTextFields(text) {
-		if len(field) == len(text) {
-			return field
-		}
-		if outputBytes > 0 {
-			outputBytes++
-		}
-		outputBytes += len(field)
-	}
 	var out strings.Builder
-	out.Grow(outputBytes)
+	// 只保留字段和单个分隔空格；输入已裁剪，两遍扫描的容量估算不再必要。
+	out.Grow(len(text))
 	for field := range qqTextFields(text) {
 		if out.Len() > 0 {
 			out.WriteByte(' ')

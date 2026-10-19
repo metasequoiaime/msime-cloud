@@ -135,6 +135,7 @@ func TestUserDataSummaryUsesOneScanPerTable(t *testing.T) {
 	for _, table := range []string{
 		"user_dictionary_entries", "user_dictionary_overlay", "user_dictionary_changes", "user_candidate_positions", "user_candidate_selections",
 		"community_skins", "community_candidate_skins", "community_resources", "community_plugins",
+		"community_candidate_skin_files",
 	} {
 		if scans[table] != 1 {
 			t.Errorf("%s 扫描了 %d 次，期望 1 次", table, scans[table])

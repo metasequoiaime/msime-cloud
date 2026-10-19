@@ -218,11 +218,17 @@ func qqCompactCanReuse(text string) bool {
 	if text == "" || strings.HasPrefix(text, "/") {
 		return false
 	}
-	count := 0
-	var last rune
+	// 首字节已需去空白或转小写时直接返回，保留短 ASCII 消息的早退出路径。
+	if c := text[0]; c >= 'A' && c <= 'Z' || c == ' ' || c >= '\t' && c <= '\r' {
+		return false
+	}
+	// 尾部全角字符或待裁剪符号已足以排除复用，无需先扫描整段正文。
+	last, size := utf8.DecodeLastRuneInString(text)
+	// 末字符未占满输入时才有多个字符，单个问号或表情仍保留复用规则。
+	if last >= 0xFF01 && last <= 0xFF5E || size < len(text) && (strings.ContainsRune(qqCommandTrailing, last) || unicode.In(last, unicode.So, unicode.Sk) || last == 0xFE0F || last == 0x200D) {
+		return false
+	}
 	for _, r := range text {
-		count++
-		last = r
 		// Latin-1 不含全角 ASCII 字符，只需检查空白和大写。
 		if uint32(r) <= unicode.MaxLatin1 {
 			if unicode.IsSpace(r) || unicode.IsUpper(r) {
@@ -237,9 +243,6 @@ func qqCompactCanReuse(text string) bool {
 		if unicode.IsSpace(r) || unicode.IsUpper(r) || unicode.IsTitle(r) || r >= 0xFF01 && r <= 0xFF5E {
 			return false
 		}
-	}
-	if count > 1 && (strings.ContainsRune(qqCommandTrailing, last) || unicode.In(last, unicode.So, unicode.Sk) || last == 0xFE0F || last == 0x200D) {
-		return false
 	}
 	return true
 }

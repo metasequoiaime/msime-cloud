@@ -494,6 +494,7 @@ lines:
 			remaining = ""
 		}
 		if line == previousLine {
+			remaining = qqSkipConsecutiveListLines(remaining, previousLine)
 			continue
 		}
 		previousLine = line
@@ -574,6 +575,18 @@ lines:
 		}
 	}
 	return labels
+}
+
+// qqSkipConsecutiveListLines 跳过当前行之后紧邻的相同列表行，避免长串重复候选逐行解析。
+func qqSkipConsecutiveListLines(remaining, line string) string {
+	if line == "" {
+		return remaining
+	}
+	prefix := line + "\n"
+	for strings.HasPrefix(remaining, prefix) {
+		remaining = remaining[len(prefix):]
+	}
+	return remaining
 }
 
 // qqListLabelCandidate 返回列表项中冒号前的 Markdown 标签；候选过短且只在少数重复变体中复用，结果可安全缓存。

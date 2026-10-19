@@ -202,9 +202,10 @@ func qqCompactTrailingPrefix(text string) (string, bool) {
 	return "", false
 }
 
-// qqTrimCommandTrailing 只统计一次字符数，逐个移除尾部标点和表情，同时至少保留一个字符。
+// qqTrimCommandTrailing 从末尾移除标点和表情，保留首字符的字节范围，避免统计全文。
 func qqTrimCommandTrailing(compact string) string {
-	for count := utf8.RuneCountInString(compact); count > 1; count-- {
+	_, firstSize := utf8.DecodeRuneInString(compact)
+	for len(compact) > firstSize {
 		r, size := utf8.DecodeLastRuneInString(compact)
 		if !strings.ContainsRune(qqCommandTrailing, r) && !unicode.In(r, unicode.So, unicode.Sk) && r != 0xFE0F && r != 0x200D {
 			break

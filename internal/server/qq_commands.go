@@ -240,6 +240,28 @@ func qqCompactReusable(text string, requireValidUTF8 bool) bool {
 	if last >= 0xFF01 && last <= 0xFF5E || size < len(text) && (strings.ContainsRune(qqCommandTrailing, last) || unicode.In(last, unicode.So, unicode.Sk) || last == 0xFE0F || last == 0x200D) {
 		return false
 	}
+	start := 0
+	for start < len(text) {
+		first := text[start]
+		if first < utf8.RuneSelf {
+			if first == ' ' || first >= '\t' && first <= '\r' || first >= 'A' && first <= 'Z' {
+				return false
+			}
+			start++
+			continue
+		}
+		// 基本汉字固定占三个有效 UTF-8 字节，无需解码码点或查询 Unicode 属性。
+		if first >= 0xE4 && first <= 0xE9 && len(text)-start >= 3 {
+			second, third := text[start+1], text[start+2]
+			if (first != 0xE4 || second >= 0xB8) && second&0xC0 == 0x80 && third&0xC0 == 0x80 {
+				start += 3
+				continue
+			}
+		}
+		break
+	}
+	// 遇到其他字符后，剩余正文沿用通用遍历，避免每个字符都重复尝试字节快路径。
+	text = text[start:]
 	for offset, r := range text {
 		// Latin-1 不含全角 ASCII 字符，只需检查空白和大写。
 		if uint32(r) <= unicode.MaxLatin1 {

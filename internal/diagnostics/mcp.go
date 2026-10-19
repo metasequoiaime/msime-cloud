@@ -159,7 +159,7 @@ func events(source []account.DiagnosticEvent, in EventInput) []Event {
 		if in.Kind != "" && e.Kind != in.Kind {
 			continue
 		}
-		out = append(out, Event{TMS: e.TMS, Kind: e.Kind, DurationMS: e.DurationMS})
+		out = append(out, Event{TMS: *e.TMS, Kind: e.Kind, DurationMS: e.DurationMS})
 		if in.Limit > 0 && len(out) == in.Limit {
 			break
 		}

@@ -9,7 +9,7 @@
 - `POST /v1/users/me/diagnostics`：上传快照。JSON 最多 2 MiB：`{"platform","app_version","sections":{...},"ttl"}`，`ttl` 是 `one_hour`、`one_day` 或 `seven_days`。`sections` 里只出现用户勾选的分类，至少一个：
   - `crash_logs`：`[{"at","message","stack"}]`，`at` 是 RFC 3339 时间，`message` 最多 2 KiB，`stack` 最多 16 KiB，两者不能含 NUL，否则返回 400 `invalid_crash_logs`；最多 200 条。
   - `perf_trace`：`[{"t_ms","kind","duration_ms"}]`，三个字段都必须有。
-  - `input_events`：`[{"t_ms","kind","duration_ms"?}]`，`duration_ms` 可以省略。
+  - `input_events`：`[{"t_ms","kind","duration_ms"?}]`，`duration_ms` 可以省略。两类事件的 `t_ms` 都必填且不能为 `null`，允许为 `0`。
   - `config_snapshot`：设置快照对象，最多 8 层、2000 个条目，字符串最多 1 KiB。所有层级的键名不能含 NUL，非凭据键下的字符串值也不能含 NUL，否则返回 400 `invalid_config_snapshot`。键名匹配 `(?i)token|secret|password|api_key|key$` 的值必须是字符串 `"<redacted>"`，不符合时返回 400 `unredacted_config`。
 
   `perf_trace` 与 `input_events` 的 `kind` 只能是 `key_down`、`key_up`、`candidate_shown`、`candidate_selected`、`commit`、`backspace`、`panel_open`、`panel_close`、`ime_start`、`ime_finish`。事件对象只允许列出的字段，任何多出来的字段（文本、拼音、候选、按键字符）、未知的分类、超长字符串或未脱敏的凭据都让整份上传返回 400，不会只存一部分。错误码：`invalid_json`、`invalid_client`、`invalid_ttl`、`empty_snapshot`、`invalid_crash_logs`、`invalid_perf_trace`、`invalid_input_events`、`invalid_config_snapshot`、`unredacted_config`。

@@ -21,9 +21,10 @@ MAX_RESOURCE = 4 << 20
 MAX_PACKAGE = 16 << 20
 MAX_ENTRIES = 512
 RESERVED = {"system", "shuishan", "light", "paper", "night", "ink", "custom"}
-# msime-windows 的六个内置外观与它放内置外观设置的 default 目录：外部皮肤不能占用这些 ID。
-WINDOWS_LOOKS = {"fluent", "wechat", "graphite", "willow_green", "autumn_osmanthus", "microsoft"}
+# msime-windows 的七个内置外观与它放内置外观设置的 default 目录：外部皮肤不能占用这些 ID。
+WINDOWS_LOOKS = {"fluent", "wechat", "graphite", "willow_green", "autumn_osmanthus", "microsoft", "wechat_scroll"}
 WINDOWS_DEFAULTS_FOLDER = "default"
+CANVAS = "canvas"
 BASES = {"system", "shuishan", "light", "paper", "night", "ink"}
 # 清单的 base 可以写 msime-windows 内置外观，服务端一律按 system 返回；外观的配色由客户端读清单时补齐。
 BASE_ALIASES = {look: "system" for look in WINDOWS_LOOKS}
@@ -31,7 +32,7 @@ BASE_ALIASES = {look: "system" for look in WINDOWS_LOOKS}
 CSS_COLOR = re.compile(r"[A-Za-z0-9#(),.% /-]*")
 CANDIDATE_COLOR_KEYS = ("accent", "selected", "hover", "surface", "border", "text", "number", "translation", "candidate_text", "preedit_text", "preedit_caret", "selected_text", "selected_number", "selected_translation", "selected_bar", "preedit_background", "preedit_divider")
 MENU_COLOR_KEYS = ("background", "border", "text", "hover")
-MEDIA = {"css": "text/css; charset=utf-8", "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp", "svg": "image/svg+xml", "ico": "image/x-icon", "bmp": "image/bmp", "avif": "image/avif", "woff": "font/woff", "woff2": "font/woff2", "ttf": "font/ttf", "otf": "font/otf"}
+MEDIA = {"css": "text/css; charset=utf-8", "png": "image/png", "apng": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp", "svg": "image/svg+xml", "ico": "image/x-icon", "bmp": "image/bmp", "avif": "image/avif", "woff": "font/woff", "woff2": "font/woff2", "ttf": "font/ttf", "otf": "font/otf"}
 BASE_HINT = "base must be system or a built-in theme"
 # schema 2 的装饰图待机动效与 [animation] 预设，取值与客户端的 DecorationMotion、SkinAnimationPreset 相同。
 DECORATION_MOTIONS = ("none", "float", "sway", "breathe", "bounce")
@@ -124,8 +125,8 @@ def package_files(files):
 
 
 def validate(folder, manifest, files):
-    """Validate one package: folder is its id, manifest the skin.toml bytes, files maps every other stored path to its size. Returns the parsed manifest or raises Invalid with the client's reason."""
-    if not safe_id(folder) or folder in RESERVED or folder in WINDOWS_LOOKS or folder == WINDOWS_DEFAULTS_FOLDER:
+    """校验皮肤包：folder 是 ID，manifest 为原始清单，files 为资源路径和大小；返回清单或按客户端原因抛出 Invalid。"""
+    if not safe_id(folder) or folder in RESERVED or folder in WINDOWS_LOOKS or folder == WINDOWS_DEFAULTS_FOLDER or folder == CANVAS:
         raise Invalid("invalid skin id")
     if len(manifest) > MAX_MANIFEST:
         raise Invalid("skin.toml is too large")
@@ -148,9 +149,13 @@ def validate(folder, manifest, files):
     required_string(table, "name", 80)
     required_string(table, "version", 32)
     base = required_string(table, "base", 32)
-    optional_string(table, "author", 120)
-    optional_string(table, "description", 500)
-    base = BASE_ALIASES.get(base, base)
+    canvas = base == CANVAS
+    if canvas and schema != 2:
+        raise Invalid("base = canvas requires schema_version 2")
+    for key, limit in (("author", 120), ("description", 500)):
+        if table.get(key) != "":
+            optional_string(table, key, limit)
+    base = "system" if canvas else BASE_ALIASES.get(base, base)
     table["base"] = base
     if base not in BASES:
         raise Invalid(BASE_HINT)
@@ -172,6 +177,9 @@ def validate(folder, manifest, files):
     if "corner_radius_dip" in window and not bounded(number(window, "corner_radius_dip"), 32):
         raise Invalid("invalid corner_radius_dip")
     validate_windows_window_keys(window)
+    validate_window_geometry(window, table.get("toolbar"))
+    if canvas:
+        validate_canvas(window, image)
     decoration = window.get("decoration", {})
     if not isinstance(decoration, dict):
         raise Invalid("invalid decoration")
@@ -229,6 +237,123 @@ def validate(folder, manifest, files):
     validate_animation(table, schema)
     validate_resources(manifest, files)
     return table
+
+
+def validate_box(table, key, required=False):
+    if key not in table:
+        if required:
+            raise Invalid("invalid border_image " + key)
+        return
+    values = table[key]
+    if not isinstance(values, list) or len(values) not in (1, 2, 4) or any(
+        not (is_int(value) or type(value) is float) or not bounded(value, 500) for value in values
+    ):
+        raise Invalid("invalid " + key)
+
+
+def validate_geometry(table):
+    validate_box(table, "preedit_margin_dip")
+    for key, dip, em in (("padding", 64, 4), ("item_gap", 64, 4), ("item_extra_height", 64, 4),
+                         ("number_inset", 64, 4), ("item_padding_right", 64, 4), ("item_min_width", 500, 40),
+                         ("number_gap", 64, 4), ("selected_bar_width", 16, 1)):
+        if key not in table:
+            continue
+        value = table[key]
+        if isinstance(value, str):
+            try:
+                n = float(value[:-2]) if value.endswith("em") and re.fullmatch(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?", value[:-2]) else math.nan
+            except ValueError:
+                n = math.nan
+            valid = bounded(n, em)
+        else:
+            valid = bounded(number(table, key), dip)
+        if not valid:
+            raise Invalid("invalid " + key)
+    for key in ("number_scale", "selected_bar_height_em"):
+        if key in table and not bounded(number(table, key), 2):
+            raise Invalid("invalid " + key)
+    for key in ("selected_bar_inside", "item_corners_follow_card", "justify_rows", "trim_hidden_preedit_gap"):
+        if key in table and type(table[key]) is not bool:
+            raise Invalid("invalid " + key)
+    if "page_arrow_style" in table and table["page_arrow_style"] not in ("chevron", "triangle"):
+        raise Invalid("invalid page_arrow_style")
+
+
+def validate_window_geometry(window, toolbar):
+    if "backdrop" in window and window["backdrop"] not in ("none", "acrylic", "mica"):
+        raise Invalid("invalid backdrop")
+    for key in ("fit_content", "expand_panel"):
+        if key in window and type(window[key]) is not bool:
+            raise Invalid("invalid " + key)
+    if "expand_rows" in window and (not is_int(window["expand_rows"]) or not 2 <= window["expand_rows"] <= 8):
+        raise Invalid("invalid expand_rows")
+    validate_geometry(window)
+    for key in ("horizontal", "vertical"):
+        if key in window:
+            if not isinstance(window[key], dict):
+                raise Invalid("invalid " + key + " geometry")
+            validate_geometry(window[key])
+    if toolbar is not None:
+        if not isinstance(toolbar, dict):
+            raise Invalid("invalid toolbar")
+        if "icon_corner_radius_dip" in toolbar and not bounded(number(toolbar, "icon_corner_radius_dip"), 16):
+            raise Invalid("invalid icon_corner_radius_dip")
+
+
+def validate_canvas(window, image):
+    def animated(name):
+        return image(name) and name.rsplit(".", 1)[-1].lower() in ("png", "apng", "gif", "webp")
+
+    if "border_image" in window:
+        border = window["border_image"]
+        if not isinstance(border, dict):
+            raise Invalid("invalid border_image")
+        source = required_string(border, "source", 256)
+        if not animated(source):
+            raise Invalid("invalid border_image source")
+        light = optional_string(border, "light_source", 256)
+        if light is not None and not animated(light):
+            raise Invalid("invalid border_image light_source")
+        for key in ("slice_dip", "stretch_dip", "width_dip"):
+            validate_box(border, key, key == "slice_dip")
+        if "fill" in border and type(border["fill"]) is not bool:
+            raise Invalid("invalid fill")
+    for key, vertical, horizontal in (("content_insets_dip", 200, 500), ("outer_insets_dip", 500, 500)):
+        if key in window:
+            insets = window[key]
+            if not isinstance(insets, dict) or any(
+                side in insets and not bounded(number(insets, side), limit)
+                for side, limit in (("top", vertical), ("right", horizontal), ("bottom", vertical), ("left", horizontal))
+            ):
+                raise Invalid("invalid " + key)
+    if "line_gap_dip" in window and not bounded(number(window, "line_gap_dip"), 100):
+        raise Invalid("invalid line_gap_dip")
+    if "decorations" not in window:
+        return
+    values = window["decorations"]
+    if not isinstance(values, list):
+        raise Invalid("invalid decorations")
+    if len(values) > 32:
+        raise Invalid("too many decorations")
+    for decoration in values:
+        if not isinstance(decoration, dict):
+            raise Invalid("invalid decoration")
+        if not animated(required_string(decoration, "image", 256)):
+            raise Invalid("invalid decoration image")
+        if decoration.get("anchor", "right") not in ("top-left", "top-right", "bottom-left", "bottom-right", "left", "right", "top", "bottom", "center"):
+            raise Invalid("invalid decoration anchor")
+        for key in ("offset_x_dip", "offset_y_dip"):
+            n = number(decoration, key)
+            if not math.isfinite(n) or not -2000 <= n <= 2000:
+                raise Invalid("invalid decoration " + key)
+        if "z_index" in decoration and (not is_int(decoration["z_index"]) or not -1000 <= decoration["z_index"] <= 1000):
+            raise Invalid("invalid decoration z_index")
+        for key in ("width_dip", "height_dip"):
+            if key not in decoration:
+                raise Invalid("missing decoration " + key)
+            n = number(decoration, key)
+            if not bounded(n, 2000) or n == 0:
+                raise Invalid("invalid decoration " + key)
 
 
 def validate_decoration_motion(decoration, decorated, schema):

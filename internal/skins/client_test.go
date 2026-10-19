@@ -36,7 +36,12 @@ type clientFixture struct {
 
 func loadClientFixture(t *testing.T) clientFixture {
 	t.Helper()
-	raw, err := os.ReadFile("testdata/client_dialect.json")
+	return loadClientCases(t, "testdata/client_dialect.json")
+}
+
+func loadClientCases(t *testing.T, path string) clientFixture {
+	t.Helper()
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,11 +89,20 @@ func (f clientFixture) build(t *testing.T, c clientCase) Stored {
 	return s
 }
 
+func TestCanvasDialect(t *testing.T) {
+	checkClientDialect(t, loadClientCases(t, "testdata/canvas_dialect.json"))
+}
+
 func TestClientDialectMatchesTheClientLoader(t *testing.T) {
 	f := loadClientFixture(t)
 	if len(f.Cases) < 150 {
 		t.Fatal("fixture lost cases", len(f.Cases))
 	}
+	checkClientDialect(t, f)
+}
+
+func checkClientDialect(t *testing.T, f clientFixture) {
+	t.Helper()
 	for _, c := range f.Cases {
 		p, err := ParseStored(f.build(t, c))
 		switch {

@@ -1221,6 +1221,8 @@ func TestCandidateSkinReservedIDConstraintUpgrade(t *testing.T) {
 	}
 	for _, statement := range []string{
 		`INSERT INTO candidate_skins(id,manifest) VALUES('autumn_osmanthus','schema_version = 1')`,
+		`INSERT INTO candidate_skins(id,manifest) VALUES('canvas','schema_version = 2')`,
+		`UPDATE community_candidate_skins SET package_id='wechat_scroll' WHERE package_id='microsoft'`,
 		`UPDATE community_candidate_skins SET package_id='default' WHERE package_id='microsoft'`,
 	} {
 		if _, err = db.pool.Exec(t.Context(), statement); err == nil {

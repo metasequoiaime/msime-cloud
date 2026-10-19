@@ -12,7 +12,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-// 本文件校验数据库里的皮肤包。它们用跨平台客户端与 msime-windows 统一后的清单规则（base 是全局主题或 msime-windows 内置外观），不是 Parse 给内置皮肤和 skins_root 用的旧 Windows 方言。规则逐条移植 msime 的 crates/client-services/src/skin/catalog.rs load()，连拒绝原因也相同，所以这里接受的包每个客户端都能列出；testdata/client_dialect.json 是 msime 那份共享用例表的副本（scripts/sync_client_dialect.py 同步），同时约束本文件和 scripts/candidate_skins_seed.py。
+// 本文件校验数据库里的皮肤包。它们用跨平台客户端与 msime-windows 统一后的清单规则（base 是全局主题或 msime-windows 内置外观），不是 Parse 给内置皮肤和 skins_root 用的旧 Windows 方言。清单规则移植自 msime 的 crates/client-services/src/skin/catalog.rs load()，新增绘制键继续保留在原始清单中；testdata/client_dialect.json 是 msime 那份共享用例表的副本（scripts/sync_client_dialect.py 同步），同时约束本文件和 scripts/candidate_skins_seed.py。
 
 // Background is the image drawn over the candidate card, with the client's defaults (cover, opacity 1) filled in.
 type Background struct {
@@ -61,15 +61,15 @@ var reservedThemeIDs = []string{"system", "shuishan", "light", "paper", "night",
 // baseThemeIDs are the global themes a package may be drawn over: every reserved id except custom.
 var baseThemeIDs = []string{"system", "shuishan", "light", "paper", "night", "ink"}
 
-// windowsLookIDs 是 msime-windows 的六个内置外观，与客户端 catalog/windows_looks.rs 的 WINDOWS_LOOK_IDS 一致。清单的 base 可以写它们，服务端一律按 system 返回；外观的配色由客户端读清单时补齐，接口按清单原样返回颜色。外部皮肤也不能用这些 ID。
-var windowsLookIDs = []string{"fluent", "wechat", "graphite", "willow_green", "autumn_osmanthus", "microsoft"}
+// windowsLookIDs 是 msime-windows 的七个内置外观，与客户端 catalog/windows_looks.rs 的 WINDOWS_LOOK_IDS 一致。清单的 base 可以写它们，服务端一律按 system 返回；外观的配色由客户端读清单时补齐，接口按清单原样返回颜色。外部皮肤也不能用这些 ID。
+var windowsLookIDs = []string{"fluent", "wechat", "graphite", "willow_green", "autumn_osmanthus", "microsoft", "wechat_scroll"}
 
 // windowsDefaultsFolder 是 msime-windows 放内置外观设置清单的子目录名，外部皮肤同样不能占用。
 const windowsDefaultsFolder = "default"
 
 // clientReservedID 是客户端的 is_reserved：全局主题、msime-windows 内置外观和 default 目录。
 func clientReservedID(id string) bool {
-	return slices.Contains(reservedThemeIDs, id) || slices.Contains(windowsLookIDs, id) || id == windowsDefaultsFolder
+	return slices.Contains(reservedThemeIDs, id) || slices.Contains(windowsLookIDs, id) || id == windowsDefaultsFolder || id == "canvas"
 }
 
 // cssColorText 是客户端的 css_color_text：颜色值会被 msime-windows 拼进 CSS 声明，只放行颜色写法用得到的字符。
@@ -91,7 +91,7 @@ func clientMediaType(name string) string {
 	switch ext {
 	case "css":
 		return "text/css; charset=utf-8"
-	case "png":
+	case "png", "apng":
 		return "image/png"
 	case "jpg", "jpeg":
 		return "image/jpeg"
@@ -178,6 +178,15 @@ func requiredString(table map[string]any, key string, max int) (string, error) {
 	}
 	return value, nil
 }
+
+// 作者与描述可以留空；其他可选字符串继续使用各字段原有的非空规则。
+func optionalText(table map[string]any, key string, max int) (string, bool, error) {
+	if value, present := table[key]; present && value == "" {
+		return "", true, nil
+	}
+	return optionalString(table, key, max)
+}
+
 func optionalString(table map[string]any, key string, max int) (string, bool, error) {
 	if _, present := table[key]; !present {
 		return "", false, nil
@@ -256,13 +265,17 @@ func ParseStored(s Stored) (Package, error) {
 	if p.Base, err = requiredString(table, "base", 32); err != nil {
 		return p, err
 	}
-	if p.Author, _, err = optionalString(table, "author", 120); err != nil {
+	canvas := p.Base == "canvas"
+	if canvas && schema != 2 {
+		return p, invalid("base = canvas requires schema_version 2")
+	}
+	if p.Author, _, err = optionalText(table, "author", 120); err != nil {
 		return p, err
 	}
-	if p.Description, _, err = optionalString(table, "description", 500); err != nil {
+	if p.Description, _, err = optionalText(table, "description", 500); err != nil {
 		return p, err
 	}
-	if slices.Contains(windowsLookIDs, p.Base) {
+	if slices.Contains(windowsLookIDs, p.Base) || canvas {
 		p.Base = "system"
 	}
 	if !slices.Contains(baseThemeIDs, p.Base) {
@@ -283,7 +296,7 @@ func ParseStored(s Stored) (Package, error) {
 		return p, invalid("missing candidate_window")
 	}
 	files := newPackageFiles(s.Resources)
-	if err = readWindow(&p, window, files, schema); err != nil {
+	if err = readWindow(&p, window, files, schema, canvas, table["toolbar"]); err != nil {
 		return p, err
 	}
 	if p.Toolbar, err = readToolbar(table); err != nil {
@@ -318,7 +331,7 @@ func ParseStored(s Stored) (Package, error) {
 	return p, storedResources(&p, s)
 }
 
-func readWindow(p *Package, window map[string]any, files packageFiles, schema int64) error {
+func readWindow(p *Package, window map[string]any, files packageFiles, schema int64, canvas bool, toolbar any) error {
 	w := &p.CandidateWindow
 	value, present := window["min_width_dip"]
 	if w.MinWidth = number(value, present); !bounded(w.MinWidth, 1000) {
@@ -333,6 +346,14 @@ func readWindow(p *Package, window map[string]any, files packageFiles, schema in
 	}
 	if err := checkWindowsWindowKeys(window); err != nil {
 		return err
+	}
+	if err := clientWindowGeometry(window, toolbar); err != nil {
+		return err
+	}
+	if canvas {
+		if err := readCanvas(p, window, files); err != nil {
+			return err
+		}
 	}
 	decoration := map[string]any{}
 	if value, present := window["decoration"]; present {

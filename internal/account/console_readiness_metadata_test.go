@@ -17,6 +17,7 @@ type readinessMetadataFixture struct {
 func TestReadyPreservesMissingMetadataOrder(t *testing.T) {
 	checkMissingReadinessMetadataOrder(t, (*Store).Ready, []readinessMetadataFixture{
 		{"candidate_skins", "candidate_skins_id_check", "candidate skin id constraints predate the msime-windows looks", true},
+		{"candidate_skin_resources", "candidate_skin_resources_path_check", "candidate skin resource constraint predates APNG paths", true},
 		{"community_resources", "community_resources_kind_known", "community resource and report kind constraints predate phrase packs", true},
 		{"user_dictionary_entries", "user_dictionary_entries_kind_check", "user_dictionary_entries kind constraint predates wubi98", true},
 		{"", "community_resource_saves_user", "community indexes missing", false},

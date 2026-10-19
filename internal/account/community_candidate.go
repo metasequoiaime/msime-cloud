@@ -291,6 +291,9 @@ func validCandidatePackage(manifest string, files map[string][]byte, requireLice
 		}
 	}
 	referenced := map[string]bool{pkg.Preview: true}
+	for _, image := range pkg.ReferencedImages() {
+		referenced[image] = true
+	}
 	if decoration := pkg.CandidateWindow.Decoration.Image; decoration != "" {
 		referenced[decoration] = true
 	}

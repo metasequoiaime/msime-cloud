@@ -53,6 +53,7 @@ type Colors struct {
 	ShowSelectedBar *bool  `toml:"show_selected_bar" json:"show_selected_bar,omitempty"`
 }
 type Package struct {
+	canvasImages      []string
 	SchemaVersion     int    `toml:"schema_version" json:"schema_version"`
 	ID                string `toml:"id" json:"id"`
 	Name              string `toml:"name" json:"name"`

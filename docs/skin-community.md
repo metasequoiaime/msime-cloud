@@ -151,7 +151,7 @@ msime-skins 清单写 `base = "fluent"`（msime-windows 只接受四个内置 ID
 
 ### 限制与校验
 
-- 只接受 `skin.toml` 加 PNG/JPEG 图片（扩展名 png、jpg、jpeg，不区分大小写），最多 3 个图片文件，每个文件都必须被清单引用：只能是 `preview`、`candidate_window.decoration.image` 和 `candidate_window.background.image`。不接受样式表（`toolbar_stylesheet`）、字体、SVG、GIF 或 WebP；Go 标准库不能重新编码 WebP，支持它需要新增依赖。
+- 只接受 `skin.toml` 加 PNG/JPEG 图片（扩展名 png、jpg、jpeg，不区分大小写），最多 3 个图片文件，每个文件都必须被清单引用：包括 `preview`、`candidate_window.decoration.image`、`candidate_window.background.image`，以及生效的 canvas 九宫格 `source` / `light_source` 和自由挂件 `image`；同一路径重复引用只计一份。不接受样式表（`toolbar_stylesheet`）、字体、SVG、GIF 或 WebP；Go 标准库不能重新编码 WebP，支持它需要新增依赖。
 - 单个图片不超过 1 MiB、合计不超过 2 MiB，上传时和清理后都要满足；skin.toml 另计，最多 65,536 字节。每边 1 到 2048 像素，整包解码像素合计不超过 800 万，尺寸在完整解码前从文件头读取。APNG（第一个 `IDAT` 之前有 `acTL` 的 PNG）最多 120 帧，超过的返回 `candidate_skin_too_large`；它的每一幅画面都按整张画布计入 800 万像素的合计，默认图不属于动画时再多算一幅，与客户端的计算相同。每张 JPEG 最多 32 个扫描段（SOS）：Go 的解码器对每个扫描都要遍历整张图，且不限制扫描数，常见渐进式 JPEG 约 10 个扫描；超过的返回 `candidate_skin_image_invalid`。
 - 必须用 `preview` 指定一张包内的 PNG/JPEG 作为预览图，清理后不超过 256 KiB。
 - 公开作品的 `skin.toml` 必须包含 `[license]` 且 `assets` 非空；私有作品可以省略，转为公开前需先用 PUT 补上。客户端发布时还要求用户勾选确认拥有素材权利。清单的 `version` 和 `[license]` 的 `code`、`assets`、`source` 不能含控制字符（包括换行和制表符），否则返回 `invalid_candidate_skin_package`：客户端会拒绝含控制字符的列表项，一条这样的记录会让所在的整页列表失败。
@@ -184,3 +184,5 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON community_candidate_skins, community_can
 加入分类的版本在启动时给 `community_candidate_skins` 增加 `category text NOT NULL DEFAULT 'other'`（已有行为 `other`，PostgreSQL 11 起带常量默认值的加列不重写表）、命名约束 `community_candidate_skins_category_check` 和服务按分类筛选的索引 `community_candidate_skins_category_newest (category, created_at DESC, id)`，重复执行不会改变任何东西；启动探测会检查这一列，缺列时自动执行迁移。没有新表，所以不需要新的授权：按最小权限部署时只需在上线前用迁移账号执行新版本的 `-migrate-users`，运行角色对这张表已有的 SELECT/INSERT/UPDATE/DELETE 覆盖新列。旧二进制插入的行取默认值 `other`，回滚不需要处理这一列。每个账号满额时约占 200 MiB bytea（100 款，每款最多 2 MiB 图片），需计入数据库容量与备份。账号注销级联删除作品、图片、评分、收藏和下载记录。
 
 公开作品发布即公开，不做事前审核；候选皮肤和其他社区内容一样由管理后台的社区审核页事后复核，审核规则见 [管理后台的「社区事后审核」](admin.md#社区事后审核)。管理后台 API 另外提供 `GET /api/candidate-skins`（可用 `visibility=public|private` 和 `category=<分类>` 筛选）、`GET /api/candidate-skins/{id}`（元数据、可见性、分类、清单文本和每个文件的路径、大小、SHA-256，不含图片字节）、审计过的 `delete_candidate_skin` 永久删除操作，以及审计过的 `set_candidate_skin_category` 用于修改分类；社区审核页的候选皮肤详情抽屉提供分类下拉框。
+
+候选窗清单基底已与新版客户端对齐：`wechat_scroll` 可用于 v1/v2，`canvas` 仅限 v2，画布图片、九宫格切片、挂件和留白按共享范围校验。当前社区仍最多 3 张 PNG/JPEG 图片，`.apng` 后缀、GIF/WebP 与更多图片的上传还未开放；不能据此宣称所有上游画布包均已可上传。

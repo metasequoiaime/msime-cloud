@@ -185,3 +185,69 @@ func BenchmarkQQInsertFAQCategoryPosition(b *testing.B) {
 		})
 	}
 }
+
+func TestQQInsertFAQBodyBoundaries(t *testing.T) {
+	for _, body := range []string{
+		"", "\n", "正文", "正文  \t\r", "正文  \t\r\n\u3000\n \t\r\n",
+		"\u0085\n\u00a0\n\u2000\n\u3000\n", "\xff\xe4\xb8 \r\n\u3000\n",
+		"正文\n## 下一分类\n后续正文", "## 下一分类\n后续正文",
+		"正文\n本页于核对\n## 下一分类", "本页于核对\n后续正文",
+		"正文内本页于不算页尾\n正文内 ## 不算分类\n末行  \r\n\n",
+		strings.Repeat("正文\n不同正文\n", 4096) + "末行  \r\n\u3000\n本页于核对\n",
+		"末行  \r\n" + strings.Repeat(" \t\r\n\u3000\n", 4096) + "本页于核对\n",
+	} {
+		for _, footer := range []string{"本页于", "", "## ", "\n", "正文\n", "\r", "\x00", "\u3000", "末行  \r", strings.Repeat("长页尾", 64)} {
+			faq := "# 合成 FAQ\r\n## 目标分类\r\n" + body
+			got, ok := qqInsertFAQ(faq, 0, "合成问题", " \r\n合成答案\t ", footer)
+			want, found := previousQQInsertFAQ(faq, 0, "合成问题", " \r\n合成答案\t ", footer)
+			if got != want || ok != found {
+				t.Fatalf("正文边界变化：正文=%q，页尾=%q，结果=%q/%t，期望=%q/%t", body, footer, got, ok, want, found)
+			}
+		}
+	}
+}
+
+func TestQQInsertFAQWhitespaceLines(t *testing.T) {
+	for _, padding := range []string{
+		" \t\r\f\v", "\u0085\u00a0\u1680", "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a",
+		"\u2028\u2029\u202f\u205f\u3000", strings.Repeat(" \t\u3000", 32),
+	} {
+		for _, line := range []string{padding, padding + "正文", "正文" + padding, padding + "\xff", padding + "\u200b", padding + "\ufeff"} {
+			faq := "## 目标分类\n正文\n" + line + "\n\n## 后续分类\n"
+			got, ok := qqInsertFAQ(faq, 0, "合成问题", "合成答案", "本页于")
+			want, found := previousQQInsertFAQ(faq, 0, "合成问题", "合成答案", "本页于")
+			if got != want || ok != found {
+				t.Fatalf("空白行判断变化：行=%q，结果=%q/%t，期望=%q/%t", line, got, ok, want, found)
+			}
+		}
+	}
+}
+
+func BenchmarkQQInsertFAQBodyBoundary(b *testing.B) {
+	body := strings.Repeat("合成内容\n不同正文\n", 25000)
+	for _, tc := range []struct {
+		name, body, footer string
+	}{
+		{"长正文到页尾", body + "\n本页于核对\n", "本页于"},
+		{"长正文到分类", body + "\n## 下一分类\n正文", "本页于"},
+		{"长正文到文末", body, "本页于"},
+		{"紧邻页尾", "本页于核对\n" + body, "本页于"},
+		{"短正文后页尾", "正文\n本页于核对\n" + body, "本页于"},
+		{"紧邻分类", "## 下一分类\n" + body, "本页于"},
+		{"长空白尾部", "正文  \r\n" + strings.Repeat(" \t\r\n\u3000\n", 50000), "本页于"},
+		{"单行伪标记", strings.Repeat("正文 ## 非分类 本页于非页尾 ", 32768), "本页于"},
+		{"含换行页尾", body, "正文\n"},
+		{"短正文", "正文  \r\n\n本页于核对\n", "本页于"},
+		{"长 ASCII 空白行", "正文\n" + strings.Repeat(" ", 400000), "本页于"},
+		{"长 Unicode 空白行", "正文\n" + strings.Repeat("\u3000", 100000), "本页于"},
+		{"超长末行", "正文\n" + strings.Repeat("合成正文", 40000) + "  \r\n", "本页于"},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			faq := "## 目标分类\n" + tc.body
+			b.ReportAllocs()
+			for b.Loop() {
+				_, _ = qqInsertFAQ(faq, 0, "合成问题", "合成答案", tc.footer)
+			}
+		})
+	}
+}

@@ -123,8 +123,8 @@ func qqInsertFAQ(faq string, index int, question, answer, footer string) (string
 			continue
 		}
 		previousBodyLine = line
-		// 记住节内最后一行非空内容的末尾，原有空行留在新条目之后。
-		previousBodyNonEmpty = strings.TrimSpace(line) != ""
+		// 只裁剪行首来判断是否为空行，原有行尾空白和后续空行都保留。
+		previousBodyNonEmpty = qqMarkdownLeadingSpace(line) != ""
 		if previousBodyNonEmpty {
 			insertAt = offset + len(line)
 		}

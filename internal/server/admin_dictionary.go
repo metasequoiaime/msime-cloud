@@ -254,6 +254,9 @@ func dictionaryRows(name, text, query string, page int) ([]dictionaryRow, int) {
 	q := strings.ToLower(query)
 	yamlHeader := strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml")
 	lineNumber := 0
+	previousQueryLine := ""
+	previousQueryMatch := false
+	previousQueryReady := false
 	for raw := range strings.SplitSeq(text, "\n") {
 		lineNumber++
 		line := strings.TrimSpace(raw)
@@ -263,7 +266,16 @@ func dictionaryRows(name, text, query string, page int) ([]dictionaryRow, int) {
 			}
 			continue
 		}
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "//") || (q != "" && !dictionaryLineContainsLower(line, q)) {
+		queryMatch := true
+		if q != "" {
+			if previousQueryReady && line == previousQueryLine {
+				queryMatch = previousQueryMatch
+			} else {
+				queryMatch = dictionaryLineContainsLower(line, q)
+				previousQueryLine, previousQueryMatch, previousQueryReady = line, queryMatch, true
+			}
+		}
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "//") || !queryMatch {
 			continue
 		}
 		total++

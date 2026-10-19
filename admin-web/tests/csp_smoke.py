@@ -1623,6 +1623,9 @@ def main() -> int:
                 check_log_stream_replay(browser, base)
                 from community_management_smoke import check_community_management
                 check_community_management(browser, base)
+                from community_section_smoke import check_community_pagination_placeholder, check_community_section_switch
+                check_community_section_switch(browser, base)
+                check_community_pagination_placeholder(browser, base)
                 from skin_preview_smoke import check_candidate_preview, check_skin_preview
                 check_skin_preview(browser, base)
                 check_candidate_preview(browser, base)

@@ -82,48 +82,53 @@ func qqInsertFAQ(faq string, index int, question, answer, footer string) (string
 	if index < 0 {
 		return faq, false
 	}
-	if index > 0 {
-		headingCount := strings.Count(faq, "\n## ")
-		if strings.HasPrefix(faq, "## ") {
-			headingCount++
+	// 按标题标记定位并核对行首，避免先统计全部分类或逐行扫描前面的正文。
+	nextCategory := func(start int) int {
+		next := strings.Index(faq[start:], "## ")
+		if next < 0 {
+			return -1
 		}
-		if headingCount <= index {
-			return faq, false
+		start += next
+		if start == 0 || faq[start-1] == '\n' {
+			return start
 		}
+		// 行内标记出现后改查完整行首模式，避免反复命中同一行的大量伪标题。
+		next = strings.Index(faq[start:], "\n## ")
+		if next < 0 {
+			return -1
+		}
+		return start + next + 1
 	}
-	seen, insertAt, offset := -1, -1, 0
+	offset := nextCategory(0)
+	for ; offset >= 0 && index > 0; index-- {
+		offset = nextCategory(offset + 3)
+	}
+	if offset < 0 {
+		return faq, false
+	}
+	heading, body, _ := strings.Cut(faq[offset:], "\n")
+	insertAt := offset + len(heading)
+	offset = insertAt + 1
 	previousBodyLine := ""
 	previousBodyNonEmpty := false
-	for line := range strings.SplitSeq(faq, "\n") {
-		if insertAt < 0 {
-			if strings.HasPrefix(line, "## ") {
-				seen++
-				if seen == index {
-					insertAt = offset + len(line)
-				}
-			}
-		} else {
-			if strings.HasPrefix(line, "## ") || strings.HasPrefix(line, footer) {
-				break
-			}
-			if line == previousBodyLine {
-				if previousBodyNonEmpty {
-					insertAt = offset + len(line)
-				}
-				offset += len(line) + 1
-				continue
-			}
-			previousBodyLine = line
-			// 记住节内最后一行非空内容的末尾，原有空行留在新条目之后。
-			previousBodyNonEmpty = strings.TrimSpace(line) != ""
+	for line := range strings.SplitSeq(body, "\n") {
+		if strings.HasPrefix(line, "## ") || strings.HasPrefix(line, footer) {
+			break
+		}
+		if line == previousBodyLine {
 			if previousBodyNonEmpty {
 				insertAt = offset + len(line)
 			}
+			offset += len(line) + 1
+			continue
+		}
+		previousBodyLine = line
+		// 记住节内最后一行非空内容的末尾，原有空行留在新条目之后。
+		previousBodyNonEmpty = strings.TrimSpace(line) != ""
+		if previousBodyNonEmpty {
+			insertAt = offset + len(line)
 		}
 		offset += len(line) + 1
-	}
-	if insertAt < 0 {
-		return faq, false
 	}
 	answer = strings.TrimSpace(answer)
 	var out strings.Builder

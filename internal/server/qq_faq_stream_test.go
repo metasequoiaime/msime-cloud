@@ -145,3 +145,43 @@ func BenchmarkQQFAQStreaming(b *testing.B) {
 		})
 	}
 }
+
+func TestQQInsertFAQCategoryPositions(t *testing.T) {
+	body := strings.Repeat("普通行内 ## 非分类\r\n", 4096)
+	for _, faq := range []string{
+		body,
+		strings.Repeat("单行内 ## 非分类 ", 4096),
+		"## 首分类\n" + body + "## 末分类\r\n末分类正文  \r\n\u3000\n本页于合成日期核对。\n",
+		body + "## 首分类\n正文\n## 末分类",
+	} {
+		for _, index := range []int{-1, 0, 1, 2, int(^uint(0) >> 1)} {
+			got, ok := qqInsertFAQ(faq, index, "合成问题", "合成答案", "本页于")
+			want, found := previousQQInsertFAQ(faq, index, "合成问题", "合成答案", "本页于")
+			if got != want || ok != found {
+				t.Fatalf("分类位置变化：分类=%d，结果长度=%d/%t，期望长度=%d/%t", index, len(got), ok, len(want), found)
+			}
+		}
+	}
+}
+
+func BenchmarkQQInsertFAQCategoryPosition(b *testing.B) {
+	body := strings.Repeat("合成内容\n", 50000)
+	for _, tc := range []struct {
+		name, faq string
+		index     int
+	}{
+		{"首分类", "## 首分类\n" + body + "## 末分类\n尾部正文", 0},
+		{"末分类", "## 首分类\n" + body + "## 末分类\n尾部正文", 1},
+		{"无分类查第一个", body, 0},
+		{"有分类查不存在的", "## 首分类\n" + body, 2},
+		{"行内伪标题", strings.Repeat("正文 ## 非分类 ", 32768), 2},
+		{"多分类查末尾", strings.Repeat("## 分类\n正文\n", 8192) + "## 末分类\n正文", 8192},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				_, _ = qqInsertFAQ(tc.faq, tc.index, "合成问题", "合成答案", "本页于")
+			}
+		})
+	}
+}

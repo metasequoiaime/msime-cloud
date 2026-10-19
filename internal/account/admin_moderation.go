@@ -105,7 +105,7 @@ func candidateCategoryFilter() listFilter {
 	return listFilter{param: "category", field: "category", max: longest, values: values}
 }
 
-// setSkinCategory 返回修改 section 中 ids（或 id）图库分类的操作，value 为 {"category":"<分类>"}。请求里的 section 可省略，给出时必须与之相同。分类只是发布元数据，所以不改 updated_at（审核时固定的版本不受影响），也不改变审核状态；设为当前值同样算作命中。审计记录分类、数量、ids，单项时还有名称和原分类 from。table 是 moderationSections 中的固定表名，不来自请求。
+// setSkinCategory 返回修改 section 中 ids（或 id）图库分类的操作，value 为 {"category":"<分类>"}，撤销时还会带上 expected 以固定撤销前看到的分类。请求里的 section 可省略，给出时必须与之相同。分类只是发布元数据，所以不改 updated_at（审核时固定的版本不受影响），也不改变审核状态；设为当前值同样算作命中。审计记录分类、数量、ids，单项时还有名称和原分类 from。table 是 moderationSections 中的固定表名，不来自请求。
 func setSkinCategory(section, table string) adminActionFunc {
 	return func(a *Service, ctx context.Context, tx pgx.Tx, v actionRequest) (actionResult, error) {
 		if v.Section != "" && v.Section != section {
@@ -117,14 +117,15 @@ func setSkinCategory(section, table string) adminActionFunc {
 			return actionResult{}, err
 		}
 		var value struct {
-			Category string `json:"category"`
+			Category string  `json:"category"`
+			Expected *string `json:"expected"`
 		}
 		d := json.NewDecoder(bytes.NewReader(v.Value))
 		d.DisallowUnknownFields()
-		if len(v.Value) == 0 || d.Decode(&value) != nil || !validCandidateSkinCategory(value.Category) {
+		if len(v.Value) == 0 || d.Decode(&value) != nil || !validCandidateSkinCategory(value.Category) || (value.Expected != nil && !validCandidateSkinCategory(*value.Expected)) {
 			return actionResult{}, actionFail(400, "invalid_category")
 		}
-		rows, err := tx.Query(ctx, `UPDATE `+table+` s SET category=$2 FROM (SELECT id,category FROM `+table+` WHERE id=ANY($1) FOR UPDATE) o WHERE s.id=o.id RETURNING s.id,s.name,o.category`, ids, value.Category)
+		rows, err := tx.Query(ctx, `UPDATE `+table+` s SET category=$2 FROM (SELECT id,category FROM `+table+` WHERE id=ANY($1) FOR UPDATE) o WHERE s.id=o.id AND ($3::text IS NULL OR o.category=$3) RETURNING s.id,s.name,o.category`, ids, value.Category, value.Expected)
 		if err != nil {
 			return actionResult{}, err
 		}
@@ -141,6 +142,9 @@ func setSkinCategory(section, table string) adminActionFunc {
 		rows.Close()
 		if err = rows.Err(); err != nil {
 			return actionResult{}, err
+		}
+		if value.Expected != nil && len(changed) != len(ids) {
+			return actionResult{}, actionFail(409, "conflict")
 		}
 		if len(changed) == 0 {
 			return actionResult{}, actionFail(404, "not_found")

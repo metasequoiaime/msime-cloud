@@ -600,6 +600,9 @@ func qqNormalizeListLabel(runes []rune, buf []byte) []byte {
 
 const qqCommonASCIIPadding = " \t \t \t \t \t \t \t \t \t \t \t \t \t \t \t \t"
 
+// qqCommonASCIISpaces 是纯空格正文的固定块，避免通用裁剪逐字节遍历超长填充。
+const qqCommonASCIISpaces = "                                "
+
 // qqTrimLeadingCommonASCIIPadding 按固定块跳过重复的 ASCII Markdown 空白，剩余部分交给标准裁剪。
 func qqTrimLeadingCommonASCIIPadding(line string) int {
 	start := 0
@@ -715,8 +718,13 @@ func qqTrimTrailingCommonPadding(text string, start, end int) int {
 
 // qqTrimSpace 先裁剪 ASCII 空白，再用同一张 Unicode 空白表处理两端的少量非 ASCII 空白。
 func qqTrimSpace(text string) string {
-	trimmed := strings.TrimLeft(text, " \t\n\f\r\v")
-	start := len(text) - len(trimmed)
+	start := qqTrimLeadingCommonASCIIPadding(text)
+	for len(text)-start >= len(qqCommonASCIISpaces) && text[start:start+len(qqCommonASCIISpaces)] == qqCommonASCIISpaces {
+		start += len(qqCommonASCIISpaces)
+	}
+	left := text[start:]
+	trimmed := strings.TrimLeft(left, " \t\n\f\r\v")
+	start += len(left) - len(trimmed)
 	trimmed = strings.TrimRight(trimmed, " \t\n\f\r\v")
 	end := start + len(trimmed)
 	if start < end && text[start] >= utf8.RuneSelf {

@@ -844,6 +844,51 @@ def check_auth_logout_inflight(context, base: str, problems: list[str]):
                 page.close()
 
 
+def check_auth_toast_identity(context, base: str, problems: list[str]):
+    # 退出或切换管理员身份后，旧身份的撤销提示不能继续调用旧令牌。
+    page = context.new_page()
+    page.on("pageerror", lambda error: problems.append(f"身份撤销提示测试页面异常：{error}"))
+    undo_requests = []
+    session = {**FIXTURES["/api/auth/session"], "token_enabled": True}
+    page.route("**/api/auth/session", lambda route: route.fulfill(json=session))
+    page.route("**/api/auth/logout", lambda route: route.fulfill(json={"ok": True}))
+    page.route("**/api/auth-test/undo", lambda route: undo_requests.append(route))
+    try:
+        page.goto(base + "/harness/?auth")
+        expect(page.get_by_test_id("auth-status")).to_have_text("已登录")
+        page.get_by_role("button", name="排队可撤销操作", exact=True).click()
+        expect(page.locator("[data-msime-toast] button")).to_be_visible()
+        page.get_by_role("button", name="测试退出", exact=True).click()
+        expect(page.get_by_test_id("auth-status")).to_have_text("未登录")
+        expect(page.locator("[data-msime-toast] button")).to_have_count(0, timeout=500)
+        page.get_by_role("button", name="测试登录", exact=True).click()
+        expect(page.get_by_test_id("auth-status")).to_have_text("已登录")
+        expect(page.locator("[data-msime-toast] button")).to_have_count(0, timeout=500)
+
+        page.get_by_role("button", name="排队可撤销操作", exact=True).click()
+        with page.expect_request("**/api/auth-test/undo"):
+            page.locator("[data-msime-toast] button").click()
+        page.get_by_role("button", name="测试退出", exact=True).click()
+        expect(page.get_by_test_id("auth-status")).to_have_text("未登录")
+        expect(page.locator("[data-msime-toast] button")).to_have_count(0, timeout=500)
+        undo_requests.pop().fulfill(json={"ok": True})
+        expect(page.get_by_text("已撤销", exact=True)).to_have_count(0, timeout=500)
+
+        page.get_by_role("button", name="测试登录", exact=True).click()
+        expect(page.get_by_test_id("auth-status")).to_have_text("已登录")
+        page.get_by_role("button", name="排队可撤销操作", exact=True).click()
+        page.get_by_label("测试密钥", exact=True).fill("new-admin-token")
+        page.get_by_role("button", name="测试登录", exact=True).click()
+        expect(page.get_by_test_id("auth-status")).to_have_text("已登录")
+        expect(page.locator("[data-msime-toast] button")).to_have_count(0, timeout=500)
+        assert not undo_requests, "切换身份时不应执行旧撤销请求"
+        problems.extend(f"身份撤销提示测试 CSP 违规：{item}" for item in page.evaluate("window.__csp.splice(0)"))
+    finally:
+        for route in undo_requests:
+            route.abort()
+        page.close()
+
+
 def wait_for_no_overflow(page, timeout_ms: int = 3000) -> bool:
     # 直接执行函数并逐帧检查布局，避免 wait_for_function 的轮询 eval 触发生产 CSP。
     return page.evaluate("""timeout => new Promise(resolve => {
@@ -2237,6 +2282,7 @@ def main() -> int:
                 check_auth_logout(context, base, problems)
                 check_auth_logout_flush(context, base, problems)
                 check_auth_logout_inflight(context, base, problems)
+                check_auth_toast_identity(context, base, problems)
                 check_profile_rollback(context, base, problems)
                 check_dictionary_editor_actions(context, base, problems)
                 check_dictionary_editor_navigation(context, base, problems)

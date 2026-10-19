@@ -134,6 +134,7 @@ function AuthHarness() {
     <button type="button" onClick={() => { setResult(""); void auth.login(token).then(() => setResult("登录完成")); }}>测试登录</button>
     <button type="button" onClick={() => request("delayed")}>启动旧请求</button>
     <button type="button" onClick={() => request("unauthorized")}>使当前登录失效</button>
+    <button type="button" onClick={() => toast({ text: "可撤销操作", undo: () => api.post("auth-test/undo", z.unknown()) })}>排队可撤销操作</button>
     <button type="button" onClick={() => toast({ text: "待提交", delayCommit: () => api.post("auth-test/delayed", z.unknown()).finally(() => setCommits(value => value + 1)) })}>排队延迟提交</button>
     <button type="button" onClick={() => { setResult("正在退出"); void auth.logout().then(() => setResult("退出完成")); }}>测试退出</button>
   </main>;

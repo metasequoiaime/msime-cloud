@@ -21,12 +21,14 @@ export type ShowToast = (options: ToastOptions | string) => void;
 
 // FlushToast 立即发出待提交的操作，并等待所有已发出的延迟提交完成（包括失败提示及 `onCommitError`），供退出登录使用。
 export type FlushToast = () => Promise<void>;
+export type ResetToast = (options?: { preservePending?: boolean }) => void;
 
 type Current = ToastOptions & { id: number };
 type PendingCommit = { id: number; run: (keepalive: boolean) => Promise<void>; timer: number };
 
 const ToastContext = createContext<ShowToast | null>(null);
 const FlushContext = createContext<FlushToast | null>(null);
+const ResetContext = createContext<ResetToast | null>(null);
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [current, setCurrent] = useState<Current | null>(null);
@@ -41,6 +43,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const nextID = useRef(0);
   const shownID = useRef(0);
   const noticeID = useRef(0);
+  const generation = useRef(0);
 
   const flush = useCallback((keepalive: boolean): Promise<void> => {
     const commit = pending.current;
@@ -59,6 +62,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
   const show = useCallback<ShowToast>(input => {
     const options = typeof input === "string" ? { text: input } : input;
+    const currentGeneration = generation.current;
     const id = ++nextID.current;
     // Only a newer undoable action replaces a toast whose delayed commit is still waiting. Anything else (a confirmation, another request's failure) goes to the notice slot and must not send someone else's irreversible request early.
     if (pending.current && !options.delayCommit && !options.undo) {
@@ -80,13 +84,29 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     if (delayCommit) {
       const run = (keepalive: boolean) => delayCommit({ keepalive }).then(() => undefined, error => {
         show(`操作失败：${errorMessage(error)}`);
-        options.onCommitError?.(error);
+        if (generation.current === currentGeneration) options.onCommitError?.(error);
       });
       pending.current = { id, run, timer: window.setTimeout(() => void flush(false), TOAST_MS) };
     }
   }, [flush]);
 
   const flushNow = useCallback<FlushToast>(() => flush(false), [flush]);
+  const reset = useCallback<ResetToast>(options => {
+    generation.current += 1;
+    const commit = pending.current;
+    if (commit && !options?.preservePending) {
+      window.clearTimeout(commit.timer);
+      pending.current = null;
+    }
+    window.clearTimeout(hideTimer.current);
+    window.clearTimeout(noticeTimer.current);
+    shownID.current = 0;
+    noticeID.current = 0;
+    setCurrent(null);
+    setNotice(null);
+    setOpen(false);
+    setNoticeOpen(false);
+  }, []);
 
   useEffect(() => {
     const onPageHide = () => void flush(true);
@@ -101,6 +121,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
   const undo = () => {
     if (!current) return;
+    const currentGeneration = generation.current;
     const commit = pending.current;
     if (commit && commit.id === current.id) {
       window.clearTimeout(commit.timer);
@@ -108,7 +129,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     }
     const result = current.undo?.();
     if (result instanceof Promise) {
-      result.then(() => show("已撤销"), error => show(`撤销失败：${errorMessage(error)}`));
+      result.then(() => {
+        if (generation.current === currentGeneration) show("已撤销");
+      }, error => {
+        if (generation.current === currentGeneration) show(`撤销失败：${errorMessage(error)}`);
+      });
     } else {
       show("已撤销");
     }
@@ -117,7 +142,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const canUndo = Boolean(current && (current.undo || current.delayCommit));
   return <ToastContext.Provider value={show}>
     <FlushContext.Provider value={flushNow}>
-      <Toast.Provider duration={Number.POSITIVE_INFINITY} swipeDirection="down" label="通知">
+      <ResetContext.Provider value={reset}>
+        <Toast.Provider duration={Number.POSITIVE_INFINITY} swipeDirection="down" label="通知">
         {children}
         {current && <ToastView key={current.id} toast={current} open={open} className="bottom-7"
           // 撤销 closes its own toast after its click handler already showed 已撤销; ignore close events from a toast that has been replaced.
@@ -127,7 +153,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         {notice && <ToastView key={notice.id} toast={notice} open={noticeOpen} className="bottom-[84px]"
           onOpenChange={next => { if (!next && noticeID.current === notice.id) setNoticeOpen(false); }} />}
         <Toast.Viewport className="fixed bottom-0 left-0 z-80 m-0 list-none p-0 outline-none" />
-      </Toast.Provider>
+        </Toast.Provider>
+      </ResetContext.Provider>
     </FlushContext.Provider>
   </ToastContext.Provider>;
 }
@@ -151,6 +178,12 @@ export function useToast(): ShowToast {
 
 export function useFlushToast(): FlushToast {
   const value = useContext(FlushContext);
+  if (!value) throw new Error("ToastProvider required");
+  return value;
+}
+
+export function useResetToast(): ResetToast {
+  const value = useContext(ResetContext);
   if (!value) throw new Error("ToastProvider required");
   return value;
 }

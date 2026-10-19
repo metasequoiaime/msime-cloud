@@ -114,6 +114,7 @@ export function describeAudit(entry: AuditEntry): string {
     case "delete_reply": return `删除了回复「${target}」${suffix}`;
     case "ban_user": return `封禁了账号 ${target}${suffix}`;
     case "unban_user": return `解封了账号 ${target}`;
+    case "undo_user_ban": return `撤销了账号 ${target} 的封禁状态操作${suffix}`;
     case "revoke_session": case "revoke_sessions": return `撤销了账号 ${target} 的登录会话`;
     case "add_sensitive_word": return `添加了敏感词${text(d.pattern) ? `「${text(d.pattern)}」` : ""}`;
     case "set_sensitive_word_level": return "调整了敏感词处理方式";

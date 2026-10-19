@@ -64,11 +64,11 @@ func saveCommunityContent(section string, create bool) adminActionFunc {
 			return actionResult{}, actionFail(400, "invalid_category")
 		}
 		// 先锁作者再锁作品，与封禁及客户端写入保持同一锁顺序。
-		_, banned, err := lockUserForBan(ctx, tx, input.OwnerID)
+		owner, err := lockUserForBan(ctx, tx, input.OwnerID)
 		if err != nil {
 			return actionResult{}, err
 		}
-		if banned {
+		if owner.Banned {
 			return actionResult{}, actionFail(403, "account_banned")
 		}
 		table := moderationSections[section].table

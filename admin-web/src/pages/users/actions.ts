@@ -2,14 +2,14 @@ import { useCallback, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { errorMessage, useAPI } from "../../api/client";
 import { keys } from "../../api/keys";
-import { banResultSchema, unbanResultSchema } from "../../api/users";
+import { banResultSchema, unbanResultSchema, banUndoSchema } from "../../api/users";
 import { useConfirm } from "../../ui/confirm";
 import { useToast } from "../../ui/toast";
 import { banReasons } from "./labels";
 
-export type BanTarget = { id: string; name: string; banReason: string };
+export type BanTarget = { id: string; name: string };
 
-// useUserActions runs ban, unban and session revocation with the design's confirm and undo toasts. Each one is reversible, so undo calls the reverse action.
+// useUserActions 封装账号管理操作，封禁撤销使用服务端返回的版本和实际原因。
 export function useUserActions() {
   const api = useAPI();
   const client = useQueryClient();
@@ -37,27 +37,39 @@ export function useUserActions() {
     }
   }, [api, refresh]);
 
+  // 不从旧页面猜测封禁原因；缺少有效版本的旧响应不提供撤销。
+  const undoFrom = useCallback((value: unknown, id: string, banned: boolean) => {
+    const parsed = banUndoSchema.safeParse(value);
+    if (!parsed.success || parsed.data.id !== id || parsed.data.value.banned !== banned) return undefined;
+    return async () => {
+      try {
+        await api.action(parsed.data);
+      } finally {
+        await refresh();
+      }
+    };
+  }, [api, refresh]);
+
   const ban = useCallback(async (user: BanTarget) => {
     const reason = await confirm({ title: `封禁 ${user.name}？`, description: "账号将无法登录，已发布的社区作品会同时下架。可随时解除封禁。", okLabel: "封禁", reasons: banReasons });
     if (reason === null) return;
     try {
       const result = await runBan(user.id, reason);
       const removed = result.removed > 0 ? `，下架 ${result.removed} 件作品` : "";
-      toast({ text: `${user.name} 已封禁：${reason}${removed}`, undo: () => runUnban(user.id) });
+      toast({ text: `${user.name} 已封禁：${reason}${removed}`, undo: undoFrom(result.undo, user.id, false) });
     } catch (error) {
       toast(`操作失败：${errorMessage(error)}`);
     }
-  }, [confirm, runBan, runUnban, toast]);
+  }, [confirm, runBan, toast, undoFrom]);
 
   const unban = useCallback(async (user: BanTarget) => {
     try {
-      await runUnban(user.id);
-      // Undoing an unban bans again with the reason the account had, so the audit log stays truthful.
-      toast({ text: `${user.name} 已解除封禁`, undo: user.banReason ? () => runBan(user.id, user.banReason) : undefined });
+      const result = await runUnban(user.id);
+      toast({ text: `${user.name} 已解除封禁`, undo: undoFrom(result.undo, user.id, true) });
     } catch (error) {
       toast(`操作失败：${errorMessage(error)}`);
     }
-  }, [runBan, runUnban, toast]);
+  }, [runUnban, toast, undoFrom]);
 
   const revokeSession = useCallback(async (userID: string, sessionID: string) => {
     const ok = await confirm({ title: "下线这台设备？", description: "该设备的登录凭据立即失效，需要重新登录。", okLabel: "下线" });

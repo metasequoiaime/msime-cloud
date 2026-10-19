@@ -61,6 +61,19 @@ END $$;
 ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS banned_at timestamptz;
 ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS ban_reason text;
 ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS banned_by text;
+-- 独立计数只随封禁字段写入递增；常量默认值避免为新增列重写整张用户表。
+ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS ban_revision bigint NOT NULL DEFAULT 0;
+CREATE OR REPLACE FUNCTION auth_user_ban_revision() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ NEW.ban_revision := OLD.ban_revision+1;
+ RETURN NEW;
+END $$;
+DO $$ BEGIN
+ IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid='auth_users'::regclass AND tgname='auth_user_ban_revision') THEN
+  CREATE TRIGGER auth_user_ban_revision BEFORE UPDATE OF banned_at,ban_reason,banned_by ON auth_users FOR EACH ROW EXECUTE FUNCTION auth_user_ban_revision();
+ END IF;
+END $$;
+ALTER TABLE auth_users ENABLE TRIGGER auth_user_ban_revision;
 CREATE INDEX IF NOT EXISTS auth_users_banned ON auth_users(banned_at) WHERE banned_at IS NOT NULL;
 -- The User-Agent a session was created with, truncated, so the admin can tell a user's devices apart.
 ALTER TABLE auth_sessions ADD COLUMN IF NOT EXISTS user_agent text NOT NULL DEFAULT '';

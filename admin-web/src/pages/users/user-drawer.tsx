@@ -26,7 +26,7 @@ export function UserDrawer({ id, onClose, actions }: { id: string | undefined; o
   });
   const user = detail.data;
   const name = user ? displayName(user) : "用户详情";
-  const target = user ? { id: user.id, name, banReason: user.ban_reason } : undefined;
+  const target = user ? { id: user.id, name } : undefined;
 
   const fields: DrawerField[] = user ? [
     { label: "账号 ID", value: user.id, mono: true },

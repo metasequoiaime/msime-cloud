@@ -61,6 +61,7 @@ var adminActions = map[string]adminActionSpec{
 	"revoke_sessions": {PermBanUsers, actionRevokeSessions},
 	"ban_user":        {PermBanUsers, actionBanUser},
 	"unban_user":      {PermBanUsers, actionUnbanUser},
+	"undo_user_ban":   {PermBanUsers, actionUndoUserBan},
 	// U2 community moderation: admin_moderation.go
 	"delete_skin":                 {PermReviewCommunity, actionDeleteSkin},
 	"delete_candidate_skin":       {PermReviewCommunity, actionDeleteCandidateSkin},

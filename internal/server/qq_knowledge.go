@@ -797,7 +797,7 @@ func qqSplitMarkdown(name, markdown string) []qqSection {
 		capacity := body.Cap()
 		text, truncated := body.String(), bodyTruncated
 		if !truncated {
-			text = strings.TrimSpace(text)
+			text = qqTrimSpace(text)
 		}
 		body.Reset()
 		bodyRunes, bodyTruncated = 0, false

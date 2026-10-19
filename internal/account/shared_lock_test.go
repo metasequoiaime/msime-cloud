@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,6 +28,8 @@ func TestWaitLockAcrossPools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	release = sync.OnceFunc(release)
+	defer release()
 	started := time.Now()
 	if _, err = second.WaitLock(ctx, name, 300*time.Millisecond); !errors.Is(err, ErrLockBusy) {
 		t.Fatal("second replica took a held lock", err)
@@ -34,9 +37,15 @@ func TestWaitLockAcrossPools(t *testing.T) {
 	if waited := time.Since(started); waited < 300*time.Millisecond {
 		t.Fatal("gave up before the wait ran out", waited)
 	}
-	// Waiting must not keep a connection: only the holder's connection is checked out.
-	if acquired := other.pool.Stat().AcquiredConns(); acquired != 0 {
-		t.Fatal("a waiter kept a pooled connection", acquired)
+	// 超时可能销毁连接，pgx 会异步移除池统计；等待回收完成，仍要求等待者不占用连接。
+	drainCtx, drainCancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer drainCancel()
+	for other.pool.Stat().AcquiredConns() != 0 {
+		select {
+		case <-drainCtx.Done():
+			t.Fatal("等待者未归还连接", other.pool.Stat().AcquiredConns())
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()

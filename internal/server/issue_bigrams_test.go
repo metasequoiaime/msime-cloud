@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"unicode"
+	"unicode/utf8"
 )
 
 func previousTitleBigrams(title string) map[string]bool {
@@ -86,6 +87,7 @@ func TestTitleBigramsAllocationBudget(t *testing.T) {
 func BenchmarkTitleBigrams(b *testing.B) {
 	for _, tc := range []struct{ name, title string }{
 		{"chinese", "多显示器下候选窗口位置偏移"},
+		{"ascii", "WINDOWS 11 WORD CANDIDATE WINDOW"},
 		{"mixed", "Windows 11 下 Word 候选窗口位置偏移"},
 		{"repeated", strings.Repeat("Windows Word 候选窗口位置偏移", 32)},
 	} {
@@ -103,5 +105,44 @@ func BenchmarkTitleBigrams(b *testing.B) {
 				}
 			})
 		})
+	}
+}
+
+func TestTitleBigramsIntoAvoidsCaseMappingAllocation(t *testing.T) {
+	for _, title := range []string{"WINDOWS 候选", "İKΣȺ 水杉", "\xffABC"} {
+		t.Run(title, func(t *testing.T) {
+			set := titleBigrams(title)
+			allocations := testing.AllocsPerRun(10, func() { set = titleBigramsInto(title, set) })
+			want := previousTitleBigrams(title)
+			if len(set) != len(want) {
+				t.Fatalf("大小写归一化后二元组数量变化：结果=%d，期望=%d", len(set), len(want))
+			}
+			for pair := range set {
+				if !want[string(pair[:])] {
+					t.Fatalf("出现额外二元组：%q", string(pair[:]))
+				}
+			}
+			if allocations != 0 {
+				t.Fatalf("复用集合后归一化仍分配 %.0f 次，期望零分配", allocations)
+			}
+		})
+	}
+}
+
+func TestTitleBigramsAllRunesMatchPrevious(t *testing.T) {
+	set := map[[2]rune]bool{}
+	// 检查基本汉字边界、Unicode 大小写映射以及字母和数字的分类规则。
+	for r := rune(0); r <= utf8.MaxRune; r++ {
+		title := "A" + string(r) + "0"
+		set = titleBigramsInto(title, set)
+		want := previousTitleBigrams(title)
+		if len(set) != len(want) {
+			t.Fatalf("码点 %U 的二元组数量变化：结果=%d，期望=%d", r, len(set), len(want))
+		}
+		for pair := range set {
+			if !want[string(pair[:])] {
+				t.Fatalf("码点 %U 出现额外二元组：%q", r, string(pair[:]))
+			}
+		}
 	}
 }

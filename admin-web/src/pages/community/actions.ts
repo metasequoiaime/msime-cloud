@@ -92,9 +92,9 @@ export function useModeration() {
   const setCategory = useCallback(async (target: Target, from: CandidateCategory, to: CandidateCategory) => {
     if (from === to) return;
     const action = target.section === "skins" ? "set_skin_category" : "set_candidate_skin_category";
-    const change = (category: CandidateCategory, expected?: CandidateCategory) => run({ action, section: target.section, id: target.id, value: { category, ...(expected ? { expected } : {}) } });
+    const change = (category: CandidateCategory, expected: CandidateCategory) => run({ action, section: target.section, id: target.id, value: { category, expected } });
     try {
-      await change(to);
+      await change(to, from);
     } catch (error) {
       toast(`操作失败：${errorMessage(error)}`);
       return;

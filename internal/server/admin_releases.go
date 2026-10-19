@@ -37,8 +37,6 @@ const (
 	releaseListQuery = "/releases?per_page=100"
 	// maxReleaseBodyBytes bounds an edited release body well inside GitHub's 125000 character limit and the 64 KiB JSON request limit.
 	maxReleaseBodyBytes = 50000
-	// releaseHistoryLimit bounds the history returned for one platform.
-	releaseHistoryLimit = 50
 	// 发布检查最多读取 1000 条，超过上限时报告未知，避免把不完整的结果当作全部通过。
 	releaseCheckPageSize = 100
 	releaseCheckPages    = 10
@@ -266,8 +264,8 @@ func (s *Server) releaseHistory(w http.ResponseWriter, r *http.Request, gh *gith
 		return
 	}
 	s.indexReleases(p, releases)
-	views := make([]releaseView, 0, min(len(releases), releaseHistoryLimit))
-	for _, release := range releases[:min(len(releases), releaseHistoryLimit)] {
+	views := make([]releaseView, 0, len(releases))
+	for _, release := range releases {
 		views = append(views, releaseToView(p, release))
 	}
 	respond(w, 200, map[string]any{"platform": platformView(p), "releases": views})

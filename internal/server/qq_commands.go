@@ -618,30 +618,45 @@ func (s *Server) qqMentionedIssues(ctx context.Context, question string) string 
 	var lines []string
 	seen := map[string]bool{}
 	question = qqIssueLinkPattern.ReplaceAllString(qqFoldWidth(question), " $1 #$2 ")
-	mentions := qqIssueMentionPattern.FindAllStringSubmatch(question, -1)
-	for _, m := range mentions {
-		key := strings.ToLower(m[1]) + "#" + m[2]
-		if seen[key] {
-			continue
-		}
-		if seen[key] = true; len(seen) > qqMentionedIssueLimit {
-			break
-		}
-		// 编号前面的词不是答疑仓库的名字时（例如「Windows #818」）不当仓库名，在每个仓库里查。
-		name := m[1]
-		if !slices.ContainsFunc(s.qqGitHubRepos(), func(r string) bool {
-			_, short, _ := strings.Cut(r, "/")
-			return strings.EqualFold(short, name) || strings.EqualFold(r, name)
-		}) {
-			name = ""
-		}
-		lines = append(lines, s.qqIssueStatus(ctx, name, m[2], qqMaintainerRunes))
-		// 只提到一两个 issue 时多半是在问这个 issue 本身（「对 #785 提点改进意见」），把正文也交给模型。
-		if len(mentions) <= 2 {
-			if body := s.qqIssueBodyText(ctx, name, m[2]); body != "" {
-				lines = append(lines, "正文："+body)
+	const matchBatchSize = 8
+	mentions := qqIssueMentionPattern.FindAllStringSubmatchIndex(question, matchBatchSize)
+	// 按原始匹配次数决定是否附正文，重复引用也计数；首批不足三个时已读到全文末尾。
+	includeBody := len(mentions) <= 2
+	offset := 0
+scanMentions:
+	for len(mentions) > 0 {
+		remaining := question[offset:]
+		for _, m := range mentions {
+			name := ""
+			if m[2] >= 0 {
+				name = remaining[m[2]:m[3]]
+			}
+			number := remaining[m[4]:m[5]]
+			key := strings.ToLower(name) + "#" + number
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			// 编号前面的词不是答疑仓库的名字时（例如「Windows #818」）不当仓库名，在每个仓库里查。
+			if !slices.ContainsFunc(s.qqGitHubRepos(), func(r string) bool {
+				_, short, _ := strings.Cut(r, "/")
+				return strings.EqualFold(short, name) || strings.EqualFold(r, name)
+			}) {
+				name = ""
+			}
+			lines = append(lines, s.qqIssueStatus(ctx, name, number, qqMaintainerRunes))
+			// 只提到一两个 issue 时多半是在问这个 issue 本身（「对 #785 提点改进意见」），把正文也交给模型。
+			if includeBody {
+				if body := s.qqIssueBodyText(ctx, name, number); body != "" {
+					lines = append(lines, "正文："+body)
+				}
+			}
+			if len(seen) == qqMentionedIssueLimit {
+				break scanMentions
 			}
 		}
+		offset += mentions[len(mentions)-1][1]
+		mentions = qqIssueMentionPattern.FindAllStringSubmatchIndex(question[offset:], matchBatchSize)
 	}
 	return strings.Join(lines, "\n")
 }

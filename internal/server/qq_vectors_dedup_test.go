@@ -131,6 +131,30 @@ func TestQQDocVectorsDistinctPlanningAllocationBudget(t *testing.T) {
 	}
 }
 
+func TestQQDocVectorsReuseCachedContentHashes(t *testing.T) {
+	sections := make([]qqSection, 8192)
+	ids := make([]string, len(sections))
+	hashes := make([]string, len(sections))
+	for i := range sections {
+		sections[i] = qqSection{Doc: "合成文档", Title: fmt.Sprintf("标题%d", i), Text: "合成正文"}
+		ids[i] = qqDocID(sections[i])
+		hashes[i] = qqContentHash("[" + sections[i].Doc + "] " + sections[i].Title + "\n" + qqTruncate(sections[i].Text, qqEmbedRunes))
+	}
+	s := qqVectorPlanningServer(sections)
+	s.qq.knowledge.docIDs = ids
+	s.qq.knowledge.contentHashes = hashes
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			if _, err := s.syncQQDocVectors(context.Background()); err == nil {
+				t.Fatal("合成 embedding 应失败")
+			}
+		}
+	})
+	if allocated := result.AllocedBytesPerOp(); allocated > 2600<<10 {
+		t.Fatalf("复用文档 ID 和正文哈希后仍分配 %d 字节，超过 2.6 MiB 预算", allocated)
+	}
+}
+
 func TestQQDocIDMatchesContentHashPrefix(t *testing.T) {
 	section := qqSection{Doc: "合成文档", Title: "设置"}
 	want := "doc:" + qqContentHash(section.Doc, section.Title)[:24]

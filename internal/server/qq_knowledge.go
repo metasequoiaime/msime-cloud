@@ -56,38 +56,46 @@ type qqSection struct {
 
 // qqKnowledge 是本副本缓存的知识库。
 type qqKnowledge struct {
-	mu       sync.Mutex
-	sections []qqSection
-	docIDs   []string
-	snippets []string
-	toc      string
-	loaded   time.Time
+	mu            sync.Mutex
+	sections      []qqSection
+	docIDs        []string
+	snippets      []string
+	toc           string
+	contentHashes []string
+	loaded        time.Time
 }
 
 // qqKnowledgeSections 返回知识库的段落，过期时先刷新。刷新失败但有旧数据时继续用旧数据，一次都没加载成功时返回错误。
 func (s *Server) qqKnowledgeSections(ctx context.Context) ([]qqSection, error) {
-	sections, _, _, _, err := s.qqKnowledgeSnapshot(ctx)
+	sections, _, _, _, _, err := s.qqKnowledgeSnapshot(ctx)
 	return sections, err
 }
 
 // qqKnowledgeSnapshot 原子返回知识库段落及其派生缓存，避免刷新与答疑请求交错时使用不同版本的缓存。
-func (s *Server) qqKnowledgeSnapshot(ctx context.Context) ([]qqSection, []string, []string, string, error) {
+func (s *Server) qqKnowledgeSnapshot(ctx context.Context) ([]qqSection, []string, []string, string, []string, error) {
 	k := &s.qq.knowledge
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if k.sections != nil && s.qq.now().Sub(k.loaded) < qqKnowledgeTTL {
-		return k.sections, k.docIDs, k.snippets, k.toc, nil
+		return k.sections, k.docIDs, k.snippets, k.toc, k.contentHashes, nil
 	}
 	sections, err := s.loadQQKnowledge(ctx)
 	if err != nil {
 		if k.sections != nil {
-			return k.sections, k.docIDs, k.snippets, k.toc, nil
+			return k.sections, k.docIDs, k.snippets, k.toc, k.contentHashes, nil
 		}
-		return nil, nil, nil, "", err
+		return nil, nil, nil, "", nil, err
 	}
 	snippets := make([]string, len(sections))
 	for i, section := range sections {
 		snippets[i] = qqSnippet(section.Text)
+	}
+	var contentHashes []string
+	if s.qqVectors != nil && s.qqEmbeddingURL() != "" {
+		contentHashes = make([]string, len(sections))
+		for i, section := range sections {
+			contentHashes[i] = qqDocVectorContentHash(section)
+		}
 	}
 	docIDs := make([]string, len(sections))
 	for i, section := range sections {
@@ -98,8 +106,8 @@ func (s *Server) qqKnowledgeSnapshot(ctx context.Context) ([]qqSection, []string
 		}
 	}
 	toc := qqKnowledgeTOC(sections, snippets)
-	k.sections, k.docIDs, k.snippets, k.toc, k.loaded = sections, docIDs, snippets, toc, s.qq.now()
-	return sections, docIDs, snippets, toc, nil
+	k.sections, k.docIDs, k.snippets, k.toc, k.contentHashes, k.loaded = sections, docIDs, snippets, toc, contentHashes, s.qq.now()
+	return sections, docIDs, snippets, toc, contentHashes, nil
 }
 
 // warmQQKnowledge 在副本启动时加载一次知识库，不等第一条答疑才去拉：新副本第一次加载就碰上 GitHub 出错时，那条答疑只能带着空段落回答（见 qqKnowledgeMaterial）。失败只记日志，答疑时会再拉。
@@ -2042,7 +2050,7 @@ func qqAppendKnowledgeSections(material *strings.Builder, sections []qqSection, 
 func (s *Server) qqKnowledgeMaterial(ctx context.Context, question string, ask *qqAsk) (string, string, error) {
 	github := ask.github
 	degraded := false
-	sections, docIDs, snippets, toc, err := s.qqKnowledgeSnapshot(ctx)
+	sections, docIDs, snippets, toc, _, err := s.qqKnowledgeSnapshot(ctx)
 	if err != nil {
 		if !github || ctx.Err() != nil {
 			return "", "", err

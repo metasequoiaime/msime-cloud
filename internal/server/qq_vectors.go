@@ -312,18 +312,23 @@ func (s *Server) syncQQVectors(ctx context.Context) {
 
 // syncQQDocVectors 同步文档段落，返回重算的段落数。
 func (s *Server) syncQQDocVectors(ctx context.Context) (int, error) {
-	sections, err := s.qqKnowledgeSections(ctx)
+	sections, cachedIDs, _, _, contentHashes, err := s.qqKnowledgeSnapshot(ctx)
 	if err != nil {
 		return 0, err
 	}
-	ids := make([]string, len(sections))
-	uniqueEstimate := 0
-	for i, section := range sections {
-		if i > 0 && section.Doc == sections[i-1].Doc && section.Title == sections[i-1].Title {
-			ids[i] = ids[i-1]
-		} else {
-			ids[i] = qqDocID(section)
+	ids := cachedIDs
+	if len(ids) != len(sections) {
+		ids = make([]string, len(sections))
+		for i, section := range sections {
+			if i > 0 && section.Doc == sections[i-1].Doc && section.Title == sections[i-1].Title {
+				ids[i] = ids[i-1]
+			} else {
+				ids[i] = qqDocID(section)
+			}
 		}
+	}
+	uniqueEstimate := 0
+	for i := range ids {
 		if i == 0 || ids[i] != ids[i-1] {
 			uniqueEstimate++
 		}
@@ -340,10 +345,20 @@ func (s *Server) syncQQDocVectors(ctx context.Context) (int, error) {
 		if _, ok := pending[ids[i]]; ok {
 			continue
 		}
-		text := "[" + section.Doc + "] " + section.Title + "\n" + qqTruncate(section.Text, qqEmbedRunes)
-		h := qqContentHash(text)
+		text := ""
+		h := ""
+		if len(contentHashes) == len(sections) {
+			h = contentHashes[i]
+		}
+		if h == "" {
+			text = qqDocVectorText(section)
+			h = qqContentHash(text)
+		}
 		if hashes[ids[i]] == h {
 			continue
+		}
+		if text == "" {
+			text = qqDocVectorText(section)
 		}
 		if pending == nil {
 			pending = make(map[string]struct{}, uniqueEstimate)
@@ -359,6 +374,14 @@ func (s *Server) syncQQDocVectors(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	return len(items), s.qqVectors.DeleteQQKnowledgeDocs(ctx, ids)
+}
+
+func qqDocVectorText(section qqSection) string {
+	return "[" + section.Doc + "] " + section.Title + "\n" + qqTruncate(section.Text, qqEmbedRunes)
+}
+
+func qqDocVectorContentHash(section qqSection) string {
+	return qqContentHash(qqDocVectorText(section))
 }
 
 // qqHistoryIssue 是同步时从 issues 接口读到的一条 issue 或 PR。

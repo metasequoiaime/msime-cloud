@@ -933,6 +933,9 @@ var qqLinkPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[!-~]*`)
 // qqCompactLower 流式合并字段，只为保留的正文分配空间；无需合并时直接转小写。
 func qqCompactLower(text string) string {
 	text = qqTrimSpace(text)
+	if compact, ok := qqCompactLowerASCII(text); ok {
+		return compact
+	}
 	outputBytes := 0
 	for field := range qqTextFields(text) {
 		if len(field) == len(text) {
@@ -947,6 +950,43 @@ func qqCompactLower(text string) string {
 	}
 	// 先合并再转小写，保留被空白拆开的无效 UTF-8 字节重新组成有效字符的行为。
 	return strings.ToLower(out.String())
+}
+
+// qqCompactLowerASCII 在确认正文全为 ASCII 后，单遍去空白并转小写。
+func qqCompactLowerASCII(text string) (string, bool) {
+	if text != "" && text[0] >= utf8.RuneSelf {
+		return "", false
+	}
+	space := false
+	spaceBytes := 0
+	for i := range len(text) {
+		b := text[i]
+		if b >= utf8.RuneSelf {
+			return "", false
+		}
+		switch b {
+		case ' ', '\t', '\n', '\v', '\f', '\r':
+			space = true
+			spaceBytes++
+		}
+	}
+	if !space {
+		return strings.ToLower(text), true
+	}
+	var out strings.Builder
+	out.Grow(len(text) - spaceBytes)
+	for i := range len(text) {
+		b := text[i]
+		switch b {
+		case ' ', '\t', '\n', '\v', '\f', '\r':
+			continue
+		}
+		if 'A' <= b && b <= 'Z' {
+			b += 'a' - 'A'
+		}
+		out.WriteByte(b)
+	}
+	return out.String(), true
 }
 
 // qqNormalizeWhitespace 按原有 Fields、Join 的规则合并空白，只为保留的正文分配空间。

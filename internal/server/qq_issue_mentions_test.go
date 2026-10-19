@@ -189,3 +189,39 @@ func TestQQIssueMentionNoLinkAllocationBudget(t *testing.T) {
 		})
 	}
 }
+
+func TestQQIssueMentionNoHashScanBudget(t *testing.T) {
+	s := &Server{}
+	ctx := context.Background()
+	for _, tc := range []struct{ name, question string }{
+		{"message_limit", strings.Repeat("ordinary question ", qqBotMaxRunes/len("ordinary question "))},
+		{"plain_ascii", strings.Repeat("ordinary question ", 4096)},
+		{"other_organization", strings.Repeat("https://github.com/example/r/issues/1 ", 4096)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// 单独执行旧的引用正则作为保守基线，不计入全半角折叠及链接替换开销。
+			var matches [][]int
+			baseline := testing.Benchmark(func(b *testing.B) {
+				matches = qqIssueMentionPattern.FindAllStringSubmatchIndex(tc.question, 8)
+				for b.Loop() {
+					matches = qqIssueMentionPattern.FindAllStringSubmatchIndex(tc.question, 8)
+				}
+			})
+			var got string
+			result := testing.Benchmark(func(b *testing.B) {
+				got = s.qqMentionedIssues(ctx, tc.question)
+				for b.Loop() {
+					got = s.qqMentionedIssues(ctx, tc.question)
+				}
+			})
+			if len(matches) != 0 || got != "" {
+				t.Fatalf("无引用输入的匹配=%v，资料=%q", matches, got)
+			}
+			t.Logf("引用正则基线：%s；完整提问处理：%s", baseline, result)
+			// 竞态插桩会改变各处理阶段的相对耗时，只在普通模式检查扫描预算。
+			if !raceEnabled && result.NsPerOp() >= baseline.NsPerOp()/2 {
+				t.Fatalf("无井号输入仍承担引用正则扫描：基线=%s，实际=%s", baseline, result)
+			}
+		})
+	}
+}

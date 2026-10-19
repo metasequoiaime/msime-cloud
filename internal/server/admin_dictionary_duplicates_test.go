@@ -98,8 +98,8 @@ func TestApplyDictionaryEarlyDuplicateMemoryBudget(t *testing.T) {
 	if got != "" || !errors.As(err, &rejected) || rejected.code != "dictionary_duplicate" || rejected.status != 409 {
 		t.Fatalf("未拒绝开头的重复词条：got=%q err=%v", got, err)
 	}
-	if bytes := result.AllocedBytesPerOp(); bytes > 2<<20 {
-		t.Fatalf("拒绝开头重复词条分配 %d 字节，超过 2 MiB 预算", bytes)
+	if bytes := result.AllocedBytesPerOp(); bytes > 64<<10 {
+		t.Fatalf("拒绝开头重复词条分配 %d 字节，超过 64 KiB 预算", bytes)
 	}
 }
 

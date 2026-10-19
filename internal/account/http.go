@@ -240,11 +240,13 @@ func IsPath(path string) bool {
 	return strings.HasPrefix(path, "/v1/community/") || path == siteDownloadMirrorsPath || path == TelemetryPath || path == FeedbackPath || strings.HasPrefix(path, "/v1/auth/") || path == "/v1/users/me" || strings.HasPrefix(path, "/v1/users/me/") || strings.HasPrefix(path, DiagnosticsMCPPrefix)
 }
 
-// accountRouteTimeout 是每条挂载路由的上下文时限：默认 15 秒；请求体本身就可能传得更久的几条例外：词库快照恢复、候选窗皮肤发布或替换、插件包发布或下载，以及带截图的反馈。
+// accountRouteTimeout 是每条挂载路由的上下文时限：默认 15 秒；大文件传输单独延长，包括词库快照恢复和下载、TSV 下载、整包数据导出、候选窗皮肤发布或替换、插件包发布或下载，以及带截图的反馈。
 func accountRouteTimeout(pattern string) time.Duration {
 	switch pattern {
 	case "PUT /v1/users/me/dictionary/snapshot":
 		return snapshotRestoreTimeout
+	case "GET /v1/users/me/dictionary/snapshot", "GET /v1/users/me/dictionaries/{kind}/export":
+		return dictionaryDownloadTimeout
 	case "POST /v1/community/candidate-skins", "PUT /v1/community/candidate-skins/{id}":
 		return candidatePublishTimeout
 	case "POST /v1/community/plugins", "POST /v1/community/plugins/{id}/download":

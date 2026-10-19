@@ -2,9 +2,11 @@
 package diagnostics
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -67,6 +69,25 @@ func Handler(store Snapshots) http.Handler {
 		if err != nil {
 			fail(w, 503, "diagnostics_unavailable")
 			return
+		}
+		if r.Method == http.MethodPost {
+			// 每个 POST 只接受单条消息，避免旧版批处理把一次共享配额放大为多次快照读取；协议仍由 SDK 解析。
+			defer r.Body.Close()
+			body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, requestBodyBytes))
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				fail(w, 413, "request_too_large")
+				return
+			}
+			if err != nil {
+				fail(w, 400, "invalid_mcp_request")
+				return
+			}
+			if trimmed := bytes.TrimSpace(body); len(trimmed) > 0 && trimmed[0] == '[' {
+				fail(w, 400, "invalid_mcp_request")
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
 		}
 		server := NewServer(store, snapshot)
 		mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: requestBodyBytes}).ServeHTTP(w, r)

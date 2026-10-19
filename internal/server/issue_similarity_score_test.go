@@ -50,7 +50,7 @@ func TestSimilarIssueRowsRepeatedScoresKeepOrdering(t *testing.T) {
 }
 
 func BenchmarkSimilarIssueScoreReuse(b *testing.B) {
-	for _, name := range []string{"exact", "repeated_other", "alternating_target", "distinct", "empty_target"} {
+	for _, name := range []string{"exact", "repeated_other", "alternating_target", "distinct", "distinct_mixed", "empty_target"} {
 		b.Run(name, func(b *testing.B) {
 			row := issueRow{Number: 1, Title: "Windows 下 Word 候选窗口位置偏移"}
 			items := make([]issueRow, 1000)
@@ -63,8 +63,11 @@ func BenchmarkSimilarIssueScoreReuse(b *testing.B) {
 					if i%2 == 0 {
 						title = "Windows 下 Word 候选窗口异常"
 					}
-				case "distinct", "empty_target":
+				case "distinct", "distinct_mixed", "empty_target":
 					title = "候选窗口位置异常" + strconv.Itoa(i)
+					if name == "distinct_mixed" {
+						title = "Windows Word " + title
+					}
 				}
 				items[i] = issueRow{Number: i + 2, Title: title, CreatedAt: time.Unix(int64(i), 0)}
 			}

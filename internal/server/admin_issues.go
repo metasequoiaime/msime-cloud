@@ -918,10 +918,21 @@ func titleBigramsInto(title string, set map[[2]rune]bool) map[[2]rune]bool {
 		clear(set)
 	}
 	var prev rune
-	for _, c := range strings.ToLower(title) {
-		if !unicode.IsLetter(c) && !unicode.IsDigit(c) {
-			prev = 0
-			continue
+	for _, c := range title {
+		// ASCII 直接折叠大小写并分类；基本汉字均为无大小写的字母。
+		if c < utf8.RuneSelf {
+			if lower := c | 0x20; lower >= 'a' && lower <= 'z' {
+				c = lower
+			} else if c < '0' || c > '9' {
+				prev = 0
+				continue
+			}
+		} else if c < 0x4E00 || c > 0x9FFF {
+			if !unicode.IsLetter(c) && !unicode.IsDigit(c) {
+				prev = 0
+				continue
+			}
+			c = unicode.ToLower(c)
 		}
 		if prev != 0 {
 			set[[2]rune{prev, c}] = true

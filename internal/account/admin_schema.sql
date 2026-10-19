@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS admin_audit (
 );
 -- 审计列表按时间和 ID 倒序分页，避免每次选页都扫描并排序全部历史。
 CREATE INDEX IF NOT EXISTS admin_audit_time ON admin_audit(created_at DESC,id DESC);
+-- 反馈撤销按目标查最近一次操作，同值设置也通过审计更新版本。
+CREATE INDEX IF NOT EXISTS admin_audit_feedback_version ON admin_audit(target,id DESC) WHERE action IN ('resolve_feedback','reopen_feedback','undo_feedback_status');
 
 CREATE INDEX IF NOT EXISTS auth_users_created ON auth_users(created_at);
 

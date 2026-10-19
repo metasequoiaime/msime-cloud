@@ -36,7 +36,7 @@ func TestAdminRegistryCompleteness(t *testing.T) {
 		"save_notice_draft", "publish_notice", "archive_notice",
 		"resolve_crash", "reopen_crash", "crash_group_status",
 		"open_incident", "resolve_incident", "update_incident",
-		"resolve_feedback", "reopen_feedback",
+		"resolve_feedback", "reopen_feedback", "undo_feedback_status",
 	}
 	var registered []string
 	for name, spec := range adminActions {

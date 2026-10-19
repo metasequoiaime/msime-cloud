@@ -1674,6 +1674,8 @@ def main() -> int:
                 check_crash_undo(browser, base)
                 from ban_undo_smoke import check_ban_undo
                 check_ban_undo(browser, base)
+                from feedback_undo_smoke import check_feedback_undo
+                check_feedback_undo(browser, base)
                 from community_category_smoke import check_community_categories
                 check_community_categories(browser, base)
                 from community_section_smoke import check_community_pagination_placeholder, check_community_section_switch

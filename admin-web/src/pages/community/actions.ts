@@ -4,7 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { errorMessage, isAPIError, useAPI } from "../../api/client";
 import { keys } from "../../api/keys";
 import type { CandidateCategory, Moderation, Section } from "../../api/community";
-import { candidateCategoryLabels, moderationSchema, removeReasons, sections } from "../../api/community";
+import { candidateCategoryLabels, categoryUndoSchema, moderationSchema, removeReasons, sections } from "../../api/community";
 import { useConfirm } from "../../ui/confirm";
 import { useToast } from "../../ui/toast";
 
@@ -26,7 +26,7 @@ const moderationUndoSchema = z.object({
   value: z.object({ token: z.string().regex(/^[a-f0-9]{32}$/), moderation: moderationSchema, previous: z.enum(["pending", "approved"]).nullable(), reason: z.string().nullable() }),
 });
 
-// useModeration 封装审核确认与提示；审核撤销使用服务端快照，分类撤销改回原分类。
+// useModeration 封装审核确认与提示；审核和分类撤销都使用服务端返回的真实前态及版本。
 export function useModeration() {
   const api = useAPI();
   const client = useQueryClient();
@@ -93,14 +93,15 @@ export function useModeration() {
   const setCategory = useCallback(async (target: Target, from: CandidateCategory, to: CandidateCategory) => {
     if (from === to) return;
     const action = target.section === "skins" ? "set_skin_category" : "set_candidate_skin_category";
-    const change = async (category: CandidateCategory, expected: CandidateCategory) => { await run({ action, section: target.section, id: target.id, value: { category, expected } }); };
     try {
-      await change(to, from);
+      const result = await run({ action, section: target.section, id: target.id, value: { category: to, expected: from } });
+      const parsed = categoryUndoSchema.safeParse(result.undo);
+      const undo = parsed.success && parsed.data.action === action && parsed.data.section === target.section && parsed.data.id === target.id ? async () => { await run(parsed.data); } : undefined;
+      toast({ text: `「${target.name}」的分类已改为「${candidateCategoryLabels[to]}」`, undo });
     } catch (error) {
       toast(`操作失败：${errorMessage(error)}`);
       return;
     }
-    toast({ text: `「${target.name}」的分类已改为「${candidateCategoryLabels[to]}」`, undo: () => change(from, to) });
   }, [run, toast]);
 
   const deleteItem = useCallback(async (target: Target) => {

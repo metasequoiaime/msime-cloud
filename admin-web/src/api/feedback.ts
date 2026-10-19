@@ -6,6 +6,10 @@ export type FeedbackType = (typeof feedbackTypes)[number];
 export const feedbackTypeLabels: Record<FeedbackType, string> = { bug: "问题", suggestion: "建议", dictionary: "词库" };
 
 export const feedbackStatuses = ["new", "resolved"] as const;
+export const feedbackUndoSchema = z.object({
+  action: z.literal("undo_feedback_status"), id: z.string(),
+  value: z.object({ status: z.enum(feedbackStatuses), token: z.string().regex(/^[a-f0-9]{32}$/) }),
+});
 export type FeedbackStatus = (typeof feedbackStatuses)[number];
 export const feedbackStatusLabels: Record<FeedbackStatus, string> = { new: "待处理", resolved: "已处理" };
 export const feedbackStatusTones = { new: "warn", resolved: "ok" } as const satisfies Record<FeedbackStatus, "warn" | "ok">;

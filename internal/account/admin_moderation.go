@@ -3,6 +3,7 @@ package account
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -105,7 +106,12 @@ func candidateCategoryFilter() listFilter {
 	return listFilter{param: "category", field: "category", max: longest, values: values}
 }
 
-// setSkinCategory 返回修改 section 中 ids（或 id）图库分类的操作，value 为 {"category":"<分类>"}，撤销时还会带上 expected 以固定撤销前看到的分类。请求里的 section 可省略，给出时必须与之相同。分类只是发布元数据，所以不改 updated_at（审核时固定的版本不受影响），也不改变审核状态；设为当前值同样算作命中。审计记录分类、数量、ids，单项时还有名称和原分类 from。table 是 moderationSections 中的固定表名，不来自请求。
+// skinCategoryVersionSQL 固定作品身份和写入版本；别名是调用方的固定 SQL 标识符。
+func skinCategoryVersionSQL(alias string) string {
+	return `md5(jsonb_build_array(` + alias + `.tableoid::text,` + alias + `.id,` + alias + `.xmin::text,extract(epoch FROM ` + alias + `.created_at),` + alias + `.category)::text)`
+}
+
+// setSkinCategory 修改图库分类，单项变更返回真实前态和版本化撤销。expected 保持直接调用兼容，token 只允许单项撤销。分类不改 updated_at 和审核状态；同值仍算命中，但不提供反向撤销。table 是固定表名。
 func setSkinCategory(section, table string) adminActionFunc {
 	return func(a *Service, ctx context.Context, tx pgx.Tx, v actionRequest) (actionResult, error) {
 		if v.Section != "" && v.Section != section {
@@ -119,21 +125,30 @@ func setSkinCategory(section, table string) adminActionFunc {
 		var value struct {
 			Category string  `json:"category"`
 			Expected *string `json:"expected"`
+			Token    *string `json:"token"`
 		}
 		d := json.NewDecoder(bytes.NewReader(v.Value))
 		d.DisallowUnknownFields()
 		if len(v.Value) == 0 || d.Decode(&value) != nil || !validCandidateSkinCategory(value.Category) || (value.Expected != nil && !validCandidateSkinCategory(*value.Expected)) {
 			return actionResult{}, actionFail(400, "invalid_category")
 		}
-		rows, err := tx.Query(ctx, `UPDATE `+table+` s SET category=$2 FROM (SELECT id,category FROM `+table+` WHERE id=ANY($1) FOR UPDATE) o WHERE s.id=o.id AND ($3::text IS NULL OR o.category=$3) RETURNING s.id,s.name,o.category`, ids, value.Category, value.Expected)
+		if value.Token != nil {
+			if len(v.IDs) != 0 || len(*value.Token) != 32 {
+				return actionResult{}, actionFail(400, "invalid_value")
+			}
+			if _, err := hex.DecodeString(*value.Token); err != nil {
+				return actionResult{}, actionFail(400, "invalid_value")
+			}
+		}
+		rows, err := tx.Query(ctx, `UPDATE `+table+` s SET category=$2 FROM (SELECT id,category,`+skinCategoryVersionSQL("locked_skin")+` AS token FROM `+table+` locked_skin WHERE id=ANY($1) FOR UPDATE) o WHERE s.id=o.id AND ($3::text IS NULL OR o.category=$3) AND ($4::text IS NULL OR o.token=$4) RETURNING s.id,s.name,o.category,`+skinCategoryVersionSQL("s"), ids, value.Category, value.Expected, value.Token)
 		if err != nil {
 			return actionResult{}, err
 		}
 		var changed []moderatedItem
-		var from string
+		var from, token string
 		for rows.Next() {
 			var item moderatedItem
-			if err = rows.Scan(&item.ID, &item.Name, &from); err != nil {
+			if err = rows.Scan(&item.ID, &item.Name, &from, &token); err != nil {
 				rows.Close()
 				return actionResult{}, err
 			}
@@ -143,7 +158,7 @@ func setSkinCategory(section, table string) adminActionFunc {
 		if err = rows.Err(); err != nil {
 			return actionResult{}, err
 		}
-		if value.Expected != nil && len(changed) != len(ids) {
+		if (value.Expected != nil || value.Token != nil) && len(changed) != len(ids) {
 			return actionResult{}, actionFail(409, "conflict")
 		}
 		if len(changed) == 0 {
@@ -153,7 +168,14 @@ func setSkinCategory(section, table string) adminActionFunc {
 		if len(changed) == 1 {
 			extra["from"] = from
 		}
-		return moderationResult(v, changed, extra), nil
+		result := moderationResult(v, changed, extra)
+		if v.ID != "" && len(v.IDs) == 0 && len(changed) == 1 {
+			result.Extra = map[string]any{"from": from}
+			if from != value.Category {
+				result.Extra["undo"] = map[string]any{"action": v.Action, "id": v.ID, "section": section, "value": map[string]string{"category": from, "token": token}}
+			}
+		}
+		return result, nil
 	}
 }
 

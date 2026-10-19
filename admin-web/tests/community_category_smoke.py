@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""在生产 CSP 下验证分类修改及撤销都固定页面所见的分类。"""
+"""在生产 CSP 下验证分类修改固定页面所见的分类，撤销使用服务端版本。"""
 
 import threading
 
@@ -10,7 +10,7 @@ import csp_smoke as smoke
 
 def check_community_categories(browser, base):
     for section in ("skins", "candidate-skins"):
-        for concurrent_change in ("before_change", "before_undo", "none"):
+        for concurrent_change in ("before_change", "before_undo", "roundtrip", "none", "missing", "invalid"):
             context = browser.new_context(viewport={"width": 1280, "height": 1000})
             page = context.new_page()
             page.clock.install()
@@ -25,18 +25,23 @@ def check_community_categories(browser, base):
             page.route(f"**/api/{section}?*", lambda route: route.fulfill(json={"items": [item], "page": 1, "total": 1, "has_more": False}))
             page.route(f"**/api/{section}/smoke-skin", lambda route: route.fulfill(json=detail))
             posts = []
+            version = {"token": "a" * 32}
+            undo = {"action": "set_skin_category" if section == "skins" else "set_candidate_skin_category", "section": section, "id": "smoke-skin", "value": {"category": "other", "token": version["token"]}}
 
             def action(route):
                 body = route.request.post_data_json
                 posts.append(body)
                 assert body["action"] == ("set_skin_category" if section == "skins" else "set_candidate_skin_category")
                 value = body["value"]
-                # 与服务端条件更新相同：没有 expected 的旧请求会直接写入。
-                if "expected" in value and value["expected"] != detail["category"]:
+                # 首次操作比较 expected；撤销还必须匹配写入版本，状态往返也会使版本失效。
+                if ("expected" in value and value["expected"] != detail["category"]) or ("token" in value and value["token"] != version["token"]):
                     route.fulfill(status=409, json={"error": {"code": "conflict"}})
                 else:
                     item["category"] = detail["category"] = value["category"]
-                    route.fulfill(json={"ok": True, "affected": 1})
+                    result = {"ok": True, "affected": 1}
+                    if len(posts) == 1 and concurrent_change != "missing":
+                        result["undo"] = undo if concurrent_change != "invalid" else {**undo, "id": "another-item"}
+                    route.fulfill(json=result)
 
             page.route("**/api/actions", action)
             try:
@@ -55,18 +60,26 @@ def check_community_categories(browser, base):
                     assert posts[0]["value"] == {"category": "cute", "expected": "other"}
                 else:
                     expect(category).to_have_value("cute")
-                    if concurrent_change == "before_undo":
-                        item["category"] = detail["category"] = "food"
+                    if concurrent_change in ("missing", "invalid"):
+                        expect(page.get_by_role("button", name="撤销", exact=True, include_hidden=True)).to_have_count(0)
+                        assert len(posts) == 1, posts
+                        assert not errors, errors
+                        assert page.evaluate("window.cspViolations") == []
+                        continue
+                    if concurrent_change in ("before_undo", "roundtrip"):
+                        item["category"] = detail["category"] = "food" if concurrent_change == "before_undo" else "cute"
+                        version["token"] = "b" * 32
                     page.get_by_role("button", name="撤销", exact=True, include_hidden=True).click()
-                    if concurrent_change == "before_undo":
+                    if concurrent_change in ("before_undo", "roundtrip"):
                         expect(page.get_by_text("撤销失败：该内容刚被其他审核员处理或被作者修改，未做改动，请查看最新内容后重试。", exact=True)).to_be_visible()
-                        expect(category).to_have_value("food")
-                        assert detail["category"] == "food", "过期撤销覆盖了另一位管理员的分类"
+                        expected = "food" if concurrent_change == "before_undo" else "cute"
+                        expect(category).to_have_value(expected)
+                        assert detail["category"] == expected, "过期撤销覆盖了另一位管理员的分类"
                     else:
                         expect(page.get_by_text("已撤销", exact=True)).to_be_visible()
                         expect(category).to_have_value("other")
                         assert detail["category"] == "other"
-                    assert [post["value"] for post in posts] == [{"category": "cute", "expected": "other"}, {"category": "other", "expected": "cute"}]
+                    assert [post["value"] for post in posts] == [{"category": "cute", "expected": "other"}, undo["value"]]
                 assert not errors, errors
                 assert page.evaluate("window.cspViolations") == []
             finally:

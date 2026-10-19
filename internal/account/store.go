@@ -426,6 +426,8 @@ SELECT word_id,day,count FROM admin_sensitive_hits WHERE false`); e != nil {
 		{`SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass('admin_notifications') AND c.relname='admin_notifications_target')`, "notification target index missing"},
 		// 审计列表需要时间和 ID 索引。
 		{`SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass('admin_audit') AND c.relname='admin_audit_time')`, "audit time index missing"},
+		// 同值反馈操作通过审计固定撤销版本，需要按目标读取最近一条审计。
+		{`SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass('admin_audit') AND c.relname='admin_audit_feedback_version')`, "feedback audit version index missing"},
 	})
 }
 

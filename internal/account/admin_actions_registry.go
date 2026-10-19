@@ -92,8 +92,9 @@ var adminActions = map[string]adminActionSpec{
 	"resolve_incident": {PermTriageIssues, actionResolveIncident},
 	"update_incident":  {PermTriageIssues, actionUpdateIncident},
 	// App 内反馈：admin_feedback.go。标记处理与问题分诊同一权限。
-	"resolve_feedback": {PermTriageIssues, actionResolveFeedback},
-	"reopen_feedback":  {PermTriageIssues, actionReopenFeedback},
+	"resolve_feedback":     {PermTriageIssues, actionResolveFeedback},
+	"reopen_feedback":      {PermTriageIssues, actionReopenFeedback},
+	"undo_feedback_status": {PermTriageIssues, actionUndoFeedbackStatus},
 }
 
 // adminRouteHandler serves one admin route; match is the part of the path the route pattern's "{}" matched, or "" for an exact pattern.

@@ -633,6 +633,9 @@ const qqCommonASCIIPadding = " \t \t \t \t \t \t \t \t \t \t \t \t \t \t \t \t"
 // qqCommonASCIISpaces 是纯空格正文的固定块，避免通用裁剪逐字节遍历超长填充。
 const qqCommonASCIISpaces = "                                "
 
+// qqCommonIdeographicSpaces 是纯全角空白正文的固定块，避免逐个解码尾部空白。
+const qqCommonIdeographicSpaces = "　　　　　　　　　　　　　　　　"
+
 // qqTrimLeadingCommonASCIIPadding 按固定块跳过重复的 ASCII Markdown 空白，剩余部分交给标准裁剪。
 func qqTrimLeadingCommonASCIIPadding(line string) int {
 	start := 0
@@ -755,6 +758,9 @@ func qqTrimSpace(text string) string {
 	left := text[start:]
 	trimmed := strings.TrimLeft(left, " \t\n\f\r\v")
 	start += len(left) - len(trimmed)
+	for len(trimmed) >= len(qqCommonASCIISpaces) && trimmed[len(trimmed)-len(qqCommonASCIISpaces):] == qqCommonASCIISpaces {
+		trimmed = trimmed[:len(trimmed)-len(qqCommonASCIISpaces)]
+	}
 	trimmed = strings.TrimRight(trimmed, " \t\n\f\r\v")
 	end := start + len(trimmed)
 	if start < end && text[start] >= utf8.RuneSelf {
@@ -768,6 +774,9 @@ func qqTrimSpace(text string) string {
 		}
 	}
 	if start < end && text[end-1] >= utf8.RuneSelf {
+		for end-start >= len(qqCommonIdeographicSpaces) && text[end-len(qqCommonIdeographicSpaces):end] == qqCommonIdeographicSpaces {
+			end -= len(qqCommonIdeographicSpaces)
+		}
 		end = qqTrimTrailingCommonPadding(text, start, end)
 		for end > start {
 			if end-start >= 3 && text[end-3] == 0xe3 && text[end-2] == 0x80 && text[end-1] == 0x80 {

@@ -105,7 +105,7 @@ msime-skins 清单写 `base = "fluent"`（msime-windows 只接受四个内置 ID
 
 ## 候选窗皮肤包分享
 
-用户可以把自己的候选窗皮肤包（msime-skins 格式，`skin.toml` 加 PNG/JPEG 图片）公开发布到社区，其他用户下载后安装到外部皮肤目录。同一张表也是账号的皮肤库：登录后客户端把本机外部皮肤以私有（`private`）作品同步上来，私有作品只有作者本人能看到、预览和下载，作者可以随时把它转为公开。接口位于 `/v1/community/candidate-skins`，数据存放在 `community_candidate_skins`、`community_candidate_skin_files`、`community_candidate_skin_downloads`、`community_candidate_skin_ratings` 和 `community_candidate_skin_saves` 五张独立的表中，与上面的精选 `candidate_skins` 表和 `/v1/skins` 目录互不影响：用户上传不会进入 `/v1/skins`。
+用户可以把自己的候选窗皮肤包（msime-skins 格式，`skin.toml` 加图片资源）公开发布到社区，其他用户下载后安装到外部皮肤目录。同一张表也是账号的皮肤库：登录后客户端把本机外部皮肤以私有（`private`）作品同步上来，私有作品只有作者本人能看到、预览和下载，作者可以随时把它转为公开。接口位于 `/v1/community/candidate-skins`，数据存放在 `community_candidate_skins`、`community_candidate_skin_files`、`community_candidate_skin_downloads`、`community_candidate_skin_ratings` 和 `community_candidate_skin_saves` 五张独立的表中，与上面的精选 `candidate_skins` 表和 `/v1/skins` 目录互不影响：用户上传不会进入 `/v1/skins`。
 
 ### 接口
 
@@ -149,15 +149,22 @@ msime-skins 清单写 `base = "fluent"`（msime-windows 只接受四个内置 ID
 - 作者用 PATCH 修改，审核员在管理后台修改（`set_candidate_skin_category`，见 [管理后台](admin.md)）。两者都不改 `updated_at`，所以不会让同步客户端以为包内容变了。
 - 滚动升级期间旧版本副本仍在服务：它们忽略 `include` 和 `category` 查询参数（响应不带分类、列表不筛选），但会以 400 `invalid_json` 拒绝请求体里的 `category` 键。客户端应把缺少的 `category` 当作 `other`，并在所有副本升级之后再在请求体中发送 `category`。
 
+### 扩展资源协商
+
+列表、详情、发布、替换、下载与同步请求支持 `resources=canvas-v1`。有效值为空或 `canvas-v1`，其他值返回 400 `invalid_fields`。这些接口在支持时返回 `X-MSIME-Candidate-Resources: canvas-v1`，JSON 形状不变。客户端上传前先用列表请求探测并检查响应头，不能只看 200：旧副本可能忽略未知查询参数。滚动升级期间每次写入仍须处理旧副本的拒绝，不能因一次探测就假定所有副本已更新。
+
+未声明时，列表在分页前过滤超过三张或含 APNG/GIF/WebP 扩展名的包，详情和下载对这些包返回 404，同步列表也不返回它们，避免已发布客户端因一条记录拒绝整页。PNG 扩展名的 APNG 沿用已有支持。预览始终为 PNG/JPEG，所有客户端可取。新客户端对旧部署退回旧资源功能；扩展资源准备、动画验证与同步安装还需客户端配套，不能通过删除上传拦截来代替协商。
+
 ### 限制与校验
 
-- 只接受 `skin.toml` 加 PNG/JPEG 图片（扩展名 png、jpg、jpeg，不区分大小写），最多 3 个图片文件，每个文件都必须被清单引用：包括 `preview`、`candidate_window.decoration.image`、`candidate_window.background.image`，以及生效的 canvas 九宫格 `source` / `light_source` 和自由挂件 `image`；同一路径重复引用只计一份。不接受样式表（`toolbar_stylesheet`）、字体、SVG、GIF 或 WebP；Go 标准库不能重新编码 WebP，支持它需要新增依赖。
-- 单个图片不超过 1 MiB、合计不超过 2 MiB，上传时和清理后都要满足；skin.toml 另计，最多 65,536 字节。每边 1 到 2048 像素，整包解码像素合计不超过 800 万，尺寸在完整解码前从文件头读取。APNG（第一个 `IDAT` 之前有 `acTL` 的 PNG）最多 120 帧，超过的返回 `candidate_skin_too_large`；它的每一幅画面都按整张画布计入 800 万像素的合计，默认图不属于动画时再多算一幅，与客户端的计算相同。每张 JPEG 最多 32 个扫描段（SOS）：Go 的解码器对每个扫描都要遍历整张图，且不限制扫描数，常见渐进式 JPEG 约 10 个扫描；超过的返回 `candidate_skin_image_invalid`。
+- 默认接受 `skin.toml` 加最多 3 张 PNG/JPEG；请求带 `resources=canvas-v1` 时接受最多 37 张 PNG/JPEG/APNG/GIF/WebP（扩展名不区分大小写）。每个文件都必须被清单引用：包括 `preview`、`candidate_window.decoration.image`、`candidate_window.background.image`，以及生效的 canvas 九宫格 `source` / `light_source` 和自由挂件 `image`；同一路径重复引用只计一份。不接受样式表（`toolbar_stylesheet`）、字体或 SVG。37 张覆盖预览、旧装饰、背景、两张九宫格来源与最多 32 个挂件。
+- 单个图片不超过 1 MiB、合计不超过 2 MiB，上传时和清理后都要满足；skin.toml 另计，最多 65,536 字节。每边 1 到 2048 像素，整包解码像素合计不超过 800 万，尺寸在完整解码前从文件头读取。APNG（第一个 `IDAT` 之前有 `acTL` 的 PNG）、GIF 与 WebP 最多 120 帧，超过的返回 `candidate_skin_too_large`；动画的每一幅画面都按整张画布计入 800 万像素的合计，默认图不属于动画时再多算一幅，与客户端的计算相同。每张 JPEG 最多 32 个扫描段（SOS）：Go 的解码器对每个扫描都要遍历整张图，且不限制扫描数，常见渐进式 JPEG 约 10 个扫描；超过的返回 `candidate_skin_image_invalid`。
 - 必须用 `preview` 指定一张包内的 PNG/JPEG 作为预览图，清理后不超过 256 KiB。
 - 公开作品的 `skin.toml` 必须包含 `[license]` 且 `assets` 非空；私有作品可以省略，转为公开前需先用 PUT 补上。客户端发布时还要求用户勾选确认拥有素材权利。清单的 `version` 和 `[license]` 的 `code`、`assets`、`source` 不能含控制字符（包括换行和制表符），否则返回 `invalid_candidate_skin_package`：客户端会拒绝含控制字符的列表项，一条这样的记录会让所在的整页列表失败。
 - 路径规则与客户端 `safe_resource` 一致：相对路径，每段只含 `A-Za-z0-9._-`，不允许空段、`.`、`..` 或反斜杠；键不能是 `skin.toml`，转小写后不能重复。
 - 清单用与客户端加载器一致的规则校验（`internal/skins/client.go` 的 `ParseStored`），包括 ID 格式、保留主题 ID 与四个内置 ID、schema_version（1 或 2）、base、supports 和窗口参数；schema 2 的 `[animation]` 和装饰图的 `motion`（`none`、`float`、`sway`、`breathe`、`bounce`）、`motion_period_ms`（1200 到 8000 的整数）按客户端的规则校验，schema 1 写这些键或没有装饰带的包写 `motion` 都被拒绝。
-- 服务器按扩展名选择解码器解码每张图片后重新编码（PNG 最高压缩、JPEG 质量 90），因此会去除 EXIF、XMP、ICC 和文本块；扩展名与内容不符的图片被拒绝。去掉 ICC 可能带来轻微色差，Go 的 PNG 编码器也可能让已优化的 PNG 变大，接近上限的包可能在重新编码后被拒绝。
+- 服务器按扩展名选择解码器完整解码每张图片，静态 PNG/JPEG 与 GIF 重新编码（PNG 最高压缩、JPEG 质量 90），因此会去除 EXIF、XMP、ICC 和文本块；扩展名与内容不符的图片被拒绝。去掉 ICC 可能带来轻微色差，Go 的 PNG 编码器也可能让已优化的 PNG 变大，接近上限的包可能在重新编码后被拒绝。
+- GIF 在完整解码前扫描所有帧描述符和子块，检查帧数及区域；完整解码后重新编码，保留透明、循环、时长和处置，丢弃评论与非绘制扩展。WebP 验证 RIFF、VP8X、ANIM 与 ANMF，核对每帧实际位流尺寸和帧区域，逐帧完整解码；保留绘制位流、循环、背景、时长、混合与处置，清除 EXIF、XMP、ICCP 和未知块。静态 WebP 同样完整解码并清理元数据。
 - APNG 保留动画，不重新编码：服务器校验签名、每个块的 CRC 和 APNG 规范的块顺序（`IHDR` 在最前；`PLTE`、`tRNS`、`acTL` 在 `IDAT` 之前；`IDAT` 连续；`fcTL` 与 `fdAT` 的序号从 0 起连续；`fcTL` 的数量等于 `acTL` 声明的帧数；每帧区域在画布内且不为空，描述默认图的那一帧覆盖整张画布；`dispose_op`、`blend_op` 取值合法；不认识的关键块拒绝），只保留 `IHDR`、`PLTE`、`tRNS`、`acTL`、`fcTL`、`IDAT`、`fdAT`、`IEND` 按原顺序拼回，文本、EXIF、ICC、`gAMA` 等色彩块、时间和其他辅助块以及 `IEND` 之后的字节都去掉，与静态 PNG 重新编码后的结果一致。随后把默认图和每一帧分别拼成独立的 PNG 完整解码，并要求每帧的压缩数据恰好是一个完整的 zlib 流，任何一帧损坏、截断或在压缩流之后夹带字节都返回 `candidate_skin_image_invalid`。像素数据保留上传时的压缩流，所以 APNG 清理后的大小不会超过上传时。预览图和背景图同样可以是 APNG；预览接口与管理后台仍按 `image/png` 返回，浏览器会播放动画。
 - 标题最多 32 个 Unicode 字符，说明最多 280 个，均先去除首尾空白；与清单里的 `name` 无关。标题不能含控制字符，说明只允许换行和制表符两种控制字符。发布请求最多 3,200,000 字节。
 - 每个账号最多 100 款（超出 409 `candidate_skin_library_limit`），其中公开最多 20 款（超出 409 `candidate_skin_publish_limit`）。公开发布和转为公开共用每小时 10 次，私有创建和 PUT 替换共用另一份每小时 60 次（均按账号计，数据库限流）；图片解码每个进程最多同时 2 个，繁忙时返回 503 `candidate_skin_busy`。
@@ -185,4 +192,4 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON community_candidate_skins, community_can
 
 公开作品发布即公开，不做事前审核；候选皮肤和其他社区内容一样由管理后台的社区审核页事后复核，审核规则见 [管理后台的「社区事后审核」](admin.md#社区事后审核)。管理后台 API 另外提供 `GET /api/candidate-skins`（可用 `visibility=public|private` 和 `category=<分类>` 筛选）、`GET /api/candidate-skins/{id}`（元数据、可见性、分类、清单文本和每个文件的路径、大小、SHA-256，不含图片字节）、审计过的 `delete_candidate_skin` 永久删除操作，以及审计过的 `set_candidate_skin_category` 用于修改分类；社区审核页的候选皮肤详情抽屉提供分类下拉框。
 
-候选窗清单基底已与新版客户端对齐：`wechat_scroll` 可用于 v1/v2，`canvas` 仅限 v2，画布图片、九宫格切片、挂件和留白按共享范围校验。当前社区仍最多 3 张 PNG/JPEG 图片，`.apng` 后缀、GIF/WebP 与更多图片的上传还未开放；不能据此宣称所有上游画布包均已可上传。
+候选窗清单基底已与新版客户端对齐：`wechat_scroll` 可用于 v1/v2，`canvas` 仅限 v2，画布图片、九宫格切片、挂件和留白按共享范围校验。扩展资源通过 `resources=canvas-v1` 协商，支持上游 APNG/GIF 画布资源；原始包没有 preview 时，发布者仍需提供 PNG/JPEG 预览，可复用已引用的面板图片。

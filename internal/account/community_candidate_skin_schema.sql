@@ -68,12 +68,20 @@ CREATE INDEX IF NOT EXISTS community_candidate_skins_category_newest ON communit
 -- One row per re-encoded image. size and sha256 are generated, so they cannot disagree with the bytes download serves.
 CREATE TABLE IF NOT EXISTS community_candidate_skin_files (
  skin_id text NOT NULL REFERENCES community_candidate_skins(id) ON DELETE CASCADE,
- path text NOT NULL CHECK(length(path) <= 256 AND path ~ '^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$' AND path !~ '(^|/)\.\.?(/|$)' AND lower(path) ~ '\.(png|jpe?g)$'),
+ path text NOT NULL CHECK(length(path) <= 256 AND path ~ '^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$' AND path !~ '(^|/)\.\.?(/|$)' AND lower(path) ~ '\.(png|apng|jpe?g|gif|webp)$'),
  bytes bytea NOT NULL CHECK(octet_length(bytes) BETWEEN 1 AND 1048576),
  size integer GENERATED ALWAYS AS (octet_length(bytes)) STORED,
  sha256 text GENERATED ALWAYS AS (encode(sha256(bytes),'hex')) STORED,
  PRIMARY KEY(skin_id,path)
 );
+-- 扩展资源仍使用同一张文件表；旧路径约束只放行 PNG/JPEG，启动探测后替换。
+DO $$
+BEGIN
+ IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='community_candidate_skin_files'::regclass AND conname='community_candidate_skin_files_path_check' AND pg_get_constraintdef(oid) LIKE '%apng%' AND pg_get_constraintdef(oid) LIKE '%webp%') THEN
+  ALTER TABLE community_candidate_skin_files DROP CONSTRAINT IF EXISTS community_candidate_skin_files_path_check;
+  ALTER TABLE community_candidate_skin_files ADD CONSTRAINT community_candidate_skin_files_path_check CHECK(length(path) <= 256 AND path ~ '^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$' AND path !~ '(^|/)\.\.?(/|$)' AND lower(path) ~ '\.(png|apng|jpe?g|gif|webp)$') NOT VALID;
+ END IF;
+END $$;
 CREATE TABLE IF NOT EXISTS community_candidate_skin_downloads (
  skin_id text NOT NULL REFERENCES community_candidate_skins(id) ON DELETE CASCADE,
  user_id text NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,

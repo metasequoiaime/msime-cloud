@@ -118,7 +118,7 @@ func newFileNameDedupFixture(tb testing.TB) fileNameDedupFixture {
 func (fixture fileNameDedupFixture) run(tb testing.TB, kind string, variant int) {
 	switch kind {
 	case "candidate":
-		if code := validCandidateFiles("", fixture.paths[variant]); code != "" {
+		if code := validCandidateResourceFiles("", fixture.paths[variant], true); code != "" {
 			tb.Fatal(code)
 		}
 	case "archive":
@@ -158,11 +158,12 @@ func TestFileNameDedupAllocationBudget(t *testing.T) {
 	for _, tc := range []struct {
 		kind   string
 		budget float64
-	}{{"candidate", 3}, {"archive", 24}, {"seed", 24}} {
+	}{{"candidate", float64(len(fixture.paths[1]))}, {"archive", 24}, {"seed", 24}} {
 		t.Run(tc.kind, func(t *testing.T) {
 			lower := testing.AllocsPerRun(100, func() { fixture.run(t, tc.kind, 0) })
 			upper := testing.AllocsPerRun(100, func() { fixture.run(t, tc.kind, 1) })
-			// 只比较文件名大小写造成的增量；插件场景为标准库缓冲池和目录读取保留余量。
+			// 候选图片每个大写文件名最多增加一次小写副本分配，预算随实际资源数变化；
+			// 插件场景为标准库缓冲池和目录读取保留余量。
 			if delta := upper - lower; delta > tc.budget {
 				t.Fatalf("大写名称额外分配 %.0f 次，小写 %.0f，大写 %.0f，预算 %.0f", delta, lower, upper, tc.budget)
 			}

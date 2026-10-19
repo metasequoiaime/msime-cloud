@@ -143,7 +143,9 @@
     "output_text_bytes": 65536,
     "chat_default_tokens": 2048,
     "stream_message_bytes": 1048576,
-    "stream_session_bytes": 33554432
+    "stream_session_bytes": 33554432,
+    "candidate_skin_files": 37,
+    "candidate_skin_legacy_files": 3
   },
   "error_response": {
     "error": {
@@ -180,5 +182,28 @@
       "protocol": "通过 WSS 传输豆包 ASR v1 二进制消息，保留消息边界和载荷；设备使用 Bearer 鉴权，供应商请求头由后端提供。",
       "close_policy": "仅返回通用关闭原因，不透传上游 HTTP 正文或连接关闭说明。"
     }
+  },
+  "community_candidate_skin_resources": {
+    "query": {
+      "resources": "canvas-v1"
+    },
+    "response_header": {
+      "X-MSIME-Candidate-Resources": "canvas-v1"
+    },
+    "probe": "客户端须先确认列表响应的能力头；旧部署可能忽略查询参数。",
+    "formats": [
+      "png",
+      "jpg",
+      "jpeg",
+      "apng",
+      "gif",
+      "webp"
+    ],
+    "preview_formats": [
+      "png",
+      "jpg",
+      "jpeg"
+    ],
+    "legacy": "无声明时仅返回最多三张 PNG/JPEG 的包，扩展包不进入分页、详情、下载和同步列表；旧 JSON 形状保持不变。"
   }
 }

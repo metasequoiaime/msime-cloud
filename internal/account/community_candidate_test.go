@@ -780,7 +780,7 @@ func TestCommunityCandidateSkinSchemaRejectsUnsafeRows(t *testing.T) {
 		{file("/abs.png", "4"), id},
 		{file("a\\b.png", "4"), id},
 		{file("style.css", "4"), id},
-		{file("x.webp", "4"), id},
+		{file("x.svg", "4"), id},
 		{file("big.png", "1048577"), id},
 		{file("empty.png", "0"), id},
 		{file("preview.png", "4"), id},

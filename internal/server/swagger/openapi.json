@@ -14761,6 +14761,19 @@
               "default": ""
             },
             "description": "category 表示每个条目带上 category 字段；不带时响应与引入分类之前逐字节相同。其他值返回 400 invalid_include。"
+          },
+          {
+            "name": "resources",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "",
+                "canvas-v1"
+              ],
+              "default": ""
+            },
+            "description": "声明扩展图片支持；默认过滤不兼容包，详情和下载返回 404。先确认响应头 X-MSIME-Candidate-Resources: canvas-v1，旧部署可能忽略该参数。"
           }
         ],
         "description": "公开目录，按发布时间倒序每页 20 条，不含清单和图片字节。scope=mine 只列出自己的作品，scope=saved 只列出自己收藏的作品（按收藏时间倒序），都需要用户会话；只有 scope 非空且 fields 含 sync 时才包含自己的私有作品，别人的私有作品永远不出现。category 按图库分类筛选，未知分类返回 400 invalid_category。 详见 docs/skin-community.md。",
@@ -14902,6 +14915,17 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-MSIME-Candidate-Resources": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "canvas-v1"
+                  ]
+                },
+                "description": "服务端支持扩展资源，旧部署不会返回此头。"
+              }
             }
           },
           "400": {
@@ -14953,9 +14977,22 @@
               "default": ""
             },
             "description": "category 表示每个条目带上 category 字段；不带时响应与引入分类之前逐字节相同。其他值返回 400 invalid_include。"
+          },
+          {
+            "name": "resources",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "",
+                "canvas-v1"
+              ],
+              "default": ""
+            },
+            "description": "声明扩展图片支持；默认过滤不兼容包，详情和下载返回 404。先确认响应头 X-MSIME-Candidate-Resources: canvas-v1，旧部署可能忽略该参数。"
           }
         ],
-        "description": "请求最多 3,200,000 字节（高于其他 JSON 接口的 64 KiB）。只接受 skin.toml 加 PNG/JPEG 图片（最多 3 个文件，均须被清单引用）：单个图片不超过 1 MiB、合计不超过 2 MiB，每边 1 到 2048 像素、整包不超过 800 万像素；必须用 preview 指定一张包内图片作为预览图（重新编码后不超过 256 KiB），公开作品的 [license] 必须填写非空 assets，私有作品可省略。服务器解码后重新编码图片，去除 EXIF、XMP、ICC 等元数据。id 为客户端 UUID，同一请求重试返回 200；每个账号最多 100 款，其中公开最多 20 款。公开发布每小时最多 10 次，私有创建与替换共用每小时 60 次。 详见 docs/skin-community.md。",
+        "description": "请求最多 3,200,000 字节（高于其他 JSON 接口的 64 KiB）。接受 skin.toml 加图片（默认最多 3 张 PNG/JPEG；resources=canvas-v1 时最多 37 张 PNG/JPEG/APNG/GIF/WebP，均须被清单引用）：单个图片不超过 1 MiB、合计不超过 2 MiB，每边 1 到 2048 像素、整包不超过 800 万像素；必须用 preview 指定一张包内图片作为预览图（重新编码后不超过 256 KiB），公开作品的 [license] 必须填写非空 assets，私有作品可省略。服务器完整解码并清理图片元数据；动画最多 120 帧，每帧按完整画布计入像素预算，保留帧时长、循环与处置。id 为客户端 UUID，同一请求重试返回 200；每个账号最多 100 款，其中公开最多 20 款。公开发布每小时最多 10 次，私有创建与替换共用每小时 60 次。 详见 docs/skin-community.md。",
         "responses": {
           "201": {
             "description": "成功",
@@ -15081,6 +15118,17 @@
                     }
                   }
                 }
+              }
+            },
+            "headers": {
+              "X-MSIME-Candidate-Resources": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "canvas-v1"
+                  ]
+                },
+                "description": "服务端支持扩展资源，旧部署不会返回此头。"
               }
             }
           },
@@ -15282,12 +15330,12 @@
                   "files": {
                     "type": "object",
                     "minProperties": 1,
-                    "maxProperties": 3,
+                    "maxProperties": 37,
                     "additionalProperties": {
                       "type": "string",
                       "format": "byte"
                     },
-                    "description": "键为包内相对路径（仅 png/jpg/jpeg），值为标准 base64。"
+                    "description": "键为包内相对路径，值为标准 base64。默认最多三张 PNG/JPEG；resources=canvas-v1 时最多 37 张 PNG/JPEG/APNG/GIF/WebP，预览仍限 PNG/JPEG。"
                   },
                   "visibility": {
                     "type": "string",
@@ -15337,7 +15385,21 @@
             "userSession": []
           }
         ],
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "resources",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "",
+                "canvas-v1"
+              ],
+              "default": ""
+            },
+            "description": "声明扩展图片支持；默认过滤不兼容包，详情和下载返回 404。先确认响应头 X-MSIME-Candidate-Resources: canvas-v1，旧部署可能忽略该参数。"
+          }
+        ],
         "description": "返回自己的全部作品（含私有），按 updated_at 倒序，不分页。 详见 docs/skin-community.md。",
         "responses": {
           "200": {
@@ -15387,6 +15449,17 @@
                     }
                   }
                 }
+              }
+            },
+            "headers": {
+              "X-MSIME-Candidate-Resources": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "canvas-v1"
+                  ]
+                },
+                "description": "服务端支持扩展资源，旧部署不会返回此头。"
               }
             }
           },
@@ -15465,6 +15538,19 @@
               "default": ""
             },
             "description": "category 表示每个条目带上 category 字段；不带时响应与引入分类之前逐字节相同。其他值返回 400 invalid_include。"
+          },
+          {
+            "name": "resources",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "",
+                "canvas-v1"
+              ],
+              "default": ""
+            },
+            "description": "声明扩展图片支持；默认过滤不兼容包，详情和下载返回 404。先确认响应头 X-MSIME-Candidate-Resources: canvas-v1，旧部署可能忽略该参数。"
           }
         ],
         "description": "公开详情；登录时额外返回自己的评分与是否为作者。私有作品仅作者带 fields=sync 可见，其他情况返回 404。 详见 docs/skin-community.md。",
@@ -15594,6 +15680,17 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-MSIME-Candidate-Resources": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "canvas-v1"
+                  ]
+                },
+                "description": "服务端支持扩展资源，旧部署不会返回此头。"
+              }
             }
           },
           "400": {
@@ -15654,6 +15751,19 @@
               "default": ""
             },
             "description": "category 表示每个条目带上 category 字段；不带时响应与引入分类之前逐字节相同。其他值返回 400 invalid_include。"
+          },
+          {
+            "name": "resources",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "",
+                "canvas-v1"
+              ],
+              "default": ""
+            },
+            "description": "声明扩展图片支持；默认过滤不兼容包，详情和下载返回 404。先确认响应头 X-MSIME-Candidate-Resources: canvas-v1，旧部署可能忽略该参数。"
           }
         ],
         "description": "仅作者可替换，校验与限制同发布；清单 id 须与原包相同，否则 409。保留 id、可见性、发布时间、下载与评分，重新计算 request_sha256 并更新 updated_at；与已存内容相同时不写入。计入每小时 60 次的私有额度。 详见 docs/skin-community.md。",
@@ -15783,6 +15893,17 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-MSIME-Candidate-Resources": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "canvas-v1"
+                  ]
+                },
+                "description": "服务端支持扩展资源，旧部署不会返回此头。"
+              }
             }
           },
           "400": {
@@ -15852,12 +15973,12 @@
                   "files": {
                     "type": "object",
                     "minProperties": 1,
-                    "maxProperties": 3,
+                    "maxProperties": 37,
                     "additionalProperties": {
                       "type": "string",
                       "format": "byte"
                     },
-                    "description": "键为包内相对路径（仅 png/jpg/jpeg），值为标准 base64。"
+                    "description": "键为包内相对路径，值为标准 base64。默认最多三张 PNG/JPEG；resources=canvas-v1 时最多 37 张 PNG/JPEG/APNG/GIF/WebP，预览仍限 PNG/JPEG。"
                   }
                 },
                 "required": [
@@ -16250,6 +16371,19 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "resources",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "",
+                "canvas-v1"
+              ],
+              "default": ""
+            },
+            "description": "声明扩展图片支持；默认过滤不兼容包，详情和下载返回 404。先确认响应头 X-MSIME-Candidate-Resources: canvas-v1，旧部署可能忽略该参数。"
           }
         ],
         "description": "公开作品无需登录，返回原样清单和重新编码后的图片；仅有效登录会话计入按账号去重的下载人数，匿名下载不计数。私有或已下架作品仅作者可下载。 详见 docs/skin-community.md。",
@@ -16274,15 +16408,26 @@
                     "files": {
                       "type": "object",
                       "minProperties": 1,
-                      "maxProperties": 3,
+                      "maxProperties": 37,
                       "additionalProperties": {
                         "type": "string",
                         "format": "byte"
                       },
-                      "description": "键为包内相对路径（仅 png/jpg/jpeg），值为标准 base64。"
+                      "description": "键为包内相对路径，值为标准 base64。默认最多三张 PNG/JPEG；resources=canvas-v1 时最多 37 张 PNG/JPEG/APNG/GIF/WebP，预览仍限 PNG/JPEG。"
                     }
                   }
                 }
+              }
+            },
+            "headers": {
+              "X-MSIME-Candidate-Resources": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "canvas-v1"
+                  ]
+                },
+                "description": "服务端支持扩展资源，旧部署不会返回此头。"
               }
             }
           },

@@ -10,10 +10,15 @@ import (
 
 // candidateUpload 是发布与替换共同接受的包内容；作品 ID、可见性和分类由各自接口处理。
 type candidateUpload struct {
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	Manifest    string            `json:"manifest"`
-	Files       map[string][]byte `json:"files"`
+	extendedResources bool
+	Name              string            `json:"name"`
+	Description       string            `json:"description"`
+	Manifest          string            `json:"manifest"`
+	Files             map[string][]byte `json:"files"`
+}
+
+func (input *candidateUpload) setCandidateResources(extended bool) {
+	input.extendedResources = extended
 }
 
 // readCandidateUpload 延长本次上传的连接期限，先校验分类声明，再按上传大小上限读取请求体。
@@ -26,7 +31,17 @@ func readCandidateUpload(w http.ResponseWriter, r *http.Request, input any) (wit
 		writeError(w, 400, "invalid_include")
 		return false, false
 	}
-	return withCategory, readSized(w, r, input, maxCandidatePublishBytes)
+	extended, ok := candidateResources(w, r)
+	if !ok {
+		return false, false
+	}
+	if !readSized(w, r, input, maxCandidatePublishBytes) {
+		return false, false
+	}
+	if upload, ok := input.(interface{ setCandidateResources(bool) }); ok {
+		upload.setCandidateResources(extended)
+	}
+	return withCategory, true
 }
 
 // prepare 规范化标题与说明，依次校验元数据、文件和清单；摘要使用原始包字节，图片解码留在重试与限流检查之后。
@@ -36,7 +51,7 @@ func (input *candidateUpload) prepare(requireLicense bool) (pkg skins.Package, d
 	if !resourceText(input.Name, 1, 32, false) || !resourceText(input.Description, 0, 280, true) {
 		return pkg, "", "invalid_skin_metadata"
 	}
-	if code := validCandidateFiles(input.Manifest, input.Files); code != "" {
+	if code := validCandidateResourceFiles(input.Manifest, input.Files, input.extendedResources); code != "" {
 		return pkg, "", code
 	}
 	digest = candidateRequestDigest(input.Name, input.Description, input.Manifest, input.Files)

@@ -26,4 +26,6 @@ const (
 	ChatDefaultTokens          = 2048
 	StreamMessageBytes         = 1048576
 	StreamSessionBytes         = 33554432
+	CandidateSkinFiles         = 37
+	CandidateSkinLegacyFiles   = 3
 )

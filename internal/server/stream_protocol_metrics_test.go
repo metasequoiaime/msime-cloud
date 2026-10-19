@@ -26,9 +26,9 @@ func writeStreamProtocolViolation(ctx context.Context, c *websocket.Conn, text b
 }
 
 func TestStreamingProtocolViolationsMeterTheirSource(t *testing.T) {
-	// 边界用例须经两段 TLS 转发 32 MiB；race 模式的共享 runner 需要留出吞吐余量。
+	// 边界用例须经两段 TLS 转发 32 MiB；联合覆盖率与 race 的共享 runner 需要留出吞吐余量。
 	// 此测试验证字节上限、关闭状态和计量归因，期限不承担性能门禁。
-	const timeout = time.Minute
+	const timeout = 5 * time.Minute
 	for _, upstream := range []bool{false, true} {
 		for _, text := range []bool{false, true} {
 			name := "客户端/"

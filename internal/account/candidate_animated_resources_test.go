@@ -175,7 +175,7 @@ func TestCandidateAnimatedResourcesRejectMalformed(t *testing.T) {
 func TestCandidateResourceNegotiation(t *testing.T) {
 	for _, query := range []string{"", "?resources=canvas-v1", "?resources=unknown"} {
 		w := httptest.NewRecorder()
-		extended, ok := candidateResources(w, httptest.NewRequest("GET", "/"+query, nil))
+		extended, ok := candidateResources(w, httptest.NewRequest("GET", "/"+query, nil), true)
 		if ok != (query != "?resources=unknown") || extended != (query == "?resources=canvas-v1") {
 			t.Fatal(query)
 		}
@@ -204,6 +204,25 @@ func TestCandidateResourceNegotiation(t *testing.T) {
 		}
 		if code := validCandidateFiles("synthetic", files); code != "candidate_skin_file_type" {
 			t.Fatal(path, code)
+		}
+	}
+}
+
+// 开关关闭时仍可读取已存在的扩展包，但不承诺或接受新的扩展上传。
+func TestCandidateResourcesDisabledDoesNotAdvertiseOrEnableUploads(t *testing.T) {
+	w := httptest.NewRecorder()
+	extended, ok := candidateResources(w, httptest.NewRequest("GET", "/?resources=canvas-v1", nil), false)
+	if !ok || !extended || w.Header().Get(candidateResourcesHeader) != "" {
+		t.Fatal("关闭时错误声明能力或拒绝扩展读取")
+	}
+	for _, enabled := range []bool{false, true} {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/?resources=canvas-v1", strings.NewReader(`{"name":"合成","manifest":"synthetic","files":{}}`))
+		r.Header.Set("Content-Type", "application/json")
+		var input candidateUpload
+		_, ok := readCandidateUpload(w, r, &input, enabled)
+		if !ok || input.extendedResources != enabled {
+			t.Fatal("上传开关未生效", enabled, w.Body.String())
 		}
 	}
 }

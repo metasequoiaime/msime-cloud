@@ -14924,7 +14924,7 @@
                     "canvas-v1"
                   ]
                 },
-                "description": "服务端支持扩展资源，旧部署不会返回此头。"
+                "description": "仅在 auth.community.canvas_resources 开启时声明支持扩展上传；默认关闭，须全部副本升级后再开启。"
               }
             }
           },
@@ -14992,7 +14992,7 @@
             "description": "声明扩展图片支持；默认过滤不兼容包，详情和下载返回 404。先确认响应头 X-MSIME-Candidate-Resources: canvas-v1，旧部署可能忽略该参数。"
           }
         ],
-        "description": "请求最多 3,200,000 字节（高于其他 JSON 接口的 64 KiB）。接受 skin.toml 加图片（默认最多 3 张 PNG/JPEG；resources=canvas-v1 时最多 37 张 PNG/JPEG/APNG/GIF/WebP，均须被清单引用）：单个图片不超过 1 MiB、合计不超过 2 MiB，每边 1 到 2048 像素、整包不超过 800 万像素；必须用 preview 指定一张包内图片作为预览图（重新编码后不超过 256 KiB），公开作品的 [license] 必须填写非空 assets，私有作品可省略。服务器完整解码并清理图片元数据；动画最多 120 帧，每帧按完整画布计入像素预算，保留帧时长、循环与处置。id 为客户端 UUID，同一请求重试返回 200；每个账号最多 100 款，其中公开最多 20 款。公开发布每小时最多 10 次，私有创建与替换共用每小时 60 次。 详见 docs/skin-community.md。",
+        "description": "请求最多 3,200,000 字节（高于其他 JSON 接口的 64 KiB）。接受 skin.toml 加图片（默认最多 3 张 PNG/JPEG；开启 auth.community.canvas_resources 且 resources=canvas-v1 时最多 37 张 PNG/JPEG/APNG/GIF/WebP，均须被清单引用）：单个图片不超过 1 MiB、合计不超过 2 MiB，每边 1 到 2048 像素、整包不超过 800 万像素；必须用 preview 指定一张包内图片作为预览图（重新编码后不超过 256 KiB），公开作品的 [license] 必须填写非空 assets，私有作品可省略。服务器完整解码并清理图片元数据；动画最多 120 帧，每帧按完整画布计入像素预算，保留帧时长、循环与处置。id 为客户端 UUID，同一请求重试返回 200；每个账号最多 100 款，其中公开最多 20 款。公开发布每小时最多 10 次，私有创建与替换共用每小时 60 次。 详见 docs/skin-community.md。",
         "responses": {
           "201": {
             "description": "成功",
@@ -15128,7 +15128,7 @@
                     "canvas-v1"
                   ]
                 },
-                "description": "服务端支持扩展资源，旧部署不会返回此头。"
+                "description": "仅在 auth.community.canvas_resources 开启时声明支持扩展上传；默认关闭，须全部副本升级后再开启。"
               }
             }
           },
@@ -15335,7 +15335,7 @@
                       "type": "string",
                       "format": "byte"
                     },
-                    "description": "键为包内相对路径，值为标准 base64。默认最多三张 PNG/JPEG；resources=canvas-v1 时最多 37 张 PNG/JPEG/APNG/GIF/WebP，预览仍限 PNG/JPEG。"
+                    "description": "键为包内相对路径，值为标准 base64。默认最多三张 PNG/JPEG；开启 auth.community.canvas_resources 且 resources=canvas-v1 时最多 37 张 PNG/JPEG/APNG/GIF/WebP，预览仍限 PNG/JPEG。"
                   },
                   "visibility": {
                     "type": "string",
@@ -15459,7 +15459,7 @@
                     "canvas-v1"
                   ]
                 },
-                "description": "服务端支持扩展资源，旧部署不会返回此头。"
+                "description": "仅在 auth.community.canvas_resources 开启时声明支持扩展上传；默认关闭，须全部副本升级后再开启。"
               }
             }
           },
@@ -15689,7 +15689,7 @@
                     "canvas-v1"
                   ]
                 },
-                "description": "服务端支持扩展资源，旧部署不会返回此头。"
+                "description": "仅在 auth.community.canvas_resources 开启时声明支持扩展上传；默认关闭，须全部副本升级后再开启。"
               }
             }
           },
@@ -15902,7 +15902,7 @@
                     "canvas-v1"
                   ]
                 },
-                "description": "服务端支持扩展资源，旧部署不会返回此头。"
+                "description": "仅在 auth.community.canvas_resources 开启时声明支持扩展上传；默认关闭，须全部副本升级后再开启。"
               }
             }
           },
@@ -15978,7 +15978,7 @@
                       "type": "string",
                       "format": "byte"
                     },
-                    "description": "键为包内相对路径，值为标准 base64。默认最多三张 PNG/JPEG；resources=canvas-v1 时最多 37 张 PNG/JPEG/APNG/GIF/WebP，预览仍限 PNG/JPEG。"
+                    "description": "键为包内相对路径，值为标准 base64。默认最多三张 PNG/JPEG；开启 auth.community.canvas_resources 且 resources=canvas-v1 时最多 37 张 PNG/JPEG/APNG/GIF/WebP，预览仍限 PNG/JPEG。"
                   }
                 },
                 "required": [
@@ -16413,7 +16413,7 @@
                         "type": "string",
                         "format": "byte"
                       },
-                      "description": "键为包内相对路径，值为标准 base64。默认最多三张 PNG/JPEG；resources=canvas-v1 时最多 37 张 PNG/JPEG/APNG/GIF/WebP，预览仍限 PNG/JPEG。"
+                      "description": "键为包内相对路径，值为标准 base64。默认最多三张 PNG/JPEG；开启 auth.community.canvas_resources 且 resources=canvas-v1 时最多 37 张 PNG/JPEG/APNG/GIF/WebP，预览仍限 PNG/JPEG。"
                     }
                   }
                 }
@@ -16427,7 +16427,7 @@
                     "canvas-v1"
                   ]
                 },
-                "description": "服务端支持扩展资源，旧部署不会返回此头。"
+                "description": "仅在 auth.community.canvas_resources 开启时声明支持扩展上传；默认关闭，须全部副本升级后再开启。"
               }
             }
           },

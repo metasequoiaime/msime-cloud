@@ -22,7 +22,7 @@ func (input *candidateUpload) setCandidateResources(extended bool) {
 }
 
 // readCandidateUpload 延长本次上传的连接期限，先校验分类声明，再按上传大小上限读取请求体。
-func readCandidateUpload(w http.ResponseWriter, r *http.Request, input any) (withCategory, ok bool) {
+func readCandidateUpload(w http.ResponseWriter, r *http.Request, input any, resourcesEnabled bool) (withCategory, ok bool) {
 	controller := http.NewResponseController(w)
 	_ = controller.SetReadDeadline(time.Now().Add(candidatePublishTimeout))
 	_ = controller.SetWriteDeadline(time.Now().Add(candidatePublishTimeout + 5*time.Second))
@@ -31,7 +31,7 @@ func readCandidateUpload(w http.ResponseWriter, r *http.Request, input any) (wit
 		writeError(w, 400, "invalid_include")
 		return false, false
 	}
-	extended, ok := candidateResources(w, r)
+	extended, ok := candidateResources(w, r, resourcesEnabled)
 	if !ok {
 		return false, false
 	}
@@ -39,7 +39,7 @@ func readCandidateUpload(w http.ResponseWriter, r *http.Request, input any) (wit
 		return false, false
 	}
 	if upload, ok := input.(interface{ setCandidateResources(bool) }); ok {
-		upload.setCandidateResources(extended)
+		upload.setCandidateResources(extended && resourcesEnabled)
 	}
 	return withCategory, true
 }

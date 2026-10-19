@@ -7,7 +7,7 @@ const candidateResourcesHeader = "X-MSIME-Candidate-Resources"
 
 // candidateResources 使用独立能力声明，保持现有 JSON 形状不变。
 // 新客户端须先探测响应头：旧部署会忽略未知查询键，不能据 200 就认定支持。
-func candidateResources(w http.ResponseWriter, r *http.Request) (extended, ok bool) {
+func candidateResources(w http.ResponseWriter, r *http.Request, enabled bool) (extended, ok bool) {
 	switch r.URL.Query().Get("resources") {
 	case "":
 	case candidateResourcesVersion:
@@ -16,8 +16,10 @@ func candidateResources(w http.ResponseWriter, r *http.Request) (extended, ok bo
 		writeError(w, 400, "invalid_fields")
 		return false, false
 	}
-	w.Header().Set(candidateResourcesHeader, candidateResourcesVersion)
-	w.Header().Add("Access-Control-Expose-Headers", candidateResourcesHeader)
+	if enabled {
+		w.Header().Set(candidateResourcesHeader, candidateResourcesVersion)
+		w.Header().Add("Access-Control-Expose-Headers", candidateResourcesHeader)
+	}
 	return extended, true
 }
 

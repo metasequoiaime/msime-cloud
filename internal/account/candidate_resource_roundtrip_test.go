@@ -27,7 +27,8 @@ func candidateAnimatedCanvasFixture(t *testing.T) (string, map[string][]byte) {
 func TestCommunityCandidateAnimatedResourcesRoundTrip(t *testing.T) {
 	db := testStore(t)
 	mux := http.NewServeMux()
-	Mount(mux, &Service{store: db})
+	service := &Service{store: db}
+	Mount(mux, service)
 	owner := complete(t, db, Identity{"email", "animated-canvas@example.test"})
 	const root = "/v1/community/candidate-skins"
 	const option = "resources=canvas-v1"
@@ -35,6 +36,13 @@ func TestCommunityCandidateAnimatedResourcesRoundTrip(t *testing.T) {
 	manifest, files := candidateAnimatedCanvasFixture(t)
 	body := candidatePublishBody(t, id, "合成动画画布", manifest, files)
 	apiRequest(t, mux, "POST", root, body, owner.AccessToken, 400)
+	// 第一阶段已更新代码但尚未启用，显式声明也不能绕过上传开关。
+	apiRequest(t, mux, "POST", root+"?"+option, body, owner.AccessToken, 400)
+	probe := apiRequest(t, mux, "GET", root+"?"+option, "", owner.AccessToken, 200)
+	if probe.Header().Get(candidateResourcesHeader) != "" {
+		t.Fatal("关闭状态声明了扩展能力")
+	}
+	service.config.Community.CanvasResources = true
 	w := apiRequest(t, mux, "POST", root+"?"+option, body, owner.AccessToken, 201)
 	if w.Header().Get(candidateResourcesHeader) != candidateResourcesVersion {
 		t.Fatal("上传未声明服务端能力")
@@ -93,6 +101,12 @@ func TestCommunityCandidateAnimatedResourcesRoundTrip(t *testing.T) {
 	// 预览继续使用所有旧客户端可解码的 PNG/JPEG 响应。
 	apiRequest(t, mux, "GET", root+"/"+id+"/preview", "", "", 200)
 	replacement := candidateReplaceBody(t, "合成动画画布二", manifest, files)
+	service.config.Community.CanvasResources = false
+	apiRequest(t, mux, "PUT", root+"/"+id+"?"+option, replacement, owner.AccessToken, 400)
+	// 停止扩展写入不抹掉已有包，新客户端仍能读取，旧客户端仍被隔离。
+	apiRequest(t, mux, "POST", root+"/"+id+"/download?"+option, "", "", 200)
+	checkList(root, "", 0)
+	service.config.Community.CanvasResources = true
 	apiRequest(t, mux, "PUT", root+"/"+id, replacement, owner.AccessToken, 400)
 	apiRequest(t, mux, "PUT", root+"/"+id+"?"+option, replacement, owner.AccessToken, 200)
 	// 替换成旧格式后，目录立即恢复可见，无需更新第二份能力字段。

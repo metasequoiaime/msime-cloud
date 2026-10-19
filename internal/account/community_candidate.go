@@ -428,7 +428,7 @@ func sanitizeCandidateImages(files map[string][]byte, preview string) (map[strin
 }
 
 func (a *Service) communityCandidateList(w http.ResponseWriter, r *http.Request) {
-	extended, ok := candidateResources(w, r)
+	extended, ok := candidateResources(w, r, a.config.Community.CanvasResources)
 	if !ok {
 		return
 	}
@@ -494,7 +494,7 @@ func (a *Service) communityCandidateList(w http.ResponseWriter, r *http.Request)
 	write(w, 200, map[string]any{"skins": items, "has_more": more})
 }
 func (a *Service) communityCandidateDetail(w http.ResponseWriter, r *http.Request) {
-	extended, ok := candidateResources(w, r)
+	extended, ok := candidateResources(w, r, a.config.Community.CanvasResources)
 	if !ok {
 		return
 	}
@@ -556,7 +556,7 @@ func (a *Service) communityCandidatePublish(w http.ResponseWriter, r *http.Reque
 		// 缺省为 other。分类不计入 request_sha256：同一内容的重试无论带什么分类都返回已存的作品，之后改分类走 PATCH。
 		Category *string `json:"category"`
 	}
-	withCategory, ok := readCandidateUpload(w, r, &input)
+	withCategory, ok := readCandidateUpload(w, r, &input, a.config.Community.CanvasResources)
 	if !ok {
 		return
 	}
@@ -738,7 +738,7 @@ SELECT $1,files.path,files.bytes
 FROM unnest($2::text[],$3::bytea[]) AS files(path,bytes)`, []any{id, paths, contents}
 }
 func (a *Service) communityCandidateDownload(w http.ResponseWriter, r *http.Request) {
-	extended, ok := candidateResources(w, r)
+	extended, ok := candidateResources(w, r, a.config.Community.CanvasResources)
 	if !ok {
 		return
 	}
@@ -830,7 +830,7 @@ func (a *Service) communityCandidateDelete(w http.ResponseWriter, r *http.Reques
 
 // communityCandidateSync lists every row the account owns, private ones included, as the identifiers a client needs to reconcile its local packages. It is not paginated: an account holds at most maxCandidateLibraryRows rows.
 func (a *Service) communityCandidateSync(w http.ResponseWriter, r *http.Request) {
-	extended, ok := candidateResources(w, r)
+	extended, ok := candidateResources(w, r, a.config.Community.CanvasResources)
 	if !ok {
 		return
 	}
@@ -874,7 +874,7 @@ func (a *Service) communityCandidateReplace(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var input candidateUpload
-	withCategory, ok := readCandidateUpload(w, r, &input)
+	withCategory, ok := readCandidateUpload(w, r, &input, a.config.Community.CanvasResources)
 	if !ok {
 		return
 	}

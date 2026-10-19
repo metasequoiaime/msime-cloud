@@ -204,6 +204,7 @@
       "jpg",
       "jpeg"
     ],
-    "legacy": "无声明时仅返回最多三张 PNG/JPEG 的包，扩展包不进入分页、详情、下载和同步列表；旧 JSON 形状保持不变。"
+    "legacy": "无声明时仅返回最多三张 PNG/JPEG 的包，扩展包不进入分页、详情、下载和同步列表；旧 JSON 形状保持不变。",
+    "enablement": "auth.community.canvas_resources 默认 false；全部副本升级后再显式开启扩展上传和能力声明。关闭后已存资源仍可由声明支持的客户端读取。"
   }
 }

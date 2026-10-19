@@ -988,7 +988,17 @@ func validWordbookEntries(raw []byte) bool {
 		return false
 	}
 	bounded := func(s string, max int) bool {
-		return utf8.RuneCountInString(s) <= max && !strings.ContainsFunc(s, unicode.IsControl)
+		count := 0
+		for _, r := range s {
+			if unicode.IsControl(r) {
+				return false
+			}
+			count++
+			if count > max {
+				return false
+			}
+		}
+		return true
 	}
 	capacity := strings.Count(text, "\n")
 	if text != "" && text[len(text)-1] != '\n' {

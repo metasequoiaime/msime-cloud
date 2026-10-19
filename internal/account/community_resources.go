@@ -374,20 +374,7 @@ SELECT COALESCE((SELECT owner_id FROM existing),''),COALESCE((SELECT kind FROM e
 	write(w, status, map[string]any{"id": input.ID, "revision": revision})
 }
 func (a *Service) resourceDelete(w http.ResponseWriter, r *http.Request) {
-	p, ok := a.principal(w, r, false)
-	if !ok {
-		return
-	}
-	rows, err := a.deleteOwnedCommunity(r.Context(), "community_resources", r.PathValue("id"), p.UserID)
-	if err != nil {
-		a.error(w, err)
-		return
-	}
-	if rows == 0 {
-		writeError(w, 404, "resource_not_found")
-		return
-	}
-	write(w, 200, map[string]bool{"deleted": true})
+	a.deleteCommunityItem(w, r, "community_resources", "resource_not_found")
 }
 func (a *Service) resourceSave(w http.ResponseWriter, r *http.Request) {
 	p, ok := a.principal(w, r, false)

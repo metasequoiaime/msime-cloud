@@ -559,20 +559,7 @@ func (a *Service) updateOwnedCommunitySkinCategoryAndRead(ctx context.Context, i
 }
 
 func (a *Service) communityDelete(w http.ResponseWriter, r *http.Request) {
-	p, ok := a.principal(w, r, false)
-	if !ok {
-		return
-	}
-	rows, e := a.deleteOwnedCommunity(r.Context(), "community_skins", r.PathValue("id"), p.UserID)
-	if e != nil {
-		a.error(w, e)
-		return
-	}
-	if rows == 0 {
-		writeError(w, 404, "skin_not_found")
-		return
-	}
-	write(w, 200, map[string]bool{"deleted": true})
+	a.deleteCommunityItem(w, r, "community_skins", "skin_not_found")
 }
 
 // communityUpdate 是作者修改自己作品发布元数据的接口，请求体 {"category":"<分类>"}，返回 200 和与详情相同形状的作品（同样支持 fields=moderation 与 include=category）。他人的作品与不存在一样返回 404 skin_not_found。分类不属于 design，所以不改变审核状态，也不影响发布重试的比较；限流沿用每个社区接口都计入的按地址额度。

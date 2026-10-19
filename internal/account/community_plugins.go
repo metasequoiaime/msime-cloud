@@ -520,18 +520,5 @@ SELECT EXISTS(SELECT 1 FROM written),EXISTS(SELECT 1 FROM community_plugins WHER
 }
 
 func (a *Service) communityPluginDelete(w http.ResponseWriter, r *http.Request) {
-	p, ok := a.principal(w, r, false)
-	if !ok {
-		return
-	}
-	rows, e := a.deleteOwnedCommunity(r.Context(), "community_plugins", r.PathValue("id"), p.UserID)
-	if e != nil {
-		a.error(w, e)
-		return
-	}
-	if rows == 0 {
-		writeError(w, 404, "plugin_not_found")
-		return
-	}
-	write(w, 200, map[string]bool{"deleted": true})
+	a.deleteCommunityItem(w, r, "community_plugins", "plugin_not_found")
 }

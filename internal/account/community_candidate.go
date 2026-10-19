@@ -755,20 +755,7 @@ func (a *Service) communityCandidateRate(w http.ResponseWriter, r *http.Request)
 SELECT EXISTS(SELECT 1 FROM written),EXISTS(SELECT 1 FROM community_candidate_skins WHERE id=$1 AND visibility='public' AND moderation<>'removed')`, "skin_not_found", "download_before_rating_or_own_skin")
 }
 func (a *Service) communityCandidateDelete(w http.ResponseWriter, r *http.Request) {
-	p, ok := a.principal(w, r, false)
-	if !ok {
-		return
-	}
-	rows, e := a.deleteOwnedCommunity(r.Context(), "community_candidate_skins", r.PathValue("id"), p.UserID)
-	if e != nil {
-		a.error(w, e)
-		return
-	}
-	if rows == 0 {
-		writeError(w, 404, "skin_not_found")
-		return
-	}
-	write(w, 200, map[string]bool{"deleted": true})
+	a.deleteCommunityItem(w, r, "community_candidate_skins", "skin_not_found")
 }
 
 // communityCandidateSync lists every row the account owns, private ones included, as the identifiers a client needs to reconcile its local packages. It is not paginated: an account holds at most maxCandidateLibraryRows rows.

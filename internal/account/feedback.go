@@ -231,6 +231,10 @@ func (a *Service) feedback(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// 慢速截图上传使用反馈路由的连接期限，不能只延长上下文而仍被全局读写超时截断。
+	controller := http.NewResponseController(w)
+	_ = controller.SetReadDeadline(time.Now().Add(feedbackTimeout))
+	_ = controller.SetWriteDeadline(time.Now().Add(feedbackTimeout + 5*time.Second))
 	payload, uploads, ok := readFeedbackForm(w, r)
 	if !ok {
 		return

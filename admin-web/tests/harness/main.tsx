@@ -117,6 +117,7 @@ function AuthHarness() {
   const toast = useToast();
   const [token, setToken] = useState("test-admin-token");
   const [result, setResult] = useState("");
+  const [commits, setCommits] = useState(0);
   const mutation = useMutation({
     mutationFn: (path: string) => api.post(`auth-test/${path}`, z.unknown()),
   });
@@ -128,12 +129,13 @@ function AuthHarness() {
     <output data-testid="auth-status">{auth.loading ? "加载中" : auth.authenticated ? "已登录" : "未登录"}</output>
     <output data-testid="auth-error">{auth.error}</output>
     <output data-testid="auth-result">{result}</output>
+    <output data-testid="auth-commits">{commits}</output>
     <input aria-label="测试密钥" value={token} onChange={event => setToken(event.target.value)} />
     <button type="button" onClick={() => { setResult(""); void auth.login(token).then(() => setResult("登录完成")); }}>测试登录</button>
     <button type="button" onClick={() => request("delayed")}>启动旧请求</button>
     <button type="button" onClick={() => request("unauthorized")}>使当前登录失效</button>
-    <button type="button" onClick={() => toast({ text: "待提交", delayCommit: () => api.post("auth-test/delayed", z.unknown()) })}>排队延迟提交</button>
-    <button type="button" onClick={() => { setResult(""); void auth.logout().then(() => setResult("退出完成")); }}>测试退出</button>
+    <button type="button" onClick={() => toast({ text: "待提交", delayCommit: () => api.post("auth-test/delayed", z.unknown()).finally(() => setCommits(value => value + 1)) })}>排队延迟提交</button>
+    <button type="button" onClick={() => { setResult("正在退出"); void auth.logout().then(() => setResult("退出完成")); }}>测试退出</button>
   </main>;
 }
 

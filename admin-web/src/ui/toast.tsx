@@ -19,7 +19,7 @@ export type ToastOptions = {
 
 export type ShowToast = (options: ToastOptions | string) => void;
 
-// FlushToast sends a waiting delayed commit now and resolves once it has settled (its failure toast and onCommitError included); logout calls it so the commit still goes out with the session it was made in.
+// FlushToast 立即发出待提交的操作，并等待所有已发出的延迟提交完成（包括失败提示及 `onCommitError`），供退出登录使用。
 export type FlushToast = () => Promise<void>;
 
 type Current = ToastOptions & { id: number };
@@ -35,6 +35,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const [notice, setNotice] = useState<Current | null>(null);
   const [noticeOpen, setNoticeOpen] = useState(false);
   const pending = useRef<PendingCommit | null>(null);
+  const inFlight = useRef(new Set<Promise<void>>());
   const hideTimer = useRef(0);
   const noticeTimer = useRef(0);
   const nextID = useRef(0);
@@ -43,12 +44,17 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
   const flush = useCallback((keepalive: boolean): Promise<void> => {
     const commit = pending.current;
-    if (!commit) return Promise.resolve();
-    pending.current = null;
-    window.clearTimeout(commit.timer);
-    // The request is on its way, so the toast must no longer offer 撤销 for it.
-    if (shownID.current === commit.id) setOpen(false);
-    return commit.run(keepalive);
+    if (commit) {
+      pending.current = null;
+      window.clearTimeout(commit.timer);
+      // 请求已经发出，不再允许撤销；保留它的 `Promise`，退出时也要等待计时器或其他提示已发出的操作。
+      if (shownID.current === commit.id) setOpen(false);
+      const running = commit.run(keepalive);
+      inFlight.current.add(running);
+      const settled = () => { inFlight.current.delete(running); };
+      void running.then(settled, settled);
+    }
+    return Promise.all([...inFlight.current]).then(() => undefined);
   }, []);
 
   const show = useCallback<ShowToast>(input => {

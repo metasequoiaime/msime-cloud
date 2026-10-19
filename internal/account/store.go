@@ -503,6 +503,7 @@ func (s *Store) PutChallenge(ctx context.Context, c Challenge) error {
 
 // PutVerificationChallenge 在同一目标的事务锁内重查有效验证码并插入挑战，避免多个副本同时看到空结果后各自发送邮件。
 // codeHash 根据最终种子生成挑战的验证码摘要；调用方在事务内只计算摘要，不做外部操作。
+// `seed` 必须是本次请求新生成的备用种子，不能传入初查到的旧种子，因为它可能在等锁期间过期。
 func (s *Store) PutVerificationChallenge(ctx context.Context, c Challenge, provider, subject, seed string, codeHash func(string) string) (bool, string, error) {
 	if codeHash == nil || seed == "" {
 		return false, "", ErrInvalid
@@ -528,7 +529,8 @@ ORDER BY expires_at LIMIT 1`, provider, subject).Scan(&actual)
 	}
 	c.Nonce = actual
 	c.CodeHash = codeHash(actual)
-	if _, err = tx.Exec(ctx, `INSERT INTO auth_challenges(id_hash,provider,subject,nonce,code_hash,link_user,code_verifier,redirect_uri,expires_at) VALUES($1,$2,$3,$4,$5,NULLIF($6,''),$7,$8,now()+interval '5 minutes')`, c.IDHash, c.Provider, c.Subject, c.Nonce, c.CodeHash, c.LinkUser, c.CodeVerifier, c.RedirectURI); err != nil {
+	// 新挑战的有效期从锁后的插入时刻开始，不能包含事务等锁的时间。
+	if _, err = tx.Exec(ctx, `INSERT INTO auth_challenges(id_hash,provider,subject,nonce,code_hash,link_user,code_verifier,redirect_uri,expires_at) VALUES($1,$2,$3,$4,$5,NULLIF($6,''),$7,$8,clock_timestamp()+interval '5 minutes')`, c.IDHash, c.Provider, c.Subject, c.Nonce, c.CodeHash, c.LinkUser, c.CodeVerifier, c.RedirectURI); err != nil {
 		return false, "", err
 	}
 	if err = tx.Commit(ctx); err != nil {

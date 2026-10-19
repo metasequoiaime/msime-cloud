@@ -367,7 +367,9 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 	if command := s.qqFAQCandidateCommands(ctx, text, admin, reply); command != "" {
 		return command
 	}
-	if qqCompact(text) == "周报" {
+	// 后续精确命令共用规范化结果，避免重复扫描和复制普通消息全文。
+	compact := qqCompact(text)
+	if compact == "周报" {
 		if admin {
 			s.qqWeeklyDigest(ctx, reply)
 		} else {
@@ -375,7 +377,7 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 		}
 		return "cmd_digest"
 	}
-	if compact := qqCompact(text); compact == "差评" || compact == "答错的" {
+	if compact == "差评" || compact == "答错的" {
 		if !admin {
 			reply("只有管理员能看差评。觉得我答错了，@我 说一句「不对」，我会重新查。")
 		} else {
@@ -383,7 +385,6 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text string, a
 		}
 		return "cmd_bad_answers"
 	}
-	compact := qqCompact(text)
 	switch {
 	case slices.Contains(qqHelpAliases, compact):
 		if admin {

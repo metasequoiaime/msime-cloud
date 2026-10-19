@@ -617,7 +617,7 @@ func (a *Service) begin(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		seed, reused, e := a.store.ActiveCodeSeed(r.Context(), v.Provider, target)
+		_, reused, e := a.store.ActiveCodeSeed(r.Context(), v.Provider, target)
 		if e != nil {
 			a.error(w, e)
 			return
@@ -629,8 +629,9 @@ func (a *Service) begin(w http.ResponseWriter, r *http.Request) {
 				a.error(w, e)
 				return
 			}
-			seed = "code-v1:" + randomToken()
 		}
+		// 初查到的种子可能在等锁期间过期；备用种子始终新建，是否复用由锁内重查决定。
+		seed := "code-v1:" + randomToken()
 		reused, seed, e = a.store.PutVerificationChallenge(r.Context(), c, v.Provider, target, seed, func(actual string) string {
 			code = a.verificationCode(v.Provider, target, actual)
 			return a.codeHash(id, code)

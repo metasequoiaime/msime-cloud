@@ -1149,6 +1149,13 @@ func qqIssueIntentStart(text string) (int, bool) {
 			offset += 3
 			continue
 		}
+		if b >= 0xe4 && b <= 0xe9 && offset+2 < len(text) && text[offset+1]&0xc0 == 0x80 && text[offset+2]&0xc0 == 0x80 {
+			if qqIssueIntentCandidate3(text[offset : offset+3]) {
+				return offset, true
+			}
+			offset += 3
+			continue
+		}
 		r, size := utf8.DecodeRuneInString(text[offset:])
 		switch r {
 		case '提', '个', '一', '交', '建', '开', '记', '成', '到', '录', '下', '帮', '忙', '我', '反', '馈', '给', '发':
@@ -1157,6 +1164,26 @@ func qqIssueIntentStart(text string) (int, bool) {
 		offset += size
 	}
 	return 0, false
+}
+
+// qqIssueIntentCandidate3 判断意图词首个汉字的三字节编码，避免普通中文消息逐个解码后再查表。
+func qqIssueIntentCandidate3(text string) bool {
+	switch text[0] {
+	case 0xe4:
+		return text == "个" || text == "一" || text == "交" || text == "下"
+	case 0xe5:
+		return text == "建" || text == "开" || text == "到" || text == "录" || text == "帮" || text == "忙" || text == "反" || text == "发"
+	case 0xe6:
+		return text == "提" || text == "成" || text == "我"
+	case 0xe7:
+		return text == "给"
+	case 0xe8:
+		return text == "记"
+	case 0xe9:
+		return text == "馈"
+	default:
+		return false
+	}
 }
 
 // fileAdminFeedback 处理管理员的一条消息。explicit 表示来自「提issue」命令。先整理成 bug 或需求：不是具体反馈、或者没有明确要求记录时转去答疑（命令不是具体反馈时请管理员写具体些）；用「记一下」这类说法要求记录的先对照知识库，文档说明功能已经有了或现象是正常的就回复文档的说法、不提交；「提issue」命令是管理员已经判断过要提，不对照知识库；其余的按平台选仓库、查重、带上附件和标签提交。转去答疑时 chat 原样交给 answerQQQuestion，「提issue」命令不答疑，传 nil。

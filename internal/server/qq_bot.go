@@ -1114,9 +1114,15 @@ func qqIssueIntentByteOffset(word string, runeIndex int) int {
 
 const qqIssueIntentASCIIWhitespaceBlock = "                                                                "
 
+// 大块空格减少超长前缀的比较次数。
+var qqIssueIntentASCIIWhitespaceLargeBlock = strings.Repeat(qqIssueIntentASCIIWhitespaceBlock, 16)
+
 // qqIssueIntentASCIIWhitespacePrefix 按固定块跳过长的 ASCII 空格前缀，再交给意图候选扫描。
 func qqIssueIntentASCIIWhitespacePrefix(text string) int {
 	offset := 0
+	for len(text)-offset >= len(qqIssueIntentASCIIWhitespaceLargeBlock) && text[offset:offset+len(qqIssueIntentASCIIWhitespaceLargeBlock)] == qqIssueIntentASCIIWhitespaceLargeBlock {
+		offset += len(qqIssueIntentASCIIWhitespaceLargeBlock)
+	}
 	for len(text)-offset >= len(qqIssueIntentASCIIWhitespaceBlock) && text[offset:offset+len(qqIssueIntentASCIIWhitespaceBlock)] == qqIssueIntentASCIIWhitespaceBlock {
 		offset += len(qqIssueIntentASCIIWhitespaceBlock)
 	}

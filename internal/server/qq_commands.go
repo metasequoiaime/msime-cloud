@@ -148,17 +148,16 @@ func qqCompactTrailingPrefix(text string) (string, bool) {
 	if !found {
 		return "", false
 	}
-	count, first := 0, rune(0)
+	// 单个半角或全角斜杠会被去掉，读到可保留的字符后即可结束检查。
+	slashOnly := false
 	for _, r := range text[:suffixStart] {
-		if !unicode.IsSpace(r) {
-			if count == 0 {
-				first = r
-			}
-			count++
+		if unicode.IsSpace(r) {
+			continue
 		}
-	}
-	if count > 0 && !(count == 1 && first == '/') {
-		return text[:suffixStart], true
+		if slashOnly || (r != '/' && r != '／') {
+			return text[:suffixStart], true
+		}
+		slashOnly = true
 	}
 	return "", false
 }

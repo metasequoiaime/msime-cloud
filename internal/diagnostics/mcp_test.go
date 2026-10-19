@@ -87,14 +87,14 @@ func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(r)
 }
 
-func duration(v int64) *int64 { return &v }
+func int64Pointer(v int64) *int64 { return &v }
 
 func fixture(withInput bool) *memorySnapshots {
 	crashes := []account.DiagnosticCrash{{At: "2026-10-05T01:02:03Z", Message: "boom", Stack: "at Main"}, {At: "2026-10-05T01:02:04Z", Message: "second", Stack: ""}}
-	perf := []account.DiagnosticEvent{{TMS: 1, Kind: "key_down", DurationMS: duration(3)}, {TMS: 2, Kind: "commit", DurationMS: duration(9)}}
+	perf := []account.DiagnosticEvent{{TMS: int64Pointer(0), Kind: "key_down", DurationMS: int64Pointer(3)}, {TMS: int64Pointer(2), Kind: "commit", DurationMS: int64Pointer(9)}}
 	sections := account.DiagnosticSections{CrashLogs: &crashes, PerfTrace: &perf, ConfigSnapshot: map[string]any{"theme": "system", "api_token": account.DiagnosticRedacted}}
 	if withInput {
-		input := []account.DiagnosticEvent{{TMS: 5, Kind: "key_down"}, {TMS: 6, Kind: "commit", DurationMS: duration(2)}, {TMS: 7, Kind: "commit"}}
+		input := []account.DiagnosticEvent{{TMS: int64Pointer(5), Kind: "key_down"}, {TMS: int64Pointer(6), Kind: "commit", DurationMS: int64Pointer(2)}, {TMS: int64Pointer(7), Kind: "commit"}}
 		sections.InputEvents = &input
 	}
 	return &memorySnapshots{snapshot: account.DiagnosticSnapshot{ID: snapshotID, Platform: "android", AppVersion: "1.0.0", ExpiresAt: time.Now().Add(time.Hour), Sections: sections}}
@@ -193,6 +193,9 @@ func TestToolOutputsAreWhitelistedAndAudited(t *testing.T) {
 	}
 	if out = call(t, session, "get_perf_trace", map[string]any{"limit": 1}); len(out["events"].([]any)) != 1 {
 		t.Fatal(out)
+	}
+	if event := out["events"].([]any)[0].(map[string]any); event["t_ms"] != float64(0) {
+		t.Fatal("合法零时间戳未按数字返回", event)
 	}
 	if out = call(t, session, "read_crash_logs", nil); len(out["crash_logs"].([]any)) != 2 {
 		t.Fatal(out)

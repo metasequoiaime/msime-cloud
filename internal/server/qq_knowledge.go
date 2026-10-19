@@ -417,12 +417,21 @@ func qqKnowledgeTOC(sections []qqSection, snippets []string) string {
 		}
 		toc.Grow(outputBytes)
 	}
+	// 没有缓存摘要时，连续相同正文通常来自重复的模板段落，复用上一段摘要。
+	previousText := ""
+	previousSnippet := ""
+	previousSnippetValid := false
 	for i, section := range sections {
 		var snippet string
 		if i < len(snippets) {
 			snippet = snippets[i]
+		} else if previousSnippetValid && section.Text == previousText {
+			snippet = previousSnippet
 		} else {
 			snippet = qqSnippet(section.Text)
+			if i >= len(snippets) {
+				previousText, previousSnippet, previousSnippetValid = section.Text, snippet, true
+			}
 		}
 		var number [20]byte
 		n := strconv.AppendInt(number[:0], int64(i+1), 10)

@@ -90,9 +90,10 @@ export default function NoticePage() {
   const handledFocus = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (busy || !focus || !items || handledFocus.current === focus) return;
-    handledFocus.current = focus;
     const notice = items.find(n => n.id === focus);
     if (!notice) return;
+    // 旧缓存可能还没有目标；找到公告后才消耗跳转，等待刷新时不能提前忽略它。
+    handledFocus.current = focus;
     if (notice.status === "draft") setForm(formFromNotice(notice));
     setFilter(notice.status === "archived" ? "archived" : "current");
     setExpanded(notice.id);

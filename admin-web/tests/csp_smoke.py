@@ -2228,6 +2228,8 @@ def main() -> int:
                 check_date_formats(browser, base, problems)
                 check_api_images(browser, base, problems)
                 check_api_image_pages(browser, base, problems)
+                from image_auth_smoke import check_image_auth
+                check_image_auth(browser, base)
                 check_list_pagination(context, base, problems)
                 check_modal(browser, base, problems)
                 check_debounce(browser, base, problems)

@@ -148,6 +148,9 @@ func (e *issueError) Error() string { return e.code }
 func issueFail(w http.ResponseWriter, err error) {
 	var e *issueError
 	if errors.As(err, &e) {
+		if e.code == "server_busy" {
+			w.Header().Set("Retry-After", "1")
+		}
 		fail(w, e.status, e.code)
 		return
 	}
@@ -1062,8 +1065,17 @@ type issueStep struct {
 	undo         *issueStep
 }
 
-// issueAction 先读取最新 Issue，再执行操作并返回审计详情。后续步骤明确被拒绝时回滚已确认的步骤；写入结果未知时保留现场并标记 uncertain，回滚失败则标记 partial。
+// issueAction 在跨副本的 Issue 锁内读取最新状态、执行操作及必要的回滚，避免失败请求撤销另一请求的成功结果。
+// 后续步骤明确被拒绝时回滚已确认的步骤；写入结果未知时保留现场并标记 uncertain，回滚失败则标记 partial。
 func (s *Server) issueAction(ctx context.Context, gh *githubapp.Client, action string, ref issueRef, body string) (map[string]any, error) {
+	unlock, err := s.accounts.WaitLock(ctx, "admin-issues:"+strings.ToLower(ref.key()), 0)
+	if errors.Is(err, account.ErrLockBusy) {
+		return nil, &issueError{503, "server_busy"}
+	}
+	if err != nil {
+		return nil, &issueError{503, "auth_unavailable"}
+	}
+	defer unlock()
 	token, err := gh.Token(ctx, ref.Repo, issueTokenPerms)
 	if err != nil {
 		return nil, issueTokenError(ctx, ref.Repo, err)

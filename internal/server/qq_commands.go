@@ -327,8 +327,8 @@ func qqPoliteCommandArg(text string, words ...string) (content string, glued, ok
 	trimmed := strings.TrimSpace(text)
 	for _, prefix := range qqCommandPolitePrefixes {
 		if rest, found := strings.CutPrefix(trimmed, prefix); found {
-			// 保留原正则 \s 的 ASCII 空白范围，不包含竖向制表符和 Unicode 空白。
-			trimmed = strings.TrimLeft(rest, "\t\n\f\r ")
+			// 继续裁掉原正则 \s 后由 qqCommandArg 的首尾裁剪处理的 Unicode 空白。
+			trimmed = strings.TrimLeftFunc(rest, unicode.IsSpace)
 			break
 		}
 	}

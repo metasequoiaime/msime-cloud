@@ -673,7 +673,8 @@ func issueStateMatches(filter, state string) bool {
 
 // parseIssuePath parses "{owner}/{repo}/{n}" to a configured repository and a positive issue number; any other repository is not found.
 func (s *Server) parseIssuePath(rest string) (issueRef, error) {
-	parts := strings.Split(rest, "/")
+	// 三段之外只需保留一个额外分段即可拒绝路径，避免随斜杠数量分配。
+	parts := strings.SplitN(rest, "/", 4)
 	if len(parts) != 3 {
 		return issueRef{}, &issueError{404, "not_found"}
 	}

@@ -142,14 +142,16 @@ func (s *Server) adminReleases(w http.ResponseWriter, r *http.Request) {
 		s.listReleases(w, r, gh)
 		return
 	}
-	segments := strings.Split(strings.TrimPrefix(rest, "/"), "/")
-	platform, found := s.releasePlatform(segments[0])
+	platformID, tail, hasTail := strings.Cut(strings.TrimPrefix(rest, "/"), "/")
+	platform, found := s.releasePlatform(platformID)
 	if !found {
 		fail(w, 404, "not_found")
 		return
 	}
+	operationStart := strings.LastIndexByte(tail, '/')
+	operation := tail[operationStart+1:]
 	switch {
-	case len(segments) == 1:
+	case !hasTail:
 		if r.Method != http.MethodGet {
 			fail(w, 405, "method_not_allowed")
 			return
@@ -159,13 +161,13 @@ func (s *Server) adminReleases(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.releaseHistory(w, r, gh, platform)
-	case len(segments) == 2 && segments[1] == "trigger":
+	case tail == "trigger":
 		if gh, ok := s.releaseWrite(w, r); ok {
 			s.triggerRelease(w, r, gh, platform)
 		}
-	case len(segments) >= 3 && (segments[len(segments)-1] == "notes" || segments[len(segments)-1] == "withdraw"):
-		// Tags may contain "/", so everything between the platform and the operation is the tag.
-		tag := strings.Join(segments[1:len(segments)-1], "/")
+	case operationStart >= 0 && (operation == "notes" || operation == "withdraw"):
+		// 标签可以含斜杠，直接保留平台与末尾操作之间的原始子串。
+		tag := tail[:operationStart]
 		if !validReleaseTag(platform, tag) {
 			fail(w, 400, "invalid_tag")
 			return
@@ -174,7 +176,7 @@ func (s *Server) adminReleases(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		if segments[len(segments)-1] == "notes" {
+		if operation == "notes" {
 			s.editReleaseNotes(w, r, gh, platform, tag)
 		} else {
 			s.withdrawRelease(w, r, gh, platform, tag)

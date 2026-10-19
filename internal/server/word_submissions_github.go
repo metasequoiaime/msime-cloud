@@ -197,9 +197,11 @@ func (f githubFile) text() (string, bool) {
 
 // submit appends the submission to its file on the open rolling pull request, or on a new community-words/<UTC timestamp> branch with a new pull request when none is open, and returns the pull request number. Every kind shares that one branch and pull request. Branch names carry a timestamp, so a merged or closed pull request is never reused. It never deletes, force-pushes or retries a write.
 func (ws *wordSubmitter) submit(ctx context.Context, sub submission) (int, error) {
-	ws.writes.Lock()
-	defer ws.writes.Unlock()
-	// Without this lock two replicas that both find no open pull request each create a community-words/<UTC second> branch and open a pull request of their own; the blob SHA check cannot catch that because the branches differ. The in-process mutex above stays in front so a replica queues its own requests locally and holds at most one database connection for the lock.
+	if err := ws.writes.Acquire(ctx, 1); err != nil {
+		return 0, errors.Join(errWordsBusy, err)
+	}
+	defer ws.writes.Release(1)
+	// 跨副本锁防止多个副本同时新建滚动分支；先在本进程排队，确保每个副本最多为此持有一个数据库连接。
 	if ws.locks != nil {
 		release, err := ws.locks.WaitLock(ctx, "word-submissions:"+strings.ToLower(ws.config.GitHub.Repository), wordSubmissionLockWait)
 		if err != nil {

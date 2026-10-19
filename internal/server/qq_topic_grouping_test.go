@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -81,6 +82,29 @@ func TestQQTopicGroupingSampleRunsMatchPrevious(t *testing.T) {
 		}
 		if got, want := qqCountTopics(topics), previousQQCountTopics(topics); !reflect.DeepEqual(got, want) {
 			t.Fatalf("采样边界归并变化：条数=%d，结果=%#v，期望=%#v", count, got, want)
+		}
+	}
+}
+
+func TestQQTopicGroupingSampleOrderMatchesPrevious(t *testing.T) {
+	for _, count := range []int{257, 258, 2048} {
+		for _, unique := range []int{1, 2, 64, 256, 257} {
+			t.Run(fmt.Sprintf("条数%d/不同话题%d", count, unique), func(t *testing.T) {
+				topics := qqTopicGroupingFixture(count, unique)
+				slices.Reverse(topics)
+				for i := range topics {
+					if i%3 == 0 {
+						topics[i] = " \t" + topics[i] + "\u3000"
+					}
+				}
+				original := slices.Clone(topics)
+				if got, want := qqCountTopics(topics), previousQQCountTopics(topics); !reflect.DeepEqual(got, want) {
+					t.Fatalf("采样顺序影响了归并和首次出现顺序：结果=%#v，期望=%#v", got, want)
+				}
+				if !slices.Equal(topics, original) {
+					t.Fatal("话题归并修改了输入顺序或原文")
+				}
+			})
 		}
 	}
 }

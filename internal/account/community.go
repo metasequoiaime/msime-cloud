@@ -150,7 +150,7 @@ func communityFields(r *http.Request, allowed ...string) (fields map[string]bool
 	if raw == "" {
 		return fields, true
 	}
-	for _, name := range strings.Split(raw, ",") {
+	for name := range strings.SplitSeq(raw, ",") {
 		if !slices.Contains(allowed, name) {
 			return nil, false
 		}

@@ -328,8 +328,8 @@ func qqNotesText(notes qqNotes) string {
 }
 
 // qqDraftCommands 处理「草稿」「看 D编号」「提交 D编号」「补充 D编号」「忽略 D编号」，返回处理结果的名字；不是这几个命令时返回空字符串。
-func (s *Server) qqDraftCommands(ctx context.Context, m qqGroupMessage, text string, admin bool, reply func(string)) string {
-	compact := qqCompact(text)
+// 参数解析使用原文 `text`，列表命令使用已规范化的 `compact`。
+func (s *Server) qqDraftCommands(ctx context.Context, m qqGroupMessage, text, compact string, admin bool, reply func(string)) string {
 	if compact == "草稿" || compact == "草稿列表" {
 		if !admin {
 			reply("只有管理员能看草稿列表。")

@@ -49,8 +49,8 @@ var qqTypingSourceNames = map[string]string{
 var qqTypingSpeedKinds = []string{"han", "latin", "otherLetter"}
 
 // qqTypingCommands 处理 /stats、/bind、/unbind 和它们的中文说法，返回处理结果的名字；不是这几个命令时返回空字符串。
-func (s *Server) qqTypingCommands(ctx context.Context, m qqGroupMessage, text string, reply func(string)) string {
-	compact := qqCompact(text)
+// `compact` 已由命令分发规范化，直接用于别名匹配。
+func (s *Server) qqTypingCommands(ctx context.Context, m qqGroupMessage, compact string, reply func(string)) string {
 	var command string
 	switch {
 	case slices.Contains(qqTypingAliases, compact):

@@ -155,11 +155,12 @@ func qqSyncFAQSources(sources, oldFAQ, newFAQ string) (string, bool) {
 		return "", false
 	}
 	oldHash := qqContentHash(oldFAQ)
-	if record.Files["faq.md"].SourceSha256 != oldHash || strings.Count(sources, `"`+oldHash+`"`) != 1 {
+	quotedOldHash := `"` + oldHash + `"`
+	if record.Files["faq.md"].SourceSha256 != oldHash || strings.Count(sources, quotedOldHash) != 1 {
 		return "", false
 	}
 	newHash := qqContentHash(newFAQ)
-	return strings.Replace(sources, `"`+oldHash+`"`, `"`+newHash+`"`, 1), true
+	return strings.Replace(sources, quotedOldHash, `"`+newHash+`"`, 1), true
 }
 
 // qqSummariseFAQ 让模型整理一条 FAQ 并校验。

@@ -81,8 +81,8 @@ func TestQQSyncFAQSourcesAllocationBudget(t *testing.T) {
 					got, ok = qqSyncFAQSources(tc.sources, oldFAQ, newFAQ)
 				}
 			})
-			if got != want || ok != found || result.AllocedBytesPerOp() > 8192 {
-				t.Fatalf("输出一致=%t，同步=%t/%t，分配=%s，期望不超过 8 KiB", got == want, ok, found, result.MemString())
+			if got != want || ok != found || result.AllocedBytesPerOp() > 1700 {
+				t.Fatalf("输出一致=%t，同步=%t/%t，分配=%s，期望不超过 1700 字节", got == want, ok, found, result.MemString())
 			}
 		})
 	}

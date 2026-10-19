@@ -577,14 +577,13 @@ lines:
 	return labels
 }
 
-// qqSkipConsecutiveListLines 跳过当前行之后紧邻的相同列表行，避免长串重复候选逐行解析。
+// qqSkipConsecutiveListLines 按原始字节和行尾跳过连续相同行，避免为比较复制长行或逐行解析重复候选。
 func qqSkipConsecutiveListLines(remaining, line string) string {
 	if line == "" {
 		return remaining
 	}
-	prefix := line + "\n"
-	for strings.HasPrefix(remaining, prefix) {
-		remaining = remaining[len(prefix):]
+	for len(remaining) > len(line) && remaining[len(line)] == '\n' && strings.HasPrefix(remaining, line) {
+		remaining = remaining[len(line)+1:]
 	}
 	return remaining
 }

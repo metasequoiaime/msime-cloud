@@ -19,7 +19,7 @@ func TestQQCompactMatchesPreviousImplementation(t *testing.T) {
 		return qqTrimCommandTrailing(compact)
 	}
 	random := rand.New(rand.NewSource(13))
-	units := []string{"", "a", "A", "1", "/", "?", "！", "🙏", "\u200d", "\u3000", "\t", "\n", "水", "Ｈ", "é", "\xff", "\u0085"}
+	units := []string{"", "a", "A", "1", "/", "／", "?", "！", "🙏", "\u200d", "\u3000", "\t", "\n", "水", "Ｈ", "é", "\xff", "\u0085"}
 	for range 4000 {
 		var text strings.Builder
 		for range random.Intn(100) {

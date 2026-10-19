@@ -68,9 +68,10 @@ var adminActions = map[string]adminActionSpec{
 	"delete_dictionary":           {PermReviewCommunity, actionDeleteDictionary},
 	"delete_reply":                {PermReviewCommunity, actionDeleteReply},
 	"delete_phrase":               {PermReviewCommunity, actionDeletePhrase},
-	"approve_content":             {PermReviewCommunity, actionApproveContent},
-	"remove_content":              {PermReviewCommunity, actionRemoveContent},
-	"restore_content":             {PermReviewCommunity, actionRestoreContent},
+	"undo_moderation":             {PermReviewCommunity, actionUndoModeration},
+	"approve_content":             {PermReviewCommunity, moderationWithUndo(actionApproveContent)},
+	"remove_content":              {PermReviewCommunity, moderationWithUndo(actionRemoveContent)},
+	"restore_content":             {PermReviewCommunity, moderationWithUndo(actionRestoreContent)},
 	"set_skin_category":           {PermReviewCommunity, actionSetSkinCategory},
 	"set_candidate_skin_category": {PermReviewCommunity, actionSetCandidateSkinCategory},
 	// U4 sensitive words: sensitive_words.go

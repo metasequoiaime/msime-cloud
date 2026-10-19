@@ -95,3 +95,5 @@ Issue 撤销回归测试验证分类、标记重复和关闭均直接采用服�
 卡片进入视口后，照片键盘皮肤与候选窗皮肤通过详情接口的 `?view=preview` 只读取设计或清单；无照片键盘皮肤直接使用列表内设计。打开详情抽屉时再请求完整审核信息。预览查询按作品版本缓存，编辑后会读取新设计及图片。
 
 皮肤预览回归测试可单独运行 `python3 tests/skin_preview_smoke.py`，也由 CSP 冒烟测试调用。键盘部分用截图像素检查键帽、材质、功能键透明度和照片连续裁切；候选窗部分检查真实清单配色、支持的布局与明暗、背景及装饰资源、编辑预览和版本刷新，上传截图仅作为对照。`src/candidate-palettes.json` 的基础配色来自 msime 的 `packages/ui/src/theme/theme-catalog.json` 与 `crates/client-services/src/skin/catalog/windows_looks.rs`；客户端修改这些基础配色时应同步更新。
+
+社区审核撤销回归覆盖通过、下架和恢复：前端直接提交服务端返回的真实快照，409 冲突显示提示并刷新；旧副本缺少撤销信息或返回其他作品的参数时不显示撤销。可单独运行 `python3 tests/community_undo_smoke.py`，也由完整 CSP 冒烟测试调用。

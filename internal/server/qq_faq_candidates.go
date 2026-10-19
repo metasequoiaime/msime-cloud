@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
@@ -78,20 +79,31 @@ func (s *Server) recordQQFAQCandidate(ctx context.Context, question, answer stri
 	}
 }
 
+// qqFAQCommandMatch 按开头动词选择文档候选或差评命令的正则，返回动作和原文匹配结果。
+func qqFAQCommandMatch(text string) (string, []string) {
+	trimmed := strings.TrimSpace(text)
+	var action string
+	var pattern *regexp.Regexp
+	switch first, _ := utf8.DecodeRuneInString(trimmed); first {
+	case '写', '加', '放', '记':
+		action, pattern = "write", qqFAQWriteCommand
+	case '忽':
+		action, pattern = "ignore", qqFAQIgnoreCommand
+	case '看':
+		action, pattern = "view", qqFAQViewCommand
+	default:
+		return "", nil
+	}
+	if match := pattern.FindStringSubmatch(trimmed); match != nil {
+		return action, match
+	}
+	return "", nil
+}
+
 // qqFAQCandidateCommands 处理「文档缺口」「看 F编号」「写进FAQ F编号」「忽略 F编号」，以及差评的「看 B编号」「写进FAQ B编号」「忽略 B编号」（交给 qqBadAnswerCommand），只有管理员能用；返回处理结果的名字，不是这几个命令时返回空字符串。
 // 参数解析使用原文 `text`，列表命令使用已规范化的 `compact`。
 func (s *Server) qqFAQCandidateCommands(ctx context.Context, text, compact string, admin bool, reply func(string)) string {
-	trimmed := strings.TrimSpace(text)
-	action, match := "", []string(nil)
-	for _, command := range []struct {
-		action  string
-		pattern *regexp.Regexp
-	}{{"write", qqFAQWriteCommand}, {"ignore", qqFAQIgnoreCommand}, {"view", qqFAQViewCommand}} {
-		if match = command.pattern.FindStringSubmatch(trimmed); match != nil {
-			action = command.action
-			break
-		}
-	}
+	action, match := qqFAQCommandMatch(text)
 	if compact != "文档缺口" && match == nil {
 		return ""
 	}

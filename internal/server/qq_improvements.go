@@ -107,10 +107,14 @@ func qqCountTopics(topics []string) []qqImprovementCounted {
 		// 用前 257 条估算不同键的数量，重复话题很多时减少预留，前缀重复后又出现大量新话题时仍保留足够容量。
 		var sample [qqTopicCapacitySample]string
 		distinct := 0
+		key := ""
 		for i := range sample {
-			key := qqCompactLower(topics[i])
-			if key == "" {
-				key = "（没有概括）"
+			// 连续重复的原文复用上一个规范键，避免采样时反复去空白、转小写和分配字符串。
+			if i == 0 || topics[i] != topics[i-1] {
+				key = qqCompactLower(topics[i])
+				if key == "" {
+					key = "（没有概括）"
+				}
 			}
 			seen := false
 			for j := 0; j < distinct; j++ {

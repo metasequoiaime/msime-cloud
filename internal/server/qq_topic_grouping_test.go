@@ -72,6 +72,19 @@ func qqTopicGroupingFixture(count, unique int) []string {
 	return topics
 }
 
+func TestQQTopicGroupingSampleRunsMatchPrevious(t *testing.T) {
+	units := []string{" \t\u3000", "（没有概括）", " Windows 五笔 ", "windows五笔", "\xe6 \x8f\x90", "提"}
+	for _, count := range []int{256, 257, 258, 2048} {
+		topics := make([]string, count)
+		for i := range topics {
+			topics[i] = units[(i/17)%len(units)]
+		}
+		if got, want := qqCountTopics(topics), previousQQCountTopics(topics); !reflect.DeepEqual(got, want) {
+			t.Fatalf("采样边界归并变化：条数=%d，结果=%#v，期望=%#v", count, got, want)
+		}
+	}
+}
+
 func TestQQTopicGroupingAllocationBudget(t *testing.T) {
 	topics := qqTopicGroupingFixture(2048, 2048)
 	var got []qqImprovementCounted

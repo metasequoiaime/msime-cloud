@@ -39,6 +39,7 @@ func TestQQTopicKeysAllocationBudget(t *testing.T) {
 	}{
 		{"重复短话题", qqTopicGroupingFixture(2048, 1), 4 << 10},
 		{"长度上限内的密集空白", slices.Repeat([]string{strings.Repeat("文\u3000 ", 60)}, 32), 16 << 10},
+		{"采样内重复的密集空白", slices.Repeat([]string{strings.Repeat("文\u3000 ", 60)}, 2048), 4 << 10},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var got []qqImprovementCounted
@@ -110,6 +111,7 @@ func BenchmarkQQTopicKeys(b *testing.B) {
 				{"大量重复话题", qqTopicGroupingFixture(2048, 1)},
 				{"部分重复话题", qqTopicGroupingFixture(2048, 64)},
 				{"长度上限内的密集空白", slices.Repeat([]string{strings.Repeat("文\u3000 ", 60)}, 32)},
+				{"采样内重复的密集空白", slices.Repeat([]string{strings.Repeat("文\u3000 ", 60)}, 2048)},
 			} {
 				b.Run(tc.name, func(b *testing.B) {
 					b.ReportAllocs()

@@ -22,6 +22,13 @@ func TestQQListLabelLineTrimMatchesUnicodeSpace(t *testing.T) {
 	}
 }
 
+func TestQQListLabelsSkipsConsecutiveDuplicateLines(t *testing.T) {
+	remaining := "- 换肤：说明\n- 换肤：说明\n- 隐私：说明"
+	if got, want := qqSkipConsecutiveListLines(remaining, "- 换肤：说明"), "- 隐私：说明"; got != want {
+		t.Fatalf("连续重复列表项未全部跳过：结果=%q，预期=%q", got, want)
+	}
+}
+
 func qqPreviousListSnippet(text string) string {
 	var labels []string
 	for line := range strings.SplitSeq(text, "\n") {

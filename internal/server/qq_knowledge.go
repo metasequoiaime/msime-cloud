@@ -668,6 +668,16 @@ func qqMarkdownLeadingSpace(line string) string {
 	if trimmed == "" || trimmed[0] < utf8.RuneSelf {
 		return trimmed
 	}
+	if strings.HasPrefix(trimmed, "\u3000") {
+		offset := 0
+		for len(trimmed)-offset >= len(qqCommonIdeographicSpaces) && trimmed[offset:offset+len(qqCommonIdeographicSpaces)] == qqCommonIdeographicSpaces {
+			offset += len(qqCommonIdeographicSpaces)
+		}
+		trimmed = trimmed[offset:]
+		if trimmed == "" {
+			return trimmed
+		}
+	}
 	const commonPadding = " \t\u3000 \t\u3000 \t\u3000 \t\u3000 \t\u3000 \t\u3000 \t\u3000 \t\u3000"
 	if strings.HasPrefix(trimmed, "\u3000 ") {
 		offset := 3

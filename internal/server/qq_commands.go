@@ -92,7 +92,7 @@ func qqCompact(text string) string {
 	}
 	if prefix, ok := qqCompactTrailingPrefix(text); ok {
 		text = prefix
-		if utf8.ValidString(text) && qqCompactCanReuse(text) {
+		if qqCompactReusable(text, true) {
 			return text
 		}
 	}
@@ -214,7 +214,13 @@ func qqTrimCommandTrailing(compact string) string {
 	return compact
 }
 
+// qqCompactCanReuse 保留原样复用时允许内部无效 UTF-8 的兼容行为。
 func qqCompactCanReuse(text string) bool {
+	return qqCompactReusable(text, false)
+}
+
+// qqCompactReusable 可在复用判定时同时要求 UTF-8 有效，避免先独立扫描全文。
+func qqCompactReusable(text string, requireValidUTF8 bool) bool {
 	if text == "" || strings.HasPrefix(text, "/") {
 		return false
 	}
@@ -228,7 +234,7 @@ func qqCompactCanReuse(text string) bool {
 	if last >= 0xFF01 && last <= 0xFF5E || size < len(text) && (strings.ContainsRune(qqCommandTrailing, last) || unicode.In(last, unicode.So, unicode.Sk) || last == 0xFE0F || last == 0x200D) {
 		return false
 	}
-	for _, r := range text {
+	for offset, r := range text {
 		// Latin-1 不含全角 ASCII 字符，只需检查空白和大写。
 		if uint32(r) <= unicode.MaxLatin1 {
 			if unicode.IsSpace(r) || unicode.IsUpper(r) {
@@ -239,6 +245,10 @@ func qqCompactCanReuse(text string) bool {
 		// 基本汉字区间不含空白、大写、标题字母或全角 ASCII 字符，省去逐字查表。
 		if r >= 0x4E00 && r <= 0x9FFF {
 			continue
+		}
+		// 合法替换字符占三个字节；`range` 会把无效序列逐字节解码为同一字符。
+		if requireValidUTF8 && r == utf8.RuneError && !strings.HasPrefix(text[offset:], "\ufffd") {
+			return false
 		}
 		if unicode.IsSpace(r) || unicode.IsUpper(r) || unicode.IsTitle(r) || r >= 0xFF01 && r <= 0xFF5E {
 			return false

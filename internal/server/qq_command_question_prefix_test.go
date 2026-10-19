@@ -57,9 +57,6 @@ func TestQQCommandAsksPrefixCompatibility(t *testing.T) {
 }
 
 func TestQQCommandAsksAvoidsMatchAllocation(t *testing.T) {
-	if raceEnabled {
-		t.Skip("race 模式会随机丢弃正则对象池，零分配在普通模式下验证")
-	}
 	for _, content := range []string{"怎么用", "？", "可不可以添加", "后不生效怎么办", "FAQ 没写怎么导入"} {
 		var got bool
 		allocations := testing.AllocsPerRun(100, func() { got = qqCommandAsks(content, true) })

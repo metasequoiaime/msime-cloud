@@ -410,10 +410,11 @@ func (a *Service) communityCandidateList(w http.ResponseWriter, r *http.Request)
 	}
 	// 私有作品只出现在作者自己、且声明了 fields=sync 的 mine 或 saved 列表里：已发布的客户端拒绝 license assets 为空的条目，而私有作品可以为空，一条就会让整页解析失败。
 	join, order := communitySavedScope(scope, "community_candidate_skin_saves", "skin_id", "s")
+	categoryCondition := communityTextFilter(category, "s.category", "$6") + communitySavedFilterValue(scope, category, "s.category", candidateSkinCategories)
 	// 先选本页皮肤，再计算文件与互动统计，避免处理 OFFSET 跳过的包。
 	rows, e := a.store.pool.Query(r.Context(), `WITH candidate_page AS MATERIALIZED (
  SELECT s.id FROM community_candidate_skins s JOIN auth_users u ON u.id=s.owner_id `+join+`
- WHERE strpos(lower(s.name),lower($2))>0 AND (`+communityMineCondition(scope, "s", "$3")+`) AND (s.visibility='public' OR ($3<>'' AND $5 AND s.owner_id=$1)) AND (s.moderation<>'removed' OR s.owner_id=$1) AND (`+communityTextFilter(category, "s.category", "$6")+`)
+ WHERE strpos(lower(s.name),lower($2))>0 AND (`+communityMineCondition(scope, "s", "$3")+`) AND (s.visibility='public' OR ($3<>'' AND $5 AND s.owner_id=$1)) AND (s.moderation<>'removed' OR s.owner_id=$1) AND (`+categoryCondition+`)
  ORDER BY `+order+` LIMIT 21 OFFSET $4
 ) `+candidateSkinSelectQuery(fields["saved"], true)+join+`ORDER BY `+order, viewer, search, scope, offset, sync, category)
 	if e != nil {

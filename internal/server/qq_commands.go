@@ -183,6 +183,17 @@ func qqCompactCanReuse(text string) bool {
 	for _, r := range text {
 		count++
 		last = r
+		// Latin-1 不含全角 ASCII 字符，只需检查空白和大写。
+		if uint32(r) <= unicode.MaxLatin1 {
+			if unicode.IsSpace(r) || unicode.IsUpper(r) {
+				return false
+			}
+			continue
+		}
+		// 基本汉字区间不含空白、大写或全角 ASCII 字符，省去逐字查表。
+		if r >= 0x4E00 && r <= 0x9FFF {
+			continue
+		}
 		if unicode.IsSpace(r) || unicode.IsUpper(r) || r >= 0xFF01 && r <= 0xFF5E {
 			return false
 		}

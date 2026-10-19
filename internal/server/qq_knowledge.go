@@ -251,6 +251,9 @@ var qqPlatformList = func() string {
 
 // qqSnippet 是目录里段落标题后面的摘要：有加粗词时列出加粗词；没有加粗词、但有两个以上「- 标签：说明」这样的列表项时列出标签（见 qqListLabels）；都没有时取正文开头，最多 qqSnippetRunes 字。
 func qqSnippet(text string) string {
+	if len(text) > 1 && strings.Trim(text, "*") == "" {
+		return ""
+	}
 	if !qqSnippetNeedsStructuredScan(text) {
 		return qqTruncate(qqSnippetNormalizedPrefix(text, false), qqSnippetRunes)
 	}

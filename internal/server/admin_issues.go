@@ -62,6 +62,7 @@ type issueLabel struct {
 
 // issueGitHub is the part of a GitHub REST issue the console needs.
 type issueGitHub struct {
+	ID          int64             `json:"id"`
 	Number      int               `json:"number"`
 	Title       string            `json:"title"`
 	Body        string            `json:"body"`
@@ -111,6 +112,8 @@ type issueRef struct {
 	KeepAssignee bool `json:"keep_assignee,omitempty"`
 	// KeepDuplicate 仅用于 reopen，保留关闭前已有的重复标签。
 	KeepDuplicate bool `json:"keep_duplicate,omitempty"`
+	// Version 固定撤销对应的 GitHub 状态和时间线，仅用于 reopen 或 untriage。
+	Version string `json:"version,omitempty"`
 }
 
 func (ref issueRef) key() string { return ref.Repo + "#" + strconv.Itoa(ref.N) }
@@ -1024,8 +1027,8 @@ func (s *Server) issueActionsHTTP(w http.ResponseWriter, r *http.Request) {
 	seen := map[string]bool{}
 	for i, item := range v.Items {
 		repo, ok := s.issueRepo(item.Repo)
-		ref := issueRef{Repo: repo, N: item.N, KeepAssignee: item.KeepAssignee, KeepDuplicate: item.KeepDuplicate}
-		if !ok || item.N < 1 || seen[ref.key()] || item.KeepAssignee && v.Action != "untriage" || item.KeepDuplicate && v.Action != "reopen" {
+		ref := issueRef{Repo: repo, N: item.N, KeepAssignee: item.KeepAssignee, KeepDuplicate: item.KeepDuplicate, Version: item.Version}
+		if !ok || item.N < 1 || seen[ref.key()] || item.KeepAssignee && v.Action != "untriage" || item.KeepDuplicate && v.Action != "reopen" || item.Version != "" && (!issueValidVersion(item.Version) || v.Action != "reopen" && v.Action != "untriage") {
 			fail(w, 400, "invalid_items")
 			return
 		}
@@ -1123,7 +1126,17 @@ func (s *Server) issueAction(ctx context.Context, gh *githubapp.Client, action s
 	if err != nil {
 		return nil, nil, err
 	}
-	// Whatever part of the action reached GitHub, the cached listing and detail of this repository are stale now.
+	if ref.Version != "" {
+		version, err := s.issueVersion(ctx, gh, token, ref, issue)
+		if err != nil {
+			return nil, nil, err
+		}
+		if version != ref.Version {
+			gh.Invalidate("/repos/" + ref.Repo + "/issues")
+			return nil, nil, &issueError{409, "conflict"}
+		}
+	}
+	// 无论操作走到哪一步，仓库列表和详情缓存都可能已经过时。
 	defer gh.Invalidate("/repos/" + ref.Repo + "/issues")
 	row := s.issueRow(ref.Repo, issue)
 	detail := map[string]any{"repo": ref.Repo, "number": ref.N, "title": issue.Title, "from": row.State}
@@ -1251,6 +1264,17 @@ func (s *Server) issueAction(ctx context.Context, gh *githubapp.Client, action s
 				return detail, nil, err
 			}
 			return nil, nil, err
+		}
+	}
+	if undo != nil {
+		// 写入已确认成功；补读失败只隐藏撤销，不能把原操作报告为失败而诱发重试。
+		current, readErr := issueFetch(ctx, gh, token, ref, false)
+		if readErr != nil {
+			undo = nil
+		} else if version, versionErr := s.issueVersion(ctx, gh, token, ref, current); versionErr != nil {
+			undo = nil
+		} else {
+			undo.Version = version
 		}
 	}
 	return detail, undo, nil

@@ -162,12 +162,15 @@ export default function IssuesPage() {
     const uncertain = result.failed.some(item => item.code === "github_uncertain");
     const message = (failed.size ? `${text(result.affected)}，${failed.size} 个失败` : text(result.affected))
       + (uncertain ? "；部分操作结果未确认，请先在 GitHub 核对后再重试" : "");
-    const undo = result.undo;
+    const targets = new Set(rows.map(row => `${row.repo}#${row.number}`));
+    const expectedUndo = action === "triage" ? "untriage" : action === "close" || action === "mark_dup" ? "reopen" : null;
+    const undo = result.undo?.action === expectedUndo && result.undo.items.every(item => targets.has(`${item.repo}#${item.n}`) && !failed.has(`${item.repo}#${item.n}`)) ? result.undo : null;
     if (undo) toast({
       text: message,
       undo: async () => {
         const undone = await runAction({ action: undo.action, items: undo.items });
         if (undone.failed.some(item => item.code === "github_uncertain")) throw new Error("部分操作结果未确认，请先在 GitHub 核对后再重试");
+        if (undone.failed.some(item => item.code === "conflict")) throw new Error(`已撤销 ${undone.affected} 个，部分 Issue 已被修改，请核对最新状态`);
         if (undone.failed.length) throw new Error(`已撤销 ${undone.affected} 个，${undone.failed.length} 个失败，请核对后重试`);
       },
     });

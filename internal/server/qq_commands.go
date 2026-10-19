@@ -190,11 +190,11 @@ func qqCompactCanReuse(text string) bool {
 			}
 			continue
 		}
-		// 基本汉字区间不含空白、大写或全角 ASCII 字符，省去逐字查表。
+		// 基本汉字区间不含空白、大写、标题字母或全角 ASCII 字符，省去逐字查表。
 		if r >= 0x4E00 && r <= 0x9FFF {
 			continue
 		}
-		if unicode.IsSpace(r) || unicode.IsUpper(r) || r >= 0xFF01 && r <= 0xFF5E {
+		if unicode.IsSpace(r) || unicode.IsUpper(r) || unicode.IsTitle(r) || r >= 0xFF01 && r <= 0xFF5E {
 			return false
 		}
 	}

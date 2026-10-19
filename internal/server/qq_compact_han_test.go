@@ -13,7 +13,7 @@ func referenceQQCompactCanReuse(text string) bool {
 		return false
 	}
 	if strings.IndexFunc(text, func(r rune) bool {
-		return unicode.IsSpace(r) || unicode.IsUpper(r) || r >= 0xFF01 && r <= 0xFF5E
+		return unicode.IsSpace(r) || unicode.IsUpper(r) || unicode.IsTitle(r) || r >= 0xFF01 && r <= 0xFF5E
 	}) >= 0 {
 		return false
 	}
@@ -33,7 +33,7 @@ func TestQQCompactHanUnicodeProperties(t *testing.T) {
 }
 
 func TestQQCompactHanReuseMatchesUnicodeChecks(t *testing.T) {
-	units := []string{"", "水", "杉", "\u4dff", "\u4e00", "\u9fff", "\ua000", "\U00020000", "a", "A", "é", "É", "Δ", "/", "／", "?", "？", "🙏", "\ufe0f", "\u200d", " ", "\u3000", "\u0085", "\xff", "\xe4\xb8"}
+	units := []string{"", "水", "杉", "\u4dff", "\u4e00", "\u9fff", "\ua000", "\U00020000", "a", "A", "é", "É", "Δ", "ǅ", "ᾈ", "/", "／", "?", "？", "🙏", "\ufe0f", "\u200d", " ", "\u3000", "\u0085", "\xff", "\xe4\xb8"}
 	check := func(input string) {
 		t.Helper()
 		if got, want := qqCompactCanReuse(input), referenceQQCompactCanReuse(input); got != want {

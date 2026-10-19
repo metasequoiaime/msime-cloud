@@ -1002,6 +1002,9 @@ func qqCompactLower(text string) string {
 	if compact, ok := qqCompactLowerASCII(text); ok {
 		return compact
 	}
+	if compact, ok := qqCompactLowerBasic(text); ok {
+		return compact
+	}
 	outputBytes := 0
 	for field := range qqTextFields(text) {
 		if len(field) == len(text) {
@@ -1052,6 +1055,60 @@ func qqCompactLowerASCII(text string) (string, bool) {
 		}
 		out.WriteByte(b)
 	}
+	return out.String(), true
+}
+
+// qqCompactLowerBasic 合并仅含 ASCII 和基本汉字的正文，避免对无大小写的汉字逐字查表。
+func qqCompactLowerBasic(text string) (string, bool) {
+	// 尾部已有其他 Unicode 字符时直接回退，避免先扫描较长的汉字前缀。
+	last, _ := utf8.DecodeLastRuneInString(text)
+	if last >= utf8.RuneSelf && (last < 0x4E00 || last > 0x9FFF) {
+		return "", false
+	}
+	spaceBytes := 0
+	needsChange := false
+	for i := 0; i < len(text); {
+		b := text[i]
+		if b >= utf8.RuneSelf {
+			// U+4E00 到 U+9FFF 均占三个有效 UTF-8 字节，不含空白或大小写映射。
+			if b >= 0xE4 && b <= 0xE9 && len(text)-i >= 3 {
+				second, third := text[i+1], text[i+2]
+				if (b != 0xE4 || second >= 0xB8) && second&0xC0 == 0x80 && third&0xC0 == 0x80 {
+					i += 3
+					continue
+				}
+			}
+			return "", false
+		}
+		switch b {
+		case ' ', '\t', '\n', '\v', '\f', '\r':
+			spaceBytes++
+			needsChange = true
+		}
+		needsChange = needsChange || 'A' <= b && b <= 'Z'
+		i++
+	}
+	if !needsChange {
+		return text, true
+	}
+	var out strings.Builder
+	out.Grow(len(text) - spaceBytes)
+	start := 0
+	for i := range len(text) {
+		b := text[i]
+		switch b {
+		case ' ', '\t', '\n', '\v', '\f', '\r':
+			out.WriteString(text[start:i])
+			start = i + 1
+			continue
+		}
+		if 'A' <= b && b <= 'Z' {
+			out.WriteString(text[start:i])
+			out.WriteByte(b + 'a' - 'A')
+			start = i + 1
+		}
+	}
+	out.WriteString(text[start:])
 	return out.String(), true
 }
 

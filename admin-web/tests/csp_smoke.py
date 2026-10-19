@@ -2248,6 +2248,11 @@ def main() -> int:
                 check_notice_focus_unsaved(browser, base)
                 check_notice_focus_older(browser, base)
                 check_notice_focus_unavailable(browser, base)
+                from admin_focus_smoke import check_crash_focus_history, check_dictpr_focus_history, check_dictpr_empty_filter, check_dictpr_focus_unavailable
+                check_crash_focus_history(browser, base)
+                check_dictpr_focus_history(browser, base)
+                check_dictpr_empty_filter(browser, base)
+                check_dictpr_focus_unavailable(browser, base)
                 check_mirror_pending(context, base, problems)
                 check_mirror_navigation(context, base, problems)
                 check_mirror_read_race(context, base, problems)

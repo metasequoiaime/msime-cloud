@@ -1,5 +1,5 @@
 import { formatNumber } from "../../utils/number";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { errorMessage, isGithubDisabled, useAPI } from "../../api/client";
 import { keys } from "../../api/keys";
@@ -32,7 +32,6 @@ export default function CrashPage() {
   const { platform = ALL, focus } = usePageSearch();
   const setSearch = useSetPageSearch();
   const { overrides, issueURLs, setStatus, createIssue } = useCrashActions();
-  const [selected, setSelected] = useState<string | null>(null);
   const filter = platform === ALL ? "" : platform;
 
   const list = useQuery({
@@ -73,10 +72,9 @@ export default function CrashPage() {
   });
   const canTriage = can("triage_issues");
 
-  // ?focus=<signature> comes from global search and crash spike notifications.
-  const openSignature = selected ?? (focus && SIGNATURE.test(focus) ? focus : null);
+  // 搜索、通知和手动打开共用 URL 中的分组签名，历史导航不会被本地选中项遮住。
+  const openSignature = focus && SIGNATURE.test(focus) ? focus : null;
   const closeDrawer = () => {
-    setSelected(null);
     if (focus) setSearch({ focus: undefined });
   };
 
@@ -115,9 +113,9 @@ export default function CrashPage() {
         ? <Button size="sm" variant="primary" disabled={!canTriage || githubDisabled || configured[group.platform] !== true}
           title={!canTriage ? noPermissionHint : githubDisabled ? "未配置 GitHub 集成" : configured[group.platform] === false ? "该平台未配置 Issue 仓库" : configured[group.platform] === undefined ? "正在确认该平台的 Issue 仓库…" : undefined}
           onClick={event => { event.stopPropagation(); createIssue(group); }}>建 Issue</Button>
-        : <Button size="sm" variant="outline" onClick={event => { event.stopPropagation(); setSelected(group.signature); }}>查看堆栈</Button>,
+        : <Button size="sm" variant="outline" onClick={event => { event.stopPropagation(); setSearch({ focus: group.signature }); }}>查看堆栈</Button>,
     },
-  ], [max, canTriage, githubDisabled, configured, createIssue]);
+  ], [max, canTriage, githubDisabled, configured, createIssue, setSearch]);
 
   const onStatus = (group: CrashGroup, to: CrashStatus, text: string) => {
     setStatus(group, to, text).catch((error: unknown) => toast(`操作失败：${errorMessage(error)}`));
@@ -146,7 +144,7 @@ export default function CrashPage() {
       getRowId={group => group.signature}
       toolbar={<FilterChips label="平台" value={platform} onChange={key => setSearch({ platform: key === ALL ? undefined : key })} options={platformOptions} />}
       searchText={group => `${group.title} ${group.signature} ${platformName(group.platform)} ${group.version} ${crashStatusLabel[group.status]}`}
-      onRowClick={group => setSelected(group.signature)}
+      onRowClick={group => setSearch({ focus: group.signature })}
       emptyText={filter ? "这个平台还没有崩溃分组" : "还没有崩溃分组，客户端上报崩溃后会按签名自动分组。"}
       minWidth="880px"
     />

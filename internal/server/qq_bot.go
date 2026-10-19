@@ -903,7 +903,8 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 	}
 	admin = s.qqIsAdmin(ctx, m.GroupOpenID, m.Author.MemberOpenID, m.Author.MemberRole)
 	// 不调模型的命令排在额度之前，只计宽松的 qqBotFreeDaily：群额度用完后帮助和查编号照样能用。加词、提文档、查、提issue 仍然要过下面的额度。
-	if qqFreeCommand(text) {
+	compact, free := qqFreeCommand(text)
+	if free {
 		switch wait, err := s.limits.RateLimitUntil(ctx, "qq-bot-free", m.GroupOpenID+"/"+m.Author.MemberOpenID, qqBotFreeDaily, 24*time.Hour); {
 		case errors.Is(err, account.ErrLimited):
 			reply(qqLimitedReply(wait))
@@ -914,7 +915,7 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 			reply(qqReplyUnavailable)
 			return
 		}
-		outcome = s.qqCommand(ctx, m, text, admin, reply, progress)
+		outcome = s.qqCommand(ctx, m, text, compact, admin, reply, progress)
 		return
 	}
 	limits := []qqLimit{{"qq-bot-admin", m.Author.MemberOpenID, qqBotAdminDaily, qqLimitedReply}}
@@ -944,8 +945,10 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 			return
 		}
 		text = qqWithShot("", shot)
+		// 截图描述替换了正文，旧的空正文规范化结果不能再复用。
+		compact = qqCompact(text)
 	}
-	if command := s.qqCommand(ctx, m, text, admin, reply, progress); command != "" {
+	if command := s.qqCommand(ctx, m, text, compact, admin, reply, progress); command != "" {
 		outcome = command
 		return
 	}

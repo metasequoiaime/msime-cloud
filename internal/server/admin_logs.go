@@ -183,8 +183,9 @@ type lokiEntry struct {
 	line string
 }
 
-// logLineJSON 是返回给前端的一行。ts 是 Loki 的纳秒时间戳（十进制字符串，也是续传游标）；time 和 stream 取自 CRI 前缀，没有前缀时 time 用 Loki 的时间戳、stream 为空；level 是从 slog 默认格式里解析出的级别，无法识别时为空；message 去掉了 CRI 前缀和 slog 的时间与级别。
+// logLineJSON 是返回给前端的一行。id 是按时间戳、副本及完整原文生成的稳定去重标识；ts 是 Loki 的纳秒时间戳（十进制字符串，也是续传游标）；time 和 stream 取自 CRI 前缀，没有前缀时 time 用 Loki 的时间戳、stream 为空；level 是从 slog 默认格式里解析出的级别，无法识别时为空；message 去掉了 CRI 前缀和 slog 的时间与级别。
 type logLineJSON struct {
+	ID      string `json:"id"`
 	TS      string `json:"ts"`
 	Time    string `json:"time"`
 	Pod     string `json:"pod"`
@@ -194,7 +195,8 @@ type logLineJSON struct {
 }
 
 func (e lokiEntry) JSON() logLineJSON {
-	out := logLineJSON{TS: strconv.FormatInt(e.ns, 10), Pod: e.pod}
+	ts := strconv.FormatInt(e.ns, 10)
+	out := logLineJSON{ID: ts + ":" + strconv.FormatUint(e.key().hash, 16), TS: ts, Pod: e.pod}
 	rest := e.line
 	if ts, stream, after, ok := cutCRIPrefix(rest); ok {
 		out.Time, out.Stream, rest = ts, stream, after

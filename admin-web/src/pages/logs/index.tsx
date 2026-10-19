@@ -31,11 +31,19 @@ function rowTs(row: Row): string {
   return row.kind === "line" ? row.line.ts : row.ts;
 }
 
-// mergeRows 把新到的行按时间戳插入（晚到的行可能早于已显示的最后一行），再截到 maxRows。
-function mergeRows(previous: Row[], incoming: Row[]): Row[] {
+// mergeRows 按服务端标识排除重发行，再按时间戳插入并截到 maxRows；暂停缓冲时也排除已显示的行。
+function mergeRows(previous: Row[], incoming: Row[], retained: Row[] = []): Row[] {
   if (incoming.length === 0) return previous;
+  const seen = new Set<string>();
+  for (const row of [...previous, ...retained]) {
+    if (row.kind === "line" && row.line.id) seen.add(row.line.id);
+  }
   const rows = previous.slice();
   for (const row of incoming) {
+    if (row.kind === "line" && row.line.id) {
+      if (seen.has(row.line.id)) continue;
+      seen.add(row.line.id);
+    }
     let index = rows.length;
     while (index > 0 && compareTs(rowTs(rows[index - 1]), rowTs(row)) > 0) index--;
     rows.splice(index, 0, row);
@@ -137,17 +145,19 @@ function LiveLogs({ token, onUnauthorized }: { token: string; onUnauthorized: ()
   const [restart, setRestart] = useState(0);
   const pausedRef = useRef(false);
   const bufferRef = useRef<Row[]>([]);
+  const rowsRef = useRef<Row[]>([]);
   const idRef = useRef(0);
   const scroller = useRef<HTMLDivElement>(null);
   const stuckRef = useRef(true);
 
   const append = useCallback((incoming: Row[]) => {
     if (pausedRef.current) {
-      bufferRef.current = mergeRows(bufferRef.current, incoming);
+      bufferRef.current = mergeRows(bufferRef.current, incoming, rowsRef.current);
       setPending(bufferRef.current.length);
       return;
     }
-    setRows(previous => mergeRows(previous, incoming));
+    rowsRef.current = mergeRows(rowsRef.current, incoming);
+    setRows(rowsRef.current);
   }, []);
 
   // 筛选条件变化时清空并重新连接；连接断开后带游标重连，从断开处继续。
@@ -155,6 +165,7 @@ function LiveLogs({ token, onUnauthorized }: { token: string; onUnauthorized: ()
     void restart;
     const controller = new AbortController();
     let cursor = "";
+    rowsRef.current = [];
     setRows([]);
     bufferRef.current = [];
     setPending(0);
@@ -229,7 +240,8 @@ function LiveLogs({ token, onUnauthorized }: { token: string; onUnauthorized: ()
       const buffered = bufferRef.current;
       bufferRef.current = [];
       setPending(0);
-      setRows(previous => mergeRows(previous, buffered));
+      rowsRef.current = mergeRows(rowsRef.current, buffered);
+      setRows(rowsRef.current);
     }
   };
 

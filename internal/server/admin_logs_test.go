@@ -225,8 +225,9 @@ func TestLogQLEscaping(t *testing.T) {
 
 func TestLogLineParsing(t *testing.T) {
 	at := time.Date(2026, 10, 1, 14, 47, 1, 378828677, time.UTC)
-	line := lokiEntry{ns: at.UnixNano() + 5, pod: "p1", line: "2026-10-01T14:47:01.378828677Z stderr F 2026/10/01 14:47:01 INFO MSIME service listening address=0.0.0.0:8080"}.JSON()
-	if line != (logLineJSON{TS: strconv.FormatInt(at.UnixNano()+5, 10), Time: "2026-10-01T14:47:01.378828677Z", Pod: "p1", Stream: "stderr", Level: "INFO", Message: "MSIME service listening address=0.0.0.0:8080"}) {
+	entry := lokiEntry{ns: at.UnixNano() + 5, pod: "p1", line: "2026-10-01T14:47:01.378828677Z stderr F 2026/10/01 14:47:01 INFO MSIME service listening address=0.0.0.0:8080"}
+	line := entry.JSON()
+	if line != (logLineJSON{ID: strconv.FormatInt(entry.ns, 10) + ":" + strconv.FormatUint(entry.key().hash, 16), TS: strconv.FormatInt(at.UnixNano()+5, 10), Time: "2026-10-01T14:47:01.378828677Z", Pod: "p1", Stream: "stderr", Level: "INFO", Message: "MSIME service listening address=0.0.0.0:8080"}) {
 		t.Fatalf("%+v", line)
 	}
 	for _, tc := range []struct{ raw, stream, level, message string }{

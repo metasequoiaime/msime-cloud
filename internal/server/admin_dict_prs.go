@@ -44,14 +44,13 @@ var dictPRPermissions = map[string]string{"contents": "write", "pull_requests": 
 
 var errDictPRConflict = errors.New("dictionary pull request changed concurrently")
 
-// dictPRState is the per-server memory of the review page: the last pull request list and the submitter notes last read for the global search, the pull requests this process already announced (a cache in front of NotifyOnce), and the lock that serialises review writes within this process.
+// dictPRState 保存本副本审核页的列表、投稿说明搜索索引，以及 NotifyOnce 前的通知缓存。
 type dictPRState struct {
 	once     sync.Once
 	mu       sync.Mutex
 	index    []dictPRSummary
 	notes    map[int]string
 	notified map[int]bool
-	writes   sync.Mutex
 }
 
 // dictPRState returns the Server's review page state, creating its maps on first use; it lives in the Server, so it goes away with it.
@@ -880,21 +879,39 @@ func (s *Server) prepareKeep(w http.ResponseWriter, ctx context.Context, gh *git
 	return token, p, files, keep, total, ok
 }
 
+// lockDictPRWrite 与官网投稿共用仓库锁，从读取 PR 起保护整个审核，避免多副本关闭仍在写入的投稿分支。
+func (s *Server) lockDictPRWrite(w http.ResponseWriter, ctx context.Context) (func(), bool) {
+	unlock, err := s.accounts.WaitLock(ctx, "word-submissions:"+strings.ToLower(s.dictRepo()), 0)
+	if errors.Is(err, account.ErrLockBusy) {
+		w.Header().Set("Retry-After", "1")
+		fail(w, 503, "server_busy")
+		return nil, false
+	}
+	if err != nil {
+		fail(w, 503, "auth_unavailable")
+		return nil, false
+	}
+	return sync.OnceFunc(unlock), true
+}
+
 func (s *Server) trimDictPR(w http.ResponseWriter, r *http.Request, gh *githubapp.Client, number int) {
 	var body dictKeepRequest
 	if !decode(w, r, &body) {
 		return
 	}
 	ctx := r.Context()
-	st := s.dictPRState()
-	st.writes.Lock()
-	defer st.writes.Unlock()
+	unlock, ok := s.lockDictPRWrite(w, ctx)
+	if !ok {
+		return
+	}
+	defer unlock()
 	token, p, files, keep, _, ok := s.prepareKeep(w, ctx, gh, number, body, true)
 	if !ok {
 		return
 	}
 	head, _, removed, err := s.trimFiles(ctx, gh, token, p, files, keep)
 	gh.Invalidate("/repos/" + s.dictRepo() + "/pulls")
+	unlock()
 	if removed > 0 {
 		s.auditDictPR(ctx, "dict_pr_trim", number, map[string]any{"count": len(keep), "removed": removed})
 	}
@@ -911,23 +928,30 @@ func (s *Server) approveDictPR(w http.ResponseWriter, r *http.Request, gh *githu
 		return
 	}
 	ctx := r.Context()
-	st := s.dictPRState()
-	st.writes.Lock()
-	defer st.writes.Unlock()
+	unlock, ok := s.lockDictPRWrite(w, ctx)
+	if !ok {
+		return
+	}
+	defer unlock()
 	token, p, files, keep, total, ok := s.prepareKeep(w, ctx, gh, number, body, false)
 	if !ok {
 		return
 	}
 	repo := "/repos/" + s.dictRepo()
 	head, title, removed := p.Head.SHA, p.Title, 0
-	if len(keep) < total {
-		var err error
-		head, title, removed, err = s.trimFiles(ctx, gh, token, p, files, keep)
+	// 合并结果确定或停止精简后先归还锁连接，再记录已完成的精简，避免审计等待同一连接池。
+	unlockAndAuditTrim := func() {
+		unlock()
 		if removed > 0 {
 			s.auditDictPR(ctx, "dict_pr_trim", number, map[string]any{"count": len(keep), "removed": removed})
 		}
+	}
+	if len(keep) < total {
+		var err error
+		head, title, removed, err = s.trimFiles(ctx, gh, token, p, files, keep)
 		if err != nil {
 			gh.Invalidate(repo + "/pulls")
+			unlockAndAuditTrim()
 			trimFailure(w, err)
 			return
 		}
@@ -935,6 +959,7 @@ func (s *Server) approveDictPR(w http.ResponseWriter, r *http.Request, gh *githu
 	// The head SHA makes the merge a compare-and-swap too: trimFiles refuses a branch that moved under its commits, and the merge refuses one that moved after them, so a submission that lands meanwhile is never merged unreviewed.
 	res, err := gh.Do(ctx, token, "PUT", repo+"/pulls/"+strconv.Itoa(number)+"/merge", map[string]string{"merge_method": "squash", "sha": head, "commit_title": title + " (#" + strconv.Itoa(number) + ")"})
 	gh.Invalidate(repo + "/pulls")
+	unlockAndAuditTrim()
 	switch {
 	case err != nil || res.Status >= 500:
 		slog.Error("dictionary pull requests: merge outcome unknown", "pull", number, "status", res.Status)
@@ -982,9 +1007,11 @@ func (s *Server) rejectDictPR(w http.ResponseWriter, r *http.Request, gh *github
 		return
 	}
 	ctx := r.Context()
-	st := s.dictPRState()
-	st.writes.Lock()
-	defer st.writes.Unlock()
+	unlock, ok := s.lockDictPRWrite(w, ctx)
+	if !ok {
+		return
+	}
+	defer unlock()
 	token, _, ok := s.openDictPull(w, ctx, gh, number, body.HeadSHA)
 	if !ok {
 		return
@@ -1007,6 +1034,7 @@ func (s *Server) rejectDictPR(w http.ResponseWriter, r *http.Request, gh *github
 		dictGitHubStatus(w, "close", res.Status)
 		return
 	}
+	unlock()
 	s.auditDictPR(ctx, "dict_pr_reject", number, map[string]any{"reason": reason})
 	respond(w, 200, map[string]any{"ok": true})
 }

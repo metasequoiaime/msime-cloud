@@ -122,3 +122,32 @@ func BenchmarkQQCommandArgPrefix(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkQQCommandArgTrimReuse(b *testing.B) {
+	for _, tc := range []struct {
+		name, text string
+		words      []string
+	}{
+		{"short", "帮我加词 扛把子", []string{"加词", "添加词条", "加个词"}},
+		{"long", "帮我加词 " + strings.Repeat("候选框在哪里", 333), []string{"加词", "添加词条", "加个词"}},
+		{"plain", strings.Repeat("候选框在哪里", 333), []string{"加词", "添加词条", "加个词"}},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			trimmed := strings.TrimSpace(tc.text)
+			prefix := qqCommandPolitePrefixes[0]
+			if rest, found := strings.CutPrefix(trimmed, prefix); found {
+				trimmed = strings.TrimLeft(rest, "\t\n\f\r ")
+			}
+			b.ReportAllocs()
+			for b.Loop() {
+				_, _ = qqCommandArgTrimmed(trimmed, tc.words...)
+			}
+		})
+		b.Run(tc.name+"_previous", func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				_, _ = qqCommandArg(strings.TrimSpace(tc.text), tc.words...)
+			}
+		})
+	}
+}

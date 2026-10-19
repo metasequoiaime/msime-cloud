@@ -332,7 +332,7 @@ func qqPoliteCommandArg(text string, words ...string) (content string, glued, ok
 			break
 		}
 	}
-	if content, ok = qqCommandArg(trimmed, words...); !ok || content == "" {
+	if content, ok = qqCommandArgTrimmed(trimmed, words...); !ok || content == "" {
 		return content, false, ok
 	}
 	last, _ := utf8.DecodeLastRuneInString(strings.TrimSuffix(trimmed, content))
@@ -373,7 +373,11 @@ func qqWordsQuestion(content string, glued bool) bool {
 
 // qqCommandArg 判断 text 是不是以某个命令词开头、后面跟着分隔符（qqLooseCommands 和以 ASCII 字母结尾的命令词不要求），返回去掉命令词后的参数；「查不到词库怎么办」这类以同一个字开头的普通提问不算命令。
 func qqCommandArg(text string, words ...string) (string, bool) {
-	trimmed := strings.TrimSpace(text)
+	return qqCommandArgTrimmed(strings.TrimSpace(text), words...)
+}
+
+// qqCommandArgTrimmed 解析已经去掉首尾空白的正文，供礼貌前缀路径避免重复裁剪。
+func qqCommandArgTrimmed(trimmed string, words ...string) (string, bool) {
 	for _, word := range words {
 		// 比较函数会在命令词结束或首个不同字符处停止，无需预读正文。
 		if !qqCommandPrefixEqualFold(trimmed, word) {

@@ -462,30 +462,30 @@ func readPluginArchive(archive []byte) (map[string]pluginMember, string) {
 			return nil, "invalid_plugin_archive"
 		}
 		limited := io.LimitReader(r, int64(m.size)+1)
-		head := make([]byte, 512)
-		n, err := io.ReadFull(limited, head)
+		keepData := name == "plugin.toml" && m.size <= maxPluginManifestBytes || pluginDataExtension(name) && m.size <= maxPluginDataBytes
+		bufferSize := 512
+		if keepData {
+			// 大小已受成员与总量上限约束；多读一个字节以完成 CRC 校验并拒绝伪造长度。
+			bufferSize = m.size + 1
+		}
+		buffer := make([]byte, bufferSize)
+		n, err := io.ReadFull(limited, buffer)
 		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
 			r.Close()
 			return nil, "invalid_plugin_archive"
 		}
-		m.head = head[:n]
+		m.head = buffer[:min(n, 512)]
 		read := int64(n)
-		if name == "plugin.toml" && m.size <= maxPluginManifestBytes || pluginDataExtension(name) && m.size <= maxPluginDataBytes {
-			rest, err := io.ReadAll(limited)
-			if err != nil {
-				r.Close()
-				return nil, "invalid_plugin_archive"
-			}
-			m.data = append(m.head, rest...)
-			read += int64(len(rest))
-		} else {
-			copied, err := io.Copy(io.Discard, limited)
-			if err != nil {
-				r.Close()
-				return nil, "invalid_plugin_archive"
-			}
-			read += copied
+		if keepData {
+			m.data = buffer[:n]
 		}
+		// 再读至 EOF，区分 ReadFull 生成的短读错误和底层解压或数据描述符的截断错误。
+		copied, err := io.Copy(io.Discard, limited)
+		if err != nil {
+			r.Close()
+			return nil, "invalid_plugin_archive"
+		}
+		read += copied
 		r.Close()
 		if read != int64(m.size) {
 			return nil, "invalid_plugin_archive"

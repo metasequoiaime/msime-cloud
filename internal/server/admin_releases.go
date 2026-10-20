@@ -436,17 +436,22 @@ func parseReleaseNotes(body string) []releaseNote {
 		if line == "" || line == "---" || strings.HasPrefix(line, "```") {
 			continue
 		}
-		if m := releaseHeading.FindStringSubmatch(line); m != nil {
-			kind = ""
-			for _, k := range releaseNoteKinds {
-				if strings.HasPrefix(m[1], k) {
-					kind = k
+		// 标题和列表只可能由这些 ASCII 字节开头，普通正文不必进入正则。
+		switch line[0] {
+		case '#':
+			if m := releaseHeading.FindStringSubmatch(line); m != nil {
+				kind = ""
+				for _, k := range releaseNoteKinds {
+					if strings.HasPrefix(m[1], k) {
+						kind = k
+					}
 				}
+				continue
 			}
-			continue
-		}
-		if m := releaseBullet.FindStringSubmatch(line); m != nil {
-			line = strings.TrimSpace(m[1])
+		case '-', '*', '+', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+			if m := releaseBullet.FindStringSubmatch(line); m != nil {
+				line = strings.TrimSpace(m[1])
+			}
 		}
 		if line == "" {
 			continue

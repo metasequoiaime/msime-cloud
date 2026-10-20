@@ -68,12 +68,9 @@ export const crashStatusLabel: Record<CrashStatus, string> = { open: "未处理"
 export const crashStatusTone = { open: "bad", known: "warn", fixed: "ok" } as const satisfies Record<CrashStatus, "bad" | "warn" | "ok">;
 
 // Telemetry reports lowercase platform ids; the console shows the product names.
-const platformNames: Record<string, string> = { windows: "Windows", macos: "macOS", linux: "Linux", android: "Android", ios: "iOS", harmonyos: "HarmonyOS", harmony: "HarmonyOS", ohos: "HarmonyOS" };
 const platformOrder = ["windows", "macos", "linux", "android", "ios", "harmonyos", "harmony", "ohos"];
 
-export function platformName(platform: string): string {
-  return platformNames[platform.toLowerCase()] ?? platform;
-}
+export { platformName } from "../utils/platform";
 
 export function comparePlatforms(a: string, b: string): number {
   const rank = (p: string) => {

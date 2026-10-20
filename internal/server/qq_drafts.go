@@ -489,7 +489,7 @@ func qqDraftText(history []account.QQTurn, question string) string {
 
 // qqDraftNoContent 判断消息里有没有能补进草稿的内容：去掉语气字、标点和表情后什么都不剩，或者只剩客气话（qqDraftAck）、只剩一句否定（qqBadAnswerPattern，交给差评重答）时没有。
 func qqDraftNoContent(text string) bool {
-	stripped := qqBadAnswerFiller.ReplaceAllString(text, "")
+	stripped := qqStripBadAnswerFiller(text)
 	return stripped == "" || qqDraftAck.MatchString(stripped) || qqBadAnswerPattern.MatchString(stripped)
 }
 

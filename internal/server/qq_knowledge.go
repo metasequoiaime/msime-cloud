@@ -2197,9 +2197,6 @@ func qqNormalizeAnswer(answer string) string {
 	return qqCollapseBlankLines(answer)
 }
 
-// qqGroupNumberPattern 匹配 QQ 群号（「加群 12345678」「QQ群号：12345678」）。只认紧跟在「群」后面的数字，不按纯数字长度过滤：22631 这类 Windows 内部版本号、issue 号和日期也是五位以上的数字。
-var qqGroupNumberPattern = regexp.MustCompile(`(?i)(加|进)?\s*(QQ)?\s*群\s*号?\s*[:：]?\s*\d{5,}`)
-
 // qqDomainPattern 匹配不带协议名的裸域名，第 1 组是域名。顶级域只认常见的一批，不认 md、py、sh、rs、app 这类同时是文件扩展名的：群里常聊 README.md、default.custom.yaml、Squirrel.app。
 var qqDomainPattern = regexp.MustCompile(`(?i)((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:com|net|org|cn|xyz|top|io|cc|me|co|info|biz|vip|club|site|online|shop|store|live|pro|fun|icu|cyou|buzz|work|life|world|tech|space|website|link|ltd|ink|wang|xin|asia|hk|tw|tv|ru|us|uk|de|jp|kr|dev|win))(?:[^A-Za-z0-9-]|$)`)
 
@@ -2223,7 +2220,7 @@ func qqPromoSentence(sentence string) string {
 	if !qqPromoSentenceCandidate(sentence) {
 		return ""
 	}
-	if qqGroupNumberPattern.MatchString(sentence) {
+	if qqGroupNumberPromo(sentence) {
 		return "group"
 	}
 	if qqWeChatPromo(sentence) {
@@ -2245,6 +2242,34 @@ func qqPromoSentence(sentence string) string {
 		remaining = remaining[matches[len(matches)-1][1]:]
 	}
 	return ""
+}
+
+// qqGroupNumberPromo 判断是否出现群号；原正则没有起点约束且「加 / 进 / QQ」均可省略，因此直接从「群」开始检查。
+func qqGroupNumberPromo(text string) bool {
+	for {
+		start := strings.Index(text, "群")
+		if start < 0 {
+			return false
+		}
+		text = text[start+len("群"):]
+		// 原正则的 \s 和 \d 只接受 ASCII 空白和数字。
+		rest := strings.TrimLeft(text, " \t\n\f\r")
+		rest = strings.TrimPrefix(rest, "号")
+		rest = strings.TrimLeft(rest, " \t\n\f\r")
+		if strings.HasPrefix(rest, ":") {
+			rest = rest[1:]
+		} else if strings.HasPrefix(rest, "：") {
+			rest = rest[len("："):]
+		}
+		rest = strings.TrimLeft(rest, " \t\n\f\r")
+		digits := 0
+		for digits < min(5, len(rest)) && rest[digits] >= '0' && rest[digits] <= '9' {
+			digits++
+		}
+		if digits == 5 {
+			return true
+		}
+	}
 }
 
 // qqWeChatPromo 扫描「微信 / vx / v信」后的 5 至 20 个号码字符，带分隔标记或 ASCII 数字时才算引流。

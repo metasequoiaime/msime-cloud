@@ -15,7 +15,7 @@ func previousQQPromoSentenceMatches(sentence string) string {
 	if !qqPromoSentenceCandidate(sentence) {
 		return ""
 	}
-	if qqGroupNumberPattern.MatchString(sentence) {
+	if previousQQGroupNumberPattern.MatchString(sentence) {
 		return "group"
 	}
 	for _, m := range previousQQWeChatPattern.FindAllStringSubmatchIndex(sentence, -1) {

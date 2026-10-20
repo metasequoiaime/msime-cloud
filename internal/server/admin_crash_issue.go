@@ -253,11 +253,41 @@ func longestBacktickRun(s string) int {
 	return longest
 }
 
-// inlineCode quotes one line as a markdown code span whose delimiter is longer than any backtick run inside it.
+// inlineCode 把空白折叠为一个空格，并用长于正文中任意连续反引号的分隔符包住整行。
 func inlineCode(s string) string {
-	s = strings.Join(strings.Fields(s), " ")
-	fence := strings.Repeat("`", longestBacktickRun(s)+1)
-	return fence + " " + s + " " + fence
+	fields, textBytes, longest := 0, 0, 0
+	first := ""
+	for field := range strings.FieldsSeq(s) {
+		if fields == 0 {
+			first = field
+		}
+		fields++
+		textBytes += len(field)
+		longest = max(longest, longestBacktickRun(field))
+	}
+	if fields == 0 {
+		return "`  `"
+	}
+	fence := strings.Repeat("`", longest+1)
+	if fields == 1 {
+		return fence + " " + first + " " + fence
+	}
+	// 只为最终输出预留空间，不建立字段切片或折叠空白后的中间字符串。
+	var out strings.Builder
+	out.Grow(textBytes + fields - 1 + 2*len(fence) + 2)
+	out.WriteString(fence)
+	out.WriteByte(' ')
+	separator := false
+	for field := range strings.FieldsSeq(s) {
+		if separator {
+			out.WriteByte(' ')
+		}
+		out.WriteString(field)
+		separator = true
+	}
+	out.WriteByte(' ')
+	out.WriteString(fence)
+	return out.String()
 }
 
 // fencedCode quotes text as a fenced code block whose fence is longer than any backtick run inside it.

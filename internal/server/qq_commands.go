@@ -288,7 +288,63 @@ func qqIssueRef(text string) []string {
 	if strings.IndexByte(text, '#') < 0 && !strings.Contains(text, "＃") {
 		return nil
 	}
+	if strings.IndexByte(text, '#') >= 0 {
+		trimmed := strings.TrimSpace(text)
+		if ref, ascii := qqIssueRefASCII(trimmed); ascii {
+			return ref
+		}
+	}
 	return qqIssueRefPattern.FindStringSubmatch(strings.TrimSpace(qqFoldWidth(text)))
+}
+
+// qqIssueRefASCII 解析不含全角字符的 issue 引用，返回 false 让调用方回退到原有宽度折叠和正则规则。
+func qqIssueRefASCII(text string) ([]string, bool) {
+	for i := range len(text) {
+		if text[i] >= utf8.RuneSelf {
+			return nil, false
+		}
+	}
+	hash := strings.IndexByte(text, '#')
+	if hash < 0 {
+		return nil, true
+	}
+	repoEnd := hash
+	for repoEnd > 0 && qqIssueRefSpace(text[repoEnd-1]) {
+		repoEnd--
+	}
+	repo := text[:repoEnd]
+	if repo != "" {
+		if len(repo) > 100 {
+			return nil, true
+		}
+		for i := range len(repo) {
+			if !qqIssueRefRepoByte(repo[i]) {
+				return nil, true
+			}
+		}
+	}
+	numberStart := hash + 1
+	numberEnd := numberStart
+	for numberEnd < len(text) && text[numberEnd] >= '0' && text[numberEnd] <= '9' {
+		numberEnd++
+	}
+	if numberEnd == numberStart || numberEnd-numberStart > 7 || numberEnd != len(text) {
+		return nil, true
+	}
+	return []string{text, repo, text[numberStart:numberEnd]}, true
+}
+
+func qqIssueRefSpace(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '\f', '\r':
+		return true
+	default:
+		return false
+	}
+}
+
+func qqIssueRefRepoByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == '/' || c == '-'
 }
 
 // qqFreeCommand 判断消息是不是不调模型的命令：帮助、版本、今天、打字数据和绑定、草稿列表和「#编号」。handleQQFeedback 把它们排在个人和群的额度之前，只按人计一个宽松的 qqBotFreeDaily：群额度用完后，新人发「帮助」原来只能收到「额度用完了」，刚上手多试几个命令也在花自己交给模型的额度。版本和「#编号」要读 GitHub，但读请求有缓存。

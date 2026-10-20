@@ -2200,9 +2200,6 @@ func qqNormalizeAnswer(answer string) string {
 // qqGroupNumberPattern 匹配 QQ 群号（「加群 12345678」「QQ群号：12345678」）。只认紧跟在「群」后面的数字，不按纯数字长度过滤：22631 这类 Windows 内部版本号、issue 号和日期也是五位以上的数字。
 var qqGroupNumberPattern = regexp.MustCompile(`(?i)(加|进)?\s*(QQ)?\s*群\s*号?\s*[:：]?\s*\d{5,}`)
 
-// qqWeChatPattern 匹配「微信 / vx / v信」后面跟的号码，第 1 组是分隔（「号」或冒号），第 2 组是号码。「微信 Windows 版」这类说法也会匹配上，所以只有带分隔或号码里有数字时才算（见 qqPromoSentence）。
-var qqWeChatPattern = regexp.MustCompile(`(?i)(?:微信|v信|vx)\s*((?:号码?|账号)?\s*[:：]?)\s*([A-Za-z0-9][-_A-Za-z0-9]{4,19})`)
-
 // qqDomainPattern 匹配不带协议名的裸域名，第 1 组是域名。顶级域只认常见的一批，不认 md、py、sh、rs、app 这类同时是文件扩展名的：群里常聊 README.md、default.custom.yaml、Squirrel.app。
 var qqDomainPattern = regexp.MustCompile(`(?i)((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:com|net|org|cn|xyz|top|io|cc|me|co|info|biz|vip|club|site|online|shop|store|live|pro|fun|icu|cyou|buzz|work|life|world|tech|space|website|link|ltd|ink|wang|xin|asia|hk|tw|tv|ru|us|uk|de|jp|kr|dev|win))(?:[^A-Za-z0-9-]|$)`)
 
@@ -2229,28 +2226,11 @@ func qqPromoSentence(sentence string) string {
 	if qqGroupNumberPattern.MatchString(sentence) {
 		return "group"
 	}
+	if qqWeChatPromo(sentence) {
+		return "wechat"
+	}
 	// 小批量读取非空匹配，避免收集全文结果，也减少逐个调用正则的开销。
 	const matchBatchSize = 8
-	for offset := 0; offset < len(sentence); {
-		remaining := sentence[offset:]
-		matches := qqWeChatPattern.FindAllStringSubmatchIndex(remaining, matchBatchSize)
-		if len(matches) == 0 {
-			break
-		}
-		for _, m := range matches {
-			// vx 前面紧挨着英文字母时是别的词的一部分。
-			if start := offset + m[0]; start > 0 {
-				if c := sentence[start-1] | 0x20; c >= 'a' && c <= 'z' {
-					continue
-				}
-			}
-			separator, id := strings.TrimSpace(remaining[m[2]:m[3]]), remaining[m[4]:m[5]]
-			if separator != "" || strings.ContainsAny(id, "0123456789") {
-				return "wechat"
-			}
-		}
-		offset += matches[len(matches)-1][1]
-	}
 	for remaining := sentence; remaining != ""; {
 		matches := qqDomainPattern.FindAllStringSubmatchIndex(remaining, matchBatchSize)
 		if len(matches) == 0 {
@@ -2265,6 +2245,74 @@ func qqPromoSentence(sentence string) string {
 		remaining = remaining[matches[len(matches)-1][1]:]
 	}
 	return ""
+}
+
+// qqWeChatPromo 扫描「微信 / vx / v信」后的 5 至 20 个号码字符，带分隔标记或 ASCII 数字时才算引流。
+func qqWeChatPromo(sentence string) bool {
+	for offset := 0; offset < len(sentence); {
+		start := offset
+		offset++
+		prefix := 0
+		switch sentence[start] {
+		case 'v', 'V':
+			if start+1 < len(sentence) && (sentence[start+1] == 'x' || sentence[start+1] == 'X') {
+				prefix = 2
+			} else if strings.HasPrefix(sentence[start+1:], "信") {
+				prefix = len("v信")
+			}
+		case 0xe5:
+			if strings.HasPrefix(sentence[start:], "微信") {
+				prefix = len("微信")
+			}
+		}
+		if prefix == 0 {
+			continue
+		}
+		// 原正则的 \s 只包含这五种 ASCII 空白，不包含垂直制表符和 Unicode 空白。
+		rest := strings.TrimLeft(sentence[start+prefix:], " \t\n\f\r")
+		separator := false
+		for _, label := range [...]string{"号码", "号", "账号"} {
+			if strings.HasPrefix(rest, label) {
+				separator = true
+				rest = strings.TrimLeft(rest[len(label):], " \t\n\f\r")
+				break
+			}
+		}
+		if strings.HasPrefix(rest, ":") {
+			separator = true
+			rest = rest[1:]
+		} else if strings.HasPrefix(rest, "：") {
+			separator = true
+			rest = rest[len("："):]
+		}
+		rest = strings.TrimLeft(rest, " \t\n\f\r")
+		count, end := 0, 0
+		digit := false
+		for end < len(rest) && count < 20 {
+			r, size := utf8.DecodeRuneInString(rest[end:])
+			// 复用 (?i)[A-Za-z0-9] 的折叠规则，保留长 s 和开尔文符号的兼容性。
+			if !qqOwnCodeLetterOrDigit(r) && (count == 0 || r != '-' && r != '_') {
+				break
+			}
+			digit = digit || r >= '0' && r <= '9'
+			end += size
+			count++
+		}
+		if count < 5 {
+			continue
+		}
+		// 即使匹配最终被忽略，也消耗完整片段，保持原正则的非重叠遍历规则。
+		offset = len(sentence) - len(rest) + end
+		if start > 0 {
+			if c := sentence[start-1] | 0x20; c >= 'a' && c <= 'z' {
+				continue
+			}
+		}
+		if separator || digit {
+			return true
+		}
+	}
+	return false
 }
 
 // qqPromoSentenceCandidate 判断句子是否含有引流规则可能命中的字面字符；普通句子跳过三组正则扫描。

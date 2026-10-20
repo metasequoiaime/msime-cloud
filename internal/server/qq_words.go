@@ -299,14 +299,13 @@ func (s *Server) qqAddWords(ctx context.Context, subject, content string, reply 
 // qqWordRejection 把 validateWordEntries 的拒绝原因换成 QQ 里的说法。那里的文案是官网表单的（拼音用 ' 分隔、词语用弯引号），网页也在用，不能改；QQ 的示例用空格分隔拼音，照搬会教错写法，词语还会出现两遍（「「扛把子」“扛把子”有 3 个字」）。
 func qqWordRejection(e wordSubmissionEntry, rejected wordRejection) string {
 	w := e.Word
-	syllables := strings.Split(e.Pinyin, "'")
 	switch rejected.Code {
 	case "invalid_pinyin":
 		return "「" + w + "」的拼音只能写字母，音节之间空一格，比如 @我 发「加词 扛把子 kang ba zi」。"
 	case "syllable_count_mismatch":
-		return fmt.Sprintf("「%s」是 %d 个字，拼音却是 %d 个音节，对一下再发。", w, utf8.RuneCountInString(w), len(syllables))
+		return fmt.Sprintf("「%s」是 %d 个字，拼音却是 %d 个音节，对一下再发。", w, utf8.RuneCountInString(w), strings.Count(e.Pinyin, "'")+1)
 	case "invalid_syllable":
-		for _, syllable := range syllables {
+		for syllable := range strings.SplitSeq(e.Pinyin, "'") {
 			if !pinyinSyllables[syllable] {
 				return "「" + w + "」的拼音里「" + syllable + "」不是有效的拼音（ü 写作 v，如 lv）。"
 			}

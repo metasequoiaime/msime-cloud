@@ -135,3 +135,58 @@ func BenchmarkQQBadAnswerQuestionCandidate(b *testing.B) {
 		}
 	}
 }
+
+func previousQQBadAnswerNegative(text string) bool {
+	return qqBadAnswerPattern.MatchString(text) || qqBadAnswerLead.MatchString(text)
+}
+
+func TestQQBadAnswerNegativeMatchesPatterns(t *testing.T) {
+	cases := []string{"不对", "不对了", "不对啊", "不对，我是安卓", "答错了：原因", "没解决 ", "不是这样。", "看不懂", "删除键不对", "不对？", "答非所问x", "普通"}
+	for _, text := range cases {
+		want := previousQQBadAnswerNegative(text)
+		if got := qqBadAnswerNegative(text); got != want {
+			t.Fatalf("差评否定词匹配变化：输入=%q，结果=%v，期望=%v", text, got, want)
+		}
+	}
+}
+
+func TestQQBadAnswerNegativeRandomCompatibility(t *testing.T) {
+	random := rand.New(rand.NewSource(20261021))
+	units := []string{"不对", "答错", "错了", "没用", "不准", "不是这样", "胡说", "瞎说", "乱说", "不行", "没解决", "答非所问", "看不懂", "了", "啊", "，", " ", "x", "普通", "\xff"}
+	for range 3000 {
+		var text strings.Builder
+		for range random.Intn(60) {
+			text.WriteString(units[random.Intn(len(units))])
+		}
+		input := text.String()
+		if got, want := qqBadAnswerNegative(input), previousQQBadAnswerNegative(input); got != want {
+			t.Fatalf("随机差评否定词不兼容：输入=%q，结果=%v，期望=%v", input, got, want)
+		}
+	}
+}
+
+func BenchmarkQQBadAnswerNegative(b *testing.B) {
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{"plain", "普通反馈内容"},
+		{"exact", "不对了"},
+		{"lead", "答错了，我是安卓"},
+		{"late", strings.Repeat("普通反馈", 8) + "不准"},
+	} {
+		for _, impl := range []struct {
+			name string
+			fn   func(string) bool
+		}{
+			{"previous", previousQQBadAnswerNegative}, {"current", qqBadAnswerNegative},
+		} {
+			b.Run(tc.name+"/"+impl.name, func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					_ = impl.fn(tc.text)
+				}
+			})
+		}
+	}
+}

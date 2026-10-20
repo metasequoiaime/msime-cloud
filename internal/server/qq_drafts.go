@@ -58,6 +58,86 @@ func createQQDraft(ctx context.Context, store qqDraftStore, subject, original, r
 // qqDraftCommand 匹配「提交 D12 …」「补充 D12 …」「看 D12」「忽略 D12」，分组是命令、编号和后面的内容（「看」「忽略」不用后面的内容）。也认「提交D12」、小写的 d、命令后的冒号（「补充：D1 Windows 11」）、编号前的「#」、d 和数字之间的空格（「补充 d 1 win11」），编号后面可以用句号、分号、顿号隔开内容：原来多一个冒号就认不出，补充的内容被当成提问交给模型。
 var qqDraftCommand = regexp.MustCompile(`^(提交|补充|看|忽略)\s*[:：]?\s*[#＃]?[Dd]\s*([0-9]{1,9})(?:[\s:：,，。.;；、]+([\s\S]*))?$`)
 
+// qqParseDraftCommand 解析草稿命令，保持 qqDraftCommand 的 ASCII 空白、编号和分隔符规则。
+func qqParseDraftCommand(text string) (command, id, extra string, ok bool) {
+	for _, candidate := range [...]string{"提交", "补充", "看", "忽略"} {
+		if !strings.HasPrefix(text, candidate) {
+			continue
+		}
+		command, text = candidate, text[len(candidate):]
+		for len(text) > 0 && qqDraftCommandSpace(text[0]) {
+			text = text[1:]
+		}
+		if strings.HasPrefix(text, ":") {
+			text = text[1:]
+		} else if strings.HasPrefix(text, "：") {
+			text = text[len("："):]
+			for len(text) > 0 && qqDraftCommandSpace(text[0]) {
+				text = text[1:]
+			}
+		}
+		if strings.HasPrefix(text, "#") {
+			text = text[1:]
+		} else if strings.HasPrefix(text, "＃") {
+			text = text[len("＃"):]
+		}
+		if len(text) == 0 || (text[0] != 'D' && text[0] != 'd') {
+			return "", "", "", false
+		}
+		text = text[1:]
+		for len(text) > 0 && qqDraftCommandSpace(text[0]) {
+			text = text[1:]
+		}
+		start := 0
+		for start < len(text) && text[start] >= '0' && text[start] <= '9' && start < 9 {
+			start++
+		}
+		if start == 0 || (start < len(text) && text[start] >= '0' && text[start] <= '9') {
+			return "", "", "", false
+		}
+		id = text[:start]
+		text = text[start:]
+		if text == "" {
+			return command, id, "", true
+		}
+		if !qqDraftCommandSeparator(text) {
+			return "", "", "", false
+		}
+		for len(text) > 0 {
+			size := qqDraftCommandSeparatorSize(text)
+			if size == 0 {
+				break
+			}
+			text = text[size:]
+		}
+		return command, id, text, true
+	}
+	return "", "", "", false
+}
+
+func qqDraftCommandSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r'
+}
+
+func qqDraftCommandSeparator(text string) bool {
+	return qqDraftCommandSeparatorSize(text) != 0
+}
+
+func qqDraftCommandSeparatorSize(text string) int {
+	if text == "" {
+		return 0
+	}
+	if qqDraftCommandSpace(text[0]) || strings.ContainsRune(":,.;", rune(text[0])) {
+		return 1
+	}
+	for _, separator := range [...]string{"：", "，", "。", "；", "、"} {
+		if strings.HasPrefix(text, separator) {
+			return len(separator)
+		}
+	}
+	return 0
+}
+
 func qqDraftCode(id int64) string { return "D" + strconv.FormatInt(id, 10) }
 
 // qqDraftMissing 是草稿还缺的信息：模型的追问，或者 Windows 要区分两个产品时的版本追问。
@@ -338,13 +418,13 @@ func (s *Server) qqDraftCommands(ctx context.Context, m qqGroupMessage, text, co
 		s.qqListDrafts(ctx, reply)
 		return "cmd_drafts"
 	}
-	match := qqDraftCommand.FindStringSubmatch(strings.TrimSpace(text))
-	if match == nil {
+	command, idText, extra, ok := qqParseDraftCommand(strings.TrimSpace(text))
+	if !ok {
 		return ""
 	}
-	id, _ := strconv.ParseInt(match[2], 10, 64)
-	extra := strings.TrimSpace(match[3])
-	if match[1] == "忽略" && !admin {
+	id, _ := strconv.ParseInt(idText, 10, 64)
+	extra = strings.TrimSpace(extra)
+	if command == "忽略" && !admin {
 		reply("只有管理员能忽略草稿。")
 		return "cmd_draft_dismiss"
 	}
@@ -361,7 +441,7 @@ func (s *Server) qqDraftCommands(ctx context.Context, m qqGroupMessage, text, co
 		slog.Warn("qq bot: draft unavailable", "reason", err.Error())
 		reply(qqReplyUnavailable)
 		return "cmd_draft"
-	case match[1] == "看":
+	case command == "看":
 		// 草稿里有群友的原话，和列表一样不给别的群友看；发起人可以看自己的。
 		if !admin && !account.QQDraftOwnedBy(draft, m.GroupOpenID+"/"+m.Author.MemberOpenID) {
 			reply("只有发起这份草稿的人和管理员能看。")
@@ -381,7 +461,7 @@ func (s *Server) qqDraftCommands(ctx context.Context, m qqGroupMessage, text, co
 		return "cmd_draft"
 	}
 	// 认领超时还没记下 issue 的草稿当作提交被打断，和没提交的一样往下走。
-	if match[1] == "忽略" {
+	if command == "忽略" {
 		ok, err := s.qqDrafts.DismissQQDraft(ctx, id)
 		switch {
 		case err != nil:
@@ -394,7 +474,7 @@ func (s *Server) qqDraftCommands(ctx context.Context, m qqGroupMessage, text, co
 		}
 		return "cmd_draft_dismiss"
 	}
-	if match[1] == "补充" {
+	if command == "补充" {
 		if !admin && !account.QQDraftOwnedBy(draft, m.GroupOpenID+"/"+m.Author.MemberOpenID) {
 			reply("只有发起这份草稿的人和管理员能补充。")
 			return "cmd_draft_supplement"

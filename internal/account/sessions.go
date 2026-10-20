@@ -39,19 +39,24 @@ var browserSystems = map[string]bool{useragent.MacOS: true, useragent.IOS: true,
 // describeSessionAgent 把登录时记录的 User-Agent 解析成平台、设备名和应用版本。不认识的格式三项都为空，客户端显示为「未知设备」。
 func describeSessionAgent(header string) (platform, name, version string) {
 	header = strings.TrimSpace(header)
-	if m := msimeAgent.FindStringSubmatch(header); m != nil && sessionPlatforms[m[1]] {
-		model := ""
-		if m[3] != "" {
-			model, _, _ = strings.Cut(m[3], ";")
-			model = strings.TrimSpace(model)
-			if strings.Contains(model, "=") || utf8.RuneCountInString(model) > 64 {
-				model = ""
+	if msimeAgent.MatchString(header) {
+		// 正则已验证完整格式，直接切原字符串，避免为每个设备分配捕获切片。
+		p, rest, _ := strings.Cut(header[len("msime-"):], "/")
+		if sessionPlatforms[p] {
+			v, detail, hasDetail := strings.Cut(rest, " (")
+			model := ""
+			if hasDetail {
+				model, _, _ = strings.Cut(detail[:len(detail)-1], ";")
+				model = strings.TrimSpace(model)
+				if strings.Contains(model, "=") || utf8.RuneCountInString(model) > 64 {
+					model = ""
+				}
 			}
+			return p, model, v
 		}
-		return m[1], model, m[2]
 	}
-	if m := legacyAgent.FindStringSubmatch(header); m != nil {
-		if p := strings.ToLower(m[1]); sessionPlatforms[p] {
+	if legacyAgent.MatchString(header) {
+		if p := strings.ToLower(header[len("MSIME/"):]); sessionPlatforms[p] {
 			return p, "", ""
 		}
 		return "", "", ""

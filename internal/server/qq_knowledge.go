@@ -1187,6 +1187,31 @@ func qqRemoveLinks(text string) string {
 	initialized := false
 	start := 0
 	var pendingSpace byte
+	removed := 0
+	for search := 0; ; {
+		i := strings.Index(text[search:], "://")
+		if i < 0 {
+			break
+		}
+		i += search
+		begin := i
+		for begin > 0 && qqURLSchemeByte(text[begin-1]) {
+			begin--
+		}
+		for begin < i && !qqURLSchemeLetter(text[begin]) {
+			begin++
+		}
+		if begin == i {
+			search = i + 3
+			continue
+		}
+		end := i + 3
+		for end < len(text) && text[end] >= '!' && text[end] <= '~' {
+			end++
+		}
+		removed += end - begin
+		search = end
+	}
 	for search := 0; ; {
 		i := strings.Index(text[search:], "://")
 		if i < 0 {
@@ -1205,7 +1230,7 @@ func qqRemoveLinks(text string) string {
 			continue
 		}
 		if !initialized {
-			out.Grow(len(text))
+			out.Grow(len(text) - removed)
 			initialized = true
 		}
 		writeQQCollapsedSegment(&out, text[start:begin], &pendingSpace)
@@ -1527,7 +1552,7 @@ func qqPlainText(md string) string {
 	}
 	// 这里仅删除裸链接；末尾的逐行裁剪和字段合并会统一处理空白，避免提前复制全文。
 	if strings.Contains(text, "://") {
-		text = qqLinkPattern.ReplaceAllString(text, "")
+		text = qqRemoveLinks(text)
 	}
 	if strings.Contains(text, "**") || strings.Contains(text, "__") || strings.ContainsRune(text, '`') {
 		text = qqPlainInlineText(text)

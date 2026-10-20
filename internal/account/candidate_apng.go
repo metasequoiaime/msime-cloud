@@ -209,6 +209,7 @@ func pngChunkType(kind string) bool {
 
 // decode 用 image/png 完整解码默认图和每一帧，任何一张失败都返回 false。每帧拼成一张独立的 PNG：IHDR 换成帧的尺寸，带上 PLTE 和 tRNS，帧数据作为 IDAT。image/png 会拒绝解压后多出的像素数据，但不管 zlib 流结束之后还剩多少压缩字节（它的读取有缓冲，并且忽略多余的 IDAT 块），而这里入库的是原始压缩流，所以另外要求每帧的数据恰好是一个完整的 zlib 流，不能借此夹带任意字节。
 func (a *candidateAPNG) decode() bool {
+	var validator apngZlibValidator
 	images := make([]apngFrame, 0, len(a.frames)+1)
 	if a.images > len(a.frames) {
 		images = append(images, apngFrame{width: uint32(a.width), height: uint32(a.height), data: a.idat})
@@ -216,7 +217,7 @@ func (a *candidateAPNG) decode() bool {
 	images = append(images, a.frames...)
 	for _, frame := range images {
 		decoded, err := png.Decode(bytes.NewReader(a.framePNG(frame)))
-		if err != nil || decoded.Bounds().Dx() != int(frame.width) || decoded.Bounds().Dy() != int(frame.height) || !zlibStreamExact(frame.data) {
+		if err != nil || decoded.Bounds().Dx() != int(frame.width) || decoded.Bounds().Dy() != int(frame.height) || !validator.exact(frame.data) {
 			return false
 		}
 	}
@@ -260,17 +261,29 @@ func (r *apngDataReader) ReadByte() (byte, error) {
 	return b, nil
 }
 
-// zlibStreamExact 报告 parts 拼起来是否恰好是一个完整的 zlib 流，校验和正确且之后没有多余字节。只在 image/png 已经解码成功之后调用，所以解压量就是这一帧的像素数据，不会更多。
-func zlibStreamExact(parts [][]byte) bool {
-	r := &apngDataReader{parts: parts}
-	z, err := zlib.NewReader(r)
+// apngZlibValidator 在同一张 APNG 的各帧之间复用解压工作区，不跨请求共享状态。
+type apngZlibValidator struct {
+	data   apngDataReader
+	stream io.ReadCloser
+}
+
+// exact 报告 parts 拼起来是否恰好是一个完整的 zlib 流，校验和正确且之后没有多余字节。只在 image/png 已经解码成功之后调用，所以解压量就是这一帧的像素数据，不会更多。
+func (v *apngZlibValidator) exact(parts [][]byte) bool {
+	v.data = apngDataReader{parts: parts}
+	var err error
+	if v.stream == nil {
+		v.stream, err = zlib.NewReader(&v.data)
+	} else {
+		// NewReader 保证实现 Resetter；重置窗口、校验和及输入位置，避免各帧互相影响。
+		err = v.stream.(zlib.Resetter).Reset(&v.data, nil)
+	}
 	if err != nil {
 		return false
 	}
-	_, err = io.Copy(io.Discard, z)
-	z.Close()
-	r.advance()
-	return err == nil && len(r.parts) == 0
+	_, err = io.Copy(io.Discard, v.stream)
+	v.stream.Close()
+	v.data.advance()
+	return err == nil && len(v.data.parts) == 0
 }
 
 // framePNG 把一帧拼成独立的 PNG 文件，按各块的完整长度一次分配输出缓冲。

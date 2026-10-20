@@ -768,29 +768,40 @@ func (s *Server) issueDetail(w http.ResponseWriter, r *http.Request, rest string
 		issueFail(w, err)
 		return
 	}
-	ctx := r.Context()
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
 	token, err := gh.Token(ctx, ref.Repo, issueTokenPerms)
 	if err != nil {
 		issueFail(w, issueTokenError(ctx, ref.Repo, err))
 		return
 	}
+	timelinePath := fmt.Sprintf("/repos/%s/issues/%d/timeline?per_page=100", ref.Repo, ref.N)
+	var resp githubapp.Response
+	var timelineErr error
+	truncated := false
+	// 详情与时间线互不依赖，同时读取；详情失败时取消时间线等待，仍优先返回详情错误。
+	var reads sync.WaitGroup
+	reads.Go(func() {
+		resp, timelineErr = gh.Get(ctx, token, timelinePath)
+		// GitHub 的时间线从旧到新分页；多页时展示末页，保留最近的回复。
+		if timelineErr == nil && resp.OK() {
+			if last := issueLastPage(resp.Header); last > 1 {
+				truncated = true
+				resp, timelineErr = gh.Get(ctx, token, timelinePath+"&page="+strconv.Itoa(last))
+			}
+		}
+	})
 	issue, err := issueFetch(ctx, gh, token, ref, true)
+	if err != nil {
+		cancel()
+	}
+	reads.Wait()
 	if err != nil {
 		issueFail(w, err)
 		return
 	}
-	timelinePath := fmt.Sprintf("/repos/%s/issues/%d/timeline?per_page=100", ref.Repo, ref.N)
-	resp, err := gh.Get(ctx, token, timelinePath)
-	// GitHub lists the timeline oldest first; a timeline of several pages shows its newest page, so recent replies (including those sent from the console) are never cut off.
-	truncated := false
-	if err == nil && resp.OK() {
-		if last := issueLastPage(resp.Header); last > 1 {
-			truncated = true
-			resp, err = gh.Get(ctx, token, timelinePath+"&page="+strconv.Itoa(last))
-		}
-	}
-	if err != nil || !resp.OK() {
-		issueFail(w, issueResponseError(ctx, ref.Repo, "timeline", resp, err))
+	if timelineErr != nil || !resp.OK() {
+		issueFail(w, issueResponseError(ctx, ref.Repo, "timeline", resp, timelineErr))
 		return
 	}
 	var events []issueTimelineGitHub

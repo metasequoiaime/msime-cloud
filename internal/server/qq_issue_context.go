@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"log/slog"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,36 +18,122 @@ const (
 	qqMaintainerShortRunes = 150
 )
 
-// qqImagePattern 匹配 Markdown 图片和 HTML 标签，维护者评论里的截图对模型没有用。
-var qqImagePattern = regexp.MustCompile(`!\[[^\]]*\]\([^)]*\)|<[^>\n]+>`)
-
 // qqStripImagesAndHTML 将 Markdown 图片和 HTML 标签替换为空格，无匹配时复用正文。
 func qqStripImagesAndHTML(text string) string {
-	start := strings.Index(text, "![")
-	if tag := strings.IndexByte(text, '<'); tag >= 0 && (start < 0 || tag < start) {
-		start = tag
-	}
-	if start < 0 {
+	outputBytes, matches := len(text), 0
+	var first [8][2]int
+	qqScanImageAndHTML(text, func(start, end int) {
+		outputBytes -= end - start - 1
+		if matches < len(first) {
+			first[matches] = [2]int{start, end}
+		}
+		matches++
+	})
+	if matches == 0 {
 		return text
 	}
-	candidate := text[start:]
-	// 普通前缀更长时复用首次匹配索引，单个匹配不再重新执行正则或重复复制前缀。
-	if start >= len(candidate) {
-		match := qqImagePattern.FindStringIndex(candidate)
-		if match == nil {
-			return text
-		}
-		tail := candidate[match[1]:]
-		if !strings.Contains(tail, "![") && !strings.ContainsRune(tail, '<') {
-			return text[:start+match[0]] + " " + tail
-		}
-		return text[:start] + qqImagePattern.ReplaceAllString(candidate, " ")
+	var out strings.Builder
+	out.Grow(outputBytes)
+	written := 0
+	write := func(start, end int) {
+		out.WriteString(text[written:start])
+		out.WriteByte(' ')
+		written = end
 	}
-	// 从最早可能的标记开始探测，避免重复扫描其前面的普通正文。
-	if !qqImagePattern.MatchString(candidate) {
-		return text
+	// 常见的少量图片或标签直接复用下标，避免再扫描长正文前缀。
+	for _, match := range first[:min(matches, len(first))] {
+		write(match[0], match[1])
 	}
-	return qqImagePattern.ReplaceAllString(text, " ")
+	if matches > len(first) {
+		resume := written
+		qqScanImageAndHTML(text[resume:], func(start, end int) {
+			write(resume+start, resume+end)
+		})
+	}
+	out.WriteString(text[written:])
+	return out.String()
+}
+
+// qqImageHTMLScanner 缓存闭合符位置，交错嵌套时不反复扫描同一段长正文。
+type qqImageHTMLScanner struct {
+	text                       string
+	labelEnd, imageEnd, tagEnd int
+}
+
+// nextImage 沿用旧表达式的首个右方括号和首个右圆括号规则；图片可以跨行。
+func (scan *qqImageHTMLScanner) nextImage(search int) (int, int) {
+	for search < len(scan.text) {
+		found := strings.Index(scan.text[search:], "![")
+		if found < 0 {
+			break
+		}
+		start := search + found
+		if scan.labelEnd < start+2 {
+			found = strings.IndexByte(scan.text[start+2:], ']')
+			if found < 0 {
+				break
+			}
+			scan.labelEnd = start + 2 + found
+		}
+		close := scan.labelEnd
+		if close+1 >= len(scan.text) || scan.text[close+1] != '(' {
+			// 同一个右方括号之前的嵌套图片起点也不可能匹配，直接推进到它后面。
+			search = close + 1
+			continue
+		}
+		if scan.imageEnd < close+2 {
+			found = strings.IndexByte(scan.text[close+2:], ')')
+			if found < 0 {
+				break
+			}
+			scan.imageEnd = close + 2 + found
+		}
+		return start, scan.imageEnd + 1
+	}
+	return -1, -1
+}
+
+// nextTag 保留旧表达式的非空标签及不跨换行规则，嵌套左尖括号仍属于标签正文。
+func (scan *qqImageHTMLScanner) nextTag(search int) (int, int) {
+	for search < len(scan.text) {
+		found := strings.IndexByte(scan.text[search:], '<')
+		if found < 0 {
+			break
+		}
+		start := search + found
+		if scan.tagEnd < start+1 {
+			found = strings.IndexAny(scan.text[start+1:], ">\n")
+			if found < 0 {
+				break
+			}
+			scan.tagEnd = start + 1 + found
+		}
+		if scan.text[scan.tagEnd] == '>' && scan.tagEnd > start+1 {
+			return start, scan.tagEnd + 1
+		}
+		search = scan.tagEnd + 1
+	}
+	return -1, -1
+}
+
+// qqScanImageAndHTML 合并两个按位置递增的匹配流，保留最左且不重叠的替换顺序。
+func qqScanImageAndHTML(text string, yield func(start, end int)) {
+	scan := qqImageHTMLScanner{text: text}
+	imageStart, imageEnd := scan.nextImage(0)
+	tagStart, tagEnd := scan.nextTag(0)
+	for imageStart >= 0 || tagStart >= 0 {
+		start, end := imageStart, imageEnd
+		if tagStart >= 0 && (imageStart < 0 || tagStart < imageStart) {
+			start, end = tagStart, tagEnd
+		}
+		yield(start, end)
+		if imageStart >= 0 && imageStart < end {
+			imageStart, imageEnd = scan.nextImage(end)
+		}
+		if tagStart >= 0 && tagStart < end {
+			tagStart, tagEnd = scan.nextTag(end)
+		}
+	}
 }
 
 // qqIssueDetail 是补上下文要用到的 issue 字段，和 qqIssue 一起嵌入解码（编号在 qqIssue 里，这里不能再有同名字段，否则两个都解不出来）。

@@ -29,6 +29,9 @@ var downloadLinkLimits = []struct {
 	window time.Duration
 }{{"download-link-hour", 3, time.Hour}, {"download-link-day", 10, 24 * time.Hour}}
 
+// downloadLinkCommitTimeout 是邮件供应商确认成功后完成数据库提交的最长时间；提交结果不能因客户端断开而变成未知。
+const downloadLinkCommitTimeout = 5 * time.Second
+
 type queryRower interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
@@ -170,7 +173,10 @@ func (a *Service) downloadLink(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 503, "delivery_failed")
 		return
 	}
-	if err = tx.Commit(r.Context()); err != nil {
+	commitCtx, cancelCommit := context.WithTimeout(context.WithoutCancel(r.Context()), downloadLinkCommitTimeout)
+	err = tx.Commit(commitCtx)
+	cancelCommit()
+	if err != nil {
 		a.error(w, err)
 		return
 	}

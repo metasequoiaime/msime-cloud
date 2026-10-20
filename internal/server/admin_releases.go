@@ -826,18 +826,27 @@ func (s *Server) releaseNotify(ctx context.Context, p AdminPlatformConfig, title
 // releaseSearchIndex holds the releases a Server last read from GitHub, by platform, so the global search never calls GitHub.
 type releaseSearchIndex struct {
 	mu         sync.Mutex
-	byPlatform map[string][]account.AdminSearchHit
+	byPlatform map[string][]releaseSearchHit
+}
+
+// releaseSearchHit 保存搜索结果及其归一化文本，避免每次搜索都为缓存条目创建临时字符串。
+type releaseSearchHit struct {
+	account.AdminSearchHit
+	lowerTitle string
+	lowerTag   string
 }
 
 func (s *Server) indexReleases(p AdminPlatformConfig, releases []ghRelease) {
-	hits := make([]account.AdminSearchHit, 0, len(releases))
+	hits := make([]releaseSearchHit, 0, len(releases))
 	for _, r := range releases {
-		hits = append(hits, account.AdminSearchHit{Kind: "release", ID: p.ID + ":" + r.TagName, Title: p.Name + " " + releaseVersion(p, r.TagName), Where: "发布管理", Target: "release"})
+		hit := account.AdminSearchHit{Kind: "release", ID: p.ID + ":" + r.TagName, Title: p.Name + " " + releaseVersion(p, r.TagName), Where: "发布管理", Target: "release"}
+		_, tag, _ := strings.Cut(hit.ID, ":")
+		hits = append(hits, releaseSearchHit{AdminSearchHit: hit, lowerTitle: strings.ToLower(hit.Title), lowerTag: strings.ToLower(tag)})
 	}
 	s.releaseIndex.mu.Lock()
 	defer s.releaseIndex.mu.Unlock()
 	if s.releaseIndex.byPlatform == nil {
-		s.releaseIndex.byPlatform = map[string][]account.AdminSearchHit{}
+		s.releaseIndex.byPlatform = map[string][]releaseSearchHit{}
 	}
 	s.releaseIndex.byPlatform[p.ID] = hits
 }
@@ -854,9 +863,8 @@ func (s *Server) searchReleases(q string) []account.AdminSearchHit {
 	// Platforms in config order keep the result stable between calls.
 	for _, p := range s.config.Admin.GitHub.Platforms {
 		for _, hit := range s.releaseIndex.byPlatform[p.ID] {
-			_, tag, _ := strings.Cut(hit.ID, ":")
-			if strings.Contains(strings.ToLower(hit.Title), q) || strings.Contains(strings.ToLower(tag), q) {
-				hits = append(hits, hit)
+			if strings.Contains(hit.lowerTitle, q) || strings.Contains(hit.lowerTag, q) {
+				hits = append(hits, hit.AdminSearchHit)
 				if len(hits) == 8 {
 					return hits
 				}

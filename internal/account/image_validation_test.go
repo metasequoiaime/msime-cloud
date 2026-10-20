@@ -22,7 +22,7 @@ func TestUploadedJPEGScanLimit(t *testing.T) {
 			return err
 		}, errInvalidAvatar},
 		{"screenshot", func(data []byte) error {
-			_, err := normalizeScreenshot(data)
+			_, err := normalizeScreenshot(data, nil)
 			return err
 		}, errInvalidScreenshot},
 		{"community photo", func(data []byte) error {

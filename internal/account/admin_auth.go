@@ -24,6 +24,10 @@ const adminSessionTouch = 5 * time.Minute
 
 // adminProfileText 跳过非法 UTF-8 和控制字符，只收集前 max 个字符，再去除首尾空白。
 func adminProfileText(s string, max int) string {
+	// 字节数不超过字符上限时无需截断；合法且不含控制字符的文本可以直接复用。
+	if len(s) <= max && utf8.ValidString(s) && !strings.ContainsFunc(s, unicode.IsControl) {
+		return strings.TrimSpace(s)
+	}
 	out := make([]rune, 0, min(len(s), max))
 	for offset := 0; offset < len(s) && len(out) < max; {
 		c, size := utf8.DecodeRuneInString(s[offset:])

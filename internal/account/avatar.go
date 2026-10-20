@@ -127,6 +127,8 @@ func (a *Service) putAvatar(w http.ResponseWriter, r *http.Request) {
 	if e = a.avatars.Put(r.Context(), key, normalized, "image/jpeg"); e != nil {
 		// 存储 SDK 的错误可能包含上游响应正文、请求地址或签名，只记录固定的操作原因。
 		slog.Error("头像上传失败", "reason", "storage_write_failed")
+		// PUT 的响应可能在对象已写入后才丢失；随机键没有数据库引用时可以安全清理。
+		a.deleteAvatarObject(key)
 		writeError(w, 502, "avatar_storage_unavailable")
 		return
 	}

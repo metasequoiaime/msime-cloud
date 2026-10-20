@@ -416,6 +416,18 @@ func (failingAvatars) Put(context.Context, string, []byte, string) error {
 }
 func (failingAvatars) Delete(context.Context, string) error { return errors.New("bucket down") }
 
+// uncertainPutAvatars 在对象已写入后返回错误，模拟上游确认响应丢失。
+type uncertainPutAvatars struct {
+	*memoryAvatars
+}
+
+func (u *uncertainPutAvatars) Put(ctx context.Context, key string, body []byte, contentType string) error {
+	if err := u.memoryAvatars.Put(ctx, key, body, contentType); err != nil {
+		return err
+	}
+	return errors.New("write response lost")
+}
+
 func TestAvatarStorageFailure(t *testing.T) {
 	db := testStore(t)
 	a := &Service{store: db, avatars: failingAvatars{}, config: Config{Avatars: AvatarConfig{PublicBaseURL: "https://media.example.test"}}}
@@ -437,6 +449,19 @@ func TestAvatarStorageFailure(t *testing.T) {
 	}
 	if _, err := db.SetAvatarKey(context.Background(), "missing-user", ""); err == nil {
 		t.Fatal("setting the avatar of a missing user succeeded")
+	}
+}
+
+func TestAvatarUploadCleansObjectWhenStorageWriteOutcomeIsUncertain(t *testing.T) {
+	db := testStore(t)
+	storage := &uncertainPutAvatars{memoryAvatars: newMemoryAvatars()}
+	a := &Service{store: db, avatars: storage, config: Config{Avatars: AvatarConfig{PublicBaseURL: "https://media.example.test"}}}
+	mux := http.NewServeMux()
+	Mount(mux, a)
+	user := complete(t, db, Identity{"email", "avatar-uncertain-write@example.test"})
+	avatarUpload(t, mux, "image/png", encodedImage(t, "png", 8, 8, color.Black), user.AccessToken, 502)
+	if keys := storage.keys(); len(keys) != 0 {
+		t.Fatalf("对象存储写入结果未知时留下了孤儿头像：%v", keys)
 	}
 }
 

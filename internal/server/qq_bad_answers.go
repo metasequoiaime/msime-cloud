@@ -53,6 +53,8 @@ var (
 
 var qqBadAnswerFillerWords = [...]string{"还是", "好像", "感觉", "你说的", "你说得", "你这个", "你的", "这个", "回答", "答案", "还", "你", "的", "啊", "呀", "哦", "嘛", "吧", "呢", "啦", "哈", "哇", "喔", "噢"}
 
+var qqBadAnswerNegativeWords = [...]string{"不对", "答错", "错了", "没用", "不准", "不是这样", "胡说", "瞎说", "乱说", "不行", "没解决", "答非所问", "看不懂"}
+
 // qqStripBadAnswerFiller 删除差评判断中的语气词、标点和空白，保持 qqBadAnswerFiller 的正则语义。
 func qqStripBadAnswerFiller(text string) string {
 	removed := 0
@@ -114,6 +116,30 @@ type qqBadAnswerStore interface {
 }
 
 // qqIsBadAnswerFeedback 判断这条消息是不是在说上一个回答不对：有上一轮、上一轮答了（不是答不上），消息很短、不是提问，并且整句只是一句否定（qqBadAnswerPattern），或者以否定开头再接纠正内容（qqBadAnswerLead）。
+// qqBadAnswerNegative 判断文本是否是固定的否定短语，或以否定短语和分隔符开头。
+func qqBadAnswerNegative(text string) bool {
+	for _, word := range qqBadAnswerNegativeWords {
+		if !strings.HasPrefix(text, word) {
+			continue
+		}
+		end := len(word)
+		if strings.HasPrefix(text[end:], "了") {
+			end += len("了")
+		}
+		if end == len(text) {
+			return true
+		}
+		switch text[end] {
+		case ',', ':', ' ':
+			return true
+		}
+		if strings.HasPrefix(text[end:], "，") || strings.HasPrefix(text[end:], "。") || strings.HasPrefix(text[end:], "：") {
+			return true
+		}
+	}
+	return false
+}
+
 // qqBadAnswerQuestionCandidate 判断差评消息中是否出现固定的提问词，避免短消息反复执行正则扫描。
 func qqBadAnswerQuestionCandidate(text string) bool {
 	return strings.Contains(text, "怎么") || strings.Contains(text, "如何") || strings.Contains(text, "为什么") || strings.Contains(text, "为啥") || strings.ContainsAny(text, "吗？?")
@@ -127,7 +153,7 @@ func qqIsBadAnswerFeedback(history []account.QQTurn, text string) bool {
 	if utf8.RuneCountInString(text) > qqBadAnswerRunes || qqBadAnswerQuestionCandidate(text) {
 		return false
 	}
-	return qqBadAnswerPattern.MatchString(qqStripBadAnswerFiller(text)) || qqBadAnswerLead.MatchString(text)
+	return qqBadAnswerNegative(qqStripBadAnswerFiller(text)) || qqBadAnswerNegative(text)
 }
 
 // qqRetryQuestion 是重答时交给模型的问题：上一个问题、上一个回答和群友的反馈。

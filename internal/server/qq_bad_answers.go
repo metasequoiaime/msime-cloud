@@ -114,12 +114,17 @@ type qqBadAnswerStore interface {
 }
 
 // qqIsBadAnswerFeedback 判断这条消息是不是在说上一个回答不对：有上一轮、上一轮答了（不是答不上），消息很短、不是提问，并且整句只是一句否定（qqBadAnswerPattern），或者以否定开头再接纠正内容（qqBadAnswerLead）。
+// qqBadAnswerQuestionCandidate 判断差评消息中是否出现固定的提问词，避免短消息反复执行正则扫描。
+func qqBadAnswerQuestionCandidate(text string) bool {
+	return strings.Contains(text, "怎么") || strings.Contains(text, "如何") || strings.Contains(text, "为什么") || strings.Contains(text, "为啥") || strings.ContainsAny(text, "吗？?")
+}
+
 func qqIsBadAnswerFeedback(history []account.QQTurn, text string) bool {
 	if len(history) == 0 || history[len(history)-1].Answer == qqUnansweredTurn {
 		return false
 	}
 	text = strings.TrimSpace(text)
-	if utf8.RuneCountInString(text) > qqBadAnswerRunes || qqBadAnswerQuestion.MatchString(text) {
+	if utf8.RuneCountInString(text) > qqBadAnswerRunes || qqBadAnswerQuestionCandidate(text) {
 		return false
 	}
 	return qqBadAnswerPattern.MatchString(qqStripBadAnswerFiller(text)) || qqBadAnswerLead.MatchString(text)

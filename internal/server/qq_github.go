@@ -321,7 +321,7 @@ func qqReleaseNotes(body string) string {
 	return qqTruncateSentence(strings.TrimSuffix(b.String(), "："), qqReleaseNoteRunes)
 }
 
-// qqReleaseNotesVisibleSegments 按代码围栏切出需要处理的连续正文片段；围栏内内容不经过图片和 HTML 正则扫描，片段本身仍保留跨行 Markdown 结构。
+// qqReleaseNotesVisibleSegments 按代码围栏切出需要处理的连续正文片段；围栏内内容不经过图片和 HTML 过滤，片段本身仍保留跨行 Markdown 结构。
 func qqReleaseNotesVisibleSegments(body string, yield func(string)) {
 	fenced := false
 	segmentStart := 0

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
@@ -50,6 +51,58 @@ var (
 	qqBadAnswerQuestion = regexp.MustCompile(`怎么|如何|为什么|为啥|吗|？|\?`)
 )
 
+var qqBadAnswerFillerWords = [...]string{"还是", "好像", "感觉", "你说的", "你说得", "你这个", "你的", "这个", "回答", "答案", "还", "你", "的", "啊", "呀", "哦", "嘛", "吧", "呢", "啦", "哈", "哇", "喔", "噢"}
+
+// qqStripBadAnswerFiller 删除差评判断中的语气词、标点和空白，保持 qqBadAnswerFiller 的正则语义。
+func qqStripBadAnswerFiller(text string) string {
+	removed := 0
+	for i := 0; i < len(text); {
+		if word := qqBadAnswerFillerWordAt(text[i:]); word != "" {
+			removed += len(word)
+			i += len(word)
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(text[i:])
+		if unicode.IsPunct(r) || unicode.IsSymbol(r) || r == ' ' || r == '\t' || r == '\n' || r == '\f' || r == '\r' {
+			removed += size
+		}
+		i += size
+	}
+	if removed == 0 {
+		return text
+	}
+	var out strings.Builder
+	out.Grow(len(text) - removed)
+	start := 0
+	for i := 0; i < len(text); {
+		if word := qqBadAnswerFillerWordAt(text[i:]); word != "" {
+			out.WriteString(text[start:i])
+			i += len(word)
+			start = i
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(text[i:])
+		if unicode.IsPunct(r) || unicode.IsSymbol(r) || r == ' ' || r == '\t' || r == '\n' || r == '\f' || r == '\r' {
+			out.WriteString(text[start:i])
+			i += size
+			start = i
+			continue
+		}
+		i += size
+	}
+	out.WriteString(text[start:])
+	return out.String()
+}
+
+func qqBadAnswerFillerWordAt(text string) string {
+	for _, word := range qqBadAnswerFillerWords {
+		if strings.HasPrefix(text, word) {
+			return word
+		}
+	}
+	return ""
+}
+
 // qqBadAnswerStore 是 account.Service 里被说答错的回答；没有数据库时为 nil。
 type qqBadAnswerStore interface {
 	AddQQBadAnswer(ctx context.Context, question, answer, feedback, retry string) error
@@ -69,7 +122,7 @@ func qqIsBadAnswerFeedback(history []account.QQTurn, text string) bool {
 	if utf8.RuneCountInString(text) > qqBadAnswerRunes || qqBadAnswerQuestion.MatchString(text) {
 		return false
 	}
-	return qqBadAnswerPattern.MatchString(qqBadAnswerFiller.ReplaceAllString(text, "")) || qqBadAnswerLead.MatchString(text)
+	return qqBadAnswerPattern.MatchString(qqStripBadAnswerFiller(text)) || qqBadAnswerLead.MatchString(text)
 }
 
 // qqRetryQuestion 是重答时交给模型的问题：上一个问题、上一个回答和群友的反馈。

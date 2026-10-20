@@ -35,7 +35,7 @@ func TestAPNGFramePNGBufferCompatibility(t *testing.T) {
 			images := append([]apngFrame{{width: uint32(a.width), height: uint32(a.height), data: a.idat}}, a.frames...)
 			for _, frame := range images {
 				want := previousAPNGFramePNG(a, frame)
-				if got := a.framePNG(frame); !bytes.Equal(got, want) {
+				if got := a.framePNG(frame, nil); !bytes.Equal(got, want) {
 					t.Fatal("重组帧的 PNG 字节改变")
 				}
 			}
@@ -46,7 +46,7 @@ func TestAPNGFramePNGBufferCompatibility(t *testing.T) {
 		for _, transparency := range [][]byte{nil, {}, {128}} {
 			a := &candidateAPNG{ihdr: make([]byte, 13), plte: palette, trns: transparency}
 			frame := apngFrame{width: 1, height: 1, data: [][]byte{nil, {}, {1}, {}, {2, 3}}}
-			if got, want := a.framePNG(frame), previousAPNGFramePNG(a, frame); !bytes.Equal(got, want) {
+			if got, want := a.framePNG(frame, nil), previousAPNGFramePNG(a, frame); !bytes.Equal(got, want) {
 				t.Fatal("空块或可选块的保留规则改变")
 			}
 		}
@@ -71,7 +71,7 @@ func TestAPNGFramePNGBufferMemoryBudget(t *testing.T) {
 			want := previousAPNGFramePNG(a, frame)
 			result := testing.Benchmark(func(b *testing.B) {
 				for b.Loop() {
-					if got := a.framePNG(frame); !bytes.Equal(got, want) {
+					if got := a.framePNG(frame, nil); !bytes.Equal(got, want) {
 						b.Fatal("帧的 PNG 字节改变")
 					}
 				}
@@ -92,7 +92,7 @@ func BenchmarkAPNGFramePNGBuffer(b *testing.B) {
 		for _, implementation := range []struct {
 			name string
 			run  func(*candidateAPNG, apngFrame) []byte
-		}{{"previous", previousAPNGFramePNG}, {"current", (*candidateAPNG).framePNG}} {
+		}{{"previous", previousAPNGFramePNG}, {"current", func(a *candidateAPNG, frame apngFrame) []byte { return a.framePNG(frame, nil) }}} {
 			b.Run(fmt.Sprintf("%d块/%s", parts, implementation.name), func(b *testing.B) {
 				b.ReportAllocs()
 				for b.Loop() {

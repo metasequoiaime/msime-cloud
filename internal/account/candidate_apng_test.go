@@ -166,7 +166,7 @@ func decodedAPNGFrames(t *testing.T, data []byte) []image.Image {
 	}
 	var out []image.Image
 	for _, frame := range a.frames {
-		img, err := png.Decode(bytes.NewReader(a.framePNG(frame)))
+		img, err := png.Decode(bytes.NewReader(a.framePNG(frame, nil)))
 		if err != nil {
 			t.Fatal(err)
 		}

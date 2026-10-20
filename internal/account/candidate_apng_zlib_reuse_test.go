@@ -30,7 +30,7 @@ func previousAPNGDecode(a *candidateAPNG) bool {
 	}
 	images = append(images, a.frames...)
 	for _, frame := range images {
-		decoded, err := png.Decode(bytes.NewReader(a.framePNG(frame)))
+		decoded, err := png.Decode(bytes.NewReader(a.framePNG(frame, nil)))
 		if err != nil || decoded.Bounds().Dx() != int(frame.width) || decoded.Bounds().Dy() != int(frame.height) || !previousAPNGZlibStreamExact(frame.data) {
 			return false
 		}

@@ -116,10 +116,12 @@ curl -G -H "Authorization: Bearer $MSIME_CLIENT_TOKEN" \
 
 ```sh
 pnpm --dir admin-web build
-go test -race ./...
+go test -race -benchtime=50ms ./...
 go vet ./...
 go build ./cmd/msime-server
 ```
+
+测试中的分配回归通过 `testing.Benchmark` 取每次调用的字节数和分配次数。CI、发版前和本地验证统一用 `-benchtime=50ms` 将每次测量的目标时间从默认 1 秒缩短为 50 毫秒，执行次数仍由 Go 自适应选择，保留现有断言并减少反复校准耗时。需要正式比较运行速度时，单独执行 `go test ./internal/server -run '^$' -bench '目标基准' -benchmem -benchtime=1s`，不要使用这里的短时采样结果作为性能结论。
 
 测试使用本地 TLS 模拟服务，不需要真实服务商密钥、不消耗线上配额。测试覆盖认证、额度隔离与补充、并发上限、超时、凭据替换、模型限制、候选编码与过滤、翻译、语音 multipart、重定向与超大上游响应。
 

@@ -340,8 +340,11 @@ func qqResearchUserWhitelist(v any) any {
 
 // qqResearchTarget 检查模型给的路径，返回申请令牌用的仓库和规范化后的路径；不允许时 ok 为 false。
 func qqResearchTarget(raw, defaultRepo string) (repo, path string, ok bool) {
+	if len(raw) > 500 {
+		return "", "", false
+	}
 	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || u.Scheme != "" || u.Host != "" || len(raw) > 500 || strings.Contains(u.Path, "..") {
+	if err != nil || u.Scheme != "" || u.Host != "" || strings.Contains(u.Path, "..") {
 		return "", "", false
 	}
 	if match := qqResearchRepoPath.FindStringSubmatch(u.Path); match != nil {

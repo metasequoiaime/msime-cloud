@@ -90,7 +90,11 @@ func (s *Server) dictionaryTree(w http.ResponseWriter, r *http.Request, gh *gith
 		fail(w, http.StatusServiceUnavailable, "github_unavailable")
 		return
 	}
-	files := make([]dictionaryTreeItem, 0, len(result.Tree))
+	// 解码结果只属于本次请求，筛选时复用它的数组，空结果仍编码为 JSON 数组。
+	files := result.Tree[:0]
+	if files == nil {
+		files = []dictionaryTreeItem{}
+	}
 	for _, item := range result.Tree {
 		if item.Type != "blob" || !dictionaryTextPath(item.Path) {
 			continue

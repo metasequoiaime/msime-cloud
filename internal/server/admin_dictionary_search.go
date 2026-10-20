@@ -73,7 +73,8 @@ func (s *Server) dictionarySearch(w http.ResponseWriter, r *http.Request, gh *gi
 		fail(w, 503, "github_unavailable")
 		return
 	}
-	files := make([]dictionaryTreeItem, 0, len(tree.Tree))
+	// 解码结果只属于本次请求，筛选时复用它的数组。
+	files := tree.Tree[:0]
 	for _, item := range tree.Tree {
 		if item.Type == "blob" && dictionaryTextPath(item.Path) && (scope == "all" || strings.HasPrefix(item.Path, scope+"/")) {
 			files = append(files, item)

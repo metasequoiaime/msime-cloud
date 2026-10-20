@@ -155,25 +155,33 @@ func qqRedactContactsBefore(text string, maxRunes int) string {
 // qqContactPatternsOverlap 判断两个正则的任意匹配是否重叠，避免后一个正则的全局替换吞掉前一个待处理的匹配。
 func qqContactPatternsOverlap(text string, first, second *regexp.Regexp) bool {
 	firstStart, secondStart := 0, 0
+	var firstMatch, secondMatch []int
 	for firstStart < len(text) && secondStart < len(text) {
-		firstMatch := first.FindStringIndex(text[firstStart:])
+		// 只重查刚推进的一侧，保留另一侧的匹配，避免重复扫描同一段长正文。
 		if firstMatch == nil {
-			return false
+			firstMatch = first.FindStringIndex(text[firstStart:])
+			if firstMatch == nil {
+				return false
+			}
+			firstMatch[0] += firstStart
+			firstMatch[1] += firstStart
 		}
-		firstMatch[0] += firstStart
-		firstMatch[1] += firstStart
-		secondMatch := second.FindStringIndex(text[secondStart:])
 		if secondMatch == nil {
-			return false
+			secondMatch = second.FindStringIndex(text[secondStart:])
+			if secondMatch == nil {
+				return false
+			}
+			secondMatch[0] += secondStart
+			secondMatch[1] += secondStart
 		}
-		secondMatch[0] += secondStart
-		secondMatch[1] += secondStart
 		if firstMatch[1] <= secondMatch[0] {
 			firstStart = firstMatch[1]
+			firstMatch = nil
 			continue
 		}
 		if secondMatch[1] <= firstMatch[0] {
 			secondStart = secondMatch[1]
+			secondMatch = nil
 			continue
 		}
 		return true

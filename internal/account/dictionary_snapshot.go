@@ -63,6 +63,7 @@ func (a *Service) dictionarySnapshot(w http.ResponseWriter, r *http.Request) {
 	// 完整快照可能较大，连接写期限必须覆盖路由允许的整个传输时间。
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(dictionaryDownloadTimeout + 5*time.Second))
 	started := false
+	writeLine := ndjsonWriter(w)
 	err := a.store.streamFullDictionarySnapshotWithFooter(r.Context(), p.UserID, func(raw json.RawMessage) error {
 		if !started {
 			w.Header().Set("Content-Type", "application/x-ndjson")
@@ -70,9 +71,7 @@ func (a *Service) dictionarySnapshot(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Cache-Control", "no-store")
 			started = true
 		}
-		line := append(raw, '\n')
-		_, err := w.Write(line)
-		return err
+		return writeLine(raw)
 	})
 	if err != nil {
 		if started {

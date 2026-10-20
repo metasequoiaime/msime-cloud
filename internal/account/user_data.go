@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -278,16 +279,30 @@ func (a *Service) userDataExport(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err = entry("dictionary.ndjson")
 	if err == nil {
-		err = a.store.streamFullDictionarySnapshotWithFooter(r.Context(), p.UserID, func(raw json.RawMessage) error {
-			_, e := out.Write(append(raw, '\n'))
-			return e
-		})
+		err = a.store.streamFullDictionarySnapshotWithFooter(r.Context(), p.UserID, ndjsonWriter(out))
 	}
 	if err == nil {
 		err = archive.Close()
 	}
 	if err != nil {
 		panic(http.ErrAbortHandler)
+	}
+}
+
+// ndjsonWriter 复用当前导出文件的行缓冲，每条记录连同换行只写一次，不修改源 JSON。
+func ndjsonWriter(out io.Writer) func(json.RawMessage) error {
+	var line []byte
+	return func(raw json.RawMessage) error {
+		// 编码器可能已留出换行空间；数据库行没有余量时才使用工作区。
+		if len(raw) < cap(raw) {
+			_, err := out.Write(append(raw, '\n'))
+			return err
+		}
+		line = slices.Grow(line[:0], len(raw)+1)
+		line = append(line, raw...)
+		line = append(line, '\n')
+		_, err := out.Write(line)
+		return err
 	}
 }
 

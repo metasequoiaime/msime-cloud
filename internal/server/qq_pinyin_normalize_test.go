@@ -13,7 +13,7 @@ func previousQQNormalizePinyin(raw string) string {
 		}
 		return r
 	}, strings.ToLower(raw))
-	raw = qqPinyinPunctuation.Replace(raw)
+	raw = previousQQPinyinPunctuation.Replace(raw)
 	raw = strings.NewReplacer("u:", "v", "’", "'", "-", " ", "　", " ").Replace(raw)
 	return strings.Join(strings.FieldsFunc(raw, func(r rune) bool { return r == ' ' || r == '\'' }), "'")
 }

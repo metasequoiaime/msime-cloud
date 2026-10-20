@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
@@ -36,12 +37,6 @@ var qqToneless = map[rune]rune{
 	'ǖ': 'v', 'ǘ': 'v', 'ǚ': 'v', 'ǜ': 'v', 'ü': 'v',
 }
 
-// qqPinyinPunctuation 是群友常用来把拼音括起来的符号，规范时换成空格：「扛把子（kang ba zi）」「扛把子 “kang ba zi”」。
-var (
-	qqPinyinPunctuation = strings.NewReplacer("（", " ", "）", " ", "(", " ", ")", " ", "[", " ", "]", " ", "【", " ", "】", " ", "「", " ", "」", " ", "《", " ", "》", " ", "“", " ", "”", " ", "\"", " ")
-	qqPinyinCleanup     = strings.NewReplacer("u:", "v", "’", "'", "-", " ", "　", " ")
-)
-
 // qqNormalizePinyin 把群友写的拼音规范成投稿用的格式：小写，去掉声调和括号，音节之间用 ' 分隔，ü 写作 v。
 func qqNormalizePinyin(raw string) string {
 	// 普通小写拼音只需合并分隔符，跳过声调和标点替换及临时切片。
@@ -59,15 +54,35 @@ func qqNormalizePinyin(raw string) string {
 		}
 		return out.String()
 	}
-	raw = strings.Map(func(r rune) rune {
+	// 通用路径按原来的小写、去声调、标点及 u: 替换顺序处理，直接写最终音节，不生成中间字符串和音节切片。
+	var out strings.Builder
+	inputBytes, separator := len(raw), false
+	for raw != "" {
+		r, size := utf8.DecodeRuneInString(raw)
+		raw = raw[size:]
+		r = unicode.ToLower(r)
 		if plain, ok := qqToneless[r]; ok {
-			return plain
+			r = plain
 		}
-		return r
-	}, strings.ToLower(raw))
-	raw = qqPinyinPunctuation.Replace(raw)
-	raw = qqPinyinCleanup.Replace(raw)
-	return strings.Join(strings.FieldsFunc(raw, func(r rune) bool { return r == ' ' || r == '\'' }), "'")
+		// 只有原文中紧接的冒号能与转换后的 u 合并；括号或空格不能被跨过。
+		if r == 'u' && strings.HasPrefix(raw, ":") {
+			r = 'v'
+			raw = raw[1:]
+		}
+		switch r {
+		case ' ', '\'', '’', '-', '　', '（', '）', '(', ')', '[', ']', '【', '】', '「', '」', '《', '》', '“', '”', '"':
+			separator = out.Len() > 0
+			continue
+		}
+		if out.Len() == 0 {
+			out.Grow(inputBytes)
+		} else if separator {
+			out.WriteByte('\'')
+		}
+		separator = false
+		out.WriteRune(r)
+	}
+	return out.String()
 }
 
 // qqSplitPinyin 把连写的全拼（例如 shuishanshurufa）按音节表切成 n 个音节；切不出来时原样返回。有多种切法时取前面音节尽量长的那种（xian 不切成 xi'an），这和音节数对得上时多数情况就是想要的读法。

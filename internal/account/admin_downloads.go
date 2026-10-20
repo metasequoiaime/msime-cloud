@@ -208,9 +208,11 @@ var releaseTagPlatforms = map[string]string{"windows": "windows", "win": "window
 
 // releaseTagPlatform 优先按平台标签识别平台和版本，否则保留完整标签作为版本，并按安装包的最后一个扩展名识别平台；未知平台返回空字符串。
 func releaseTagPlatform(tag, asset string) (string, string) {
-	if m := releaseTag.FindStringSubmatch(tag); m != nil {
-		if platform, ok := releaseTagPlatforms[strings.ToLower(m[1])]; ok {
-			return platform, m[2]
+	if releaseTag.MatchString(tag) {
+		// 正则保证平台前缀不含横线，直接切原标签，省去捕获结果切片。
+		prefix, version, _ := strings.Cut(tag, "-")
+		if platform, ok := releaseTagPlatforms[strings.ToLower(prefix)]; ok {
+			return platform, version
 		}
 	}
 	if extension := releaseAssetExtension(asset); extension != "" {

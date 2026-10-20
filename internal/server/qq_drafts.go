@@ -555,16 +555,32 @@ var (
 // qqDraftText 是整理草稿用的原话：群友这次和之前几轮说的话，较早的在前，用换行拼起来。只拼群友说的，不拼机器人的回答，免得整理时把排查建议当成群友的描述。从最近一轮起过草稿、补充过草稿或记过票的回复之后拼起：那之前说的已经记在别处，再拼进来，新草稿会混进上一个问题。
 func qqDraftText(history []account.QQTurn, question string) string {
 	start := 0
-	for i, turn := range history {
-		if qqDraftTurn.MatchString(turn.Answer) {
+	for i := len(history) - 1; i >= 0; i-- {
+		if qqDraftTurn.MatchString(history[i].Answer) {
 			start = i + 1
+			break
 		}
 	}
-	parts := make([]string, 0, len(history)-start+1)
-	for _, turn := range history[start:] {
-		parts = append(parts, turn.Question)
+	history = history[start:]
+	if len(history) == 0 {
+		return question
 	}
-	return strings.Join(append(parts, question), "\n")
+	size := len(question)
+	const maxInt = int(^uint(0) >> 1)
+	for _, turn := range history {
+		if len(turn.Question) >= maxInt-size {
+			panic("strings: Join output length overflow")
+		}
+		size += len(turn.Question) + 1
+	}
+	var out strings.Builder
+	out.Grow(size)
+	for _, turn := range history {
+		out.WriteString(turn.Question)
+		out.WriteByte('\n')
+	}
+	out.WriteString(question)
+	return out.String()
 }
 
 // qqDraftNoContent 判断消息里有没有能补进草稿的内容：去掉语气字、标点和表情后什么都不剩，或者只剩客气话（qqDraftAck）、只剩一句否定（qqBadAnswerPattern，交给差评重答）时没有。

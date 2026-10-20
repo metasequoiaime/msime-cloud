@@ -412,6 +412,8 @@ var (
 
 // parseReleaseNotes 从发布正文提取新增、修复、改进、说明和待办；其他标题下及首个标题前的说明不标注类别。
 func parseReleaseNotes(body string) []releaseNote {
+	// 与正则的 \s 一致，不包含垂直制表符或 Unicode 空白。
+	const regexSpace = " \t\r\n\f"
 	notes := []releaseNote{}
 	var noteText strings.Builder
 	kind := ""
@@ -439,18 +441,32 @@ func parseReleaseNotes(body string) []releaseNote {
 		// 标题和列表只可能由这些 ASCII 字节开头，普通正文不必进入正则。
 		switch line[0] {
 		case '#':
-			if m := releaseHeading.FindStringSubmatch(line); m != nil {
+			if releaseHeading.MatchString(line) {
+				// 只检查分类前缀，无需复制捕获结果或移除标题末尾的井号。
+				heading := strings.TrimLeft(strings.TrimLeft(line, "#"), regexSpace)
 				kind = ""
 				for _, k := range releaseNoteKinds {
-					if strings.HasPrefix(m[1], k) {
+					if strings.HasPrefix(heading, k) {
 						kind = k
 					}
 				}
 				continue
 			}
 		case '-', '*', '+', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
-			if m := releaseBullet.FindStringSubmatch(line); m != nil {
-				line = strings.TrimSpace(m[1])
+			if releaseBullet.MatchString(line) {
+				// 正则已验证标记和分隔空白，直接切原字符串，省去捕获切片。
+				if line[0] == '-' || line[0] == '*' || line[0] == '+' {
+					line = line[1:]
+				} else {
+					line = line[strings.IndexAny(line, ".)")+1:]
+				}
+				line = strings.TrimLeft(line, regexSpace)
+				if len(line) >= 3 && line[0] == '[' && line[2] == ']' && (line[1] == ' ' || line[1] == 'x' || line[1] == 'X') {
+					if text := strings.TrimLeft(line[3:], regexSpace); len(text) < len(line)-3 {
+						line = text
+					}
+				}
+				line = strings.TrimSpace(line)
 			}
 		}
 		if line == "" {

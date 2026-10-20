@@ -672,11 +672,23 @@ var crashSystemPrefixes = []string{
 	"???", "<unknown>",
 }
 
+// 按首字节索引固定的系统前缀，避免每个字段都扫描其他首字节的候选。
+var crashSystemPrefixesByByte = func() [256][]string {
+	var prefixes [256][]string
+	for _, prefix := range crashSystemPrefixes {
+		prefixes[prefix[0]] = append(prefixes[prefix[0]], prefix)
+	}
+	return prefixes
+}()
+
 // crashSystemFrame 判断规范化的小写栈帧是否属于系统：模块或符号的任一字段以系统前缀开头即命中。
 func crashSystemFrame(frame string) bool {
 	for field := range strings.FieldsSeq(frame) {
 		field = strings.TrimLeft(field, "-+[(")
-		for _, prefix := range crashSystemPrefixes {
+		if field == "" {
+			continue
+		}
+		for _, prefix := range crashSystemPrefixesByByte[field[0]] {
 			if strings.HasPrefix(field, prefix) {
 				return true
 			}

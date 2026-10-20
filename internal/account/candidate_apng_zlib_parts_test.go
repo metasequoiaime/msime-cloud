@@ -10,6 +10,12 @@ import (
 	"testing"
 )
 
+// 单流测试每次使用独立校验器，保留原有测试与基准的调用方式。
+func zlibStreamExact(parts [][]byte) bool {
+	var validator apngZlibValidator
+	return validator.exact(parts)
+}
+
 // 固定原来的拼接与校验规则，验证流结束位置和错误处理没有改变。
 func previousZlibStreamExact(parts [][]byte) bool {
 	r := bytes.NewReader(bytes.Join(parts, nil))

@@ -69,8 +69,8 @@ var (
 	qqResearchUserPath = regexp.MustCompile(`^/users/[A-Za-z0-9-]{1,39}$`)
 	// qqResearchScope 只匹配独立、正向的本组织限定，不能把引号中的文本当作授权范围。
 	qqResearchScope = regexp.MustCompile(`(?i)^(?:repo:` + qqResearchOrg + `/[A-Za-z0-9._-]+|org:` + qqResearchOrg + `)$`)
-	// qqResearchSearchTerm 支持关键词、引号短语和 label:"help wanted" 这类过滤条件；不支持括号或转义。
-	qqResearchSearchTerm = regexp.MustCompile(`(?:-?[A-Za-z][A-Za-z_-]*:)?(?:"[^"\\]*"|[^\s"()\\]+)`)
+	// qqResearchSearchTerm 从当前词项开头匹配关键词、引号短语和 label:"help wanted" 这类过滤条件；不支持括号或转义。
+	qqResearchSearchTerm = regexp.MustCompile(`^(?:-?[A-Za-z][A-Za-z_-]*:)?(?:"[^"\\]*"|[^\s"()\\]+)`)
 )
 
 // qqResearchToolCall 是模型返回的一次工具调用。
@@ -371,13 +371,22 @@ func qqResearchScopedSearch(query string) bool {
 			return false
 		}
 	}
-	scoped, end := false, 0
-	for i, loc := range qqResearchSearchTerm.FindAllStringIndex(query, -1) {
-		// 词项必须用空格分开；未匹配的引号、括号或转义符也一并拒绝。
-		if (i > 0 && loc[0] == end) || strings.Trim(query[end:loc[0]], " ") != "" {
+	scoped := false
+	for query != "" {
+		query = strings.TrimLeft(query, " ")
+		if query == "" {
+			break
+		}
+		term := qqResearchSearchTerm.FindString(query)
+		if term == "" {
 			return false
 		}
-		term := strings.ToLower(query[loc[0]:loc[1]])
+		query = query[len(term):]
+		// 词项必须用空格分开，未匹配的引号、括号或转义符直接拒绝，不收集后续匹配位置。
+		if query != "" && query[0] != ' ' {
+			return false
+		}
+		term = strings.ToLower(term)
 		if term == "and" || term == "or" || term == "not" {
 			return false
 		}
@@ -387,9 +396,8 @@ func qqResearchScopedSearch(query string) bool {
 			}
 			scoped = true
 		}
-		end = loc[1]
 	}
-	return scoped && strings.Trim(query[end:], " ") == ""
+	return scoped
 }
 
 // qqResearchPeople 是返回里表示人的字段，只留登录名。

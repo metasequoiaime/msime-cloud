@@ -893,11 +893,26 @@ type qqNotes struct {
 
 var qqPriorityNames = map[string]string{"P0": "紧急", "P1": "高", "P2": "中", "P3": "低"}
 
+// qqContainsEffortMarker 判断文字里是否出现工作量标注的字段名；没有字段名时无需再跑一次正则。
+func qqContainsEffortMarker(text string) bool {
+	if strings.Contains(text, "工作量") {
+		return true
+	}
+	for i := 0; i+len("effort") <= len(text); i++ {
+		if (text[i]|0x20) != 'e' || (text[i+1]|0x20) != 'f' || (text[i+2]|0x20) != 'f' || (text[i+3]|0x20) != 'o' || (text[i+4]|0x20) != 'r' || (text[i+5]|0x20) != 't' {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 // qqParseNotes 从反馈文字里取出优先级和工作量，返回去掉这些标注后的文字。
 func qqParseNotes(text string) (string, qqNotes) {
 	var notes qqNotes
-	if m := qqPriorityPattern.FindStringSubmatchIndex(text); m != nil {
-		switch v := strings.ToUpper(text[m[2]:m[3]]); v {
+	priority := qqPriorityPattern.FindStringSubmatchIndex(text)
+	if priority != nil {
+		switch v := strings.ToUpper(text[priority[2]:priority[3]]); v {
 		case "紧急":
 			notes.Priority = "P0"
 		case "高":
@@ -909,14 +924,58 @@ func qqParseNotes(text string) (string, qqNotes) {
 		default:
 			notes.Priority = v
 		}
-		// 只删到值为止，值后面的标点留在原文里。
-		text = text[:m[0]] + " " + text[m[3]:]
 	}
-	if m := qqEffortPattern.FindStringSubmatchIndex(text); m != nil {
-		notes.Effort = strings.ToUpper(text[m[2]:m[3]])
-		text = text[:m[0]] + " " + text[m[3]:]
+	var effort []int
+	hasEffortMarker := priority == nil || qqContainsEffortMarker(text)
+	if hasEffortMarker {
+		effort = qqEffortPattern.FindStringSubmatchIndex(text)
 	}
-	return strings.TrimSpace(text), notes
+	if priority != nil && !hasEffortMarker {
+		return strings.TrimSpace(text[:priority[0]] + " " + text[priority[3]:]), notes
+	}
+	if priority != nil && (effort == nil || effort[0] < priority[3] && priority[0] < effort[3]) {
+		// 删除优先级后才出现的工作量标注无法直接映射回原文，保留旧路径处理这种少见的交叉情况。
+		text = text[:priority[0]] + " " + text[priority[3]:]
+		effort = qqEffortPattern.FindStringSubmatchIndex(text)
+		if effort != nil {
+			notes.Effort = strings.ToUpper(text[effort[2]:effort[3]])
+			text = text[:effort[0]] + " " + text[effort[3]:]
+		}
+		return strings.TrimSpace(text), notes
+	}
+	if effort != nil {
+		notes.Effort = strings.ToUpper(text[effort[2]:effort[3]])
+	}
+	if priority == nil && effort == nil {
+		return strings.TrimSpace(text), notes
+	}
+	if priority == nil || effort == nil {
+		match := priority
+		if match == nil {
+			match = effort
+		}
+		return strings.TrimSpace(text[:match[0]] + " " + text[match[3]:]), notes
+	}
+	var result strings.Builder
+	result.Grow(len(text) + 2)
+	cursor := 0
+	write := func(match []int) {
+		if match == nil || match[0] < cursor {
+			return
+		}
+		result.WriteString(text[cursor:match[0]])
+		result.WriteByte(' ')
+		cursor = match[3]
+	}
+	if effort != nil && (priority == nil || effort[0] < priority[0]) {
+		write(effort)
+		write(priority)
+	} else {
+		write(priority)
+		write(effort)
+	}
+	result.WriteString(text[cursor:])
+	return strings.TrimSpace(result.String()), notes
 }
 
 // qqRepoLabels 读仓库已有的标签名（读请求带缓存）。

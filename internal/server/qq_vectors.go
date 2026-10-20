@@ -337,8 +337,8 @@ func (s *Server) syncQQDocVectors(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	items := make([]account.QQKnowledgeItem, 0, uniqueEstimate)
-	texts := make([]string, 0, uniqueEstimate)
+	var items []account.QQKnowledgeItem
+	var texts []string
 	var pending map[string]struct{}
 	for i, section := range sections {
 		// 只对本轮已经选中更新的 ID 去重，未变化的段落不能遮住后续同 ID 的更新。
@@ -361,7 +361,10 @@ func (s *Server) syncQQDocVectors(ctx context.Context) (int, error) {
 			text = qqDocVectorText(section)
 		}
 		if pending == nil {
+			// 仅在确有更新时准备批处理缓冲，避免未变化的文档每轮都分配整份待更新数组。
 			pending = make(map[string]struct{}, uniqueEstimate)
+			items = make([]account.QQKnowledgeItem, 0, uniqueEstimate)
+			texts = make([]string, 0, uniqueEstimate)
 		}
 		pending[ids[i]] = struct{}{}
 		items = append(items, account.QQKnowledgeItem{ID: ids[i], Kind: "doc", Title: section.Doc + " · " + section.Title, Summary: qqTruncate(section.Text, qqHistorySummaryRunes), ContentHash: h, UpdatedAt: s.qq.now()})

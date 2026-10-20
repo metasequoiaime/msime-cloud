@@ -115,6 +115,31 @@ func TestDictPRAuditSurvivesCancellation(t *testing.T) {
 	}
 }
 
+func TestDictPRRejectContinuesAfterCommentCancellation(t *testing.T) {
+	s, f, conn, schema := dictPRServer(t, "")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	const root = "/repos/" + dictTestRepo
+	s.adminGitHub.HTTP.Transport = dictionaryCancelTransport{
+		base: s.adminGitHub.HTTP.Transport, method: "POST", path: root + "/issues/12/comments", cancel: cancel,
+	}
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, dictionaryAuditRequest(s, ctx, "/api/dict-prs/12/reject", `{"reason":"合成拒绝理由","head_sha":"head12"}`))
+	if ctx.Err() == nil || w.Code != http.StatusOK {
+		t.Fatalf("评论写入后取消请求未继续完成拒绝：ctx=%v status=%d body=%s", ctx.Err(), w.Code, w.Body.String())
+	}
+	f.mu.Lock()
+	p := *f.pull(12)
+	f.mu.Unlock()
+	if p.state != "closed" || len(p.comments) != 1 {
+		t.Fatalf("评论写入后未关闭拉取请求或重复评论：%+v", p)
+	}
+	want := dictAuditRow{"dict_pr_reject", "12", "", "", "合成拒绝理由", "pat:" + dictionaryAuditEmail}
+	if audits := dictAudit(t, conn, schema); !slices.Equal(audits, []dictAuditRow{want}) {
+		t.Fatalf("评论写入后取消请求丢失拒绝审计：%+v", audits)
+	}
+}
+
 func TestDictionaryChangesAuditSurvivesCancellation(t *testing.T) {
 	s, _, conn, schema := dictPRServer(t, "")
 	f := &dictionaryMock{text: "甲\tjia\t1\n乙\tyi\t5\n"}

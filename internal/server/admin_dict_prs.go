@@ -1023,7 +1023,10 @@ func (s *Server) rejectDictPR(w http.ResponseWriter, r *http.Request, gh *github
 		fail(w, 502, "github_error")
 		return
 	}
-	res, err = gh.Do(ctx, token, "PATCH", repo+"/pulls/"+strconv.Itoa(number), map[string]string{"state": "closed"})
+	// 评论已经确认写入后，即使管理员断开连接也继续限时关闭拉取请求，避免重试产生重复评论并留下开放的拒绝请求。
+	closeCtx, cancelClose := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancelClose()
+	res, err = gh.Do(closeCtx, token, "PATCH", repo+"/pulls/"+strconv.Itoa(number), map[string]string{"state": "closed"})
 	gh.Invalidate(repo + "/pulls")
 	switch {
 	case err != nil || res.Status >= 500:
@@ -1035,7 +1038,7 @@ func (s *Server) rejectDictPR(w http.ResponseWriter, r *http.Request, gh *github
 		return
 	}
 	unlock()
-	s.auditDictPR(ctx, "dict_pr_reject", number, map[string]any{"reason": reason})
+	s.auditDictPR(closeCtx, "dict_pr_reject", number, map[string]any{"reason": reason})
 	respond(w, 200, map[string]any{"ok": true})
 }
 

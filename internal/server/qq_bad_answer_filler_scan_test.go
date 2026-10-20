@@ -49,7 +49,7 @@ func TestQQBadAnswerFillerScanAllocationBudget(t *testing.T) {
 			if got != previousQQStripBadAnswerFiller(tc.input) {
 				t.Fatal("语气词扫描结果变化")
 			}
-			if allocs > tc.maxAllocs {
+			if !raceEnabled && allocs > tc.maxAllocs {
 				t.Fatalf("语气词扫描分配 %.1f 次，超过 %.1f 次预算", allocs, tc.maxAllocs)
 			}
 			result := testing.Benchmark(func(b *testing.B) {

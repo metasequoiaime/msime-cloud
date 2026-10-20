@@ -240,6 +240,10 @@ func (a *Service) dictionaryImport(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, "invalid_dictionary_weight")
 			return
 		}
+		// 保留第 501 条作为超限标记，后续行继续按原顺序校验，但不再累积条目。
+		if len(entries) > 500 {
+			continue
+		}
 		if input.Format == "windows" && (kind == "english" || kind == "quick") {
 			word, code = code, word
 		}
@@ -375,6 +379,10 @@ func (a *Service) dictionaryImportHans(w http.ResponseWriter, r *http.Request) {
 				writeError(w, 400, "pure_han_required")
 				return
 			}
+		}
+		// 第 501 个词已标记超限；后续词仍需完成字符校验，以保留原错误优先级。
+		if len(words) > 500 {
+			continue
 		}
 		words = append(words, word)
 	}

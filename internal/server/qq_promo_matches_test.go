@@ -2,10 +2,13 @@ package server
 
 import (
 	"math/rand"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 )
+
+var previousQQWeChatPattern = regexp.MustCompile(`(?i)(?:微信|v信|vx)\s*((?:号码?|账号)?\s*[:：]?)\s*([A-Za-z0-9][-_A-Za-z0-9]{4,19})`)
 
 // 保留旧的全量匹配流程，核对分批读取后的分类及非重叠匹配规则。
 func previousQQPromoSentenceMatches(sentence string) string {
@@ -15,7 +18,7 @@ func previousQQPromoSentenceMatches(sentence string) string {
 	if qqGroupNumberPattern.MatchString(sentence) {
 		return "group"
 	}
-	for _, m := range qqWeChatPattern.FindAllStringSubmatchIndex(sentence, -1) {
+	for _, m := range previousQQWeChatPattern.FindAllStringSubmatchIndex(sentence, -1) {
 		if start := m[0]; start > 0 {
 			if c := sentence[start-1] | 0x20; c >= 'a' && c <= 'z' {
 				continue
@@ -47,6 +50,22 @@ func TestQQPromoMatchTraversalCompatibility(t *testing.T) {
 		{"vx Windows avxabc12 vxabc34", "wechat"},
 		{"微信 Windows vx:abcde", "wechat"},
 		{"\xffvxabc12", "wechat"},
+		{"VX\t账号\f：\rabcde", "wechat"},
+		{"微信号码 abcde", "wechat"},
+		{"v信:abcde", "wechat"},
+		{"vx\vabc12", ""},
+		{"vx\u3000abc12", ""},
+		{"vx:abcd", ""},
+		{"vx:abcde", "wechat"},
+		{"vx:ſKabc", "wechat"},
+		{"vxſKabc", ""},
+		{"vxſKab1", "wechat"},
+		{"ſvxabc12", "wechat"},
+		{"avx:abc12", ""},
+		{"avxvxabc12", ""},
+		{"vx" + strings.Repeat("a", 20) + "1", ""},
+		{"vx" + strings.Repeat("a", 19) + "1", "wechat"},
+		{"vx" + strings.Repeat("a", 18) + "vxabc12", ""},
 		{"github.com", ""},
 		{"GITHUB.COM DOCS.GITHUB.COM", ""},
 		{"github.com external.example.net", "domain"},
@@ -67,8 +86,8 @@ func TestQQPromoMatchTraversalCompatibility(t *testing.T) {
 		}
 	}
 	random := rand.New(rand.NewSource(67))
-	units := []string{"普通", "微信 Windows", "vxabc12", "vx abcde", "vx:abcde", "avxabc12", "v信号 abc12", "微信账号 abc12", "github.com", "DOCS.GITHUB.COM", "external.example.net", "加群 12345", "a", " ", "\n", "\t", ":", ".", "。", "\xff", "\xe4\xb8", "😀"}
-	for range 2000 {
+	units := []string{"普通", "微信 Windows", "vxabc12", "vx abcde", "vx:abcde", "avxabc12", "v信号 abc12", "微信账号 abc12", "github.com", "DOCS.GITHUB.COM", "external.example.net", "加群 12345", "a", " ", "\n", "\t", ":", ".", "。", "\xff", "\xe4\xb8", "😀", "v", "V", "x", "X", "微", "信", "号码", "号", "账号", "：", "\f", "\r", "\v", "\u3000", "ſ", "K", "abcde", "abc12", "abcd", "1", "_", "-"}
+	for range 10000 {
 		var text strings.Builder
 		for range random.Intn(24) {
 			text.WriteString(units[random.Intn(len(units))])
@@ -84,6 +103,7 @@ func TestQQPromoMatchAllocationBudget(t *testing.T) {
 	for _, tc := range []struct{ name, text, want string }{
 		{"wechat", strings.Repeat("微信号 abc12 ", 4096), "wechat"},
 		{"domain", strings.Repeat("external.example.com ", 4096), "domain"},
+		{"ignored_wechat", strings.Repeat("avxabc12 ", 4096), ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var got string
@@ -99,7 +119,7 @@ func TestQQPromoMatchAllocationBudget(t *testing.T) {
 			t.Logf("%s：%s，%s", tc.name, result.String(), result.MemString())
 			// 竞态检测会随机丢弃正则对象池并重建位图；沿用现有过滤测试的做法，在普通模式检查分配预算。
 			if !raceEnabled && result.AllocedBytesPerOp() > 4096 {
-				t.Fatalf("首个匹配已命中时分配 %d 字节，超过 4096 字节预算", result.AllocedBytesPerOp())
+				t.Fatalf("引流分类扫描分配 %d 字节，超过 4096 字节预算", result.AllocedBytesPerOp())
 			}
 		})
 	}

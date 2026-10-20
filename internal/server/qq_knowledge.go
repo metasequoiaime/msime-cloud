@@ -1250,6 +1250,64 @@ func qqRemoveLinks(text string) string {
 	return out.String()
 }
 
+// qqRemoveRawLinks 按 qqLinkPattern 的规则删除链接，但保留链接前后的空白原样。
+func qqRemoveRawLinks(text string) string {
+	removed := 0
+	links := 0
+	for search := 0; ; {
+		begin, end, next, ok := qqNextRawLink(text, search)
+		if !ok {
+			break
+		}
+		removed += end - begin
+		links++
+		search = next
+	}
+	if links == 0 {
+		return text
+	}
+	var out strings.Builder
+	out.Grow(len(text) - removed)
+	start := 0
+	for search := 0; ; {
+		begin, end, next, ok := qqNextRawLink(text, search)
+		if !ok {
+			break
+		}
+		out.WriteString(text[start:begin])
+		start, search = end, next
+	}
+	out.WriteString(text[start:])
+	return out.String()
+}
+
+func qqNextRawLink(text string, search int) (begin, end, next int, ok bool) {
+	for search < len(text) {
+		i := strings.Index(text[search:], "://")
+		if i < 0 {
+			return 0, 0, 0, false
+		}
+		i += search
+		begin = i
+		for begin > 0 && qqURLSchemeByte(text[begin-1]) {
+			begin--
+		}
+		for begin < i && !qqURLSchemeLetter(text[begin]) {
+			begin++
+		}
+		if begin == i {
+			search = i + 3
+			continue
+		}
+		end = i + 3
+		for end < len(text) && text[end] >= '!' && text[end] <= '~' {
+			end++
+		}
+		return begin, end, end, true
+	}
+	return 0, 0, 0, false
+}
+
 // writeQQCollapsedSegment 写入不含链接的一段正文，保留单个制表符，只把连续或跨链接的 ASCII 空白合并为一个空格。
 func writeQQCollapsedSegment(out *strings.Builder, text string, pendingSpace *byte) {
 	for i := 0; i < len(text); {

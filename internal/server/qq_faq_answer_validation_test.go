@@ -7,6 +7,7 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -136,6 +137,61 @@ func TestQQFAQAnswerValidationAllocationBudget(t *testing.T) {
 	}
 	if saved := baseline.AllocedBytesPerOp() - result.AllocedBytesPerOp(); saved < 64<<10 {
 		t.Fatalf("旧分配=%s，新分配=%s，每次节省 %d 字节，期望至少 64 KiB", baseline.MemString(), result.MemString(), saved)
+	}
+}
+
+func TestQQFAQAnswerLinkScanMatchesPrevious(t *testing.T) {
+	previous := regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[!-~]*`)
+	units := []string{"", "a", "1", "+", "-", ".", ":", "/", "!", " ", "甲", "\n", "\t", "\xff", "https", "ftp", "普通", "**", "#"}
+	check := func(input string) {
+		want := previous.ReplaceAllString(input, "")
+		if got := qqRemoveRawLinks(input); got != want {
+			t.Fatalf("FAQ 裸链接扫描变化：输入=%q，实际=%q，预期=%q", input, got, want)
+		}
+	}
+	for _, input := range []string{
+		"", "https://example.test", "HTTP+unix://socket/path", "7://not-a-scheme", "普通://网址", "前https://a.b后",
+		"https://a.bhttp://c.d", "http://a.b/path?x=1#x", "[链接](https://a.b)", "https://\xff/路径",
+	} {
+		check(input)
+	}
+	random := rand.New(rand.NewSource(1042))
+	for range 5000 {
+		var text strings.Builder
+		for range random.Intn(100) {
+			text.WriteString(units[random.Intn(len(units))])
+		}
+		check(text.String())
+	}
+}
+
+func TestQQFAQAnswerLinkScanAllocationBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name, input string
+		maxAllocs   float64
+		maxBytes    int
+	}{
+		{"dense", strings.Repeat("普通答案 https://example.test/path ", 1024), 1, 64 << 10},
+		{"long_target", "前 " + strings.Repeat("https://example.test/path/", 1<<15) + " 后", 1, 64 << 10},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got string
+			allocs := testing.AllocsPerRun(20, func() { got = qqRemoveRawLinks(tc.input) })
+			if got == "" {
+				t.Fatal("链接扫描结果不应为空")
+			}
+			if allocs > tc.maxAllocs {
+				t.Fatalf("FAQ 裸链接扫描分配 %.1f 次，超过 %.1f 次预算", allocs, tc.maxAllocs)
+			}
+			result := testing.Benchmark(func(b *testing.B) {
+				for b.Loop() {
+					_ = qqRemoveRawLinks(tc.input)
+				}
+			})
+			if result.AllocedBytesPerOp() > int64(tc.maxBytes) {
+				t.Fatalf("FAQ 裸链接扫描分配 %d 字节，超过 %d 字节预算", result.AllocedBytesPerOp(), tc.maxBytes)
+			}
+		})
 	}
 }
 

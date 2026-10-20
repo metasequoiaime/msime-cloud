@@ -233,12 +233,25 @@ func zlibStreamExact(parts [][]byte) bool {
 	return err == nil && r.Len() == 0
 }
 
-// framePNG 把一帧拼成独立的 PNG 文件。
+// framePNG 把一帧拼成独立的 PNG 文件，按各块的完整长度一次分配输出缓冲。
 func (a *candidateAPNG) framePNG(frame apngFrame) []byte {
 	ihdr := append([]byte{}, a.ihdr...)
 	binary.BigEndian.PutUint32(ihdr, frame.width)
 	binary.BigEndian.PutUint32(ihdr[4:], frame.height)
-	out := appendPNGChunk(append([]byte{}, pngSignature...), "IHDR", ihdr)
+	// 每个块另含长度、类型和 CRC 共 12 字节；固定块是 IHDR 和 IEND。
+	size := len(pngSignature) + len(ihdr) + 2*12
+	if a.plte != nil {
+		size += len(a.plte) + 12
+	}
+	if a.trns != nil {
+		size += len(a.trns) + 12
+	}
+	for _, data := range frame.data {
+		size += len(data) + 12
+	}
+	out := make([]byte, len(pngSignature), size)
+	copy(out, pngSignature)
+	out = appendPNGChunk(out, "IHDR", ihdr)
 	if a.plte != nil {
 		out = appendPNGChunk(out, "PLTE", a.plte)
 	}

@@ -316,6 +316,21 @@ func candidatePackageLicense(pkg skins.Package) CandidateSkinLicense {
 	return CandidateSkinLicense{Code: pkg.License.Code, Assets: pkg.License.Assets, Source: pkg.License.Source}
 }
 
+// candidatePNGBufferPool 在一次包清理中顺序复用一个编码工作区，引用随本次调用一起释放。
+type candidatePNGBufferPool struct {
+	buffer *png.EncoderBuffer
+}
+
+func (p *candidatePNGBufferPool) Get() *png.EncoderBuffer {
+	buffer := p.buffer
+	p.buffer = nil
+	return buffer
+}
+
+func (p *candidatePNGBufferPool) Put(buffer *png.EncoderBuffer) {
+	p.buffer = buffer
+}
+
 // sanitizeCandidateImages 按扩展名选择解码器完整解码每张图片：静态 PNG 和 JPEG 解码后重新编码，从而去掉 EXIF、XMP、ICC 和文本块；APNG 走 parseCandidateAPNG 的块级清理，保留动画并逐帧解码校验。尺寸、APNG 帧数和 JPEG 扫描段数都在完整解码前从文件头读取，APNG 的每幅画面都按整张画布计入整包像素上限。
 func sanitizeCandidateImages(files map[string][]byte, preview string) (map[string][]byte, string) {
 	pixels := 0
@@ -351,6 +366,8 @@ func sanitizeCandidateImages(files map[string][]byte, preview string) (map[strin
 	}
 	clean := make(map[string][]byte, len(files))
 	total := 0
+	var pngBuffers candidatePNGBufferPool
+	pngEncoder := png.Encoder{CompressionLevel: png.BestCompression, BufferPool: &pngBuffers}
 	for path, data := range files {
 		var decoded image.Image
 		var err error
@@ -362,7 +379,7 @@ func sanitizeCandidateImages(files map[string][]byte, preview string) (map[strin
 			out.Write(a.clean)
 		} else if candidateExtension(path) == "png" {
 			if decoded, err = png.Decode(bytes.NewReader(data)); err == nil {
-				err = (&png.Encoder{CompressionLevel: png.BestCompression}).Encode(&out, decoded)
+				err = pngEncoder.Encode(&out, decoded)
 			}
 		} else {
 			if decoded, err = jpeg.Decode(bytes.NewReader(data)); err == nil {

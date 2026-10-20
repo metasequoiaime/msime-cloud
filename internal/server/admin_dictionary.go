@@ -210,7 +210,28 @@ func dictionaryTextPath(name string) bool {
 	if !ok || strings.Contains(file, "/") {
 		return false
 	}
-	base := strings.ToLower(file)
+	// 短文件名在栈上折叠 ASCII 大小写；限制长度以便结果字符串也能使用编译器的栈缓冲。
+	var lower [32]byte
+	ascii := len(file) <= len(lower)
+	if ascii {
+		for i := range len(file) {
+			c := file[i]
+			if c >= utf8.RuneSelf {
+				ascii = false
+				break
+			}
+			if c >= 'A' && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			lower[i] = c
+		}
+	}
+	var base string
+	if ascii {
+		base = string(lower[:len(file)])
+	} else {
+		base = strings.ToLower(file)
+	}
 	stem, _, _ := strings.Cut(base, ".")
 	if slices.Contains([]string{"readme", "license", "licence", "notice", "changelog", "agents"}, stem) {
 		return false

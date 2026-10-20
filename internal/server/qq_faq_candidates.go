@@ -49,8 +49,16 @@ var (
 	qqFAQViewCommand   = regexp.MustCompile(`(?i)^看\s*[:：]?\s*[#＃]?([fb])\s*([0-9]{1,9})$`)
 )
 
-// qqAnswerPrefix 是「写进FAQ F12 答：……」里答案的开头。
-var qqAnswerPrefix = regexp.MustCompile(`^答[:：]\s*`)
+// qqTrimAnswerPrefix 去掉答案开头的「答:」或「答：」及其后的 ASCII 空白，直接返回原文切片。
+func qqTrimAnswerPrefix(text string) string {
+	if rest, ok := strings.CutPrefix(text, "答:"); ok {
+		return strings.TrimLeft(rest, " \t\n\f\r")
+	}
+	if rest, ok := strings.CutPrefix(text, "答："); ok {
+		return strings.TrimLeft(rest, " \t\n\f\r")
+	}
+	return text
+}
 
 // recordQQFAQCandidate 记下一条文档候选；同一个问题 7 天内只记一次，数据库明确拒绝时退回去重额度，结果不确定时保留额度。在回复之后调用，不跟随处理消息的 ctx、另限 3 秒（写法照 recordQQTurn）：滚动发布取消了 ctx 也要记下。
 func (s *Server) recordQQFAQCandidate(ctx context.Context, question, answer string) {
@@ -112,7 +120,7 @@ func (s *Server) qqFAQCandidateCommands(ctx context.Context, text, compact strin
 	if match != nil {
 		id, _ = strconv.ParseInt(match[2], 10, 64)
 		if action == "write" {
-			extra = strings.TrimSpace(qqAnswerPrefix.ReplaceAllString(strings.TrimSpace(match[3]), ""))
+			extra = strings.TrimSpace(qqTrimAnswerPrefix(strings.TrimSpace(match[3])))
 		}
 		if strings.EqualFold(match[1], "b") {
 			return s.qqBadAnswerCommand(ctx, action, id, extra, admin, reply)

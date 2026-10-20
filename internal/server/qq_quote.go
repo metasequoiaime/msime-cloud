@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"strings"
+	"unicode/utf8"
 )
 
 // 引用的消息。群友常常引用（回复）一条带截图或问题的消息，再 @机器人 问「这个是什么意思」，机器人原来只收到这一句，看不到被引用的截图，只能瞎猜：曾把候选后面括号里的辅助码「(AD)」答成广告、公元、活动目录。开放平台的群 @ 事件里引用的内容放在哪个字段，文档没写清、生产上也还没见过：这里按已知的写法认 msg_elements（被引用消息的文字和附件），message_reference（对象）和 message_type=103 只说明引用了。这几个字段单独解析，类型对不上就当没有引用，不影响 qqGroupMessage 本身的解析（字段类型猜错会让整条消息被丢掉）；probeEventFields 会记下带这些字段的事件长什么样，确认之后再按实际字段调整。
@@ -59,9 +60,21 @@ func qqQuoteFromFields(fields qqQuoteEventFields, m qqGroupMessage) qqQuote {
 		}
 		ownText := qqFeedbackText(m.Content)
 		var texts []string
+		// 前 500 个字符最多占 2000 字节，多保留一字节供 qqTruncate 判断省略号。
+		// 字节边界可能切进后续字符，但不会切断最终保留的字符；达到预算后仍须检查附件。
+		remaining := qqQuoteRunes*utf8.UTFMax + 1
 		for _, e := range elements {
-			if text := qqFeedbackText(e.Content); text != "" && text != ownText {
-				texts = append(texts, text)
+			if remaining > 0 {
+				if text := qqFeedbackText(e.Content); text != "" && text != ownText {
+					if len(texts) > 0 {
+						remaining--
+					}
+					if len(text) > remaining {
+						text = text[:remaining]
+					}
+					remaining -= len(text)
+					texts = append(texts, text)
+				}
 			}
 			for _, a := range e.Attachments {
 				if !own[a.URL] && strings.HasPrefix(strings.ToLower(a.ContentType), "image/") {

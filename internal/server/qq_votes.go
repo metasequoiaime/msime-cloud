@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
@@ -22,7 +22,28 @@ const (
 	qqVoteMarker = "<!-- qq-votes:"
 )
 
-var qqVotePattern = regexp.MustCompile(`<!-- qq-votes:([0-9]{1,7}) -->`)
+// qqVoteCount 扫描机器人投票评论中的首个计数标记，保持 qq-votes 正则的边界规则。
+func qqVoteCount(body string) (int, bool) {
+	for search := 0; search < len(body); {
+		offset := strings.Index(body[search:], qqVoteMarker)
+		if offset < 0 {
+			return 0, false
+		}
+		start := search + offset + len(qqVoteMarker)
+		end, value := start, 0
+		for end < len(body) && body[end] >= '0' && body[end] <= '9' {
+			if end-start < 7 {
+				value = value*10 + int(body[end]-'0')
+			}
+			end++
+		}
+		if end > start && end-start <= 7 && strings.HasPrefix(body[end:], " -->") {
+			return value, true
+		}
+		search = start
+	}
+	return 0, false
+}
 
 type qqVoteComment struct {
 	ID   int64  `json:"id"`
@@ -119,8 +140,8 @@ func (s *Server) qqAddVote(ctx context.Context, token, repo string, number int64
 	}
 	unknown := false
 	for _, c := range comments {
-		m := qqVotePattern.FindStringSubmatch(c.Body)
-		if m == nil {
+		n, ok := qqVoteCount(c.Body)
+		if !ok {
 			continue
 		}
 		owned, known := s.qqWrittenByApp(ctx, c.qqGitHubAuthor)
@@ -128,7 +149,6 @@ func (s *Server) qqAddVote(ctx context.Context, token, repo string, number int64
 			unknown = unknown || !known
 			continue
 		}
-		n, _ := strconv.Atoi(m[1])
 		// 写入结果可能在响应返回前丢失；先失效缓存，避免不确定时继续读到旧评论。
 		defer client.Invalidate("/repos/" + repo + "/issues")
 		r, err := qqWriteIssue(ctx, client, token, repo, "PATCH", "/repos/"+repo+"/issues/comments/"+strconv.FormatInt(c.ID, 10), map[string]string{"body": qqVoteBody(n + 1)})

@@ -40,7 +40,8 @@ func TestQQBadAnswerFillerScanAllocationBudget(t *testing.T) {
 		maxAllocs   float64
 		maxBytes    int64
 	}{
-		{"plain", strings.Repeat("普通文字", 32768), 0, 0},
+		// AllocsPerRun 仍检查零分配；进程级字节统计为 race 和背景分配保留少量余量。
+		{"plain", strings.Repeat("普通文字", 32768), 0, 1 << 10},
 		{"dense", strings.Repeat("好像还是你的回答！", 4096), 1, 128 << 10},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

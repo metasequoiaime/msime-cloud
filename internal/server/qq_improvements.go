@@ -260,7 +260,7 @@ func (s *Server) qqImprovementReport(ctx context.Context, from, to time.Time, dr
 			fmt.Fprintf(&b, "有 %d 条被说答错，没能自动概括；管理员可以在群里 @机器人 发「差评」看详情。\n", len(bad))
 		} else {
 			for _, item := range summary.Items {
-				fmt.Fprintf(&b, "- [ ] %s\n", githubReferenceBreaker.Replace(qqStripLinks(strings.Join(strings.Fields(item), " "))))
+				fmt.Fprintf(&b, "- [ ] %s\n", githubReferenceBreaker.Replace(qqStripLinks(qqNormalizeWhitespace(item))))
 			}
 			if len(bad) > len(shown) {
 				fmt.Fprintf(&b, "\n还有 %d 条没列出，管理员可以在群里发「差评」看。\n", len(bad)-len(shown))

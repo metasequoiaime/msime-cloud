@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"math/rand"
 	"strings"
 	"sync"
 	"testing"
@@ -10,6 +11,64 @@ import (
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
+
+func previousQQImprovementSummaryItem(item string) string {
+	return githubReferenceBreaker.Replace(qqStripLinks(strings.Join(strings.Fields(item), " ")))
+}
+
+func currentQQImprovementSummaryItem(item string) string {
+	return githubReferenceBreaker.Replace(qqStripLinks(qqNormalizeWhitespace(item)))
+}
+
+func TestQQImprovementSummaryItemMatchesPrevious(t *testing.T) {
+	inputs := []string{
+		"",
+		" 普通概括 ",
+		"仓库有多少 star #12",
+		"\t\u0085\u00a0\u1680\u202f\u3000",
+		"链接 https://example.test/a?x=1 之后",
+		"\xff\xe6\x8f\x90\x90  无效 UTF-8",
+	}
+	random := rand.New(rand.NewSource(1108))
+	units := []string{"", "概括", " ", "\t", "\n", "\v", "\f", "\r", "\u0085", "\u00a0", "\u1680", "\u202f", "\u3000", "https://example.test", "@", "#", "://", "\xff", "\xe6", "\x8f", "\x90"}
+	for range 1000 {
+		var input strings.Builder
+		for range random.Intn(80) {
+			input.WriteString(units[random.Intn(len(units))])
+		}
+		inputs = append(inputs, input.String())
+	}
+	for _, input := range inputs {
+		if got, want := currentQQImprovementSummaryItem(input), previousQQImprovementSummaryItem(input); got != want {
+			t.Fatalf("摘要空白归一化结果变化：输入=%q，结果=%q，期望=%q", input, got, want)
+		}
+	}
+}
+
+func BenchmarkQQImprovementSummaryItem(b *testing.B) {
+	for _, tc := range []struct {
+		name, input string
+	}{
+		{"短摘要", "仓库有多少 star #12"},
+		{"长摘要", strings.Repeat("普通概括 ", 8192)},
+		{"混合空白和链接", strings.Repeat("普通\t概括\u3000", 2048) + " https://example.test/a 结尾 #12"},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.Run("previous", func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					_ = previousQQImprovementSummaryItem(tc.input)
+				}
+			})
+			b.Run("current", func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					_ = currentQQImprovementSummaryItem(tc.input)
+				}
+			})
+		})
+	}
+}
 
 func TestQQImprovementReportInvalidatesIssueCache(t *testing.T) {
 	s, fake, _ := qqServer(t)

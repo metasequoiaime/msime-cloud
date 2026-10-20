@@ -479,22 +479,66 @@ func (s *Server) qqWebSearch(ctx context.Context, query string) string {
 		return "联网搜索失败。"
 	}
 	var result struct {
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
+		Content []qqWebSearchContent `json:"content"`
 	}
 	if json.Unmarshal(b, &result) != nil {
 		return "联网搜索返回的内容看不懂。"
 	}
-	var texts []string
-	for _, c := range result.Content {
-		if c.Type == "text" && strings.TrimSpace(c.Text) != "" {
-			texts = append(texts, strings.TrimSpace(c.Text))
+	if text := qqJoinWebSearchText(result.Content); text != "" {
+		return text
+	}
+	return "没有搜到结果。"
+}
+
+// qqWebSearchContent 是联网搜索服务返回的内容块。
+type qqWebSearchContent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// qqJoinWebSearchText 去掉空白内容并按原顺序合并文本块，避免为中间切片和 Join 结果重复分配。
+func qqJoinWebSearchText(content []qqWebSearchContent) string {
+	count := 0
+	total := 0
+	for _, c := range content {
+		if c.Type != "text" {
+			continue
+		}
+		text := strings.TrimSpace(c.Text)
+		if text == "" {
+			continue
+		}
+		count++
+		total += len(text)
+	}
+	if count == 0 {
+		return ""
+	}
+	if count == 1 {
+		for _, c := range content {
+			if c.Type == "text" {
+				if text := strings.TrimSpace(c.Text); text != "" {
+					return qqTruncate(text, qqResearchResultRunes)
+				}
+			}
 		}
 	}
-	if len(texts) == 0 {
-		return "没有搜到结果。"
+	var out strings.Builder
+	out.Grow(total + count - 1)
+	joined := 0
+	for _, c := range content {
+		if c.Type != "text" {
+			continue
+		}
+		text := strings.TrimSpace(c.Text)
+		if text == "" {
+			continue
+		}
+		if joined > 0 {
+			out.WriteByte('\n')
+		}
+		out.WriteString(text)
+		joined++
 	}
-	return qqTruncate(strings.Join(texts, "\n"), qqResearchResultRunes)
+	return qqTruncate(out.String(), qqResearchResultRunes)
 }

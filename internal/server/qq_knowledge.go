@@ -904,7 +904,8 @@ func qqSplitMarkdown(name, markdown string) []qqSection {
 		}
 		if m != nil {
 			flush()
-			if len(m[1]) > 1 && qqTrimSpace(markdown[nextOffset:]) == "" {
+			// 只需判断后续是否全为空白；遇到正文即停，避免每个标题重扫同一段尾部空白。
+			if len(m[1]) > 1 && qqMarkdownLeadingSpace(markdown[nextOffset:]) == "" {
 				break
 			}
 			level := len(m[1])

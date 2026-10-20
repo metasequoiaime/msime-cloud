@@ -43,11 +43,12 @@ func TestDictionaryRequestBody(t *testing.T) {
 
 func TestDictionaryRequestBodyAllocationBudget(t *testing.T) {
 	for _, tc := range []struct {
-		name, text          string
-		budget, allocations int64
+		name, text                  string
+		budget, allocations         int64
+		raceBudget, raceAllocations int64
 	}{
-		{"最长文本", strings.Repeat("a", 8192), 64 << 10, 26},
-		{"HTML转义文本", strings.Repeat("<", 8192), 448 << 10, 34},
+		{"最长文本", strings.Repeat("a", 8192), 64 << 10, 26, 128 << 10, 48},
+		{"HTML转义文本", strings.Repeat("<", 8192), 448 << 10, 34, 640 << 10, 64},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			arguments, err := json.Marshal(map[string]any{"text": tc.text, "operation": "annotate"})
@@ -71,8 +72,13 @@ func TestDictionaryRequestBodyAllocationBudget(t *testing.T) {
 			if err := json.Unmarshal(body["text"], &text); err != nil || len(body) != 1 || text != tc.text || request.Path != "/v1/input/annotate" {
 				t.Fatal("请求体字段、文本或路由发生变化")
 			}
-			if result.AllocedBytesPerOp() > tc.budget || result.AllocsPerOp() > tc.allocations {
-				t.Fatalf("请求构造分配 %s，超过 %d 字节/%d 次预算", result.MemString(), tc.budget, tc.allocations)
+			budget, allocations := tc.budget, tc.allocations
+			if raceEnabled {
+				// race 会随机丢弃 sync.Pool 中的 JSON 编码缓冲；为冷缓存和进程背景分配保留余量，普通模式沿用原预算。
+				budget, allocations = tc.raceBudget, tc.raceAllocations
+			}
+			if result.AllocedBytesPerOp() > budget || result.AllocsPerOp() > allocations {
+				t.Fatalf("请求构造分配 %s，超过 %d 字节/%d 次预算", result.MemString(), budget, allocations)
 			}
 		})
 	}

@@ -275,6 +275,30 @@ func (s *Server) qqLatestReleases(ctx context.Context) []qqPlatformRelease {
 	cache := map[string][]qqRelease{}
 	// failed 记下查询失败的仓库：查不到不等于没发布，这些仓库的平台不写进结果。
 	failed := map[string]bool{}
+	type releaseRead struct {
+		list []qqRelease
+		ok   bool
+	}
+	reads := map[string]*releaseRead{}
+	for _, p := range s.config.Admin.GitHub.Platforms {
+		if p.TagPrefix != "" && reads[p.Repo] == nil {
+			reads[p.Repo] = &releaseRead{}
+		}
+	}
+	// 多个独立平台仓库同时读取；只有一个时沿用下方按需读取，避免额外调度。
+	if len(reads) > 1 {
+		var pending errgroup.Group
+		for repo, result := range reads {
+			pending.Go(func() error {
+				result.list, result.ok = s.qqReleases(ctx, repo)
+				return nil
+			})
+		}
+		_ = pending.Wait()
+		for repo, result := range reads {
+			cache[repo], failed[repo] = result.list, !result.ok
+		}
+	}
 	releases := func(repo string) []qqRelease {
 		if list, ok := cache[repo]; ok {
 			return list

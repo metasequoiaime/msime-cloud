@@ -86,6 +86,8 @@ type Server struct {
 	mu          sync.Mutex
 	buckets     map[string]bucket
 	handler     http.Handler
+	// bucketOldest 是桶更新时间的保守下界，零值表示尚未扫描；由 mu 保护。
+	bucketOldest time.Time
 	// loki 是服务日志页读取 Loki 用的客户端；logStreams 限制同时打开的日志流，logStreamsDone 在优雅关闭开始时关闭以结束它们；logPoll、logHeartbeat 和 logMaxDuration 是日志流的轮询间隔、心跳间隔和单个连接的最长时间，测试会调小。
 	loki           *http.Client
 	logStreams     logStreamLimiter
@@ -385,10 +387,16 @@ func (s *Server) allow(c Client, now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.buckets) > 10000 {
-		for id, b := range s.buckets {
-			if now.Sub(b.updated) > 10*time.Minute {
-				delete(s.buckets, id)
+		if s.bucketOldest.IsZero() || now.Sub(s.bucketOldest) > 10*time.Minute {
+			oldest := now
+			for id, b := range s.buckets {
+				if now.Sub(b.updated) > 10*time.Minute {
+					delete(s.buckets, id)
+				} else if b.updated.Before(oldest) {
+					oldest = b.updated
+				}
 			}
+			s.bucketOldest = oldest
 		}
 		if _, exists := s.buckets[c.ID]; !exists && len(s.buckets) > 10000 {
 			return false
@@ -405,6 +413,10 @@ func (s *Server) allow(c Client, now time.Time) bool {
 		b.tokens--
 	}
 	s.buckets[c.ID] = b
+	// 时间回退时也降低下界，确保随后仍能及时回收新写入的旧时间戳。
+	if !s.bucketOldest.IsZero() && now.Before(s.bucketOldest) {
+		s.bucketOldest = now
+	}
 	return allowed
 }
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {

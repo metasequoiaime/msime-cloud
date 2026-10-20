@@ -213,9 +213,8 @@ func releaseTagPlatform(tag, asset string) (string, string) {
 			return platform, m[2]
 		}
 	}
-	name := strings.ToLower(asset)
-	if dot := strings.LastIndexByte(name, '.'); dot >= 0 {
-		switch name[dot:] {
+	if extension := releaseAssetExtension(asset); extension != "" {
+		switch extension {
 		case ".exe", ".msi", ".msix", ".appx":
 			return "windows", tag
 		case ".dmg", ".pkg":
@@ -233,13 +232,19 @@ func releaseTagPlatform(tag, asset string) (string, string) {
 	return "", tag
 }
 
-// releaseMetadataAsset reports checksum, signature and updater manifest files, whose downloads are update checks or verification rather than installs.
+// releaseAssetExtension 只转换最后一个扩展名，避免为无关的文件名前缀分配小写副本。
+func releaseAssetExtension(asset string) string {
+	if dot := strings.LastIndexByte(asset, '.'); dot >= 0 {
+		return strings.ToLower(asset[dot:])
+	}
+	return ""
+}
+
+// releaseMetadataAsset 识别校验和、签名和更新清单；这些下载属于更新检查或校验，不计作安装。
 func releaseMetadataAsset(asset string) bool {
-	name := strings.ToLower(asset)
-	for _, suffix := range []string{".sha256", ".sha512", ".sha256sum", ".sig", ".asc", ".minisig", ".txt", ".yml", ".yaml", ".json", ".blockmap", ".zsync"} {
-		if strings.HasSuffix(name, suffix) {
-			return true
-		}
+	switch releaseAssetExtension(asset) {
+	case ".sha256", ".sha512", ".sha256sum", ".sig", ".asc", ".minisig", ".txt", ".yml", ".yaml", ".json", ".blockmap", ".zsync":
+		return true
 	}
 	return false
 }

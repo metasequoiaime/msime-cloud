@@ -91,7 +91,40 @@ func telemetryNull(s string) any {
 
 // telemetryLines 把 CRLF 和单独的 CR 换行统一为 LF，让 Windows 的堆栈或消息通过控制字符检查，并与以 LF 上报的同一崩溃归为一组。
 func telemetryLines(s string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\r", "\n")
+	first := strings.IndexByte(s, '\r')
+	if first < 0 {
+		return s
+	}
+	pairs := strings.Count(s[first:], "\r\n")
+	if pairs == 0 {
+		return strings.ReplaceAll(s, "\r", "\n")
+	}
+	carriages := strings.Count(s[first:], "\r")
+	var out strings.Builder
+	// 每对 CRLF 缩短一个字节，按最终长度分配，避免混合换行复制两次或密集 CRLF 保留多余空间。
+	out.Grow(len(s) - pairs)
+	start := 0
+	if carriages == pairs {
+		// 纯 CRLF 每次固定跳过两个字节，避免为密集换行逐个判断后继字符。
+		for range pairs {
+			end := start + strings.IndexByte(s[start:], '\r')
+			out.WriteString(s[start:end])
+			out.WriteByte('\n')
+			start = end + 2
+		}
+	} else {
+		for range carriages {
+			end := start + strings.IndexByte(s[start:], '\r')
+			out.WriteString(s[start:end])
+			out.WriteByte('\n')
+			start = end + 1
+			if start < len(s) && s[start] == '\n' {
+				start++
+			}
+		}
+	}
+	out.WriteString(s[start:])
+	return out.String()
 }
 
 // truncateStack 把超过 limit 个标量的堆栈截到能放下的最后一个完整行，超长堆栈仍被记录而不是被拒绝（否则用同一 ID 重试永远不会成功）。第一行就超过 limit 时在 limit 处截断。

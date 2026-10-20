@@ -376,7 +376,12 @@ func sanitizeCandidateImages(files map[string][]byte, preview string) (map[strin
 			if !a.decode() {
 				return nil, "candidate_skin_image_invalid"
 			}
-			out.Write(a.clean)
+			// 解析结果已独立于上传字节；剥离大部分内容时仍压紧容量，避免保留过大的底层数组。
+			if cap(a.clean) > 2*len(a.clean) {
+				out.Write(a.clean)
+			} else {
+				out = *bytes.NewBuffer(a.clean)
+			}
 		} else if candidateExtension(path) == "png" {
 			if decoded, err = png.Decode(bytes.NewReader(data)); err == nil {
 				err = pngEncoder.Encode(&out, decoded)

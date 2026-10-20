@@ -347,8 +347,9 @@ func qqResearchTarget(raw, defaultRepo string) (repo, path string, ok bool) {
 	if err != nil || u.Scheme != "" || u.Host != "" || strings.Contains(u.Path, "..") {
 		return "", "", false
 	}
-	if match := qqResearchRepoPath.FindStringSubmatch(u.Path); match != nil {
-		repo = qqResearchOrg + "/" + match[1]
+	if qqResearchRepoPath.MatchString(u.Path) {
+		name, _, _ := strings.Cut(u.Path[len("/repos/"+qqResearchOrg+"/"):], "/")
+		repo = qqResearchOrg + "/" + name
 	} else if qqResearchOrgPath.MatchString(u.Path) || qqResearchUserPath.MatchString(u.Path) {
 		repo = defaultRepo
 	} else if u.Path == "/search/issues" || u.Path == "/search/commits" {

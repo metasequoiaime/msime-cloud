@@ -85,3 +85,53 @@ func BenchmarkQQBadAnswerFillerScan(b *testing.B) {
 		}
 	}
 }
+
+func TestQQBadAnswerQuestionCandidateMatchesPattern(t *testing.T) {
+	cases := []string{"", "删除键怎么用", "如何设置", "为什么不行", "为啥", "有吗", "真的？", "really?", "普通反馈", "不准了", "\xff怎么"}
+	for _, text := range cases {
+		want := qqBadAnswerQuestion.MatchString(text)
+		if got := qqBadAnswerQuestionCandidate(text); got != want {
+			t.Fatalf("差评问句预筛变化：输入=%q，结果=%v，期望=%v", text, got, want)
+		}
+	}
+}
+
+func TestQQBadAnswerQuestionCandidateRandomCompatibility(t *testing.T) {
+	random := rand.New(rand.NewSource(20261020))
+	units := []string{"普通", "怎么", "如何", "为什么", "为啥", "吗", "？", "?", "不", "\xff", "\xe4", "\x80"}
+	for range 3000 {
+		var text strings.Builder
+		for range random.Intn(80) {
+			text.WriteString(units[random.Intn(len(units))])
+		}
+		input := text.String()
+		if got, want := qqBadAnswerQuestionCandidate(input), qqBadAnswerQuestion.MatchString(input); got != want {
+			t.Fatalf("随机差评问句预筛不兼容：输入=%q，结果=%v，期望=%v", input, got, want)
+		}
+	}
+}
+
+func BenchmarkQQBadAnswerQuestionCandidate(b *testing.B) {
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{"missing", strings.Repeat("普通反馈。", 32)},
+		{"early", "怎么用" + strings.Repeat("普通反馈。", 32)},
+		{"late", strings.Repeat("普通反馈。", 32) + "为什么"},
+	} {
+		for _, impl := range []struct {
+			name string
+			fn   func(string) bool
+		}{
+			{"previous", qqBadAnswerQuestion.MatchString}, {"current", qqBadAnswerQuestionCandidate},
+		} {
+			b.Run(tc.name+"/"+impl.name, func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					_ = impl.fn(tc.text)
+				}
+			})
+		}
+	}
+}

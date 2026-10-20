@@ -1262,8 +1262,76 @@ func qqURLSchemeLetter(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
-// qqMarkdownLink 匹配 Markdown 链接和图片，第 1 组是链接文字。qqLinkPattern 的 [!-~]* 会连右括号一起吞掉，`[#730](https://…)，` 只用 qqStripLinks 会剩下「[#730](，」。
-var qqMarkdownLink = regexp.MustCompile(`!?\[([^\]]*)\]\([^)]*\)`)
+// qqMarkdownLinksToText 只保留 Markdown 链接和图片的文字，避免裸链接过滤留下半截括号。
+func qqMarkdownLinksToText(text string) string {
+	outputBytes, matches := len(text), 0
+	var first [8][4]int
+	qqScanMarkdownLinks(text, func(match [4]int) {
+		outputBytes -= match[1] - match[0] - (match[3] - match[2])
+		if matches < len(first) {
+			first[matches] = match
+		}
+		matches++
+	})
+	if matches == 0 {
+		return text
+	}
+	var out strings.Builder
+	out.Grow(outputBytes)
+	written := 0
+	write := func(match [4]int) {
+		out.WriteString(text[written:match[0]])
+		out.WriteString(text[match[2]:match[3]])
+		written = match[1]
+	}
+	// 少量链接复用栈上的下标，不再扫描它们之前的长正文。
+	for _, match := range first[:min(matches, len(first))] {
+		write(match)
+	}
+	if matches > len(first) {
+		resume := written
+		qqScanMarkdownLinks(text[resume:], func(match [4]int) {
+			for i := range match {
+				match[i] += resume
+			}
+			write(match)
+		})
+	}
+	out.WriteString(text[written:])
+	return out.String()
+}
+
+// qqScanMarkdownLinks 依次返回完整匹配和标签文字的四个下标，沿用旧正则的非重叠规则。
+func qqScanMarkdownLinks(text string, yield func([4]int)) {
+	for search := 0; search < len(text); {
+		open := strings.IndexByte(text[search:], '[')
+		if open < 0 {
+			return
+		}
+		open += search
+		close := strings.IndexByte(text[open+1:], ']')
+		if close < 0 {
+			return
+		}
+		close += open + 1
+		if close+1 >= len(text) || text[close+1] != '(' {
+			// 当前右方括号不接左圆括号时，前面的嵌套起点也不可能匹配。
+			search = close + 1
+			continue
+		}
+		end := strings.IndexByte(text[close+2:], ')')
+		if end < 0 {
+			return
+		}
+		end += close + 3
+		start := open
+		if start > search && text[start-1] == '!' {
+			start--
+		}
+		yield([4]int{start, end, open + 1, close})
+		search = end
+	}
+}
 
 // qqLineMarkerEnd 返回行首 Markdown 标记的字节长度；沿用原正则的 ASCII 数字及空白规则。
 func qqLineMarkerEnd(line string) int {
@@ -1455,7 +1523,7 @@ func qqPlainText(md string) string {
 	}
 	// 缺少规则所需的字面字符时直接跳过，避免无匹配的替换复制全文。
 	if strings.Contains(text, "](") {
-		text = qqMarkdownLink.ReplaceAllString(text, "$1")
+		text = qqMarkdownLinksToText(text)
 	}
 	// 这里仅删除裸链接；末尾的逐行裁剪和字段合并会统一处理空白，避免提前复制全文。
 	if strings.Contains(text, "://") {

@@ -344,18 +344,17 @@ func qqResearchTarget(raw, defaultRepo string) (repo, path string, ok bool) {
 	if err != nil || u.Scheme != "" || u.Host != "" || len(raw) > 500 || strings.Contains(u.Path, "..") {
 		return "", "", false
 	}
-	switch {
-	case qqResearchRepoPath.MatchString(u.Path):
-		repo = qqResearchOrg + "/" + qqResearchRepoPath.FindStringSubmatch(u.Path)[1]
-	case qqResearchOrgPath.MatchString(u.Path), qqResearchUserPath.MatchString(u.Path):
+	if match := qqResearchRepoPath.FindStringSubmatch(u.Path); match != nil {
+		repo = qqResearchOrg + "/" + match[1]
+	} else if qqResearchOrgPath.MatchString(u.Path) || qqResearchUserPath.MatchString(u.Path) {
 		repo = defaultRepo
-	case u.Path == "/search/issues" || u.Path == "/search/commits":
+	} else if u.Path == "/search/issues" || u.Path == "/search/commits" {
 		query, err := url.ParseQuery(u.RawQuery)
 		if err != nil || len(query["q"]) != 1 || !qqResearchScopedSearch(query.Get("q")) {
 			return "", "", false
 		}
 		repo = defaultRepo
-	default:
+	} else {
 		return "", "", false
 	}
 	path = u.Path

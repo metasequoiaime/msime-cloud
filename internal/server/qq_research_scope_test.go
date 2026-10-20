@@ -94,3 +94,69 @@ func TestQQResearchRejectsOutsideSearchBeforeGitHubRequest(t *testing.T) {
 		}
 	}
 }
+
+func TestQQResearchTargetMatchesPrevious(t *testing.T) {
+	for _, raw := range []string{
+		"", " /repos/metasequoiaime/msime/issues/123 ", "/repos/metasequoiaime/msime", "/orgs/metasequoiaime", "/users/example",
+		"/search/issues?q=repo%3Ametasequoiaime%2Fmsime+bug", "/search/commits?q=org%3Ametasequoiaime+author%3Aexample",
+		"https://github.com/metasequoiaime/msime", "/repos/other/msime/issues/1", "/repos/metasequoiaime/msime/../secret",
+		"/search/issues?q=repo%3Aother%2Fmsime", "/search/issues?q=org%3Ametasequoiaime&q=repo%3Ametasequoiaime%2Fmsime",
+	} {
+		gotRepo, gotPath, gotOK := qqResearchTarget(raw, "metasequoiaime/msime")
+		wantRepo, wantPath, wantOK := previousQQResearchTarget(raw, "metasequoiaime/msime")
+		if gotRepo != wantRepo || gotPath != wantPath || gotOK != wantOK {
+			t.Fatalf("研究路径解析变化：输入=%q，结果=(%q,%q,%v)，期望=(%q,%q,%v)", raw, gotRepo, gotPath, gotOK, wantRepo, wantPath, wantOK)
+		}
+	}
+}
+
+func BenchmarkQQResearchTarget(b *testing.B) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+	}{
+		{"repo", "/repos/metasequoiaime/msime/issues/123"},
+		{"org", "/orgs/metasequoiaime"},
+		{"search", "/search/issues?q=repo%3Ametasequoiaime%2Fmsime+bug"},
+	} {
+		for _, impl := range []struct {
+			name string
+			fn   func(string, string) (string, string, bool)
+		}{
+			{"previous", previousQQResearchTarget}, {"current", qqResearchTarget},
+		} {
+			b.Run(tc.name+"/"+impl.name, func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					_, _, _ = impl.fn(tc.raw, "metasequoiaime/msime")
+				}
+			})
+		}
+	}
+}
+
+func previousQQResearchTarget(raw, defaultRepo string) (repo, path string, ok bool) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme != "" || u.Host != "" || len(raw) > 500 || strings.Contains(u.Path, "..") {
+		return "", "", false
+	}
+	switch {
+	case qqResearchRepoPath.MatchString(u.Path):
+		repo = qqResearchOrg + "/" + qqResearchRepoPath.FindStringSubmatch(u.Path)[1]
+	case qqResearchOrgPath.MatchString(u.Path), qqResearchUserPath.MatchString(u.Path):
+		repo = defaultRepo
+	case u.Path == "/search/issues" || u.Path == "/search/commits":
+		query, err := url.ParseQuery(u.RawQuery)
+		if err != nil || len(query["q"]) != 1 || !qqResearchScopedSearch(query.Get("q")) {
+			return "", "", false
+		}
+		repo = defaultRepo
+	default:
+		return "", "", false
+	}
+	path = u.Path
+	if u.RawQuery != "" {
+		path += "?" + u.Query().Encode()
+	}
+	return repo, path, true
+}

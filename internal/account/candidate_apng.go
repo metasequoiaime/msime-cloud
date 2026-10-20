@@ -223,14 +223,54 @@ func (a *candidateAPNG) decode() bool {
 	return true
 }
 
-// zlibStreamExact 报告 parts 拼起来是否恰好是一个完整的 zlib 流，校验和正确且之后没有多余字节。只在 image/png 已经解码成功之后调用，所以解压量就是这一帧的像素数据，不会更多。bytes.Reader 实现了 io.ByteReader，flate 直接逐字节读它、不预读，流结束后 Len 就是剩下的字节数。
-func zlibStreamExact(parts [][]byte) bool {
-	r := bytes.NewReader(bytes.Join(parts, nil))
-	z, err := zlib.NewReader(r)
-	if err == nil {
-		_, err = io.Copy(io.Discard, z)
+// apngDataReader 直接读取各个数据块，只移动自身的切片头，不修改调用方的数据段。
+// 同时实现 io.ByteReader，防止 flate 添加缓冲后预读流尾的多余字节。
+type apngDataReader struct {
+	parts  [][]byte
+	offset int
+}
+
+func (r *apngDataReader) advance() {
+	for len(r.parts) > 0 && r.offset == len(r.parts[0]) {
+		r.parts = r.parts[1:]
+		r.offset = 0
 	}
-	return err == nil && r.Len() == 0
+}
+
+func (r *apngDataReader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	r.advance()
+	if len(r.parts) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, r.parts[0][r.offset:])
+	r.offset += n
+	return n, nil
+}
+
+func (r *apngDataReader) ReadByte() (byte, error) {
+	r.advance()
+	if len(r.parts) == 0 {
+		return 0, io.EOF
+	}
+	b := r.parts[0][r.offset]
+	r.offset++
+	return b, nil
+}
+
+// zlibStreamExact 报告 parts 拼起来是否恰好是一个完整的 zlib 流，校验和正确且之后没有多余字节。只在 image/png 已经解码成功之后调用，所以解压量就是这一帧的像素数据，不会更多。
+func zlibStreamExact(parts [][]byte) bool {
+	r := &apngDataReader{parts: parts}
+	z, err := zlib.NewReader(r)
+	if err != nil {
+		return false
+	}
+	_, err = io.Copy(io.Discard, z)
+	z.Close()
+	r.advance()
+	return err == nil && len(r.parts) == 0
 }
 
 // framePNG 把一帧拼成独立的 PNG 文件，按各块的完整长度一次分配输出缓冲。

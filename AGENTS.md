@@ -36,11 +36,12 @@ python3 scripts/sync_contract.py --check
 python3 scripts/generate_openapi.py --check
 python3 -m unittest discover -s scripts/release -p "test_*.py"
 pnpm --dir admin-web build
-go test -race ./...
+go test -race -benchtime=50ms ./...
 go vet ./...
 gofmt -l ./cmd ./internal
 ```
 
+- 测试内的 `testing.Benchmark` 用来断言分配字节数、次数或较宽的耗时回归预算。验证命令的 `-benchtime=50ms` 将每次测量的目标时间从默认 1 秒缩短为 50 毫秒，由 Go 根据单次操作的成本自动选择执行次数；测试范围、预算、竞态和覆盖率参数保持不变。发布性能对比时单独运行 `-bench`，使用默认或明确指定的较长测量时间，不采用这里的短时采样结果。
 - 依赖 PostgreSQL 的测试在没有 `MSIME_TEST_DATABASE_URL` 时会跳过，`go test` 显示 ok 不代表它们跑过。改动 `internal/account` 或 `internal/server` 中涉及数据库的代码时，本地起一个 PostgreSQL 并设置该变量再跑这两个包，CI 的「用户体系 PostgreSQL 集成测试」用的是 `postgres:17-alpine`。
 - `go test` 在 CI 中同时跑 ubuntu 和 windows。测试不能假设 Unix 专有行为，例如文件权限位（Windows 上 `0600` 读回来是 `0666`）、路径分隔符或 shell 命令；确实只在 Unix 上成立的断言要按 `runtime.GOOS` 区分并写明原因。
 - CI 有两道 Go 语句覆盖率门禁（`scripts/check_go_coverage.py`）。每个拉取请求上，「用户体系 PostgreSQL 集成测试」不带原生引擎只量 `internal/account` 和 `internal/server`，下限是脚本里的 `DATABASE_MINIMUMS`（85% 和 88%），不过就合不进去。「公共引擎与发布词库集成测试」带真实引擎量全仓、`internal/account`、`internal/server`，各自不低于 90%；这个任务只在改到原生引擎（引擎子模块、`internal/engine`、`internal/server` 里调用引擎的 `input.go`、`word_submissions.go` 和依赖引擎的测试、`native/`、Dockerfile、引擎相关脚本）时运行，拉取请求和 main 上的推送都一样。main 上的推送不等它，发版工作流同时就推出了镜像，所以改到引擎的拉取请求要等它在拉取请求上跑过。新增的代码要带测试；新增可执行包时，同时把它加进该脚本要求出现的包清单及 `scripts/test_go_coverage.py`。

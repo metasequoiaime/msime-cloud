@@ -687,7 +687,7 @@ func sanitizeWordNote(note string) (string, bool) {
 		}
 		return r
 	}, note)
-	note = strings.Join(strings.Fields(note), " ")
+	note = qqNormalizeWhitespace(note)
 	return githubReferenceBreaker.Replace(note), true
 }
 

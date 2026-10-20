@@ -13,6 +13,7 @@ import (
 	"hash/fnv"
 	"io"
 	"math"
+	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -7245,5 +7246,93 @@ func TestQQBotBacklogHint(t *testing.T) {
 func TestQQResearchSourceLabels(t *testing.T) {
 	if !strings.Contains(qqResearchHeading, "没有注明的是 GitHub 上直接查到的") || !strings.Contains(qqResearchPrompt, "只有 web_search 搜到的内容才注明「据网上资料」") || !strings.Contains(qqAnswerPrompt, "其余是从 GitHub 直接查到的，照实说") {
 		t.Fatal("research results must say which facts came from the web")
+	}
+}
+
+func previousQQParseVersion(text string) ([3]int, bool) {
+	m := qqVersionPattern.FindStringSubmatch(text)
+	if m == nil {
+		return [3]int{}, false
+	}
+	var v [3]int
+	for i := range 3 {
+		if m[i+1] == "" {
+			continue
+		}
+		n, err := strconv.Atoi(m[i+1])
+		if err != nil || n > 1_000_000 {
+			return [3]int{}, false
+		}
+		v[i] = n
+	}
+	return v, true
+}
+
+func TestQQParseVersionMatchesPatternRandomly(t *testing.T) {
+	random := rand.New(rand.NewSource(715))
+	for range 5000 {
+		data := make([]byte, random.Intn(80))
+		if _, err := random.Read(data); err != nil {
+			t.Fatal(err)
+		}
+		text := string(data)
+		match := qqVersionPattern.FindStringSubmatch(text)
+		want := [3]int{}
+		wantOK := match != nil
+		if wantOK {
+			for i := range 3 {
+				if match[i+1] == "" {
+					continue
+				}
+				n, err := strconv.Atoi(match[i+1])
+				if err != nil || n > 1_000_000 {
+					wantOK = false
+					break
+				}
+				want[i] = n
+			}
+		}
+		got, gotOK := qqParseVersion(text)
+		if gotOK != wantOK || got != want {
+			t.Fatalf("版本号扫描不兼容：输入=%q，结果=(%v,%v)，期望=(%v,%v)", text, got, gotOK, want, wantOK)
+		}
+	}
+}
+
+func TestQQParseVersionAvoidsMatchAllocation(t *testing.T) {
+	text := "水杉输入法 v0.9.5"
+	if allocations := testing.AllocsPerRun(100, func() {
+		if _, ok := qqParseVersion(text); !ok {
+			t.Fatal("版本号未解析")
+		}
+	}); allocations != 0 {
+		t.Fatalf("版本号解析分配 %.0f 次，期望零分配", allocations)
+	}
+}
+
+func BenchmarkQQParseVersion(b *testing.B) {
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{"found", "Windows 上的水杉输入法 v0.9.5，问题仍在"},
+		{"missing", strings.Repeat("普通反馈正文。", 128)},
+		{"overflow", "版本 999999999999999999999.1"},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			for _, impl := range []struct {
+				name string
+				fn   func(string) ([3]int, bool)
+			}{
+				{"previous", previousQQParseVersion}, {"current", qqParseVersion},
+			} {
+				b.Run(impl.name, func(b *testing.B) {
+					b.ReportAllocs()
+					for b.Loop() {
+						_, _ = impl.fn(tc.text)
+					}
+				})
+			}
+		})
 	}
 }

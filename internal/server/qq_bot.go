@@ -1889,22 +1889,54 @@ var qqVersionPattern = regexp.MustCompile(`([0-9]+)\.([0-9]+)(?:\.([0-9]+))?`)
 
 // qqParseVersion 取 text 里第一个形如 0.9 或 0.9.5 的版本号。
 func qqParseVersion(text string) ([3]int, bool) {
-	m := qqVersionPattern.FindStringSubmatch(text)
-	if m == nil {
-		return [3]int{}, false
-	}
-	var v [3]int
-	for i := range 3 {
-		if m[i+1] == "" {
+	const maximum = 1_000_000
+	for search := 0; search < len(text); {
+		if text[search] < '0' || text[search] > '9' {
+			search++
 			continue
 		}
-		n, err := strconv.Atoi(m[i+1])
-		if err != nil || n > 1_000_000 {
+		first := search
+		value1, overflow1 := 0, false
+		for search < len(text) && text[search] >= '0' && text[search] <= '9' {
+			value1 = value1*10 + int(text[search]-'0')
+			if value1 > maximum {
+				overflow1 = true
+			}
+			search++
+		}
+		if search >= len(text) || text[search] != '.' || search+1 >= len(text) || text[search+1] < '0' || text[search+1] > '9' {
+			if search == first {
+				search++
+			}
+			continue
+		}
+		search++
+		value2, overflow2 := 0, false
+		for search < len(text) && text[search] >= '0' && text[search] <= '9' {
+			value2 = value2*10 + int(text[search]-'0')
+			if value2 > maximum {
+				overflow2 = true
+			}
+			search++
+		}
+		value3 := 0
+		overflow3 := false
+		if search+1 < len(text) && text[search] == '.' && text[search+1] >= '0' && text[search+1] <= '9' {
+			search++
+			for search < len(text) && text[search] >= '0' && text[search] <= '9' {
+				value3 = value3*10 + int(text[search]-'0')
+				if value3 > maximum {
+					overflow3 = true
+				}
+				search++
+			}
+		}
+		if overflow1 || overflow2 || overflow3 {
 			return [3]int{}, false
 		}
-		v[i] = n
+		return [3]int{value1, value2, value3}, true
 	}
-	return v, true
+	return [3]int{}, false
 }
 
 func qqVersionAtLeast(v, floor [3]int) bool {

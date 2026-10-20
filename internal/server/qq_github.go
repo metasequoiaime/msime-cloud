@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -199,11 +200,50 @@ const qqMemberIssueResults = 5
 // qqIssueTitleTag 匹配 issue 标题开头的「[Bug]」「[Feature]:」这类模板前缀。
 var qqIssueTitleTag = regexp.MustCompile(`^\s*\[[^\]]{1,20}\]\s*:?\s*`)
 
+// qqTrimIssueTitleTag 删除 issue 标题开头的模板前缀，保持 qqIssueTitleTag 的 ASCII 空白和最多 20 个字符规则。
+func qqTrimIssueTitleTag(text string) string {
+	i := 0
+	for i < len(text) && qqIssueTitleTagSpace(text[i]) {
+		i++
+	}
+	if i >= len(text) || text[i] != '[' {
+		return text
+	}
+	i++
+	count := 0
+	for i < len(text) && text[i] != ']' {
+		_, size := utf8.DecodeRuneInString(text[i:])
+		i += size
+		count++
+		if count > 20 {
+			return text
+		}
+	}
+	if count == 0 || i >= len(text) || text[i] != ']' {
+		return text
+	}
+	i++
+	for i < len(text) && qqIssueTitleTagSpace(text[i]) {
+		i++
+	}
+	if i < len(text) && text[i] == ':' {
+		i++
+		for i < len(text) && qqIssueTitleTagSpace(text[i]) {
+			i++
+		}
+	}
+	return text[i:]
+}
+
+func qqIssueTitleTagSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r'
+}
+
 // qqIssueListForMembers 是「查」命令发到群里的短列表：最多 qqMemberIssueResults 条，每条一行「msime #7066 标题（还没解决）」，标题去掉模板前缀，不带标签、日期和维护者评论，最后一行告诉群友怎么看某条的进展。曾经直接发给模型看的资料，最多十行，带英文标签，外加三段几百字没清洗的维护者评论，在千人群里刷屏。
 func qqIssueListForMembers(hits []qqIssueHit) string {
 	var b strings.Builder
 	for _, hit := range hits[:min(len(hits), qqMemberIssueResults)] {
-		title := cmp.Or(strings.TrimSpace(qqIssueTitleTag.ReplaceAllString(hit.Title, "")), strings.TrimSpace(hit.Title))
+		title := cmp.Or(strings.TrimSpace(qqTrimIssueTitleTag(hit.Title)), strings.TrimSpace(hit.Title))
 		fmt.Fprintf(&b, "%s #%d %s（%s）\n", hit.Name, hit.Number, title, hit.State)
 	}
 	b.WriteString("以上是 GitHub 上搜到的相关 issue，想看某条的进展，@我 发「#编号」")

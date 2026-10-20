@@ -545,7 +545,7 @@ func (ws *wordSubmitter) clientAddress(r *http.Request) string {
 
 func wordCharacter(r rune) bool { return unicode.Is(unicode.Unified_Ideograph, r) || r == '〇' }
 
-// One rejection per entry (its first problem), in the same terms the website form uses, so the page can show each next to its row.
+// validateWordEntries 每条词语只返回首个问题，沿用官网表单的错误格式，方便逐行展示。
 func validateWordEntries(entries []wordSubmissionEntry) []wordRejection {
 	rejected := []wordRejection{}
 	seen := map[string]bool{}
@@ -567,19 +567,31 @@ func validateWordEntries(entries []wordSubmissionEntry) []wordRejection {
 			reject("pinyin_required", "请填写拼音")
 			continue
 		}
-		syllables := strings.Split(e.Pinyin, "'")
-		if len(e.Pinyin) > 200 || slices.ContainsFunc(syllables, func(s string) bool {
-			return s == "" || strings.IndexFunc(s, func(r rune) bool { return r < 'a' || r > 'z' }) >= 0
-		}) {
+		syllables, bad := 0, ""
+		invalid := len(e.Pinyin) > 200
+		if !invalid {
+			for syllable := range strings.SplitSeq(e.Pinyin, "'") {
+				if syllable == "" || strings.IndexFunc(syllable, func(r rune) bool { return r < 'a' || r > 'z' }) >= 0 {
+					invalid = true
+					break
+				}
+				syllables++
+				// 先记录无效音节，全文语法通过后再拒绝，保留语法错误优先的规则。
+				if bad == "" && !pinyinSyllables[syllable] {
+					bad = syllable
+				}
+			}
+		}
+		if invalid {
 			reject("invalid_pinyin", "拼音只能包含小写字母，音节之间用 ' 分隔，例如 wei'lai'ke'qi")
 			continue
 		}
-		if bad := slices.IndexFunc(syllables, func(s string) bool { return !pinyinSyllables[s] }); bad >= 0 {
-			reject("invalid_syllable", "“"+syllables[bad]+"”不是有效的全拼音节（ü 请写作 v，如 lv、nve）")
+		if bad != "" {
+			reject("invalid_syllable", "“"+bad+"”不是有效的全拼音节（ü 请写作 v，如 lv、nve）")
 			continue
 		}
-		if len(syllables) != characters {
-			reject("syllable_count_mismatch", "“"+e.Word+"”有 "+strconv.Itoa(characters)+" 个字，但拼音有 "+strconv.Itoa(len(syllables))+" 个音节")
+		if syllables != characters {
+			reject("syllable_count_mismatch", "“"+e.Word+"”有 "+strconv.Itoa(characters)+" 个字，但拼音有 "+strconv.Itoa(syllables)+" 个音节")
 			continue
 		}
 		key := e.Word + "\t" + e.Pinyin

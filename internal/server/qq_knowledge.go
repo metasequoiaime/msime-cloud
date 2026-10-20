@@ -1760,9 +1760,27 @@ var (
 	qqAnswerReplacer = strings.NewReplacer("“", "「", "”", "」", "‘", "『", "’", "』", "\t", " ", "**", "", "__", "")
 	// qqWindowsPath 匹配 Windows 路径（C:\、%APPDATA%\）：答案里有路径时，字面的 \t 多半是 \temp 这类路径的一部分，不换成空格。
 	qqWindowsPath = regexp.MustCompile(`[A-Za-z]:\\|%\\`)
-	// qqPromptLeak 匹配提示词禁止出现在答案里的说法（「资料」是模型内部看的材料），只记日志作为提示词回归的信号，不在代码里删词。
-	qqPromptLeak = regexp.MustCompile(`资料|文档里|截断`)
 )
+
+type qqPromptLeakMatcher struct{}
+
+// FindString 保留原提示词匹配器的测试接口，但直接查找固定词，避免正则执行器分配。
+func (qqPromptLeakMatcher) FindString(answer string) string {
+	return qqPromptLeakWord(answer)
+}
+
+var qqPromptLeak qqPromptLeakMatcher
+
+// qqPromptLeakWord 返回答案中最早出现的提示词泄漏标记，只记日志，不修改答案。
+func qqPromptLeakWord(answer string) string {
+	word, position := "", len(answer)
+	for _, candidate := range []string{"资料", "文档里", "截断"} {
+		if index := strings.Index(answer, candidate); index >= 0 && index < position {
+			word, position = candidate, index
+		}
+	}
+	return word
+}
 
 // qqNormalizeApostrophes 把英文单词中的弯撇号换成直撇号，保留原正则不共享两侧字母的匹配规则。
 func qqNormalizeApostrophes(answer string) string {
@@ -2015,7 +2033,7 @@ func qqNormalizeAnswer(answer string) string {
 	candidates := qqScanAnswerCandidates(answer)
 	promptLeak, replacement := candidates.promptLeak, candidates.replacement
 	if promptLeak {
-		if word := qqPromptLeak.FindString(answer); word != "" {
+		if word := qqPromptLeakWord(answer); word != "" {
 			slog.Info("qq bot: prompt leak", "word", word)
 		}
 	}

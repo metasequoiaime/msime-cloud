@@ -1281,6 +1281,70 @@ func qqRemoveRawLinks(text string) string {
 	return out.String()
 }
 
+// qqRemoveLinkNotes 删除全角括号包住的裸链接，并保留其他文字和空白原样。
+func qqRemoveLinkNotes(text string) string {
+	removed := 0
+	notes := 0
+	for search := 0; ; {
+		begin, end, next, ok := qqNextLinkNote(text, search)
+		if !ok {
+			break
+		}
+		removed += end - begin
+		notes++
+		search = next
+	}
+	if notes == 0 {
+		return text
+	}
+	var out strings.Builder
+	out.Grow(len(text) - removed)
+	start := 0
+	for search := 0; ; {
+		begin, end, next, ok := qqNextLinkNote(text, search)
+		if !ok {
+			break
+		}
+		out.WriteString(text[start:begin])
+		start, search = end, next
+	}
+	out.WriteString(text[start:])
+	return out.String()
+}
+
+func qqNextLinkNote(text string, search int) (begin, end, next int, ok bool) {
+	const leftParen = "（"
+	const rightParen = "）"
+	for search < len(text) {
+		i := strings.Index(text[search:], leftParen)
+		if i < 0 {
+			return 0, 0, 0, false
+		}
+		begin = search + i
+		prefix := begin + len(leftParen)
+		if prefix >= len(text) || !qqURLSchemeLetter(text[prefix]) {
+			search = prefix
+			continue
+		}
+		i = prefix + 1
+		for i < len(text) && qqURLSchemeByte(text[i]) {
+			i++
+		}
+		if i+3 > len(text) || text[i:i+3] != "://" {
+			search = prefix
+			continue
+		}
+		close := strings.Index(text[i+3:], rightParen)
+		if close < 0 {
+			search = prefix
+			continue
+		}
+		end = i + 3 + close + len(rightParen)
+		return begin, end, end, true
+	}
+	return 0, 0, 0, false
+}
+
 func qqNextRawLink(text string, search int) (begin, end, next int, ok bool) {
 	for search < len(text) {
 		i := strings.Index(text[search:], "://")

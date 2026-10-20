@@ -1495,12 +1495,9 @@ const (
 	qqEscalationUnrecorded = "要是还没解决，可以在群里找管理员，请他转给开发者。"
 )
 
-// qqLinkNote 匹配回复里括在全角括号里的链接，例如 qqIssueNumberText 附上的「（https://github.com/…）」。
-var qqLinkNote = regexp.MustCompile(`（[A-Za-z][A-Za-z0-9+.-]*://[^）]*）`)
-
 // qqWithoutLinks 去掉回复里的链接，连同包着它的括号。
 func qqWithoutLinks(text string) string {
-	return qqStripLinks(qqLinkNote.ReplaceAllString(text, ""))
+	return qqStripLinks(qqRemoveLinkNotes(text))
 }
 
 // qqFeedbackText 去掉消息里的 @ 标记、表情等尖括号标签和首尾空白。

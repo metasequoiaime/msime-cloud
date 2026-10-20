@@ -1822,9 +1822,15 @@ func (s *Server) qqWindowsProduct(ctx context.Context, version [3]int, text stri
 	case slices.ContainsFunc(qqWindowsOldWords, func(w string) bool { return strings.Contains(lower, w) }):
 		return false, ""
 	}
+	if !qqVersionAtLeast(version, qqWindowsNewFrom) {
+		return false, ""
+	}
 	below, oldCurrent, haveOld := qqWindowsNewBelow, [3]int{}, false
 	if newest, ok := s.qqNewestRelease(ctx, s.qq.config.Repo, "windows-v"); ok {
 		below = [3]int{newest[0], newest[1] + 2, 0}
+	}
+	if qqVersionAtLeast(version, below) {
+		return false, ""
 	}
 	for _, p := range s.config.Admin.GitHub.Platforms {
 		if p.ID == "windows" && p.TagPrefix != "" && !strings.EqualFold(p.Repo, s.qq.config.Repo) {
@@ -1832,9 +1838,6 @@ func (s *Server) qqWindowsProduct(ctx context.Context, version [3]int, text stri
 				oldCurrent, haveOld = [3]int{newest[0], newest[1], 0}, true
 			}
 		}
-	}
-	if !qqVersionAtLeast(version, qqWindowsNewFrom) || qqVersionAtLeast(version, below) {
-		return false, ""
 	}
 	// 落在新实现的范围里，又落在 msime-windows 当前在发的 minor 及以后：两个产品都可能，版本号分不出来。更早的重叠（两边都发过的 0.1 到 0.3）按仍在发布的新实现处理。
 	if haveOld && qqVersionAtLeast(version, oldCurrent) {

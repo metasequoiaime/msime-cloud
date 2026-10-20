@@ -1758,8 +1758,6 @@ func qqCleanAnswer(answer string) string {
 var (
 	// qqAnswerReplacer 把弯引号换成群里统一用的直角引号，把制表符换成空格，删掉 Markdown 加粗。字面的 \t（两个字符）另外处理，见 qqWindowsPath。
 	qqAnswerReplacer = strings.NewReplacer("“", "「", "”", "」", "‘", "『", "’", "』", "\t", " ", "**", "", "__", "")
-	// qqApostrophe 匹配英文单词里当撇号用的弯单引号（don’t），先换成直撇号，免得被当成引号换成『』。
-	qqApostrophe = regexp.MustCompile(`([A-Za-z])’([A-Za-z])`)
 	// qqWindowsPath 匹配 Windows 路径（C:\、%APPDATA%\）：答案里有路径时，字面的 \t 多半是 \temp 这类路径的一部分，不换成空格。
 	qqWindowsPath = regexp.MustCompile(`[A-Za-z]:\\|%\\`)
 	// qqBlankLines 匹配三个及以上连续的换行。
@@ -1767,6 +1765,43 @@ var (
 	// qqPromptLeak 匹配提示词禁止出现在答案里的说法（「资料」是模型内部看的材料），只记日志作为提示词回归的信号，不在代码里删词。
 	qqPromptLeak = regexp.MustCompile(`资料|文档里|截断`)
 )
+
+// qqNormalizeApostrophes 把英文单词中的弯撇号换成直撇号，保留原正则不共享两侧字母的匹配规则。
+func qqNormalizeApostrophes(answer string) string {
+	var out strings.Builder
+	copied := 0
+	for search := 0; search < len(answer); {
+		next := strings.Index(answer[search:], "’")
+		if next < 0 {
+			break
+		}
+		quote := search + next
+		if quote+3 >= len(answer) {
+			break
+		}
+		if quote > search {
+			before, after := answer[quote-1]|0x20, answer[quote+3]|0x20
+			if before >= 'a' && before <= 'z' && after >= 'a' && after <= 'z' {
+				if copied == 0 {
+					// 每次替换缩短两个字节；按首次替换后的上限一次分配，避免逐个捕获和扩容。
+					out.Grow(len(answer) - 2)
+				}
+				out.WriteString(answer[copied:quote])
+				out.WriteByte('\'')
+				copied = quote + 3
+				// 右侧字母已被本次匹配占用，下一处撇号不能再次使用它。
+				search = quote + 4
+				continue
+			}
+		}
+		search = quote + 3
+	}
+	if copied == 0 {
+		return answer
+	}
+	out.WriteString(answer[copied:])
+	return out.String()
+}
 
 // qqPromptLeakCandidate 判断答案是否含有提示词泄漏规则可能命中的字面字符；没有候选字符时跳过正则扫描。
 func qqPromptLeakCandidate(answer string) bool {
@@ -1937,10 +1972,7 @@ func qqStripAnswerHeadings(answer string) string {
 
 // qqNormalizeAnswer 统一答案的格式：模型偶尔不照提示词写，同一个群里一会儿“”一会儿「」，或者冒出 **、## 和字面的 \t，读起来不像同一个助手说的。引号换成「」『』，字面的 \t 和制表符换成空格，删掉 **、__，去掉行首的 #（「#123」这种 issue 编号不动），行首的「- 」保留，三个以上的连续换行压成两个。
 func qqNormalizeAnswer(answer string) string {
-	// 无匹配时正则替换仍会复制正文，先确认有英文单词里的弯撇号。
-	if strings.ContainsRune(answer, '’') && qqApostrophe.MatchString(answer) {
-		answer = qqApostrophe.ReplaceAllString(answer, "$1'$2")
-	}
+	answer = qqNormalizeApostrophes(answer)
 	candidates := qqScanAnswerCandidates(answer)
 	promptLeak, replacement := candidates.promptLeak, candidates.replacement
 	if promptLeak {

@@ -1760,8 +1760,6 @@ var (
 	qqAnswerReplacer = strings.NewReplacer("“", "「", "”", "」", "‘", "『", "’", "』", "\t", " ", "**", "", "__", "")
 	// qqWindowsPath 匹配 Windows 路径（C:\、%APPDATA%\）：答案里有路径时，字面的 \t 多半是 \temp 这类路径的一部分，不换成空格。
 	qqWindowsPath = regexp.MustCompile(`[A-Za-z]:\\|%\\`)
-	// qqBlankLines 匹配三个及以上连续的换行。
-	qqBlankLines = regexp.MustCompile(`\n{3,}`)
 	// qqPromptLeak 匹配提示词禁止出现在答案里的说法（「资料」是模型内部看的材料），只记日志作为提示词回归的信号，不在代码里删词。
 	qqPromptLeak = regexp.MustCompile(`资料|文档里|截断`)
 )
@@ -1970,6 +1968,47 @@ func qqStripAnswerHeadings(answer string) string {
 	return out.String()
 }
 
+// qqCollapseBlankLines 把三个及以上连续的换行压成两个，其他字节保持原样。
+func qqCollapseBlankLines(answer string) string {
+	first := strings.Index(answer, "\n\n\n")
+	if first < 0 {
+		return answer
+	}
+	runs := func(yield func(start, end int) bool) {
+		for start := first; ; {
+			end := start + 3
+			for end < len(answer) && answer[end] == '\n' {
+				end++
+			}
+			if !yield(start, end) {
+				return
+			}
+			next := strings.Index(answer[end:], "\n\n\n")
+			if next < 0 {
+				return
+			}
+			start = end + next
+		}
+	}
+	size := len(answer)
+	for start, end := range runs {
+		size -= end - start - 2
+	}
+	if size == 2 {
+		return "\n\n"
+	}
+	// 按保留内容分配，避免长换行串压缩后的短结果持有整段输入大小的缓冲。
+	var out strings.Builder
+	out.Grow(size)
+	copied := 0
+	for start, end := range runs {
+		out.WriteString(answer[copied : start+2])
+		copied = end
+	}
+	out.WriteString(answer[copied:])
+	return out.String()
+}
+
 // qqNormalizeAnswer 统一答案的格式：模型偶尔不照提示词写，同一个群里一会儿“”一会儿「」，或者冒出 **、## 和字面的 \t，读起来不像同一个助手说的。引号换成「」『』，字面的 \t 和制表符换成空格，删掉 **、__，去掉行首的 #（「#123」这种 issue 编号不动），行首的「- 」保留，三个以上的连续换行压成两个。
 func qqNormalizeAnswer(answer string) string {
 	answer = qqNormalizeApostrophes(answer)
@@ -1990,10 +2029,7 @@ func qqNormalizeAnswer(answer string) string {
 	if candidates.headingCandidate {
 		answer = qqStripAnswerHeadings(answer)
 	}
-	if strings.Contains(answer, "\n\n\n") {
-		answer = qqBlankLines.ReplaceAllString(answer, "\n\n")
-	}
-	return answer
+	return qqCollapseBlankLines(answer)
 }
 
 // qqGroupNumberPattern 匹配 QQ 群号（「加群 12345678」「QQ群号：12345678」）。只认紧跟在「群」后面的数字，不按纯数字长度过滤：22631 这类 Windows 内部版本号、issue 号和日期也是五位以上的数字。

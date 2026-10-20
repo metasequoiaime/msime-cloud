@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"iter"
 	"net/http"
 	"net/url"
 	"slices"
@@ -184,6 +185,24 @@ func (a *Service) dictionary(w http.ResponseWriter, r *http.Request) {
 	}
 	write(w, status, change)
 }
+
+// dictionaryImportTextLines 按需去掉开头的 BOM 和换行前的一个 CR，保留单独 CR 与末尾空行，不复制全文。
+func dictionaryImportTextLines(text string) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		remaining := strings.TrimPrefix(text, "\ufeff")
+		for {
+			line, rest, newline := strings.Cut(remaining, "\n")
+			if newline {
+				line = strings.TrimSuffix(line, "\r")
+			}
+			if !yield(line) || !newline {
+				return
+			}
+			remaining = rest
+		}
+	}
+}
+
 func (a *Service) dictionaryImport(w http.ResponseWriter, r *http.Request) {
 	p, ok := a.principal(w, r, false)
 	if !ok {
@@ -206,7 +225,7 @@ func (a *Service) dictionaryImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	entries := []DictionaryEntry{}
-	for line := range strings.SplitSeq(strings.ReplaceAll(strings.TrimPrefix(input.Text, "\ufeff"), "\r\n", "\n"), "\n") {
+	for line := range dictionaryImportTextLines(input.Text) {
 		if line == "" {
 			continue
 		}
@@ -342,7 +361,7 @@ func (a *Service) dictionaryImportHans(w http.ResponseWriter, r *http.Request) {
 		weight = *input.Weight
 	}
 	words := []string{}
-	for line := range strings.SplitSeq(strings.ReplaceAll(strings.TrimPrefix(input.Text, "\ufeff"), "\r\n", "\n"), "\n") {
+	for line := range dictionaryImportTextLines(input.Text) {
 		word := strings.TrimSpace(line)
 		if word == "" {
 			continue

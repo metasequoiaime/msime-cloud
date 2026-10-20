@@ -80,8 +80,19 @@ type CommunityResource struct {
 }
 
 func resourceText(s string, min, max int, multiline bool) bool {
-	if !utf8.ValidString(s) || utf8.RuneCountInString(strings.TrimSpace(s)) < min || utf8.RuneCountInString(s) > max {
+	// 每个合法标量最多占四字节；用除法判断明显超长，避免最大上限乘四时溢出。
+	if max < 0 || len(s) > 0 && (len(s)-1)/utf8.UTFMax >= max {
 		return false
+	}
+	// 字节数已在上限内时，字符数也不会超限，无需再计数。
+	if !utf8.ValidString(s) || len(s) > max && utf8.RuneCountInString(s) > max {
+		return false
+	}
+	if min > 0 {
+		trimmed := strings.TrimSpace(s)
+		if trimmed == "" || min > 1 && utf8.RuneCountInString(trimmed) < min {
+			return false
+		}
 	}
 	for _, c := range s {
 		if unicode.IsControl(c) && !(multiline && (c == '\n' || c == '\t')) {

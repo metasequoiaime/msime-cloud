@@ -316,7 +316,7 @@ func candidatePackageLicense(pkg skins.Package) CandidateSkinLicense {
 	return CandidateSkinLicense{Code: pkg.License.Code, Assets: pkg.License.Assets, Source: pkg.License.Source}
 }
 
-// candidatePNGBufferPool 在一次包清理中顺序复用一个编码工作区，引用随本次调用一起释放。
+// candidatePNGBufferPool 在一次图片清理中顺序复用一个编码工作区，引用随本次调用一起释放。
 type candidatePNGBufferPool struct {
 	buffer *png.EncoderBuffer
 }

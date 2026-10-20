@@ -161,14 +161,14 @@ func TestFeedbackPayloadValidation(t *testing.T) {
 }
 
 func TestNormalizeScreenshot(t *testing.T) {
-	shot, err := normalizeScreenshot(feedbackPNG(t, 40, 80))
+	shot, err := normalizeScreenshot(feedbackPNG(t, 40, 80), nil)
 	if err != nil || shot.mime != "image/png" || bytes.Contains(shot.bytes, []byte("secret-location")) || bytes.Contains(shot.bytes, []byte("tEXt")) {
 		t.Fatal("png metadata kept", err)
 	}
 	if config, format, err := image.DecodeConfig(bytes.NewReader(shot.bytes)); err != nil || format != "png" || config.Width != 40 || config.Height != 80 {
 		t.Fatal("png re-encode", config, format, err)
 	}
-	shot, err = normalizeScreenshot(feedbackJPEG(t))
+	shot, err = normalizeScreenshot(feedbackJPEG(t), nil)
 	if err != nil || shot.mime != "image/jpeg" || bytes.Contains(shot.bytes, []byte("Exif")) || bytes.Contains(shot.bytes, []byte("secret-location")) {
 		t.Fatal("jpeg metadata kept", err)
 	}
@@ -187,7 +187,7 @@ func TestNormalizeScreenshot(t *testing.T) {
 			return out.Bytes()
 		}(),
 	} {
-		if _, err := normalizeScreenshot(data); err != errInvalidScreenshot {
+		if _, err := normalizeScreenshot(data, nil); err != errInvalidScreenshot {
 			t.Errorf("%s accepted: %v", name, err)
 		}
 	}

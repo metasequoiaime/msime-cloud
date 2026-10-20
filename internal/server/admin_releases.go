@@ -897,11 +897,29 @@ func (s *Server) releaseSnapshotJob(ctx context.Context) {
 func (s *Server) snapshotReleaseAssets(ctx context.Context, gh *githubapp.Client, now time.Time) error {
 	var snapshots []account.ReleaseAssetSnapshot
 	var errs []error
+	type repositoryRead struct {
+		releases []ghRelease
+		err      error
+	}
+	// 只在本轮快照内复用完整仓库列表；下一轮仍绕过缓存读取最新下载数。
+	reads := map[string]repositoryRead{}
 	for _, p := range s.config.Admin.GitHub.Platforms {
-		releases, err := fetchPlatformReleases(ctx, gh, p, true)
-		if err != nil {
-			errs = append(errs, errors.New(p.ID+": "+err.Error()))
+		read, ok := reads[p.Repo]
+		if !ok {
+			repository := p
+			repository.TagPrefix = ""
+			read.releases, read.err = fetchPlatformReleases(ctx, gh, repository, true)
+			reads[p.Repo] = read
+		}
+		if read.err != nil {
+			errs = append(errs, errors.New(p.ID+": "+read.err.Error()))
 			continue
+		}
+		releases := make([]ghRelease, 0, len(read.releases))
+		for _, release := range read.releases {
+			if strings.HasPrefix(release.TagName, p.TagPrefix) {
+				releases = append(releases, release)
+			}
 		}
 		s.indexReleases(p, releases)
 		for _, r := range releases {

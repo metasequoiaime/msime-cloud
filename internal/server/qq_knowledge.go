@@ -2197,9 +2197,6 @@ func qqNormalizeAnswer(answer string) string {
 	return qqCollapseBlankLines(answer)
 }
 
-// qqDomainPattern 匹配不带协议名的裸域名，第 1 组是域名。顶级域只认常见的一批，不认 md、py、sh、rs、app 这类同时是文件扩展名的：群里常聊 README.md、default.custom.yaml、Squirrel.app。
-var qqDomainPattern = regexp.MustCompile(`(?i)((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:com|net|org|cn|xyz|top|io|cc|me|co|info|biz|vip|club|site|online|shop|store|live|pro|fun|icu|cyou|buzz|work|life|world|tech|space|website|link|ltd|ink|wang|xin|asia|hk|tw|tv|ru|us|uk|de|jp|kr|dev|win))(?:[^A-Za-z0-9-]|$)`)
-
 // qqAllowedDomains 是答案里可以出现的官方域名，子域名也算。
 var qqAllowedDomains = []string{"msime.app", "github.com"}
 
@@ -2226,20 +2223,8 @@ func qqPromoSentence(sentence string) string {
 	if qqWeChatPromo(sentence) {
 		return "wechat"
 	}
-	// 小批量读取非空匹配，避免收集全文结果，也减少逐个调用正则的开销。
-	const matchBatchSize = 8
-	for remaining := sentence; remaining != ""; {
-		matches := qqDomainPattern.FindAllStringSubmatchIndex(remaining, matchBatchSize)
-		if len(matches) == 0 {
-			break
-		}
-		for _, m := range matches {
-			host := strings.ToLower(remaining[m[2]:m[3]])
-			if !slices.ContainsFunc(qqAllowedDomains, func(d string) bool { return host == d || strings.HasSuffix(host, "."+d) }) {
-				return "domain"
-			}
-		}
-		remaining = remaining[matches[len(matches)-1][1]:]
+	if qqDomainPromo(sentence) {
+		return "domain"
 	}
 	return ""
 }

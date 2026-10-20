@@ -10,6 +10,8 @@ import (
 
 var previousQQWeChatPattern = regexp.MustCompile(`(?i)(?:微信|v信|vx)\s*((?:号码?|账号)?\s*[:：]?)\s*([A-Za-z0-9][-_A-Za-z0-9]{4,19})`)
 
+var previousQQDomainPattern = regexp.MustCompile(`(?i)((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:com|net|org|cn|xyz|top|io|cc|me|co|info|biz|vip|club|site|online|shop|store|live|pro|fun|icu|cyou|buzz|work|life|world|tech|space|website|link|ltd|ink|wang|xin|asia|hk|tw|tv|ru|us|uk|de|jp|kr|dev|win))(?:[^A-Za-z0-9-]|$)`)
+
 // 保留旧的全量匹配流程，核对分批读取后的分类及非重叠匹配规则。
 func previousQQPromoSentenceMatches(sentence string) string {
 	if !qqPromoSentenceCandidate(sentence) {
@@ -29,7 +31,7 @@ func previousQQPromoSentenceMatches(sentence string) string {
 			return "wechat"
 		}
 	}
-	for _, m := range qqDomainPattern.FindAllStringSubmatchIndex(sentence, -1) {
+	for _, m := range previousQQDomainPattern.FindAllStringSubmatchIndex(sentence, -1) {
 		host := strings.ToLower(sentence[m[2]:m[3]])
 		if !slices.ContainsFunc(qqAllowedDomains, func(d string) bool { return host == d || strings.HasSuffix(host, "."+d) }) {
 			return "domain"
@@ -104,6 +106,9 @@ func TestQQPromoMatchAllocationBudget(t *testing.T) {
 		{"wechat", strings.Repeat("微信号 abc12 ", 4096), "wechat"},
 		{"domain", strings.Repeat("external.example.com ", 4096), "domain"},
 		{"ignored_wechat", strings.Repeat("avxabc12 ", 4096), ""},
+		{"allowed_domains", strings.Repeat("github.com ", 4096), ""},
+		{"allowed_uppercase_domains", strings.Repeat("DOCS.GITHUB.COM ", 4096), ""},
+		{"allowed_unicode_domains", strings.Repeat("ſ.K.github.com。", 4096), ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var got string

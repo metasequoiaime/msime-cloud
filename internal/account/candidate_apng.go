@@ -210,13 +210,15 @@ func pngChunkType(kind string) bool {
 // decode 用 image/png 完整解码默认图和每一帧，任何一张失败都返回 false。每帧拼成一张独立的 PNG：IHDR 换成帧的尺寸，带上 PLTE 和 tRNS，帧数据作为 IDAT。image/png 会拒绝解压后多出的像素数据，但不管 zlib 流结束之后还剩多少压缩字节（它的读取有缓冲，并且忽略多余的 IDAT 块），而这里入库的是原始压缩流，所以另外要求每帧的数据恰好是一个完整的 zlib 流，不能借此夹带任意字节。
 func (a *candidateAPNG) decode() bool {
 	var validator apngZlibValidator
+	var frameBuffer []byte
 	images := make([]apngFrame, 0, len(a.frames)+1)
 	if a.images > len(a.frames) {
 		images = append(images, apngFrame{width: uint32(a.width), height: uint32(a.height), data: a.idat})
 	}
 	images = append(images, a.frames...)
 	for _, frame := range images {
-		decoded, err := png.Decode(bytes.NewReader(a.framePNG(frame)))
+		frameBuffer = a.framePNG(frame, frameBuffer)
+		decoded, err := png.Decode(bytes.NewReader(frameBuffer))
 		if err != nil || decoded.Bounds().Dx() != int(frame.width) || decoded.Bounds().Dy() != int(frame.height) || !validator.exact(frame.data) {
 			return false
 		}
@@ -286,8 +288,8 @@ func (v *apngZlibValidator) exact(parts [][]byte) bool {
 	return err == nil && len(v.data.parts) == 0
 }
 
-// framePNG 把一帧拼成独立的 PNG 文件，按各块的完整长度一次分配输出缓冲。
-func (a *candidateAPNG) framePNG(frame apngFrame) []byte {
+// framePNG 把一帧拼成独立的 PNG 文件，复用 out 的容量并覆盖其内容；容量不足时按各块的完整长度一次分配。
+func (a *candidateAPNG) framePNG(frame apngFrame, out []byte) []byte {
 	ihdr := append([]byte{}, a.ihdr...)
 	binary.BigEndian.PutUint32(ihdr, frame.width)
 	binary.BigEndian.PutUint32(ihdr[4:], frame.height)
@@ -302,7 +304,11 @@ func (a *candidateAPNG) framePNG(frame apngFrame) []byte {
 	for _, data := range frame.data {
 		size += len(data) + 12
 	}
-	out := make([]byte, len(pngSignature), size)
+	if cap(out) < size {
+		out = make([]byte, len(pngSignature), size)
+	} else {
+		out = out[:len(pngSignature)]
+	}
 	copy(out, pngSignature)
 	out = appendPNGChunk(out, "IHDR", ihdr)
 	if a.plte != nil {

@@ -1,4 +1,4 @@
-import { formatNumber } from "../../utils/number";
+import { formatNumber, formatRate } from "../../utils/number";
 import { platformName } from "../../utils/platform";
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -59,7 +59,7 @@ function KPIs({ data }: { data: Overview }) {
       sub={downloads ? "近 30 天较前 30 天" : `近 30 天 ${formatNumber(data.downloads_30d)} 次`} />
     <StatTile size="kpi" label="7 日活跃设备" value={data.telemetry.active ? formatNumber(data.active_devices_7d) : "—"} delta={active?.text} deltaTone={active?.tone}
       sub={data.telemetry.active ? "全平台合计" : "客户端未上报"} />
-    <StatTile size="kpi" label="无崩溃会话率" value={data.crash_free_rate === null ? "—" : `${(data.crash_free_rate * 100).toFixed(2)}%`} delta={crashFree?.text} deltaTone={crashFree?.tone}
+    <StatTile size="kpi" label="无崩溃会话率" value={formatRate(data.crash_free_rate)} delta={crashFree?.text} deltaTone={crashFree?.tone}
       sub={data.crash_free_rate !== null ? (data.crash_top ? `${platformName(data.crash_top.platform)} ${data.crash_top.version} 拖累` : "近 7 天会话") : data.telemetry.sessions ? "近 7 天没有会话" : "客户端未上报"} />
     <StatTile size="kpi" label="待审核" value={pending ? formatNumber(pending.dict_prs + pending.community + pending.issues) : "—"}
       sub={pending ? `词库 PR ${pending.dict_prs} · 社区 ${pending.community} · Issue ${pending.issues}` : "正在加载…"} />

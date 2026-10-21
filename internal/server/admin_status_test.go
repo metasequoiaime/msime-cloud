@@ -69,7 +69,7 @@ func pendingCalls(m *serviceMetrics, service string) metricCounts {
 	return total
 }
 
-// Hourly and minute buckets are taken for flushing in a fixed order and restored when the flush fails, dropping stale ones.
+// 批次同时提取小时与分钟桶，顺序固定；重试裁剪过期行，新调用保留在下一批。
 func TestServiceMetricsBuckets(t *testing.T) {
 	var m serviceMetrics
 	now := time.Date(2026, 10, 1, 12, 30, 0, 0, time.UTC)
@@ -80,8 +80,10 @@ func TestServiceMetricsBuckets(t *testing.T) {
 	if w := pendingCalls(&m, "chat"); w.calls != 3 || w.errors != 1 {
 		t.Fatalf("pending chat minutes = %+v", w)
 	}
-	minutes := m.takeMinutes()
-	if len(minutes) != 4 || len(m.takeMinutes()) != 0 {
+	m.record("cloud", now.Add(-8*24*time.Hour), time.Second, false, 0)
+	batch := m.nextBatch(now)
+	minutes := batch.Minutes
+	if len(minutes) != 4 {
 		t.Fatalf("minutes = %+v", minutes)
 	}
 	for i, want := range []string{"chat 12:23", "chat 12:28", "chat 12:30", "translation 12:30"} {
@@ -92,19 +94,11 @@ func TestServiceMetricsBuckets(t *testing.T) {
 	if minutes[1].Errors != 1 || minutes[3].Calls != 1 {
 		t.Fatalf("minute counts = %+v", minutes)
 	}
-	// A failed flush puts the minutes back, except those too old for any window the probe will still judge.
-	m.restoreMinutes(append(minutes, account.ServiceMinute{Service: "cloud", Minute: now.Add(-2 * time.Hour), Calls: 5}), now)
-	if w := pendingCalls(&m, "chat"); w.calls != 3 || w.errors != 1 {
-		t.Fatalf("restored chat minutes = %+v", w)
-	}
-	if w := pendingCalls(&m, "cloud"); w.calls != 0 {
-		t.Fatalf("a stale minute was restored: %+v", w)
-	}
 	if pending := m.pending(); len(pending) != 2 {
 		t.Fatalf("pending = %+v", pending)
 	}
-	rows := m.take()
-	if len(rows) != 2 || len(m.take()) != 0 {
+	rows := batch.Hours
+	if len(rows) != 2 {
 		t.Fatalf("take = %+v", rows)
 	}
 	for _, row := range rows {
@@ -112,15 +106,19 @@ func TestServiceMetricsBuckets(t *testing.T) {
 			t.Fatalf("row = %+v", row)
 		}
 	}
-	stale := account.ServiceMetric{Service: "cloud", Hour: now.Add(-8 * 24 * time.Hour), Calls: 5}
-	m.restore(append(rows, stale), now)
 	m.record("chat", now, time.Second, false, 0)
 	restored := map[string]int64{}
-	for _, row := range m.take() {
+	for _, row := range m.pending() {
 		restored[row.Service] += row.Calls
 	}
 	if restored["chat"] != 4 || restored["translation"] != 1 || restored["cloud"] != 0 {
 		t.Fatalf("restored = %v", restored)
+	}
+	if retried := m.nextBatch(now.Add(2 * time.Hour)); retried.ID != batch.ID || len(retried.Minutes) != 0 || retried.Hours[0].Calls != 3 {
+		t.Fatalf("重试混入新调用或保留了过期分钟：%+v", retried)
+	}
+	if expired := m.nextBatch(now.Add(8 * 24 * time.Hour)); expired != nil || len(m.pending()) != 0 {
+		t.Fatalf("过期批次或积压桶没有清理：%+v", expired)
 	}
 }
 

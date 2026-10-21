@@ -1,4 +1,5 @@
 import { formatNumber } from "../../utils/number";
+import { platformName } from "../../utils/platform";
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -24,10 +25,6 @@ const activeSeries = [
   { key: "ios", label: "iOS", color: "var(--chart-5)" },
   { key: "harmonyos", label: "HarmonyOS", color: "var(--chart-6)" },
 ] as const;
-
-const platformLabels: Record<string, string> = { windows: "Windows", macos: "macOS", linux: "Linux", android: "Android", ios: "iOS", harmonyos: "HarmonyOS" };
-
-const platformName = (platform: string) => platformLabels[platform] ?? platform;
 
 const stateTone: Record<ServiceState, Tone> = { ok: "ok", degraded: "warn", down: "bad", unknown: "mute" };
 const stateLabel: Record<ServiceState, string> = { ok: "运行正常", degraded: "性能降级", down: "服务中断", unknown: "暂无探测数据" };

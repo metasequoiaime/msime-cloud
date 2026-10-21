@@ -35,9 +35,12 @@ func userRoleSQL(ownersParam string) string {
  ORDER BY CASE m.role WHEN 'maintainer' THEN 0 WHEN 'operator' THEN 1 WHEN 'reviewer' THEN 2 WHEN 'readonly' THEN 3 ELSE 4 END,m.role LIMIT 1),'user') END`
 }
 
-// adminOwnersArg is the configured owners as a non-nil text[] argument; a nil slice would be sent as NULL.
+// adminOwnersArg 只读复用启动时配置的所有者；调用方不能修改。空配置返回非 nil 切片，避免 text[] 参数被编码为 NULL。
 func (a *Service) adminOwnersArg() []string {
-	return append([]string{}, a.admin.Owners...)
+	if a.admin.Owners == nil {
+		return []string{}
+	}
+	return a.admin.Owners
 }
 
 // userContactSQL 按邮箱验证码、提供方邮箱、手机的优先级选择并脱敏联系人，短手机号只保留末两位；外层聚合最多一行，让分页和总数查询可以移除未使用的联系人连接。

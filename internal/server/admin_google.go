@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	msimebackend "github.com/metasequoiaime/MSIME-Backend"
@@ -352,41 +351,17 @@ func (s *Server) adminGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		denied()
 		return
 	}
-	ctx := context.WithValue(r.Context(), oauth2.HTTPClient, s.client)
-	tokens, err := s.adminGoogle.oauth.Exchange(ctx, code, oauth2.VerifierOption(flow.Verifier))
+	identity, err := s.adminGoogleIdentity(r.Context(), s.adminGoogle.oauth, s.adminGoogle.verifier, flow, code)
 	if err != nil {
-		denied()
+		if errors.Is(err, errAdminGoogleDenied) {
+			denied()
+		} else {
+			s.adminAuthError(w, err)
+		}
 		return
 	}
-	raw, ok := tokens.Extra("id_token").(string)
-	if !ok || len(raw) > 16384 {
-		denied()
-		return
-	}
-	token, err := s.adminGoogle.verifier.Verify(r.Context(), raw)
-	if err != nil || token.Subject == "" || len(token.Subject) > 255 || token.IssuedAt.IsZero() || token.IssuedAt.After(time.Now().Add(30*time.Second)) || subtle.ConstantTimeCompare([]byte(token.Nonce), []byte(flow.Nonce)) != 1 {
-		denied()
-		return
-	}
-	var claims struct {
-		Email    string `json:"email"`
-		Verified bool   `json:"email_verified"`
-		Name     string `json:"name"`
-	}
-	if token.Claims(&claims) != nil || !claims.Verified {
-		denied()
-		return
-	}
-	allowed, err := s.adminEmailAllowed(r.Context(), claims.Email)
-	if err != nil {
-		s.adminAuthError(w, err)
-		return
-	}
-	if !allowed {
-		denied()
-		return
-	}
-	value, err := s.adminStore.CreateAdminSession(r.Context(), account.AdminIdentity{Subject: token.Subject, Email: strings.ToLower(claims.Email), Name: claims.Name, UserAgent: r.UserAgent()})
+	identity.UserAgent = r.UserAgent()
+	value, err := s.adminStore.CreateAdminSession(r.Context(), identity)
 	if err != nil {
 		s.adminAuthError(w, err)
 		return

@@ -849,9 +849,9 @@ func reviewAgain(flag string) string {
 	return `moderation=CASE WHEN moderation='removed' THEN 'removed' ELSE 'pending' END,previous_moderation=CASE WHEN moderation='removed' THEN 'pending' END,moderation_reason=CASE WHEN moderation='removed' THEN moderation_reason ELSE ` + flag + ` END`
 }
 
-// resourceScreenText is the user-visible text of a word pack or reply template: the words and the prompt.
+// resourceScreenText 提取词条、回复和短语的可见文本，预留每条短语的分组与正文位置。
 func resourceScreenText(content ResourceContent) string {
-	parts := make([]string, 0, len(content.Entries)+1)
+	parts := make([]string, 0, len(content.Entries)+1+2*len(content.Phrases))
 	for _, entry := range content.Entries {
 		parts = append(parts, entry.Word)
 	}

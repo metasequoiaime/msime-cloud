@@ -431,7 +431,7 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 	respond(w, 200, map[string]any{"api_version": contract.APIVersion, "cloud": s.config.Cloud.URL != "", "chat": s.config.Chat.URL != "", "translation": s.translationEnabled(), "transcription": s.config.Transcription.URL != "", "streaming_transcription": s.config.Streaming.URL != ""})
 }
 func (s *Server) upstream(r *http.Request, e Endpoint, method, contentType string, body io.Reader) ([]byte, error) {
-	req, err := http.NewRequestWithContext(r.Context(), method, e.URL, body)
+	req, err := e.newRequest(r.Context(), method, body)
 	if err != nil {
 		return nil, err
 	}
@@ -439,9 +439,6 @@ func (s *Server) upstream(r *http.Request, e Endpoint, method, contentType strin
 		req.Header.Set("Content-Type", contentType)
 	}
 	req.Header.Set("Accept", "application/json")
-	if e.token != "" {
-		req.Header.Set("Authorization", "Bearer "+e.token)
-	}
 	return s.doUpstream(req)
 }
 

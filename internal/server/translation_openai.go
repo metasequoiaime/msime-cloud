@@ -20,14 +20,14 @@ func (s *Server) translateOpenAI(w http.ResponseWriter, r *http.Request, v trans
 		Model: e.Model, MaxTokens: contract.ChatMaxTokens,
 		Messages: []message{{Role: "system", Content: prompt}, {Role: "user", Content: v.Text}},
 	})
-	b, err := s.upstream(r, e.Endpoint, "POST", "application/json", bytes.NewReader(payload))
 	var result struct {
 		Choices []struct {
 			Message      message `json:"message"`
 			FinishReason string  `json:"finish_reason"`
 		} `json:"choices"`
 	}
-	if err != nil || json.Unmarshal(b, &result) != nil || len(result.Choices) == 0 {
+	decoded, err := s.upstreamJSON(r, e.Endpoint, "POST", "application/json", bytes.NewReader(payload), &result)
+	if err != nil || !decoded || len(result.Choices) == 0 {
 		upstreamError(w, r, err)
 		return "", false
 	}

@@ -328,11 +328,11 @@ func dictionaryRows(name, text, query string, page int) ([]dictionaryRow, int) {
 			}
 		} else if strings.HasPrefix(name, "sources/korean/") {
 			cols = strings.SplitN(line, ":", 3)
+		} else if !strings.HasSuffix(name, ".md") && !strings.ContainsRune(raw, '\t') {
+			// 原始行的首尾制表符也代表列，不能用去除空白后的 line 判断。
+			cols = strings.Fields(line)
 		} else {
 			cols = strings.Split(strings.TrimSuffix(raw, "\r"), "\t")
-			if len(cols) == 1 && !strings.HasSuffix(name, ".md") {
-				cols = strings.Fields(line)
-			}
 		}
 		rows = append(rows, dictionaryRow{Line: lineNumber, Columns: cols})
 	}

@@ -99,7 +99,7 @@ func (c *AdminLogsConfig) validate() error {
 	}
 	c.LokiURL = strings.TrimSuffix(c.LokiURL, "/")
 	u, err := url.Parse(c.LokiURL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(c.LokiURL, "#") {
 		return errors.New("admin logs loki_url must be an http(s) URL without credentials, query or fragment")
 	}
 	if c.Selector == "" {

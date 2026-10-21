@@ -294,7 +294,7 @@ Google 登录时，后端校验 ID Token 的签名、issuer、audience、有效�
 | --- | --- |
 | `app_id`、`installation_id` | GitHub App 及其安装的 ID |
 | `private_key_env` | 存放 App 私钥（PEM，PKCS#1 或 PKCS#8）的环境变量名 |
-| `api_url` | 可选，默认 `https://api.github.com`，必须是 HTTPS |
+| `api_url` | 可选，默认 `https://api.github.com`，必须是 HTTPS 基础地址；可带代理路径前缀和尾斜杠，不能带凭据、查询或片段，裸 `?`、`#` 也不允许 |
 | `dictionary_repo` | 词库审核的仓库。留空时跟随 `word_submissions.github.repository`，官网投稿未启用时默认 `metasequoiaime/msime-dictionary`。两者都启用时必须是同一个仓库（不区分大小写），否则服务拒绝启动：`word_submissions` 表只按 PR 编号记录投稿说明，换了仓库就会把说明挂到无关的 PR 上 |
 | `issue_repos` | 问题分诊的仓库，最多 20 个 |
 | `platforms[]` | 发布平台，最多 16 个，按显示顺序排列 |

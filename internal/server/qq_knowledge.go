@@ -215,7 +215,7 @@ func qqMarkdownHeading(line string) (level int, title string, ok bool) {
 		return 0, "", false
 	}
 	start := level
-	for start < len(line) && qqMarkdownHeadingSpace(line[start]) {
+	for start < len(line) && qqRegexpSpace(line[start]) {
 		start++
 	}
 	if start == level {
@@ -229,25 +229,16 @@ func qqMarkdownHeading(line string) (level int, title string, ok bool) {
 		start--
 	}
 	end := len(line)
-	for end > start+1 && qqMarkdownHeadingSpace(line[end-1]) {
+	for end > start+1 && qqRegexpSpace(line[end-1]) {
 		end--
 	}
 	for end > start+1 && line[end-1] == '#' {
 		end--
 	}
-	for end > start+1 && qqMarkdownHeadingSpace(line[end-1]) {
+	for end > start+1 && qqRegexpSpace(line[end-1]) {
 		end--
 	}
 	return level, line[start:end], true
-}
-
-func qqMarkdownHeadingSpace(c byte) bool {
-	switch c {
-	case ' ', '\t', '\n', '\f', '\r':
-		return true
-	default:
-		return false
-	}
 }
 
 // qqDocPlatforms 按文件名标出每篇指南适用的平台，写在段落的文档名前面。windows.md 的一级标题是「水杉输入法文档」，不标的话 Windows 的操作路径会被当成通用答案交给 macOS、Linux 用户。

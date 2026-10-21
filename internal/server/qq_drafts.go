@@ -65,14 +65,14 @@ func qqParseDraftCommand(text string) (command, id, extra string, ok bool) {
 			continue
 		}
 		command, text = candidate, text[len(candidate):]
-		for len(text) > 0 && qqDraftCommandSpace(text[0]) {
+		for len(text) > 0 && qqRegexpSpace(text[0]) {
 			text = text[1:]
 		}
 		if strings.HasPrefix(text, ":") {
 			text = text[1:]
 		} else if strings.HasPrefix(text, "：") {
 			text = text[len("："):]
-			for len(text) > 0 && qqDraftCommandSpace(text[0]) {
+			for len(text) > 0 && qqRegexpSpace(text[0]) {
 				text = text[1:]
 			}
 		}
@@ -85,7 +85,7 @@ func qqParseDraftCommand(text string) (command, id, extra string, ok bool) {
 			return "", "", "", false
 		}
 		text = text[1:]
-		for len(text) > 0 && qqDraftCommandSpace(text[0]) {
+		for len(text) > 0 && qqRegexpSpace(text[0]) {
 			text = text[1:]
 		}
 		start := 0
@@ -115,10 +115,6 @@ func qqParseDraftCommand(text string) (command, id, extra string, ok bool) {
 	return "", "", "", false
 }
 
-func qqDraftCommandSpace(c byte) bool {
-	return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r'
-}
-
 func qqDraftCommandSeparator(text string) bool {
 	return qqDraftCommandSeparatorSize(text) != 0
 }
@@ -127,7 +123,7 @@ func qqDraftCommandSeparatorSize(text string) int {
 	if text == "" {
 		return 0
 	}
-	if qqDraftCommandSpace(text[0]) || strings.ContainsRune(":,.;", rune(text[0])) {
+	if qqRegexpSpace(text[0]) || strings.ContainsRune(":,.;", rune(text[0])) {
 		return 1
 	}
 	for _, separator := range [...]string{"：", "，", "。", "；", "、"} {

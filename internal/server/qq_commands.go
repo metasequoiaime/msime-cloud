@@ -309,7 +309,7 @@ func qqIssueRefASCII(text string) ([]string, bool) {
 		return nil, true
 	}
 	repoEnd := hash
-	for repoEnd > 0 && qqIssueRefSpace(text[repoEnd-1]) {
+	for repoEnd > 0 && qqRegexpSpace(text[repoEnd-1]) {
 		repoEnd--
 	}
 	repo := text[:repoEnd]
@@ -332,15 +332,6 @@ func qqIssueRefASCII(text string) ([]string, bool) {
 		return nil, true
 	}
 	return []string{text, repo, text[numberStart:numberEnd]}, true
-}
-
-func qqIssueRefSpace(c byte) bool {
-	switch c {
-	case ' ', '\t', '\n', '\f', '\r':
-		return true
-	default:
-		return false
-	}
 }
 
 func qqIssueRefRepoByte(c byte) bool {

@@ -22,8 +22,26 @@ type moderationSnapshot struct {
 // moderationVersionSQL 用 `xmin` 固定主行版本，并包含作者的封禁时间，防止撤销恢复已经结束的封禁原因；时间与表标识避免事务编号循环或跨表复用凭据。
 const moderationVersionSQL = `md5(jsonb_build_array(tableoid::text,id,xmin::text,extract(epoch FROM created_at),moderation,extract(epoch FROM moderated_at),(SELECT extract(epoch FROM u.banned_at) FROM auth_users u WHERE u.id=owner_id))::text)`
 
+type moderationUndoQueries struct {
+	snapshot, ownerLock, itemLock, update string
+}
+
+// contentModerationUndoQueries 预先构建固定分区的快照和撤销语句，版本、封禁状态和行锁仍逐事务获取。
+var contentModerationUndoQueries = func() map[moderationTable]moderationUndoQueries {
+	queries := make(map[moderationTable]moderationUndoQueries, len(moderationSections))
+	for _, section := range moderationSections {
+		queries[section] = moderationUndoQueries{
+			snapshot:  `SELECT ` + moderationVersionSQL + `,moderation,previous_moderation,moderation_reason FROM ` + section.table + section.where(`id=$1`),
+			ownerLock: `SELECT u.id,u.banned_at IS NOT NULL FROM auth_users u WHERE u.id=(SELECT owner_id FROM ` + section.table + section.where(`id=$1`) + `) FOR SHARE OF u`,
+			itemLock:  `SELECT id FROM ` + section.table + section.where(`id=$1 AND owner_id=$2`) + ` FOR UPDATE`,
+			update:    `UPDATE ` + section.table + ` SET moderation=$2,previous_moderation=$3,moderation_reason=$4,moderated_by=$5,moderated_at=now()` + section.where(`id=$1`) + ` RETURNING id,name`,
+		}
+	}
+	return queries
+}()
+
 func readModerationSnapshot(ctx context.Context, tx pgx.Tx, section moderationTable, id string) (snapshot moderationSnapshot, err error) {
-	err = tx.QueryRow(ctx, `SELECT `+moderationVersionSQL+`,moderation,previous_moderation,moderation_reason FROM `+section.table+section.where(`id=$1`), id).Scan(&snapshot.Token, &snapshot.Moderation, &snapshot.Previous, &snapshot.Reason)
+	err = tx.QueryRow(ctx, contentModerationUndoQueries[section].snapshot, id).Scan(&snapshot.Token, &snapshot.Moderation, &snapshot.Previous, &snapshot.Reason)
 	return
 }
 
@@ -31,7 +49,7 @@ func readModerationSnapshot(ctx context.Context, tx pgx.Tx, section moderationTa
 func lockModerationItem(ctx context.Context, tx pgx.Tx, section moderationTable, id string) (bool, error) {
 	var owner string
 	var banned bool
-	err := tx.QueryRow(ctx, `SELECT u.id,u.banned_at IS NOT NULL FROM auth_users u WHERE u.id=(SELECT owner_id FROM `+section.table+section.where(`id=$1`)+`) FOR SHARE OF u`, id).Scan(&owner, &banned)
+	err := tx.QueryRow(ctx, contentModerationUndoQueries[section].ownerLock, id).Scan(&owner, &banned)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, actionFail(http.StatusNotFound, "not_found")
 	}
@@ -39,7 +57,7 @@ func lockModerationItem(ctx context.Context, tx pgx.Tx, section moderationTable,
 		return false, err
 	}
 	var locked string
-	err = tx.QueryRow(ctx, `SELECT id FROM `+section.table+section.where(`id=$1 AND owner_id=$2`)+` FOR UPDATE`, id, owner).Scan(&locked)
+	err = tx.QueryRow(ctx, contentModerationUndoQueries[section].itemLock, id, owner).Scan(&locked)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, actionFail(http.StatusConflict, "conflict")
 	}
@@ -108,7 +126,7 @@ func actionUndoModeration(a *Service, ctx context.Context, tx pgx.Tx, v actionRe
 	if current.Token != value.Token {
 		return actionResult{}, actionFail(409, "conflict")
 	}
-	changed, err := moderationUpdate(ctx, tx, `UPDATE `+section.table+` SET moderation=$2,previous_moderation=$3,moderation_reason=$4,moderated_by=$5,moderated_at=now()`+section.where(`id=$1`)+` RETURNING id,name`, v.ID, value.Moderation, value.Previous, value.Reason, adminActor(ctx))
+	changed, err := moderationUpdate(ctx, tx, contentModerationUndoQueries[section].update, v.ID, value.Moderation, value.Previous, value.Reason, adminActor(ctx))
 	if err != nil {
 		return actionResult{}, err
 	}

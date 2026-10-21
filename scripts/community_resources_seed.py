@@ -4,10 +4,13 @@ import json
 from pathlib import Path
 from uuid import uuid5, NAMESPACE_URL
 
+if __package__:
+    from .seed_sql import literal as quoted
+else:
+    from seed_sql import literal as quoted
+
 root = Path(__file__).resolve().parents[1]
 publisher = str(uuid5(NAMESPACE_URL, 'https://msime.app/community/publisher/starter'))
-def quoted(value):
-    return "'" + value.replace("'", "''") + "'"
 
 def render():
     items = json.loads((root / 'assets/community-starter-resources.json').read_text())

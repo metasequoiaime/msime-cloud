@@ -584,6 +584,17 @@ var pluginKindKeys = map[string][]string{
 	"wordbook":      {"wordbook"},
 }
 
+// pluginManifestKeys 精确校验公共键与当前类型的专属键，直接读取两份白名单，避免每次校验时合并切片。
+func pluginManifestKeys(table map[string]any, kind string) bool {
+	kindKeys := pluginKindKeys[kind]
+	for key := range table {
+		if !slices.Contains(pluginCommonKeys, key) && !slices.Contains(kindKeys, key) {
+			return false
+		}
+	}
+	return true
+}
+
 // validPluginArchive runs every server-side check on an uploaded pack and returns what is stored, or the error code. It never decodes audio beyond its magic bytes and never executes anything.
 func validPluginArchive(archive []byte) (pluginPack, string) {
 	members, code := readPluginArchive(archive)
@@ -612,7 +623,7 @@ func validPluginArchive(archive []byte) (pluginPack, string) {
 		return pluginPack{}, "invalid_plugin_manifest"
 	}
 	kind := *m.Kind
-	if !pluginKeys(table, append(slices.Clone(pluginCommonKeys), pluginKindKeys[kind]...)...) {
+	if !pluginManifestKeys(table, kind) {
 		return pluginPack{}, "invalid_plugin_manifest"
 	}
 	if m.ID == nil || !validPluginID(*m.ID) || slices.Contains(builtinPluginIDs[kind], *m.ID) {

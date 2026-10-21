@@ -418,6 +418,24 @@ func actionApproveContent(a *Service, ctx context.Context, tx pgx.Tx, v actionRe
 	return moderationResult(v, changed, nil), nil
 }
 
+type moderationStateQueries struct {
+	remove, restore, undo, exists string
+}
+
+// contentModerationStateQueries 预先构建固定分区的下架和恢复语句，审核状态仍由事务读取和更新。
+var contentModerationStateQueries = func() map[moderationTable]moderationStateQueries {
+	queries := make(map[moderationTable]moderationStateQueries, len(moderationSections))
+	for _, section := range moderationSections {
+		queries[section] = moderationStateQueries{
+			remove:  `UPDATE ` + section.table + ` SET previous_moderation=CASE WHEN moderation='removed' THEN previous_moderation ELSE COALESCE($4,moderation) END,moderation='removed',moderation_reason=$3,moderated_by=$2,moderated_at=now()` + section.match() + ` RETURNING id,name`,
+			restore: `UPDATE ` + section.table + ` SET moderation=COALESCE(previous_moderation,'approved'),previous_moderation=NULL,moderation_reason=NULL,moderated_by=$2,moderated_at=now()` + section.match() + ` AND moderation='removed' RETURNING id,name`,
+			undo:    `UPDATE ` + section.table + ` SET moderation=$3,previous_moderation=NULL,moderated_by=$2,moderated_at=now()` + section.match() + ` AND moderation<>'removed' RETURNING id,name`,
+			exists:  `SELECT EXISTS(SELECT 1 FROM ` + section.table + section.match() + `)`,
+		}
+	}
+	return queries
+}()
+
 // actionRemoveContent hides the items ids (or id) of section from the public endpoints, recording reason and the state it replaced.
 //
 // With value {"previous":"pending"|"approved"} the state a later restore_content returns to is that one instead of the state the removal replaced. The console sends it when undoing the approval or restore of a removed item, so the undo puts back the removed item's own restore state rather than "approved".
@@ -443,7 +461,7 @@ func actionRemoveContent(a *Service, ctx context.Context, tx pgx.Tx, v actionReq
 		previous = &value.Previous
 	}
 	// Removing a removed row again only updates the reason, so previous_moderation keeps the state the first removal replaced.
-	changed, err := moderationUpdate(ctx, tx, `UPDATE `+section.table+` SET previous_moderation=CASE WHEN moderation='removed' THEN previous_moderation ELSE COALESCE($4,moderation) END,moderation='removed',moderation_reason=$3,moderated_by=$2,moderated_at=now()`+section.match()+` RETURNING id,name`, ids, adminActor(ctx), reason, previous)
+	changed, err := moderationUpdate(ctx, tx, contentModerationStateQueries[section].remove, ids, adminActor(ctx), reason, previous)
 	if err != nil {
 		return actionResult{}, err
 	}
@@ -476,7 +494,7 @@ func actionRestoreContent(a *Service, ctx context.Context, tx pgx.Tx, v actionRe
 		if err = bannedOwnerGuard(ctx, tx, section, ids); err != nil {
 			return actionResult{}, err
 		}
-		changed, err = moderationUpdate(ctx, tx, `UPDATE `+section.table+` SET moderation=COALESCE(previous_moderation,'approved'),previous_moderation=NULL,moderation_reason=NULL,moderated_by=$2,moderated_at=now()`+section.match()+` AND moderation='removed' RETURNING id,name`, ids, adminActor(ctx))
+		changed, err = moderationUpdate(ctx, tx, contentModerationStateQueries[section].restore, ids, adminActor(ctx))
 		if err == nil && len(changed) > 0 {
 			restored := make([]string, len(changed))
 			for i, item := range changed {
@@ -486,14 +504,14 @@ func actionRestoreContent(a *Service, ctx context.Context, tx pgx.Tx, v actionRe
 		}
 	} else {
 		// moderation_reason of a row that is not removed is the automatic flag, which stays.
-		changed, err = moderationUpdate(ctx, tx, `UPDATE `+section.table+` SET moderation=$3,previous_moderation=NULL,moderated_by=$2,moderated_at=now()`+section.match()+` AND moderation<>'removed' RETURNING id,name`, ids, adminActor(ctx), to)
+		changed, err = moderationUpdate(ctx, tx, contentModerationStateQueries[section].undo, ids, adminActor(ctx), to)
 	}
 	if err != nil {
 		return actionResult{}, err
 	}
 	if len(changed) == 0 {
 		var exists bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM `+section.table+section.match()+`)`, ids).Scan(&exists); err != nil {
+		if err = tx.QueryRow(ctx, contentModerationStateQueries[section].exists, ids).Scan(&exists); err != nil {
 			return actionResult{}, err
 		}
 		switch {

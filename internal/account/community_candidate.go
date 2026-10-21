@@ -215,10 +215,10 @@ func validCandidateFiles(manifest string, files map[string][]byte) string {
 		if !skins.SafeResource(path, 256) || path == "skin.toml" {
 			return "candidate_skin_file_path"
 		}
-		// 总路径上限不代表文件名可达同样长度；客户端文件系统的单段名称最多 255 个 ASCII 字节。
+		// 每段最多 255 个 ASCII 字节；尾点会导致 Windows 目录别名冲突或纯点目录安装失败。
 		for remaining := path; remaining != ""; {
 			part, rest, _ := strings.Cut(remaining, "/")
-			if len(part) > 255 {
+			if len(part) > 255 || strings.HasSuffix(part, ".") {
 				return "candidate_skin_file_path"
 			}
 			remaining = rest

@@ -14,6 +14,8 @@
 
 `TestCommunityReportsDoNotFollowReusedIDs` 覆盖六类作品经作者、后台或账号注销永久删除后由新作者同 ID 重发，后台不显示旧举报且原举报者可以重新举报。`TestCommunityReportsWaitForChanges` 观察真实 PostgreSQL 锁等待，验证删除、下架、转私有后的迟到举报返回 404、不写记录，删除回滚后正常举报；迁移测试检查触发器缺失或停用时拒绝就绪、重复迁移修复并清理孤立记录，DML 角色测试覆盖账号注销的举报清理。
 
+`TestCandidateAcceptedPathsCanBeInstalledOnWindows` 在真实 Windows 文件系统上逐个独占创建服务器接受的候选皮肤文件，检查写入字节和最终路径集合，覆盖目录尾点别名与纯点目录。`TestCandidateWindowsTrailingDotPathsRejected` 验证各平台都拒绝尾点路径段并保留合法相似名称；`TestCandidateWindowsTrailingDotPathsRejectedByWriteEndpoints` 使用真实 PostgreSQL 覆盖发布、替换、后台创建和编辑四个入口，检查返回 400、不保存无效包、不生成成功审计且失败编辑保留原作品。
+
 ## 完整运行
 
 必须使用独立的 PostgreSQL 数据库，名称包含 `msime_auth_test`；账号测试会清空测试表。不要复用本地开发或生产数据库，也不要并行运行多个使用同一测试数据库的 `go test` 进程。

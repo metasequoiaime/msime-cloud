@@ -10,6 +10,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -115,8 +116,8 @@ func validCandidateSkinCategory(category string) bool {
 }
 
 // candidateIncludeCategory 读取 include=category；ok 为 false 表示 include 带了其他非空值。
-func candidateIncludeCategory(r *http.Request) (category bool, ok bool) {
-	switch r.URL.Query().Get("include") {
+func candidateIncludeCategory(query url.Values) (category bool, ok bool) {
+	switch query.Get("include") {
 	case "":
 		return false, true
 	case "category":
@@ -143,8 +144,8 @@ func candidateLegacy(v CommunityCandidateSkin) CommunityCandidateSkin {
 }
 
 // candidateFields 读取列表和详情的 `fields=` 开关：sync（同步字段和作者的私有作品）、moderation 与 saved，可单独使用，也可逗号组合，例如 `fields=sync,moderation`；出现其他名称时 ok 为 false。
-func candidateFields(r *http.Request) (fields map[string]bool, ok bool) {
-	return communityFields(r, "sync", "moderation", "saved")
+func candidateFields(query url.Values) (fields map[string]bool, ok bool) {
+	return communityFields(query, "sync", "moderation", "saved")
 }
 
 const candidateSkinSelectBase = `SELECT s.id,s.package_id,s.name,s.description,
@@ -421,23 +422,24 @@ func sanitizeCandidateImages(files map[string][]byte, preview string) (map[strin
 }
 
 func (a *Service) communityCandidateList(w http.ResponseWriter, r *http.Request) {
-	offset, search, code := communityListPage(r)
+	query := r.URL.Query()
+	offset, search, code := communityListPage(query)
 	if code != "" {
 		writeError(w, 400, code)
 		return
 	}
-	scope, validScope := communityListScope(r)
+	scope, validScope := communityListScope(query)
 	if !validScope {
 		writeError(w, 400, "invalid_scope")
 		return
 	}
-	fields, ok := candidateFields(r)
+	fields, ok := candidateFields(query)
 	if !ok {
 		writeError(w, 400, "invalid_fields")
 		return
 	}
 	sync := fields["sync"]
-	category, withCategory, code := communitySkinListCategory(r)
+	category, withCategory, code := communitySkinListCategory(query)
 	if code != "" {
 		writeError(w, 400, code)
 		return
@@ -484,13 +486,14 @@ func (a *Service) communityCandidateList(w http.ResponseWriter, r *http.Request)
 	write(w, 200, map[string]any{"skins": items, "has_more": more})
 }
 func (a *Service) communityCandidateDetail(w http.ResponseWriter, r *http.Request) {
-	fields, ok := candidateFields(r)
+	query := r.URL.Query()
+	fields, ok := candidateFields(query)
 	if !ok {
 		writeError(w, 400, "invalid_fields")
 		return
 	}
 	sync := fields["sync"]
-	withCategory, ok := candidateIncludeCategory(r)
+	withCategory, ok := candidateIncludeCategory(query)
 	if !ok {
 		writeError(w, 400, "invalid_include")
 		return
@@ -931,7 +934,7 @@ func (a *Service) communityCandidateVisibility(w http.ResponseWriter, r *http.Re
 		Visibility *string `json:"visibility"`
 		Category   *string `json:"category"`
 	}
-	withCategory, ok := candidateIncludeCategory(r)
+	withCategory, ok := candidateIncludeCategory(r.URL.Query())
 	if !ok {
 		writeError(w, 400, "invalid_include")
 		return

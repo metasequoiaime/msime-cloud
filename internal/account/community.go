@@ -8,6 +8,7 @@ import (
 	"image/jpeg"
 	"math"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -144,9 +145,9 @@ func communitySkinItem(v CommunitySkin, fields map[string]bool, category bool) C
 }
 
 // communityFields 读取社区列表和详情接口的 `fields=` 开关：逗号分隔、取自 allowed 的名称列表，出现其他名称时 ok 为 false。已发布的客户端解析社区条目时拒绝未知字段，所以额外字段只发给显式请求的客户端。
-func communityFields(r *http.Request, allowed ...string) (fields map[string]bool, ok bool) {
+func communityFields(query url.Values, allowed ...string) (fields map[string]bool, ok bool) {
 	fields = map[string]bool{}
-	raw := r.URL.Query().Get("fields")
+	raw := query.Get("fields")
 	if raw == "" {
 		return fields, true
 	}
@@ -316,22 +317,23 @@ func (a *Service) communityViewer(r *http.Request) string {
 	return p.UserID
 }
 func (a *Service) communityList(w http.ResponseWriter, r *http.Request) {
-	offset, search, code := communityListPage(r)
+	query := r.URL.Query()
+	offset, search, code := communityListPage(query)
 	if code != "" {
 		writeError(w, 400, code)
 		return
 	}
-	scope, validScope := communityListScope(r)
+	scope, validScope := communityListScope(query)
 	if !validScope {
 		writeError(w, 400, "invalid_scope")
 		return
 	}
-	fields, ok := communityFields(r, "moderation", "saved")
+	fields, ok := communityFields(query, "moderation", "saved")
 	if !ok {
 		writeError(w, 400, "invalid_fields")
 		return
 	}
-	category, withCategory, code := communitySkinListCategory(r)
+	category, withCategory, code := communitySkinListCategory(query)
 	if code != "" {
 		writeError(w, 400, code)
 		return
@@ -374,12 +376,13 @@ func (a *Service) communityList(w http.ResponseWriter, r *http.Request) {
 	write(w, 200, map[string]any{"skins": items, "has_more": more})
 }
 func (a *Service) communityDetail(w http.ResponseWriter, r *http.Request) {
-	fields, ok := communityFields(r, "moderation", "saved")
+	query := r.URL.Query()
+	fields, ok := communityFields(query, "moderation", "saved")
 	if !ok {
 		writeError(w, 400, "invalid_fields")
 		return
 	}
-	withCategory, ok := candidateIncludeCategory(r)
+	withCategory, ok := candidateIncludeCategory(query)
 	if !ok {
 		writeError(w, 400, "invalid_include")
 		return
@@ -599,12 +602,13 @@ func (a *Service) communityUpdate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	fields, ok := communityFields(r, "moderation")
+	query := r.URL.Query()
+	fields, ok := communityFields(query, "moderation")
 	if !ok {
 		writeError(w, 400, "invalid_fields")
 		return
 	}
-	withCategory, ok := candidateIncludeCategory(r)
+	withCategory, ok := candidateIncludeCategory(query)
 	if !ok {
 		writeError(w, 400, "invalid_include")
 		return

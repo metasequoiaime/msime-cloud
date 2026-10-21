@@ -84,7 +84,7 @@ func TestCommunityListPage(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodGet, "/?"+tc.query, nil)
-			offset, search, code := communityListPage(r)
+			offset, search, code := communityListPage(r.URL.Query())
 			if offset != tc.offset || search != tc.search || code != tc.code {
 				t.Fatalf("分页查询不符：offset=%d search=%q code=%q", offset, search, code)
 			}
@@ -107,7 +107,7 @@ func TestCommunityListScope(t *testing.T) {
 		{"scope=saved&scope=bad", "saved", true},
 	} {
 		t.Run(tc.query, func(t *testing.T) {
-			scope, ok := communityListScope(httptest.NewRequest(http.MethodGet, "/?"+tc.query, nil))
+			scope, ok := communityListScope(httptest.NewRequest(http.MethodGet, "/?"+tc.query, nil).URL.Query())
 			if scope != tc.scope || ok != tc.ok {
 				t.Fatalf("范围校验不符：scope=%q ok=%v", scope, ok)
 			}
@@ -138,7 +138,7 @@ func TestCommunitySkinListCategory(t *testing.T) {
 		{"首个错误声明", "include=bad&include=category", "", false, "invalid_include"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			category, withCategory, code := communitySkinListCategory(httptest.NewRequest(http.MethodGet, "/?"+tc.query, nil))
+			category, withCategory, code := communitySkinListCategory(httptest.NewRequest(http.MethodGet, "/?"+tc.query, nil).URL.Query())
 			if category != tc.category || withCategory != tc.withCategory || code != tc.code {
 				t.Fatalf("分类查询不符：category=%q withCategory=%v code=%q", category, withCategory, code)
 			}

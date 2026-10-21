@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"slices"
 	"time"
 	"unicode/utf8"
 )
@@ -114,8 +115,17 @@ func missingTexts(wanted []string, cached map[string]string) []string {
 	return missing
 }
 
-// 把命中的译文和上游刚返回的译文按请求原序拼回去。fresh 与 missing 一一对应,由上游返回长度校验保证。
+// 把命中的译文和上游刚返回的译文按请求原序拼回去。missing 由 missingTexts 去重，
+// fresh 与 missing 一一对应，由上游返回长度校验保证。
 func mergeTranslations(wanted []string, cached map[string]string, missing, fresh []string) []string {
+	if len(cached) == 0 && slices.Equal(wanted, missing) {
+		// 整批未命中且没有重复时，上游译文已经按请求排序；仍复制到独立切片。
+		out := make([]string, len(wanted))
+		for i := range out {
+			out[i] = fresh[i]
+		}
+		return out
+	}
 	translated := make(map[string]string, len(missing))
 	for i, text := range missing {
 		translated[text] = fresh[i]

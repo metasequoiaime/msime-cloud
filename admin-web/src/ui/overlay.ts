@@ -1,13 +1,10 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
+import { createListeners } from "../utils/listeners";
 
 // Tracks open modal overlays (confirm dialog, detail drawer, release dialogs): page hotkeys stay inert while one is open, matching the prototype where the confirm dialog swallows every key but Enter and Escape, and the toast hands Escape to the topmost one.
 type Entry = { close: () => void };
 const stack: Entry[] = [];
-const listeners = new Set<() => void>();
-
-function emit() {
-  for (const listener of listeners) listener();
-}
+const listeners = createListeners();
 
 // useRegisterOverlay marks an overlay as open while active is true; onClose is how Escape closes it when another layer (a toast shown after it opened) receives the key first.
 export function useRegisterOverlay(active: boolean, onClose: () => void) {
@@ -17,11 +14,11 @@ export function useRegisterOverlay(active: boolean, onClose: () => void) {
     if (!active) return;
     const entry: Entry = { close: () => close.current() };
     stack.push(entry);
-    emit();
+    listeners.emit();
     return () => {
       const index = stack.indexOf(entry);
       if (index >= 0) stack.splice(index, 1);
-      emit();
+      listeners.emit();
     };
   }, [active]);
 }
@@ -31,7 +28,7 @@ export function overlayOpen(): boolean {
 }
 
 export function useOverlayOpen(): boolean {
-  return useSyncExternalStore(listener => { listeners.add(listener); return () => listeners.delete(listener); }, overlayOpen);
+  return useSyncExternalStore(listeners.subscribe, overlayOpen);
 }
 
 // closeTopOverlay closes the most recently opened overlay and reports whether there was one.

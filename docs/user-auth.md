@@ -58,6 +58,8 @@ ALTER DEFAULT PRIVILEGES FOR ROLE msime_migrator IN SCHEMA public GRANT USAGE, S
 6. `PATCH /v1/users/me`：`{"display_name":"昵称"}`，去除首尾空白后最长 64 字符，不能含 NUL，否则返回 400 `invalid_display_name`；空昵称重置为默认昵称。在用户行锁内重新检查封禁；封禁先提交时返回 403 `account_banned`，原昵称保持不变，包括重置昵称的请求。
 7. 绑定其他身份：创建挑战时使用 `purpose: link`，创建和验证均携带同一用户的访问令牌。绑定与 `DELETE /v1/users/me` 注销操作均要求最近 10 分钟内重新登录。注销删除用户、身份、会话及关联挑战。
 
+完成登录或绑定时，先串行化同一身份，再锁定已有用户，最后按锁后的实际时间消费挑战，避免与注销的级联删除形成反向锁等待。已定位到原账号的登录或绑定等待用户锁时，若注销先提交则返回 401 `invalid_credentials`；封禁账号仍消费有效挑战并返回 403 `account_banned`。此调整无需配置或迁移；多副本滚动升级期间旧副本仍可能使用原锁顺序，全部副本升级后才完整消除该竞态。
+
 ## 我的设备
 
 - `GET /v1/users/me/sessions` 返回本账号未撤销、未过期的会话，最多 50 条，按最近活跃倒序：`{"sessions":[{"id","platform","name","app_version","created_at","last_active","current"}]}`。`platform`、`name`（设备型号）、`app_version` 从登录时记录的 User-Agent 解析：认 `msime-<平台>/<版本> (<型号>; <系统>; edition=<版本 id>)`（例如 Android 真实账号登录时发送的 `msime-android/2.1.0 (Pixel 8; Android 15; edition=pinyin)`）、旧客户端的 `MSIME/Android` 这类写法和常见浏览器；解析不出的字段为空字符串。User-Agent 只在登录时记录，刷新令牌不更新。`last_active` 取 `greatest(created_at, 访问令牌到期时间 - 15 分钟)`，即最近一次签发访问令牌的时间。`current` 标出发起请求的会话。

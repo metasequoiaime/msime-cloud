@@ -622,20 +622,6 @@ func (s *Store) completeWith(ctx context.Context, c Challenge, identity Identity
 		return Tokens{}, e
 	}
 	defer tx.Rollback(ctx)
-	var id string
-	// 先物化锁定的挑战，再按数据库实时时钟校验并消费；锁等待期间过期的挑战不会被删除。
-	e = tx.QueryRow(ctx, `WITH locked AS MATERIALIZED (
- SELECT id_hash,expires_at FROM auth_challenges WHERE id_hash=$1 FOR UPDATE
-)
-DELETE FROM auth_challenges c USING locked
-WHERE c.id_hash=locked.id_hash AND locked.expires_at>clock_timestamp()
-RETURNING c.id_hash`, c.IDHash).Scan(&id)
-	if errors.Is(e, pgx.ErrNoRows) {
-		return Tokens{}, ErrInvalid
-	}
-	if e != nil {
-		return Tokens{}, e
-	}
 	// 同一身份的首次注册与绑定串行化，避免创建重复用户。
 	if _, e = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1,0))", identity.Provider+":"+identity.Subject); e != nil {
 		return Tokens{}, e
@@ -652,19 +638,36 @@ RETURNING c.id_hash`, c.IDHash).Scan(&id)
 	if account == "" {
 		account = c.LinkUser
 	}
+	var banned bool
 	if account != "" {
-		// 封禁账号不能登录或绑定身份，但仍消费挑战，阻止已验证凭据被重放。
-		// 提前取得更新锁，避免不同已绑定身份并发登录后更新默认昵称时从共享锁升级造成死锁；也等待并发封禁提交并读取最终状态。
-		var banned bool
-		if e = tx.QueryRow(ctx, "SELECT banned_at IS NOT NULL FROM auth_users WHERE id=$1 FOR NO KEY UPDATE", account).Scan(&banned); e != nil && !errors.Is(e, pgx.ErrNoRows) {
+		// 先锁用户再消费挑战，与注销的用户锁及外键级联删除顺序一致。
+		// 直接取得更新锁，避免并发登录更新默认昵称时升级共享锁；锁后读取封禁或注销结果。
+		if e = tx.QueryRow(ctx, "SELECT banned_at IS NOT NULL FROM auth_users WHERE id=$1 FOR NO KEY UPDATE", account).Scan(&banned); errors.Is(e, pgx.ErrNoRows) {
+			return Tokens{}, ErrInvalid
+		} else if e != nil {
 			return Tokens{}, e
 		}
-		if banned {
-			if e = tx.Commit(ctx); e != nil {
-				return Tokens{}, e
-			}
-			return Tokens{}, ErrBanned
+	}
+	var id string
+	// 挑战在身份锁和用户锁之后按实时时钟校验并消费，等待期间过期的挑战不会被删除。
+	e = tx.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+ SELECT id_hash,expires_at FROM auth_challenges WHERE id_hash=$1 FOR UPDATE
+)
+DELETE FROM auth_challenges c USING locked
+WHERE c.id_hash=locked.id_hash AND locked.expires_at>clock_timestamp()
+RETURNING c.id_hash`, c.IDHash).Scan(&id)
+	if errors.Is(e, pgx.ErrNoRows) {
+		return Tokens{}, ErrInvalid
+	}
+	if e != nil {
+		return Tokens{}, e
+	}
+	if banned {
+		// 封禁账号不能登录或绑定身份，但仍消费挑战，阻止已验证凭据被重放。
+		if e = tx.Commit(ctx); e != nil {
+			return Tokens{}, e
 		}
+		return Tokens{}, ErrBanned
 	}
 	// 身份归属和封禁检查完成后，把后续写入按原顺序排入同一批次，再读取资料并创建会话。
 	batch := &pgx.Batch{}

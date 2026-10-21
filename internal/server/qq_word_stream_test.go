@@ -129,6 +129,21 @@ func TestQQParseWordsManyEntriesAllocationBudget(t *testing.T) {
 	}
 }
 
+func TestQQParseWordsSeparatorsOnlyAllocationBudget(t *testing.T) {
+	input := strings.Repeat("，;", 900)
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			entries, _ := qqParseWords(input)
+			if entries != nil {
+				b.Fatalf("只有分隔符时解析结果=%v，期望 nil", entries)
+			}
+		}
+	})
+	if result.AllocedBytesPerOp() >= 1024 {
+		t.Fatalf("只有分隔符的解析分配 %d B，超过 1 KiB 预算", result.AllocedBytesPerOp())
+	}
+}
+
 func BenchmarkQQWordsQuestionStream(b *testing.B) {
 	for _, tc := range []struct{ name, input string }{
 		{"typical", "水杉输入法 shui shan shu ru fa"},

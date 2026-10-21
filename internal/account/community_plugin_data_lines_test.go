@@ -102,9 +102,9 @@ func TestPluginDataLineMemoryBudget(t *testing.T) {
 				t.Fatalf("校验=%t，期望 %t", valid, tc.valid)
 			}
 			t.Logf("%s; %s", result, result.MemString())
-			// 为文本副本和固定开销保留余量，禁止按空行数创建字符串切片。
-			if budget, allocated := int64(2*len(tc.raw)+64<<10), result.AllocedBytesPerOp(); allocated > budget {
-				t.Fatalf("数据校验分配 %d 字节，超过 %d 字节预算", allocated, budget)
+			// 原始字节已由归档读取阶段持有，校验不应再复制整份上限大小的文本。
+			if allocated := result.AllocedBytesPerOp(); allocated > 64<<10 {
+				t.Fatalf("数据校验分配 %d 字节，超过 64 KiB 预算", allocated)
 			}
 		})
 	}

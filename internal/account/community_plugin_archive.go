@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -943,12 +944,18 @@ func validPluginWordbook(table map[string]any, m pluginManifest) (map[string]int
 	return map[string]int{*m.Wordbook.File: maxWordbookBytes}, true
 }
 
-// pluginDataText 校验完整文件为 UTF-8，并剥除开头可选的 BOM，供逐行校验使用。
+// pluginDataText 校验完整文件为 UTF-8，并剥除开头可选的 BOM；校验函数只读字符串，所以直接借用归档缓冲，避免复制整份数据。
 func pluginDataText(raw []byte) (string, bool) {
 	if !utf8.Valid(raw) {
 		return "", false
 	}
-	return strings.TrimPrefix(string(raw), "\uFEFF"), true
+	if bytes.HasPrefix(raw, []byte{0xef, 0xbb, 0xbf}) {
+		raw = raw[3:]
+	}
+	if len(raw) == 0 {
+		return "", true
+	}
+	return unsafe.String(unsafe.SliceData(raw), len(raw)), true
 }
 
 // validHelpcodeTable 是辅助码表的严格语法：每行为空行、`#` 开头的注释或 `<字>=<码>`。`<字>` 恰好是一个非 ASCII、非空白、非控制字符的 Unicode 标量，`<码>` 恰好是 1 到 2 个小写 ASCII 字母（更长的拒绝，不像 Engine 的宽松解析器那样截断），`=` 两侧不允许空格；1 到 30000 条，同一个字出现两次拒绝。

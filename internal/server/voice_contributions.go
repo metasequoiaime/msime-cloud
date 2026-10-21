@@ -161,6 +161,10 @@ func (s *Server) voiceContribution(w http.ResponseWriter, r *http.Request) {
 		fail(w, 403, "account_banned")
 		return
 	}
+	if errors.Is(err, account.ErrInvalid) {
+		fail(w, 401, "invalid_credentials")
+		return
+	}
 	if err != nil {
 		slog.Error("voice contribution not stored", "reason", err.Error())
 		fail(w, 503, "service_unavailable")

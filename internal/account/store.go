@@ -88,6 +88,9 @@ var ErrInvalid = errors.New("invalid_credentials")
 var ErrLimited = errors.New("rate_limit_exceeded")
 var ErrConflict = errors.New("identity_already_linked")
 
+// errMissingUser 同时保留数据库层的无行语义和 HTTP 层的凭据失效语义。
+var errMissingUser = errors.Join(ErrInvalid, pgx.ErrNoRows)
+
 // ErrRefreshSuperseded 表示提交的刷新令牌在 refreshSupersededGrace 之内刚被另一次刷新轮换掉：会话没有被撤销，调用方应改用并发请求已经拿到的新令牌。它不包装 ErrInvalid，HTTP 层单独映射为 409。
 var ErrRefreshSuperseded = errors.New("refresh_superseded")
 

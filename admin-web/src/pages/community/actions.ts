@@ -108,11 +108,17 @@ export function useModeration() {
     const actions: Partial<Record<Section, string>> = { skins: "delete_skin", "candidate-skins": "delete_candidate_skin", plugins: "delete_plugin" };
     const action = actions[target.section];
     if (!action) return false;
+    if (!target.edit_token) {
+      toast("作品版本信息尚未加载，请刷新页面后重试。");
+      return false;
+    }
     const reason = await confirm({ title: `删除「${target.name}」？`, description: "作品及其下载、评分、收藏记录将永久删除。确认后有 4 秒可以撤销。", okLabel: "删除" });
     if (reason === null) return false;
     toast({ text: `即将删除「${target.name}」`, delayCommit: async ({ keepalive }) => {
       try {
-        await api.action({ action, section: target.section, id: target.id }, { keepalive });
+        await api.action({ action, section: target.section, id: target.id, value: { edit_token: target.edit_token } }, { keepalive });
+      } catch (error) {
+        throw new Error(failure(error));
       } finally {
         await refresh();
         await client.invalidateQueries({ queryKey: keys.page("users") });

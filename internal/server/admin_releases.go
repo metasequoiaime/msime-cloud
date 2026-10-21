@@ -784,17 +784,7 @@ func (s *Server) withdrawRelease(w http.ResponseWriter, r *http.Request, gh *git
 
 // lockReleaseWrite 在读取发布状态之前锁定仓库，覆盖正文修改和 latest 恢复，避免多副本或共享仓库的平台互相覆盖。
 func (s *Server) lockReleaseWrite(w http.ResponseWriter, ctx context.Context, p AdminPlatformConfig) (func(), bool) {
-	unlock, err := s.accounts.WaitLock(ctx, "admin-releases:"+strings.ToLower(p.Repo), 0)
-	if errors.Is(err, account.ErrLockBusy) {
-		w.Header().Set("Retry-After", "1")
-		fail(w, 503, "server_busy")
-		return nil, false
-	}
-	if err != nil {
-		fail(w, 503, "auth_unavailable")
-		return nil, false
-	}
-	return sync.OnceFunc(unlock), true
+	return s.lockAdminWrite(w, ctx, "admin-releases:"+strings.ToLower(p.Repo))
 }
 
 func (s *Server) patchRelease(w http.ResponseWriter, ctx context.Context, gh *githubapp.Client, p AdminPlatformConfig, id int64, patch map[string]any) bool {

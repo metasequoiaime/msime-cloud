@@ -881,17 +881,7 @@ func (s *Server) prepareKeep(w http.ResponseWriter, ctx context.Context, gh *git
 
 // lockDictPRWrite 与官网投稿共用仓库锁，从读取 PR 起保护整个审核，避免多副本关闭仍在写入的投稿分支。
 func (s *Server) lockDictPRWrite(w http.ResponseWriter, ctx context.Context) (func(), bool) {
-	unlock, err := s.accounts.WaitLock(ctx, "word-submissions:"+strings.ToLower(s.dictRepo()), 0)
-	if errors.Is(err, account.ErrLockBusy) {
-		w.Header().Set("Retry-After", "1")
-		fail(w, 503, "server_busy")
-		return nil, false
-	}
-	if err != nil {
-		fail(w, 503, "auth_unavailable")
-		return nil, false
-	}
-	return sync.OnceFunc(unlock), true
+	return s.lockAdminWrite(w, ctx, "word-submissions:"+strings.ToLower(s.dictRepo()))
 }
 
 func (s *Server) trimDictPR(w http.ResponseWriter, r *http.Request, gh *githubapp.Client, number int) {

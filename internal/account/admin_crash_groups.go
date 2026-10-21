@@ -170,6 +170,15 @@ type crashPlatformCount struct {
 	Count    int64  `json:"count"`
 }
 
+// crashSummaryQuery 在初始化时构建固定统计查询，规范化后的平台仍按请求绑定。
+var crashSummaryQuery = `SELECT
+ (SELECT count(*) FROM admin_crash_groups WHERE $1='' OR platform=$1),
+ count(*) FILTER (WHERE kind='crash'),
+ CASE WHEN count(install_id) FILTER (WHERE kind='crash')=0 THEN NULL ELSE count(DISTINCT install_id) FILTER (WHERE kind='crash') END,
+ CASE WHEN count(install_id)=0 THEN NULL ELSE count(DISTINCT install_id) FILTER (WHERE created_at>=date_trunc('day',now(),'UTC')) END,
+ round(count(*) FILTER (WHERE kind='session')::numeric/NULLIF(count(*) FILTER (WHERE kind IN ('session','session_crash')),0),4)::float8
+	FROM admin_events WHERE kind IN ('download','crash','active','session','session_crash') AND created_at>=now()-interval '7 days' AND ($1='' OR ` + overviewPlatform("platform") + `=$1)`
+
 // adminCrashGroups serves GET /api/crash-groups?platform=.
 func (a *Service) adminCrashGroups(w http.ResponseWriter, r *http.Request, _ string) {
 	query := r.URL.Query()
@@ -232,13 +241,7 @@ ORDER BY COALESCE(c.c7,0) DESC,g.last_seen DESC,g.signature LIMIT $3`, "", platf
 		return err
 	})
 	var summary crashSummary
-	batch.Queue(`SELECT
- (SELECT count(*) FROM admin_crash_groups WHERE $1='' OR platform=$1),
- count(*) FILTER (WHERE kind='crash'),
- CASE WHEN count(install_id) FILTER (WHERE kind='crash')=0 THEN NULL ELSE count(DISTINCT install_id) FILTER (WHERE kind='crash') END,
- CASE WHEN count(install_id)=0 THEN NULL ELSE count(DISTINCT install_id) FILTER (WHERE created_at>=date_trunc('day',now(),'UTC')) END,
- round(count(*) FILTER (WHERE kind='session')::numeric/NULLIF(count(*) FILTER (WHERE kind IN ('session','session_crash')),0),4)::float8
-	FROM admin_events WHERE kind IN ('download','crash','active','session','session_crash') AND created_at>=now()-interval '7 days' AND ($1='' OR `+overviewPlatform("platform")+`=$1)`, platform).QueryRow(func(row pgx.Row) error {
+	batch.Queue(crashSummaryQuery, platform).QueryRow(func(row pgx.Row) error {
 		return row.Scan(&summary.Groups, &summary.Crashes7d, &summary.Devices7d, &summary.InstallsToday, &summary.CrashFreeRate)
 	})
 	if err = tx.SendBatch(ctx, batch).Close(); err != nil {

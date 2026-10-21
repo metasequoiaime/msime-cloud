@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """在真实浏览器中验证社区分类切换不会把旧作品绑定到新分类。"""
 
+import datetime
 import json
 import threading
 from urllib.parse import parse_qs, urlencode, urlsplit
@@ -109,6 +110,83 @@ def check_community_pagination_placeholder(browser, base):
         context.close()
 
 
+def check_community_search_debounce(browser, base):
+    for section in ("skins", "candidate-skins"):
+        context = browser.new_context(viewport={"width": 1280, "height": 1000})
+        page = context.new_page()
+        requests, errors = [], []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.add_init_script("window.cspViolations = []; document.addEventListener('securitypolicyviolation', e => window.cspViolations.push(e.violatedDirective));")
+        original = smoke.FIXTURES["/api/skins"]["items"][0]
+
+        def listing(route):
+            params = parse_qs(urlsplit(route.request.url).query)
+            requests.append(params)
+            current = int(params["page"][0])
+            item = {**original, "name": f"{params.get('q', ['全部'])[0]}-{current}"}
+            route.fulfill(json={"items": [item], "page": current, "total": 151, "has_more": current < 4})
+
+        page.route(f"**/api/{section}?*", listing)
+        page.route("**/api/replies?*", listing)
+        try:
+            page.clock.install(time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc))
+            query = {"page": "3", "status": "pending"}
+            if section == "candidate-skins":
+                query["visibility"] = "private"
+            page.goto(base + f"/{section}?" + urlencode(query))
+            expect(page.get_by_role("button", name="全部-3", exact=True)).to_be_visible()
+            page.clock.pause_at(datetime.datetime(2026, 1, 1, 0, 1, tzinfo=datetime.timezone.utc))
+            typed = page.get_by_role("searchbox", name="搜索名称、作者", exact=True)
+            initial = len(requests)
+
+            # 用可控时钟验证 300 毫秒边界，连续输入重新计时且不发送中间搜索词。
+            typed.fill("中间词")
+            page.clock.run_for(299)
+            assert len(requests) == initial, requests
+            typed.fill("  最终词  ")
+            page.clock.run_for(299)
+            assert len(requests) == initial, requests
+            with page.expect_response(f"**/api/{section}?*"):
+                page.clock.run_for(1)
+            # Query 的响应通知也使用定时器；收到响应后推进时钟，让真实页面显示已返回的数据。
+            page.clock.run_for(100)
+            expect(page.get_by_role("button", name="最终词-1", exact=True)).to_be_visible()
+            expected = {"page": ["1"], "status": ["pending"], "q": ["最终词"]}
+            if section == "candidate-skins":
+                expected["visibility"] = ["private"]
+            assert requests[initial:] == [expected], requests
+
+            with page.expect_response(f"**/api/{section}?*"):
+                page.get_by_role("button", name="下一页", exact=True).click()
+            page.clock.run_for(100)
+            expect(page.get_by_role("button", name="最终词-2", exact=True)).to_be_visible()
+            count = len(requests)
+            typed.fill("最终词")
+            page.clock.run_for(300)
+            expect(page.get_by_text("第 2 / 4 页 · 共 151 项", exact=True)).to_be_visible()
+            assert len(requests) == count, requests
+
+            with page.expect_response(f"**/api/{section}?*"):
+                typed.fill("")
+                page.clock.run_for(300)
+            page.clock.run_for(100)
+            expect(page.get_by_role("button", name="全部-1", exact=True)).to_be_visible()
+            assert requests[-1] == {key: value for key, value in expected.items() if key != "q"}, requests
+
+            # 搜索尚未应用时切换页面，旧搜索词不能带到新页面的请求。
+            typed.fill("未应用的旧搜索")
+            page.clock.run_for(299)
+            page.locator('aside a[href="/replies"]').click()
+            expect(page.get_by_role("heading", name="回复模板", exact=True)).to_be_visible()
+            page.clock.run_for(1000)
+            expect(page.get_by_role("button", name="全部-1", exact=True)).to_be_visible()
+            assert all(params.get("q") != ["未应用的旧搜索"] for params in requests), requests
+            assert not errors, errors
+            assert page.evaluate("window.cspViolations") == []
+        finally:
+            context.close()
+
+
 def check_community_entry_links(browser, base):
     context = browser.new_context(viewport={"width": 1280, "height": 1000})
     page = context.new_page()
@@ -186,7 +264,8 @@ if __name__ == "__main__":
             check_community_entry_links(browser, base)
             check_community_section_switch(browser, base)
             check_community_pagination_placeholder(browser, base)
+            check_community_search_debounce(browser, base)
             browser.close()
-        print("社区分类切换和同分类翻页验证通过")
+        print("社区独立入口、分类切换、翻页及搜索防抖验证通过")
     finally:
         server.shutdown()

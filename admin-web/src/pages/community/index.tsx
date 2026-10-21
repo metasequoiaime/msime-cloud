@@ -1,6 +1,6 @@
 import { formatNumber } from "../../utils/number";
 import { parsePage } from "../../utils/pagination";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Search } from "lucide-react";
@@ -8,6 +8,7 @@ import { useAPI } from "../../api/client";
 import { keys } from "../../api/keys";
 import type { Detail, Item, Section } from "../../api/community";
 import { isSection, listSchema, sectionLabels } from "../../api/community";
+import { useDebounced } from "../../hooks/use-debounced";
 import { usePageSearch, useSetPageSearch } from "../../shell/page-search";
 import { PageIntro } from "../../shell/page-intro";
 import { usePermissions } from "../../shell/permissions";
@@ -38,26 +39,24 @@ export function CommunityPage({ section: tab }: { section: Section }) {
   const setSearch = useSetPageSearch();
   const status: Status = isStatus(search.status) ? search.status : "all";
   const visibility = search.visibility === "private" ? "private" : "public";
-  const page = parsePage(search.page, Number.POSITIVE_INFINITY);
   const [typed, setTyped] = useState("");
-  const [q, setQ] = useState("");
+  const q = useDebounced(typed, 300).trim();
+  const [pageQuery, setPageQuery] = useState("");
+  const page = parsePage(q === pageQuery ? search.page : undefined, Number.POSITIVE_INFINITY);
   const [open, setOpen] = useState<{ section: Section; id: string } | null>(null);
   const [editor, setEditor] = useState<{ section: EditableSection; detail?: Detail } | null>(null);
   const { approve, remove, restore, setCategory, deleteItem } = useModeration();
   const canReview = can("review_community");
 
-  // The server search runs on what was typed after a short pause, not on every keystroke, and starts again from the first page.
-  const applied = useRef("");
+  // 搜索词改变时立即按第一页查询；URL 重置完成后再确认页码归属，避免把旧页码发给新搜索词。
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      const next = typed.trim();
-      if (next === applied.current) return;
-      applied.current = next;
-      setQ(next);
+    if (q === pageQuery) return;
+    if (search.page !== undefined) {
       setSearch({ page: undefined });
-    }, 300);
-    return () => window.clearTimeout(timer);
-  }, [typed, setSearch]);
+      return;
+    }
+    setPageQuery(q);
+  }, [q, pageQuery, search.page, setSearch]);
 
   // Global search and notifications link here with ?focus=<section>/<id> (or a bare id in the current tab).
   const focus = search.focus;

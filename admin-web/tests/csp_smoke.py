@@ -1678,10 +1678,11 @@ def main() -> int:
                 check_feedback_undo(browser, base)
                 from community_category_smoke import check_community_categories
                 check_community_categories(browser, base)
-                from community_section_smoke import check_community_entry_links, check_community_pagination_placeholder, check_community_section_switch
+                from community_section_smoke import check_community_entry_links, check_community_pagination_placeholder, check_community_search_debounce, check_community_section_switch
                 check_community_entry_links(browser, base)
                 check_community_section_switch(browser, base)
                 check_community_pagination_placeholder(browser, base)
+                check_community_search_debounce(browser, base)
                 from skin_preview_smoke import check_candidate_preview, check_skin_preview
                 check_skin_preview(browser, base)
                 check_candidate_preview(browser, base)

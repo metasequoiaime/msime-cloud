@@ -731,10 +731,31 @@ func contentScreenSQL(section string, table moderationTable) string {
 	return `SELECT json_build_object('name',name,'description',description,'content',` + screenContentColumn(section) + `) FROM ` + table.table + table.where(`id=$1`)
 }
 
+type rescreenQueries struct {
+	selectPending, updateFlags string
+}
+
+// contentRescreenQueries 按固定分区预先构建重筛语句，待审核作品和敏感词标记仍逐事务计算。
+var contentRescreenQueries = func() map[string]rescreenQueries {
+	queries := make(map[string]rescreenQueries, len(moderationSections))
+	for name, table := range moderationSections {
+		where := `target.id=v.id`
+		if table.kind != "" {
+			where += ` AND target.kind='` + table.kind + `'`
+		}
+		queries[name] = rescreenQueries{
+			selectPending: `SELECT id,json_build_object('name',name,'description',description,'content',` + screenContentColumn(name) + `) FROM ` + table.table + table.where(`id=ANY($1) AND moderation='pending'`),
+			updateFlags: `UPDATE ` + table.table + ` AS target SET moderation_reason=v.reason
+FROM unnest($1::text[],$2::text[]) AS v(id,reason) WHERE ` + where,
+		}
+	}
+	return queries
+}()
+
 // rescreenRestored puts the automatic flag back on the items of section among ids that are pending review again after a restore or an unban. Removing an item overwrote its flag with the removal reason, so it is computed afresh from the item's text, with the preview matcher because a restore is not a new submission.
 func (a *Service) rescreenRestored(ctx context.Context, tx pgx.Tx, section string, ids []string) error {
-	table := moderationSections[section]
-	rows, err := tx.Query(ctx, `SELECT id,json_build_object('name',name,'description',description,'content',`+screenContentColumn(section)+`) FROM `+table.table+table.where(`id=ANY($1) AND moderation='pending'`), ids)
+	queries := contentRescreenQueries[section]
+	rows, err := tx.Query(ctx, queries.selectPending, ids)
 	if err != nil {
 		return err
 	}
@@ -781,12 +802,7 @@ func (a *Service) rescreenRestored(ctx context.Context, tx pgx.Tx, section strin
 	if len(flaggedIDs) == 0 {
 		return nil
 	}
-	where := `target.id=v.id`
-	if table.kind != "" {
-		where += ` AND target.kind='` + table.kind + `'`
-	}
-	_, err = tx.Exec(ctx, `UPDATE `+table.table+` AS target SET moderation_reason=v.reason
-FROM unnest($1::text[],$2::text[]) AS v(id,reason) WHERE `+where, flaggedIDs, flags)
+	_, err = tx.Exec(ctx, queries.updateFlags, flaggedIDs, flags)
 	return err
 }
 

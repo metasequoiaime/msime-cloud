@@ -69,17 +69,42 @@ var (
 	}
 )
 
-// deleteContent hard-deletes one row by id; the foreign keys cascade to downloads, ratings and files.
-func deleteContent(query string) adminActionFunc {
+// deleteContent 永久删除作品及外键关联记录；支持编辑的分区可用凭据固定确认时的版本，旧调用仍可只传 ID。
+func deleteContent(query, editableSection string) adminActionFunc {
 	return func(a *Service, ctx context.Context, tx pgx.Tx, v actionRequest) (actionResult, error) {
 		if err := requireActionID(v); err != nil {
 			return actionResult{}, err
 		}
-		tag, err := tx.Exec(ctx, query, v.ID)
+		var value struct {
+			EditToken *string `json:"edit_token"`
+		}
+		if editableSection != "" && len(v.Value) != 0 {
+			d := json.NewDecoder(bytes.NewReader(v.Value))
+			d.DisallowUnknownFields()
+			if d.Decode(&value) != nil {
+				return actionResult{}, actionFail(400, "invalid_value")
+			}
+			if value.EditToken != nil {
+				token, err := hex.DecodeString(*value.EditToken)
+				if err != nil || len(token) != 16 {
+					return actionResult{}, actionFail(400, "invalid_value")
+				}
+			}
+		}
+		deleteQuery, args := query, []any{v.ID}
+		if value.EditToken != nil {
+			// 在同一条 DELETE 中比较版本，等待并发更新后仍由 PostgreSQL 重新检查条件。
+			deleteQuery += ` AND ` + contentEditToken(editableSection, moderationSections[editableSection].table) + `=$2`
+			args = append(args, *value.EditToken)
+		}
+		tag, err := tx.Exec(ctx, deleteQuery, args...)
 		if err != nil {
 			return actionResult{}, err
 		}
 		if tag.RowsAffected() == 0 {
+			if value.EditToken != nil {
+				return actionResult{}, actionFail(409, "conflict")
+			}
 			return actionResult{}, actionFail(404, "not_found")
 		}
 		return actionResult{Affected: tag.RowsAffected()}, nil
@@ -87,12 +112,12 @@ func deleteContent(query string) adminActionFunc {
 }
 
 var (
-	actionDeleteSkin          = deleteContent(`DELETE FROM community_skins WHERE id=$1`)
-	actionDeleteCandidateSkin = deleteContent(`DELETE FROM community_candidate_skins WHERE id=$1`)
-	actionDeletePlugin        = deleteContent(`DELETE FROM community_plugins WHERE id=$1`)
-	actionDeleteDictionary    = deleteContent(`DELETE FROM community_resources WHERE id=$1 AND kind='dictionary'`)
-	actionDeleteReply         = deleteContent(`DELETE FROM community_resources WHERE id=$1 AND kind='reply'`)
-	actionDeletePhrase        = deleteContent(`DELETE FROM community_resources WHERE id=$1 AND kind='phrase'`)
+	actionDeleteSkin          = deleteContent(`DELETE FROM community_skins WHERE id=$1`, "skins")
+	actionDeleteCandidateSkin = deleteContent(`DELETE FROM community_candidate_skins WHERE id=$1`, "candidate-skins")
+	actionDeletePlugin        = deleteContent(`DELETE FROM community_plugins WHERE id=$1`, "plugins")
+	actionDeleteDictionary    = deleteContent(`DELETE FROM community_resources WHERE id=$1 AND kind='dictionary'`, "")
+	actionDeleteReply         = deleteContent(`DELETE FROM community_resources WHERE id=$1 AND kind='reply'`, "")
+	actionDeletePhrase        = deleteContent(`DELETE FROM community_resources WHERE id=$1 AND kind='phrase'`, "")
 )
 
 // candidateCategoryFilter 让键盘皮肤和候选皮肤列表按图库分类筛选，取值即 candidateSkinCategories。

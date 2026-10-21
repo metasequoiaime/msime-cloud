@@ -117,8 +117,10 @@ func (s *Store) pendingAppleWebChallenge(ctx context.Context, idHash string) (ap
 	return c, err
 }
 
-// dropPendingAppleWebChallenge 只作废尚未签发授权码的挑战；并发回调已经签发的授权码仍由兑换接口消费。
+// dropPendingAppleWebChallenge 在独立的三秒期限内作废尚未签发授权码的挑战，不受回调请求取消影响；并发回调已经签发的授权码仍由兑换接口消费。
 func (s *Store) dropPendingAppleWebChallenge(ctx context.Context, idHash string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
 	s.pool.Exec(ctx, `DELETE FROM auth_challenges WHERE id_hash=$1 AND provider='apple_web' AND granted_at IS NULL`, idHash)
 }
 

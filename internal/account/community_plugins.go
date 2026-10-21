@@ -264,11 +264,7 @@ func (a *Service) communityPluginList(w http.ResponseWriter, r *http.Request) {
 		a.error(w, e)
 		return
 	}
-	more := len(items) > 20
-	if more {
-		items = items[:20]
-	}
-	write(w, 200, map[string]any{"plugins": items, "has_more": more})
+	writeCommunityPage(w, "plugins", items)
 }
 
 func (a *Service) communityPluginDetail(w http.ResponseWriter, r *http.Request) {

@@ -230,7 +230,8 @@ func (a *Service) communitySave(w http.ResponseWriter, r *http.Request, t commun
 	defer tx.Rollback(r.Context())
 	batch := &pgx.Batch{}
 	if input.Saved {
-		batch.Queue(`INSERT INTO `+t.saves+`(`+t.column+`,user_id) SELECT s.id,$2 FROM `+t.items+` s WHERE s.id=$1 AND `+t.visible+` ON CONFLICT DO NOTHING`, id, p.UserID)
+		// 先锁定可见作品，等待删除或下架提交后重新检查，避免收藏插入触发外键错误。
+		batch.Queue(`INSERT INTO `+t.saves+`(`+t.column+`,user_id) SELECT s.id,$2 FROM `+t.items+` s WHERE s.id=$1 AND `+t.visible+` FOR SHARE OF s ON CONFLICT DO NOTHING`, id, p.UserID)
 	} else {
 		batch.Queue(`DELETE FROM `+t.saves+` WHERE `+t.column+`=$1 AND user_id=$2`, id, p.UserID)
 	}
@@ -661,13 +662,13 @@ func (a *Service) communityDownload(w http.ResponseWriter, r *http.Request) {
 	write(w, 200, map[string]any{"design": design})
 }
 func (a *Service) communityRate(w http.ResponseWriter, r *http.Request) {
-	a.rateCommunityItem(w, r, `WITH eligible AS MATERIALIZED (
- SELECT id FROM community_skins WHERE id=$1 AND owner_id<>$2 AND moderation<>'removed'
+	a.rateCommunityItem(w, r, `WITH visible AS MATERIALIZED (
+ SELECT id,owner_id FROM community_skins WHERE id=$1 AND moderation<>'removed' FOR SHARE
 ), written AS (
  INSERT INTO community_skin_ratings(skin_id,user_id,stars)
- SELECT id,$2,$3 FROM eligible
+ SELECT id,$2,$3 FROM visible WHERE owner_id<>$2
  ON CONFLICT(skin_id,user_id) DO UPDATE SET stars=excluded.stars
  RETURNING skin_id
 )
-SELECT EXISTS(SELECT 1 FROM written),EXISTS(SELECT 1 FROM community_skins WHERE id=$1 AND owner_id=$2 AND moderation<>'removed')`, "skin_not_found", "download_before_rating_or_own_skin")
+SELECT EXISTS(SELECT 1 FROM written),EXISTS(SELECT 1 FROM visible WHERE owner_id=$2)`, "skin_not_found", "download_before_rating_or_own_skin")
 }

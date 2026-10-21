@@ -4,6 +4,7 @@ import "net/http"
 
 // rateCommunityItem 共用登录后的评分流程；各入口提供固定 SQL 和已发布的错误码。
 // SQL 返回是否写入，以及未写入时是否应拒绝评分，保留各类作品的可见性和作者判定。
+// 可见性检查须先持有作品的共享行锁；写入和拒绝原因都使用锁定后的同一条记录。
 func (a *Service) rateCommunityItem(w http.ResponseWriter, r *http.Request, query, notFoundCode, forbiddenCode string) {
 	p, ok := a.principal(w, r, false)
 	if !ok {

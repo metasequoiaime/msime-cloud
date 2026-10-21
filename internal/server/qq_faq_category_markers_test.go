@@ -50,3 +50,17 @@ func BenchmarkQQFAQCategoryMarkers(b *testing.B) {
 		})
 	}
 }
+
+func TestQQFAQCategoriesDenseAllocationBudget(t *testing.T) {
+	faq := strings.Repeat("## 分类\n正文\n", 8192)
+	var got []string
+	allocations := testing.AllocsPerRun(3, func() {
+		got = qqFAQCategories(faq)
+	})
+	if len(got) != 8192 {
+		t.Fatalf("分类数量=%d，期望 8192", len(got))
+	}
+	if allocations > 4 {
+		t.Fatalf("密集分类分配 %.0f 次，超过 4 次预算", allocations)
+	}
+}

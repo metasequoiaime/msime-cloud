@@ -60,6 +60,14 @@ func qqFAQCategories(faq string) []string {
 		if index < 0 {
 			break
 		}
+		if categories == nil {
+			capacity := 1
+			next := qqNextFAQCategory(faq, index+3)
+			if next > index {
+				capacity = max(capacity, len(faq)/(next-index))
+			}
+			categories = make([]string, 0, capacity)
+		}
 		end := strings.IndexByte(faq[index:], '\n')
 		if end < 0 {
 			end = len(faq)

@@ -723,7 +723,17 @@ func qqRewriteIssueLinks(question string) string {
 	if !found {
 		return question
 	}
+	outputSize := len(question)
+	remaining := question
+	for found {
+		outputSize -= match[1] - match[0]
+		outputSize += 1 + match[3] - match[2] + 2 + match[5] - match[4] + 1
+		remaining = remaining[match[1]:]
+		match, found = qqFindIssueLink(remaining)
+	}
+	match, found = qqFindIssueLink(question)
 	var result strings.Builder
+	result.Grow(outputSize)
 	for found {
 		result.WriteString(question[:match[0]])
 		result.WriteByte(' ')

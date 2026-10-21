@@ -300,6 +300,19 @@ func TestQQRewriteIssueLinksCompatibility(t *testing.T) {
 	}
 }
 
+func TestQQRewriteIssueLinksDenseAllocationBudget(t *testing.T) {
+	link := "https://github.com/metasequoiaime/r/issues/1"
+	question := strings.Repeat(link+" ", 512)
+	allocations := testing.AllocsPerRun(20, func() {
+		if got := qqRewriteIssueLinks(question); got == question {
+			t.Fatal("链接未被替换")
+		}
+	})
+	if allocations > 2 {
+		t.Fatalf("密集链接改写分配 %.0f 次，超过 2 次预算", allocations)
+	}
+}
+
 func TestQQIssueMentionTraversalCompatibility(t *testing.T) {
 	s := qqIssueMentionTestServer(t)
 	ctx := context.Background()

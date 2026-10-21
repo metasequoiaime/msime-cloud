@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -327,6 +326,35 @@ func bannedOwnerGuard(ctx context.Context, tx pgx.Tx, section moderationTable, i
 	return nil
 }
 
+type approvalQueries struct {
+	update, tokenUpdate, exists string
+}
+
+// contentApprovalQueries 按固定分区预先构建审批语句，版本和状态仍逐请求绑定。
+var contentApprovalQueries = func() map[moderationTable]approvalQueries {
+	queries := make(map[moderationTable]approvalQueries, len(moderationSections))
+	for name, section := range moderationSections {
+		condition := ` AND ($3::text IS NULL OR moderation=$3) AND ($4::timestamptz IS NULL OR created_at=$4)`
+		if section.editable {
+			condition += ` AND ($5::timestamptz IS NULL OR updated_at=$5)`
+		}
+		update := `UPDATE ` + section.table + ` SET moderation='approved',previous_moderation=NULL,moderation_reason=CASE WHEN moderation='pending' THEN moderation_reason END,moderated_by=$2,moderated_at=now()` + section.match() + condition
+		query := approvalQueries{
+			update: update + ` RETURNING id,name`,
+			exists: `SELECT EXISTS(SELECT 1 FROM ` + section.table + section.match() + `)`,
+		}
+		if name == "skins" || name == "plugins" || name == "candidate-skins" {
+			parameter := "$5"
+			if section.editable {
+				parameter = "$6"
+			}
+			query.tokenUpdate = update + ` AND ` + contentEditToken(name, section.table) + `=` + parameter + ` RETURNING id,name`
+		}
+		queries[section] = query
+	}
+	return queries
+}()
+
 // 审核通过可固定原状态、创建时间、更新时间和编辑凭据；作品被重发、修改或审核后返回冲突，避免通过未看过的内容。
 // 待审核作品保留自动检查标记以支持撤销，下架作品则清除原下架原因。
 func actionApproveContent(a *Service, ctx context.Context, tx pgx.Tx, v actionRequest) (actionResult, error) {
@@ -351,15 +379,15 @@ func actionApproveContent(a *Service, ctx context.Context, tx pgx.Tx, v actionRe
 	if err = bannedOwnerGuard(ctx, tx, section, ids); err != nil {
 		return actionResult{}, err
 	}
-	// $3, $4 and $5 are NULL without a pin, which leaves the conditions true.
+	// 未固定版本时，$3、$4 和 $5 为 NULL，对应条件始终为真。
 	var from *string
 	if pinned {
 		from = &expect.From
 	}
-	condition := ` AND ($3::text IS NULL OR moderation=$3) AND ($4::timestamptz IS NULL OR created_at=$4)`
+	queries := contentApprovalQueries[section]
+	query := queries.update
 	args := []any{ids, adminActor(ctx), from, expect.CreatedAt}
 	if section.editable {
-		condition += ` AND ($5::timestamptz IS NULL OR updated_at=$5)`
 		args = append(args, expect.UpdatedAt)
 	}
 	if expect.EditToken != "" {
@@ -367,15 +395,15 @@ func actionApproveContent(a *Service, ctx context.Context, tx pgx.Tx, v actionRe
 			return actionResult{}, actionFail(400, "invalid_value")
 		}
 		args = append(args, expect.EditToken)
-		condition += ` AND ` + contentEditToken(v.Section, section.table) + `=$` + strconv.Itoa(len(args))
+		query = queries.tokenUpdate
 	}
-	changed, err := moderationUpdate(ctx, tx, `UPDATE `+section.table+` SET moderation='approved',previous_moderation=NULL,moderation_reason=CASE WHEN moderation='pending' THEN moderation_reason END,moderated_by=$2,moderated_at=now()`+section.match()+condition+` RETURNING id,name`, args...)
+	changed, err := moderationUpdate(ctx, tx, query, args...)
 	if err != nil {
 		return actionResult{}, err
 	}
 	if len(changed) == 0 {
 		var exists bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM `+section.table+section.match()+`)`, ids).Scan(&exists); err != nil {
+		if err = tx.QueryRow(ctx, queries.exists, ids).Scan(&exists); err != nil {
 			return actionResult{}, err
 		}
 		if exists {

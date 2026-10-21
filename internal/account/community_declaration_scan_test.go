@@ -15,7 +15,7 @@ func TestCommunityDeclarationCompatibility(t *testing.T) {
 		want map[string]bool
 		ok   bool
 	}{
-		{"", map[string]bool{}, true},
+		{"", nil, true},
 		{"saved", map[string]bool{"saved": true}, true},
 		{"moderation,saved,moderation", map[string]bool{"moderation": true, "saved": true}, true},
 		{"unknown,saved", nil, false},

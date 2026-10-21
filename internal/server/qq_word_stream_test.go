@@ -114,6 +114,21 @@ func TestQQWordsQuestionAllocationBudget(t *testing.T) {
 	}
 }
 
+func TestQQParseWordsManyEntriesAllocationBudget(t *testing.T) {
+	input := strings.Repeat("词语，", 600)
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			entries, _ := qqParseWords(input)
+			if len(entries) != 600 {
+				b.Fatalf("解析条数=%d，期望 600", len(entries))
+			}
+		}
+	})
+	if result.AllocedBytesPerOp() >= 32<<10 {
+		t.Fatalf("600 条词语解析分配 %d B，超过 32 KiB 预算", result.AllocedBytesPerOp())
+	}
+}
+
 func BenchmarkQQWordsQuestionStream(b *testing.B) {
 	for _, tc := range []struct{ name, input string }{
 		{"typical", "水杉输入法 shui shan shu ru fa"},

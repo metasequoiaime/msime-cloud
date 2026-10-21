@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/metasequoiaime/MSIME-Backend/internal/digest"
 )
 
 // pluginTransferTimeout is how long a publish or a download may take end to end: either moves up to 11.3 MB of JSON, which the default 15 s route context and the server's read and write deadlines would cut off on a slow link.
@@ -141,9 +142,8 @@ func scanCommunityPlugin(row interface{ Scan(...any) error }) (CommunityPlugin, 
 
 // pluginRequestDigest identifies one publish request, so an identical retry is answered with the stored row and anything else under the same id is a conflict.
 func pluginRequestDigest(name, description, kind, pluginID, version string, archive []byte) string {
-	sum := sha256.Sum256(archive)
 	h := sha256.New()
-	for _, part := range []string{name, description, kind, pluginID, version, hex.EncodeToString(sum[:])} {
+	for _, part := range []string{name, description, kind, pluginID, version, digest.SHA256(archive)} {
 		h.Write([]byte(part))
 		h.Write([]byte{0})
 	}

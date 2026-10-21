@@ -2,9 +2,7 @@
 package skins
 
 import (
-	"crypto/sha256"
 	"embed"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -18,6 +16,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	checksum "github.com/metasequoiaime/MSIME-Backend/internal/digest"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -279,8 +278,7 @@ func loadPackage(root, id string) (Package, error) {
 		if total > 16<<20 {
 			return ErrInvalid
 		}
-		sum := sha256.Sum256(raw)
-		p.Resources = append(p.Resources, Resource{name, len(raw), hex.EncodeToString(sum[:]), mediaType(name), "/v1/skins/" + id + "/resources/" + name})
+		p.Resources = append(p.Resources, Resource{name, len(raw), checksum.SHA256(raw), mediaType(name), "/v1/skins/" + id + "/resources/" + name})
 		return nil
 	})
 	if err != nil {

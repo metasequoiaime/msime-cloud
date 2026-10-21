@@ -2,13 +2,13 @@ package skins
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"io/fs"
 	"os"
 	"slices"
 	"strings"
+
+	checksum "github.com/metasequoiaime/MSIME-Backend/internal/digest"
 )
 
 // Database is the stored-package source, implemented by the account store. CandidateSkin and CandidateSkinResource return ErrNotFound for an id or path that is absent or unpublished; any other error means the database could not answer.
@@ -152,8 +152,8 @@ func (s Sources) ReadResource(ctx context.Context, id, name string) ([]byte, str
 	if err != nil {
 		return nil, "", err
 	}
-	sum := sha256.Sum256(raw)
-	if len(raw) != p.Resources[i].Size || hex.EncodeToString(sum[:]) != p.Resources[i].SHA256 {
+	sum := checksum.SHA256(raw)
+	if len(raw) != p.Resources[i].Size || sum != p.Resources[i].SHA256 {
 		return nil, "", ErrNotFound
 	}
 	return raw, p.Resources[i].MediaType, nil

@@ -817,20 +817,7 @@ func (s *Store) Me(ctx context.Context, uid string) (User, []Identity, error) {
 	var u User
 	ids := []Identity{}
 	batch := &pgx.Batch{}
-	batch.Queue(userQuery, uid).QueryRow(func(row pgx.Row) error {
-		return scanUser(row, &u)
-	})
-	batch.Queue("SELECT provider,subject FROM auth_identities WHERE user_id=$1 ORDER BY provider,subject", uid).Query(func(rows pgx.Rows) error {
-		var err error
-		ids, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (Identity, error) {
-			var i Identity
-			return i, row.Scan(&i.Provider, &i.Subject)
-		})
-		if ids == nil {
-			ids = []Identity{}
-		}
-		return err
-	})
+	queueUserProfileReads(batch, uid, &u, &ids)
 	if e := s.pool.SendBatch(ctx, batch).Close(); e != nil {
 		if errors.Is(e, pgx.ErrNoRows) {
 			return u, ids, errMissingUser
@@ -911,20 +898,7 @@ func (s *Store) SetAvatarKeyAndMe(ctx context.Context, uid, key string) (string,
 	batch.Queue(setAvatarKeyQuery, uid, key).QueryRow(func(row pgx.Row) error {
 		return scanAvatarKeyChange(row, &previous)
 	})
-	batch.Queue(userQuery, uid).QueryRow(func(row pgx.Row) error {
-		return scanUser(row, &u)
-	})
-	batch.Queue("SELECT provider,subject FROM auth_identities WHERE user_id=$1 ORDER BY provider,subject", uid).Query(func(rows pgx.Rows) error {
-		var err error
-		ids, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (Identity, error) {
-			var i Identity
-			return i, row.Scan(&i.Provider, &i.Subject)
-		})
-		if ids == nil {
-			ids = []Identity{}
-		}
-		return err
-	})
+	queueUserProfileReads(batch, uid, &u, &ids)
 	if e = tx.SendBatch(ctx, batch).Close(); e != nil {
 		return "", User{}, nil, e
 	}

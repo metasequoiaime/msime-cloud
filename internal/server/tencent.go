@@ -2,8 +2,6 @@ package server
 
 import (
 	"bytes"
-	"crypto/hmac"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -15,12 +13,6 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/digest"
 )
 
-func hmac256(key []byte, value string) []byte {
-	h := hmac.New(sha256.New, key)
-	_, _ = h.Write([]byte(value))
-	return h.Sum(nil)
-}
-
 // signTencent 为管理员指定的 TMT 根地址生成 TC3 签名。
 // 不转发客户端凭据或客户端指定的请求头。
 func signTencent(req *http.Request, payload []byte, e TranslationEndpoint, now time.Time) {
@@ -31,10 +23,10 @@ func signTencent(req *http.Request, payload []byte, e TranslationEndpoint, now t
 	canonical := "POST\n/\n\ncontent-type:" + contentType + "\nhost:" + req.URL.Host + "\nx-tc-action:texttranslatebatch\n\n" + signedHeaders + "\n" + digest.SHA256(payload)
 	scope := date + "/tmt/tc3_request"
 	toSign := "TC3-HMAC-SHA256\n" + timestamp + "\n" + scope + "\n" + digest.SHA256([]byte(canonical))
-	key := hmac256([]byte("TC3"+e.token), date)
-	key = hmac256(key, "tmt")
-	key = hmac256(key, "tc3_request")
-	signature := hex.EncodeToString(hmac256(key, toSign))
+	key := digest.HMACSHA256([]byte("TC3"+e.token), []byte(date))
+	key = digest.HMACSHA256(key, []byte("tmt"))
+	key = digest.HMACSHA256(key, []byte("tc3_request"))
+	signature := hex.EncodeToString(digest.HMACSHA256(key, []byte(toSign)))
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-TC-Action", "TextTranslateBatch")

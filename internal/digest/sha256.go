@@ -1,4 +1,4 @@
-// Package digest 提供各功能共用的摘要编码。
+// Package digest 提供各功能共用的摘要编码与消息认证码计算。
 package digest
 
 import (

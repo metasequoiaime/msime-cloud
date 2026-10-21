@@ -2,12 +2,11 @@ package account
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"github.com/metasequoiaime/MSIME-Backend/internal/digest"
 	"github.com/metasequoiaime/MSIME-Backend/internal/engine"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 	"log/slog"
@@ -479,9 +478,8 @@ func (a *Service) providers(w http.ResponseWriter, r *http.Request) {
 	write(w, 200, map[string]any{"providers": m})
 }
 func (a *Service) codeHash(challenge, code string) string {
-	mac := hmac.New(sha256.New, []byte(os.Getenv(a.config.PepperEnv)))
-	mac.Write([]byte(challenge + ":" + code))
-	return hex.EncodeToString(mac.Sum(nil))
+	mac := digest.HMACSHA256([]byte(os.Getenv(a.config.PepperEnv)), []byte(challenge+":"+code))
+	return hex.EncodeToString(mac)
 }
 
 // refundDeliveryReservation 只在邮件尚未进入 DATA 阶段时退回全站额度；进入 DATA 后结果可能已经投递。
@@ -503,9 +501,8 @@ func (a *Service) suppressDeliveryTarget(parent context.Context, provider, targe
 
 // verificationCode 使用随机种子和服务端密钥生成六位验证码。相同目标复用有效挑战时，种子保持不变，因此不会再次发送邮件。
 func (a *Service) verificationCode(provider, target, seed string) string {
-	mac := hmac.New(sha256.New, []byte(os.Getenv(a.config.PepperEnv)))
-	mac.Write([]byte("verification-code-v1:" + provider + ":" + target + ":" + seed))
-	n := strconv.FormatUint(uint64(binary.BigEndian.Uint32(mac.Sum(nil)))%1000000, 10)
+	mac := digest.HMACSHA256([]byte(os.Getenv(a.config.PepperEnv)), []byte("verification-code-v1:"+provider+":"+target+":"+seed))
+	n := strconv.FormatUint(uint64(binary.BigEndian.Uint32(mac))%1000000, 10)
 	return strings.Repeat("0", 6-len(n)) + n
 }
 

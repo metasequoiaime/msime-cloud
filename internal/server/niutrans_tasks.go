@@ -2,7 +2,6 @@ package server
 
 import (
 	"crypto/hmac"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -10,6 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/metasequoiaime/MSIME-Backend/internal/digest"
 	segmentjson "github.com/segmentio/encoding/json"
 )
 
@@ -18,9 +18,7 @@ const niuTransTaskPrefix = "nt1."
 // niuTransTaskMAC 用独立协议标识绑定上游应用、媒体类型、身份与原始编号；JSON 数组避免字段拼接歧义。
 func niuTransTaskMAC(e NiuTransEndpoint, service, owner, fileNo string) []byte {
 	body, _ := json.Marshal([]string{"msime-niutrans-task-v1", e.appID, service, owner, fileNo})
-	mac := hmac.New(sha256.New, []byte(e.apiKey))
-	_, _ = mac.Write(body)
-	return mac.Sum(nil)
+	return digest.HMACSHA256([]byte(e.apiKey), body)
 }
 
 func validNiuTransFileNo(fileNo string) bool {

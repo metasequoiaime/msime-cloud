@@ -471,15 +471,18 @@ func actionRestoreContent(a *Service, ctx context.Context, tx pgx.Tx, v actionRe
 // moderationCounts is the number of items per section and moderation state. Private candidate skins are left out: they are visible only to their owner, so they never wait for review.
 type moderationCounts map[string]map[string]int
 
+// moderationCountsQuery 在初始化时构建固定审核统计语句，统计值仍逐请求从数据库读取。
+var moderationCountsQuery = `SELECT 'skins',moderation,count(*) FROM community_skins GROUP BY moderation
+UNION ALL SELECT 'candidate-skins',moderation,count(*) FROM community_candidate_skins WHERE visibility='public' GROUP BY moderation
+UNION ALL SELECT 'plugins',moderation,count(*) FROM community_plugins GROUP BY moderation
+UNION ALL SELECT ` + resourceSectionSQL("") + `,moderation,count(*) FROM community_resources GROUP BY kind,moderation`
+
 func (a *Service) moderationCounts(ctx context.Context) (moderationCounts, error) {
 	counts := moderationCounts{}
 	for section := range moderationSections {
 		counts[section] = map[string]int{"pending": 0, "approved": 0, "removed": 0}
 	}
-	rows, err := a.store.pool.Query(ctx, `SELECT 'skins',moderation,count(*) FROM community_skins GROUP BY moderation
-UNION ALL SELECT 'candidate-skins',moderation,count(*) FROM community_candidate_skins WHERE visibility='public' GROUP BY moderation
-UNION ALL SELECT 'plugins',moderation,count(*) FROM community_plugins GROUP BY moderation
-UNION ALL SELECT `+resourceSectionSQL("")+`,moderation,count(*) FROM community_resources GROUP BY kind,moderation`)
+	rows, err := a.store.pool.Query(ctx, moderationCountsQuery)
 	if err != nil {
 		return nil, err
 	}

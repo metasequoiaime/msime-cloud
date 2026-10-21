@@ -214,6 +214,13 @@ CREATE TABLE IF NOT EXISTS admin_service_metrics (
  usage numeric NOT NULL DEFAULT 0,
  PRIMARY KEY(service,hour)
 );
+-- 冲刷批次与两类指标在同一事务中写入，确认丢失时重试不会重复累加；保留八天覆盖最长七天的待写入窗口。
+CREATE TABLE IF NOT EXISTS admin_service_metric_batches (
+ id text PRIMARY KEY,
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS admin_service_metric_batches_time ON admin_service_metric_batches(created_at);
+
 CREATE TABLE IF NOT EXISTS admin_service_daily (
  service text NOT NULL,
  day date NOT NULL,

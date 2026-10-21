@@ -36,9 +36,9 @@ func TestMonitoringWritesUseOneDatabaseCall(t *testing.T) {
 				trace.mu.Unlock()
 				switch kind {
 				case "metrics":
-					err = a.RecordServiceMetrics(ctx, []ServiceMetric{{Service: "chat", Hour: now, Calls: 1}, {Service: "translation", Hour: now, Calls: 2}})
+					err = a.RecordServiceMetricBatch(ctx, ServiceMetricBatch{ID: randomToken(), Hours: []ServiceMetric{{Service: "chat", Hour: now, Calls: 1}, {Service: "translation", Hour: now, Calls: 2}}})
 				case "minutes":
-					err = a.RecordServiceMinutes(ctx, []ServiceMinute{{Service: "chat", Minute: now, Calls: 1}, {Service: "translation", Minute: now, Calls: 2}})
+					err = a.RecordServiceMetricBatch(ctx, ServiceMetricBatch{ID: randomToken(), Minutes: []ServiceMinute{{Service: "chat", Minute: now, Calls: 1}, {Service: "translation", Minute: now, Calls: 2}}})
 				case "verdicts":
 					var recorded int
 					recorded, err = a.RecordServiceVerdicts(ctx, now, []ServiceVerdict{{Service: "chat", State: "ok", CheckedAt: now}, {Service: "translation", State: "down", CheckedAt: now}})
@@ -86,9 +86,9 @@ func TestMonitoringBatchWriteFailuresRollBackEarlierChanges(t *testing.T) {
 			var err error
 			switch kind {
 			case "metrics":
-				err = a.RecordServiceMetrics(ctx, []ServiceMetric{{Service: "chat", Hour: now, Calls: 1}, {Service: "translation", Hour: now, Calls: 2}})
+				err = a.RecordServiceMetricBatch(ctx, ServiceMetricBatch{ID: randomToken(), Hours: []ServiceMetric{{Service: "chat", Hour: now, Calls: 1}, {Service: "translation", Hour: now, Calls: 2}}})
 			case "minutes":
-				err = a.RecordServiceMinutes(ctx, []ServiceMinute{{Service: "chat", Minute: now, Calls: 1}, {Service: "translation", Minute: now, Calls: 2}})
+				err = a.RecordServiceMetricBatch(ctx, ServiceMetricBatch{ID: randomToken(), Minutes: []ServiceMinute{{Service: "chat", Minute: now, Calls: 1}, {Service: "translation", Minute: now, Calls: 2}}})
 			case "verdicts":
 				var recorded int
 				recorded, err = a.RecordServiceVerdicts(ctx, now, []ServiceVerdict{{Service: "chat", State: "ok", CheckedAt: now}, {Service: "translation", State: "down", CheckedAt: now}})

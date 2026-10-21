@@ -34,6 +34,7 @@ SELECT hash,email,last4,created_at,expires_at FROM admin_tokens WHERE false;
 SELECT id,kind,title,target_page,target_id,created_at FROM admin_notifications WHERE false; SELECT email,notification_id FROM admin_notification_reads WHERE false; SELECT email,prefs,read_all_before FROM admin_preferences WHERE false;
 SELECT service,hour,calls,errors,latency_buckets,usage FROM admin_service_metrics WHERE false; SELECT service,day,ok_minutes,total_minutes,degraded,p95_ms FROM admin_service_daily WHERE false; SELECT id,service,title,description,state,started_at,resolved_at,auto FROM admin_incidents WHERE false;
 SELECT minute,service,calls,errors,latency_buckets FROM admin_service_minutes WHERE false; SELECT minute,service,state,calls,errors,p95_ms,bad_runs,good_runs,incident,checked_at FROM admin_service_verdicts WHERE false;
+SELECT id,created_at FROM admin_service_metric_batches WHERE false;
 SELECT repo,tag,asset,day,download_count FROM release_asset_snapshots WHERE false`); err != nil {
 		return err
 	}

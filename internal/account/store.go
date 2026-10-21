@@ -420,6 +420,8 @@ SELECT word_id,day,count FROM admin_sensitive_hits WHERE false`); e != nil {
 		{`SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='admin_role_permissions'::regclass AND conname='admin_role_permissions_permission_check' AND pg_get_constraintdef(oid) LIKE '%view_logs%')`, "admin_role_permissions permission constraint predates view_logs"},
 		// 插件种类约束需要支持 wordbook。
 		{`SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='community_plugins'::regclass AND conname='community_plugins_kind_known' AND pg_get_constraintdef(oid) LIKE '%wordbook%')`, "community_plugins kind constraint predates the helpcode, symbol_set, phrase_table and wordbook kinds"},
+		// 冲刷批次按创建时间清理，需要保留期索引。
+		{`SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass('admin_service_metric_batches') AND c.relname='admin_service_metric_batches_time')`, "service metric batch time index missing"},
 		// 下载快照需要日期索引。
 		{`SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass('release_asset_snapshots') AND c.relname='release_asset_snapshots_day')`, "release snapshot day index missing"},
 		// 通知查重和崩溃通知需要目标时间索引。

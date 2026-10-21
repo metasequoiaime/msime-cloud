@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { platformKey } from "../utils/platform";
 
 const count = z.number().int().nonnegative();
 
@@ -38,13 +39,8 @@ export const platformOptions = [
   { key: "harmony", label: "HarmonyOS" },
 ] as const;
 
-const platformAliases: Record<string, string> = { win: "windows", win32: "windows", win64: "windows", mac: "macos", osx: "macos", darwin: "macos", harmonyos: "harmony", ohos: "harmony", openharmony: "harmony", iphone: "ios", ipados: "ios" };
-
-// platformKey normalizes a reported platform to a chip key; an unknown platform keeps its lower-cased name and lands under 其他.
-export function platformKey(platform: string): string {
-  const key = platform.trim().toLowerCase();
-  return platformAliases[key] ?? key;
-}
+// 保留下载页的平台键导出，规范化逻辑由公共平台工具提供。
+export { platformKey } from "../utils/platform";
 
 export function platformLabel(platform: string): string {
   const key = platformKey(platform);

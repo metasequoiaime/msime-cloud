@@ -146,11 +146,11 @@ func communitySkinItem(v CommunitySkin, fields map[string]bool, category bool) C
 
 // communityFields 读取社区列表和详情接口的 `fields=` 开关：逗号分隔、取自 allowed 的名称列表，出现其他名称时 ok 为 false。已发布的客户端解析社区条目时拒绝未知字段，所以额外字段只发给显式请求的客户端。
 func communityFields(query url.Values, allowed ...string) (fields map[string]bool, ok bool) {
-	fields = map[string]bool{}
 	raw := query.Get("fields")
 	if raw == "" {
-		return fields, true
+		return nil, true
 	}
+	fields = map[string]bool{}
 	for name := range strings.SplitSeq(raw, ",") {
 		if !slices.Contains(allowed, name) {
 			return nil, false

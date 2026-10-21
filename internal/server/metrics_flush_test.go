@@ -38,6 +38,13 @@ func TestMetricFlushRetriesKeepNewCallsSeparate(t *testing.T) {
 				if len(ids) == 1 {
 					// 写入期间仍可记录新请求，不等待数据库，也不修改原批次。
 					m.record("chat", now, time.Second, true, 0)
+					var visible int64
+					for _, row := range m.pending() {
+						visible += row.Calls
+					}
+					if visible != 1 {
+						t.Fatalf("在途批次仍叠加到数据库快照，可能重复显示：%d", visible)
+					}
 					return io.ErrUnexpectedEOF
 				}
 				return nil

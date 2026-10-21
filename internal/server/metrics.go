@@ -228,12 +228,16 @@ func (m *serviceMetrics) flush(ctx context.Context, write func(context.Context, 
 		if batch == nil {
 			return nil
 		}
-		if err := write(ctx, *batch); err != nil {
-			return err
-		}
+		// 在途增量可能已经提交，暂不再叠加到读取到的数据库快照；失败后恢复待确认批次。
 		m.mu.Lock()
 		m.batch = nil
 		m.mu.Unlock()
+		if err := write(ctx, *batch); err != nil {
+			m.mu.Lock()
+			m.batch = batch
+			m.mu.Unlock()
+			return err
+		}
 	}
 	return nil
 }

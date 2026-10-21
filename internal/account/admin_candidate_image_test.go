@@ -25,6 +25,9 @@ func TestAdminCandidateSkinImage(t *testing.T) {
 		if w.Code != 200 || !bytes.Equal(w.Body.Bytes(), image) || w.Header().Get("Content-Type") != "image/png" || w.Header().Get("Cache-Control") != "no-store" || w.Header().Get("X-Content-Type-Options") != "nosniff" {
 			t.Fatal(role, w.Code, w.Header())
 		}
+		if w.Result().Header.Get("Content-Security-Policy") != "sandbox; default-src 'none'" {
+			t.Fatal(role, w.Header())
+		}
 	}
 	for suffix, status := range map[string]int{
 		id + "/image":                                     400,

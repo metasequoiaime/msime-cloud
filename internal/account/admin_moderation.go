@@ -71,6 +71,11 @@ var (
 
 // deleteContent 永久删除作品及外键关联记录；支持编辑的分区可用凭据固定确认时的版本，旧调用仍可只传 ID。
 func deleteContent(query, editableSection string) adminActionFunc {
+	versionedQuery := query
+	if editableSection != "" {
+		// 分区和表名由动作固定，版本条件只构建一次，编辑凭据仍逐请求绑定。
+		versionedQuery += ` AND ` + contentEditToken(editableSection, moderationSections[editableSection].table) + `=$2`
+	}
 	return func(a *Service, ctx context.Context, tx pgx.Tx, v actionRequest) (actionResult, error) {
 		if err := requireActionID(v); err != nil {
 			return actionResult{}, err
@@ -94,7 +99,7 @@ func deleteContent(query, editableSection string) adminActionFunc {
 		deleteQuery, args := query, []any{v.ID}
 		if value.EditToken != nil {
 			// 在同一条 DELETE 中比较版本，等待并发更新后仍由 PostgreSQL 重新检查条件。
-			deleteQuery += ` AND ` + contentEditToken(editableSection, moderationSections[editableSection].table) + `=$2`
+			deleteQuery = versionedQuery
 			args = append(args, *value.EditToken)
 		}
 		tag, err := tx.Exec(ctx, deleteQuery, args...)

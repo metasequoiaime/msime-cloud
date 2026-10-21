@@ -28,6 +28,7 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"github.com/metasequoiaime/MSIME-Backend/internal/engine"
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -323,15 +324,13 @@ type submission struct {
 	flagged []string
 }
 
-// decodeEntries decodes the entries of one kind; an unknown field (for example a weight, or a field of another kind) is invalid JSON.
+// decodeEntries 按投稿类型解码词条，拒绝权重或其他类型的字段。
 func decodeEntries[T any](raw json.RawMessage) ([]T, error) {
 	var entries []T
 	if len(raw) == 0 {
 		return nil, nil
 	}
-	d := json.NewDecoder(bytes.NewReader(raw))
-	d.DisallowUnknownFields()
-	if err := d.Decode(&entries); err != nil {
+	if err := httpjson.DecodeValue(bytes.NewReader(raw), &entries); err != nil {
 		return nil, err
 	}
 	return entries, nil
@@ -360,25 +359,12 @@ func (s *Server) submitWords(w http.ResponseWriter, r *http.Request) {
 		wordsFail(w, 503, "rate_limit_unavailable", "词条提交暂时不可用，请稍后再试。")
 		return
 	}
-	mediaType, _, _ := strings.Cut(r.Header.Get("Content-Type"), ";")
-	mediaType = strings.Trim(mediaType, " \t")
-	// 先比较字节长度，避免 Unicode 大小写折叠将非 ASCII 类型名当作 JSON。
-	if len(mediaType) != len("application/json") || !strings.EqualFold(mediaType, "application/json") {
+	if !httpjson.IsJSONContentType(r.Header.Get("Content-Type")) {
 		wordsFail(w, 415, "json_required", "请求格式不正确。")
 		return
 	}
 	var input wordSubmissionRequest
-	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, wordSubmissionBodyBytes))
-	d.DisallowUnknownFields()
-	err := d.Decode(&input)
-	if err == nil {
-		err = d.Decode(new(any))
-		if err == io.EOF {
-			err = nil
-		} else if err == nil {
-			err = errors.New("trailing data")
-		}
-	}
+	err := httpjson.DecodeValue(http.MaxBytesReader(w, r.Body, wordSubmissionBodyBytes), &input)
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
 		wordsFail(w, 413, "request_too_large", "内容过长。")

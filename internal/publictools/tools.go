@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -184,9 +185,7 @@ func decode(arguments json.RawMessage, out any) error {
 	if len(arguments) > MaxArguments || len(bytes.TrimSpace(arguments)) == 0 || bytes.TrimSpace(arguments)[0] != '{' {
 		return errors.New("invalid_tool_arguments")
 	}
-	d := json.NewDecoder(bytes.NewReader(arguments))
-	d.DisallowUnknownFields()
-	if d.Decode(out) != nil || d.Decode(new(any)) != io.EOF {
+	if httpjson.DecodeValue(bytes.NewReader(arguments), out) != nil {
 		return errors.New("invalid_tool_arguments")
 	}
 	return nil

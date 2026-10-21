@@ -1,10 +1,36 @@
 package server
 
 import (
+	"encoding/base64"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
 )
+
+func TestQQRepositoryTextLargeAllocationBudget(t *testing.T) {
+	raw := []byte(strings.Repeat("合成", 1<<17))
+	encoded, err := json.Marshal(struct {
+		Encoding string `json:"encoding"`
+		Content  string `json:"content"`
+	}{Encoding: "base64", Content: base64.StdEncoding.EncodeToString(raw)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			text, err := qqRepositoryText(githubapp.Response{Body: encoded}, "read synthetic")
+			if err != nil || len(text) != len(raw) {
+				b.Fatalf("仓库文本解码失败：len=%d err=%v", len(text), err)
+			}
+		}
+	})
+	t.Logf("%s; %s", result, result.MemString())
+	if allocated := result.AllocedBytesPerOp(); allocated > int64(len(raw))*3 {
+		t.Fatalf("大文本解码分配 %d 字节，超过原文 3 倍预算", allocated)
+	}
+}
 
 func TestQQRepositoryText(t *testing.T) {
 	tests := []struct {

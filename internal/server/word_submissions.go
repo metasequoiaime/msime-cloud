@@ -545,10 +545,24 @@ func (ws *wordSubmitter) clientAddress(r *http.Request) string {
 
 func wordCharacter(r rune) bool { return unicode.Is(unicode.Unified_Ideograph, r) || r == '〇' }
 
+// submissionEntrySeen 对至多 20 条的投稿直接比较已处理记录，避免拼接键和分配集合。
+// 调用前已完成字段校验和原地裁剪，等值的先前记录具有相同合法性。
+func submissionEntrySeen[T comparable](entries []T, index int, seen map[T]bool) bool {
+	entry := entries[index]
+	if len(entries) <= wordSubmissionMaxEntries {
+		return slices.Contains(entries[:index], entry)
+	}
+	if seen[entry] {
+		return true
+	}
+	seen[entry] = true
+	return false
+}
+
 // validateWordEntries 每条词语只返回首个问题，沿用官网表单的错误格式，方便逐行展示。
 func validateWordEntries(entries []wordSubmissionEntry) []wordRejection {
 	rejected := []wordRejection{}
-	seen := map[string]bool{}
+	seen := map[wordSubmissionEntry]bool{}
 	for i, e := range entries {
 		reject := func(code, reason string) { rejected = append(rejected, wordRejection{i, code, reason}) }
 		characters := utf8.RuneCountInString(e.Word)
@@ -594,12 +608,10 @@ func validateWordEntries(entries []wordSubmissionEntry) []wordRejection {
 			reject("syllable_count_mismatch", "“"+e.Word+"”有 "+strconv.Itoa(characters)+" 个字，但拼音有 "+strconv.Itoa(syllables)+" 个音节")
 			continue
 		}
-		key := e.Word + "\t" + e.Pinyin
-		if seen[key] {
+		if submissionEntrySeen(entries, i, seen) {
 			reject("duplicate_entry", "“"+e.Word+"”重复填写了")
 			continue
 		}
-		seen[key] = true
 	}
 	return rejected
 }
@@ -614,7 +626,7 @@ func plainText(s string) bool {
 // validateEnglishEntries checks English words and trims their display forms in place. The word is the english_words key the Engine completes typed prefixes against: lowercase ASCII letters only.
 func validateEnglishEntries(entries []englishSubmissionEntry) []wordRejection {
 	rejected := []wordRejection{}
-	seen := map[string]bool{}
+	seen := map[englishSubmissionEntry]bool{}
 	for i := range entries {
 		e := &entries[i]
 		reject := func(code, reason string) { rejected = append(rejected, wordRejection{i, code, reason}) }
@@ -632,10 +644,8 @@ func validateEnglishEntries(entries []englishSubmissionEntry) []wordRejection {
 			reject("invalid_display", "显示词形不能包含制表符、换行或其他控制字符")
 		case utf8.RuneCountInString(e.Display) > englishDisplayMaxChars:
 			reject("display_too_long", "显示词形最多 64 个字符")
-		case seen[e.Word+"\t"+e.Display]:
+		case submissionEntrySeen(entries, i, seen):
 			reject("duplicate_entry", "“"+e.Display+"”重复填写了")
-		default:
-			seen[e.Word+"\t"+e.Display] = true
 		}
 	}
 	return rejected
@@ -644,7 +654,7 @@ func validateEnglishEntries(entries []englishSubmissionEntry) []wordRejection {
 // validateTranslationEntries checks translation overrides and trims both sides in place, as the dictionary build strips them. A source may repeat one already in translations.txt (the later line wins, which is the point of an override); only an identical pair is a duplicate.
 func validateTranslationEntries(entries []translationSubmissionEntry) []wordRejection {
 	rejected := []wordRejection{}
-	seen := map[string]bool{}
+	seen := map[translationSubmissionEntry]bool{}
 	for i := range entries {
 		e := &entries[i]
 		reject := func(code, reason string) { rejected = append(rejected, wordRejection{i, code, reason}) }
@@ -664,10 +674,8 @@ func validateTranslationEntries(entries []translationSubmissionEntry) []wordReje
 			reject("invalid_gloss", "译文不能包含制表符、换行或其他控制字符")
 		case utf8.RuneCountInString(e.Gloss) > translationGlossChars:
 			reject("gloss_too_long", "译文最多 200 个字符")
-		case seen[e.Source+"\t"+e.Gloss]:
+		case submissionEntrySeen(entries, i, seen):
 			reject("duplicate_entry", "“"+e.Source+"”的这条翻译重复填写了")
-		default:
-			seen[e.Source+"\t"+e.Gloss] = true
 		}
 	}
 	return rejected

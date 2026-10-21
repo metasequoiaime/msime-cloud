@@ -187,6 +187,22 @@ type lokiEntry struct {
 	line string
 }
 
+// lokiValues 预留单个日志流的常见上限，避免 encoding/json 为每行结果反复扩容切片。
+type lokiValues [][2]string
+
+func (v *lokiValues) UnmarshalJSON(data []byte) error {
+	capacity := min(maxLogLimit, len(data)/32)
+	if capacity == 0 && len(data) > 2 {
+		capacity = 1
+	}
+	values := make([][2]string, 0, capacity)
+	if err := json.Unmarshal(data, &values); err != nil {
+		return err
+	}
+	*v = values
+	return nil
+}
+
 // logLineJSON 是返回给前端的一行。id 是按时间戳、副本及完整原文生成的稳定去重标识；ts 是 Loki 的纳秒时间戳（十进制字符串，也是续传游标）；time 和 stream 取自 CRI 前缀，没有前缀时 time 用 Loki 的时间戳、stream 为空；level 是从 slog 默认格式里解析出的级别，无法识别时为空；message 去掉了 CRI 前缀和 slog 的时间与级别。
 type logLineJSON struct {
 	ID      string `json:"id"`
@@ -334,7 +350,7 @@ func (s *Server) lokiQueryRange(ctx context.Context, query string, start, end in
 			ResultType string `json:"resultType"`
 			Result     []struct {
 				Stream map[string]string `json:"stream"`
-				Values [][2]string       `json:"values"`
+				Values lokiValues        `json:"values"`
 			} `json:"result"`
 		} `json:"data"`
 	}

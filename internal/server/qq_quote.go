@@ -34,6 +34,59 @@ type qqQuoteEventFields struct {
 	MessageReference json.RawMessage `json:"message_reference"`
 }
 
+// qqQuoteArrayElementCount 统计 JSON 数组的顶层元素，为反序列化预留切片容量。
+func qqQuoteArrayElementCount(raw []byte) int {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) < 2 || raw[0] != '[' {
+		return 0
+	}
+	for i := 1; i < len(raw); i++ {
+		if raw[i] == ' ' || raw[i] == '\t' || raw[i] == '\r' || raw[i] == '\n' {
+			continue
+		}
+		if raw[i] == ']' {
+			return 0
+		}
+		break
+	}
+
+	depth := 1
+	count := 1
+	inString := false
+	escaped := false
+	for i := 1; i < len(raw); i++ {
+		c := raw[i]
+		if inString {
+			if escaped {
+				escaped = false
+			} else if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+			}
+			continue
+		}
+		if c == '"' {
+			inString = true
+			continue
+		}
+		switch c {
+		case '[', '{':
+			depth++
+		case ']', '}':
+			depth--
+			if depth == 0 {
+				return count
+			}
+		case ',':
+			if depth == 1 {
+				count++
+			}
+		}
+	}
+	return 0
+}
+
 // qqQuoteOf 从事件 d 里取出引用的消息。msg_elements 里和这条消息自己相同的文字、附件不算引用：不确定开放平台会不会把消息本身也放进去。
 func qqQuoteOf(raw json.RawMessage, m qqGroupMessage) qqQuote {
 	var fields qqQuoteEventFields
@@ -45,10 +98,10 @@ func qqQuoteOf(raw json.RawMessage, m qqGroupMessage) qqQuote {
 
 func qqQuoteFromFields(fields qqQuoteEventFields, m qqGroupMessage) qqQuote {
 	var q qqQuote
-	var elements []struct {
+	elements := make([]struct {
 		Content     string         `json:"content"`
 		Attachments []qqAttachment `json:"attachments"`
-	}
+	}, 0, qqQuoteArrayElementCount(fields.MsgElements))
 	// 缺失、null 和标量值不可能解码成引用元素数组，直接跳过，避免为类型错误创建临时对象。
 	if elementsRaw := bytes.TrimSpace(fields.MsgElements); len(elementsRaw) > 0 && elementsRaw[0] == '[' && json.Unmarshal(elementsRaw, &elements) == nil {
 		var own map[string]bool

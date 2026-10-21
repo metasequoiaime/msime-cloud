@@ -2,12 +2,11 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 	"golang.org/x/oauth2"
 )
 
@@ -28,9 +27,7 @@ func (s *Server) adminCLIAvailable(w http.ResponseWriter, r *http.Request) bool 
 }
 
 func readAdminJSON(w http.ResponseWriter, r *http.Request, v any) bool {
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
-	decoder.DisallowUnknownFields()
-	if decoder.Decode(v) != nil || decoder.Decode(new(any)) != io.EOF {
+	if httpjson.DecodeValue(http.MaxBytesReader(w, r.Body, 16<<10), v) != nil {
 		fail(w, 400, "invalid_request")
 		return false
 	}

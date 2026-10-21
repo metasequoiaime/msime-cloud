@@ -5,10 +5,8 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -22,6 +20,7 @@ import (
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 )
 
 var dictionarySHAPattern = regexp.MustCompile(`^[a-f0-9]{40}$`)
@@ -48,13 +47,7 @@ func (s *Server) dictionaryChanges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input dictionaryChangeRequest
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128<<10))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&input); err != nil {
-		fail(w, 400, "invalid_request")
-		return
-	}
-	if decoder.Decode(new(any)) != io.EOF {
+	if httpjson.DecodeValue(http.MaxBytesReader(w, r.Body, 128<<10), &input) != nil {
 		fail(w, 400, "invalid_request")
 		return
 	}

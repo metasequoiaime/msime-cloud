@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -69,8 +70,9 @@ func (a *Service) AdminHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 405, "method_not_allowed")
 		return
 	}
+	query := r.URL.Query()
 	page := 1
-	if raw := r.URL.Query().Get("page"); raw != "" {
+	if raw := query.Get("page"); raw != "" {
 		var err error
 		page, err = strconv.Atoi(raw)
 		if err != nil || page < 1 || page > 10000 {
@@ -78,7 +80,7 @@ func (a *Service) AdminHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	search := r.URL.Query().Get("q")
+	search := query.Get("q")
 	if len(search) > 200 || !utf8.ValidString(search) || strings.ContainsRune(search, 0) {
 		writeError(w, 400, "invalid_search")
 		return
@@ -88,7 +90,7 @@ func (a *Service) AdminHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "not_found")
 		return
 	}
-	a.adminList(w, r, list, page, search)
+	a.adminList(w, r, list, page, search, query)
 }
 
 // matchAdminPattern matches path against a route pattern (see adminRoute) and returns what "{}" matched.
@@ -114,9 +116,8 @@ var adminListFilterParams = sync.OnceValue(func() map[string]bool {
 	return params
 })
 
-// adminList serves one list page of 50 rows, newest first. Count and page share one statement snapshot, including pages beyond the last row.
-func (a *Service) adminList(w http.ResponseWriter, r *http.Request, list adminList, page int, search string) {
-	query := r.URL.Query()
+// adminList 复用已解析的查询参数，按时间倒序返回每页 50 条；总数和分页共用语句快照，包括超出末尾的页。
+func (a *Service) adminList(w http.ResponseWriter, r *http.Request, list adminList, page int, search string, query url.Values) {
 	accepted := map[string]bool{}
 	args := []any{search, (page - 1) * 50, page}
 	if list.args != nil {

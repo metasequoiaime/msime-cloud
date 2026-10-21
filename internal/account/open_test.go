@@ -7,9 +7,12 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // A pod that has just started can find the database unreachable for a moment; the server used to exit on the first failed ping and come back only through a container restart. Open now keeps trying until the caller's deadline, and the error it finally returns carries the cause instead of hiding it.
@@ -39,11 +42,53 @@ func TestOpenRetriesUntilTheDeadlineAndKeepsTheCause(t *testing.T) {
 	}
 }
 
-// The case the retry is for: the database only becomes reachable after Open has started trying.
+// 数据库在 Open 开始重试之后才恢复可达，连接串中的查询参数也必须经过延迟代理。
 func TestOpenWaitsForADatabaseThatComesUpLate(t *testing.T) {
 	dsn := os.Getenv("MSIME_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("MSIME_TEST_DATABASE_URL is not set")
+	}
+	cfg, err := pgconn.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal("测试数据库配置无效")
+	}
+	target, err := url.Parse(dsn)
+	if err != nil || (target.Scheme != "postgres" && target.Scheme != "postgresql") {
+		t.Fatal("延迟连接测试需要 PostgreSQL URL")
+	}
+	queryTarget := *target
+	queryTarget.Host = "ignored.example.test:1"
+	query := queryTarget.Query()
+	query.Set("host", cfg.Host)
+	query.Set("port", strconv.Itoa(int(cfg.Port)))
+	queryTarget.RawQuery = query.Encode()
+	implicitPortTarget := queryTarget
+	implicitPortTarget.Host = ""
+	query.Del("port")
+	implicitPortTarget.RawQuery = query.Encode()
+	for _, tc := range []struct {
+		name    string
+		dsn     string
+		envPort string
+	}{
+		{"configured_url", dsn, ""},
+		{"query_address", queryTarget.String(), ""},
+		{"port_from_environment", implicitPortTarget.String(), strconv.Itoa(int(cfg.Port))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.envPort != "" {
+				t.Setenv("PGPORT", tc.envPort)
+			}
+			testOpenWaitsForADatabaseThatComesUpLate(t, tc.dsn)
+		})
+	}
+}
+
+func testOpenWaitsForADatabaseThatComesUpLate(t *testing.T, dsn string) {
+	t.Helper()
+	cfg, err := pgconn.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal("测试数据库配置无效")
 	}
 	target, err := url.Parse(dsn)
 	if err != nil {
@@ -55,8 +100,9 @@ func TestOpenWaitsForADatabaseThatComesUpLate(t *testing.T) {
 	}
 	addr := reserved.Addr().String()
 	reserved.Close()
-	upstream := target.Host
+	upstreamNetwork, upstream := pgconn.NetworkAddress(cfg.Host, cfg.Port)
 	late := make(chan net.Listener, 1)
+	forwarded := make(chan struct{}, 1)
 	go func() {
 		time.Sleep(time.Second)
 		l, err := net.Listen("tcp", addr)
@@ -72,11 +118,15 @@ func TestOpenWaitsForADatabaseThatComesUpLate(t *testing.T) {
 			}
 			go func() {
 				defer client.Close()
-				server, err := net.Dial("tcp", upstream)
+				server, err := net.Dial(upstreamNetwork, upstream)
 				if err != nil {
 					return
 				}
 				defer server.Close()
+				select {
+				case forwarded <- struct{}{}:
+				default:
+				}
 				go io.Copy(server, client)
 				io.Copy(client, server)
 			}()
@@ -89,6 +139,15 @@ func TestOpenWaitsForADatabaseThatComesUpLate(t *testing.T) {
 	})
 	proxied := *target
 	proxied.Host = addr
+	proxyHost, proxyPort, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 查询参数优先于 URL authority，必须一并覆盖才能保证所有连接经过代理。
+	query := proxied.Query()
+	query.Set("host", proxyHost)
+	query.Set("port", proxyPort)
+	proxied.RawQuery = query.Encode()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	db, err := Open(ctx, proxied.String())
@@ -96,4 +155,9 @@ func TestOpenWaitsForADatabaseThatComesUpLate(t *testing.T) {
 		t.Fatalf("did not wait for the database: %v", err)
 	}
 	db.Close()
+	select {
+	case <-forwarded:
+	default:
+		t.Fatal("数据库连接绕过了延迟代理，没有验证启动重试")
+	}
 }

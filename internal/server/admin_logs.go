@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -49,6 +50,8 @@ const (
 	maxLogMessageBytes = 4096
 	// maxLokiResponseBytes 限制读取的 Loki 响应体，maxLogLimit 行乘以单行上限仍在范围内。
 	maxLokiResponseBytes = 16 << 20
+	// maxLokiPooledResponseBytes 限制响应缓冲池的单个缓存，避免一次异常大响应长期占住 16 MiB。
+	maxLokiPooledResponseBytes = 1 << 20
 	// maxLogPods 是返回的副本列表上限。
 	maxLogPods  = 100
 	lokiTimeout = 10 * time.Second
@@ -82,9 +85,10 @@ const (
 )
 
 var (
-	logMatcher         = `\s*[A-Za-z_][A-Za-z0-9_]*\s*(?:=|!=|=~|!~)\s*"(?:[^"\\\x00-\x1f]|\\.)*"\s*`
-	logSelectorPattern = regexp.MustCompile(`^\{` + logMatcher + `(?:,` + logMatcher + `)*\}$`)
-	logPodPattern      = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?$`)
+	lokiResponseBufferPool sync.Pool
+	logMatcher             = `\s*[A-Za-z_][A-Za-z0-9_]*\s*(?:=|!=|=~|!~)\s*"(?:[^"\\\x00-\x1f]|\\.)*"\s*`
+	logSelectorPattern     = regexp.MustCompile(`^\{` + logMatcher + `(?:,` + logMatcher + `)*\}$`)
+	logPodPattern          = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?$`)
 	// logLevelPrefix 匹配一行开头的 CRI 前缀（可选）和 slog 默认格式的时间，后面接级别。级别筛选用它排除低于所选级别的行，所以无法识别级别的行（panic、标准库 log 的输出）在 WARN、ERROR 筛选下仍会显示。
 	logLevelPrefix = `^(?:\S+ (?:stdout|stderr) [FP] )?\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)? `
 	logLevelBelow  = map[string]string{"INFO": "DEBUG", "WARN": "DEBUG|INFO", "ERROR": "DEBUG|INFO|WARN"}
@@ -279,7 +283,7 @@ type errLoki struct{ reason string }
 
 func (e errLoki) Error() string { return "loki " + e.reason }
 
-// lokiGet 请求 Loki 并把 JSON 响应解到 v。
+// lokiGet 请求 Loki 并把 JSON 响应解到 v；响应正文缓冲在常见大小内复用，避免每次查询都重新分配整份正文。
 func (s *Server) lokiGet(ctx context.Context, path string, params url.Values, v any) error {
 	ctx, cancel := context.WithTimeout(ctx, lokiTimeout)
 	defer cancel()
@@ -296,14 +300,27 @@ func (s *Server) lokiGet(ctx context.Context, path string, params url.Values, v 
 	if resp.StatusCode != http.StatusOK {
 		return errLoki{fmt.Sprintf("status %d", resp.StatusCode)}
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxLokiResponseBytes+1))
-	if err != nil {
+	buffer := lokiResponseBufferPool.Get()
+	var body *bytes.Buffer
+	if buffer == nil {
+		body = new(bytes.Buffer)
+	} else {
+		body = buffer.(*bytes.Buffer)
+		body.Reset()
+	}
+	defer func() {
+		if body.Cap() <= maxLokiPooledResponseBytes {
+			body.Reset()
+			lokiResponseBufferPool.Put(body)
+		}
+	}()
+	if _, err := body.ReadFrom(io.LimitReader(resp.Body, maxLokiResponseBytes+1)); err != nil {
 		return errLoki{"read failed"}
 	}
-	if len(body) > maxLokiResponseBytes {
+	if body.Len() > maxLokiResponseBytes {
 		return errLoki{"response too large"}
 	}
-	if err = json.Unmarshal(body, v); err != nil {
+	if err := json.Unmarshal(body.Bytes(), v); err != nil {
 		return errLoki{"invalid response"}
 	}
 	return nil

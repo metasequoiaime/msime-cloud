@@ -19,6 +19,17 @@ func (body lokiQueryResponseTransport) RoundTrip(*http.Request) (*http.Response,
 	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(body)))}, nil
 }
 
+type lokiReadErrorBody struct{}
+
+func (lokiReadErrorBody) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+func (lokiReadErrorBody) Close() error             { return nil }
+
+type lokiReadErrorTransport struct{}
+
+func (lokiReadErrorTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: http.StatusOK, Body: lokiReadErrorBody{}}, nil
+}
+
 func fixedLokiQueryServer(body string) *Server {
 	s := &Server{loki: &http.Client{Transport: lokiQueryResponseTransport(body)}}
 	s.config.Admin.Logs.LokiURL = "http://loki.example.test"
@@ -91,6 +102,50 @@ func TestLokiQueryRangeAllocationBudget(t *testing.T) {
 				t.Fatalf("两千行日志查询分配 %d 字节，超过 800 KiB 预算", allocated)
 			}
 		})
+	}
+}
+
+func TestLokiQueryRangePooledResponseBudget(t *testing.T) {
+	payload, want := lokiQueryPayload(maxLogLimit)
+	s := fixedLokiQueryServer(payload)
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			got, err := s.lokiQueryRange(context.Background(), "{}", 1, math.MaxInt64, maxLogLimit, "forward")
+			if err != nil || len(got) != len(want) {
+				b.Fatalf("日志查询结果变化：len=%d err=%v", len(got), err)
+			}
+		}
+	})
+	// 常见响应正文复用缓冲；race 模式也应低于旧实现的约 912 KiB。
+	if allocated := result.AllocedBytesPerOp(); allocated > 700<<10 {
+		t.Fatalf("日志查询缓冲复用分配 %d 字节，超过 700 KiB 预算", allocated)
+	}
+}
+
+func TestLokiGetReadError(t *testing.T) {
+	s := fixedLokiQueryServer(`{}`)
+	s.loki.Transport = lokiReadErrorTransport{}
+	var result map[string]any
+	if err := s.lokiGet(context.Background(), "/loki/api/v1/query", nil, &result); err != (errLoki{"read failed"}) {
+		t.Fatalf("读取错误变化：%v", err)
+	}
+}
+
+func TestLokiGetRejectsTrailingJSON(t *testing.T) {
+	for _, body := range []string{"{} {}", "{}x", "{}\n[]"} {
+		t.Run(body, func(t *testing.T) {
+			s := fixedLokiQueryServer(body)
+			var result map[string]any
+			if err := s.lokiGet(context.Background(), "/loki/api/v1/query", nil, &result); err != (errLoki{"invalid response"}) {
+				t.Fatalf("尾随 JSON 未被拒绝：%v", err)
+			}
+		})
+	}
+	// 与 json.Unmarshal 一样，合法空白可以出现在 JSON 后面。
+	s := fixedLokiQueryServer("{} \n\t")
+	var result map[string]any
+	if err := s.lokiGet(context.Background(), "/loki/api/v1/query", nil, &result); err != nil {
+		t.Fatalf("尾随空白被拒绝：%v", err)
 	}
 }
 

@@ -205,7 +205,50 @@ func (s *Server) loadQQKnowledge(ctx context.Context) ([]qqSection, error) {
 	return sections, nil
 }
 
-var qqHeadingPattern = regexp.MustCompile(`^(#{1,6})\s+(.+?)\s*#*\s*$`)
+// qqMarkdownHeading 按标题正则的语义扫描一行，避免为每个标题建立捕获切片。
+func qqMarkdownHeading(line string) (level int, title string, ok bool) {
+	level = 0
+	for level < len(line) && level < 6 && line[level] == '#' {
+		level++
+	}
+	if level == 0 || (level < len(line) && line[level] == '#') {
+		return 0, "", false
+	}
+	start := level
+	for start < len(line) && qqMarkdownHeadingSpace(line[start]) {
+		start++
+	}
+	if start == level {
+		return 0, "", false
+	}
+	if start == len(line) {
+		// 正则的 `.+?` 会从连续空白中留下最后一个字节作为标题；只有单个分隔空白时才不能成标题。
+		if start-level < 2 {
+			return 0, "", false
+		}
+		start--
+	}
+	end := len(line)
+	for end > start+1 && qqMarkdownHeadingSpace(line[end-1]) {
+		end--
+	}
+	for end > start+1 && line[end-1] == '#' {
+		end--
+	}
+	for end > start+1 && qqMarkdownHeadingSpace(line[end-1]) {
+		end--
+	}
+	return level, line[start:end], true
+}
+
+func qqMarkdownHeadingSpace(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '\f', '\r':
+		return true
+	default:
+		return false
+	}
+}
 
 // qqDocPlatforms 按文件名标出每篇指南适用的平台，写在段落的文档名前面。windows.md 的一级标题是「水杉输入法文档」，不标的话 Windows 的操作路径会被当成通用答案交给 macOS、Linux 用户。
 var qqDocPlatforms = map[string]string{
@@ -898,19 +941,18 @@ func qqSplitMarkdown(name, markdown string) []qqSection {
 		if strings.HasPrefix(leading, "```") {
 			fenced = !fenced
 		}
-		var m []string
+		level, headingText, headingOK := 0, "", false
 		if !fenced && strings.HasPrefix(line, "#") {
-			m = qqHeadingPattern.FindStringSubmatch(line)
+			level, headingText, headingOK = qqMarkdownHeading(line)
 		}
-		if m != nil {
+		if headingOK {
 			flush()
 			// 只需判断后续是否全为空白；遇到正文即停，避免每个标题重扫同一段尾部空白。
-			if len(m[1]) > 1 && qqMarkdownLeadingSpace(markdown[nextOffset:]) == "" {
+			if level > 1 && qqMarkdownLeadingSpace(markdown[nextOffset:]) == "" {
 				break
 			}
-			level := len(m[1])
 			// 标题随段落进入缓存，复制捕获结果以免引用整份 Markdown 的底层内存。
-			heading := strings.Clone(m[2])
+			heading := strings.Clone(headingText)
 			if level == 1 {
 				doc, titles, intro = heading, nil, true
 				offset = nextOffset

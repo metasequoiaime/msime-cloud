@@ -1,6 +1,6 @@
 // Component harness for tests/csp_smoke.py: renders every shared ui piece with fixed test fixtures so the smoke test can exercise them under the production CSP.
 import "../../src/zod-config";
-import { StrictMode, useRef, useState } from "react";
+import { StrictMode, useCallback, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider, useMutation } from "@tanstack/react-query";
 import { z } from "zod";
@@ -27,6 +27,7 @@ import { ToastProvider, useToast } from "../../src/ui/toast";
 import { useAPIImage } from "../../src/hooks/use-api-image";
 import { keys } from "../../src/api/keys";
 import { useDebounced } from "../../src/hooks/use-debounced";
+import { useDebouncedEffect } from "../../src/hooks/use-debounced-effect";
 import { formatBytes as dictionaryBytes } from "../../src/pages/dictionary";
 import { formatBytes as communityBytes } from "../../src/pages/community/format";
 import { formatSize as releaseBytes } from "../../src/pages/release/shared";
@@ -154,6 +155,30 @@ function DebounceHarness() {
   </Card>;
 }
 
+function DebouncedEffectProbe({ value, delay, enabled, onFire }: { value: string; delay: number; enabled: boolean; onFire: (value: string) => void }) {
+  useDebouncedEffect(useCallback(() => onFire(value), [value, onFire]), delay, enabled);
+  return null;
+}
+
+function DebouncedEffectHarness() {
+  const [value, setValue] = useState("初始值");
+  const [delay, setDelay] = useState(200);
+  const [enabled, setEnabled] = useState(false);
+  const [visible, setVisible] = useState(true);
+  const [events, setEvents] = useState<string[]>([]);
+  const onFire = useCallback((next: string) => setEvents(previous => [...previous, next]), []);
+  return <main>
+    <input aria-label="副作用输入" value={value} onChange={event => setValue(event.target.value)} />
+    <select aria-label="副作用延迟" value={delay} onChange={event => setDelay(Number(event.target.value))}>
+      <option value={200}>200ms</option><option value={400}>400ms</option>
+    </select>
+    <label><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} />启用副作用</label>
+    <button type="button" onClick={() => setVisible(previous => !previous)}>切换副作用挂载</button>
+    <output data-testid="debounced-events">{JSON.stringify(events)}</output>
+    {visible && <DebouncedEffectProbe value={value} delay={delay} enabled={enabled} onFire={onFire} />}
+  </main>;
+}
+
 function Harness() {
   const confirm = useConfirm();
   const toast = useToast();
@@ -211,4 +236,6 @@ createRoot(root).render(<StrictMode><ToastProvider>{params.has("images")
   ? <ModalHarness />
   : params.has("auth")
   ? <QueryClientProvider client={authClient}><AuthProvider><AuthHarness /></AuthProvider></QueryClientProvider>
+  : params.has("effect")
+  ? <DebouncedEffectHarness />
   : <ConfirmProvider><Harness /></ConfirmProvider>}</ToastProvider></StrictMode>);

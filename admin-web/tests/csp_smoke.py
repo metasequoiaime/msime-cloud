@@ -2290,6 +2290,9 @@ def main() -> int:
                 check_list_pagination(context, base, problems)
                 check_modal(browser, base, problems)
                 check_debounce(browser, base, problems)
+                from search_debounce_smoke import check_debounced_effect, check_dictionary_debounce
+                check_debounced_effect(browser, base)
+                check_dictionary_debounce(browser, base)
                 check_auth_generation(context, base, problems)
                 check_auth_logout(context, base, problems)
                 check_auth_logout_flush(context, base, problems)

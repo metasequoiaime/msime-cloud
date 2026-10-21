@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { platformKey } from "../utils/platform";
+import { platformName } from "../utils/platform.ts";
 
 const count = z.number().int().nonnegative();
 
@@ -29,22 +29,11 @@ export const downloadsSummarySchema = z.object({
 });
 export type DownloadsSummary = z.infer<typeof downloadsSummarySchema>;
 
-// The platform chips of the design; reported platform names are matched case-insensitively and with common aliases.
-export const platformOptions = [
-  { key: "windows", label: "Windows" },
-  { key: "macos", label: "macOS" },
-  { key: "linux", label: "Linux" },
-  { key: "android", label: "Android" },
-  { key: "ios", label: "iOS" },
-  { key: "harmony", label: "HarmonyOS" },
-] as const;
-
-// 保留下载页的平台键导出，规范化逻辑由公共平台工具提供。
-export { platformKey } from "../utils/platform";
+// 下载筛选沿用公共平台选项和规范化键，保留原有导出供页面使用。
+export { platformKey, platformOptions } from "../utils/platform.ts";
 
 export function platformLabel(platform: string): string {
-  const key = platformKey(platform);
-  return platformOptions.find(option => option.key === key)?.label ?? (platform || "未知平台");
+  return platformName(platform) || "未知平台";
 }
 
 const channelLabels: Record<string, string> = {

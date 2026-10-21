@@ -16,6 +16,11 @@ import tomllib
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
+if __package__:
+    from .seed_sql import literal
+else:
+    from seed_sql import literal
+
 MAX_MANIFEST = 65536
 MAX_RESOURCE = 4 << 20
 MAX_PACKAGE = 16 << 20
@@ -391,10 +396,6 @@ def provenance(checkout):
     if git("status", "--porcelain", "--untracked-files=all"):
         lines.append("-- WARNING: the checkout has uncommitted changes; this SQL reflects the files on disk, not the commit above.")
     return lines
-
-
-def literal(value):
-    return "'" + value.replace("'", "''") + "'"
 
 
 def sha256(raw):

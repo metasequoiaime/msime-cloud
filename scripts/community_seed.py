@@ -3,9 +3,10 @@
 import json
 from pathlib import Path
 
-
-def literal(value):
-    return "'" + value.replace("'", "''") + "'"
+if __package__:
+    from .seed_sql import literal
+else:
+    from seed_sql import literal
 
 
 def render(catalog):

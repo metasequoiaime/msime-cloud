@@ -46,7 +46,7 @@ func TestReleaseRecordsSurviveCancellation(t *testing.T) {
 	}{
 		{"trigger", "/api/releases/windows/trigger", `{"version":"v0.5.5"}`, "POST", repo + "/actions/workflows/release.yml/dispatches", "release_trigger", "windows", 1, false},
 		{"notes", "/api/releases/windows/windows-v0.5.4/notes", `{"body":"合成发布说明"}`, "PATCH", repo + "/releases/3", "release_notes", "windows-v0.5.4", 0, false},
-		{"withdraw", "/api/releases/windows/windows-v0.5.4/withdraw", "", "PATCH", repo + "/releases/3", "release_withdraw", "windows-v0.5.4", 1, false},
+		{"withdraw", "/api/releases/windows/windows-v0.5.4/withdraw", "", "PATCH", repo + "/releases/3", "release_withdraw", "windows-v0.5.4", 1, true},
 		{"restore_latest", "/api/releases/windows/windows-v0.5.4/withdraw", "", "PATCH", repo + "/releases/2", "release_withdraw", "windows-v0.5.4", 1, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

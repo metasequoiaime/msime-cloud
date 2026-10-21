@@ -749,6 +749,9 @@ func (s *Server) withdrawRelease(w http.ResponseWriter, r *http.Request, gh *git
 	if !s.patchRelease(w, ctx, gh, p, release.ID, map[string]any{"prerelease": true, "body": withdrawnBody(releaseUserBody(release.Body))}) {
 		return
 	}
+	// 撤回已经确认成功后，即使管理员断开连接也继续限时恢复 latest，避免下载页停留在已撤回版本。
+	postCtx, cancelPost := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancelPost()
 	var previous *ghRelease
 	for j := i + 1; j < len(releases); j++ {
 		if releaseStatus(releases[j]) == "released" {
@@ -764,7 +767,7 @@ func (s *Server) withdrawRelease(w http.ResponseWriter, r *http.Request, gh *git
 		detail["previous"], result["previous"] = previous.TagName, previous.TagName
 		if wasLatest {
 			// The withdrawal itself already succeeded, so a failure here is reported in the result rather than as an error.
-			resp, err := gh.Do(ctx, token, "PATCH", "/repos/"+p.Repo+"/releases/"+strconv.FormatInt(previous.ID, 10), map[string]any{"make_latest": "true"})
+			resp, err := gh.Do(postCtx, token, "PATCH", "/repos/"+p.Repo+"/releases/"+strconv.FormatInt(previous.ID, 10), map[string]any{"make_latest": "true"})
 			restored := err == nil && resp.OK()
 			if !restored {
 				slog.Warn("release withdraw: previous release not made latest", "repo", p.Repo, "tag", previous.TagName, "status", resp.Status)
@@ -774,8 +777,8 @@ func (s *Server) withdrawRelease(w http.ResponseWriter, r *http.Request, gh *git
 		}
 	}
 	unlock()
-	s.releaseAudit(ctx, "release_withdraw", tag, detail)
-	s.releaseNotify(ctx, p, p.Name+" "+releaseVersion(p, tag)+" 已撤回", p.ID)
+	s.releaseAudit(postCtx, "release_withdraw", tag, detail)
+	s.releaseNotify(postCtx, p, p.Name+" "+releaseVersion(p, tag)+" 已撤回", p.ID)
 	respond(w, 200, result)
 }
 

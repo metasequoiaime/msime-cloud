@@ -39,7 +39,12 @@ func previousQQContactPatternsOverlap(text string, first, second *regexp.Regexp)
 
 func TestQQContactOverlapCompatibility(t *testing.T) {
 	texts := []string{
-		"", "普通正文", "reader@example.test", "+86 13900000000", "QQ 12345", "微信号：example_user",
+		"", "普通正文", "reader@example.test",
+		"a@b.com13900000000@c.test", "a@b.com+13900000000@c.test",
+		"a@b.com8613900000000@c.test", "a@b.com_13900000000@c.test",
+		"+86 13900000000@example.test", "x13900000000@example.test",
+		"reader@13900000000.example.test", "13900000000x@example.test",
+		"+86 13900000000", "QQ 12345", "微信号：example_user",
 		"13900000000@example.test", "QQ 13900000000", "wx:example_user@example.test",
 		"QQ 12345wx:example_user",
 		"reader@example.test QQ 13900000000 微信号：example_user",
@@ -69,6 +74,34 @@ func TestQQContactOverlapCompatibility(t *testing.T) {
 		}
 		if got, want := qqGapTopic(text), previousQQGapTopic(text); got != want {
 			t.Fatalf("完整概括脱敏结果变化：输入=%q，结果=%q，期望=%q", text, got, want)
+		}
+	}
+}
+
+func TestQQContactEmailPhoneOverlapRandomCompatibility(t *testing.T) {
+	random := rand.New(rand.NewSource(1126))
+	units := []string{"a@b.co", "13900000000", "8613900000000", "+86 ", "x", "_", ".", "-", "+", "@c.test", " ", "字", "\xff"}
+	for range 2000 {
+		var text strings.Builder
+		for range random.Intn(16) {
+			text.WriteString(units[random.Intn(len(units))])
+		}
+		input := text.String()
+		for _, pair := range [][2]int{{0, 1}, {1, 0}} {
+			first, second := qqContactPatterns[pair[0]], qqContactPatterns[pair[1]]
+			got, want := qqContactPatternsOverlap(input, first, second), previousQQContactPatternsOverlap(input, first, second)
+			if got != want {
+				t.Fatalf("邮箱与手机号重叠结果变化：正则=%d/%d，输入=%q，结果=%v，期望=%v", pair[0], pair[1], input, got, want)
+			}
+		}
+	}
+}
+
+func TestQQContactEmailPhoneOverlap(t *testing.T) {
+	text := "13900000000@example.test"
+	for _, pair := range [][2]int{{0, 1}, {1, 0}} {
+		if !qqContactPatternsOverlap(text, qqContactPatterns[pair[0]], qqContactPatterns[pair[1]]) {
+			t.Fatalf("邮箱中的手机号应被识别为重叠：正则=%d/%d", pair[0], pair[1])
 		}
 	}
 }
@@ -108,6 +141,41 @@ func TestQQContactOverlapScanBudget(t *testing.T) {
 				t.Fatalf("重叠检查耗时 %d ns，未低于旧扫描 %d ns 的四分之一", current.NsPerOp(), baseline.NsPerOp())
 			}
 		})
+	}
+}
+
+func TestQQContactOverlapEmailOnlyAllocationBudget(t *testing.T) {
+	if raceEnabled {
+		t.Skip("竞态检测会放大正则分配")
+	}
+	text := strings.Repeat("reader@example.test ", 512)
+	for _, pair := range [][2]int{{0, 1}, {1, 0}} {
+		allocations := testing.AllocsPerRun(20, func() {
+			if qqContactPatternsOverlap(text, qqContactPatterns[pair[0]], qqContactPatterns[pair[1]]) {
+				t.Fatal("只有邮箱时不应存在手机号重叠")
+			}
+		})
+		if allocations > 4 {
+			t.Fatalf("纯邮箱重叠检查分配 %.0f 次，超过 4 次预算", allocations)
+		}
+	}
+}
+
+func TestQQContactOverlapAllocationBudget(t *testing.T) {
+	if raceEnabled {
+		t.Skip("竞态检测会放大正则分配")
+	}
+	text := strings.Repeat("13900000000 ", 512) + "reader@example.test"
+	for _, pair := range [][2]int{{0, 1}, {1, 0}} {
+		first, second := qqContactPatterns[pair[0]], qqContactPatterns[pair[1]]
+		allocations := testing.AllocsPerRun(20, func() {
+			if qqContactPatternsOverlap(text, first, second) {
+				t.Fatal("分离的联系方式不应重叠")
+			}
+		})
+		if allocations > 4 {
+			t.Fatalf("手机号和邮箱重叠检查分配 %.0f 次，超过 4 次预算", allocations)
+		}
 	}
 }
 

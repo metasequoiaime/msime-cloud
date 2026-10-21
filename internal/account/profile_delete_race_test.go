@@ -43,7 +43,6 @@ func TestProfileAfterAccountDeletionRaceReturns401(t *testing.T) {
 	db := testStore(t)
 	user := complete(t, db, Identity{"email", "profile-delete-race@example.test"})
 	trace := &profileDeleteTrace{authDone: make(chan struct{}), release: make(chan struct{})}
-	defer trace.unblock()
 	cfg := db.pool.Config()
 	cfg.ConnConfig.Tracer = trace
 	cfg.MaxConns = 2
@@ -52,6 +51,7 @@ func TestProfileAfterAccountDeletionRaceReturns401(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
+	defer trace.unblock()
 	mux := http.NewServeMux()
 	Mount(mux, &Service{store: &Store{pool: pool}})
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)

@@ -199,7 +199,7 @@ func candidateExtension(path string) string {
 	return ""
 }
 
-// validCandidateFiles runs the structural checks that need no image decode and returns the error code, or "" when the upload may proceed.
+// validCandidateFiles 执行无需解码图片的结构校验；可以继续上传时返回空字符串，否则返回错误码。
 func validCandidateFiles(manifest string, files map[string][]byte) string {
 	if len(files) < 1 || len(files) > maxCandidateFiles {
 		return "candidate_skin_file_path"
@@ -209,7 +209,7 @@ func validCandidateFiles(manifest string, files map[string][]byte) string {
 		paths = append(paths, path)
 	}
 	slices.Sort(paths)
-	lowered := map[string]bool{}
+	lowered := map[string]bool{"skin.toml": true}
 	total := 0
 	for _, path := range paths {
 		if !skins.SafeResource(path, 256) || path == "skin.toml" {
@@ -227,6 +227,15 @@ func validCandidateFiles(manifest string, files map[string][]byte) string {
 		total += size
 		if size < 1 || size > maxCandidateFileBytes || total > maxCandidatePackageBytes {
 			return "candidate_skin_too_large"
+		}
+	}
+	// 用完整文件集合检查每层父目录，包括固定清单，避免检查结果依赖遍历顺序。
+	for path := range lowered {
+		for parent := path; strings.Contains(parent, "/"); {
+			parent = parent[:strings.LastIndexByte(parent, '/')]
+			if lowered[parent] {
+				return "candidate_skin_file_path"
+			}
 		}
 	}
 	if len(manifest) > maxCandidateManifestBytes {

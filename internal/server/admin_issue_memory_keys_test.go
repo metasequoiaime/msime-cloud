@@ -97,6 +97,16 @@ func TestRememberIssuesStableSnapshotAllocationBudget(t *testing.T) {
 			if len(s.issues.items) != len(rows) || len(s.issues.seen) != 0 {
 				t.Fatalf("稳定快照改变了保留条目或通知数量：items=%d seen=%d", len(s.issues.items), len(s.issues.seen))
 			}
+			if openOnly {
+				result := testing.Benchmark(func(b *testing.B) {
+					for b.Loop() {
+						s.rememberIssues(t.Context(), rows, true, true, now)
+					}
+				})
+				if result.AllocedBytesPerOp() > 64<<10 {
+					t.Fatalf("没有已关闭条目的开放快照分配 %d 字节，超过 64 KiB 预算", result.AllocedBytesPerOp())
+				}
+			}
 		})
 	}
 }

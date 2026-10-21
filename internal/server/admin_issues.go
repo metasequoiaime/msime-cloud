@@ -520,18 +520,42 @@ func (s *Server) rememberIssues(ctx context.Context, items []issueRow, openOnly,
 	m := s.issueMemory()
 	m.mu.Lock()
 	if openOnly {
-		fresh := make(map[issueMemoryKey]bool, len(items))
-		for _, row := range items {
-			fresh[issueMemoryKey{repo: row.Repo, number: row.Number}] = true
-		}
-		merged := slices.Clone(items)
+		hasRetained := false
 		for _, row := range m.items {
-			if (row.State == "done" || row.State == "dup") && !fresh[issueMemoryKey{repo: row.Repo, number: row.Number}] {
-				merged = append(merged, row)
+			if row.State == "done" || row.State == "dup" {
+				hasRetained = true
+				break
 			}
 		}
-		slices.SortStableFunc(merged, issueNewestFirst)
-		items = merged
+		if hasRetained {
+			fresh := make(map[issueMemoryKey]struct{}, len(items))
+			for _, row := range items {
+				fresh[issueMemoryKey{repo: row.Repo, number: row.Number}] = struct{}{}
+			}
+			missing := false
+			for _, row := range m.items {
+				if row.State != "done" && row.State != "dup" {
+					continue
+				}
+				if _, ok := fresh[issueMemoryKey{repo: row.Repo, number: row.Number}]; !ok {
+					missing = true
+					break
+				}
+			}
+			if missing {
+				merged := slices.Clone(items)
+				for _, row := range m.items {
+					if row.State != "done" && row.State != "dup" {
+						continue
+					}
+					if _, ok := fresh[issueMemoryKey{repo: row.Repo, number: row.Number}]; !ok {
+						merged = append(merged, row)
+					}
+				}
+				slices.SortStableFunc(merged, issueNewestFirst)
+				items = merged
+			}
+		}
 	}
 	m.items = items
 	var announce []issueRow

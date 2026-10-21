@@ -12,6 +12,8 @@
 
 `TestCommunityInteractionsWaitForChanges` 使用真实 PostgreSQL 行锁控制并发顺序，覆盖键盘皮肤、候选皮肤、插件和共享资源的首次及重复评分、收藏：删除、下架或候选皮肤转私有后，迟到写入返回对应的 404，不产生新记录或改写旧评分；删除回滚后仍可正常写入。评分的写入和拒绝原因使用同一次加锁读取，避免继续使用等待前的可见性快照。
 
+`TestCommunityReportsDoNotFollowReusedIDs` 覆盖六类作品经作者、后台或账号注销永久删除后由新作者同 ID 重发，后台不显示旧举报且原举报者可以重新举报。`TestCommunityReportsWaitForChanges` 观察真实 PostgreSQL 锁等待，验证删除、下架、转私有后的迟到举报返回 404、不写记录，删除回滚后正常举报；迁移测试检查触发器缺失或停用时拒绝就绪、重复迁移修复并清理孤立记录，DML 角色测试覆盖账号注销的举报清理。
+
 ## 完整运行
 
 必须使用独立的 PostgreSQL 数据库，名称包含 `msime_auth_test`；账号测试会清空测试表。不要复用本地开发或生产数据库，也不要并行运行多个使用同一测试数据库的 `go test` 进程。

@@ -19409,7 +19409,7 @@
             "userSession": []
           }
         ],
-        "description": "登录用户举报一项社区内容，由管理后台复核。kind 取 skins、candidate-skins、plugins、dictionaries、replies、phrases（短语包）；只能举报自己可见的内容（已下架内容与私有候选皮肤返回 404）。同一账号重复举报同一内容不会新增记录，返回 200；每个账号每小时最多 30 次。",
+        "description": "登录用户举报一项社区内容，由管理后台复核。kind 取 skins、candidate-skins、plugins、dictionaries、replies、phrases（短语包）；只能举报自己可见的内容（已下架内容与私有候选皮肤返回 404）。同一账号重复举报同一内容不会新增记录，返回 200；永久删除作品时清理对应举报，同 ID 重发可重新举报，下架和恢复保留举报。每个账号每小时最多 30 次。",
         "requestBody": {
           "required": true,
           "content": {

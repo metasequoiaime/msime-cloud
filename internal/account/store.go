@@ -410,6 +410,8 @@ SELECT word_id,day,count FROM admin_sensitive_hits WHERE false`); e != nil {
 		return e
 	}
 	return s.checkReadinessMetadata(ctx, []readinessMetadataCheck{
+		// 永久删除必须清理举报；旧库缺少触发器时先迁移再接收请求。
+		{`SELECT count(*)=4 FROM pg_trigger WHERE tgrelid IN ('community_skins'::regclass,'community_candidate_skins'::regclass,'community_plugins'::regclass,'community_resources'::regclass) AND tgname='community_reports_cleanup' AND tgenabled IN ('O','A')`, "community report cleanup triggers missing or disabled"},
 		// 旧副本和直接 SQL 的封禁写入也必须更新撤销版本。
 		{`SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='auth_users'::regclass AND tgname='auth_user_ban_revision' AND tgenabled IN ('O','A'))`, "user ban revision trigger missing or disabled"},
 		// 状态写入必须更新版本，缺少或停用触发器时先迁移再接受管理操作。

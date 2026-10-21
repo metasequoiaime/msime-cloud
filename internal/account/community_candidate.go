@@ -17,6 +17,7 @@ import (
 	"unicode"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/metasequoiaime/MSIME-Backend/internal/digest"
 	"github.com/metasequoiaime/MSIME-Backend/internal/skins"
 	"github.com/pelletier/go-toml/v2"
 )
@@ -266,8 +267,7 @@ func candidateRequestDigest(name, description, manifest string, files map[string
 		h.Write([]byte{0})
 	}
 	for _, path := range paths {
-		sum := sha256.Sum256(files[path])
-		h.Write([]byte(path + "\x00" + hex.EncodeToString(sum[:]) + "\n"))
+		h.Write([]byte(path + "\x00" + digest.SHA256(files[path]) + "\n"))
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -282,8 +282,7 @@ func validCandidatePackage(manifest string, files map[string][]byte, requireLice
 	}
 	resources := make([]skins.StoredResource, 0, len(files))
 	for path, data := range files {
-		sum := sha256.Sum256(data)
-		resources = append(resources, skins.StoredResource{Path: path, Size: len(data), SHA256: hex.EncodeToString(sum[:])})
+		resources = append(resources, skins.StoredResource{Path: path, Size: len(data), SHA256: digest.SHA256(data)})
 	}
 	pkg, err := skins.ParseStored(skins.Stored{ID: head.ID, Manifest: []byte(manifest), Resources: resources})
 	if err != nil {

@@ -3,7 +3,6 @@ package account
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
 	"errors"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/metasequoiaime/MSIME-Backend/internal/digest"
 )
 
 //go:embed schema.sql
@@ -163,7 +163,7 @@ func randomToken() string {
 	}
 	return hex.EncodeToString(b)
 }
-func hash(s string) string { v := sha256.Sum256([]byte(s)); return hex.EncodeToString(v[:]) }
+func hash(s string) string { return digest.SHA256([]byte(s)) }
 
 var errDatabaseEncoding = errors.New("用户数据库及客户端连接编码必须为 UTF8")
 

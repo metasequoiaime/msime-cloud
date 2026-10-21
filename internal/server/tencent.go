@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
+	"github.com/metasequoiaime/MSIME-Backend/internal/digest"
 )
 
-func sha256Hex(data []byte) string { sum := sha256.Sum256(data); return hex.EncodeToString(sum[:]) }
 func hmac256(key []byte, value string) []byte {
 	h := hmac.New(sha256.New, key)
 	_, _ = h.Write([]byte(value))
@@ -28,9 +28,9 @@ func signTencent(req *http.Request, payload []byte, e TranslationEndpoint, now t
 	date := now.UTC().Format("2006-01-02")
 	const contentType = "application/json; charset=utf-8"
 	const signedHeaders = "content-type;host;x-tc-action"
-	canonical := "POST\n/\n\ncontent-type:" + contentType + "\nhost:" + req.URL.Host + "\nx-tc-action:texttranslatebatch\n\n" + signedHeaders + "\n" + sha256Hex(payload)
+	canonical := "POST\n/\n\ncontent-type:" + contentType + "\nhost:" + req.URL.Host + "\nx-tc-action:texttranslatebatch\n\n" + signedHeaders + "\n" + digest.SHA256(payload)
 	scope := date + "/tmt/tc3_request"
-	toSign := "TC3-HMAC-SHA256\n" + timestamp + "\n" + scope + "\n" + sha256Hex([]byte(canonical))
+	toSign := "TC3-HMAC-SHA256\n" + timestamp + "\n" + scope + "\n" + digest.SHA256([]byte(canonical))
 	key := hmac256([]byte("TC3"+e.token), date)
 	key = hmac256(key, "tmt")
 	key = hmac256(key, "tc3_request")

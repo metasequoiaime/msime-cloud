@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/metasequoiaime/MSIME-Backend/internal/digest"
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
 )
 
@@ -88,6 +89,5 @@ func (s *Server) issueVersion(ctx context.Context, gh *githubapp.Client, token s
 	if err != nil {
 		return "", issueResponseError(ctx, ref.Repo, "undo version", resp, err)
 	}
-	sum := sha256.Sum256(payload)
-	return hex.EncodeToString(sum[:]), nil
+	return digest.SHA256(payload), nil
 }

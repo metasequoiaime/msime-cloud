@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha1"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -20,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/metasequoiaime/MSIME-Backend/internal/digest"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -222,8 +222,7 @@ func pluginSeedLiteral(s string) string {
 }
 
 func pluginSeedSHA256(b []byte) string {
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
+	return digest.SHA256(b)
 }
 
 // renderPluginSeed 写出整个事务。packs 已按目录名排好序并通过 preparePluginSeedPack。

@@ -5,8 +5,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rsa"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +18,7 @@ import (
 
 	jose "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
+	"github.com/metasequoiaime/MSIME-Backend/internal/digest"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -344,8 +343,7 @@ func (c Client) Get(ctx context.Context, token, path string) (Response, error) {
 }
 
 func tokenDigest(token string) string {
-	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:])
+	return digest.SHA256([]byte(token))
 }
 
 func (c Client) getRead(ctx context.Context, token, path, key string, generation uint64) (Response, error) {

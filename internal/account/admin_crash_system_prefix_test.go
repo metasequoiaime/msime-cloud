@@ -54,6 +54,12 @@ func TestCrashSystemPrefixScanBudget(t *testing.T) {
 	}
 	baseline, current := measure(previousCrashSystemPrefixScan), measure(crashSystemFrame)
 	t.Logf("原扫描：%s；当前：%s", baseline, current)
+	// Go 不给 _test.go 中的旧实现插桩，生产函数的覆盖率计数会使两边的计时条件不同。
+	// 覆盖率运行仍执行上述真实函数；两倍耗时门槛由 Linux、Windows 的常规竞态 CI 执行。
+	if mode := testing.CoverMode(); mode != "" {
+		t.Logf("覆盖率模式 %s 不比较插桩条件不同的耗时，原门槛由未启用覆盖率的测试执行", mode)
+		return
+	}
 	// 多字段应用帧会遍历全部前缀；留出一倍耗时余量，检出重新退化为全表扫描。
 	if current.NsPerOp() >= baseline.NsPerOp()/2 {
 		t.Fatalf("系统前缀匹配耗时 %d ns，未低于旧扫描 %d ns 的一半", current.NsPerOp(), baseline.NsPerOp())

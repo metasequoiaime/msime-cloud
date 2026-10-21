@@ -1,4 +1,4 @@
-import { formatNumber } from "../../utils/number";
+import { formatNumber, formatRate } from "../../utils/number";
 import { useCallback, useMemo } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { errorMessage, isGithubDisabled, useAPI } from "../../api/client";
@@ -126,7 +126,7 @@ export default function CrashPage() {
     <PageIntro page="crash" />
     <StatGrid className="mb-3.5">
       <StatTile label="今日安装上报" value={summary?.installs_today == null ? "—" : formatNumber(summary.installs_today)} sub={summary?.installs_today === null ? UNREPORTED : "今天上报过的安装"} />
-      <StatTile label="无崩溃会话" value={summary?.crash_free_rate == null ? "—" : `${(summary.crash_free_rate * 100).toFixed(2)}%`} sub={summary?.crash_free_rate === null ? UNREPORTED : "近 7 天"} />
+      <StatTile label="无崩溃会话" value={formatRate(summary?.crash_free_rate)} sub={summary?.crash_free_rate === null ? UNREPORTED : "近 7 天"} />
       <StatTile label="崩溃分组" value={summary ? formatNumber(summary.groups) : "—"} sub={summary ? `近 7 天崩溃 ${formatNumber(summary.crashes_7d)} 次` : undefined} />
       <StatTile label="影响设备" value={summary?.devices_7d == null ? "—" : formatNumber(summary.devices_7d)} sub={summary?.devices_7d === null ? UNREPORTED : "近 7 天"} />
     </StatGrid>

@@ -14,18 +14,12 @@ func actorDisplaySQL(column string) string {
 	return `CASE WHEN ` + column + ` LIKE 'google:%:%' THEN regexp_replace(` + column + `,'^google:[^:]*:','') WHEN ` + column + ` LIKE 'pat:%' THEN substr(` + column + `,5) ELSE ` + column + ` END`
 }
 
-// adminUser returns only profile and session metadata, never identity subjects or credentials. The contact is masked, works are the user's community content in every moderation state, and history is the admin actions taken on the account or its sessions.
-func (a *Service) adminUser(w http.ResponseWriter, r *http.Request, id string) {
-	if !resourceText(id, 1, 128, false) || strings.Contains(id, "/") {
-		writeError(w, 400, "invalid_id")
-		return
-	}
-	var result json.RawMessage
-	err := a.store.pool.QueryRow(r.Context(), `SELECT json_build_object(
+// adminUserQuery 在初始化时构建固定查询；用户 ID 和所有者始终通过参数传入。
+var adminUserQuery = `SELECT json_build_object(
  'id',u.id,'display_name',u.display_name,'created_at',u.created_at,
  'providers',COALESCE((SELECT json_agg(DISTINCT provider ORDER BY provider) FROM auth_identities WHERE user_id=u.id),'[]'::json),
- 'role',`+userRoleSQL("$2")+`,'contact',COALESCE(contact.contact,''),'contact_kind',COALESCE(contact.contact_kind,''),
- 'banned',u.banned_at IS NOT NULL,'banned_at',u.banned_at,'ban_reason',COALESCE(u.ban_reason,''),'banned_by',COALESCE(`+actorDisplaySQL("u.banned_by")+`,''),
+ 'role',` + userRoleSQL("$2") + `,'contact',COALESCE(contact.contact,''),'contact_kind',COALESCE(contact.contact_kind,''),
+ 'banned',u.banned_at IS NOT NULL,'banned_at',u.banned_at,'ban_reason',COALESCE(u.ban_reason,''),'banned_by',COALESCE(` + actorDisplaySQL("u.banned_by") + `,''),
  'sync',EXISTS(SELECT 1 FROM user_preferences WHERE user_id=u.id),'last_active',activity.last_active,
  'active_sessions',activity.devices,
  'total_sessions',activity.total_sessions,
@@ -44,7 +38,7 @@ func (a *Service) adminUser(w http.ResponseWriter, r *http.Request, id string) {
   SELECT 'skins' AS section,s.id,s.name,s.moderation,COALESCE(s.moderation_reason,'') AS moderation_reason,s.created_at FROM community_skins s WHERE s.owner_id=u.id
   UNION ALL SELECT 'candidate-skins',c.id,c.name,c.moderation,COALESCE(c.moderation_reason,''),c.created_at FROM community_candidate_skins c WHERE c.owner_id=u.id
   UNION ALL SELECT 'plugins',p.id,p.name,p.moderation,COALESCE(p.moderation_reason,''),p.created_at FROM community_plugins p WHERE p.owner_id=u.id
-  UNION ALL SELECT `+resourceSectionSQL("r.")+`,r.id,r.name,r.moderation,COALESCE(r.moderation_reason,''),r.created_at FROM community_resources r WHERE r.owner_id=u.id
+  UNION ALL SELECT ` + resourceSectionSQL("r.") + `,r.id,r.name,r.moderation,COALESCE(r.moderation_reason,''),r.created_at FROM community_resources r WHERE r.owner_id=u.id
  ) all_works ORDER BY created_at DESC,id DESC LIMIT 20
  ) SELECT json_agg(w ORDER BY created_at DESC,id DESC) FROM (
  SELECT page.*,CASE section WHEN 'skins' THEN (SELECT count(*) FROM community_skin_downloads d WHERE d.skin_id=page.id)
@@ -53,14 +47,23 @@ func (a *Service) adminUser(w http.ResponseWriter, r *http.Request, id string) {
  CASE WHEN section IN ('dictionaries','replies','phrases') THEN (SELECT count(*) FROM community_resource_saves v WHERE v.resource_id=page.id) ELSE 0::bigint END AS saves FROM page
  ) w),'[]'::json),
  'history',COALESCE((SELECT json_agg(h ORDER BY created_at DESC,id DESC) FROM (
- SELECT a.id,a.action,`+actorDisplaySQL("a.actor")+` AS actor,a.detail,a.created_at FROM admin_audit a
+ SELECT a.id,a.action,` + actorDisplaySQL("a.actor") + ` AS actor,a.detail,a.created_at FROM admin_audit a
  WHERE (a.target=u.id AND a.action IN ('ban_user','unban_user','revoke_sessions'))
   OR (a.action='revoke_session' AND a.target IN (SELECT id FROM auth_sessions WHERE user_id=u.id))
  ORDER BY a.created_at DESC,a.id DESC LIMIT 20
- ) h),'[]'::json)) FROM auth_users u `+userContactSQL+` `+userActivitySQL+`
+ ) h),'[]'::json)) FROM auth_users u ` + userContactSQL + ` ` + userActivitySQL + `
  CROSS JOIN LATERAL (SELECT count(*) FILTER (WHERE kind='dictionary') AS dictionaries,count(*) FILTER (WHERE kind='reply') AS replies,
  count(*) FILTER (WHERE kind='phrase') AS phrases FROM community_resources WHERE owner_id=u.id) resource_stats
- WHERE u.id=$1`, id, a.adminOwnersArg()).Scan(&result)
+ WHERE u.id=$1`
+
+// adminUser 只返回资料和会话元数据，不包含身份标识或凭据。联系人已脱敏，作品包含所有审核状态，历史只包含针对该账号及其会话的管理操作。
+func (a *Service) adminUser(w http.ResponseWriter, r *http.Request, id string) {
+	if !resourceText(id, 1, 128, false) || strings.Contains(id, "/") {
+		writeError(w, 400, "invalid_id")
+		return
+	}
+	var result json.RawMessage
+	err := a.store.pool.QueryRow(r.Context(), adminUserQuery, id, a.adminOwnersArg()).Scan(&result)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, 404, "not_found")
 		return

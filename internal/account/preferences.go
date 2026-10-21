@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -51,7 +52,6 @@ func validPreference(key string, raw json.RawMessage) bool {
 		value := bytes.Trim(raw, " \t\r\n")
 		return bytes.Equal(value, []byte("true")) || bytes.Equal(value, []byte("false"))
 	case "integer":
-		var v int64
 		low, high := int64(0), int64(1000000)
 		if field.Minimum != nil {
 			low = *field.Minimum
@@ -59,7 +59,12 @@ func validPreference(key string, raw json.RawMessage) bool {
 		if field.Maximum != nil {
 			high = *field.Maximum
 		}
-		return json.Unmarshal(raw, &v) == nil && v >= low && v <= high
+		// 先保留 JSON 语法限制，避免整数转换接受前导加号或前导零。
+		if !json.Valid(raw) {
+			return false
+		}
+		v, err := strconv.ParseInt(string(bytes.Trim(raw, " \t\r\n")), 10, 64)
+		return err == nil && v >= low && v <= high
 	case "number":
 		return validPreferenceNumber(raw)
 	case "string":

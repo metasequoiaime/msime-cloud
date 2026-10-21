@@ -176,7 +176,8 @@ def check_community_search_debounce(browser, base):
             # 搜索尚未应用时切换页面，旧搜索词不能带到新页面的请求。
             typed.fill("未应用的旧搜索")
             page.clock.run_for(299)
-            page.locator('aside a[href="/replies"]').click()
+            with page.expect_response("**/api/replies?*"):
+                page.locator('aside a[href="/replies"]').click()
             expect(page.get_by_role("heading", name="回复模板", exact=True)).to_be_visible()
             page.clock.run_for(1000)
             expect(page.get_by_role("button", name="全部-1", exact=True)).to_be_visible()

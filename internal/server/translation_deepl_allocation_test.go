@@ -2,11 +2,47 @@ package server
 
 import (
 	"fmt"
+	"math/rand"
 	"net/url"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestDeepLQueryEscapeMatchesNetURL(t *testing.T) {
+	random := rand.New(rand.NewSource(20261021))
+	for _, text := range []string{"", "word", "词 😀 +%&=\n\x00", strings.Repeat("中", 1024)} {
+		if got, want := deepLQueryEscape(text), url.QueryEscape(text); got != want {
+			t.Fatalf("转义结果不兼容：输入=%q，结果=%q，期望=%q", text, got, want)
+		}
+	}
+	for range 1000 {
+		data := make([]byte, random.Intn(256))
+		for i := range data {
+			data[i] = byte(random.Intn(256))
+		}
+		text := string(data)
+		if got, want := deepLQueryEscape(text), url.QueryEscape(text); got != want {
+			t.Fatalf("随机转义结果不兼容：输入=%q，结果=%q，期望=%q", text, got, want)
+		}
+	}
+}
+
+func TestDeepLTranslationBatchEscapeAllocationBudget(t *testing.T) {
+	v := translationRequest{Texts: make([]string, translationBatchLimit), Source: "zh", Target: "en"}
+	for i := range v.Texts {
+		v.Texts[i] = strings.Repeat("中", 650)
+	}
+	allocations := testing.AllocsPerRun(20, func() {
+		batches := deepLTranslationBatches(v)
+		if len(batches) == 0 {
+			t.Fatal("未生成请求")
+		}
+	})
+	if allocations > 45 {
+		t.Fatalf("长正文批量构造分配 %.0f 次，超过 45 次预算", allocations)
+	}
+}
 
 func previousDeepLTranslationBatches(v translationRequest) []deepLTranslationBatch {
 	form := url.Values{"target_lang": {strings.ToUpper(v.Target)}}

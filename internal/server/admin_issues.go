@@ -118,6 +118,12 @@ type issueRef struct {
 
 func (ref issueRef) key() string { return ref.Repo + "#" + strconv.Itoa(ref.N) }
 
+// issueMemoryKey 只保留仓库和编号，避免轮询时为内存去重拼接目标 ID。
+type issueMemoryKey struct {
+	repo   string
+	number int
+}
+
 // issueSnapshot is one read of every configured repository.
 type issueSnapshot struct {
 	items []issueRow
@@ -134,7 +140,7 @@ type issueMemory struct {
 	items []issueRow
 	// baseline is when the first complete snapshot was taken; only issues created after it are announced, so a restart does not announce the backlog.
 	baseline time.Time
-	seen     map[string]bool
+	seen     map[issueMemoryKey]bool
 }
 
 // issueMemory returns the Server's issue triage memory; it lives in the Server, so it goes away with it.
@@ -514,13 +520,13 @@ func (s *Server) rememberIssues(ctx context.Context, items []issueRow, openOnly,
 	m := s.issueMemory()
 	m.mu.Lock()
 	if openOnly {
-		fresh := make(map[string]bool, len(items))
+		fresh := make(map[issueMemoryKey]bool, len(items))
 		for _, row := range items {
-			fresh[issueRef{Repo: row.Repo, N: row.Number}.key()] = true
+			fresh[issueMemoryKey{repo: row.Repo, number: row.Number}] = true
 		}
 		merged := slices.Clone(items)
 		for _, row := range m.items {
-			if (row.State == "done" || row.State == "dup") && !fresh[issueRef{Repo: row.Repo, N: row.Number}.key()] {
+			if (row.State == "done" || row.State == "dup") && !fresh[issueMemoryKey{repo: row.Repo, number: row.Number}] {
 				merged = append(merged, row)
 			}
 		}
@@ -532,11 +538,11 @@ func (s *Server) rememberIssues(ctx context.Context, items []issueRow, openOnly,
 	if m.baseline.IsZero() {
 		if complete {
 			m.baseline = now
-			m.seen = map[string]bool{}
+			m.seen = map[issueMemoryKey]bool{}
 		}
 	} else {
 		for _, row := range items {
-			key := issueRef{Repo: row.Repo, N: row.Number}.key()
+			key := issueMemoryKey{repo: row.Repo, number: row.Number}
 			if row.State == "new" && row.CreatedAt.After(m.baseline) && !m.seen[key] {
 				m.seen[key] = true
 				announce = append(announce, row)
@@ -555,7 +561,7 @@ func (s *Server) rememberIssues(ctx context.Context, items []issueRow, openOnly,
 		key := issueRef{Repo: row.Repo, N: row.Number}.key()
 		if err := s.accounts.NotifyOnce(ctx, account.Notification{Kind: account.NotifyIssue, Title: title, TargetPage: "issues", TargetID: key}); err != nil {
 			m.mu.Lock()
-			delete(m.seen, key)
+			delete(m.seen, issueMemoryKey{repo: row.Repo, number: row.Number})
 			m.mu.Unlock()
 			slog.Error("issues: notification failed", "issue", key, "reason", err.Error())
 		}

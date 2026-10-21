@@ -411,7 +411,7 @@ func (a *Service) resourceSave(w http.ResponseWriter, r *http.Request) {
 	if input.Saved {
 		var available bool
 		err = tx.QueryRow(r.Context(), `WITH eligible AS MATERIALIZED (
- SELECT id FROM community_resources WHERE id=$1 AND (moderation<>'removed' OR owner_id=$2)
+ SELECT id FROM community_resources WHERE id=$1 AND (moderation<>'removed' OR owner_id=$2) FOR SHARE
 ), inserted AS (
  INSERT INTO community_resource_saves(resource_id,user_id)
  SELECT id,$2 FROM eligible
@@ -440,13 +440,13 @@ SELECT EXISTS(SELECT 1 FROM eligible)`, r.PathValue("id"), p.UserID).Scan(&avail
 	write(w, 200, map[string]bool{"saved": input.Saved})
 }
 func (a *Service) resourceRate(w http.ResponseWriter, r *http.Request) {
-	a.rateCommunityItem(w, r, `WITH eligible AS MATERIALIZED (
- SELECT id FROM community_resources WHERE id=$1 AND owner_id<>$2 AND moderation<>'removed'
+	a.rateCommunityItem(w, r, `WITH visible AS MATERIALIZED (
+ SELECT id,owner_id FROM community_resources WHERE id=$1 AND moderation<>'removed' FOR SHARE
 ), written AS (
  INSERT INTO community_resource_ratings(resource_id,user_id,stars)
- SELECT id,$2,$3 FROM eligible
+ SELECT id,$2,$3 FROM visible WHERE owner_id<>$2
  ON CONFLICT(resource_id,user_id) DO UPDATE SET stars=excluded.stars
  RETURNING resource_id
 )
-SELECT EXISTS(SELECT 1 FROM written),EXISTS(SELECT 1 FROM community_resources WHERE id=$1 AND owner_id=$2 AND moderation<>'removed')`, "resource_not_found", "save_before_rating_or_own_resource")
+SELECT EXISTS(SELECT 1 FROM written),EXISTS(SELECT 1 FROM visible WHERE owner_id=$2)`, "resource_not_found", "save_before_rating_or_own_resource")
 }

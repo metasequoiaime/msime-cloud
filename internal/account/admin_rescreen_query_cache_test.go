@@ -2,6 +2,7 @@ package account
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -18,7 +19,7 @@ type adminRescreenTrace struct {
 }
 
 func (trace *adminRescreenTrace) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	if strings.HasPrefix(data.SQL, "SELECT id,json_build_object('name',name,'description',description,'content',") && strings.Contains(data.SQL, " FROM "+trace.table+" WHERE ") || strings.HasPrefix(data.SQL, "UPDATE "+trace.table+" AS target SET moderation_reason=v.reason") {
+	if strings.HasPrefix(data.SQL, "SELECT id,") && strings.Contains(data.SQL, " FROM "+trace.table+" WHERE ") || strings.HasPrefix(data.SQL, "UPDATE "+trace.table+" AS target SET moderation_reason=v.reason") {
 		trace.queries <- communityPageQuery{data.SQL, append([]any(nil), data.Args...)}
 	}
 	return ctx
@@ -64,13 +65,56 @@ func TestRescreenQueriesReuseSQL(t *testing.T) {
 			t.Cleanup(pool.Close)
 			a := &Service{store: &Store{pool: pool}}
 			a.sensitive.loaded = time.Now().AddDate(100, 0, 0)
+			nameText, description, body := "名称\"\\\n雪杉", "描述\"\\\n水杉", "正文\"\\\n云杉"
+			if _, err := db.pool.Exec(t.Context(), `UPDATE `+section.table+` SET name=$2,description=$3 WHERE id=ANY($1)`, ids, nameText, description); err != nil {
+				t.Fatal(err)
+			}
+			switch name {
+			case "skins":
+				design, _ := json.Marshal(map[string]string{"text": body})
+				if _, err := db.pool.Exec(t.Context(), `UPDATE community_skins SET design=$2 WHERE id=ANY($1)`, ids, string(design)); err != nil {
+					t.Fatal(err)
+				}
+			case "candidate-skins", "plugins":
+				if _, err := db.pool.Exec(t.Context(), `UPDATE `+section.table+` SET manifest=$2 WHERE id=ANY($1)`, ids, []byte(body)); err != nil {
+					t.Fatal(err)
+				}
+			default:
+				content, _ := json.Marshal(ResourceContent{Entries: []SharedWord{{Word: body}}, Prompt: body, Phrases: []SharedPhrase{{Group: body, Text: body}}})
+				if _, err := db.pool.Exec(t.Context(), `UPDATE community_resources SET content=$2 WHERE id=ANY($1)`, ids, string(content)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if name == "skins" {
+				a.sensitive.words = []sensitiveWord{{hit: SensitiveHit{WordID: 1, Pattern: body, Level: SensitiveReview}, plain: foldSensitive(body, true)}}
+				tx, err := pool.Begin(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = a.rescreenRestored(t.Context(), tx, name, ids); err != nil {
+					tx.Rollback(t.Context())
+					t.Fatal(err)
+				}
+				if err = tx.Commit(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				if len(trace.queries) != 1 {
+					t.Fatal("皮肤设计文本参加了重筛", len(trace.queries))
+				}
+				<-trace.queries
+				for _, id := range ids {
+					if _, _, reason, _ := moderationState(t, db, section.table, id); reason != nil {
+						t.Fatal("皮肤设计触发了标记", reason)
+					}
+				}
+			}
 			firstSQL := map[string]string{}
 			for request, id := range []string{ids[0], ids[0], ids[1]} {
-				pattern := "合成作品"
-				if request == 1 {
-					pattern = "作品"
+				pattern := []string{nameText, description, body}[request]
+				if name == "skins" && request == 2 {
+					pattern = nameText
 				}
-				a.sensitive.words = []sensitiveWord{{hit: SensitiveHit{WordID: 1, Pattern: pattern, Level: SensitiveReview}, plain: pattern}}
+				a.sensitive.words = []sensitiveWord{{hit: SensitiveHit{WordID: 1, Pattern: pattern, Level: SensitiveReview}, plain: foldSensitive(pattern, true)}}
 				selected := []string{id}
 				flag := "命中敏感词：「" + pattern + "」"
 				tx, err := pool.Begin(t.Context())
@@ -98,6 +142,9 @@ func TestRescreenQueriesReuseSQL(t *testing.T) {
 					}
 					if !reflect.DeepEqual(query.args, args) {
 						t.Fatalf("%s 参数错误：%v，期望 %v", kind, query.args, args)
+					}
+					if kind == "select" && !strings.HasPrefix(query.sql, "SELECT id,name,description,") {
+						t.Error("重筛仍将整行字段包装成 JSON", query.sql)
 					}
 					if firstSQL[kind] == "" {
 						firstSQL[kind] = query.sql

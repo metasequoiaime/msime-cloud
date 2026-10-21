@@ -744,7 +744,7 @@ var contentRescreenQueries = func() map[string]rescreenQueries {
 			where += ` AND target.kind='` + table.kind + `'`
 		}
 		queries[name] = rescreenQueries{
-			selectPending: `SELECT id,json_build_object('name',name,'description',description,'content',` + screenContentColumn(name) + `) FROM ` + table.table + table.where(`id=ANY($1) AND moderation='pending'`),
+			selectPending: `SELECT id,name,description,` + screenContentColumn(name) + ` FROM ` + table.table + table.where(`id=ANY($1) AND moderation='pending'`),
 			updateFlags: `UPDATE ` + table.table + ` AS target SET moderation_reason=v.reason
 FROM unnest($1::text[],$2::text[]) AS v(id,reason) WHERE ` + where,
 		}
@@ -752,7 +752,7 @@ FROM unnest($1::text[],$2::text[]) AS v(id,reason) WHERE ` + where,
 	return queries
 }()
 
-// rescreenRestored puts the automatic flag back on the items of section among ids that are pending review again after a restore or an unban. Removing an item overwrote its flag with the removal reason, so it is computed afresh from the item's text, with the preview matcher because a restore is not a new submission.
+// rescreenRestored 对恢复或解封后重新待审的作品计算自动标记；使用预览匹配器，不增加投稿命中计数。
 func (a *Service) rescreenRestored(ctx context.Context, tx pgx.Tx, section string, ids []string) error {
 	queries := contentRescreenQueries[section]
 	rows, err := tx.Query(ctx, queries.selectPending, ids)
@@ -762,17 +762,13 @@ func (a *Service) rescreenRestored(ctx context.Context, tx pgx.Tx, section strin
 	defer rows.Close()
 	var flaggedIDs, flags []string
 	for rows.Next() {
-		var id string
-		var raw json.RawMessage
-		if err = rows.Scan(&id, &raw); err != nil {
+		var id, name, description string
+		var content []byte
+		if err = rows.Scan(&id, &name, &description, &content); err != nil {
 			rows.Close()
 			return err
 		}
-		var base map[string]json.RawMessage
-		if err = json.Unmarshal(raw, &base); err != nil {
-			return err
-		}
-		hits, err := a.SensitivePreview().Match(ctx, contentScreenText(section, base))
+		hits, err := a.SensitivePreview().Match(ctx, rescreenText(section, name, description, content))
 		if err != nil {
 			return err
 		}
@@ -804,6 +800,21 @@ func (a *Service) rescreenRestored(ctx context.Context, tx pgx.Tx, section strin
 	}
 	_, err = tx.Exec(ctx, queries.updateFlags, flaggedIDs, flags)
 	return err
+}
+
+// rescreenText 直接组合数据库列；资源正文仍按类型解码，皮肤设计不参与文本审核。
+func rescreenText(section, name, description string, raw []byte) string {
+	parts := []string{name, description}
+	switch section {
+	case "dictionaries", "replies", "phrases":
+		var content ResourceContent
+		if json.Unmarshal(raw, &content) == nil {
+			parts = append(parts, resourceScreenText(content))
+		}
+	case "candidate-skins", "plugins":
+		parts = append(parts, string(raw))
+	}
+	return strings.Join(parts, "\n")
 }
 
 func screenContentColumn(section string) string {

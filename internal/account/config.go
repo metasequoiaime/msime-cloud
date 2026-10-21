@@ -177,8 +177,8 @@ func (c Config) Validate() error {
 	}
 	if a := c.Avatars; a.Bucket != "" {
 		u, e := url.Parse(a.PublicBaseURL)
-		// Only the configuration itself is checked here. Secrets that are missing from the environment turn uploads off at startup instead (see avatarStorageFor), so an optional feature whose secret has not been provisioned yet cannot keep the whole service down.
-		if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || strings.Trim(u.Path, "/") != "" || u.RawQuery != "" || u.Fragment != "" || a.AccountIDEnv == "" || a.AccessKeyIDEnv == "" || a.SecretAccessKeyEnv == "" {
+		// 这里只校验配置，缺少密钥时由 avatarStorageFor 关闭上传。空查询和空片段也必须拒绝，否则后续拼接的对象键会进入查询或片段。
+		if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || strings.Trim(u.Path, "/") != "" || u.RawQuery != "" || u.ForceQuery || strings.Contains(a.PublicBaseURL, "#") || a.AccountIDEnv == "" || a.AccessKeyIDEnv == "" || a.SecretAccessKeyEnv == "" {
 			return errors.New("头像存储配置无效：public_base_url 须为 https 域名根地址，账号 ID 与访问密钥环境变量名不能为空")
 		}
 	}

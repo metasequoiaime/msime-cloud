@@ -2,6 +2,7 @@ import { useContext } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { QueryKey } from "@tanstack/react-query";
 import { APICredentialsContext, APIError } from "../api/client";
+import { readBlobDataURL } from "../utils/blob";
 
 type APIImageOptions = { queryKey: QueryKey; path: string; enabled?: boolean };
 
@@ -21,10 +22,7 @@ export function useAPIImage({ queryKey, path, enabled = true }: APIImageOptions)
       }
       const blob = await response.blob();
       return await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result));
-        reader.onerror = () => reject(reader.error);
-        reader.readAsDataURL(blob);
+        readBlobDataURL(blob, resolve, reject);
       });
     },
   });

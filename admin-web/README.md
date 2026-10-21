@@ -26,6 +26,8 @@ pnpm dev
 
 `src/utils/platform.ts` 共用平台规范键、别名、显示名称与标准显示顺序。下载筛选和公告目标保留各自的导出名称并引用同一份选项；未知平台保留原文，空值提示由页面决定。
 
+`src/utils/blob.ts` 共用 Blob 到 data URL 的读取，管理接口图片与候选窗本地预览复用它；清理函数先解绑回调，再取消仍在进行的读取。本地图片的大小限制由预览保留，接口图片继续沿用原有凭据、请求取消和缓存。
+
 ## CSP
 
 后台的 CSP 是 `script-src 'self'; style-src 'self'; img-src 'self' data:`，不允许 eval、内联 `<style>` 和外链图片。因此：

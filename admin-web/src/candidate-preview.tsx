@@ -5,6 +5,7 @@ import { keys } from "./api/keys";
 import { candidateImagePath, candidatePalette } from "./candidate-design";
 import type { CandidateDesign, CandidateLayout, CandidateMode } from "./candidate-design";
 import { Segmented } from "./ui/segmented";
+import { readBlobDataURL } from "./utils/blob";
 import "./candidate-preview.css";
 
 type ImageFile = { file: File; path: string };
@@ -17,11 +18,10 @@ function useCandidateImage(path: string | undefined, source: ImageSource) {
   useEffect(() => {
     if (!selected) return;
     if (selected.size > 1024 * 1024) { setLocal({ file: selected, error: true }); return; }
-    const reader = new FileReader();
-    reader.onload = () => setLocal({ file: selected, data: String(reader.result) });
-    reader.onerror = () => setLocal({ file: selected, error: true });
-    reader.readAsDataURL(selected);
-    return () => { reader.onload = null; reader.onerror = null; if (reader.readyState === FileReader.LOADING) reader.abort(); };
+    return readBlobDataURL(selected,
+      data => setLocal({ file: selected, data }),
+      () => setLocal({ file: selected, error: true }),
+    );
   }, [selected]);
   const remote = useAPIImage({
     queryKey: keys.page("community", "candidate-image", source.id, source.revision, safe),

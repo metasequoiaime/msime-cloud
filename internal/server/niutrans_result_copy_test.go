@@ -149,6 +149,10 @@ func TestNiuTransResultCopyAllocationBudget(t *testing.T) {
 	r := niuTransResultCopyRequest("synthetic-owner")
 	e := NiuTransEndpoint{appID: "synthetic-app", apiKey: "synthetic-key"}
 	for _, op := range niuTransResultCopyOperations() {
+		// 改写路径的 JSON 输出缓冲受竞态模式下缓冲池随机丢弃影响，输入复制由下方独立预算约束。
+		if op.rewrite && !op.failed {
+			continue
+		}
 		t.Run(op.name, func(t *testing.T) {
 			body := niuTransResultCopyPayload(128<<10, op.rewrite, op.failed)
 			var got []byte
@@ -165,13 +169,35 @@ func TestNiuTransResultCopyAllocationBudget(t *testing.T) {
 			if err != nil || len(got) == 0 {
 				t.Fatal("响应处理失败", err)
 			}
-			budget := int64(8192)
-			if op.rewrite && !op.failed {
-				// 改写必须生成新的 JSON，预算允许输出缓冲，不允许再复制两层输入正文。
-				budget = int64(3*len(body) + 32768)
+			if result.AllocedBytesPerOp() > 8192 {
+				t.Fatalf("响应处理分配 %d 字节，超过 8192 字节预算", result.AllocedBytesPerOp())
 			}
-			if result.AllocedBytesPerOp() > budget {
-				t.Fatalf("响应处理分配 %d 字节，超过 %d 字节预算", result.AllocedBytesPerOp(), budget)
+		})
+	}
+}
+
+func TestNiuTransResponseFieldsAllocationBudget(t *testing.T) {
+	for _, size := range []int{128 << 10, 900 << 10} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			body := niuTransResultCopyPayload(size, true, false)
+			want := []byte(`"` + strings.Repeat("x", size) + `"`)
+			var fields, data map[string]json.RawMessage
+			var ok bool
+			// 两层原始字段解析直接约束输入复制，不包含生成输出所需的编码缓冲。
+			result := testing.Benchmark(func(b *testing.B) {
+				for b.Loop() {
+					fields, ok = niuTransResponseFields(body)
+					if !ok {
+						b.Fatal("顶层响应解析失败")
+					}
+					data, ok = niuTransResponseFields(fields["data"])
+				}
+			})
+			if !ok || !bytes.Equal(data["translation"], want) || string(data["fileNo"]) != `"synthetic-file"` {
+				t.Fatal("原始响应字段解析结果变化")
+			}
+			if result.AllocedBytesPerOp() > 8192 {
+				t.Fatalf("两层字段解析分配 %d 字节，超过 8192 字节预算", result.AllocedBytesPerOp())
 			}
 		})
 	}

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -102,8 +103,8 @@ func matchAdminPattern(pattern, path string) (string, bool) {
 	return path[len(prefix) : len(path)-len(suffix)], true
 }
 
-// adminListFilterParams is every filter parameter any list accepts; giving one to a list that does not accept it is an error rather than silently ignored.
-func adminListFilterParams() map[string]bool {
+// adminListFilterParams 从固定注册表缓存全部筛选参数，调用方只读；列表仍拒绝其他列表独有的非空参数。
+var adminListFilterParams = sync.OnceValue(func() map[string]bool {
 	params := map[string]bool{}
 	for _, list := range adminLists {
 		for _, f := range list.filters {
@@ -111,7 +112,7 @@ func adminListFilterParams() map[string]bool {
 		}
 	}
 	return params
-}
+})
 
 // adminList serves one list page of 50 rows, newest first. Count and page share one statement snapshot, including pages beyond the last row.
 func (a *Service) adminList(w http.ResponseWriter, r *http.Request, list adminList, page int, search string) {

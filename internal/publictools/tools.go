@@ -365,7 +365,8 @@ func NewServer(execute Execute, version string) *mcp.Server {
 // HTTP 使用管理员选定的服务地址；公共查询不附带任何会话，输入查询只使用显式令牌。
 func HTTP(client *http.Client, base, token string) (Execute, error) {
 	u, err := url.Parse(base)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+	// 空查询和空片段同样会吞掉后续拼接的工具路径，必须在发请求或启动 MCP 前拒绝。
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(base, "#") {
 		return nil, errors.New("invalid_public_api_url")
 	}
 	isolated := *client

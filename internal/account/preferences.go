@@ -68,7 +68,6 @@ func validPreference(key string, raw json.RawMessage) bool {
 	case "number":
 		return validPreferenceNumber(raw)
 	case "string":
-		var v string
 		max := 1024
 		if field.MaxLength > 0 {
 			max = field.MaxLength
@@ -76,7 +75,7 @@ func validPreference(key string, raw json.RawMessage) bool {
 		if strings.Contains(key, "prompt") {
 			max = 8192
 		}
-		return json.Unmarshal(raw, &v) == nil && len(v) <= max && !strings.ContainsRune(v, 0) && validPreferenceUnicode(raw)
+		return validPreferenceString(raw, max)
 	}
 	return false
 }

@@ -26,7 +26,7 @@ func TestNiuTransFormRequestAllocationBudget(t *testing.T) {
 		var w *httptest.ResponseRecorder
 		allocations := testing.AllocsPerRun(100, func() {
 			w = httptest.NewRecorder()
-			s.translateNiuTransUpstream(w, r, v, e)
+			s.translateSingle(w, r, v, e)
 		})
 		if w.Code != http.StatusOK {
 			t.Fatal(w.Code, w.Body.String())

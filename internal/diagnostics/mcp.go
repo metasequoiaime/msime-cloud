@@ -74,8 +74,7 @@ func Handler(store Snapshots) http.Handler {
 			// 每个 POST 只接受单条消息，避免旧版批处理把一次共享配额放大为多次快照读取；协议仍由 SDK 解析。
 			defer r.Body.Close()
 			body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, requestBodyBytes))
-			var tooLarge *http.MaxBytesError
-			if errors.As(err, &tooLarge) {
+			if httpjson.IsBodyTooLarge(err) {
 				fail(w, 413, "request_too_large")
 				return
 			}

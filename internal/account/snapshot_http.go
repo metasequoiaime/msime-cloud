@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 )
 
 const snapshotRestoreBytes int64 = 512 << 20
@@ -58,9 +60,8 @@ func (a *Service) restoreDictionarySnapshot(w http.ResponseWriter, r *http.Reque
 	r.Body = http.MaxBytesReader(w, r.Body, snapshotRestoreBytes)
 	revision, err := a.store.RestoreDictionarySnapshot(r.Context(), user.UserID, expected, r.Body, a.engine)
 	if err != nil {
-		var tooLarge *http.MaxBytesError
 		switch {
-		case errors.As(err, &tooLarge):
+		case httpjson.IsBodyTooLarge(err):
 			writeError(w, 413, "snapshot_too_large")
 		case errors.Is(err, errInvalidSnapshot), errors.Is(err, bufio.ErrTooLong):
 			writeError(w, 400, "invalid_dictionary_snapshot")

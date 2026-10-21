@@ -275,8 +275,9 @@ func (a *Service) dictionaryExport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "not_found")
 		return
 	}
-	format := r.URL.Query().Get("format")
-	if (format != "" && format != "standard" && format != "windows") || len(r.URL.Query()["format"]) > 1 {
+	query := r.URL.Query()
+	format := query.Get("format")
+	if (format != "" && format != "standard" && format != "windows") || len(query["format"]) > 1 {
 		writeError(w, 400, "invalid_dictionary_format")
 		return
 	}

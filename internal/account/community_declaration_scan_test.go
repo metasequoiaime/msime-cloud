@@ -28,7 +28,7 @@ func TestCommunityDeclarationCompatibility(t *testing.T) {
 		{strings.Repeat("saved,", 8192) + "moderation", map[string]bool{"saved": true, "moderation": true}, true},
 	} {
 		r := httptest.NewRequest("GET", "/?fields="+url.QueryEscape(tc.raw), nil)
-		got, ok := communityFields(r, "moderation", "saved")
+		got, ok := communityFields(r.URL.Query(), "moderation", "saved")
 		if ok != tc.ok || !reflect.DeepEqual(got, tc.want) {
 			t.Fatalf("字段声明长度 %d：%v、%t，期望 %v、%t", len(tc.raw), got, ok, tc.want, tc.ok)
 		}
@@ -48,7 +48,7 @@ func TestCommunityDeclarationCompatibility(t *testing.T) {
 		{raw: strings.Repeat("unknown,wordbook,", 8192) + "helpcode", kind: "phrase_table", extra: []string{"wordbook", "helpcode", "phrase_table"}},
 	} {
 		r := httptest.NewRequest("GET", "/?kinds="+url.QueryEscape(tc.raw), nil)
-		got := pluginVisibleKinds(r, tc.kind)
+		got := pluginVisibleKinds(r.URL.Query(), tc.kind)
 		want := append(slices.Clone(legacy), tc.extra...)
 		if !slices.Equal(got, want) || !slices.Equal(legacyPluginKinds, legacy) {
 			t.Fatalf("类型声明长度 %d、kind=%q：%v，期望 %v；旧类型=%v", len(tc.raw), tc.kind, got, want, legacyPluginKinds)
@@ -56,8 +56,8 @@ func TestCommunityDeclarationCompatibility(t *testing.T) {
 	}
 	// 重复查询参数仍只采用第一个值，不能让解析优化改变声明来源。
 	r := httptest.NewRequest("GET", "/?fields=saved&fields=unknown&kinds=wordbook&kinds=helpcode", nil)
-	fields, ok := communityFields(r, "saved")
-	if !ok || !reflect.DeepEqual(fields, map[string]bool{"saved": true}) || !slices.Equal(pluginVisibleKinds(r, ""), append(slices.Clone(legacy), "wordbook")) {
+	fields, ok := communityFields(r.URL.Query(), "saved")
+	if !ok || !reflect.DeepEqual(fields, map[string]bool{"saved": true}) || !slices.Equal(pluginVisibleKinds(r.URL.Query(), ""), append(slices.Clone(legacy), "wordbook")) {
 		t.Fatal("重复查询参数的优先级改变")
 	}
 }
@@ -78,9 +78,9 @@ func TestCommunityDeclarationAllocationBudget(t *testing.T) {
 			b.ReportAllocs()
 			for b.Loop() {
 				if tc.name == "kinds" {
-					kinds = pluginVisibleKinds(r, "phrase_table")
+					kinds = pluginVisibleKinds(r.URL.Query(), "phrase_table")
 				} else {
-					fields, ok = communityFields(r, "moderation", "saved")
+					fields, ok = communityFields(r.URL.Query(), "moderation", "saved")
 				}
 			}
 		})

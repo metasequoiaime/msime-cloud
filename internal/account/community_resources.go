@@ -188,7 +188,7 @@ func (a *Service) resourceList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_resource_query")
 		return
 	}
-	fields, ok := communityFields(r, "moderation")
+	fields, ok := communityFields(query, "moderation")
 	if !ok {
 		writeError(w, 400, "invalid_fields")
 		return
@@ -235,7 +235,7 @@ func (a *Service) resourceList(w http.ResponseWriter, r *http.Request) {
 	write(w, 200, map[string]any{"items": items, "has_more": more})
 }
 func (a *Service) resourceDetail(w http.ResponseWriter, r *http.Request) {
-	fields, ok := communityFields(r, "moderation")
+	fields, ok := communityFields(r.URL.Query(), "moderation")
 	if !ok {
 		writeError(w, 400, "invalid_fields")
 		return

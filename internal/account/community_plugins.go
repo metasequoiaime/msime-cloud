@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -193,14 +194,14 @@ func extendPluginTransfer(w http.ResponseWriter) {
 }
 
 // pluginVisibleKinds 返回本次请求能看到的类型：冻结的 legacyPluginKinds，加上客户端在 `kinds`（逗号分隔）里声明能安装的类型，再加上 `kind` 参数指定的类型。不认识的名字直接忽略而不是返回 400：声明只能放宽结果，不会让响应多出客户端不认识的类型，忽略未知值让声明了未来类型的客户端在后端认识它之前也能正常浏览。不带 `kinds` 或为空时只有旧类型，响应与引入这个参数之前逐字节相同。
-func pluginVisibleKinds(r *http.Request, kind string) []string {
+func pluginVisibleKinds(query url.Values, kind string) []string {
 	visible := slices.Clone(legacyPluginKinds)
 	add := func(name string) {
 		if slices.Contains(pluginKinds, name) && !slices.Contains(visible, name) {
 			visible = append(visible, name)
 		}
 	}
-	for name := range strings.SplitSeq(r.URL.Query().Get("kinds"), ",") {
+	for name := range strings.SplitSeq(query.Get("kinds"), ",") {
 		add(name)
 	}
 	add(kind)
@@ -208,22 +209,23 @@ func pluginVisibleKinds(r *http.Request, kind string) []string {
 }
 
 func (a *Service) communityPluginList(w http.ResponseWriter, r *http.Request) {
-	offset, search, code := communityListPage(r)
+	query := r.URL.Query()
+	offset, search, code := communityListPage(query)
 	if code != "" {
 		writeError(w, 400, code)
 		return
 	}
-	kind := r.URL.Query().Get("kind")
+	kind := query.Get("kind")
 	if kind != "" && !slices.Contains(pluginKinds, kind) {
 		writeError(w, 400, "invalid_kind")
 		return
 	}
-	scope, validScope := communityListScope(r)
+	scope, validScope := communityListScope(query)
 	if !validScope {
 		writeError(w, 400, "invalid_scope")
 		return
 	}
-	fields, ok := communityFields(r, "moderation", "saved")
+	fields, ok := communityFields(query, "moderation", "saved")
 	if !ok {
 		writeError(w, 400, "invalid_fields")
 		return
@@ -240,7 +242,7 @@ func (a *Service) communityPluginList(w http.ResponseWriter, r *http.Request) {
  SELECT p.id FROM community_plugins p JOIN auth_users u ON u.id=p.owner_id `+join+`
  WHERE strpos(lower(p.name),lower($2))>0 AND (`+kindCondition+`) AND (`+communityMineCondition(scope, "p", "$5")+`) AND (p.moderation<>'removed' OR p.owner_id=$1) AND p.kind=ANY($6)
  ORDER BY `+order+` LIMIT 21 OFFSET $4
-) `+communityPluginSelectQuery(fields["saved"], true)+join+`ORDER BY `+order, viewer, search, kind, offset, scope, pluginVisibleKinds(r, kind))
+) `+communityPluginSelectQuery(fields["saved"], true)+join+`ORDER BY `+order, viewer, search, kind, offset, scope, pluginVisibleKinds(query, kind))
 	if e != nil {
 		a.error(w, e)
 		return
@@ -269,13 +271,14 @@ func (a *Service) communityPluginList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Service) communityPluginDetail(w http.ResponseWriter, r *http.Request) {
-	fields, ok := communityFields(r, "moderation", "saved")
+	query := r.URL.Query()
+	fields, ok := communityFields(query, "moderation", "saved")
 	if !ok {
 		writeError(w, 400, "invalid_fields")
 		return
 	}
 	// 客户端没有声明能安装的类型按不存在处理，与列表看不到它一致。
-	v, e := scanCommunityPlugin(a.store.pool.QueryRow(r.Context(), communityPluginSelect(fields["saved"])+`WHERE p.id=$2 AND (p.moderation<>'removed' OR p.owner_id=$1) AND p.kind=ANY($3)`, a.communityViewer(r), r.PathValue("id"), pluginVisibleKinds(r, "")))
+	v, e := scanCommunityPlugin(a.store.pool.QueryRow(r.Context(), communityPluginSelect(fields["saved"])+`WHERE p.id=$2 AND (p.moderation<>'removed' OR p.owner_id=$1) AND p.kind=ANY($3)`, a.communityViewer(r), r.PathValue("id"), pluginVisibleKinds(query, "")))
 	if errors.Is(e, pgx.ErrNoRows) {
 		writeError(w, 404, "plugin_not_found")
 		return

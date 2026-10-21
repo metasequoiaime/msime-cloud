@@ -132,6 +132,8 @@ go build ./cmd/msime-server
 
 账户、服务端和诊断端点共用 `internal/httpjson` 写入 JSON 响应及固定错误码封装，各入口继续设置自己的缓存、鉴权与安全响应头。
 
+反馈 ID 和语音流上游请求 ID 共用 `internal/uuid.NewV4`，使用密码学安全随机数生成小写、带连字符的 UUID v4，保留各入口原有的失败处理。
+
 社区的键盘皮肤、候选皮肤与插件列表共用 `internal/account/community_list_query.go` 校验偏移、搜索文本和列表范围；各入口继续按原顺序校验自己的类型、字段和分类参数。
 
 账户与服务端的常规 JSON 请求由 `internal/httpjson` 统一检查内容类型、字节上限、未知字段和尾随数据。两个入口保留各自的默认上限（账户 16 KiB、服务端 64 KiB）、调用方指定上限及错误响应头；multipart、命令行登录等采用不同解析规则的入口仍由各功能处理。

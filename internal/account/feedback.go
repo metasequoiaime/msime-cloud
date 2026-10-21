@@ -3,8 +3,6 @@ package account
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"image"
@@ -19,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
+	"github.com/metasequoiaime/MSIME-Backend/internal/uuid"
 )
 
 // FeedbackPath 是 App 内反馈的提交接口。它不在 /v1/users/me 下，由 IsPath 放行全局 Bearer 检查，处理函数自己校验用户会话（匿名账号也可以提交）。
@@ -161,14 +160,11 @@ func normalizeScreenshot(data []byte, pool png.EncoderBufferPool) (feedbackScree
 
 // newFeedbackID 返回随机的 UUID v4 字符串。
 func newFeedbackID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
+	id, err := uuid.NewV4()
+	if err != nil {
 		panic(err)
 	}
-	b[6] = b[6]&0x0f | 0x40
-	b[8] = b[8]&0x3f | 0x80
-	h := hex.EncodeToString(b)
-	return h[:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:]
+	return id
 }
 
 // readFeedbackForm 读取 multipart 请求：恰好一个 payload 部分和最多 3 个 screenshots 部分，其他部分一律拒绝。失败时已经写好错误响应并返回 false。

@@ -4,11 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -112,9 +113,7 @@ func actionUndoFeedbackStatus(a *Service, ctx context.Context, tx pgx.Tx, v acti
 		Status string `json:"status"`
 		Token  string `json:"token"`
 	}
-	d := json.NewDecoder(bytes.NewReader(v.Value))
-	d.DisallowUnknownFields()
-	if d.Decode(&value) != nil || (value.Status != "new" && value.Status != "resolved") || len(value.Token) != 32 {
+	if httpjson.DecodeValue(bytes.NewReader(v.Value), &value) != nil || (value.Status != "new" && value.Status != "resolved") || len(value.Token) != 32 {
 		return actionResult{}, actionFail(400, "invalid_value")
 	}
 	if _, err := hex.DecodeString(value.Token); err != nil {

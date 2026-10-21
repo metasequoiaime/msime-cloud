@@ -5,13 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -71,15 +72,13 @@ type noticeInput struct {
 	Channels []string `json:"channels"`
 }
 
-// parseNoticeInput decodes and validates an action value strictly. A draft may have no channel yet; a published notice needs at least one.
+// parseNoticeInput 严格解析并校验操作值；草稿可暂不指定渠道，发布时至少需要一个渠道。
 func parseNoticeInput(raw json.RawMessage, publish bool) (noticeInput, error) {
 	var in noticeInput
 	if len(raw) == 0 {
 		return in, actionFail(400, "invalid_value")
 	}
-	d := json.NewDecoder(bytes.NewReader(raw))
-	d.DisallowUnknownFields()
-	if d.Decode(&in) != nil || d.Decode(new(any)) != io.EOF {
+	if httpjson.DecodeValue(bytes.NewReader(raw), &in) != nil {
 		return in, actionFail(400, "invalid_value")
 	}
 	in.Channels = nonNilStrings(in.Channels)

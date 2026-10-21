@@ -13,6 +13,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
+
 	"github.com/jackc/pgx/v5"
 )
 
@@ -83,9 +85,7 @@ func deleteContent(query, editableSection string) adminActionFunc {
 			EditToken *string `json:"edit_token"`
 		}
 		if editableSection != "" && len(v.Value) != 0 {
-			d := json.NewDecoder(bytes.NewReader(v.Value))
-			d.DisallowUnknownFields()
-			if d.Decode(&value) != nil {
+			if httpjson.DecodeValue(bytes.NewReader(v.Value), &value) != nil {
 				return actionResult{}, actionFail(400, "invalid_value")
 			}
 			if value.EditToken != nil {
@@ -158,9 +158,7 @@ func setSkinCategory(section, table string) adminActionFunc {
 			Expected *string `json:"expected"`
 			Token    *string `json:"token"`
 		}
-		d := json.NewDecoder(bytes.NewReader(v.Value))
-		d.DisallowUnknownFields()
-		if len(v.Value) == 0 || d.Decode(&value) != nil || !validCandidateSkinCategory(value.Category) || (value.Expected != nil && !validCandidateSkinCategory(*value.Expected)) {
+		if len(v.Value) == 0 || httpjson.DecodeValue(bytes.NewReader(v.Value), &value) != nil || !validCandidateSkinCategory(value.Category) || (value.Expected != nil && !validCandidateSkinCategory(*value.Expected)) {
 			return actionResult{}, actionFail(400, "invalid_category")
 		}
 		if value.Token != nil {
@@ -370,9 +368,7 @@ func actionApproveContent(a *Service, ctx context.Context, tx pgx.Tx, v actionRe
 	}
 	pinned := len(v.Value) > 0 && string(v.Value) != "null"
 	if pinned {
-		d := json.NewDecoder(bytes.NewReader(v.Value))
-		d.DisallowUnknownFields()
-		if d.Decode(&expect) != nil || (expect.From != "pending" && expect.From != "removed") || (expect.UpdatedAt != nil && !section.editable) {
+		if httpjson.DecodeValue(bytes.NewReader(v.Value), &expect) != nil || (expect.From != "pending" && expect.From != "removed") || (expect.UpdatedAt != nil && !section.editable) {
 			return actionResult{}, actionFail(400, "invalid_value")
 		}
 	}
@@ -453,9 +449,7 @@ func actionRemoveContent(a *Service, ctx context.Context, tx pgx.Tx, v actionReq
 		var value struct {
 			Previous string `json:"previous"`
 		}
-		d := json.NewDecoder(bytes.NewReader(v.Value))
-		d.DisallowUnknownFields()
-		if d.Decode(&value) != nil || (value.Previous != "pending" && value.Previous != "approved") {
+		if httpjson.DecodeValue(bytes.NewReader(v.Value), &value) != nil || (value.Previous != "pending" && value.Previous != "approved") {
 			return actionResult{}, actionFail(400, "invalid_value")
 		}
 		previous = &value.Previous
@@ -482,9 +476,7 @@ func actionRestoreContent(a *Service, ctx context.Context, tx pgx.Tx, v actionRe
 		var value struct {
 			To string `json:"to"`
 		}
-		d := json.NewDecoder(bytes.NewReader(v.Value))
-		d.DisallowUnknownFields()
-		if d.Decode(&value) != nil || (value.To != "pending" && value.To != "approved") {
+		if httpjson.DecodeValue(bytes.NewReader(v.Value), &value) != nil || (value.To != "pending" && value.To != "approved") {
 			return actionResult{}, actionFail(400, "invalid_value")
 		}
 		to = value.To

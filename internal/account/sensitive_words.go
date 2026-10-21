@@ -17,6 +17,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
+
 	"github.com/jackc/pgx/v5"
 )
 
@@ -472,11 +474,9 @@ type sensitiveWordInput struct {
 	Level    string `json:"level"`
 }
 
-// decodeSensitiveValue decodes an action value strictly: a missing value, unknown fields and trailing data are 400 invalid_value.
+// decodeSensitiveValue 严格解析操作值，缺失值、未知字段和尾随数据均返回 400 invalid_value。
 func decodeSensitiveValue(raw json.RawMessage, out any) error {
-	d := json.NewDecoder(bytes.NewReader(raw))
-	d.DisallowUnknownFields()
-	if len(raw) == 0 || d.Decode(out) != nil || d.More() {
+	if len(raw) == 0 || httpjson.DecodeValue(bytes.NewReader(raw), out) != nil {
 		return actionFail(400, "invalid_value")
 	}
 	return nil

@@ -407,7 +407,14 @@ func (s *Server) writeQQFAQ(ctx context.Context, text, drafted string, reply fun
 		}
 	}
 	// 一次提交：在父提交的树上改这几个文件，建新提交，再建分支、开 PR。
-	r, err = client.Do(ctx, token, "POST", "/repos/"+repo+"/git/trees", map[string]any{"base_tree": parent.Tree.SHA, "tree": files})
+	// 读改写阶段可以响应请求取消；开始创建 Git 对象前先确认请求仍有效，之后用独立的限时上下文完成整组写入，避免提交或分支已经成功后留下无 PR 的孤儿对象。
+	if err := ctx.Err(); err != nil {
+		fail("write", err)
+		return 0
+	}
+	writeCtx, cancelWrite := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancelWrite()
+	r, err = client.Do(writeCtx, token, "POST", "/repos/"+repo+"/git/trees", map[string]any{"base_tree": parent.Tree.SHA, "tree": files})
 	var tree struct {
 		SHA string `json:"sha"`
 	}
@@ -419,7 +426,7 @@ func (s *Server) writeQQFAQ(ctx context.Context, text, drafted string, reply fun
 	if drafted != "" {
 		message = "docs(faq): add " + entry.Question + "\n\nDrafted by the QQ bot from the docs and GitHub for a question it could not answer; not reviewed by a person."
 	}
-	r, err = client.Do(ctx, token, "POST", "/repos/"+repo+"/git/commits", map[string]any{"message": message, "tree": tree.SHA, "parents": []string{head}})
+	r, err = client.Do(writeCtx, token, "POST", "/repos/"+repo+"/git/commits", map[string]any{"message": message, "tree": tree.SHA, "parents": []string{head}})
 	var commit struct {
 		SHA string `json:"sha"`
 	}
@@ -428,7 +435,7 @@ func (s *Server) writeQQFAQ(ctx context.Context, text, drafted string, reply fun
 		return 0
 	}
 	branch := "qq-faq/" + s.qq.now().UTC().Format(qqFAQBranchStamp) + "-" + qqMediaName()[:8]
-	r, err = client.Do(ctx, token, "POST", "/repos/"+repo+"/git/refs", map[string]string{"ref": "refs/heads/" + branch, "sha": commit.SHA})
+	r, err = client.Do(writeCtx, token, "POST", "/repos/"+repo+"/git/refs", map[string]string{"ref": "refs/heads/" + branch, "sha": commit.SHA})
 	if err != nil || !r.OK() {
 		fail("branch", githubFailure("branch", r, err))
 		return 0
@@ -445,7 +452,7 @@ func (s *Server) writeQQFAQ(ctx context.Context, text, drafted string, reply fun
 	}
 	client.Invalidate("/repos/" + repo + "/pulls")
 	defer client.Invalidate("/repos/" + repo + "/pulls")
-	r, err = client.Do(ctx, token, "POST", "/repos/"+repo+"/pulls", map[string]any{"title": "docs(faq): add 「" + githubReferenceBreaker.Replace(entry.Question) + "」", "head": branch, "base": base, "body": body})
+	r, err = client.Do(writeCtx, token, "POST", "/repos/"+repo+"/pulls", map[string]any{"title": "docs(faq): add 「" + githubReferenceBreaker.Replace(entry.Question) + "」", "head": branch, "base": base, "body": body})
 	client.Invalidate("/repos/" + repo + "/pulls")
 	var pull struct {
 		Number int64 `json:"number"`

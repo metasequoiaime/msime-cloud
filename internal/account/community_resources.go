@@ -302,7 +302,7 @@ func (a *Service) resourcePublish(w http.ResponseWriter, r *http.Request) {
 		a.error(w, err)
 		return
 	}
-	flag, ok := a.screenUpload(w, r, input.Name, input.Description, resourceScreenText(content))
+	flag, ok := a.screenUpload(w, r, resourceScreenTextWithPrefix(content, []string{input.Name, input.Description}))
 	if !ok {
 		return
 	}

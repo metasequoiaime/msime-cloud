@@ -832,6 +832,9 @@ func (s *Store) Me(ctx context.Context, uid string) (User, []Identity, error) {
 		return err
 	})
 	if e := s.pool.SendBatch(ctx, batch).Close(); e != nil {
+		if errors.Is(e, pgx.ErrNoRows) {
+			return u, ids, errMissingUser
+		}
 		return u, ids, e
 	}
 	return u, ids, nil

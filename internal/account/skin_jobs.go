@@ -32,14 +32,22 @@ type SkinJob struct {
 	Artwork []byte
 }
 
+// SkinJobReservation 保存任务到期时间及仅用于撤回未启动任务的内部凭据。
+// 凭据绑定任务身份和原额度窗口，防止重复退款或影响后续任务。
+type SkinJobReservation struct {
+	ExpiresAt      time.Time
+	id, owner      string
+	quotaExpiresAt time.Time
+}
+
 // CreateSkinJob 在同一事务中检查主体与全局容量、记录任务并扣除每日额度；任何一步失败都会回滚。
-// 返回任务到期时间；每日额度用尽时返回剩余等待时长与 ErrLimited。
+// 返回任务预留凭据；每日额度用尽时返回剩余等待时长与 `ErrLimited`。
 // 已取消但工作进程尚未停止的任务仍占容量；失去心跳的任务不占容量。
-func (a *Service) CreateSkinJob(ctx context.Context, id, owner string, perOwner, total, perDay int, ttl time.Duration) (time.Time, time.Duration, error) {
-	var expires time.Time
+func (a *Service) CreateSkinJob(ctx context.Context, id, owner string, perOwner, total, perDay int, ttl time.Duration) (SkinJobReservation, time.Duration, error) {
+	reservation := SkinJobReservation{id: id, owner: owner}
 	tx, err := a.store.pool.Begin(ctx)
 	if err != nil {
-		return expires, 0, err
+		return reservation, 0, err
 	}
 	defer tx.Rollback(ctx)
 	// 保活设置与首个锁请求批量发送，仍在取锁前启用，避免持锁副本失联后长时间阻塞其他副本。
@@ -66,12 +74,12 @@ func (a *Service) CreateSkinJob(ctx context.Context, id, owner string, perOwner,
 		setup.Queue(skinJobsLock)
 	}
 	if err = tx.SendBatch(ctx, setup).Close(); err != nil {
-		return expires, 0, err
+		return reservation, 0, err
 	}
 	if userOwner {
 		// 先确认账号有效再等待全局锁；后续容量读取使用取锁后的独立语句快照。
 		if _, err = tx.Exec(ctx, skinJobsLock); err != nil {
-			return expires, 0, err
+			return reservation, 0, err
 		}
 	}
 	// 先清理过期任务和失去工作进程的已取消任务，再基于清理后的快照判断容量并插入。
@@ -85,27 +93,27 @@ FROM (SELECT count(*) AS total_count,count(*) FILTER (WHERE owner=$2) AS owner_c
  FROM skin_jobs WHERE state<>'running' OR `+skinJobLive+`) counts
 WHERE owner_count<$4 AND total_count<$5
 RETURNING expires_at`, id, owner, ttl.Seconds(), perOwner, total).QueryRow(func(row pgx.Row) error {
-		return row.Scan(&expires)
+		return row.Scan(&reservation.ExpiresAt)
 	})
 	var wait time.Duration
 	batch.Queue(rateUntilSQL, "skin-art-day:"+hash(owner), (24 * time.Hour).String(), perDay).QueryRow(func(row pgx.Row) error {
 		var used int
-		var until, now time.Time
-		if err := row.Scan(&used, &until, &now); err != nil {
+		var now time.Time
+		if err := row.Scan(&used, &reservation.quotaExpiresAt, &now); err != nil {
 			return err
 		}
 		if used > perDay {
-			wait = max(until.Sub(now), time.Second)
+			wait = max(reservation.quotaExpiresAt.Sub(now), time.Second)
 			return ErrLimited
 		}
 		return nil
 	})
 	if err = tx.SendBatch(ctx, batch).Close(); errors.Is(err, pgx.ErrNoRows) {
-		return expires, 0, ErrSkinJobsBusy
+		return reservation, 0, ErrSkinJobsBusy
 	} else if err != nil {
-		return expires, wait, err
+		return reservation, wait, err
 	}
-	return expires, 0, tx.Commit(ctx)
+	return reservation, 0, tx.Commit(ctx)
 }
 
 // GetSkinJob returns owner's unexpired, undeleted job.
@@ -203,8 +211,16 @@ SELECT EXISTS(SELECT 1 FROM updated)`, id, state, reason, artwork).Scan(&recorde
 	return recorded, nil
 }
 
-// DropSkinJob deletes a job that was recorded but never started, for a replica that began shutting down between the insert and starting its worker.
-func (a *Service) DropSkinJob(ctx context.Context, id string) error {
-	_, err := a.store.pool.Exec(ctx, `DELETE FROM skin_jobs WHERE id=$1`, id)
+// DropSkinJob 原子撤回副本关闭时已登记但未启动的任务，并退还原窗口的一次额度。
+// 只有凭据对应的任务实际被删除才退款；重试不重复退款，旧凭据也不影响复用 ID 的新任务。
+func (a *Service) DropSkinJob(ctx context.Context, reservation SkinJobReservation) error {
+	_, err := a.store.pool.Exec(ctx, `WITH removed AS (
+ DELETE FROM skin_jobs WHERE id=$1 AND owner=$2 AND expires_at=$3
+ RETURNING 1
+)
+UPDATE auth_rates SET count=greatest(count-1,0)
+WHERE key=$4 AND expires_at=$5 AND EXISTS(SELECT 1 FROM removed)`,
+		reservation.id, reservation.owner, reservation.ExpiresAt,
+		"skin-art-day:"+hash(reservation.owner), reservation.quotaExpiresAt)
 	return err
 }

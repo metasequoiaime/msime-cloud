@@ -2,9 +2,7 @@ package server
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/base64"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -13,6 +11,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
+	"github.com/metasequoiaime/MSIME-Backend/internal/uuid"
 )
 
 // Close 取消并等待所有已升级的 WebSocket 处理协程，补足 http.Server.Shutdown 的管理范围。互斥锁防止 Wait 与新处理协程的 Add 发生竞争。
@@ -88,14 +87,12 @@ func (s *Server) streamTranscription(w http.ResponseWriter, r *http.Request) {
 	if e.Provider != "everyapi" {
 		headers.Set("X-Api-Resource-Id", e.ResourceID)
 	}
-	id := make([]byte, 16)
-	if _, err := rand.Read(id); err != nil {
+	id, err := uuid.NewV4()
+	if err != nil {
 		upstreamError(w, r, err)
 		return
 	}
-	id[6] = id[6]&0x0f | 0x40
-	id[8] = id[8]&0x3f | 0x80
-	headers.Set("X-Api-Request-Id", fmt.Sprintf("%x-%x-%x-%x-%x", id[:4], id[4:6], id[6:8], id[8:10], id[10:]))
+	headers.Set("X-Api-Request-Id", id)
 	dialCtx, stopDial := context.WithCancel(r.Context())
 	stopShutdown := context.AfterFunc(ctx, stopDial)
 	dialStarted := time.Now()

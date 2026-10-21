@@ -40,6 +40,10 @@ type contentEdit struct {
 
 // 新增和编辑都由统一的操作分发器提交，作品写入和审计在同一事务内完成。
 func saveCommunityContent(section string, create bool) adminActionFunc {
+	// 分区和表名固定，预先构建查询；作品版本和审核状态仍由数据库逐请求读取或更新。
+	table := moderationSections[section].table
+	lockQuery := `SELECT owner_id,` + contentEditToken(section, "s") + ` FROM ` + table + ` s WHERE id=$1 FOR UPDATE`
+	moderationQuery := `UPDATE ` + table + ` SET moderation=$2,previous_moderation=CASE WHEN $2='removed' THEN CASE WHEN $4 THEN 'approved' WHEN moderation='removed' THEN COALESCE(previous_moderation,'approved') ELSE moderation END END,moderation_reason=CASE WHEN $2='removed' THEN COALESCE(moderation_reason,'管理员保存为下架') END,moderated_by=$3,moderated_at=now() WHERE id=$1`
 	return func(a *Service, ctx context.Context, tx pgx.Tx, v actionRequest) (actionResult, error) {
 		if err := requireActionID(v); err != nil {
 			return actionResult{}, err
@@ -71,10 +75,9 @@ func saveCommunityContent(section string, create bool) adminActionFunc {
 		if owner.Banned {
 			return actionResult{}, actionFail(403, "account_banned")
 		}
-		table := moderationSections[section].table
 		if !create {
 			var owner, token string
-			err = tx.QueryRow(ctx, `SELECT owner_id,`+contentEditToken(section, "s")+` FROM `+table+` s WHERE id=$1 FOR UPDATE`, v.ID).Scan(&owner, &token)
+			err = tx.QueryRow(ctx, lockQuery, v.ID).Scan(&owner, &token)
 			if errors.Is(err, pgx.ErrNoRows) {
 				return actionResult{}, actionFail(404, "not_found")
 			}
@@ -97,7 +100,7 @@ func saveCommunityContent(section string, create bool) adminActionFunc {
 			return actionResult{}, err
 		}
 		// 包体和设计数据不进入审计，只记操作对象与发布状态。
-		_, err = tx.Exec(ctx, `UPDATE `+table+` SET moderation=$2,previous_moderation=CASE WHEN $2='removed' THEN CASE WHEN $4 THEN 'approved' WHEN moderation='removed' THEN COALESCE(previous_moderation,'approved') ELSE moderation END END,moderation_reason=CASE WHEN $2='removed' THEN COALESCE(moderation_reason,'管理员保存为下架') END,moderated_by=$3,moderated_at=now() WHERE id=$1`, v.ID, input.Moderation, adminActor(ctx), create)
+		_, err = tx.Exec(ctx, moderationQuery, v.ID, input.Moderation, adminActor(ctx), create)
 		return actionResult{Affected: 1, Detail: map[string]any{"section": section, "name": input.Name, "moderation": input.Moderation}, Extra: map[string]any{"id": v.ID}}, err
 	}
 }

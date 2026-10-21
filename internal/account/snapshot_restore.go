@@ -3,7 +3,6 @@ package account
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"io"
 	"os"
 
@@ -37,28 +36,7 @@ func (s *Store) RestoreDictionarySnapshot(ctx context.Context, user string, expe
 	}
 	defer os.Remove(file.Name())
 	defer file.Close()
-	entryCount := 0
-	err = decodeDictionarySnapshot(reader, func(record snapshotRecord) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if record.Type == "entry" {
-			entryCount++
-			if entryCount > 100000 {
-				return errDictionaryLimit
-			}
-			var e DictionaryEntry
-			if err := json.Unmarshal(record.Data, &e); err != nil {
-				return err
-			}
-			e.ID = randomToken()
-			record.Data, err = json.Marshal(e)
-			if err != nil {
-				return err
-			}
-		}
-		return json.NewEncoder(file).Encode(record)
-	})
+	err = stageDictionarySnapshot(ctx, reader, file)
 	if err != nil {
 		return 0, err
 	}

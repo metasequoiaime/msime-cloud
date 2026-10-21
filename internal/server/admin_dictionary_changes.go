@@ -163,11 +163,17 @@ func (s *Server) createDictionaryPR(ctx context.Context, gh *githubapp.Client, i
 	if next == text {
 		return result, dictionaryChangeFail(400, "dictionary_no_changes")
 	}
+	// 写入前仍响应请求取消；开始创建分支后用独立的限时上下文完成文件提交和 PR，避免留下无 PR 的分支。
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	writeCtx, cancelWrite := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancelWrite()
 	branch := "dictionary-admin/" + adminRandom()
 	result.Branch = branch
 	// 每次请求创建随机分支，多副本无需共享进程锁；所有修改基于同一不可变提交。
 	write := func(method, p string, body, out any) error {
-		res, err := gh.Do(ctx, token, method, root+p, body)
+		res, err := gh.Do(writeCtx, token, method, root+p, body)
 		if err != nil || res.Status >= 500 {
 			return dictionaryChangeFail(502, "dictionary_uncertain")
 		}

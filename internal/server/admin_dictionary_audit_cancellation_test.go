@@ -141,35 +141,43 @@ func TestDictPRRejectContinuesAfterCommentCancellation(t *testing.T) {
 }
 
 func TestDictionaryChangesAuditSurvivesCancellation(t *testing.T) {
-	s, _, conn, schema := dictPRServer(t, "")
-	f := &dictionaryMock{text: "甲\tjia\t1\n乙\tyi\t5\n"}
-	s.adminGitHub = dictionaryMockClient(t, f)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	s.adminGitHub.HTTP.Transport = dictionaryCancelTransport{base: s.adminGitHub.HTTP.Transport, method: "POST", path: "/repos/" + dictTestRepo + "/pulls", cancel: cancel}
-	body, err := json.Marshal(dictionaryChangeRequest{Path: "custom/words.txt", SHA: dictionaryBlobSHA([]byte(f.text)), Changes: []dictionaryEdit{{Operation: "add", Columns: []string{"丙", "bing", "3"}}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	w := httptest.NewRecorder()
-	s.ServeHTTP(w, dictionaryAuditRequest(s, ctx, "/api/dictionary/changes", string(body)))
-	if ctx.Err() == nil || w.Code != 200 {
-		t.Errorf("PR 已创建后错误报告审计失败：ctx=%v status=%d body=%s", ctx.Err(), w.Code, w.Body.String())
-	} else if result := decodeDict[dictionaryChangeResult](t, w); result.Number != 42 || result.URL != "https://github.com/"+dictTestRepo+"/pull/42" || !strings.HasPrefix(result.Branch, "dictionary-admin/") {
-		t.Errorf("请求取消后未返回已创建的 PR：%+v", result)
-	}
-	if writes := f.writes(); len(writes) != 3 || writes[2].path != "/repos/"+dictTestRepo+"/pulls" {
-		t.Fatalf("未复现 PR 创建或重复发送写入：%+v", writes)
-	}
-	f.mu.Lock()
-	created := f.pullCreated
-	f.mu.Unlock()
-	if !created {
-		t.Fatal("上游未创建 PR")
-	}
-	want := dictAuditRow{"dictionary_change", "custom/words.txt", "1", "", "", "pat:" + dictionaryAuditEmail}
-	if audits := dictAudit(t, conn, schema); !slices.Equal(audits, []dictAuditRow{want}) {
-		t.Errorf("PR 创建后丢失准确审计或操作者：%+v", audits)
+	for _, path := range []string{"/git/refs", "/contents/custom/words.txt", "/pulls"} {
+		t.Run(path, func(t *testing.T) {
+			s, _, conn, schema := dictPRServer(t, "")
+			f := &dictionaryMock{text: "甲\tjia\t1\n乙\tyi\t5\n"}
+			s.adminGitHub = dictionaryMockClient(t, f)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			method := http.MethodPost
+			if strings.HasPrefix(path, "/contents/") {
+				method = http.MethodPut
+			}
+			s.adminGitHub.HTTP.Transport = dictionaryCancelTransport{base: s.adminGitHub.HTTP.Transport, method: method, path: "/repos/" + dictTestRepo + path, cancel: cancel}
+			body, err := json.Marshal(dictionaryChangeRequest{Path: "custom/words.txt", SHA: dictionaryBlobSHA([]byte(f.text)), Changes: []dictionaryEdit{{Operation: "add", Columns: []string{"丙", "bing", "3"}}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := httptest.NewRecorder()
+			s.ServeHTTP(w, dictionaryAuditRequest(s, ctx, "/api/dictionary/changes", string(body)))
+			if ctx.Err() == nil || w.Code != 200 {
+				t.Errorf("写入开始后请求取消导致 PR 或审计未完成：ctx=%v status=%d body=%s", ctx.Err(), w.Code, w.Body.String())
+			} else if result := decodeDict[dictionaryChangeResult](t, w); result.Number != 42 || result.URL != "https://github.com/"+dictTestRepo+"/pull/42" || !strings.HasPrefix(result.Branch, "dictionary-admin/") {
+				t.Errorf("请求取消后未返回已创建的 PR：%+v", result)
+			}
+			if writes := f.writes(); len(writes) != 3 || writes[2].path != "/repos/"+dictTestRepo+"/pulls" {
+				t.Fatalf("未复现 PR 创建或重复发送写入：%+v", writes)
+			}
+			f.mu.Lock()
+			created := f.pullCreated
+			f.mu.Unlock()
+			if !created {
+				t.Fatal("上游未创建 PR")
+			}
+			want := dictAuditRow{"dictionary_change", "custom/words.txt", "1", "", "", "pat:" + dictionaryAuditEmail}
+			if audits := dictAudit(t, conn, schema); !slices.Equal(audits, []dictAuditRow{want}) {
+				t.Errorf("PR 创建后丢失准确审计或操作者：%+v", audits)
+			}
+		})
 	}
 }
 

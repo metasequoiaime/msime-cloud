@@ -20,6 +20,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	segmentjson "github.com/segmentio/encoding/json"
 )
 
 const (
@@ -265,12 +267,20 @@ func (s *Server) niuTransFileRequest(w http.ResponseWriter, r *http.Request, e N
 
 // niuTransMediaAccepted 只把明确返回成功业务码的 JSON 控制响应计为成功。
 func niuTransMediaAccepted(body []byte) bool {
-	var reply map[string]json.RawMessage
-	if json.Unmarshal(body, &reply) != nil {
+	// 保留标准库的语法和嵌套深度限制，不复制与成功判断无关的响应字段。
+	if !json.Valid(body) {
+		return false
+	}
+	var reply struct {
+		Code json.RawMessage `json:"code"`
+	}
+	// 原映射只识别小写 `code`；业务码仅在本次检查期间借用正文中的原始字节。
+	rest, err := segmentjson.Parse(body, &reply, segmentjson.DontCopyRawMessage|segmentjson.DontMatchCaseInsensitiveStructFields)
+	if err != nil || len(rest) != 0 {
 		return false
 	}
 	var code int
-	return json.Unmarshal(reply["code"], &code) == nil && code == http.StatusOK
+	return json.Unmarshal(reply.Code, &code) == nil && code == http.StatusOK
 }
 
 // niuTransDownload 以固定大小缓冲区转发文件，JSON 控制响应先按独立上限校验。

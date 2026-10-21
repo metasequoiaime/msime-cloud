@@ -302,9 +302,18 @@ func moderationResult(v actionRequest, changed []moderatedItem, extra map[string
 	return actionResult{Affected: affected, Target: v.Section, Detail: detail}
 }
 
-// bannedOwnerGuard fails with 409 owner_banned when any row among ids belongs to a banned account: the ban removed it, and only unbanning the account brings it back, so a moderator cannot republish a banned author's work. The owners' rows are locked FOR SHARE, which conflicts with the FOR UPDATE that ban_user and unban_user take first: a ban running concurrently is waited for and its committed state read, and a ban that starts later waits until this approval or restore has committed, so its own UPDATE then removes the row again.
+// bannedOwnerGuardQueries 按固定分区预先构建查询，封禁状态仍在每次事务中读取并加锁。
+var bannedOwnerGuardQueries = func() map[moderationTable]string {
+	queries := make(map[moderationTable]string, len(moderationSections))
+	for _, section := range moderationSections {
+		queries[section] = `SELECT u.banned_at IS NOT NULL FROM auth_users u WHERE u.id IN (SELECT owner_id FROM ` + section.table + section.match() + `) ORDER BY u.id FOR SHARE OF u`
+	}
+	return queries
+}()
+
+// bannedOwnerGuard 对已封禁作者返回 409 owner_banned，阻止管理员重新发布其作品。作者行的 FOR SHARE 锁与封禁和解封操作先获取的 FOR UPDATE 锁冲突，等待后读取已提交状态，并让后续封禁等到当前审核或恢复事务提交后再下架作品。
 func bannedOwnerGuard(ctx context.Context, tx pgx.Tx, section moderationTable, ids []string) error {
-	rows, err := tx.Query(ctx, `SELECT u.banned_at IS NOT NULL FROM auth_users u WHERE u.id IN (SELECT owner_id FROM `+section.table+section.match()+`) ORDER BY u.id FOR SHARE OF u`, ids)
+	rows, err := tx.Query(ctx, bannedOwnerGuardQueries[section], ids)
 	if err != nil {
 		return err
 	}

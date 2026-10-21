@@ -804,12 +804,13 @@ func (a *Service) rescreenRestored(ctx context.Context, tx pgx.Tx, section strin
 
 // rescreenText 直接组合数据库列；资源正文仍按类型解码，皮肤设计不参与文本审核。
 func rescreenText(section, name, description string, raw []byte) string {
-	parts := []string{name, description}
+	parts := make([]string, 2, 3)
+	parts[0], parts[1] = name, description
 	switch section {
 	case "dictionaries", "replies", "phrases":
 		var content ResourceContent
 		if json.Unmarshal(raw, &content) == nil {
-			parts = append(parts, resourceScreenText(content))
+			return resourceScreenTextWithPrefix(content, parts)
 		}
 	case "candidate-skins", "plugins":
 		parts = append(parts, string(raw))
@@ -851,7 +852,13 @@ func reviewAgain(flag string) string {
 
 // resourceScreenText 提取词条、回复和短语的可见文本，预留每条短语的分组与正文位置。
 func resourceScreenText(content ResourceContent) string {
-	parts := make([]string, 0, len(content.Entries)+1+2*len(content.Phrases))
+	return resourceScreenTextWithPrefix(content, nil)
+}
+
+// resourceScreenTextWithPrefix 将名称等前缀和资源正文一次拼接，避免先分配整份正文再复制。
+func resourceScreenTextWithPrefix(content ResourceContent, prefix []string) string {
+	parts := make([]string, 0, len(prefix)+len(content.Entries)+1+2*len(content.Phrases))
+	parts = append(parts, prefix...)
 	for _, entry := range content.Entries {
 		parts = append(parts, entry.Word)
 	}
@@ -860,6 +867,10 @@ func resourceScreenText(content ResourceContent) string {
 	}
 	for _, phrase := range content.Phrases {
 		parts = append(parts, phrase.Group, phrase.Text)
+	}
+	// 原流程即使正文为空也追加第三段，保留名称和描述之后的换行。
+	if len(prefix) > 0 && len(parts) == len(prefix) {
+		parts = append(parts, "")
 	}
 	return strings.Join(parts, "\n")
 }

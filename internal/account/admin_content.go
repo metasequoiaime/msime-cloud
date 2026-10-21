@@ -197,17 +197,18 @@ func (a *Service) contentModeration(ctx context.Context, section, id string, raw
 	return detail, nil
 }
 
-// contentScreenText is the text of a stored item that uploads are screened on: name and description, plus the word pack's words, the reply prompt, or the candidate-skin or plugin manifest. A skin design carries no text.
+// contentScreenText 提取已存作品的审核文本；资源正文与名称、描述一次拼接，皮肤设计不参与文本审核。
 func contentScreenText(section string, base map[string]json.RawMessage) string {
 	var name, description string
 	_ = json.Unmarshal(base["name"], &name)
 	_ = json.Unmarshal(base["description"], &description)
-	parts := []string{name, description}
+	parts := make([]string, 2, 3)
+	parts[0], parts[1] = name, description
 	switch section {
 	case "dictionaries", "replies", "phrases":
 		var content ResourceContent
 		if json.Unmarshal(base["content"], &content) == nil {
-			parts = append(parts, resourceScreenText(content))
+			return resourceScreenTextWithPrefix(content, parts)
 		}
 	case "candidate-skins", "plugins":
 		var manifest string

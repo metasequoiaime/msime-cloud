@@ -154,6 +154,17 @@ func qqRedactContactsBefore(text string, maxRunes int) string {
 
 // qqContactPatternsOverlap 判断两个正则的任意匹配是否重叠，避免后一个正则的全局替换吞掉前一个待处理的匹配。
 func qqContactPatternsOverlap(text string, first, second *regexp.Regexp) bool {
+	if (first == qqContactPatterns[0] && second == qqContactPatterns[1]) || (first == qqContactPatterns[1] && second == qqContactPatterns[0]) {
+		email := qqContactPatterns[0].FindStringIndex(text)
+		if email == nil {
+			return false
+		}
+		// 只有一个邮箱时直接检查其中的手机号，省去前方每个手机号的匹配切片；多个邮箱沿用下方扫描，避免逐个检查纯邮箱正文。
+		if !qqContactPatterns[0].MatchString(text[email[1]:]) {
+			// 保留左侧边界上下文；邮箱末尾一定是 ASCII 字母，不会因右侧截断产生手机号边界。
+			return qqContactPatterns[1].MatchString(text[max(0, email[0]-1):email[1]])
+		}
+	}
 	firstStart, secondStart := 0, 0
 	var firstMatch, secondMatch []int
 	for firstStart < len(text) && secondStart < len(text) {

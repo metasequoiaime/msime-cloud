@@ -1215,56 +1215,24 @@ func qqRemoveLinks(text string) string {
 	var pendingSpace byte
 	removed := 0
 	for search := 0; ; {
-		i := strings.Index(text[search:], "://")
-		if i < 0 {
+		begin, end, next, ok := qqNextRawLink(text, search)
+		if !ok {
 			break
-		}
-		i += search
-		begin := i
-		for begin > 0 && qqURLSchemeByte(text[begin-1]) {
-			begin--
-		}
-		for begin < i && !qqURLSchemeLetter(text[begin]) {
-			begin++
-		}
-		if begin == i {
-			search = i + 3
-			continue
-		}
-		end := i + 3
-		for end < len(text) && text[end] >= '!' && text[end] <= '~' {
-			end++
 		}
 		removed += end - begin
-		search = end
+		search = next
 	}
 	for search := 0; ; {
-		i := strings.Index(text[search:], "://")
-		if i < 0 {
+		begin, end, next, ok := qqNextRawLink(text, search)
+		if !ok {
 			break
-		}
-		i += search
-		begin := i
-		for begin > 0 && qqURLSchemeByte(text[begin-1]) {
-			begin--
-		}
-		for begin < i && !qqURLSchemeLetter(text[begin]) {
-			begin++
-		}
-		if begin == i {
-			search = i + 3
-			continue
 		}
 		if !initialized {
 			out.Grow(len(text) - removed)
 			initialized = true
 		}
 		writeQQCollapsedSegment(&out, text[start:begin], &pendingSpace)
-		end := i + 3
-		for end < len(text) && text[end] >= '!' && text[end] <= '~' {
-			end++
-		}
-		start, search = end, end
+		start, search = end, next
 	}
 	if start == 0 {
 		return qqCollapseSpaceRuns(text)

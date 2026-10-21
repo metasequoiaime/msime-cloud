@@ -7,6 +7,28 @@ import (
 	"testing"
 )
 
+func TestQQQuoteArrayElementCount(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want int
+	}{
+		{"empty", `[]`, 0},
+		{"objects with nested arrays", `[{"content":"a,b","attachments":[{"url":"x"}]},{"content":"c"}]`, 2},
+		{"strings containing punctuation", `["[",{"content":"\\\"}"}]`, 2},
+		{"whitespace", "[  {\"content\":\"a\"} , null ]", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := qqQuoteArrayElementCount([]byte(tc.raw)); got != tc.want {
+				t.Fatalf("数组元素数=%d，期望=%d", got, tc.want)
+			}
+		})
+	}
+	if got := qqQuoteArrayElementCount([]byte(`null`)); got != 0 {
+		t.Fatalf("非数组元素数=%d，期望 0", got)
+	}
+}
+
 func TestQQGroupMessageCarriesQuoteFieldsFromInitialDecode(t *testing.T) {
 	raw := json.RawMessage(`{"id":"m1","content":"question","message_type":103,"msg_elements":[{"content":"quoted"}],"message_reference":{"message_id":"ref"}}`)
 	var message qqGroupMessage

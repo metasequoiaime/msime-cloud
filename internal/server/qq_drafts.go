@@ -14,7 +14,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
 
@@ -205,8 +204,7 @@ func (s *Server) qqDraftReport(ctx context.Context, subject, text string, histor
 	if err != nil {
 		slog.Warn("qq bot: draft not stored", "reason", err.Error())
 		// PostgreSQL 明确拒绝语句时可以确认没有新建草稿，才退回名额。连接中断、超时或取消时事务可能已经提交，保留名额避免重试再建一份草稿。
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
+		if account.DatabaseWriteDefinitelyRejected(err) {
 			releaseDraftSlot()
 		} else {
 			slog.Warn("qq bot: draft write outcome uncertain; keeping draft slot")

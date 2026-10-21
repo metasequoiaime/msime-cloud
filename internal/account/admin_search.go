@@ -17,6 +17,14 @@ type AdminSearchHit struct {
 	Target string `json:"target"`
 }
 
+// appendAdminSearchHit 在首次命中时一次预留本次搜索的结果容量，没有命中时不分配结果缓冲。
+func appendAdminSearchHit(hits []AdminSearchHit, hit AdminSearchHit, limit int) []AdminSearchHit {
+	if len(hits) == 0 {
+		hits = make([]AdminSearchHit, 0, limit)
+	}
+	return append(hits, hit)
+}
+
 // MaxAdminSearchQuery is the longest query, in characters, that the console search accepts.
 const MaxAdminSearchQuery = 100
 
@@ -77,7 +85,7 @@ func (a *Service) AdminSearch(ctx context.Context, q string, limit int) ([]Admin
 		if err := rows.Scan(&hit.Kind, &hit.ID, &hit.Title, &hit.Where, &hit.Target); err != nil {
 			return nil, err
 		}
-		hits = append(hits, hit)
+		hits = appendAdminSearchHit(hits, hit, limit)
 	}
 	return hits, rows.Err()
 }

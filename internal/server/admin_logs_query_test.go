@@ -108,16 +108,20 @@ func TestLokiQueryRangeAllocationBudget(t *testing.T) {
 func TestLokiQueryRangePooledResponseBudget(t *testing.T) {
 	payload, want := lokiQueryPayload(maxLogLimit)
 	s := fixedLokiQueryServer(payload)
+	const queriesPerSample = 100
 	result := testing.Benchmark(func(b *testing.B) {
 		for b.Loop() {
-			got, err := s.lokiQueryRange(context.Background(), "{}", 1, math.MaxInt64, maxLogLimit, "forward")
-			if err != nil || len(got) != len(want) {
-				b.Fatalf("日志查询结果变化：len=%d err=%v", len(got), err)
+			for range queriesPerSample {
+				got, err := s.lokiQueryRange(context.Background(), "{}", 1, math.MaxInt64, maxLogLimit, "forward")
+				if err != nil || len(got) != len(want) {
+					b.Fatalf("日志查询结果变化：len=%d err=%v", len(got), err)
+				}
 			}
 		}
 	})
-	// 常见响应正文复用缓冲；race 模式也应低于旧实现的约 912 KiB。
-	if allocated := result.AllocedBytesPerOp(); allocated > 700<<10 {
+	// race 模式的 sync.Pool 会随机丢弃对象；每个样本至少测量一百次查询，保留全部冷分配并减少短采样波动。
+	// 每次查询的预算保持 700 KiB，仍低于旧实现的约 912 KiB。
+	if allocated := result.AllocedBytesPerOp() / queriesPerSample; allocated > 700<<10 {
 		t.Fatalf("日志查询缓冲复用分配 %d 字节，超过 700 KiB 预算", allocated)
 	}
 }

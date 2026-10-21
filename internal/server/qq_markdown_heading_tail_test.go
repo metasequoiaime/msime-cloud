@@ -2,12 +2,15 @@ package server
 
 import (
 	"math/rand"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
 )
+
+var qqHeadingPattern = regexp.MustCompile(`^(#{1,6})\s+(.+?)\s*#*\s*$`)
 
 func markdownHeadingTailInput(headings int, padding string) string {
 	return "# 合成文档\n" + strings.Repeat("## 合成标题\n正文\n", headings) + padding
@@ -59,6 +62,18 @@ func TestQQMarkdownHeadingTailScanBudget(t *testing.T) {
 	}
 	if current.NsPerOp() >= baseline.NsPerOp()/4 {
 		t.Fatalf("多标题解析耗时 %d ns，未低于旧尾部扫描 %d ns 的四分之一", current.NsPerOp(), baseline.NsPerOp())
+	}
+}
+
+func TestQQMarkdownHeadingScanAllocationBudget(t *testing.T) {
+	text := markdownHeadingTailInput(256, "")
+	allocations := testing.AllocsPerRun(20, func() {
+		if got := qqSplitMarkdown("synthetic", text); len(got) != 256 {
+			t.Fatalf("分段数=%d，期望 256", len(got))
+		}
+	})
+	if allocations > 800 {
+		t.Fatalf("多标题解析分配 %.0f 次，超过 800 次预算", allocations)
 	}
 }
 

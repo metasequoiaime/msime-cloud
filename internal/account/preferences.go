@@ -36,6 +36,15 @@ var preferenceFields = func() map[string]preferenceField {
 	return fields
 }()
 
+// preferenceSchemaJSON 是只读的预编码 schema；字段表固定在构建产物中，避免每次请求重复遍历和编码。
+var preferenceSchemaJSON = func() json.RawMessage {
+	raw, err := json.Marshal(map[string]any{"fields": preferenceFields, "maximum_bytes": maximumPreferencesBytes, "update_mode": "replace", "revision_required": true})
+	if err != nil {
+		panic(err)
+	}
+	return raw
+}()
+
 type Preferences struct {
 	Revision int64                      `json:"revision"`
 	Settings map[string]json.RawMessage `json:"settings"`
@@ -151,5 +160,5 @@ func (a *Service) preferencesSchema(w http.ResponseWriter, r *http.Request) {
 	if _, ok := a.principal(w, r, false); !ok {
 		return
 	}
-	write(w, 200, map[string]any{"fields": preferenceFields, "maximum_bytes": maximumPreferencesBytes, "update_mode": "replace", "revision_required": true})
+	write(w, 200, preferenceSchemaJSON)
 }

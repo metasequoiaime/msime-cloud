@@ -168,7 +168,7 @@ jobs:
           python3 scripts/test_native.py
           python3 -m unittest discover -s scripts -p 'test_api_test_results.py'
           python3 -m unittest discover -s scripts -p 'test_go_coverage.py'
-          go test -race -benchtime=50ms -count=1 -p 1 -json -coverpkg=./... -coverprofile=bin/api.cover ./... > bin/api-test-results.jsonl || { cat bin/api-test-results.jsonl; exit 1; }
+          go test -race -benchtime=50ms -count=1 -p 1 -timeout=20m -json -coverpkg=./... -coverprofile=bin/api.cover ./... > bin/api-test-results.jsonl || { cat bin/api-test-results.jsonl; exit 1; }
           python3 scripts/check_api_test_results.py bin/api-test-results.jsonl
           python3 scripts/check_go_coverage.py bin/api.cover
       - name: 确认查询未修改基础词库

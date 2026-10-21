@@ -40,7 +40,7 @@ func (s *Server) createSharedSkinJob(w http.ResponseWriter, r *http.Request, id,
 		s.skinJobsBusy(w)
 		return
 	}
-	expires, wait, err := s.accounts.CreateSkinJob(r.Context(), id, owner, skinJobsPerOwner, skinJobCap(s.config), skinJobsPerDay, skinJobTTL)
+	reservation, wait, err := s.accounts.CreateSkinJob(r.Context(), id, owner, skinJobsPerOwner, skinJobCap(s.config), skinJobsPerDay, skinJobTTL)
 	if errors.Is(err, account.ErrLimited) {
 		w.Header().Set("Retry-After", strconv.Itoa(int((wait+time.Second-1)/time.Second)))
 		fail(w, 429, "rate_limit_exceeded")
@@ -61,11 +61,11 @@ func (s *Server) createSharedSkinJob(w http.ResponseWriter, r *http.Request, id,
 	ctx, cancel := context.WithTimeout(s.lifetime, skinJobTimeout)
 	s.mu.Lock()
 	if s.closed {
-		// Shutdown began after the insert: Close may already be waiting on skinWorkers, so no worker can be added. Drop the row rather than leave a job nobody runs.
+		// 登记后开始关闭，`Close` 可能已在等待工作进程，不能再增加任务；撤回任务并退还额度。
 		s.mu.Unlock()
 		cancel()
 		dropCtx, dropCancel := context.WithTimeout(context.Background(), skinJobWriteTimeout)
-		if err := s.accounts.DropSkinJob(dropCtx, id); err != nil {
+		if err := s.accounts.DropSkinJob(dropCtx, reservation); err != nil {
 			slog.Warn("unstarted skin artwork job not dropped", "job", id, "reason", err.Error())
 		}
 		dropCancel()
@@ -79,7 +79,7 @@ func (s *Server) createSharedSkinJob(w http.ResponseWriter, r *http.Request, id,
 	s.skinWorkers.Add(1)
 	s.mu.Unlock()
 	go s.runSharedSkinJob(ctx, cancel, id, body)
-	respondSkinJobCreated(w, id, expires)
+	respondSkinJobCreated(w, id, reservation.ExpiresAt)
 }
 
 func (s *Server) runSharedSkinJob(ctx context.Context, cancel context.CancelFunc, id string, body []byte) {

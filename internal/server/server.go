@@ -442,12 +442,100 @@ func (s *Server) upstream(r *http.Request, e Endpoint, method, contentType strin
 	return s.doUpstream(req)
 }
 
+// upstreamJSON 直接从上游响应流解码 JSON；只在调用方需要原始字节时才使用 upstream。
+func (s *Server) upstreamJSON(r *http.Request, e Endpoint, method, contentType string, body io.Reader, dst any) (bool, error) {
+	req, err := e.newRequest(r.Context(), method, body)
+	if err != nil {
+		return false, err
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	req.Header.Set("Accept", "application/json")
+	return s.doUpstreamJSON(req, dst)
+}
+
 // doUpstream sends req and returns its validated JSON body. For a request whose context was tagged by metered, the exchange (latency, and whether it failed with a transport error, non-2xx status or invalid body) is captured for the console's service metrics; the tagging handler records it once it has validated the body.
 func (s *Server) doUpstream(req *http.Request) ([]byte, error) {
 	started := time.Now()
 	b, err := s.sendUpstream(req)
 	captureMeter(req.Context(), started, err)
 	return b, err
+}
+
+var upstreamResponseBufferPool sync.Pool
+
+const upstreamPooledResponseInitialBytes = 32 << 10
+
+// doUpstreamJSON 校验响应大小和 JSON 后解码，复用批量翻译的响应缓冲。
+func (s *Server) doUpstreamJSON(req *http.Request, dst any) (bool, error) {
+	started := time.Now()
+	resp, err := s.client.Do(req)
+	if err != nil {
+		err = upstreamTransportError{cause: err}
+		captureMeter(req.Context(), started, err)
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		err = errors.New("upstream rejected request")
+		captureMeter(req.Context(), started, err)
+		return false, err
+	}
+
+	buffer := upstreamResponseBufferPool.Get()
+	var body []byte
+	if buffer != nil {
+		body = buffer.([]byte)
+	}
+	if cap(body) < upstreamPooledResponseInitialBytes {
+		body = make([]byte, 0, upstreamPooledResponseInitialBytes)
+	} else {
+		body = body[:0]
+	}
+	defer func() {
+		if cap(body) <= contract.UpstreamResponseBytes {
+			upstreamResponseBufferPool.Put(body[:0])
+		}
+	}()
+	for {
+		if len(body) == cap(body) {
+			if cap(body) >= contract.UpstreamResponseBytes+1 {
+				err = errors.New("invalid upstream response")
+				captureMeter(req.Context(), started, err)
+				return false, err
+			}
+			next := cap(body) * 2
+			if next > contract.UpstreamResponseBytes+1 {
+				next = contract.UpstreamResponseBytes + 1
+			}
+			grown := make([]byte, len(body), next)
+			copy(grown, body)
+			body = grown
+		}
+		n, readErr := resp.Body.Read(body[len(body):cap(body)])
+		body = body[:len(body)+n]
+		if len(body) > contract.UpstreamResponseBytes {
+			err = errors.New("invalid upstream response")
+			captureMeter(req.Context(), started, err)
+			return false, err
+		}
+		if readErr != nil {
+			if readErr != io.EOF {
+				err = upstreamTransportError{cause: readErr}
+				captureMeter(req.Context(), started, err)
+				return false, err
+			}
+			break
+		}
+	}
+	if !json.Valid(body) {
+		err = errors.New("invalid upstream response")
+		captureMeter(req.Context(), started, err)
+		return false, err
+	}
+	captureMeter(req.Context(), started, nil)
+	return json.Unmarshal(body, dst) == nil, nil
 }
 
 // upstreamTransportError 隐藏传输错误文本中的地址、凭据和用户参数，同时保留错误链供超时、取消和指标分类使用。

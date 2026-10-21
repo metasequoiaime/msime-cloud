@@ -57,6 +57,7 @@ func decodeDictionarySnapshot(reader io.Reader, stage func(snapshotRecord) error
 		if err := strictSnapshotJSON(line, &record); err != nil {
 			return errInvalidSnapshot
 		}
+		// 整行已递归拒绝重复键；正文先用 snapshotFields 校验字段与空值，再解码类型，无需重新扫描令牌。
 		var fields map[string]json.RawMessage
 		if err := json.Unmarshal(line, &fields); err != nil {
 			return errInvalidSnapshot
@@ -96,7 +97,7 @@ func decodeDictionarySnapshot(reader io.Reader, stage func(snapshotRecord) error
 				return errInvalidSnapshot
 			}
 			var e DictionaryEntry
-			if err := strictSnapshotJSON(record.Data, &e); err != nil {
+			if err := json.Unmarshal(record.Data, &e); err != nil {
 				return errInvalidSnapshot
 			}
 			// 覆盖记录可以没有源 ID，但 ID 会先进入 jsonb 暂存，不能包含 PostgreSQL 不支持的 NUL。
@@ -126,7 +127,7 @@ func decodeDictionarySnapshot(reader io.Reader, stage func(snapshotRecord) error
 				return errInvalidSnapshot
 			}
 			var p CandidatePosition
-			if err := strictSnapshotJSON(record.Data, &p); err != nil {
+			if err := json.Unmarshal(record.Data, &p); err != nil {
 				return errInvalidSnapshot
 			}
 			if !validSnapshotKey(p.Context, p.Code, p.Word) || p.Position < 1 || p.Position > 5 {
@@ -148,7 +149,7 @@ func decodeDictionarySnapshot(reader io.Reader, stage func(snapshotRecord) error
 				return errInvalidSnapshot
 			}
 			var p CandidateSelection
-			if err := strictSnapshotJSON(record.Data, &p); err != nil {
+			if err := json.Unmarshal(record.Data, &p); err != nil {
 				return errInvalidSnapshot
 			}
 			if !validSnapshotKey(p.Context, p.Code, p.Word) || p.Count < 0 || p.Count > 10 {

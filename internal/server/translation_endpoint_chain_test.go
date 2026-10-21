@@ -22,8 +22,8 @@ func runTranslationChainRequest(s *Server, r *http.Request, body string) *httpte
 	return w
 }
 
-func translationChainFixture(fallbacks int, disabled bool) *Server {
-	s := translationMeterServer("deeplx")
+func translationChainFixture(fallbacks int, disabled bool, provider string) *Server {
+	s := translationMeterServer(provider)
 	if disabled {
 		s.config.Translation.URL = ""
 	}
@@ -49,7 +49,8 @@ func TestTranslationEndpointChainAllocationBudget(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			measure := func(fallbacks int) testing.BenchmarkResult {
-				s := translationChainFixture(fallbacks, tc.disabled)
+				// 使用 DeepL 路径测量服务链，避免大响应缓冲池在竞态模式下随机丢弃缓存干扰分配预算。
+				s := translationChainFixture(fallbacks, tc.disabled, "deepl")
 				r := httptest.NewRequest(http.MethodPost, "/v1/translate", nil)
 				return testing.Benchmark(func(b *testing.B) {
 					for b.Loop() {
@@ -151,7 +152,7 @@ func TestTranslationEndpointChainOrderAndBudget(t *testing.T) {
 func BenchmarkTranslationEndpointChain(b *testing.B) {
 	for _, count := range []int{0, 1, 3} {
 		b.Run(fmt.Sprint(count), func(b *testing.B) {
-			s := translationChainFixture(count, false)
+			s := translationChainFixture(count, false, "deeplx")
 			r := httptest.NewRequest(http.MethodPost, "/v1/translate", nil)
 			b.ReportAllocs()
 			for b.Loop() {

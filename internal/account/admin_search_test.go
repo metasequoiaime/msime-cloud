@@ -99,3 +99,63 @@ INSERT INTO admin_notices(title,created_by) VALUES('Spring 版本公告','t'),('
 		t.Fatal("oversized query accepted", err)
 	}
 }
+
+func TestAdminSearchResultCapacity(t *testing.T) {
+	const limit = 20
+	samples := make([]AdminSearchHit, limit)
+	for i := range samples {
+		samples[i] = AdminSearchHit{ID: string(rune('a' + i))}
+	}
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			hits := []AdminSearchHit{}
+			for i := range limit {
+				hits = appendAdminSearchHit(hits, samples[i], limit)
+			}
+			if len(hits) != limit || cap(hits) != limit {
+				b.Fatalf("搜索结果长度=%d、容量=%d，期望均为 %d", len(hits), cap(hits), limit)
+			}
+		}
+	})
+	if result.AllocsPerOp() > 1 {
+		t.Fatalf("20 条搜索结果分配 %d 次，超过一次结果切片分配", result.AllocsPerOp())
+	}
+}
+
+func previousAdminSearchHits(samples []AdminSearchHit, limit int) []AdminSearchHit {
+	var hits []AdminSearchHit
+	for _, hit := range samples[:limit] {
+		hits = append(hits, hit)
+	}
+	return hits
+}
+
+func BenchmarkAdminSearchResultCapacity(b *testing.B) {
+	const limit = 20
+	samples := make([]AdminSearchHit, limit)
+	for i := range samples {
+		samples[i] = AdminSearchHit{ID: string(rune('a' + i))}
+	}
+	for _, tc := range []struct {
+		name string
+		fn   func([]AdminSearchHit, int) []AdminSearchHit
+	}{
+		{"previous", previousAdminSearchHits},
+		{"current", func(samples []AdminSearchHit, limit int) []AdminSearchHit {
+			var hits []AdminSearchHit
+			for _, hit := range samples[:limit] {
+				hits = appendAdminSearchHit(hits, hit, limit)
+			}
+			return hits
+		}},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				if got := tc.fn(samples, limit); len(got) != limit {
+					b.Fatal("搜索结果数量变化")
+				}
+			}
+		})
+	}
+}

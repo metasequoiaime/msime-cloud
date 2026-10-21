@@ -112,21 +112,21 @@ func (s *Server) translateNiuTrans(w http.ResponseWriter, r *http.Request, v tra
 	return true
 }
 
-func (s *Server) translateNiuTransUpstream(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint) {
+func (s *Server) translateNiuTransUpstream(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint) (string, bool) {
 	source, target := niutransLanguage(v.Source), niutransLanguage(v.Target)
 	timestamp := strconv.FormatInt(time.Now().UnixMilli(), 10)
 	payload := niutransTextForm(e.appID, e.apiKey, source, target, timestamp, v.Text)
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, e.URL, strings.NewReader(payload))
 	if err != nil {
 		upstreamError(w, r, err)
-		return
+		return "", false
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
 	req.Header.Set("Accept", "application/json")
 	body, err := s.doUpstream(req)
 	if err != nil {
 		upstreamError(w, r, err)
-		return
+		return "", false
 	}
 	var result struct {
 		Text      json.RawMessage `json:"tgtText"`
@@ -136,20 +136,20 @@ func (s *Server) translateNiuTransUpstream(w http.ResponseWriter, r *http.Reques
 	// 只借用本次调用的响应字节，忽略未知字段；精确匹配键名，保留原映射对大小写及 null 错误字段的判断。
 	if rest, decodeErr := segmentjson.Parse(body, &result, segmentjson.DontCopyRawMessage|segmentjson.DontMatchCaseInsensitiveStructFields); decodeErr != nil || len(rest) != 0 {
 		upstreamError(w, r, nil)
-		return
+		return "", false
 	}
 	if result.ErrorCode != nil {
 		upstreamError(w, r, niutransError(result.ErrorCode))
-		return
+		return "", false
 	}
 	if result.ErrorMsg != nil {
 		upstreamError(w, r, niutransError(nil))
-		return
+		return "", false
 	}
 	var translated string
 	if json.Unmarshal(result.Text, &translated) != nil || !bounded(translated, contract.OutputTextBytes) {
 		upstreamError(w, r, err)
-		return
+		return "", false
 	}
-	respond(w, 200, map[string]any{"code": 200, "data": translated})
+	return translated, true
 }

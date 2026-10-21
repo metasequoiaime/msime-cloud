@@ -335,11 +335,18 @@ func (s *Server) translateEndpoint(w http.ResponseWriter, r *http.Request, v tra
 
 // translateSingle 为一条已按上游限制拆好的文本执行实际 HTTP 调用。
 func (s *Server) translateSingle(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint) {
+	if text, ok := s.translateSingleText(w, r, v, e); ok {
+		respond(w, 200, map[string]any{"code": 200, "data": text})
+	}
+}
+
+// translateSingleText 返回已校验的译文，失败时沿用现有错误响应。
+func (s *Server) translateSingleText(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint) (string, bool) {
 	switch e.Provider {
 	case "openai":
-		s.translateOpenAI(w, r, v, e)
+		return s.translateOpenAI(w, r, v, e)
 	case "niutrans":
-		s.translateNiuTransUpstream(w, r, v, e)
+		return s.translateNiuTransUpstream(w, r, v, e)
 	default:
 		v.Source, v.Target = strings.ToUpper(v.Source), strings.ToUpper(v.Target)
 		payload, _ := json.Marshal(v)
@@ -350,9 +357,9 @@ func (s *Server) translateSingle(w http.ResponseWriter, r *http.Request, v trans
 		}
 		if err != nil || json.Unmarshal(b, &result) != nil || (result.Code != 0 && result.Code != 200) || !bounded(result.Data, contract.OutputTextBytes) {
 			upstreamError(w, r, err)
-			return
+			return "", false
 		}
-		respond(w, 200, map[string]any{"code": 200, "data": result.Data})
+		return result.Data, true
 	}
 }
 
@@ -366,6 +373,7 @@ const translationSplitConcurrency = 4
 // 外层改试下一个翻译服务,4xx 原样交给客户端,不会出现一半有译文一半没有的结果。
 func (s *Server) translateEach(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint) ([]string, bool) {
 	results := make([]*httptest.ResponseRecorder, len(v.Texts))
+	texts := make([]string, len(v.Texts))
 	slots := make(chan struct{}, translationSplitConcurrency)
 	var wg sync.WaitGroup
 	for i, text := range v.Texts {
@@ -377,22 +385,22 @@ func (s *Server) translateEach(w http.ResponseWriter, r *http.Request, v transla
 			rr := httptest.NewRecorder()
 			// 每条实际请求单独计量，避免并发调用互相覆盖结果和用量。
 			mr, call := metered(r, "translation", textChars([]string{text}))
-			s.translateSingle(rr, mr, translationRequest{Text: text, Source: v.Source, Target: v.Target}, e)
+			translated, ok := s.translateSingleText(rr, mr, translationRequest{Text: text, Source: v.Source, Target: v.Target}, e)
 			s.settleMeter(call, rr.Code < 500)
-			results[i] = rr
+			if ok {
+				// 直接保存字符串，避免成功结果经内部 JSON 编码和解析再复制正文。
+				texts[i] = translated
+			} else {
+				results[i] = rr
+			}
 		}()
 	}
 	wg.Wait()
-	texts := make([]string, len(results))
-	for i, rr := range results {
-		var result struct {
-			Data string `json:"data"`
-		}
-		if rr.Code != 200 || json.Unmarshal(rr.Body.Bytes(), &result) != nil {
+	for _, rr := range results {
+		if rr != nil {
 			copyResponse(w, rr)
 			return nil, false
 		}
-		texts[i] = result.Data
 	}
 	return texts, true
 }

@@ -84,7 +84,7 @@ func TestNiuTransResponseMatchesPrevious(t *testing.T) {
 			})
 			logs := captureLogs(t)
 			w := httptest.NewRecorder()
-			s.translateNiuTransUpstream(w, httptest.NewRequest(http.MethodPost, "/v1/translate", nil), translationRequest{Text: "word", Source: "zh", Target: "en"}, niuTransMemoryEndpoint())
+			s.translateSingle(w, httptest.NewRequest(http.MethodPost, "/v1/translate", nil), translationRequest{Text: "word", Source: "zh", Target: "en"}, niuTransMemoryEndpoint())
 			if ok {
 				var result struct{ Data string }
 				if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Data != want || logs.String() != "" {
@@ -113,7 +113,7 @@ func benchmarkNiuTransResponse(b *testing.B, body string, status int) {
 	b.ReportAllocs()
 	for b.Loop() {
 		w := httptest.NewRecorder()
-		s.translateNiuTransUpstream(w, r, v, e)
+		s.translateSingle(w, r, v, e)
 		if w.Code != status || (status == http.StatusOK && !strings.Contains(w.Body.String(), `"data":"word"`)) {
 			b.Fatal(w.Code, w.Body.String())
 		}

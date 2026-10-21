@@ -28,7 +28,7 @@ func TestNiuTransTextRequestMemoryBudget(t *testing.T) {
 	result := testing.Benchmark(func(b *testing.B) {
 		for b.Loop() {
 			w := httptest.NewRecorder()
-			s.translateNiuTransUpstream(w, r, v, e)
+			s.translateSingle(w, r, v, e)
 			if w.Code != http.StatusOK {
 				b.Fatal(w.Code, w.Body.String())
 			}
@@ -77,7 +77,7 @@ func TestNiuTransTextRequestBodyReplay(t *testing.T) {
 			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"tgtText":"word"}`))}, nil
 		})
 		w := httptest.NewRecorder()
-		s.translateNiuTransUpstream(w, httptest.NewRequest(http.MethodPost, "/v1/translate", nil), translationRequest{Text: text, Source: "zh-Hans", Target: "EN-US"}, e)
+		s.translateSingle(w, httptest.NewRequest(http.MethodPost, "/v1/translate", nil), translationRequest{Text: text, Source: "zh-Hans", Target: "EN-US"}, e)
 		if w.Code != http.StatusOK || calls != 1 {
 			t.Fatal("翻译调用或结果改变")
 		}
@@ -94,7 +94,7 @@ func BenchmarkNiuTransTextUpstreamRequest(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
 				w := httptest.NewRecorder()
-				s.translateNiuTransUpstream(w, r, v, e)
+				s.translateSingle(w, r, v, e)
 				if w.Code != http.StatusOK {
 					b.Fatal(w.Code, w.Body.String())
 				}

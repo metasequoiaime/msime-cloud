@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -272,18 +271,7 @@ func (s *Server) qqRepoFile(ctx context.Context, token, repo, path, ref string) 
 	if err != nil || !r.OK() {
 		return "", githubFailure("read "+path, r, err)
 	}
-	var file struct {
-		Content  string `json:"content"`
-		Encoding string `json:"encoding"`
-	}
-	if r.Decode(&file) != nil || file.Encoding != "base64" {
-		return "", errors.New("read " + path + ": invalid response")
-	}
-	raw, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(file.Content, "\n", ""))
-	if err != nil || !utf8.Valid(raw) {
-		return "", errors.New("read " + path + ": invalid content")
-	}
-	return string(raw), nil
+	return qqRepositoryText(r, "read "+path)
 }
 
 // recordQQAnswer 处理「记录答案」：整理成 FAQ 条目，在知识库仓库新分支上一次提交简体、繁体和核对哈希，开 PR。

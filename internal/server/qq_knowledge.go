@@ -3,7 +3,6 @@ package server
 import (
 	"cmp"
 	"context"
-	"encoding/base64"
 	"errors"
 	"iter"
 	"log/slog"
@@ -164,19 +163,12 @@ func (s *Server) loadQQKnowledge(ctx context.Context) ([]qqSection, error) {
 			if err != nil || !r.OK() {
 				return githubFailure("knowledge file", r, err)
 			}
-			var file struct {
-				Content  string `json:"content"`
-				Encoding string `json:"encoding"`
-			}
-			if r.Decode(&file) != nil || file.Encoding != "base64" {
-				return errors.New("knowledge file: invalid response")
-			}
-			raw, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(file.Content, "\n", ""))
-			if err != nil || !utf8.Valid(raw) {
-				return errors.New("knowledge file: invalid content")
+			text, err := qqRepositoryText(r, "knowledge file")
+			if err != nil {
+				return err
 			}
 			name := strings.TrimSuffix(entry.Name, ".md")
-			split := qqSplitMarkdown(name, string(raw))
+			split := qqSplitMarkdown(name, text)
 			if platform := qqDocPlatforms[name]; platform != "" {
 				for i := range split {
 					label := platform

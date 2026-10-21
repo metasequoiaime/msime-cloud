@@ -47,8 +47,9 @@ func validPreference(key string, raw json.RawMessage) bool {
 	}
 	switch field.Type {
 	case "boolean":
-		var v bool
-		return json.Unmarshal(raw, &v) == nil
+		// JSON 只允许这四种边界空白，其他 Unicode 空白仍须拒绝。
+		value := bytes.Trim(raw, " \t\r\n")
+		return bytes.Equal(value, []byte("true")) || bytes.Equal(value, []byte("false"))
 	case "integer":
 		var v int64
 		low, high := int64(0), int64(1000000)

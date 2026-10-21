@@ -801,6 +801,41 @@ type issueSimilar struct {
 	URL    string `json:"url"`
 }
 
+// issueTimelineEvents 把 GitHub 时间线转换成详情页事件，并按已解码事件数预留结果容量。
+func issueTimelineEvents(issue issueGitHub, events []issueTimelineGitHub) []issueEvent {
+	timeline := make([]issueEvent, 1, len(events)+1)
+	timeline[0] = issueEvent{Kind: "created", Actor: issue.User.Login, At: issue.CreatedAt}
+	for _, e := range events {
+		event := issueEvent{Kind: e.Event, Actor: e.actor(), At: e.CreatedAt}
+		switch e.Event {
+		case "commented":
+			event.Text = e.Body
+		case "labeled", "unlabeled":
+			if e.Label == nil {
+				continue
+			}
+			event.Text = e.Label.Name
+		case "assigned", "unassigned":
+			if e.Assignee == nil {
+				continue
+			}
+			event.Text = e.Assignee.Login
+		case "renamed":
+			if e.Rename == nil {
+				continue
+			}
+			event.Text = e.Rename.To
+		case "closed":
+			event.Text = e.StateReason
+		case "reopened", "marked_as_duplicate":
+		default:
+			continue
+		}
+		timeline = append(timeline, event)
+	}
+	return timeline
+}
+
 // issueDetail serves GET /api/issues/{owner}/{repo}/{n}: the issue with its body, its timeline (comments, labels, assignments, closing and reopening), the assignee triage would pick and up to three listed issues with similar titles.
 func (s *Server) issueDetail(w http.ResponseWriter, r *http.Request, rest string) {
 	gh, ok := s.adminGitHubApp(w)
@@ -853,35 +888,7 @@ func (s *Server) issueDetail(w http.ResponseWriter, r *http.Request, rest string
 		issueFail(w, issueResponseError(ctx, ref.Repo, "timeline", resp, err))
 		return
 	}
-	timeline := []issueEvent{{Kind: "created", Actor: issue.User.Login, At: issue.CreatedAt}}
-	for _, e := range events {
-		event := issueEvent{Kind: e.Event, Actor: e.actor(), At: e.CreatedAt}
-		switch e.Event {
-		case "commented":
-			event.Text = e.Body
-		case "labeled", "unlabeled":
-			if e.Label == nil {
-				continue
-			}
-			event.Text = e.Label.Name
-		case "assigned", "unassigned":
-			if e.Assignee == nil {
-				continue
-			}
-			event.Text = e.Assignee.Login
-		case "renamed":
-			if e.Rename == nil {
-				continue
-			}
-			event.Text = e.Rename.To
-		case "closed":
-			event.Text = e.StateReason
-		case "reopened", "marked_as_duplicate":
-		default:
-			continue
-		}
-		timeline = append(timeline, event)
-	}
+	timeline := issueTimelineEvents(issue, events)
 	row := s.issueRow(ref.Repo, issue)
 	assignee := ""
 	if p := s.issuePlatform(ref.Repo, row.Labels); p != nil {

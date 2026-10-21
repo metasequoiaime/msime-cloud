@@ -190,7 +190,6 @@ func respondTranslations(w http.ResponseWriter, v translationRequest, texts []st
 }
 
 func (s *Server) translate(w http.ResponseWriter, r *http.Request) {
-	endpoints := append([]TranslationEndpoint{s.config.Translation}, s.config.TranslationFallbacks...)
 	if !s.translationEnabled() {
 		if !enabled(w, s.config.Translation.Endpoint) {
 			return
@@ -212,13 +211,19 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var last *httptest.ResponseRecorder
-	for i, e := range endpoints {
+	fallbacks := s.config.TranslationFallbacks
+	// 第零项是主服务，后续项直接读取配置，避免每次请求复制整条服务链。
+	for i := 0; i <= len(fallbacks); i++ {
+		e := s.config.Translation
+		if i > 0 {
+			e = fallbacks[i-1]
+		}
 		if e.URL == "" {
 			continue
 		}
 		// 还有后备服务商时预留实际的上游请求额度；最后一家照常调用。
 		var budget *providerBudget
-		if hasTranslationEndpoint(endpoints[i+1:]) {
+		if hasTranslationEndpoint(fallbacks[i:]) {
 			budget = s.translationBudget(e)
 		}
 		rr := httptest.NewRecorder()

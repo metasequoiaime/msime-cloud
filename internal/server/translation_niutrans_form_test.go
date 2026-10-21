@@ -64,6 +64,18 @@ func TestNiuTransTextFormMatchesPrevious(t *testing.T) {
 	}
 }
 
+func TestNiuTransTextFormLongAllocationBudget(t *testing.T) {
+	text := strings.Repeat("中", 2730)
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			_ = niutransTextForm("synthetic-app", "synthetic-key", "zh", "en", "1700000000000", text)
+		}
+	})
+	if result.AllocedBytesPerOp() >= 32<<10 {
+		t.Fatalf("长文本表单分配 %d B，超过 32 KiB 预算", result.AllocedBytesPerOp())
+	}
+}
+
 func BenchmarkNiuTransTextForm(b *testing.B) {
 	for _, tc := range niuTransTextAuthInputs() {
 		for _, impl := range []struct {

@@ -78,6 +78,22 @@ func (a *Service) adminDownloadsSummary(w http.ResponseWriter, r *http.Request, 
 	write(w, 200, summary)
 }
 
+// downloadsTelemetryQuery 在初始化时构建平台归并和聚合语句，日期窗口、渠道和行数上限按请求绑定。
+var downloadsTelemetryQuery = `WITH grouped AS (
+ SELECT ` + canonicalPlatformSQL("platform") + ` AS p,version,artifact,channel,
+   count(*) FILTER (WHERE created_at>=$1) AS today,
+   count(*) AS week,
+   count(*) FILTER (WHERE channel=$4) AS mirror,
+   bool_or(channel IS NOT NULL) AS channel_reported
+ FROM admin_events WHERE kind='download' AND created_at>=$2 AND created_at<$3
+ GROUP BY p,version,artifact,channel
+)
+SELECT p,version,artifact,channel,today,week,
+ sum(today) OVER ()::bigint,sum(week) OVER ()::bigint,sum(mirror) OVER ()::bigint,
+ bool_or(channel_reported) OVER ()
+ FROM grouped
+	 ORDER BY week DESC,p,version,artifact NULLS LAST,channel NULLS LAST LIMIT $5`
+
 // downloadsSummary groups the download telemetry of the UTC week ending on now's day and adds the GitHub Release channel from the asset snapshots.
 func (a *Service) downloadsSummary(ctx context.Context, now time.Time) (downloadsSummary, error) {
 	now = now.UTC()
@@ -96,20 +112,7 @@ func (a *Service) downloadsSummary(ctx context.Context, now time.Time) (download
 	var telemetryChannelReported bool
 	var github []downloadsRow
 	batch := &pgx.Batch{}
-	batch.Queue(`WITH grouped AS (
- SELECT `+canonicalPlatformSQL("platform")+` AS p,version,artifact,channel,
-   count(*) FILTER (WHERE created_at>=$1) AS today,
-   count(*) AS week,
-   count(*) FILTER (WHERE channel=$4) AS mirror,
-   bool_or(channel IS NOT NULL) AS channel_reported
- FROM admin_events WHERE kind='download' AND created_at>=$2 AND created_at<$3
- GROUP BY p,version,artifact,channel
-)
-SELECT p,version,artifact,channel,today,week,
- sum(today) OVER ()::bigint,sum(week) OVER ()::bigint,sum(mirror) OVER ()::bigint,
- bool_or(channel_reported) OVER ()
- FROM grouped
-	 ORDER BY week DESC,p,version,artifact NULLS LAST,channel NULLS LAST LIMIT $5`, today, weekStart, today.AddDate(0, 0, 1), downloadsMirrorChannel, downloadsRowLimit+1).Query(func(rows pgx.Rows) error {
+	batch.Queue(downloadsTelemetryQuery, today, weekStart, today.AddDate(0, 0, 1), downloadsMirrorChannel, downloadsRowLimit+1).Query(func(rows pgx.Rows) error {
 		defer rows.Close()
 		for rows.Next() {
 			row := downloadsRow{Source: downloadsSourceTelemetry}

@@ -1,4 +1,5 @@
 import { formatNumber } from "../../utils/number";
+import { formatHours } from "../../utils/duration";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -80,12 +81,6 @@ function eventText(event: IssueEvent): string {
     case "marked_as_duplicate": return `${who}标记为重复`;
     default: return `${who}${event.kind}`;
   }
-}
-
-function formatHours(value: number | null): string {
-  if (value === null) return "—";
-  if (value < 1) return `${Math.max(1, Math.round(value * 60))} 分钟`;
-  return `${value < 10 ? value.toFixed(1) : Math.round(value)} 小时`;
 }
 
 const isOpenRow = (row: IssueRow) => row.state === "new" || row.state === "triaged";
@@ -281,7 +276,7 @@ export default function IssuesPage() {
           <StatTile label="待分诊" value={formatNumber(stats.pending)} />
           <StatTile label="已分类待处理" value={formatNumber(stats.triaged)} />
           <StatTile label="本周新增" value={formatNumber(stats.new_this_week)} />
-          <StatTile label="平均首次响应" value={formatHours(stats.first_response_hours)} sub={stats.first_response_samples ? `近 30 天 · ${stats.first_response_samples} 个 Issue` : "近 30 天暂无维护者回复"} />
+          <StatTile label="平均首次响应" value={formatHours(stats.first_response_hours, "minutes")} sub={stats.first_response_samples ? `近 30 天 · ${stats.first_response_samples} 个 Issue` : "近 30 天暂无维护者回复"} />
         </> : ["a", "b", "c", "d"].map(key => <Skeleton key={key} className="h-[76px] rounded-2xl" />)}
       </StatGrid>
       <DataTable

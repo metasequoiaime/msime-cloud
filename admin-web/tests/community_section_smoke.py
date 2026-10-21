@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 import csp_smoke as smoke
+from clock_helpers import expect_clocked_visible
 
 
 SECTIONS = (
@@ -148,9 +149,7 @@ def check_community_search_debounce(browser, base):
             assert len(requests) == initial, requests
             with page.expect_response(f"**/api/{section}?*"):
                 page.clock.run_for(1)
-            # Query 的响应通知也使用定时器；收到响应后推进时钟，让真实页面显示已返回的数据。
-            page.clock.run_for(100)
-            expect(page.get_by_role("button", name="最终词-1", exact=True)).to_be_visible()
+            expect_clocked_visible(page, page.get_by_role("button", name="最终词-1", exact=True))
             expected = {"page": ["1"], "status": ["pending"], "q": ["最终词"]}
             if section == "candidate-skins":
                 expected["visibility"] = ["private"]
@@ -158,8 +157,7 @@ def check_community_search_debounce(browser, base):
 
             with page.expect_response(f"**/api/{section}?*"):
                 page.get_by_role("button", name="下一页", exact=True).click()
-            page.clock.run_for(100)
-            expect(page.get_by_role("button", name="最终词-2", exact=True)).to_be_visible()
+            expect_clocked_visible(page, page.get_by_role("button", name="最终词-2", exact=True))
             count = len(requests)
             typed.fill("最终词")
             page.clock.run_for(300)
@@ -169,8 +167,7 @@ def check_community_search_debounce(browser, base):
             with page.expect_response(f"**/api/{section}?*"):
                 typed.fill("")
                 page.clock.run_for(300)
-            page.clock.run_for(100)
-            expect(page.get_by_role("button", name="全部-1", exact=True)).to_be_visible()
+            expect_clocked_visible(page, page.get_by_role("button", name="全部-1", exact=True))
             assert requests[-1] == {key: value for key, value in expected.items() if key != "q"}, requests
 
             # 搜索尚未应用时切换页面，旧搜索词不能带到新页面的请求。
@@ -179,8 +176,7 @@ def check_community_search_debounce(browser, base):
             with page.expect_response("**/api/replies?*"):
                 page.locator('aside a[href="/replies"]').click()
             expect(page.get_by_role("heading", name="回复模板", exact=True)).to_be_visible()
-            page.clock.run_for(1000)
-            expect(page.get_by_role("button", name="全部-1", exact=True)).to_be_visible()
+            expect_clocked_visible(page, page.get_by_role("button", name="全部-1", exact=True))
             assert all(params.get("q") != ["未应用的旧搜索"] for params in requests), requests
             assert not errors, errors
             assert page.evaluate("window.cspViolations") == []

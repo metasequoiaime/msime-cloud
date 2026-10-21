@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 import csp_smoke as smoke
+from clock_helpers import expect_clocked_visible
 
 
 def check_debounced_effect(browser, base):
@@ -106,6 +107,7 @@ def check_dictionary_debounce(browser, base):
             requests.append((params["page"][0], params.get("q", [""])[0]))
         route.fulfill(json=smoke.dictionary_fixture(query))
 
+    page.route("**/api/auth/session", lambda route: route.fulfill(json=smoke.FIXTURES["/api/auth/session"]))
     page.route("**/api/dictionary/file?*", listing)
     try:
         page.clock.install(time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc))
@@ -115,8 +117,7 @@ def check_dictionary_debounce(browser, base):
         page.clock.pause_at(datetime.datetime(2026, 1, 1, 0, 1, tzinfo=datetime.timezone.utc))
         with page.expect_response("**/api/dictionary/file?*"):
             page.get_by_role("button", name="下一页", exact=True).click()
-        page.clock.run_for(100)
-        expect(page.get_by_text("第 2 / 2 页", exact=False)).to_be_visible()
+        expect_clocked_visible(page, page.get_by_text("第 2 / 2 页", exact=False))
         typed = page.get_by_role("textbox", name="搜索当前文件词条", exact=True)
         initial = len(requests)
         typed.fill("中间词")
@@ -127,23 +128,20 @@ def check_dictionary_debounce(browser, base):
         assert len(requests) == initial, requests
         with page.expect_response("**/api/dictionary/file?*"):
             page.clock.run_for(1)
-        page.clock.run_for(100)
-        expect(page.get_by_text("找到 104 条「测试」的匹配", exact=False)).to_be_visible()
+        expect_clocked_visible(page, page.get_by_text("找到 104 条「测试」的匹配", exact=False))
         assert requests[initial:] == [("1", "测试")], requests
 
         # 手动搜索与清空立即生效，不能在旧计时器到期后再查询一次。
         typed.fill("示例")
         with page.expect_response("**/api/dictionary/file?*"):
             page.get_by_role("button", name="搜索词条", exact=True).click()
-        page.clock.run_for(100)
-        expect(page.get_by_text("找到 1 条「示例」的匹配", exact=False)).to_be_visible()
+        expect_clocked_visible(page, page.get_by_text("找到 1 条「示例」的匹配", exact=False))
         count = len(requests)
         page.clock.run_for(1000)
         assert len(requests) == count, requests
         with page.expect_response("**/api/dictionary/file?*"):
             page.get_by_role("button", name="清空词条搜索", exact=True).click()
-        page.clock.run_for(100)
-        expect(page.get_by_text("共 105 条词条", exact=False)).to_be_visible()
+        expect_clocked_visible(page, page.get_by_text("共 105 条词条", exact=False))
 
         # 编辑期间取消待应用搜索，提交单元格后再等待完整的 350 毫秒。
         typed.fill("测试")
@@ -162,8 +160,8 @@ def check_dictionary_debounce(browser, base):
         assert len(requests) == count, requests
         expect(page.get_by_text("共 105 条词条", exact=False)).to_be_visible()
         # 之前搜索过的结果仍在 60 秒缓存内，因此恢复时验证页面而不要求重新发请求。
-        page.clock.run_for(101)
-        expect(page.get_by_text("找到 104 条「测试」的匹配", exact=False)).to_be_visible()
+        page.clock.run_for(1)
+        expect_clocked_visible(page, page.get_by_text("找到 104 条「测试」的匹配", exact=False))
         expect(page.get_by_text("待保存变更 · 1 项", exact=False)).to_be_visible()
         assert all(q != "中间词" for _, q in requests), requests
         assert not errors, errors

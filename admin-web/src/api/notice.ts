@@ -1,14 +1,7 @@
 import { z } from "zod";
 
-// Platforms a notice can target besides "all", in display order; the server validates the same set.
-export const noticePlatforms = [
-  { key: "windows", label: "Windows" },
-  { key: "macos", label: "macOS" },
-  { key: "linux", label: "Linux" },
-  { key: "android", label: "Android" },
-  { key: "ios", label: "iOS" },
-  { key: "harmony", label: "HarmonyOS" },
-] as const;
+// 公告支持除 all 外的标准平台，沿用后台显示顺序；服务端独立校验允许值。
+export { platformOptions as noticePlatforms } from "../utils/platform.ts";
 
 // Channels: site and app pull /v1/notices, telegram is pushed by the server when the notice is published.
 export const noticeChannels = [

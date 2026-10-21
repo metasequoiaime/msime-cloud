@@ -56,7 +56,7 @@ def check_community_undo(browser, base):
                 if action == "remove_content":
                     page.get_by_role("dialog", name="下架「春日樱」？", exact=True).get_by_role("button", name="下架", exact=True).click()
                 text = "「春日樱」已下架：" if action == "remove_content" else "「春日樱」已上架" if action == "approve_content" else "「春日樱」已恢复"
-                expect(page.get_by_text(text, exact=action != "remove_content")).to_be_visible()
+                expect(page.locator("[data-msime-toast]").get_by_text(text, exact=action != "remove_content")).to_be_visible()
                 undo_button = page.get_by_role("button", name="撤销", exact=True, include_hidden=True)
                 if scenario in ("missing", "invalid"):
                     expect(undo_button).to_have_count(0)

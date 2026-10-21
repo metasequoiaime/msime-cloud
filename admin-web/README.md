@@ -24,6 +24,8 @@ pnpm dev
 - `src/auth.tsx`：登录状态、Google 登录与管理员密钥登录页。
 - `tests/csp_smoke.py`、`tests/harness/`：CSP 冒烟测试与共享组件测试页。
 
+`src/utils/platform.ts` 共用平台规范键、别名、显示名称与标准显示顺序。下载筛选和公告目标保留各自的导出名称并引用同一份选项；未知平台保留原文，空值提示由页面决定。
+
 ## CSP
 
 后台的 CSP 是 `script-src 'self'; style-src 'self'; img-src 'self' data:`，不允许 eval、内联 `<style>` 和外链图片。因此：

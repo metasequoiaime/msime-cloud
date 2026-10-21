@@ -79,7 +79,7 @@ def check_dictionary_revisions(browser, base):
             expect(page.get_by_role("button", name="撤销", exact=True)).to_be_disabled()
             expect(page.get_by_role("button", name="重做", exact=True)).to_be_disabled()
             edit_weight("350")
-            with page.expect_request("**/api/dictionary/changes"):
+            with page.expect_response("**/api/dictionary/changes"):
                 page.get_by_role("button", name="保存变更（1）", exact=True).click()
             assert posts == [{"path": "packs/programming/quanpin.txt", "sha": revision, "changes": [{"operation": "replace", "line": 1, "columns": ["示例", "shi'li", "350"]}]}], posts
             expect(page.get_by_text("已创建 PR #42。", exact=False)).to_be_visible()

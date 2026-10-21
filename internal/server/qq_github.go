@@ -360,21 +360,40 @@ const qqReleaseNoteRunes = 300
 // qqReleaseNotes 把发布说明变成一行纯文本交给模型：去掉图片、HTML 标签和代码块，每行过 qqPlainText（链接只留文字，去掉 Markdown 符号），丢掉空行，条目之间用「；」隔开，小标题后面接「：」，再按句截到 qqReleaseNoteRunes 字。曾经资料里只有 tag 和日期，问「windows 最新版更新了啥」只能叫群友自己去 GitHub 看。
 func qqReleaseNotes(body string) string {
 	var b strings.Builder
+	// 末尾可能去掉一个标题冒号；额外保留两字，确保超长正文仍会添加省略号。
+	remaining := qqReleaseNoteRunes + 2
+	writePrefix := func(text string) {
+		end := len(text)
+		for offset := range text {
+			if remaining == 0 {
+				end = offset
+				break
+			}
+			remaining--
+		}
+		b.WriteString(text[:end])
+	}
 	heading := false
 	qqReleaseNotesVisibleSegments(body, func(segment string) {
+		if remaining == 0 {
+			return
+		}
 		for line := range strings.SplitSeq(qqStripImagesAndHTML(segment), "\n") {
+			if remaining == 0 {
+				return
+			}
 			trimmed := strings.TrimSpace(line)
 			text := strings.TrimRight(qqPlainText(trimmed), "。；;：: ")
 			if text == "" {
 				continue
 			}
 			if b.Len() > 0 && !heading {
-				b.WriteString("；")
+				writePrefix("；")
 			}
-			b.WriteString(text)
+			writePrefix(text)
 			heading = strings.HasPrefix(trimmed, "#")
 			if heading {
-				b.WriteString("：")
+				writePrefix("：")
 			}
 		}
 	})

@@ -45,6 +45,9 @@ const (
 	qqHistorySummaryRunes = 300
 )
 
+// qqPendingVectorHash 是同步本轮已选中更新的标记；内容哈希只由十六进制字符组成，不会与它冲突。
+const qqPendingVectorHash = "\x00qq-vector-pending"
+
 // qqHistoryPerms 是同步 issue 和 PR 时的令牌权限：只有 issues 读权限的令牌调 issues 接口时，GitHub 会把 PR 滤掉（曾经因此一条 PR 都没有入库），所以要加上 pull_requests 读权限。
 var qqHistoryPerms = map[string]string{"contents": "read", "issues": "read", "pull_requests": "read", "metadata": "read"}
 
@@ -338,10 +341,16 @@ func (s *Server) syncQQDocVectors(ctx context.Context) (int, error) {
 	}
 	var items []account.QQKnowledgeItem
 	var texts []string
+	// 数据库已有本轮全部段落时直接复用哈希表做去重标记，避免更新一段时再分配整张 pending 表；首次同步或部分命中仍使用独立表，避免把缺失 ID 逐个扩进数据库返回的 map。
+	useHashMarkers := len(hashes) == uniqueEstimate
 	var pending map[string]struct{}
 	for i, section := range sections {
 		// 只对本轮已经选中更新的 ID 去重，未变化的段落不能遮住后续同 ID 的更新。
-		if _, ok := pending[ids[i]]; ok {
+		if useHashMarkers {
+			if hashes[ids[i]] == qqPendingVectorHash {
+				continue
+			}
+		} else if _, ok := pending[ids[i]]; ok {
 			continue
 		}
 		text := ""
@@ -359,13 +368,19 @@ func (s *Server) syncQQDocVectors(ctx context.Context) (int, error) {
 		if text == "" {
 			text = qqDocVectorText(section)
 		}
-		if pending == nil {
+		if len(items) == 0 {
 			// 仅在确有更新时准备批处理缓冲，避免未变化的文档每轮都分配整份待更新数组。
-			pending = make(map[string]struct{}, uniqueEstimate)
 			items = make([]account.QQKnowledgeItem, 0, uniqueEstimate)
 			texts = make([]string, 0, uniqueEstimate)
 		}
-		pending[ids[i]] = struct{}{}
+		if useHashMarkers {
+			hashes[ids[i]] = qqPendingVectorHash
+		} else {
+			if pending == nil {
+				pending = make(map[string]struct{}, uniqueEstimate)
+			}
+			pending[ids[i]] = struct{}{}
+		}
 		items = append(items, account.QQKnowledgeItem{ID: ids[i], Kind: "doc", Title: section.Doc + " · " + section.Title, Summary: qqTruncate(section.Text, qqHistorySummaryRunes), ContentHash: h, UpdatedAt: s.qq.now()})
 		texts = append(texts, text)
 	}

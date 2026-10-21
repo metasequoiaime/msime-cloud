@@ -82,6 +82,7 @@ func TestQQDocVectorsDuplicateUpdatesKeepPreviousSemantics(t *testing.T) {
 		{"新段落保留首次正文", nil, []qqSection{base, changed, other, later}, base, 2},
 		{"未变化段落后仍可更新", []qqSection{base}, []qqSection{base, changed, other, later}, changed, 2},
 		{"首次更新后忽略其余重复", []qqSection{base}, []qqSection{changed, base, later, other}, changed, 2},
+		{"已有全部 ID 时首次更新后忽略重复", []qqSection{base, other}, []qqSection{changed, later, other}, changed, 1},
 		{"全部未变化时不重算", []qqSection{base, other}, []qqSection{base, other, base}, base, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

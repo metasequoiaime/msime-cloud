@@ -14,6 +14,32 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
 )
 
+// qqFAQCancelResponseTransport 在指定 GitHub 写入的响应读取完成后取消请求，重现管理员断开连接。
+type qqFAQCancelResponseTransport struct {
+	base         http.RoundTripper
+	method, path string
+	cancel       context.CancelFunc
+}
+
+func (tr qqFAQCancelResponseTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := tr.base.RoundTrip(r)
+	if err == nil && r.Method == tr.method && r.URL.Path == tr.path {
+		resp.Body = qqFAQCancelResponseBody{ReadCloser: resp.Body, cancel: tr.cancel}
+	}
+	return resp, err
+}
+
+type qqFAQCancelResponseBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b qqFAQCancelResponseBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.cancel()
+	return err
+}
+
 const qqRaceFAQ = `{"valid":"yes","question":"鸿蒙版在哪下载？","answer":"鸿蒙版已经上架华为应用市场。在鸿蒙手机上打开华为应用市场，搜索「水杉输入法」安装即可，安装后到系统设置的输入法里把它设为默认输入法，就能正常打字了。","category":"安装与启动","question_tw":"鴻蒙版在哪下載？","answer_tw":"鴻蒙版已經上架華為應用市場。在鴻蒙手機上打開華為應用市場，搜尋「水杉輸入法」安裝即可，安裝後到系統設定的輸入法裡把它設為預設輸入法，就能正常打字了。"}`
 
 const qqRaceOpenPull = `[{"number":42,"title":"docs(faq): add 「鸿蒙版在哪下载？」","head":{"ref":"qq-faq/existing"}}]`
@@ -135,6 +161,32 @@ func TestRecordQQAnswerStopsWhenLockUnavailable(t *testing.T) {
 	}
 	if fake.pullListCalls != 0 || len(fake.faqWrites) != 0 {
 		t.Fatal("拿锁失败后不应查询或创建 PR", fake.pullListCalls, fake.faqWrites)
+	}
+}
+
+func TestRecordQQAnswerContinuesAfterCommitCancellation(t *testing.T) {
+	s, fake := qqFAQRaceServer(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	base := s.adminGitHub.HTTP.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	s.adminGitHub.HTTP.Transport = qqFAQCancelResponseTransport{
+		base: base, method: http.MethodPost, path: "/repos/o/docs/git/commits", cancel: cancel,
+	}
+	var reply string
+	number := s.recordQQAnswer(ctx, "记录答案 鸿蒙版在哪下载", func(text string) { reply = text })
+	if ctx.Err() == nil {
+		t.Fatal("未在创建 commit 后取消请求")
+	}
+	if number != 42 || !strings.Contains(reply, "PR：docs #42") {
+		t.Fatalf("请求取消后未返回已创建的 PR：number=%d reply=%s", number, reply)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.faqWrites) != 4 {
+		t.Fatalf("请求取消后 GitHub 写入不完整：%v", fake.faqWrites)
 	}
 }
 

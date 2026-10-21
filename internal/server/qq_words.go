@@ -134,13 +134,13 @@ const qqReplyWordLetters = "加词只收纯汉字的词；带字母的词（比�
 
 // qqParseWords 把「加词」后面的内容拆成词条：每条是词语，后面可以跟拼音。词语两边的引号、书名号先去掉；拼音那边的括号和引号由 qqNormalizePinyin 去掉。lettered 表示有一条的字母是词语的一部分（「栓Q shuan q」「打call」）：开头的汉字后面不隔空格紧跟着 ASCII 字母，并且这样拆出来的拼音校验不过；校验得过的是拼音连着词语写（「水杉shuishan」），照常当拼音。
 func qqParseWords(content string) (entries []wordSubmissionEntry, lettered bool) {
-	entries = make([]wordSubmissionEntry, 0, qqWordEntryCapacity(content))
+	capacity := qqWordEntryCapacity(content)
 	for entry, hasLetters := range qqWordEntries(content) {
+		if entries == nil {
+			entries = make([]wordSubmissionEntry, 0, capacity)
+		}
 		entries = append(entries, entry)
 		lettered = lettered || hasLetters
-	}
-	if len(entries) == 0 {
-		return nil, lettered
 	}
 	return entries, lettered
 }

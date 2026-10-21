@@ -413,36 +413,84 @@ func qqReleaseNotesVisibleSegments(body string, yield func(string)) {
 	}
 }
 
+func qqReleaseMaterialDate(r *qqRelease) string {
+	d, _, _ := strings.Cut(r.PublishedAt, "T")
+	return d
+}
+
+func appendQQReleaseMaterialPart(b *strings.Builder, hasPart bool, prefix string, r *qqRelease) bool {
+	if hasPart {
+		b.WriteString("；")
+	}
+	b.WriteString(prefix)
+	b.WriteString(r.TagName)
+	b.WriteString("（")
+	b.WriteString(qqReleaseMaterialDate(r))
+	b.WriteString(" 发布）")
+	return true
+}
+
 // qqReleasesMaterial 是交给回答的模型的各平台最新版本，每个平台一行，写出仓库名和完整 tag，方便模型对照 issue；notes 为 nil 或对这个平台返回 true 时，在最新正式版下面加一行「更新内容：…」（见 qqReleaseNotes），预发布版和新版预览不附。
 func qqReleasesMaterial(list []qqPlatformRelease, notes func(qqPlatformRelease) bool) string {
-	date := func(r *qqRelease) string {
-		d, _, _ := strings.Cut(r.PublishedAt, "T")
-		return d
+	var capacity int
+	for _, p := range list {
+		capacity += len(p.Name) + len(p.Repo) + len(p.NextGenRepo) + 64
+		if p.Stable != nil {
+			capacity += len(p.Stable.TagName) + len(p.Stable.PublishedAt)
+			if p.Stable.notesReady {
+				capacity += len(p.Stable.notes)
+			} else {
+				capacity += qqReleaseNoteRunes * utf8.UTFMax
+			}
+		}
+		if p.Preview != nil {
+			capacity += len(p.Preview.TagName) + len(p.Preview.PublishedAt)
+		}
+		for i := range p.NextGen {
+			capacity += len(p.NextGen[i].TagName) + len(p.NextGen[i].PublishedAt)
+		}
 	}
 	var b strings.Builder
+	b.Grow(capacity)
 	for _, p := range list {
 		_, name, _ := strings.Cut(p.Repo, "/")
 		_, home, _ := strings.Cut(p.NextGenRepo, "/")
-		parts := []string{}
+		b.WriteString("- ")
+		b.WriteString(p.Name)
+		b.WriteString("（")
+		b.WriteString(name)
+		b.WriteString(" 仓库）：")
+		hasPart := false
 		if p.Stable != nil {
-			parts = append(parts, fmt.Sprintf("正式版 %s（%s 发布）", p.Stable.TagName, date(p.Stable)))
+			hasPart = appendQQReleaseMaterialPart(&b, hasPart, "正式版 ", p.Stable)
 		}
 		if p.Preview != nil {
-			parts = append(parts, fmt.Sprintf("预发布 %s（%s 发布）", p.Preview.TagName, date(p.Preview)))
+			hasPart = appendQQReleaseMaterialPart(&b, hasPart, "预发布 ", p.Preview)
 		}
-		for _, r := range p.NextGen {
-			parts = append(parts, fmt.Sprintf("%s 仓库的新版预览 %s（%s 发布）", home, r.TagName, date(&r)))
+		for i := range p.NextGen {
+			if hasPart {
+				b.WriteString("；")
+			}
+			b.WriteString(home)
+			b.WriteString(" 仓库的新版预览 ")
+			b.WriteString(p.NextGen[i].TagName)
+			b.WriteString("（")
+			b.WriteString(qqReleaseMaterialDate(&p.NextGen[i]))
+			b.WriteString(" 发布）")
+			hasPart = true
 		}
-		if len(parts) == 0 {
-			parts = append(parts, "还没有发布")
+		if !hasPart {
+			b.WriteString("还没有发布")
 		}
-		fmt.Fprintf(&b, "- %s（%s 仓库）：%s\n", p.Name, name, strings.Join(parts, "；"))
+		b.WriteByte('\n')
 		if p.Stable != nil && (notes == nil || notes(p)) {
 			if !p.Stable.notesReady {
 				p.Stable.notes, p.Stable.notesReady = qqReleaseNotes(p.Stable.Body), true
 			}
 			if text := p.Stable.notes; text != "" {
-				b.WriteString("  更新内容：" + text + "\n")
+				b.WriteString("  更新内容：")
+				b.WriteString(text)
+				b.WriteByte('\n')
 			}
 		}
 	}

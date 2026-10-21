@@ -3,10 +3,39 @@ package server
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+type wordSubmissionCancelTransport struct {
+	base         http.RoundTripper
+	method, path string
+	cancel       context.CancelFunc
+}
+
+func (tr wordSubmissionCancelTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := tr.base.RoundTrip(r)
+	if err == nil && r.Method == tr.method && r.URL.Path == tr.path {
+		resp.Body = wordSubmissionCancelBody{ReadCloser: resp.Body, cancel: tr.cancel}
+	}
+	return resp, err
+}
+
+type wordSubmissionCancelBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b wordSubmissionCancelBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.cancel()
+	return err
+}
 
 func TestWordSubmissionLocalQueueHonorsContext(t *testing.T) {
 	for _, name := range []string{"cancelled", "deadline"} {
@@ -93,5 +122,29 @@ func TestWordSubmissionLocalQueueHonorsContext(t *testing.T) {
 				t.Fatalf("取消后串行写入未恢复：number=%d，error=%v", number, err)
 			}
 		})
+	}
+}
+
+func TestWordSubmissionOpensPullRequestAfterCommitCancellation(t *testing.T) {
+	s, upstream, _ := wordsFixture(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	base := s.words.client.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	s.words.client.Transport = wordSubmissionCancelTransport{
+		base: base, method: "PUT", path: wordsTestRepo + "/contents/custom/words.txt", cancel: cancel,
+	}
+	r := httptest.NewRequest("POST", wordSubmissionsPath, strings.NewReader(validWords)).WithContext(ctx)
+	r.Header.Set("Origin", wordsTestOrigin)
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	if ctx.Err() == nil || w.Code != http.StatusCreated {
+		t.Fatalf("词条提交后取消请求未继续创建 PR：ctx=%v status=%d body=%s", ctx.Err(), w.Code, w.Body.String())
+	}
+	if upstream.count("PUT "+wordsTestRepo+"/contents/custom/words.txt") != 1 || upstream.count("POST "+wordsTestRepo+"/pulls") != 1 {
+		t.Fatalf("提交后的写入次数错误：%v", upstream.calls)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -312,12 +313,15 @@ func (ws *wordSubmitter) submit(ctx context.Context, sub submission) (int, error
 	case !r.ok():
 		return 0, phaseError(errWordsUnavailable, "commit "+sub.kind.file, r, nil)
 	}
+	// 词条已经确认写入后，即使访客断开连接也继续限时更新标题或创建拉取请求，避免留下无 PR 的孤儿分支。
+	postCtx, cancelPost := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancelPost()
 	if open != nil {
-		ws.retitle(ctx, token, *open, map[string]int{sub.kind.name: addedLines(baseContent, updated)})
+		ws.retitle(postCtx, token, *open, map[string]int{sub.kind.name: addedLines(baseContent, updated)})
 		return open.Number, nil
 	}
 	// From here on the entries are committed, so failing to open the pull request is reported as uncertain rather than as not submitted.
-	r, err = ws.githubRequest(ctx, token, "POST", repo+"/pulls", map[string]any{"title": submissionTitle(map[string]int{sub.kind.name: len(sub.lines)}), "head": branch, "base": g.Branch, "body": wordsPullRequestBody})
+	r, err = ws.githubRequest(postCtx, token, "POST", repo+"/pulls", map[string]any{"title": submissionTitle(map[string]int{sub.kind.name: len(sub.lines)}), "head": branch, "base": g.Branch, "body": wordsPullRequestBody})
 	var created struct {
 		Number int `json:"number"`
 	}

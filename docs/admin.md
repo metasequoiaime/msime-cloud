@@ -274,7 +274,7 @@ Google 登录时，后端校验 ID Token 的签名、issuer、audience、有效�
 | `create_candidate_skin` / `update_candidate_skin` | `candidate-skins` | `manifest`：`skin.toml` 文本；`files`：包内相对路径到图片 base64 的对象；`category`；`visibility`：`public` / `private` |
 | `create_plugin` / `update_plugin` | `plugins` | `archive`：插件 ZIP 的标准 base64；类型、插件 ID、版本、许可从包内 `plugin.toml` 解析 |
 
-三类 `value` 都要求 `owner_id`、`name`（1–32 字）、`description`（可省略，最多 280 字）和 `moderation`（`pending` / `approved` / `removed`）。编辑还必须传入详情返回的 `edit_token`。作品的内容、分类、可见性或审核状态已变化时返回 409 `content_changed`，保留表单供复制，关闭并重新打开详情后再编辑。列表和详情同时返回 `edit_token`；`approve_content.value` 也可带它，过期审核返回 409 `conflict`。新增 ID 已存在时分别返回 409 `skin_id_conflict` / `candidate_skin_id_conflict` / `plugin_id_conflict`，不会覆盖旧作品。
+三类 `value` 都要求 `owner_id`、`name`（1–32 字）、`description`（可省略，最多 280 字）和 `moderation`（`pending` / `approved` / `removed`）。编辑还必须传入详情返回的 `edit_token`。作品的内容、分类、可见性或审核状态已变化时返回 409 `content_changed`，保留表单供复制，关闭并重新打开详情后再编辑。列表和详情同时返回 `edit_token`；`approve_content.value` 也可带它，过期审核返回 409 `conflict`。新增 ID 已存在时分别返回 409 `skin_id_conflict` / `candidate_skin_id_conflict` / `plugin_id_conflict`，不会覆盖旧作品。候选皮肤和插件的包内 ID 不能以点结尾或为 `nul`，以避免 Windows 安装目录失真；不合规的创建和编辑分别返回 400 `invalid_candidate_skin_package` / `invalid_plugin_manifest`，作品和成功审计都不改变。
 
 编辑插件时可省略 `archive` 以保留原 ZIP；编辑候选皮肤时可省略 `files` 以保留原图片，传入时替换全部图片。键盘设计、候选皮肤清单和图片、插件 ZIP 均沿用公共上传接口的格式、许可及大小校验。`create_skin` / `update_skin` 的 `value` 上限为 710000 字节，候选皮肤为 3200000 字节，插件为 11300000 字节，其他操作仍按各自原有限制。管理员维护不扣客户端的发布频率及数量配额；仍锁定作者行防止绕过并发封禁，封禁作者不能新增或编辑。管理员具有直接发布权限，保存时以指定的状态写入并记录审核人，不运行客户端上传的敏感词拦截；详情的实时检查仍会展示命中项。
 

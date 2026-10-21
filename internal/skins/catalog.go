@@ -37,7 +37,10 @@ var builtinLoads = func() map[string]func() (Package, error) {
 	return loads
 }()
 
-func SafeID(id string) bool  { return idPattern.MatchString(id) }
+// SafeID 额外拒绝 Windows 无法按原名安装的尾点目录与 nul 设备目录。
+func SafeID(id string) bool {
+	return id != "nul" && !strings.HasSuffix(id, ".") && idPattern.MatchString(id)
+}
 func Builtin(id string) bool { return slices.Contains(builtinIDs, id) }
 
 type Colors struct {

@@ -16,6 +16,8 @@
 
 `TestCandidateAcceptedPathsCanBeInstalledOnWindows` 在真实 Windows 文件系统上逐个独占创建服务器接受的候选皮肤文件，检查写入字节和最终路径集合，覆盖目录尾点别名与纯点目录。`TestCandidateWindowsTrailingDotPathsRejected` 验证各平台都拒绝尾点路径段并保留合法相似名称；`TestCandidateWindowsTrailingDotPathsRejectedByWriteEndpoints` 使用真实 PostgreSQL 覆盖发布、替换、后台创建和编辑四个入口，检查返回 400、不保存无效包、不生成成功审计且失败编辑保留原作品。
 
+`TestCommunityPackageIDsKeepWindowsDirectoryNames` 在真实 Windows 上检查候选皮肤创建目录和插件重命名安装后，扫描读回的名称仍与已接受的清单 ID 相同。`TestCommunityPackageIDsRejectWindowsAliases`、`TestSafeIDPreservesWindowsDirectoryName` 和种子脚本测试在各平台拒绝尾点与 `nul` ID；`TestCommunityPackageWindowsAliasIDsRejectedByWriteEndpoints` 使用真实 PostgreSQL 覆盖七个写入口，检查拒绝、不落库、不新增成功审计以及失败编辑保留原作品。
+
 ## 完整运行
 
 必须使用独立的 PostgreSQL 数据库，名称包含 `msime_auth_test`；账号测试会清空测试表。不要复用本地开发或生产数据库，也不要并行运行多个使用同一测试数据库的 `go test` 进程。

@@ -48,6 +48,18 @@ class ClientDialectTests(unittest.TestCase):
                 if reason is None and case.get("base"):
                     self.assertEqual(table["base"], case["base"])
 
+    def test_ids_preserve_windows_directory_name(self):
+        fixture = json.loads(FIXTURE.read_text())
+        for sid in ("shared.", "shared..", "default.", "fluent.", "nul"):
+            with self.subTest(sid):
+                sid, manifest, files = build_case(fixture, {"template": "sample", "id": sid})
+                with self.assertRaisesRegex(seed.Invalid, "invalid skin id"):
+                    seed.validate(sid, manifest, files)
+        for sid in ("shared", "shared.v1", "shared..v1", "shared-v1", "shared_v1", "con", "aux", "com1", "lpt9", "null", "nul0", "a" * 64):
+            with self.subTest(sid):
+                sid, manifest, files = build_case(fixture, {"template": "sample", "id": sid})
+                seed.validate(sid, manifest, files)
+
     def test_animation_table(self):
         """与 internal/skins/client_test.go 的 TestClientAnimationTable 相同的用例：共享用例表没有覆盖 [animation]。"""
         fixture = json.loads(FIXTURE.read_text())

@@ -40,7 +40,7 @@
 清单最大 256 KiB，必须是 UTF-8，用 go-toml 严格解析：重复键、类型不符（例如浮点写进整数）均拒绝；键名逐字比较，`Kind` 这类大小写不同的键视为未知键。
 
 - 公共键：`schema_version`（必须为 1）、`kind`、`id`、`name`（≤ 80 字节）、`version`（≤ 32）、`license`（≤ 64，只含 SPDX 表达式字符）、可选 `author`（≤ 120）、`description`（≤ 500）、`permissions`（必须为空数组或省略）。必填文本不能为空白，任何文本不能含控制字符。
-- `kind` 必须与请求的 `kind` 一致（否则 400 `plugin_kind_mismatch`），`id` 和 `version` 必须与请求的 `plugin_id`、`version` 一致（否则 400 `plugin_manifest_mismatch`）。`id` 不能占用客户端内置的同类插件 id。
+- `kind` 必须与请求的 `kind` 一致（否则 400 `plugin_kind_mismatch`），`id` 和 `version` 必须与请求的 `plugin_id`、`version` 一致（否则 400 `plugin_manifest_mismatch`）。`id` 为 1 到 64 个小写 ASCII 字母、数字、点、横线或下划线，以字母或数字开头；不能以点结尾、不能是 `nul`，也不能占用客户端内置的同类插件 id。尾点和 `nul` 会导致 Windows 无法按清单 ID 安装目录；发布请求的 `plugin_id` 不合规时返回 400 `invalid_plugin_metadata`，包内 ID 不合规时返回 400 `invalid_plugin_manifest`，种子生成同样拒绝。
 - `sound`：`mode = "keys"`（默认）需要 `[sounds]` 且含 `default`，其余可选键为 `space`、`enter`、`backspace`、`commit`、`achievement`；`mode = "sequence"` 需要 `[sequence]`，`sample` 加 1 到 128 个 -24..24 的 `semitones`，可选 `advance = "key" | "commit"`。最多 8 个不同样本，单个不超过 512 KiB，合计不超过 4 MiB。
 - `music`：`[music]` 的 `tracks` 为 1 到 8 个不重复文件，单个不超过 16 MiB。
 - `command_table`：1 到 256 个 `[[commands]]`，每行 `trigger`（1 到 32 个小写字母，不重复）、`title`（≤ 48 字节）、`template`（≤ 199 个 UTF-16 单元）。模板的花括号必须成对且不嵌套，占位符只能是 `{date}`、`{time}`、`{weekday}`、`{date:FMT}`、`{time:FMT}`。FMT 按客户端所用 time crate 的 strftime 规则解析，不认识的说明符（如 `%Q`、`%E`、`%O`、`%Z`）以及需要时区偏移的 `%s`、`%z` 均拒绝。模板在 2026-09-30 和 2026-12-30 的 23:59:59 各展开一次（`{weekday}` 为“星期三”，月份和星期用英文名），展开结果不能含控制字符（`%n`、`%t` 会产生换行和制表符），也不能超过 199 个 UTF-16 单元。

@@ -56,7 +56,8 @@ def is_image(name):
 
 
 def safe_id(value):
-    return re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", value) is not None
+    # 与 Go 的 SafeID 一致，避免发布在 Windows 上无法按原名安装的目录。
+    return value != "nul" and not value.endswith(".") and re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", value) is not None
 
 
 def safe_resource(name, limit):

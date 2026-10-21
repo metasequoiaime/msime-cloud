@@ -15355,7 +15355,7 @@
                   "manifest": {
                     "type": "string",
                     "maxLength": 65536,
-                    "description": "原样的 skin.toml 文本"
+                    "description": "原样的 skin.toml 文本；包内 id 不能以点结尾或为 nul，以避免 Windows 安装目录失真。"
                   },
                   "files": {
                     "type": "object",
@@ -15925,7 +15925,7 @@
                   "manifest": {
                     "type": "string",
                     "maxLength": 65536,
-                    "description": "原样的 skin.toml 文本，id 须与原包相同"
+                    "description": "原样的 skin.toml 文本，id 须与原包相同，不能以点结尾或为 nul。"
                   },
                   "files": {
                     "type": "object",
@@ -16798,7 +16798,7 @@
           }
         ],
         "parameters": [],
-        "description": "请求最多 11,300,000 字节。zip 包不超过 8 MiB、最多 64 个成员和 16 个文件，解压总量不超过 24 MiB 且不超过包体 100 倍加 1 MiB；拒绝绝对路径、..、反斜杠、符号链接、加密成员和嵌套压缩包。包内恰好一个 plugin.toml（schema_version = 1，严格解析，未知键拒绝），kind 与 plugin_id、version 须与请求一致，permissions 必须为空；引用的音频须存在且为 .wav/.ogg 并匹配文件头（sound 采样只能是 .wav），effect、phrase_table、symbol_set 只含清单里的参数或数据、不带任何音频；helpcode 点名一个不超过 1 MiB 的 .txt 辅助码表，wordbook 点名一个不超过 4 MiB 的 .tsv 单词表，内容按客户端的严格语法校验；其余文件只能是 .txt/.md 说明。id 为客户端 UUID，同一请求重试返回 200；每个账号最多 20 个插件、包体合计不超过 32 MiB，每小时最多发布 10 次；同一账号的发布逐个处理，同一进程最多同时接收 4 个发布，排队超时返回 503 plugin_busy。 详见 docs/plugin-community.md。",
+        "description": "请求最多 11,300,000 字节。zip 包不超过 8 MiB、最多 64 个成员和 16 个文件，解压总量不超过 24 MiB 且不超过包体 100 倍加 1 MiB；拒绝绝对路径、..、反斜杠、符号链接、加密成员和嵌套压缩包。包内恰好一个 plugin.toml（schema_version = 1，严格解析，未知键拒绝），kind 与 plugin_id、version 须与请求一致，包内 id 不能以点结尾或为 nul（Windows 无法按原名安装，返回 invalid_plugin_manifest），请求的 plugin_id 不合规返回 invalid_plugin_metadata；permissions 必须为空；引用的音频须存在且为 .wav/.ogg 并匹配文件头（sound 采样只能是 .wav），effect、phrase_table、symbol_set 只含清单里的参数或数据、不带任何音频；helpcode 点名一个不超过 1 MiB 的 .txt 辅助码表，wordbook 点名一个不超过 4 MiB 的 .tsv 单词表，内容按客户端的严格语法校验；其余文件只能是 .txt/.md 说明。id 为客户端 UUID，同一请求重试返回 200；每个账号最多 20 个插件、包体合计不超过 32 MiB，每小时最多发布 10 次；同一账号的发布逐个处理，同一进程最多同时接收 4 个发布，排队超时返回 503 plugin_busy。 详见 docs/plugin-community.md。",
         "responses": {
           "201": {
             "description": "成功",

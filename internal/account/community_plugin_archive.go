@@ -115,9 +115,9 @@ type pluginPack struct {
 	Manifest []byte
 }
 
-// validPluginID is the client's safe_id: 1 to 64 lowercase ASCII letters, digits, dots, dashes and underscores, starting with a letter or digit.
+// validPluginID 沿用客户端的标识符形状，并拒绝 Windows 无法按原名安装的尾点与 nul 目录。
 func validPluginID(id string) bool {
-	if id == "" || len(id) > 64 || !isASCIIAlnum(id[0]) {
+	if id == "" || len(id) > 64 || !isASCIIAlnum(id[0]) || id == "nul" || strings.HasSuffix(id, ".") {
 		return false
 	}
 	for i := 0; i < len(id); i++ {

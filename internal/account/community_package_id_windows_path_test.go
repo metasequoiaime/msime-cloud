@@ -10,7 +10,7 @@ import (
 
 func TestCommunityPackageIDsKeepWindowsDirectoryNames(t *testing.T) {
 	for _, kind := range []string{"candidate-skins", "plugins"} {
-		for _, id := range []string{"shared", "shared.v1", "shared-v1", "shared_v1", "con", "nul", "aux", "com1", "lpt9", "shared.", "shared..", "default.", "fluent."} {
+		for _, id := range []string{"shared", "shared.v1", "shared-v1", "shared_v1", "con", "nul", "nul.v1", "null", "nul0", "con.v1", "aux.v1", "com1.v1", "lpt9.v1", "aux", "com1", "lpt9", "shared.", "shared..", "default.", "fluent."} {
 			t.Run(kind+"/"+id, func(t *testing.T) {
 				var manifest, code string
 				if kind == "candidate-skins" {

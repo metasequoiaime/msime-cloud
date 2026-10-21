@@ -369,11 +369,7 @@ func (a *Service) communityList(w http.ResponseWriter, r *http.Request) {
 		a.error(w, e)
 		return
 	}
-	more := len(items) > 20
-	if more {
-		items = items[:20]
-	}
-	write(w, 200, map[string]any{"skins": items, "has_more": more})
+	writeCommunityPage(w, "skins", items)
 }
 func (a *Service) communityDetail(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()

@@ -228,11 +228,7 @@ func (a *Service) resourceList(w http.ResponseWriter, r *http.Request) {
 		a.error(w, err)
 		return
 	}
-	more := len(items) > 20
-	if more {
-		items = items[:20]
-	}
-	write(w, 200, map[string]any{"items": items, "has_more": more})
+	writeCommunityPage(w, "items", items)
 }
 func (a *Service) resourceDetail(w http.ResponseWriter, r *http.Request) {
 	fields, ok := communityFields(r.URL.Query(), "moderation")

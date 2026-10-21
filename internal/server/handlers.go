@@ -372,7 +372,12 @@ const translationSplitConcurrency = 4
 // 并发请求正是 max_concurrent 会挡掉的那种(#3864)。任何一条失败,整次调用就按那条的状态返回:5xx 让
 // 外层改试下一个翻译服务,4xx 原样交给客户端,不会出现一半有译文一半没有的结果。
 func (s *Server) translateEach(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint) ([]string, bool) {
-	results := make([]*httptest.ResponseRecorder, len(v.Texts))
+	// 各条记录器和空缓冲一次预留，响应头由标准库在实际写入时创建。
+	results := make([]struct {
+		response httptest.ResponseRecorder
+		body     bytes.Buffer
+		failed   bool
+	}, len(v.Texts))
 	texts := make([]string, len(v.Texts))
 	slots := make(chan struct{}, translationSplitConcurrency)
 	var wg sync.WaitGroup
@@ -382,7 +387,9 @@ func (s *Server) translateEach(w http.ResponseWriter, r *http.Request, v transla
 		go func() {
 			defer wg.Done()
 			defer func() { <-slots }()
-			rr := httptest.NewRecorder()
+			result := &results[i]
+			rr := &result.response
+			rr.Code, rr.Body = http.StatusOK, &result.body
 			// 每条实际请求单独计量，避免并发调用互相覆盖结果和用量。
 			mr, call := metered(r, "translation", textChars([]string{text}))
 			translated, ok := s.translateSingleText(rr, mr, translationRequest{Text: text, Source: v.Source, Target: v.Target}, e)
@@ -391,14 +398,14 @@ func (s *Server) translateEach(w http.ResponseWriter, r *http.Request, v transla
 				// 直接保存字符串，避免成功结果经内部 JSON 编码和解析再复制正文。
 				texts[i] = translated
 			} else {
-				results[i] = rr
+				result.failed = true
 			}
 		}()
 	}
 	wg.Wait()
-	for _, rr := range results {
-		if rr != nil {
-			copyResponse(w, rr)
+	for i := range results {
+		if results[i].failed {
+			copyResponse(w, &results[i].response)
 			return nil, false
 		}
 	}

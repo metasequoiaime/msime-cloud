@@ -857,7 +857,13 @@ func resourceScreenText(content ResourceContent) string {
 
 // resourceScreenTextWithPrefix 将名称等前缀和资源正文一次拼接，避免先分配整份正文再复制。
 func resourceScreenTextWithPrefix(content ResourceContent, prefix []string) string {
-	parts := make([]string, 0, len(prefix)+len(content.Entries)+1+2*len(content.Phrases))
+	capacity := len(prefix) + len(content.Entries) + 1 + 2*len(content.Phrases)
+	// 回复、单词条和空资源只需少量段，使用栈上缓冲避免新增切片分配。
+	var small [4]string
+	parts := small[:0]
+	if capacity > len(small) {
+		parts = make([]string, 0, capacity)
+	}
 	parts = append(parts, prefix...)
 	for _, entry := range content.Entries {
 		parts = append(parts, entry.Word)

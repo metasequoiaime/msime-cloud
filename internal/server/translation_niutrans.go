@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -44,12 +43,39 @@ func niutransAuthString(appID, apiKey, source, target, timestamp, text string) s
 // niutransTextForm 保留字段顺序及 URL 转义，一次拼成正文；签名按原始值生成，十六进制摘要直接写入。
 func niutransTextForm(appID, apiKey, source, target, timestamp, text string) string {
 	auth := niutransAuthString(appID, apiKey, source, target, timestamp, text)
-	return "appId=" + url.QueryEscape(appID) +
-		"&authStr=" + auth +
-		"&from=" + url.QueryEscape(source) +
-		"&srcText=" + url.QueryEscape(text) +
-		"&timestamp=" + url.QueryEscape(timestamp) +
-		"&to=" + url.QueryEscape(target)
+	var form strings.Builder
+	form.Grow(3*(len(appID)+len(source)+len(timestamp)+len(target)+len(text)) + len(auth) + 64)
+	form.WriteString("appId=")
+	writeNiuTransQueryEscape(&form, appID)
+	form.WriteString("&authStr=")
+	form.WriteString(auth)
+	form.WriteString("&from=")
+	writeNiuTransQueryEscape(&form, source)
+	form.WriteString("&srcText=")
+	writeNiuTransQueryEscape(&form, text)
+	form.WriteString("&timestamp=")
+	writeNiuTransQueryEscape(&form, timestamp)
+	form.WriteString("&to=")
+	writeNiuTransQueryEscape(&form, target)
+	return form.String()
+}
+
+// writeNiuTransQueryEscape 将值直接写入表单缓冲，避免 QueryEscape 返回的临时字符串复制长正文。
+func writeNiuTransQueryEscape(form *strings.Builder, value string) {
+	const hex = "0123456789ABCDEF"
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_', c == '.', c == '~':
+			form.WriteByte(c)
+		case c == ' ':
+			form.WriteByte('+')
+		default:
+			form.WriteByte('%')
+			form.WriteByte(hex[c>>4])
+			form.WriteByte(hex[c&0x0f])
+		}
+	}
 }
 
 // niutransDefaultRequestsPerSecond 是小牛文本翻译当前账号的每秒请求上限：超过时它返回错误码 10001（The QPS Exceeds Maximum Limit 5）。升级套餐后用 requests_per_second 覆盖。

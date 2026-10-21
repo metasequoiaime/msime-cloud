@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"strconv"
-	"strings"
 	"unicode/utf8"
 )
 
@@ -20,41 +19,46 @@ func validPreferenceNumber(raw json.RawMessage) bool {
 	if len(raw) == 0 || (raw[0] != '-' && (raw[0] < '0' || raw[0] > '9')) || !json.Valid(raw) {
 		return false
 	}
-	value := string(raw)
+	value := raw
 	negative := value[0] == '-'
 	if negative {
 		value = value[1:]
 	}
 	mantissa := value
 	var exponent int64
-	if i := strings.IndexAny(value, "eE"); i >= 0 {
+	if i := bytes.IndexAny(value, "eE"); i >= 0 {
 		var err error
-		exponent, err = strconv.ParseInt(value[i+1:], 10, 32)
+		exponent, err = strconv.ParseInt(string(value[i+1:]), 10, 32)
 		if err != nil || exponent > maximumPreferenceNumericExponent || exponent < -maximumPreferenceNumericExponent {
 			return false
 		}
 		mantissa = value[:i]
 	}
 	var fractionDigits int64
-	if i := strings.IndexByte(mantissa, '.'); i >= 0 {
+	if i := bytes.IndexByte(mantissa, '.'); i >= 0 {
 		fractionDigits = int64(len(mantissa) - i - 1)
 	}
 	if fractionDigits-exponent > maximumPreferenceNumericScale {
 		return false
 	}
-	digits := strings.TrimLeft(strings.ReplaceAll(mantissa, ".", ""), "0")
-	if digits == "" {
+	// JSON 语法已保证最多一个小数点；保留子切片，计数和尾零检查时跳过它。
+	digits := bytes.TrimLeft(mantissa, "0.")
+	if len(digits) == 0 {
 		return true
 	}
 	if negative {
 		return false
 	}
-	integerDigits := int64(len(digits)) + exponent - fractionDigits
+	digitCount := len(digits)
+	if bytes.IndexByte(digits, '.') >= 0 {
+		digitCount--
+	}
+	integerDigits := int64(digitCount) + exponent - fractionDigits
 	if integerDigits < 7 {
 		return true
 	}
 	// 恰有七位整数时，只有 1000000 本身合法；小数尾部也不能有非零数字。
-	return integerDigits == 7 && digits[0] == '1' && strings.Trim(digits[1:], "0") == ""
+	return integerDigits == 7 && digits[0] == '1' && len(bytes.Trim(digits[1:], "0.")) == 0
 }
 
 // validPreferenceString 检查 JSON 字符串、数据库编码限制及解码后的 UTF-8 字节数，不分配解码副本。

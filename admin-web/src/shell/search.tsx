@@ -42,7 +42,7 @@ export function GlobalSearch() {
     if (!q) return [];
     const lower = q.toLowerCase();
     const pages = navItems.filter(item => navAllowed(permissions, item)).filter(item => item.label.toLowerCase().includes(lower) || item.key.includes(lower)).map(item => ({ key: `page:${item.key}`, title: item.label, where: "页面", path: item.path }));
-    const items = debounced === q && server.data ? server.data.items.map(item => ({ key: `${item.kind}:${item.id}`, title: item.title, where: item.where, path: pageForTarget(item.target), focus: item.id })) : [];
+    const items = debounced === q && server.data ? server.data.items.map(item => ({ key: `${item.kind}:${item.id}`, title: item.title, where: item.where, path: pageForTarget(item.target, item.id), focus: item.id })) : [];
     return [...pages, ...items].slice(0, 8);
   }, [q, debounced, server.data, permissions]);
 

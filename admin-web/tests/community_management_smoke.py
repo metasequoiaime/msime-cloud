@@ -66,7 +66,7 @@ def check_community_management(browser, base):
     page.route("**/api/actions", action)
     try:
         page.goto(base + "/community")
-        expect(page.get_by_role("heading", name="社区管理", exact=True)).to_be_visible()
+        expect(page.get_by_role("heading", name="键盘皮肤", exact=True)).to_be_visible()
         expect(page.get_by_role("radio", name="全部", exact=True)).to_have_attribute("data-state", "on")
         page.get_by_role("button", name="新增键盘皮肤", exact=True).click()
         form = page.get_by_role("dialog", name="新增键盘皮肤", exact=True)

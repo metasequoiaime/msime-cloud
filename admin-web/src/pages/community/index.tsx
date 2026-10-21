@@ -3,12 +3,11 @@ import { parsePage } from "../../utils/pagination";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ToggleGroup } from "radix-ui";
 import { Search } from "lucide-react";
 import { useAPI } from "../../api/client";
 import { keys } from "../../api/keys";
 import type { Detail, Item, Section } from "../../api/community";
-import { countsSchema, isSection, listSchema, sectionLabels, sections } from "../../api/community";
+import { isSection, listSchema, sectionLabels } from "../../api/community";
 import { usePageSearch, useSetPageSearch } from "../../shell/page-search";
 import { PageIntro } from "../../shell/page-intro";
 import { usePermissions } from "../../shell/permissions";
@@ -31,29 +30,12 @@ function isStatus(value: string | undefined): value is Status {
   return value === "pending" || value === "approved" || value === "removed" || value === "all";
 }
 
-// SectionTabs is the segmented tab row of the five content kinds, each with its pending count.
-function SectionTabs({ value, onChange, pending }: { value: Section; onChange: (section: Section) => void; pending?: Record<Section, number> }) {
-  return <div className="max-w-full overflow-x-auto">
-    <ToggleGroup.Root type="single" value={value} aria-label="内容类型" onValueChange={next => { if (isSection(next)) onChange(next); }}
-      className="inline-flex rounded-xl bg-panel-2 p-1">
-      {sections.map(section => {
-        const count = pending?.[section] ?? 0;
-        return <ToggleGroup.Item key={section} value={section}
-          className="inline-flex h-8 items-center gap-1.5 rounded-[9px] px-3.5 text-[13.5px] whitespace-nowrap text-muted transition hover:text-ink data-[state=on]:bg-panel data-[state=on]:font-semibold data-[state=on]:text-ink data-[state=on]:shadow-[0_1px_3px_rgba(0,0,0,.08)]">
-          {sectionLabels[section]}
-          {count > 0 && <span className="text-xs tabular-nums opacity-70">{count}</span>}
-        </ToggleGroup.Item>;
-      })}
-    </ToggleGroup.Root>
-  </div>;
-}
-
-export default function CommunityPage() {
+// CommunityPage 为各独立内容页复用列表、详情和审核流程。
+export function CommunityPage({ section: tab }: { section: Section }) {
   const api = useAPI();
   const { can } = usePermissions();
   const search = usePageSearch();
   const setSearch = useSetPageSearch();
-  const tab: Section = isSection(search.tab) ? search.tab : "skins";
   const status: Status = isStatus(search.status) ? search.status : "all";
   const visibility = search.visibility === "private" ? "private" : "public";
   const page = parsePage(search.page, Number.POSITIVE_INFINITY);
@@ -86,10 +68,6 @@ export default function CommunityPage() {
     setOpen(isSection(prefix) ? { section: prefix, id: focus.slice(slash + 1) } : { section: tab, id: focus });
   }, [focus, tab]);
 
-  const counts = useQuery({
-    queryKey: keys.page("community", "counts"),
-    queryFn: ({ signal }) => api.get("community/counts", countsSchema, { signal }),
-  });
   const params = new URLSearchParams({ page: String(page) });
   if (status !== "all") params.set("status", status);
   if (tab === "candidate-skins") params.set("visibility", visibility);
@@ -102,7 +80,6 @@ export default function CommunityPage() {
     placeholderData: (previous, previousQuery) => previousQuery?.queryKey[3] === tab ? previous : undefined,
   });
 
-  const pending = counts.data ? Object.fromEntries(sections.map(section => [section, counts.data[section].pending])) as Record<Section, number> : undefined;
   const items = list.data?.items ?? [];
   const total = list.data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -136,11 +113,10 @@ export default function CommunityPage() {
   }
 
   return <>
-    <PageIntro page="community">
+    <PageIntro page={tab}>
       {isEditableSection(tab) && <Button variant="primary" disabled={!canReview} title={canReview ? undefined : "需要审核社区内容权限"} onClick={() => { if (isEditableSection(tab)) setEditor({ section: tab }); }}>新增{sectionLabels[tab]}</Button>}
     </PageIntro>
     <div className="mb-3.5 flex flex-wrap items-center gap-2.5">
-      <SectionTabs value={tab} pending={pending} onChange={next => setSearch({ tab: next === "skins" ? undefined : next, page: undefined, visibility: undefined })} />
       <FilterChips label="审核状态" value={status} options={statusOptions} onChange={next => setSearch({ status: next === "all" ? undefined : next, page: undefined })} />
       {tab === "candidate-skins" && <FilterChips label="可见性" value={visibility} options={visibilityOptions} onChange={next => setSearch({ visibility: next === "public" ? undefined : next, page: undefined })} />}
       <label className="relative flex h-9 w-full min-[820px]:ml-auto min-[820px]:w-[220px]">
@@ -151,7 +127,6 @@ export default function CommunityPage() {
       </label>
     </div>
     {tab === "candidate-skins" && visibility === "private" && <p className="m-0 mb-3.5 text-[12.5px] text-muted">私有库只有作者本人可见，不计入待审核数。</p>}
-    {counts.isError && <ErrorState error={counts.error} onRetry={() => counts.refetch()} className="mb-3.5" />}
 
     {body}
 

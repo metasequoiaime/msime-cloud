@@ -1,6 +1,7 @@
+import type { Section } from "./api/community";
 import type { Permission, Shell } from "./api/shell";
 
-export type PageKey = "overview" | "dictionary" | "dictpr" | "community" | "issues" | "feedback" | "words" | "users" | "downloads" | "notice" | "release" | "cloud" | "crash" | "status" | "logs" | "perm" | "me";
+export type PageKey = "overview" | "dictionary" | "dictpr" | Section | "issues" | "feedback" | "words" | "users" | "downloads" | "notice" | "release" | "cloud" | "crash" | "status" | "logs" | "perm" | "me";
 
 export type NavItem = {
   key: PageKey;
@@ -10,11 +11,30 @@ export type NavItem = {
   // SVG path data on a 24x24 viewBox, taken from the design prototype.
   icon: string;
   badge?: keyof Shell["pending"];
+  communityBadge?: Section;
   // permission hides the item from the sidebar and global search for roles without it, for pages whose reads are permission-gated on the server (GET /api/cloud requires view_cloud_usage).
   permission?: Permission;
   // feature 是页面依赖的可选功能（/api/shell 的 features），未在部署配置中启用时侧栏和全局搜索都不显示该页。
   feature?: keyof NonNullable<Shell["features"]>;
 };
+
+export const communityPaths = {
+  "skins": "/skins",
+  "candidate-skins": "/candidate-skins",
+  "plugins": "/plugins",
+  "dictionaries": "/dictionaries",
+  "replies": "/replies",
+  "phrases": "/phrases",
+} as const;
+
+export const communityNavItems: readonly NavItem[] = [
+  { key: "skins", label: "键盘皮肤", path: communityPaths.skins, description: "管理键盘皮肤的设计、作者与上下架。", icon: "M8 3 4 6l2 4 2-1v12h8V9l2 1 2-4-4-3c-.5 1.5-2 2.5-4 2.5S8.5 4.5 8 3z", communityBadge: "skins" },
+  { key: "candidate-skins", label: "候选窗皮肤", path: communityPaths["candidate-skins"], description: "管理候选窗皮肤、图片资源与公开或私有图库。", icon: "M4 5h16v12H4zM8 21h8M12 17v4M7 9h3M7 13h7", communityBadge: "candidate-skins" },
+  { key: "plugins", label: "插件", path: communityPaths.plugins, description: "管理社区插件包、版本与上下架。", icon: "M9 3v4M15 3v4M7 7h10v4a5 5 0 0 1-10 0zM12 16v5", communityBadge: "plugins" },
+  { key: "dictionaries", label: "社区词库", path: communityPaths.dictionaries, description: "审核用户分享的社区词库，查看词条和举报。", icon: "M4 4h7a2 2 0 0 1 2 2v15a3 3 0 0 0-3-2H4zM20 4h-4a3 3 0 0 0-3 2M20 4v15h-4a3 3 0 0 0-3 2", communityBadge: "dictionaries" },
+  { key: "replies", label: "回复模板", path: communityPaths.replies, description: "审核用户分享的回复模板，查看内容和举报。", icon: "M4 5h16v11H9l-5 4zM8 9h8M8 12h5", communityBadge: "replies" },
+  { key: "phrases", label: "短语包", path: communityPaths.phrases, description: "审核用户分享的短语包，查看短语和举报。", icon: "M5 4h14v16H5zM8 8h8M8 12h8M8 16h5", communityBadge: "phrases" },
+];
 
 export const navGroups: readonly { title: string; items: readonly NavItem[] }[] = [
   { title: "概览", items: [
@@ -23,11 +43,11 @@ export const navGroups: readonly { title: string; items: readonly NavItem[] }[] 
   { title: "审核", items: [
     { key: "dictionary", label: "词库管理", path: "/dictionary", description: "浏览词库、维护词条，并将变更提交到 msime-dictionary。", icon: "M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5zM4 5.5v15M8 7h8M8 11h8M8 15h5" },
     { key: "dictpr", label: "词库审核", path: "/dictpr", description: "审核官网词库投稿生成的 GitHub PR。", icon: "M5 19.5V4.5A1.5 1.5 0 0 1 6.5 3H19v15H6.5A1.5 1.5 0 0 0 5 19.5A1.5 1.5 0 0 0 6.5 21H19v-3M9 10l2 2 4-4", badge: "dict_prs" },
-    { key: "community", label: "社区管理", path: "/community", description: "管理键盘皮肤、候选窗皮肤和插件的内容与上下架，复核社区词库、回复模板和短语包。", icon: "M8 3 4 6l2 4 2-1v12h8V9l2 1 2-4-4-3c-.5 1.5-2 2.5-4 2.5S8.5 4.5 8 3z", badge: "community" },
     { key: "issues", label: "问题分诊", path: "/issues", description: "分类、指派和回复 GitHub Issue。", icon: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 8v5M12 16.5v.01", badge: "issues" },
     { key: "feedback", label: "用户反馈", path: "/feedback", description: "用户在 App 里提交的问题、建议和词库反馈，以及附带的截图。", icon: "M4 5h16v11H8l-4 4zM8 9h8M8 12.5h5" },
     { key: "words", label: "敏感词库", path: "/words", description: "词库投稿和社区内容的敏感词名单。", icon: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM5.6 5.6l12.8 12.8" },
   ] },
+  { title: "社区", items: communityNavItems },
   { title: "运营", items: [
     { key: "users", label: "用户账号", path: "/users", description: "注册用户、登录会话与封禁。", icon: "M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M16 4.5a3.5 3.5 0 0 1 0 6.5M18 14.5c1.8.8 3 2.8 3 5.5" },
     { key: "downloads", label: "下载记录", path: "/downloads", description: "安装包下载上报与 GitHub Release 下载量。", icon: "M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19h14" },
@@ -71,14 +91,21 @@ export const legacyRedirects: Readonly<Record<string, string>> = {
   "/audit": "/perm",
   "/system": "/status",
   "/crashes": "/crash",
-  "/skins": "/community",
-  "/dictionaries": "/community",
-  "/replies": "/community",
+  "/community": "/skins",
   "/site-settings": "/downloads",
 };
 
-// pageForTarget turns a server-side target (a page key such as "users", or a path) into a route path; unknown targets fall back to the overview.
-export function pageForTarget(target: string): string {
+// communityPathForSearch 兼容旧分类链接，带类型前缀的定位目标优先于旧 tab。
+export function communityPathForSearch(search: Record<string, string | undefined>) {
+  const slash = search.focus?.indexOf("/") ?? -1;
+  const prefix = slash > 0 ? search.focus?.slice(0, slash) : undefined;
+  const section = prefix && Object.hasOwn(communityPaths, prefix) ? prefix : search.tab;
+  return section && Object.hasOwn(communityPaths, section) ? communityPaths[section as Section] : communityPaths.skins;
+}
+
+// pageForTarget 将页面键或路径转换为路由；旧社区搜索和通知按定位目标选择内容页。
+export function pageForTarget(target: string, focus?: string): string {
+  if (target === "community" || target === "/community") return communityPathForSearch({ focus });
   if (target.startsWith("/")) return pageForPath(target)?.path ?? legacyRedirects[target] ?? "/";
   return navItems.find(item => item.key === target)?.path ?? "/";
 }

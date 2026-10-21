@@ -25,11 +25,11 @@ DIST = ROOT / "admin-web" / "dist"
 ADMIN_GO = ROOT / "internal" / "server" / "admin.go"
 
 PAGES = {
-    "/": "数据概览", "/dictionary": "词库管理", "/dictpr": "词库审核", "/community": "社区管理", "/issues": "问题分诊", "/feedback": "用户反馈", "/words": "敏感词库",
+    "/": "数据概览", "/dictionary": "词库管理", "/dictpr": "词库审核", "/skins": "键盘皮肤", "/candidate-skins": "候选窗皮肤", "/plugins": "插件", "/dictionaries": "社区词库", "/replies": "回复模板", "/phrases": "短语包", "/issues": "问题分诊", "/feedback": "用户反馈", "/words": "敏感词库",
     "/users": "用户账号", "/downloads": "下载记录", "/notice": "公告推送", "/release": "发布管理", "/cloud": "云端监控",
     "/crash": "崩溃上报", "/status": "系统状态", "/logs": "服务日志", "/perm": "权限日志", "/me": "个人中心",
 }
-REDIRECTS = {"/admins": "/perm", "/audit": "/perm", "/system": "/status", "/crashes": "/crash", "/skins": "/community?tab=skins", "/dictionaries": "/community?tab=dictionaries", "/replies": "/community?tab=replies", "/site-settings": "/downloads"}
+REDIRECTS = {"/admins": "/perm", "/audit": "/perm", "/system": "/status", "/crashes": "/crash", "/community": "/skins", "/site-settings": "/downloads"}
 
 # Test fixtures for the shell endpoints, shaped like gap.md section 1.
 FIXTURES = {
@@ -1678,7 +1678,8 @@ def main() -> int:
                 check_feedback_undo(browser, base)
                 from community_category_smoke import check_community_categories
                 check_community_categories(browser, base)
-                from community_section_smoke import check_community_pagination_placeholder, check_community_section_switch
+                from community_section_smoke import check_community_entry_links, check_community_pagination_placeholder, check_community_section_switch
+                check_community_entry_links(browser, base)
                 check_community_section_switch(browser, base)
                 check_community_pagination_placeholder(browser, base)
                 from skin_preview_smoke import check_candidate_preview, check_skin_preview

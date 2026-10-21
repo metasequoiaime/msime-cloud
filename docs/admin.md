@@ -174,12 +174,12 @@ Google 登录时，后端校验 ID Token 的签名、issuer、audience、有效�
 
 ## 外壳
 
-外壳由 `GET /api/shell` 一次性提供，每 60 秒刷新：版本号、环境标签（`admin.environment`）、本人邮箱、名字、角色和权限、侧栏待处理角标（词库 PR、社区待复核、待分诊 Issue）、未读通知数、后端状态（`ok`、`degraded`、`down`；前端也接受 `unknown` 并显示「状态未知」），以及部署配置启用的可选功能 `features`（目前只有 `logs`，即是否配置了 `admin.logs.loki_url`，未启用时侧栏不显示服务日志页）。
+外壳由 `GET /api/shell` 一次性提供，每 60 秒刷新：版本号、环境标签（`admin.environment`）、本人邮箱、名字、角色和权限、侧栏待处理角标（词库 PR、待分诊 Issue；社区各类型角标由 `GET /api/community/counts` 提供）、未读通知数、后端状态（`ok`、`degraded`、`down`；前端也接受 `unknown` 并显示「状态未知」），以及部署配置启用的可选功能 `features`（目前只有 `logs`，即是否配置了 `admin.logs.loki_url`，未启用时侧栏不显示服务日志页）。
 
 - 全局搜索（按 `/` 聚焦）：前端匹配页面名，`GET /api/search?q=` 最多返回 8 条，覆盖用户、社区内容、崩溃分组、敏感词、公告，以及内存缓存中的 GitHub PR、Issue 和 Release。结果通过 `?focus=<id>` 打开对应页面的详情。
 - 通知：`GET /api/notifications?limit=20`，`POST /api/notifications/read {ids}|{all:true,up_to_id?}`。「全部已读」带上列表中最新一条通知的 `up_to_id`，只把本次标记语句可见、创建时间不晚于它的通知标为已读；不带 `up_to_id` 时标记到服务端当前时间。操作按通知写入本人的已读记录，尚未提交的业务通知稍后提交时仍保持未读；旧版本留下的已读水位继续生效，无需迁移。通知列表每次打开都重新加载；角标在弹层关闭时跟随外壳的 60 秒轮询，在个人中心切换通知偏好后立即刷新。来源包括新举报（与举报同事务写入）、新词库 PR、崩溃分组 7 天环比上升超过 20%（每小时检查，同一分组 7 天内只提醒一次）、自动开启的故障事件、Release 状态变化和新 Issue。个人中心可以按类型关闭词库 PR、举报和崩溃提醒。新加入的管理员会看到全部历史通知为未读。新 Issue 通知的整批写入共用独立的 3 秒预算；请求取消不影响写入，数据库等待超时或写入失败则留待后续轮询重试。
 - 外观：浅色、深色或跟随系统；配色可选春、夏、秋、冬或「自动」。自动配色按本地月份切换（3–5 月春，6–8 月夏，9–11 月秋，12–2 月冬），页面一直开着跨过月份边界时也会自动切换。外观保存在浏览器本地。
-- 旧路径重定向：`/admins`、`/audit` → `/perm`，`/system` → `/status`，`/crashes` → `/crash`，`/skins`、`/dictionaries`、`/replies` → `/community?tab=skins|dictionaries|replies`，原有查询参数保留。
+- 旧路径重定向：`/admins`、`/audit` → `/perm`，`/system` → `/status`，`/crashes` → `/crash`，`/community?tab=<类型>` → 对应社区页面（默认 `/skins`，合法 `focus` 类型前缀优先），原有筛选、页码和定位参数保留。
 
 ## 页面
 
@@ -188,7 +188,12 @@ Google 登录时，后端校验 ID Token 的签名、issuer、audience、有效�
 | 数据概览 | `/` | `GET /api/overview` | — |
 | 词库管理 | `/dictionary` | `GET /api/dictionary`、`GET /api/dictionary/file`、`GET /api/dictionary/search`、`POST /api/dictionary/changes`（GitHub） | 读取需 GitHub App；提交变更需 `review_dict_pr` |
 | 词库审核 | `/dictpr` | `GET /api/dict-prs`、`/api/dict-prs/{n}`（GitHub） | `review_dict_pr` |
-| 社区管理 | `/community` | `GET /api/{skins,candidate-skins,plugins,dictionaries,replies,phrases}`、`/api/community/counts` | `review_community` |
+| 键盘皮肤 | `/skins` | `GET /api/skins`、`/api/community/counts` | `review_community` |
+| 候选窗皮肤 | `/candidate-skins` | `GET /api/candidate-skins`、`/api/community/counts` | `review_community` |
+| 插件 | `/plugins` | `GET /api/plugins`、`/api/community/counts` | `review_community` |
+| 社区词库 | `/dictionaries` | `GET /api/dictionaries`、`/api/community/counts` | `review_community` |
+| 回复模板 | `/replies` | `GET /api/replies`、`/api/community/counts` | `review_community` |
+| 短语包 | `/phrases` | `GET /api/phrases`、`/api/community/counts` | `review_community` |
 | 问题分诊 | `/issues` | `GET /api/issues`、`/api/issues/{owner}/{repo}/{n}`（GitHub） | `triage_issues` |
 | 用户反馈 | `/feedback` | `GET /api/feedback`、`/api/feedback/{id}/screenshots/{n}` | `triage_issues` |
 | 敏感词库 | `/words` | `GET /api/sensitive-words` | `review_community` |
@@ -216,7 +221,7 @@ Google 登录时，后端校验 ID Token 的签名、issuer、audience、有效�
 - **词库审核**：只列词库仓库自身 `community-words/` 分支上的 PR（忽略 fork），读最近 100 个。搜索或通知指定的 `focus` 目标不在列表时，通过现有 `GET /api/dict-prs/{n}` 补读并展示；读取期间、失败、目标不存在或编号无效时，都不回退到其他 PR 的详情和审核入口，失败可重试。未指定定位目标时只展示当前状态筛选内的 PR，空筛选不显示其他状态的审核入口。详情比较 PR 基准提交与头部提交的 `custom/{words,english,translations}.txt`，逐条标记：`ad` 命中敏感词，`bad` 不符合官网校验规则，`dup` 已在基准文件或内置词库中、或在 PR 内重复，`new` 可收录。可以只保留勾选项（逐个文件以 blob SHA 做比较交换后重写分支，并改写 PR 标题），可以通过（先精简，再以头部 SHA 为条件 squash 合并；只有 GitHub 响应确认 `merged: true` 且带有合并提交 SHA 时才返回成功并记录通过审计；上游返回 2xx 但缺少有效确认时返回 `502 github_uncertain`，保留此前已完成的精简及其审计，需先检查 PR 实际状态），也可以驳回（先评论「审核未通过：原因」再关闭）。三种操作都带上审核时看到的头部 SHA，PR 此后有了新提交（例如官网又追加了投稿）就返回 409 `pr_changed`，不会对没人看过的词条生效；精简时每个新提交的父提交也必须是上一个头部，否则说明分支在精简途中被追加了投稿，立即停止，不再继续写入或合并。精简和通过前会读取 PR 的改动文件列表，只要改动了这三个文件之外的任何文件就返回 409 `unexpected_files`，以免审核只看到词条而合并带进别的改动。页面显示每次投稿的补充说明和时间，来自 `word_submissions` 表。PR 作者是提交用的 GitHub App 时显示为「官网机器人」。
 
   官网投稿与批准、驳回、精简三种审核操作共用 PostgreSQL 仓库锁，按不区分大小写的仓库名互斥，覆盖读取 PR 到完成 GitHub 写入的整个过程。另一操作持锁时，审核返回 `503 server_busy` 和 `Retry-After: 1`，本次尚未读取或修改 GitHub；数据库无法加锁时返回 `503 auth_unavailable`。释放锁连接后才写审计，批准前已经完成的精简在后续合并失败时仍保留审计。直接在 GitHub 上的修改不受此锁约束，现有 head SHA 和 blob SHA 冲突检查继续生效。
-- **社区管理**：皮肤、候选皮肤、插件、词库、回复模板、短语包 6 个分类（短语包卡片显示条数和前三条正文，抽屉显示全部短语及分组），按待复核、已通过、已下架筛选。卡片显示自动检查标记和被举报次数；详情抽屉显示举报记录、实时敏感词检查、作者的其他作品和皮肤键盘预览，候选皮肤的预览图由 `GET /api/candidate-skins/{id}/preview` 提供。操作为 `approve_content`、`remove_content`（需要原因）、`restore_content`（恢复下架前的状态）和永久删除。候选皮肤另有图库分类：`GET /api/candidate-skins` 可用 `category=<分类>` 筛选，列表行和详情都带 `category`；详情抽屉的「分类」下拉框调用 `set_candidate_skin_category`（需要 `review_community`），请求体为 `{"action":"set_candidate_skin_category","id":"…"（或 "ids":[…] 最多 100 个）,"section":"candidate-skins"（可省略）,"value":{"category":"<分类>"}}`；直接修改分类时可在 `value` 中附带 `expected`，服务端只在当前分类仍与之相同时修改，否则返回 409 `conflict`。分类取值见 [皮肤社区 · 分类](skin-community.md#分类)，未知分类 400 `invalid_category`，section 不是 `candidate-skins` 时 400 `invalid_section`，没有一个 id 存在时 404 `not_found`。修改不改变审核状态，也不更新 `updated_at`；使用 `edit_token` 固定审核版本时，分类变化也会使旧凭据失效；审计记录 `category`、`ids`、`count`，单项时还有 `name` 和原分类 `from`。键盘皮肤（`skins`）用同一组分类：`GET /api/skins` 可用 `category=<分类>` 筛选，列表行和详情都带 `category`，详情抽屉的「分类」下拉框调用 `set_skin_category`（需要 `review_community`），请求体为 `{"action":"set_skin_category","id":"…"（或 "ids":[…] 最多 100 个）,"section":"skins"（可省略）,"value":{"category":"<分类>"}}`；直接修改分类时可在 `value` 中附带 `expected`，服务端只在当前分类仍与之相同时修改，否则返回 409 `conflict`。错误码、审计字段与 `set_candidate_skin_category` 相同，section 不是 `skins` 时 400 `invalid_section`；修改不改变审核状态。作者因封禁被下架的内容只能通过解封恢复（409 `owner_banned`）。审核规则见「社区事后审核」。
+- **社区内容**：键盘皮肤、候选窗皮肤、插件、社区词库、回复模板、短语包 6 个独立页面（短语包卡片显示条数和前三条正文，抽屉显示全部短语及分组），按待复核、已通过、已下架筛选。卡片显示自动检查标记和被举报次数；详情抽屉显示举报记录、实时敏感词检查、作者的其他作品和皮肤键盘预览，候选皮肤的预览图由 `GET /api/candidate-skins/{id}/preview` 提供。操作为 `approve_content`、`remove_content`（需要原因）、`restore_content`（恢复下架前的状态）和永久删除。候选皮肤另有图库分类：`GET /api/candidate-skins` 可用 `category=<分类>` 筛选，列表行和详情都带 `category`；详情抽屉的「分类」下拉框调用 `set_candidate_skin_category`（需要 `review_community`），请求体为 `{"action":"set_candidate_skin_category","id":"…"（或 "ids":[…] 最多 100 个）,"section":"candidate-skins"（可省略）,"value":{"category":"<分类>"}}`；直接修改分类时可在 `value` 中附带 `expected`，服务端只在当前分类仍与之相同时修改，否则返回 409 `conflict`。分类取值见 [皮肤社区 · 分类](skin-community.md#分类)，未知分类 400 `invalid_category`，section 不是 `candidate-skins` 时 400 `invalid_section`，没有一个 id 存在时 404 `not_found`。修改不改变审核状态，也不更新 `updated_at`；使用 `edit_token` 固定审核版本时，分类变化也会使旧凭据失效；审计记录 `category`、`ids`、`count`，单项时还有 `name` 和原分类 `from`。键盘皮肤（`skins`）用同一组分类：`GET /api/skins` 可用 `category=<分类>` 筛选，列表行和详情都带 `category`，详情抽屉的「分类」下拉框调用 `set_skin_category`（需要 `review_community`），请求体为 `{"action":"set_skin_category","id":"…"（或 "ids":[…] 最多 100 个）,"section":"skins"（可省略）,"value":{"category":"<分类>"}}`；直接修改分类时可在 `value` 中附带 `expected`，服务端只在当前分类仍与之相同时修改，否则返回 409 `conflict`。错误码、审计字段与 `set_candidate_skin_category` 相同，section 不是 `skins` 时 400 `invalid_section`；修改不改变审核状态。作者因封禁被下架的内容只能通过解封恢复（409 `owner_banned`）。审核规则见「社区事后审核」。
 
   单项分类变更成功时返回真实 `from` 与 `undo:{"action":"set_skin_category|set_candidate_skin_category","section":"skins|candidate-skins","id":"…","value":{"category":"真实前态","token":"32 位版本"}}`；同值设置或使用 `ids` 的批量请求不返回单项撤销。前端原样提交 `undo`，服务端在作品行锁内校验身份和写入版本，后续操作（包括同值写入、分类改走再改回）、作者编辑或删除重建后返回 409 `conflict`，不写作品和成功审计。`token` 仅限单项请求，用于并发检查，不是授权凭据。`expected` 继续兼容直接调用。旧副本拒绝新增的 `token` 字段并返回 400 `invalid_category`，新页面缺少有效 `undo` 时隐藏按钮；全部副本升级后刷新旧页面。
   后台分类下拉框修改时以页面所见分类作为 `expected`，撤销时以本次设置的分类作为 `expected`；页面打开后分类已被修改会提示冲突并刷新，不再提供这次操作的撤销入口。
@@ -257,7 +262,7 @@ Google 登录时，后端校验 ID Token 的签名、issuer、audience、有效�
 
 ### 皮肤与插件管理
 
-`/community` 默认展示全部状态，保留「待审核」「已上架」「已下架」筛选；概览页的社区待办直接打开 `?status=pending`。皮肤、候选皮肤和插件分区提供新增入口及详情里的编辑、删除、上下架操作。新增和编辑需要 `review_community`，只读角色仍可查看列表与详情。新作品由管理员选择已有的未封禁用户作为作者，编辑不能转移作者；表单默认将新作品保存为下架，也可选择上架或待审核。
+侧栏「社区」分组提供键盘皮肤（`/skins`）、候选窗皮肤（`/candidate-skins`）、插件（`/plugins`）、社区词库（`/dictionaries`）、回复模板（`/replies`）和短语包（`/phrases`）六个独立入口，并分别显示待审核数。六页共用详情与审核能力，默认展示全部状态，保留「待审核」「已上架」「已下架」筛选；概览页的社区待办按类型打开对应页面的 `?status=pending`。旧 `/community?tab=…` 自动跳转并保留筛选、页码和定位参数；搜索和通知按 `focus=<section>/<id>` 直达对应页面及作品详情。皮肤、候选皮肤和插件分区提供新增入口及详情里的编辑、删除、上下架操作。新增和编辑需要 `review_community`，只读角色仍可查看列表与详情。新作品由管理员选择已有的未封禁用户作为作者，编辑不能转移作者；表单默认将新作品保存为下架，也可选择上架或待审核。
 
 `GET /api/skins/{id}?view=preview` 和 `GET /api/candidate-skins/{id}?view=preview` 供卡片预览使用，仅返回 `{"content":…}`：分别是完整键盘设计 JSON（含照片）和 `skin.toml` 文本。它们沿用详情接口的管理员鉴权，可读取私有、待审核和下架内容，但不加载举报、作者作品、互动统计或敏感词检查。打开详情仍请求不带 `view` 的原接口。未知的非空 `view`，或其他社区详情接口使用非空 `view`，返回 400 `invalid_request`；作品不存在返回 404 `not_found`。
 

@@ -7,6 +7,8 @@ import { useAPI } from "../../api/client";
 import { keys } from "../../api/keys";
 import { overviewSchema } from "../../api/overview";
 import type { Overview, OverviewService, ServiceState } from "../../api/overview";
+import { communityNavItems } from "../../nav";
+import { useCommunityCounts } from "../../hooks/use-community-counts";
 import { PageIntro } from "../../shell/page-intro";
 import { useShell } from "../../shell/shell-data";
 import { Card, CardHeader } from "../../ui/card";
@@ -110,9 +112,9 @@ function EmailDelivery({ data }: { data: Overview }) {
   </Card>;
 }
 
-function TodoRow({ to, icon, title, sub, count }: { to: "/dictpr" | "/community" | "/issues" | "/crash"; icon: string; title: string; sub: ReactNode; count: number | undefined }) {
+function TodoRow({ to, icon, title, sub, count }: { to: "/dictpr" | "/issues" | "/crash"; icon: string; title: string; sub: ReactNode; count: number | undefined }) {
   return <li>
-    <Link to={to} search={to === "/community" ? { status: "pending" } : {}} className="flex items-center gap-3 rounded-xl px-2.5 py-3 text-body no-underline transition hover:bg-panel-2 hover:text-body">
+    <Link to={to} search={{}} className="flex items-center gap-3 rounded-xl px-2.5 py-3 text-body no-underline transition hover:bg-panel-2 hover:text-body">
       <span aria-hidden="true" className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-[10px] bg-accent-soft font-bold text-accent-ink">{icon}</span>
       <span className="min-w-0 flex-1">
         <span className="block truncate font-semibold text-ink">{title}</span>
@@ -125,11 +127,25 @@ function TodoRow({ to, icon, title, sub, count }: { to: "/dictpr" | "/community"
 
 function Todos({ data }: { data: Overview }) {
   const pending = useShell().data?.pending;
+  const community = useCommunityCounts();
   return <Card>
     <CardHeader title="待处理" />
     <ul className="-mx-2.5 -mb-2 m-0 list-none p-0">
       <TodoRow to="/dictpr" icon="词" title="词库 PR 待审核" sub="官网词库投稿生成的 GitHub PR" count={pending?.dict_prs} />
-      <TodoRow to="/community" icon="社" title="社区内容待审核" sub={data.pending.reports_7d > 0 ? `近 7 天收到 ${formatNumber(data.pending.reports_7d)} 次举报` : "先发后审，新内容已公开展示"} count={pending?.community ?? data.pending.community} />
+      <li className="px-2.5 py-3">
+        <div className="flex items-center justify-between gap-3">
+          <span className="font-semibold text-ink">社区内容待审核</span>
+          <span className="text-lg font-bold text-ink tabular-nums">{formatNumber(pending?.community ?? data.pending.community)}</span>
+        </div>
+        <p className="m-0 mb-2 text-[12.5px] text-muted">{data.pending.reports_7d > 0 ? `近 7 天收到 ${formatNumber(data.pending.reports_7d)} 次举报` : "先发后审，新内容已公开展示"}</p>
+        <nav className="grid grid-cols-2 gap-1" aria-label="社区待审核分类">
+          {communityNavItems.map(item => <Link key={item.key} to={item.path} search={{ status: "pending" }}
+            className="flex min-w-0 items-center justify-between gap-2 rounded-lg px-2 py-2 text-[12.5px] text-body no-underline hover:bg-panel-2">
+            <span className="truncate">{item.label}</span>
+            <span className="text-muted tabular-nums">{community.data && item.communityBadge ? formatNumber(community.data[item.communityBadge].pending) : "—"}</span>
+          </Link>)}
+        </nav>
+      </li>
       <TodoRow to="/issues" icon="议" title="Issue 待分诊" sub="尚未分类的 GitHub Issue" count={pending?.issues} />
       <TodoRow to="/crash" icon="崩" title="新增崩溃分组" sub={data.crash_group_latest ? `${platformName(data.crash_group_latest.platform)} · ${data.crash_group_latest.title}` : "近 7 天首次出现、尚未处理"} count={data.pending.crash_groups} />
     </ul>

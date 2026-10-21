@@ -7,6 +7,7 @@ import logo from "../assets/msime.png";
 import { NavIcon } from "./nav-icon";
 import { navAllowed, usePermissions } from "./permissions";
 import { useShell } from "./shell-data";
+import { useCommunityCounts } from "../hooks/use-community-counts";
 
 const statusText = { ok: "后端运行正常", degraded: "部分服务降级", down: "后端服务异常", unknown: "状态未知" } as const;
 const statusDot = { ok: "bg-accent ring-accent-soft", degraded: "bg-warn ring-warn-soft", down: "bg-bad ring-bad-soft", unknown: "bg-muted ring-panel-2" } as const;
@@ -15,6 +16,7 @@ const statusDot = { ok: "bg-accent ring-accent-soft", degraded: "bg-warn ring-wa
 export function Sidebar({ expanded, mobile, mobileOpen, onToggle, onNavigate }: { expanded: boolean; mobile: boolean; mobileOpen: boolean; onToggle: () => void; onNavigate: () => void }) {
   const { session } = useAuth();
   const shell = useShell();
+  const community = useCommunityCounts();
   const permissions = usePermissions();
   const data = shell.data;
   const version = data?.version ?? session?.version;
@@ -37,7 +39,7 @@ export function Sidebar({ expanded, mobile, mobileOpen, onToggle, onNavigate }: 
       {navGroups.map(group => ({ ...group, items: group.items.filter(item => navAllowed(permissions, item)) })).filter(group => group.items.length > 0).map(group => <div key={group.title} className="mb-3.5">
         {expanded && <div className="px-2.5 py-1.5 text-[11.5px] font-semibold text-muted">{group.title}</div>}
         {group.items.map(item => {
-          const badge = item.badge && data ? data.pending[item.badge] : 0;
+          const badge = item.communityBadge ? community.data?.[item.communityBadge].pending ?? 0 : item.badge && data ? data.pending[item.badge] : 0;
           return <Link key={item.key} to={item.path} title={item.label} onClick={onNavigate} activeOptions={{ exact: item.path === "/" }}
             className="group relative flex h-[38px] items-center gap-2.5 rounded-[10px] px-2.5 text-body no-underline transition hover:bg-panel-2 hover:text-body data-[status=active]:bg-accent-soft data-[status=active]:font-semibold data-[status=active]:text-accent-ink">
             <NavIcon d={item.icon} className="text-muted group-data-[status=active]:text-accent-ink" />

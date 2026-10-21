@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
+
 	"github.com/jackc/pgx/v5"
 )
 
@@ -423,9 +425,7 @@ type incidentValue struct {
 
 func decodeIncidentValue(raw json.RawMessage) (incidentValue, error) {
 	var v incidentValue
-	d := json.NewDecoder(bytes.NewReader(raw))
-	d.DisallowUnknownFields()
-	if len(raw) == 0 || d.Decode(&v) != nil || d.More() {
+	if len(raw) == 0 || httpjson.DecodeValue(bytes.NewReader(raw), &v) != nil {
 		return v, actionFail(400, "invalid_value")
 	}
 	if v.Title != nil && !resourceText(*v.Title, 1, 200, false) {

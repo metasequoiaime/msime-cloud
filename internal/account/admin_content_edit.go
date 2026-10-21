@@ -7,6 +7,8 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
+
 	"github.com/jackc/pgx/v5"
 )
 
@@ -52,9 +54,7 @@ func saveCommunityContent(section string, create bool) adminActionFunc {
 			return actionResult{}, actionFail(400, "invalid_value")
 		}
 		var input contentEdit
-		d := json.NewDecoder(bytes.NewReader(v.Value))
-		d.DisallowUnknownFields()
-		if d.Decode(&input) != nil {
+		if httpjson.DecodeValue(bytes.NewReader(v.Value), &input) != nil {
 			return actionResult{}, actionFail(400, "invalid_value")
 		}
 		input.Name, input.Description = strings.TrimSpace(input.Name), strings.TrimSpace(input.Description)

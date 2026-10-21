@@ -4,9 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"net/http"
+
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -107,9 +108,7 @@ func actionUndoModeration(a *Service, ctx context.Context, tx pgx.Tx, v actionRe
 		return actionResult{}, actionFail(400, "invalid_id")
 	}
 	var value moderationSnapshot
-	d := json.NewDecoder(bytes.NewReader(v.Value))
-	d.DisallowUnknownFields()
-	if d.Decode(&value) != nil || !validModerationSnapshot(value) {
+	if httpjson.DecodeValue(bytes.NewReader(v.Value), &value) != nil || !validModerationSnapshot(value) {
 		return actionResult{}, actionFail(400, "invalid_value")
 	}
 	banned, err := lockModerationItem(ctx, tx, section, v.ID)

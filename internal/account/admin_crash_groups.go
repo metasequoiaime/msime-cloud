@@ -16,6 +16,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -75,9 +77,7 @@ func actionCrashGroupStatus(a *Service, ctx context.Context, tx pgx.Tx, v action
 	}
 	var change crashStatusChange
 	if json.Unmarshal(v.Value, &change.Status) != nil {
-		d := json.NewDecoder(bytes.NewReader(v.Value))
-		d.DisallowUnknownFields()
-		if d.Decode(&change) != nil || len(change.Token) != 32 {
+		if httpjson.DecodeValue(bytes.NewReader(v.Value), &change) != nil || len(change.Token) != 32 {
 			return actionResult{}, actionFail(400, "invalid_value")
 		}
 		if _, err := hex.DecodeString(change.Token); err != nil {

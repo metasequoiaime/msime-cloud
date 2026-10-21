@@ -2,8 +2,6 @@
 package httpjson
 
 import (
-	"encoding/json"
-	"io"
 	"net/http"
 	"strings"
 )
@@ -19,9 +17,7 @@ func Decode(w http.ResponseWriter, r *http.Request, v any, maxBytes int64, rejec
 		return false
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
-	d := json.NewDecoder(r.Body)
-	d.DisallowUnknownFields()
-	if d.Decode(v) != nil || d.Decode(new(any)) != io.EOF {
+	if DecodeValue(r.Body, v) != nil {
 		reject(w, http.StatusBadRequest, "invalid_json")
 		return false
 	}

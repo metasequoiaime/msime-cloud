@@ -12,6 +12,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
+
 	"github.com/jackc/pgx/v5"
 )
 
@@ -142,9 +144,7 @@ func checkBanVersion(value json.RawMessage, current string) error {
 	var v struct {
 		Token string `json:"token"`
 	}
-	d := json.NewDecoder(bytes.NewReader(value))
-	d.DisallowUnknownFields()
-	if d.Decode(&v) != nil || len(v.Token) != 32 {
+	if httpjson.DecodeValue(bytes.NewReader(value), &v) != nil || len(v.Token) != 32 {
 		return actionFail(400, "invalid_value")
 	}
 	if _, err := hex.DecodeString(v.Token); err != nil {
@@ -176,9 +176,7 @@ func actionUndoUserBan(a *Service, ctx context.Context, tx pgx.Tx, v actionReque
 		Token  string `json:"token"`
 		Banned *bool  `json:"banned"`
 	}
-	d := json.NewDecoder(bytes.NewReader(v.Value))
-	d.DisallowUnknownFields()
-	if d.Decode(&value) != nil || value.Banned == nil {
+	if httpjson.DecodeValue(bytes.NewReader(v.Value), &value) != nil || value.Banned == nil {
 		return actionResult{}, actionFail(400, "invalid_value")
 	}
 	if !*value.Banned && v.Reason != "" {

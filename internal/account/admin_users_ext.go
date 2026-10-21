@@ -156,6 +156,16 @@ func checkBanVersion(value json.RawMessage, current string) error {
 	return nil
 }
 
+// lockUserForBanAction 先取得用户行锁和封禁快照，再校验操作携带的可选版本。
+// 用户不存在或数据库失败时优先保留原错误，不提前解析版本值。
+func lockUserForBanAction(ctx context.Context, tx pgx.Tx, v actionRequest) (userBanSnapshot, error) {
+	current, err := lockUserForBan(ctx, tx, v.ID)
+	if err != nil {
+		return current, err
+	}
+	return current, checkBanVersion(v.Value, current.Token)
+}
+
 func banUndo(id, token string, banned bool, reason *string) map[string]any {
 	undo := map[string]any{"action": "undo_user_ban", "id": id, "value": map[string]any{"token": token, "banned": banned}}
 	if reason != nil {
@@ -205,11 +215,8 @@ func actionBanUser(a *Service, ctx context.Context, tx pgx.Tx, v actionRequest) 
 	if reason == "" {
 		return actionResult{}, actionFail(400, "invalid_reason")
 	}
-	current, err := lockUserForBan(ctx, tx, v.ID)
+	current, err := lockUserForBanAction(ctx, tx, v)
 	if err != nil {
-		return actionResult{}, err
-	}
-	if err = checkBanVersion(v.Value, current.Token); err != nil {
 		return actionResult{}, err
 	}
 	if current.Banned {
@@ -248,11 +255,8 @@ func actionUnbanUser(a *Service, ctx context.Context, tx pgx.Tx, v actionRequest
 	if err := requireActionID(v); err != nil {
 		return actionResult{}, err
 	}
-	current, err := lockUserForBan(ctx, tx, v.ID)
+	current, err := lockUserForBanAction(ctx, tx, v)
 	if err != nil {
-		return actionResult{}, err
-	}
-	if err = checkBanVersion(v.Value, current.Token); err != nil {
 		return actionResult{}, err
 	}
 	if !current.Banned {

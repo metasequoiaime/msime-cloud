@@ -602,7 +602,11 @@ RETURNING c.id_hash,c.provider,c.subject,c.nonce,c.code_hash,COALESCE(c.link_use
 	}
 	return c, nil
 }
+
+// DropChallenge 清理认证未完成的挑战；不跟随请求取消或过期，但最多等待三秒，避免失败的投递被后续请求复用。
 func (s *Store) DropChallenge(ctx context.Context, idHash string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
 	s.pool.Exec(ctx, "DELETE FROM auth_challenges WHERE id_hash=$1", idHash)
 }
 func (s *Store) Complete(ctx context.Context, c Challenge, identity Identity) (Tokens, error) {

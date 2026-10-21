@@ -46,6 +46,8 @@ ALTER DEFAULT PRIVILEGES FOR ROLE msime_migrator IN SCHEMA public GRANT USAGE, S
 - 头像：用户对象带 `avatar_url`，上传的自定义头像优先，其次是 Google 头像（只给出 `googleusercontent.com` 的 https 地址），都没有时省略、客户端显示昵称首字；`email` 是已绑定 Google 身份的已验证邮箱，只出现在登录、刷新和 `/v1/users/me` 的响应里。Google 登录时，若用户昵称为空或仍是生成的「水杉小鹿·XXXXXX」，用 Google 昵称替换；用户自己改过的昵称不会被覆盖。
 - 自定义头像存储：`avatars` 配置 Cloudflare R2 的 `bucket`、绑定自定义域名后的公开地址 `public_base_url`（须为 https 域名根地址，生产为 `https://media.msime.app`），以及账号 ID、Access Key ID、Secret Access Key 三个环境变量名（示例配置为 `MSIME_R2_ACCOUNT_ID`、`MSIME_R2_ACCESS_KEY_ID`、`MSIME_R2_SECRET_ACCESS_KEY`）。`bucket` 为空时上传关闭，`PUT /v1/users/me/avatar` 返回 503 `avatar_upload_disabled`。配置了 `bucket` 但三个环境变量有任何一个没有值时（例如密钥还没同步进 Secret），服务照常启动，只关闭上传并在启动日志中记录一条 ERROR（`avatar uploads disabled`，带缺失的变量名），不会因为这个可选功能整体起不来；`public_base_url` 格式不对或变量名为空则仍是配置错误，启动失败。服务端只写入和删除对象：上传的 PNG/JPEG（最多 1 MiB、边长不超过 4096、JPEG 最多 32 个扫描段）裁成居中正方形并重新编码为 256×256 JPEG，存为 `avatars/<随机值>.jpg`，`Cache-Control: public, max-age=31536000, immutable`；每次上传换新键，旧对象随即删除，注销账号时一并删除。头像登记和删除在用户行锁内重新检查封禁；封禁先提交时返回 403 `account_banned`，保留原头像登记和旧对象，已上传但未登记的新对象会清理。Access Key 只需该 bucket 的对象读写权限。
 
+`public_base_url` 可使用不带尾斜杠的根地址或以 `/` 结尾的根地址，不得包含查询或片段分隔符，即使 `?` 或 `#` 后面为空也不允许。否则拼出的头像及 QQ 附件链接会把对象路径当成查询或片段。升级前若配置末尾误带这些分隔符，先删除它们；新版本会在启动时拒绝此类配置。
+
 ## 登录与账号管理
 
 1. `POST /v1/auth/challenges`：`{"provider":"email","target":"user@example.com","purpose":"login"}`。返回 `challenge_id`，不会返回验证码。第三方登录省略 target。同一邮箱已有未过期验证码时，服务端为本次请求建立新的挑战但复用原验证码，不重复发送邮件；响应额外带 `reused:true`，首次发送为 `false` 或省略。验证码仍只在各自挑战上可用，5 分钟后失效。

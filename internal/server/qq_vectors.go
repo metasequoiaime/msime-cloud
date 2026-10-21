@@ -622,6 +622,9 @@ func qqHistoryMaterial(hits []account.QQKnowledgeHit) string {
 
 // qqMergeSections 把向量召回的段落接在模型挑出的段落后面（去重），返回最终交给回答模型的段落下标。
 func qqMergeSections(picked, recalled []int, limit int) []int {
+	if len(recalled) == 0 || len(picked) >= limit {
+		return picked
+	}
 	out := slices.Clone(picked)
 	for _, i := range recalled {
 		if len(out) >= limit {

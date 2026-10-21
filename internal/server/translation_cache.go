@@ -48,14 +48,21 @@ func (s *Server) cachedTranslations(ctx context.Context, source, target string, 
 	if s.accounts == nil {
 		return nil
 	}
+	first := 0
+	for first < len(texts) && !cacheableText(texts[first]) {
+		first++
+	}
+	if first == len(texts) {
+		return nil
+	}
+	// 跳过不可缓存的前缀，整批不适合缓存时无需分配缓冲区。
+	texts = texts[first:]
 	wanted := make([]string, 0, len(texts))
-	for _, text := range texts {
+	wanted = append(wanted, texts[0])
+	for _, text := range texts[1:] {
 		if cacheableText(text) {
 			wanted = append(wanted, text)
 		}
-	}
-	if len(wanted) == 0 {
-		return nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, translationCacheTimeout)
 	defer cancel()
@@ -71,15 +78,23 @@ func (s *Server) storeTranslations(ctx context.Context, source, target string, s
 	if s.accounts == nil {
 		return
 	}
+	first := 0
+	for first < len(sources) && !cacheablePair(sources[first], targets[first]) {
+		first++
+	}
+	if first == len(sources) {
+		return
+	}
+	// 原文和译文同步截去前缀，保留配对且不修改调用方的切片。
+	sources, targets = sources[first:], targets[first:]
 	keep, values := make([]string, 0, len(sources)), make([]string, 0, len(sources))
-	for i, text := range sources {
+	keep, values = append(keep, sources[0]), append(values, targets[0])
+	for i := 1; i < len(sources); i++ {
+		text := sources[i]
 		if cacheablePair(text, targets[i]) {
 			keep = append(keep, text)
 			values = append(values, targets[i])
 		}
-	}
-	if len(keep) == 0 {
-		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, translationCacheTimeout)
 	defer cancel()

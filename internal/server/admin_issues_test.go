@@ -567,7 +567,7 @@ func TestAdminIssuesAnnounceNew(t *testing.T) {
 	if n, err := s.pendingIssues(context.Background()); n != 3 || err != nil {
 		t.Fatal(n, err)
 	}
-	if !m.seen[issuesWinRepo+"#13"] || len(m.seen) != 1 {
+	if !m.seen[issueMemoryKey{repo: issuesWinRepo, number: 13}] || len(m.seen) != 1 {
 		t.Fatal(m.seen)
 	}
 	if got := notificationRows(t, conn, schema); !slices.Equal(got, []string{"issue issues " + issuesWinRepo + "#13"}) {

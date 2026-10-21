@@ -143,16 +143,13 @@ func (s *Server) chatStreamOnce(w http.ResponseWriter, r *http.Request, v chatRe
 		return false
 	}
 	e := s.config.Chat
-	req, err := http.NewRequestWithContext(ctx, "POST", e.URL, bytes.NewReader(payload))
+	req, err := e.newRequest(ctx, "POST", bytes.NewReader(payload))
 	if err != nil {
 		upstreamError(w, mr, err)
 		return false
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	if e.token != "" {
-		req.Header.Set("Authorization", "Bearer "+e.token)
-	}
 	started := time.Now()
 	// abandoned 判断客户端是否已经断开或不再读取：这时上游的错误只是取消的后果，按放弃处理，不计入上游失败，也不再写错误事件。
 	abandoned := func(err error) bool {

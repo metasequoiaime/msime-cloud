@@ -44,15 +44,12 @@ func (s *Server) generateSkinArtwork(w http.ResponseWriter, r *http.Request) {
 	// Image inference may outlast the normal JSON endpoint write deadline.
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(185 * time.Second))
 	body, _ := json.Marshal(map[string]any{"model": s.config.Images.Model, "n": 1, "size": "1024x1024", "prompt": "Design an original illustrated mobile keyboard wallpaper, not a screenshot. No text, letters, numbers, keyboard buttons, logos or watermark. Build an immersive scene with distinctive artwork and materials, keep the central typing area quieter and concentrate characters and decoration around the perimeter. User art direction: " + input.Prompt})
-	req, err := http.NewRequestWithContext(r.Context(), "POST", s.config.Images.URL, bytes.NewReader(body))
+	req, err := s.config.Images.newRequest(r.Context(), "POST", bytes.NewReader(body))
 	if err != nil {
 		upstreamError(w, r, err)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if s.config.Images.token != "" {
-		req.Header.Set("Authorization", "Bearer "+s.config.Images.token)
-	}
 	client := *s.client
 	client.Timeout = 180 * time.Second
 	started := time.Now()

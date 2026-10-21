@@ -184,15 +184,12 @@ func (s *Server) qqResearchChat(ctx context.Context, messages []qqResearchMessag
 		request["tools"] = append(definitions, publictools.ChatDefinitions()...)
 	}
 	payload, _ := json.Marshal(request)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.URL, bytes.NewReader(payload))
+	req, err := e.newRequest(ctx, http.MethodPost, bytes.NewReader(payload))
 	if err != nil {
 		return qqResearchMessage{}, "", errors.New("invalid chat endpoint")
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	if e.token != "" {
-		req.Header.Set("Authorization", "Bearer "+e.token)
-	}
 	b, err := s.doUpstream(req)
 	if err != nil {
 		return qqResearchMessage{}, "", err
@@ -463,16 +460,15 @@ func (s *Server) qqWebSearch(ctx context.Context, query string) string {
 	payload, _ := json.Marshal(map[string]any{"model": s.qq.config.Model, "max_tokens": 1500,
 		"tools":    []map[string]any{{"type": "web_search_20250305", "name": "web_search", "max_uses": 1}},
 		"messages": []map[string]string{{"role": "user", "content": query}}})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(payload))
+	e := s.config.Chat.Endpoint
+	e.URL = u.String()
+	req, err := e.newRequest(ctx, http.MethodPost, bytes.NewReader(payload))
 	if err != nil {
 		return "联网搜索暂时用不了。"
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("anthropic-version", "2023-06-01")
-	if token := s.config.Chat.token; token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
 	b, err := s.doUpstream(req)
 	if err != nil {
 		slog.Warn("qq bot: web search failed", "reason", err.Error())

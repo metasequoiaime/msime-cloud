@@ -138,6 +138,8 @@ func skinCategoryVersionSQL(alias string) string {
 
 // setSkinCategory 修改图库分类，单项变更返回真实前态和版本化撤销。expected 保持直接调用兼容，token 只允许单项撤销。分类不改 updated_at 和审核状态；同值仍算命中，但不提供反向撤销。table 是固定表名。
 func setSkinCategory(section, table string) adminActionFunc {
+	// 每个动作只构建一次固定语句，分类、前态和撤销版本仍按请求绑定。
+	query := `UPDATE ` + table + ` s SET category=$2 FROM (SELECT id,category,` + skinCategoryVersionSQL("locked_skin") + ` AS token FROM ` + table + ` locked_skin WHERE id=ANY($1) FOR UPDATE) o WHERE s.id=o.id AND ($3::text IS NULL OR o.category=$3) AND ($4::text IS NULL OR o.token=$4) RETURNING s.id,s.name,o.category,` + skinCategoryVersionSQL("s")
 	return func(a *Service, ctx context.Context, tx pgx.Tx, v actionRequest) (actionResult, error) {
 		if v.Section != "" && v.Section != section {
 			return actionResult{}, actionFail(400, "invalid_section")
@@ -165,7 +167,7 @@ func setSkinCategory(section, table string) adminActionFunc {
 				return actionResult{}, actionFail(400, "invalid_value")
 			}
 		}
-		rows, err := tx.Query(ctx, `UPDATE `+table+` s SET category=$2 FROM (SELECT id,category,`+skinCategoryVersionSQL("locked_skin")+` AS token FROM `+table+` locked_skin WHERE id=ANY($1) FOR UPDATE) o WHERE s.id=o.id AND ($3::text IS NULL OR o.category=$3) AND ($4::text IS NULL OR o.token=$4) RETURNING s.id,s.name,o.category,`+skinCategoryVersionSQL("s"), ids, value.Category, value.Expected, value.Token)
+		rows, err := tx.Query(ctx, query, ids, value.Category, value.Expected, value.Token)
 		if err != nil {
 			return actionResult{}, err
 		}

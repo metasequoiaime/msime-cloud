@@ -160,7 +160,7 @@ func (a *Service) deleteAvatar(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 
-// deleteAvatarObject removes an object that no user points at any more. Best-effort: the user's change has already been committed, and an orphaned object costs storage, not correctness.
+// deleteAvatarObject 尽力清理不再被引用的公开存储对象，头像和附件共用此 bucket；清理不跟随原请求取消，并限制在 10 秒内完成。
 func (a *Service) deleteAvatarObject(key string) {
 	if key == "" || a.avatars == nil {
 		return
@@ -168,6 +168,6 @@ func (a *Service) deleteAvatarObject(key string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if e := a.avatars.Delete(ctx, key); e != nil {
-		slog.Warn("旧头像删除失败", "reason", "storage_delete_failed")
+		slog.Warn("公开存储对象删除失败", "reason", "storage_delete_failed")
 	}
 }

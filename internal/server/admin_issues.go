@@ -316,6 +316,26 @@ func (s *Server) issueRow(repo string, v issueGitHub) issueRow {
 	}
 }
 
+// issueRowsFromPage 过滤一页里的 Pull Request，并按实际 issue 数量预留结果容量。
+func issueRowsFromPage(s *Server, repo string, page []issueGitHub) []issueRow {
+	count := 0
+	for _, v := range page {
+		if !v.isPullRequest() {
+			count++
+		}
+	}
+	if count == 0 {
+		return nil
+	}
+	rows := make([]issueRow, 0, count)
+	for _, v := range page {
+		if !v.isPullRequest() {
+			rows = append(rows, s.issueRow(repo, v))
+		}
+	}
+	return rows
+}
+
 // issueComment is the part of a repository issue comment needed for response times.
 type issueComment struct {
 	IssueURL          string          `json:"issue_url"`
@@ -391,13 +411,7 @@ func (s *Server) issuePage(ctx context.Context, gh *githubapp.Client, token, rep
 	if err := r.Decode(&page); err != nil {
 		return nil, 0, issueResponseError(ctx, repo, "list issues", r, err)
 	}
-	var rows []issueRow
-	for _, v := range page {
-		if !v.isPullRequest() {
-			rows = append(rows, s.issueRow(repo, v))
-		}
-	}
-	return rows, len(page), nil
+	return issueRowsFromPage(s, repo, page), len(page), nil
 }
 
 // issueWindowComments 读取仓库在响应窗口内最多 issueOpenPages 页评论。按时间从旧到新读，窗口内各 issue 的首次回复会排在之后的回复前面；评论多于读取上限时，丢掉的是最新 issue 的样本，而不会把后来的回复误算成首次回复。since 取整到天，让路径（也就是读缓存的键）一整天保持不变。

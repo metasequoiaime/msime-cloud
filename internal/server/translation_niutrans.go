@@ -15,24 +15,30 @@ import (
 	segmentjson "github.com/segmentio/encoding/json"
 )
 
-// niutransAuthString 按小牛 v2 协议计算签名，保留空字段和原始字节；URL 编码只用于表单正文。
+// niutransAuthString 按小牛 v2 协议分块计算签名，保留空字段和原始字节；URL 编码只用于表单正文。
 func niutransAuthString(appID, apiKey, source, target, timestamp, text string) string {
-	size := len("apikey=&appId=&from=&srcText=&timestamp=&to=") + len(apiKey) + len(appID) + len(source) + len(text) + len(timestamp) + len(target)
-	canonical := make([]byte, 0, size)
-	canonical = append(canonical, "apikey="...)
-	canonical = append(canonical, apiKey...)
-	canonical = append(canonical, "&appId="...)
-	canonical = append(canonical, appID...)
-	canonical = append(canonical, "&from="...)
-	canonical = append(canonical, source...)
-	canonical = append(canonical, "&srcText="...)
-	canonical = append(canonical, text...)
-	canonical = append(canonical, "&timestamp="...)
-	canonical = append(canonical, timestamp...)
-	canonical = append(canonical, "&to="...)
-	canonical = append(canonical, target...)
-	checksum := md5.Sum(canonical) // #nosec G401 -- 上游协议要求使用 MD5。
-	return hex.EncodeToString(checksum[:])
+	parts := [...]string{"apikey=", apiKey, "&appId=", appID, "&from=", source, "&srcText=", text, "&timestamp=", timestamp, "&to=", target}
+	h := md5.New() // #nosec G401 -- 上游协议要求使用 MD5。
+	// 固定缓冲区同时承接字段和分隔符，避免复制整份签名正文。
+	var buffer [1024]byte
+	used := 0
+	for _, part := range parts {
+		for part != "" {
+			n := copy(buffer[used:], part)
+			used += n
+			part = part[n:]
+			if used == len(buffer) {
+				h.Write(buffer[:])
+				used = 0
+			}
+		}
+	}
+	h.Write(buffer[:used])
+	var checksum [md5.Size]byte
+	h.Sum(checksum[:0])
+	var encoded [md5.Size * 2]byte
+	hex.Encode(encoded[:], checksum[:])
+	return string(encoded[:])
 }
 
 // niutransTextForm 保留字段顺序及 URL 转义，一次拼成正文；签名按原始值生成，十六进制摘要直接写入。

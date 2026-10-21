@@ -35,7 +35,8 @@ func TestAdminFilteredListStatsRunOnlyForPage(t *testing.T) {
 	for page := 1; page <= 4; page++ {
 		t.Run(fmt.Sprint(page), func(t *testing.T) {
 			w := httptest.NewRecorder()
-			a.adminList(w, httptest.NewRequest("GET", "/api/skins?status=pending&category=tech", nil), skinsList, page, "")
+			r := httptest.NewRequest("GET", "/api/skins?status=pending&category=tech", nil)
+			a.adminList(w, r, skinsList, page, "", r.URL.Query())
 			var result struct {
 				Items []struct {
 					ID         string `json:"id"`

@@ -98,9 +98,10 @@ func TestAdminFilteredListUsesConcretePredicates(t *testing.T) {
 		t.Run(fmt.Sprintf("%s/page=%d", tc.platform, tc.page), func(t *testing.T) {
 			path := "/api/downloads?platform=" + tc.platform
 			w := httptest.NewRecorder()
-			a.adminList(w, httptest.NewRequest("GET", path, nil), downloadsList, tc.page, "")
+			r := httptest.NewRequest("GET", path, nil)
+			a.adminList(w, r, downloadsList, tc.page, "", r.URL.Query())
 			old := httptest.NewRecorder()
-			baseline.adminList(old, httptest.NewRequest("GET", path, nil), downloadsList, tc.page, "filtered-page")
+			baseline.adminList(old, r, downloadsList, tc.page, "filtered-page", r.URL.Query())
 			var got, want any
 			if w.Code != 200 || old.Code != 200 || json.Unmarshal(w.Body.Bytes(), &got) != nil || json.Unmarshal(old.Body.Bytes(), &want) != nil || !reflect.DeepEqual(got, want) {
 				t.Fatal("筛选分页与全匹配搜索结果不同：", w.Code, w.Body.String(), old.Code, old.Body.String())
@@ -177,7 +178,8 @@ func TestAdminRoleFilterAvoidsRepeatedCalculation(t *testing.T) {
 	for _, role := range []string{"reviewer", "maintainer", "missing"} {
 		t.Run(role, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			a.adminList(w, httptest.NewRequest("GET", "/api/users?role="+role, nil), usersList, 1, "")
+			r := httptest.NewRequest("GET", "/api/users?role="+role, nil)
+			a.adminList(w, r, usersList, 1, "", r.URL.Query())
 			var body struct {
 				Items []struct{ ID, Role string }
 				Total int

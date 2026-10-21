@@ -84,8 +84,7 @@ func (s *Server) voiceContribution(w http.ResponseWriter, r *http.Request) {
 		if err == io.EOF {
 			break
 		}
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
+		if httpjson.IsBodyTooLarge(err) {
 			fail(w, 413, "contribution_too_large")
 			return
 		}
@@ -116,7 +115,7 @@ func (s *Server) voiceContribution(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			audio, err = io.ReadAll(io.LimitReader(part, voiceContributionAudioBytes+1))
-			if errors.As(err, &tooLarge) || len(audio) > voiceContributionAudioBytes {
+			if httpjson.IsBodyTooLarge(err) || len(audio) > voiceContributionAudioBytes {
 				fail(w, 413, "audio_too_large")
 				return
 			}

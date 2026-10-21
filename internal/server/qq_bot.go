@@ -30,6 +30,7 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 )
 
 // QQ 群反馈机器人。群友在 QQ 群里 @机器人 描述遇到的问题或想要的功能，QQ 开放平台把事件以 Webhook 推到 qqBotEventsPath；服务端校验 Ed25519 签名、按消息 id 在所有副本间去重后立即应答，再在后台处理：大多数消息按知识库答疑；管理员明确要求记录（「提issue」命令或「记一下」这类说法）的具体 bug 或需求，用 chat 端点整理成结构化反馈，先对照知识库确认不是已有功能或正常现象，再用管理后台的 GitHub App 新建 issue，或补充到已有的同一问题下，最后在群里被动回复 issue 编号。官方机器人只能收到 @它 的消息，收不到群里的其他聊天。群友的原话、昵称和 openid 不写进 issue，也不写进日志：issue 里只有模型转述后的内容，并且打断了 @ 提及、# 引用和链接。
@@ -485,8 +486,7 @@ func (s *Server) qqBotEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, qqBotBodyBytes))
-	var tooLarge *http.MaxBytesError
-	if errors.As(err, &tooLarge) {
+	if httpjson.IsBodyTooLarge(err) {
 		fail(w, 413, "request_too_large")
 		return
 	}

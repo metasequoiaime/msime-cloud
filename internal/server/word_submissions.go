@@ -365,8 +365,7 @@ func (s *Server) submitWords(w http.ResponseWriter, r *http.Request) {
 	}
 	var input wordSubmissionRequest
 	err := httpjson.DecodeValue(http.MaxBytesReader(w, r.Body, wordSubmissionBodyBytes), &input)
-	var tooLarge *http.MaxBytesError
-	if errors.As(err, &tooLarge) {
+	if httpjson.IsBodyTooLarge(err) {
 		wordsFail(w, 413, "request_too_large", "内容过长。")
 		return
 	}

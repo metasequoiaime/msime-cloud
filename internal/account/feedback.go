@@ -183,17 +183,13 @@ func readFeedbackForm(w http.ResponseWriter, r *http.Request) (feedbackPayload, 
 	}
 	var screenshots [][]byte
 	seenPayload := false
-	tooLarge := func(err error) bool {
-		var limit *http.MaxBytesError
-		return errors.As(err, &limit)
-	}
 	for {
 		part, err := reader.NextPart()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			if tooLarge(err) {
+			if httpjson.IsBodyTooLarge(err) {
 				writeError(w, 413, "feedback_too_large")
 			} else {
 				writeError(w, 400, "invalid_feedback")
@@ -208,7 +204,7 @@ func readFeedbackForm(w http.ResponseWriter, r *http.Request) (feedbackPayload, 
 			}
 			seenPayload = true
 			raw, err := io.ReadAll(io.LimitReader(part, maxFeedbackPayload+1))
-			if err != nil && tooLarge(err) {
+			if err != nil && httpjson.IsBodyTooLarge(err) {
 				writeError(w, 413, "feedback_too_large")
 				return payload, nil, false
 			}
@@ -227,7 +223,7 @@ func readFeedbackForm(w http.ResponseWriter, r *http.Request) (feedbackPayload, 
 			}
 			data, err := io.ReadAll(io.LimitReader(part, maxFeedbackScreenshot+1))
 			if err != nil {
-				if tooLarge(err) {
+				if httpjson.IsBodyTooLarge(err) {
 					writeError(w, 413, "feedback_too_large")
 				} else {
 					writeError(w, 400, "invalid_feedback")

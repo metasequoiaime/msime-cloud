@@ -3,6 +3,7 @@ import { Login, useAuth } from "../auth";
 import { AppShell } from "../shell/app-shell";
 import { validatePageSearch } from "../shell/page-search";
 import { Empty } from "../ui/states";
+import { communityPathForSearch } from "../nav";
 
 function Root() {
   const { authenticated, loading } = useAuth();
@@ -24,7 +25,12 @@ const page = <P extends string>(path: P, load: () => Promise<{ default: () => Re
 const overviewRoute = page("/", () => import("../pages/overview"));
 const dictionaryRoute = page("/dictionary", () => import("../pages/dictionary"));
 const dictprRoute = page("/dictpr", () => import("../pages/dictpr"));
-const communityRoute = page("/community", () => import("../pages/community"));
+const skinsRoute = page("/skins", () => import("../pages/skins"));
+const candidateSkinsRoute = page("/candidate-skins", () => import("../pages/candidate-skins"));
+const pluginsRoute = page("/plugins", () => import("../pages/plugins"));
+const dictionariesRoute = page("/dictionaries", () => import("../pages/dictionaries"));
+const repliesRoute = page("/replies", () => import("../pages/replies"));
+const phrasesRoute = page("/phrases", () => import("../pages/phrases"));
 const issuesRoute = page("/issues", () => import("../pages/issues"));
 const feedbackRoute = page("/feedback", () => import("../pages/feedback"));
 const wordsRoute = page("/words", () => import("../pages/words"));
@@ -39,15 +45,20 @@ const logsRoute = page("/logs", () => import("../pages/logs"));
 const permRoute = page("/perm", () => import("../pages/perm"));
 const meRoute = page("/me", () => import("../pages/me"));
 
-// Old console paths redirect to the pages that replaced them (see legacyRedirects in nav.ts and pagePaths in embed.go). Incoming search params are kept, and tab selects the community section an old content path stood for.
-const moved = <P extends string>(path: P, to: "/perm" | "/status" | "/crash" | "/community" | "/downloads", tab?: string) =>
+// 旧后台路径保留筛选及定位参数，社区旧入口按内容类型迁移。
+const moved = <P extends string>(path: P, to: "/perm" | "/status" | "/crash" | "/downloads") =>
   createRoute({ getParentRoute: () => rootRoute, path, component: Outlet, beforeLoad: ({ location }) => {
-    throw redirect({ to, search: validatePageSearch({ ...(location.search as Record<string, unknown>), ...(tab ? { tab } : {}) }) as never, replace: true });
+    throw redirect({ to, search: validatePageSearch(location.search as Record<string, unknown>) as never, replace: true });
   } });
 
+const communityRoute = createRoute({ getParentRoute: () => rootRoute, path: "/community", component: Outlet, beforeLoad: ({ location }) => {
+  const search = validatePageSearch(location.search as Record<string, unknown>);
+  throw redirect({ to: communityPathForSearch(search), search: validatePageSearch({ ...search, tab: undefined }) as never, replace: true });
+} });
+
 const routeTree = rootRoute.addChildren([
-  overviewRoute, dictionaryRoute, dictprRoute, communityRoute, issuesRoute, feedbackRoute, wordsRoute, usersRoute, downloadsRoute, noticeRoute, releaseRoute, cloudRoute, crashRoute, statusRoute, logsRoute, permRoute, meRoute,
-  moved("/admins", "/perm"), moved("/audit", "/perm"), moved("/system", "/status"), moved("/crashes", "/crash"), moved("/skins", "/community", "skins"), moved("/dictionaries", "/community", "dictionaries"), moved("/replies", "/community", "replies"), moved("/site-settings", "/downloads"),
+  overviewRoute, dictionaryRoute, dictprRoute, communityRoute, skinsRoute, candidateSkinsRoute, pluginsRoute, dictionariesRoute, repliesRoute, phrasesRoute, issuesRoute, feedbackRoute, wordsRoute, usersRoute, downloadsRoute, noticeRoute, releaseRoute, cloudRoute, crashRoute, statusRoute, logsRoute, permRoute, meRoute,
+  moved("/admins", "/perm"), moved("/audit", "/perm"), moved("/system", "/status"), moved("/crashes", "/crash"), moved("/site-settings", "/downloads"),
 ]);
 
 export const router = createRouter({ routeTree, defaultPreload: "intent", scrollRestoration: true });

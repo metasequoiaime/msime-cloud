@@ -14,7 +14,8 @@ pnpm dev
 ## 目录
 
 - `src/main.tsx`：入口。第一行导入 `src/zod-config.ts`，让 Zod 以 jitless 模式运行；`vite.config.ts` 把 zod 和这个文件放进同一个 chunk，保证任何共享 chunk 建 schema 之前 jitless 已生效。
-- `src/routes/router.tsx`：路由表。每个页面是 `src/pages/<page>/index.tsx` 的默认导出，懒加载为独立 chunk；旧路径（`/admins`、`/audit`、`/system`、`/crashes`、`/skins`、`/dictionaries`、`/replies`）在这里重定向。新增页面时同步修改 `src/nav.ts` 和 Go 侧 `embed.go` 的 `pagePaths`。
+- `src/routes/router.tsx`：路由表。每个页面是 `src/pages/<page>/index.tsx` 的默认导出，懒加载为独立 chunk；旧路径（`/admins`、`/audit`、`/system`、`/crashes`、`/community`、`/site-settings`）在这里重定向。新增页面时同步修改 `src/nav.ts` 和 Go 侧 `embed.go` 的 `pagePaths`。
+- 社区内容按六个独立路由展示：`/skins`、`/candidate-skins`、`/plugins`、`/dictionaries`、`/replies`、`/phrases`；页面包装组件复用 `src/pages/community/` 的列表、详情和审核能力。旧 `/community?tab=…` 按类型重定向并保留筛选、页码和定位参数；全局搜索与通知仍兼容后端的 `community` 目标。侧栏和概览共用 `use-community-counts.ts` 的分类待审核计数缓存。
 - `src/api/`：每个页面一个模块，放 Zod schema、类型和标签。`client.ts` 提供 `useAPI()`（绑定当前登录身份，401 时自动登出）、`requestAPI()`，以及所有服务端错误码的中文提示 `codeMessages`；新增错误码在这里加文案，页面只在语境需要不同措辞时局部覆盖。`keys.ts` 是 TanStack Query 的 key 工厂。
 - `src/utils/`：不依赖组件的公共工具。`time.ts` 提供本地时区固定格式日期与中文相对时间，无效日期保留原文；`formatLocaleDateTime` 共用中文本地时间（含秒）和旧页面的 `Invalid Date` 文案。个人资料、会话、公告、发布记录、审计与下载镜像设置复用这些方法，空值文案由页面决定；`bytes.ts` 统一字节到 B、KB、MB 的单位换算，页面自行决定精度和空值文案；`number.ts` 提供数字千分位格式化，默认使用 `zh-CN`，页面可指定 `en-US` 和小数位等 `Intl` 选项，并共用 `formatRate` 的比率百分比显示（默认两位小数，空值显示 `—`）；`pagination.ts` 共用管理列表的 URL 页码解析，保留十进制整数前缀语义，缺省或无效时回到第一页；用户与反馈列表限制在 1 至 10000，社区列表沿用不设上限的旧行为。`duration.ts` 共用处理时长的小时格式化，默认保持小时单位；Issue 页可选择不足一小时按分钟显示，保留至少一分钟的规则。
 - `src/hooks/`：共享 React Hook。`use-debounced.ts` 延迟发布输入值，输入或延迟改变时重新计时，卸载时取消等待；`use-api-image.ts` 共用管理接口图片读取、五分钟缓存和 data URL 转换，支持 Cookie 与旧令牌，页面保留各自的缓存键和地址。
@@ -103,3 +104,5 @@ Issue 撤销回归测试共 13 个场景：分类、标记重复和关闭直接�
 账号封禁撤销回归覆盖封禁和解封：直接使用服务端实际原因与版本，冲突后刷新账号状态，旧响应或其他账号的撤销参数不显示按钮。可单独运行 `python3 tests/ban_undo_smoke.py`，也由完整 CSP 冒烟测试调用。
 
 反馈撤销回归覆盖已处理和重新打开各 4 种结果：直接提交服务端前态与版本，冲突刷新，缺失或无效参数不显示撤销。可单独运行 `python3 tests/feedback_undo_smoke.py`，也由完整 CSP 冒烟测试调用。分类回归增加状态改走再改回、缺失和无效撤销参数，两种皮肤共 12 个场景。
+
+社区独立入口回归可运行 `python3 tests/community_section_smoke.py`，也由完整 CSP 冒烟调用：覆盖旧链接参数、搜索与通知直达、六类页面与移动导航、切页时挂起请求的审核目标隔离、分类待审核数刷新及同类翻页保留结果。

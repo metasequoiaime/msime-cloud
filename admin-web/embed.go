@@ -16,12 +16,12 @@ const assetsDirEnv = "MSIME_ADMIN_WEB_DIR"
 
 // pagePaths 是由 index.html 响应的 SPA 路由；修改路由表时同步更新这里。
 var pagePaths = map[string]bool{
-	"/": true, "/dictpr": true, "/community": true, "/issues": true, "/feedback": true, "/words": true,
+	"/": true, "/dictpr": true, "/issues": true, "/feedback": true, "/words": true,
 	"/users": true, "/downloads": true, "/notice": true, "/release": true, "/cloud": true,
 	"/crash": true, "/status": true, "/logs": true, "/perm": true, "/me": true, "/dictionary": true,
-	// Pre-console paths that the client router redirects to their replacements.
-	"/admins": true, "/audit": true, "/system": true, "/crashes": true,
-	"/skins": true, "/dictionaries": true, "/replies": true, "/site-settings": true,
+	"/skins": true, "/candidate-skins": true, "/plugins": true, "/dictionaries": true, "/replies": true, "/phrases": true,
+	// 旧入口由前端路由重定向到对应页面。
+	"/admins": true, "/audit": true, "/system": true, "/crashes": true, "/community": true, "/site-settings": true,
 }
 
 func IsPath(path string) bool { return pagePaths[path] || strings.HasPrefix(path, "/assets/") }

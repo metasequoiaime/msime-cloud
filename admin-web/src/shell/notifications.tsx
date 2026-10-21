@@ -39,7 +39,7 @@ export function NotificationBell({ unread }: { unread: number }) {
   const openItem = (item: Notification) => {
     setOpen(false);
     if (!item.read) markRead.mutate({ ids: [item.id] });
-    void navigate({ to: pageForTarget(item.target_page), search: item.target_id ? { focus: item.target_id } : {} });
+    void navigate({ to: pageForTarget(item.target_page, item.target_id ?? undefined), search: item.target_id ? { focus: item.target_id } : {} });
   };
   return <Popover.Root open={open} onOpenChange={setOpen}>
     <Popover.Trigger asChild>

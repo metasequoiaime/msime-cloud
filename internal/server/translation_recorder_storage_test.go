@@ -58,10 +58,15 @@ func TestTranslationRecorderStorageAllocationBudget(t *testing.T) {
 				for i := range v.Texts {
 					v.Texts[i], want[i] = "source", "word"
 				}
+				// 单条只节省少量分配，增加采样以平滑 race 模式下 JSON 编码池的随机丢弃。
+				runs := 50
+				if count == 1 {
+					runs = 1000
+				}
 				measure := func(previous bool) float64 {
 					var got []string
 					var ok bool
-					allocations := testing.AllocsPerRun(50, func() {
+					allocations := testing.AllocsPerRun(runs, func() {
 						w := httptest.NewRecorder()
 						if previous {
 							got, ok = s.previousTranslateEachRecorders(w, r, v, e)

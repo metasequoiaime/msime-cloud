@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { createListeners } from "../utils/listeners";
 
 export type ThemeMode = "light" | "dark" | "system";
 export type Season = "spring" | "summer" | "autumn" | "winter";
@@ -38,7 +39,7 @@ function readStored(): Appearance {
 }
 
 let current: Appearance = { theme: "light", season: "auto" };
-const listeners = new Set<() => void>();
+const listeners = createListeners();
 let media: MediaQueryList | null = null;
 
 function apply() {
@@ -53,7 +54,7 @@ function refreshSeason() {
   if (current.season !== "auto" || document.documentElement.dataset.season === resolveSeason("auto")) return;
   current = { ...current };
   apply();
-  for (const listener of listeners) listener();
+  listeners.emit();
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -69,7 +70,7 @@ function scheduleSeasonCheck() {
 export function initAppearance() {
   current = readStored();
   media = window.matchMedia("(prefers-color-scheme: dark)");
-  media.addEventListener("change", () => { apply(); for (const listener of listeners) listener(); });
+  media.addEventListener("change", () => { apply(); listeners.emit(); });
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refreshSeason(); });
   scheduleSeasonCheck();
   apply();
@@ -83,9 +84,9 @@ export function setAppearance(patch: Partial<Appearance>) {
     // Storage may be unavailable; the choice still applies for this page view.
   }
   apply();
-  for (const listener of listeners) listener();
+  listeners.emit();
 }
 
 export function useAppearance(): Appearance {
-  return useSyncExternalStore(listener => { listeners.add(listener); return () => listeners.delete(listener); }, () => current);
+  return useSyncExternalStore(listeners.subscribe, () => current);
 }

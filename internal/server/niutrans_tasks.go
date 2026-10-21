@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"unicode/utf8"
+
+	segmentjson "github.com/segmentio/encoding/json"
 )
 
 const niuTransTaskPrefix = "nt1."
@@ -51,8 +53,11 @@ func niuTransTaskFileNo(e NiuTransEndpoint, service, owner, task string) (string
 
 // niuTransUploadResult 只替换成功上传的 fileNo，其他业务字段保持原样；业务错误由调用方统一转换，不透传上游详情。
 func niuTransUploadResult(r *http.Request, e NiuTransEndpoint, service string, body []byte) ([]byte, error) {
-	var reply map[string]json.RawMessage
-	if json.Unmarshal(body, &reply) != nil || reply == nil {
+	if !json.Valid(body) {
+		return nil, errors.New("invalid upstream upload response")
+	}
+	reply, ok := niuTransResponseFields(body)
+	if !ok || reply == nil {
 		return nil, errors.New("invalid upstream upload response")
 	}
 	var code *int
@@ -62,10 +67,10 @@ func niuTransUploadResult(r *http.Request, e NiuTransEndpoint, service string, b
 	if *code != http.StatusOK {
 		return body, nil
 	}
-	var data map[string]json.RawMessage
+	data, ok := niuTransResponseFields(reply["data"])
 	var fileNo string
 	owner, _ := r.Context().Value(skinJobOwnerKey{}).(string)
-	if json.Unmarshal(reply["data"], &data) != nil || json.Unmarshal(data["fileNo"], &fileNo) != nil || !validNiuTransFileNo(fileNo) || owner == "" {
+	if !ok || json.Unmarshal(data["fileNo"], &fileNo) != nil || !validNiuTransFileNo(fileNo) || owner == "" {
 		return nil, errors.New("invalid upstream upload response")
 	}
 	data["fileNo"], _ = json.Marshal(niuTransTaskID(e, service, owner, fileNo))
@@ -78,9 +83,12 @@ func niuTransFileResult(body []byte, task string) ([]byte, error) {
 	if !json.Valid(body) {
 		return nil, errors.New("invalid upstream JSON")
 	}
-	var reply map[string]json.RawMessage
-	var data map[string]json.RawMessage
-	if json.Unmarshal(body, &reply) != nil || json.Unmarshal(reply["data"], &data) != nil {
+	reply, ok := niuTransResponseFields(body)
+	if !ok {
+		return body, nil
+	}
+	data, ok := niuTransResponseFields(reply["data"])
+	if !ok {
 		return body, nil
 	}
 	if _, ok := data["fileNo"]; !ok {
@@ -89,4 +97,12 @@ func niuTransFileResult(body []byte, task string) ([]byte, error) {
 	data["fileNo"], _ = json.Marshal(task)
 	reply["data"], _ = json.Marshal(data)
 	return json.Marshal(reply)
+}
+
+// niuTransResponseFields 解析已通过标准库语法校验的对象或其原始子值，字段值只在响应改写期间借用正文。
+func niuTransResponseFields(body []byte) (map[string]json.RawMessage, bool) {
+	// 预先创建小映射，避免解码器按大型对象预分配容量。
+	fields := make(map[string]json.RawMessage)
+	rest, err := segmentjson.Parse(body, &fields, segmentjson.DontCopyRawMessage)
+	return fields, err == nil && len(rest) == 0
 }

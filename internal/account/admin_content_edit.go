@@ -166,22 +166,12 @@ func saveAdminCandidate(ctx context.Context, tx pgx.Tx, id string, input content
 	}
 	keepFiles := input.Files == nil && !create
 	if keepFiles {
-		input.Files = map[string][]byte{}
 		rows, err := tx.Query(ctx, `SELECT path,bytes FROM community_candidate_skin_files WHERE skin_id=$1`, id)
 		if err != nil {
 			return err
 		}
-		for rows.Next() {
-			var path string
-			var data []byte
-			if err := rows.Scan(&path, &data); err != nil {
-				rows.Close()
-				return err
-			}
-			input.Files[path] = data
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
+		input.Files, err = collectCandidateFiles(rows)
+		if err != nil {
 			return err
 		}
 	}

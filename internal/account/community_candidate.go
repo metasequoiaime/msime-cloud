@@ -700,6 +700,22 @@ func (a *Service) candidatePublicLimit(userID string) int {
 	return maxCandidateSkinsPerUser
 }
 
+// collectCandidateFiles 读取路径和二进制内容，关闭结果集并保留扫描与迭代错误。
+// 空结果仍返回非 nil 映射，保持下载响应中 files 编码为对象。
+func collectCandidateFiles(rows pgx.Rows) (map[string][]byte, error) {
+	defer rows.Close()
+	files := map[string][]byte{}
+	for rows.Next() {
+		var path string
+		var data []byte
+		if err := rows.Scan(&path, &data); err != nil {
+			return nil, err
+		}
+		files[path] = data
+	}
+	return files, rows.Err()
+}
+
 // insertCandidateFiles stores the re-encoded images of one package in path order.
 func insertCandidateFiles(ctx context.Context, tx pgx.Tx, id string, clean map[string][]byte) error {
 	query, args := candidateFilesInsertQuery(id, clean)
@@ -746,22 +762,15 @@ func (a *Service) communityCandidateDownload(w http.ResponseWriter, r *http.Requ
 	defer tx.Rollback(r.Context())
 	var packageID string
 	var manifest []byte
-	files := map[string][]byte{}
+	var files map[string][]byte
 	batch := &pgx.Batch{}
 	batch.Queue(`SELECT package_id,manifest FROM community_candidate_skins WHERE id=$1 AND ((visibility='public' AND moderation<>'removed') OR owner_id=$2) FOR SHARE`, r.PathValue("id"), viewer).QueryRow(func(row pgx.Row) error {
 		return row.Scan(&packageID, &manifest)
 	})
 	batch.Queue(`SELECT path,bytes FROM community_candidate_skin_files WHERE skin_id=$1 ORDER BY path`, r.PathValue("id")).Query(func(rows pgx.Rows) error {
-		defer rows.Close()
-		for rows.Next() {
-			var path string
-			var data []byte
-			if e := rows.Scan(&path, &data); e != nil {
-				return e
-			}
-			files[path] = data
-		}
-		return rows.Err()
+		var err error
+		files, err = collectCandidateFiles(rows)
+		return err
 	})
 	// 下载人数仍按有效账号去重；匿名请求不创建账号或下载记录。
 	if viewer != "" {

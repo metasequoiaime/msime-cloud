@@ -27,6 +27,8 @@ curl -G -H "Authorization: Bearer $MSIME_CLIENT_TOKEN" \
 
 配置文件只能包含一个 JSON 对象，含前后空白的总大小至多 1 MiB。未知字段、尾随内容和超出大小上限都会拒绝启动；合法的前后空白仍可使用。
 
+`admin.github.api_url`、`word_submissions.github.api_url`、`qq_bot.api_url`、`admin.telegram.api_url` 和 `admin.logs.loki_url` 是拼接请求路径的基础地址，可带代理路径前缀和尾斜杠，不得带凭据、查询或片段；裸 `?`、`#` 也会拒绝，路径中的 `%3F`、`%23` 编码仍可使用。前四项必须是 HTTPS，Loki 也可使用 HTTP。`word_submissions.turnstile.siteverify_url` 是完整 HTTPS 接口地址，同样不允许凭据、查询或片段。升级前先移除这些配置中误带的分隔符，避免启动校验失败。
+
 ## 接口
 
 业务接口除 `GET /healthz`、官网词条提交（见下文）、公告、社区浏览和匿名遥测上报（见 [管理后台文档](docs/admin.md#公开客户端接口)）外均需 Bearer 鉴权；Swagger 和 OpenAPI 文档可匿名访问。响应禁用缓存，输入正文、音频和凭据不写日志或磁盘。

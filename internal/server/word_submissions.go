@@ -174,7 +174,8 @@ func (c *WordSubmissionsConfig) validate(authEnabled bool, origins []string) err
 
 func plainHTTPSURL(raw string, allowEmptyPath bool) bool {
 	u, err := url.Parse(raw)
-	return err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil && u.RawQuery == "" && !u.ForceQuery && u.Fragment == "" && (allowEmptyPath || u.Path != "")
+	// 空片段解析后不留标记，但原始地址的 # 仍会吞掉后续拼接的接口路径。
+	return err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil && u.RawQuery == "" && !u.ForceQuery && !strings.Contains(raw, "#") && (allowEmptyPath || u.Path != "")
 }
 
 // GitHub hands out PKCS#1 keys; converted keys are PKCS#8. Secret stores that cannot hold newlines often store the PEM with literal \n sequences, so those are accepted too.

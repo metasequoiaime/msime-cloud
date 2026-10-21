@@ -15365,7 +15365,7 @@
                       "type": "string",
                       "format": "byte"
                     },
-                    "description": "键为包内相对路径（仅 png/jpg/jpeg），值为标准 base64。忽略大小写后路径不能重复，图片文件或固定的 skin.toml 不能同时充当其他文件的父目录；上传冲突返回 400 candidate_skin_file_path。"
+                    "description": "键为包内相对路径（仅 png/jpg/jpeg），完整路径最多 256 字节、每段最多 255 字节，值为标准 base64。忽略大小写后路径不能重复，图片文件或固定的 skin.toml 不能同时充当其他文件的父目录；非法路径或上传冲突返回 400 candidate_skin_file_path。"
                   },
                   "visibility": {
                     "type": "string",
@@ -15935,7 +15935,7 @@
                       "type": "string",
                       "format": "byte"
                     },
-                    "description": "键为包内相对路径（仅 png/jpg/jpeg），值为标准 base64。忽略大小写后路径不能重复，图片文件或固定的 skin.toml 不能同时充当其他文件的父目录；上传冲突返回 400 candidate_skin_file_path。"
+                    "description": "键为包内相对路径（仅 png/jpg/jpeg），完整路径最多 256 字节、每段最多 255 字节，值为标准 base64。忽略大小写后路径不能重复，图片文件或固定的 skin.toml 不能同时充当其他文件的父目录；非法路径或上传冲突返回 400 candidate_skin_file_path。"
                   }
                 },
                 "required": [
@@ -16357,7 +16357,7 @@
                         "type": "string",
                         "format": "byte"
                       },
-                      "description": "键为包内相对路径（仅 png/jpg/jpeg），值为标准 base64。忽略大小写后路径不能重复，图片文件或固定的 skin.toml 不能同时充当其他文件的父目录；上传冲突返回 400 candidate_skin_file_path。"
+                      "description": "键为包内相对路径（仅 png/jpg/jpeg），完整路径最多 256 字节、每段最多 255 字节，值为标准 base64。忽略大小写后路径不能重复，图片文件或固定的 skin.toml 不能同时充当其他文件的父目录；非法路径或上传冲突返回 400 candidate_skin_file_path。"
                     }
                   }
                 }

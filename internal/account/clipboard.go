@@ -50,7 +50,10 @@ func (s *Store) userDataTransaction(ctx context.Context, user string) (pgx.Tx, e
 		return nil, e
 	}
 	var banned bool
-	if e = tx.QueryRow(ctx, "SELECT banned_at IS NOT NULL FROM auth_users WHERE id=$1 FOR UPDATE", user).Scan(&banned); e != nil {
+	if e = tx.QueryRow(ctx, "SELECT banned_at IS NOT NULL FROM auth_users WHERE id=$1 FOR UPDATE", user).Scan(&banned); errors.Is(e, pgx.ErrNoRows) {
+		tx.Rollback(ctx)
+		return nil, errMissingUser
+	} else if e != nil {
 		tx.Rollback(ctx)
 		return nil, e
 	}
@@ -91,6 +94,9 @@ func (s *Store) SetClipboardEnabled(ctx context.Context, user string, enabled bo
 )
 SELECT banned FROM locked_user`, user).Scan(&banned)
 		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return errMissingUser
+			}
 			return err
 		}
 		if banned {
@@ -128,6 +134,9 @@ func (s *Store) SetClipboardRetention(ctx context.Context, user string, days int
 )
 SELECT banned FROM locked_user`, user, days).Scan(&banned)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errMissingUser
+		}
 		return err
 	}
 	if banned {

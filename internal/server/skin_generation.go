@@ -24,12 +24,7 @@ func (s *Server) generateSkinArtwork(w http.ResponseWriter, r *http.Request) {
 	owner, _ := r.Context().Value(skinJobOwnerKey{}).(string)
 	if user, ok := strings.CutPrefix(owner, "user:"); ok {
 		err := s.accounts.EnsureUserActive(r.Context(), user)
-		if errors.Is(err, account.ErrBanned) {
-			fail(w, http.StatusForbidden, "account_banned")
-			return
-		}
-		if errors.Is(err, account.ErrInvalid) {
-			fail(w, http.StatusUnauthorized, "unauthorized")
+		if writeSkinAccountError(w, err) {
 			return
 		}
 		if err != nil {

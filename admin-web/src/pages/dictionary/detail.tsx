@@ -1,11 +1,12 @@
 import { formatNumber } from "../../utils/number";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useBlocker } from "@tanstack/react-router";
 import { ExternalLink, Maximize2, Minimize2, RefreshCw, Search, X } from "lucide-react";
 import { APIError, useAPI } from "../../api/client";
 import { columnLabels, dictionaryChangeSchema, dictionaryContentSchema } from "../../api/dictionary";
 import { keys } from "../../api/keys";
+import { useDebouncedEffect } from "../../hooks/use-debounced-effect";
 import { noPermissionHint, usePermissions } from "../../shell/permissions";
 import { Button, buttonVariants } from "../../ui/button";
 import { Banner, Card, CardHeader } from "../../ui/card";
@@ -34,7 +35,13 @@ export function FileDetail({ path, initialQuery = "", onDirty, focused, onToggle
   const sheet = useRef<DictionarySheetHandle>(null);
   const [saveError, setSaveError] = useState("");
   const [uncertain, setUncertain] = useState(false);
-  useEffect(() => { if (editing || search.trim() === query) return; const timer = window.setTimeout(() => { setQuery(search.trim()); setPage(1); }, 350); return () => window.clearTimeout(timer); }, [search, editing, query]);
+  const applySearch = useCallback(() => {
+    const next = search.trim();
+    if (next === query) return;
+    setQuery(next);
+    setPage(1);
+  }, [search, query]);
+  useDebouncedEffect(applySearch, 350, !editing && search.trim() !== query);
   const dirty = drafts.length > 0 || editing;
   useEffect(() => { onDirty(dirty); }, [dirty, onDirty]);
   const blocker = useBlocker({ shouldBlockFn: ({ current, next }) => dirty && current.pathname !== next.pathname, enableBeforeUnload: dirty, withResolver: true });

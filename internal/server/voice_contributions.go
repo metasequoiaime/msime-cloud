@@ -2,7 +2,6 @@ package server
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -14,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 )
 
 // voiceContributionsPath 是用户自愿上传语音样本的接口。需要用户会话（匿名账号也是用户），配置的客户端令牌不能上传。
@@ -105,9 +105,7 @@ func (s *Server) voiceContribution(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			var v voiceContributionPayload
-			d := json.NewDecoder(bytes.NewReader(raw))
-			d.DisallowUnknownFields()
-			if d.Decode(&v) != nil || d.Decode(new(any)) != io.EOF {
+			if httpjson.DecodeValue(bytes.NewReader(raw), &v) != nil {
 				fail(w, 400, "invalid_payload")
 				return
 			}

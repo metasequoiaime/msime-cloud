@@ -17,6 +17,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 )
 
 // FeedbackPath 是 App 内反馈的提交接口。它不在 /v1/users/me 下，由 IsPath 放行全局 Bearer 检查，处理函数自己校验用户会话（匿名账号也可以提交）。
@@ -218,9 +220,7 @@ func readFeedbackForm(w http.ResponseWriter, r *http.Request) (feedbackPayload, 
 				writeError(w, 400, "invalid_json")
 				return payload, nil, false
 			}
-			d := json.NewDecoder(bytes.NewReader(raw))
-			d.DisallowUnknownFields()
-			if d.Decode(&payload) != nil || d.Decode(new(any)) != io.EOF {
+			if httpjson.DecodeValue(bytes.NewReader(raw), &payload) != nil {
 				writeError(w, 400, "invalid_json")
 				return payload, nil, false
 			}

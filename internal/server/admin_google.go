@@ -332,7 +332,8 @@ func (s *Server) adminGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		s.adminCookie(w, "", true, -1)
 		http.Redirect(w, r, "/?login_error=google_denied", http.StatusSeeOther)
 	}
-	state := r.URL.Query().Get("state")
+	query := r.URL.Query()
+	state := query.Get("state")
 	cookie, err := r.Cookie(s.adminCookieName(true))
 	if err != nil || len(state) != 64 || subtle.ConstantTimeCompare([]byte(state), []byte(cookie.Value)) != 1 {
 		denied()
@@ -347,8 +348,8 @@ func (s *Server) adminGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	code := r.URL.Query().Get("code")
-	if r.URL.Query().Get("error") != "" || code == "" || len(code) > 4096 {
+	code := query.Get("code")
+	if query.Get("error") != "" || code == "" || len(code) > 4096 {
 		denied()
 		return
 	}

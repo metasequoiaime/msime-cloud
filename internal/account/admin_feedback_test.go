@@ -68,6 +68,9 @@ func TestAdminFeedbackListScreenshotsAndStatus(t *testing.T) {
 	if w.Header().Get("Content-Type") != "image/png" || w.Header().Get("Cache-Control") != "no-store" || !strings.Contains(w.Header().Get("Content-Security-Policy"), "sandbox") || !bytes.HasPrefix(w.Body.Bytes(), []byte("\x89PNG")) || bytes.Contains(w.Body.Bytes(), []byte("secret-location")) {
 		t.Fatal("screenshot response", w.Header())
 	}
+	if w.Result().Header.Get("Content-Security-Policy") != "sandbox; default-src 'none'" || w.Result().Header.Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatal("screenshot security headers", w.Header())
+	}
 	if w = apiRequest(t, admin, "GET", "/api/feedback/"+bug.ID+"/screenshots/1", "", "", 200); w.Header().Get("Content-Type") != "image/jpeg" {
 		t.Fatal(w.Header())
 	}

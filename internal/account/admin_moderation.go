@@ -599,12 +599,7 @@ func (a *Service) adminCandidateSkinPicture(w http.ResponseWriter, r *http.Reque
 		writeError(w, 404, "not_found")
 		return
 	}
-	w.Header().Set("Content-Type", "image/"+extension)
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'")
-	w.WriteHeader(200)
-	_, _ = w.Write(data)
+	writeAdminImage(w, "image/"+extension, data)
 }
 
 // PendingCommunity 只统计待审核项供后台徽标使用，让已有的待审部分索引参与查询；私有候选皮肤不计入。

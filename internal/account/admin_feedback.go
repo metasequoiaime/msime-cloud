@@ -72,12 +72,7 @@ func (a *Service) adminFeedbackScreenshot(w http.ResponseWriter, r *http.Request
 		a.error(w, err)
 		return
 	}
-	w.Header().Set("Content-Type", mime)
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'")
-	w.WriteHeader(200)
-	_, _ = w.Write(data)
+	writeAdminImage(w, mime, data)
 }
 
 // setFeedbackStatus 把反馈 id 标记为 status；已经是这个状态时同样算作命中。

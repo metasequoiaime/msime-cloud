@@ -22,7 +22,7 @@ func niuTransTaskMAC(e NiuTransEndpoint, service, owner, fileNo string) []byte {
 }
 
 func validNiuTransFileNo(fileNo string) bool {
-	return fileNo != "" && len(fileNo) <= 256 && utf8.ValidString(fileNo) && !strings.ContainsAny(fileNo, "/\\\x00\r\n")
+	return fileNo != "" && fileNo != "." && fileNo != ".." && len(fileNo) <= 256 && utf8.ValidString(fileNo) && !strings.ContainsAny(fileNo, "/\\\x00\r\n")
 }
 
 // niuTransTaskID 不保存进程内状态，同样凭据的其他副本可以验证；编号仅能由原身份用于同类媒体。

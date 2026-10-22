@@ -73,4 +73,10 @@ func TestNiuTransFileOperationsRejectPathSeparatorsAndOversize(t *testing.T) {
 			t.Fatalf("%q: %d %s", fileNo, w.Code, w.Body.String())
 		}
 	}
+	for _, fileNo := range []string{".", ".."} {
+		path := "/v1/niutrans/documents/" + url.PathEscape(niuTransTaskID(s.config.NiuTrans.Document, "niutrans_document", "test", fileNo))
+		if w := call(s, http.MethodGet, path, ""); w.Code != http.StatusNotFound {
+			t.Fatalf("%q: %d %s", fileNo, w.Code, w.Body.String())
+		}
+	}
 }

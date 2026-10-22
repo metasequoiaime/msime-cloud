@@ -46,7 +46,7 @@ const userDataSummaryQuery = `SELECT id,bytes,items FROM (
  ) community
  UNION ALL SELECT 6,'voice',COALESCE(sum(octet_length(t.audio)+octet_length(t.transcript)),0),count(*) FROM voice_contributions t WHERE user_id=$1
  UNION ALL SELECT 7,'avatar',0,(SELECT count(*) FROM auth_users WHERE id=$1 AND avatar_key<>'')
-) s ORDER BY o`
+) s WHERE EXISTS (SELECT 1 FROM auth_users WHERE id=$1) ORDER BY o`
 
 // UserDataSummary 返回本人云端数据的分区汇总，分区顺序固定。
 func (s *Store) UserDataSummary(ctx context.Context, user string) ([]UserDataSection, int64, error) {
@@ -58,6 +58,9 @@ func (s *Store) UserDataSummary(ctx context.Context, user string) ([]UserDataSec
 		var v UserDataSection
 		return v, row.Scan(&v.ID, &v.Bytes, &v.Items)
 	})
+	if err == nil && len(sections) == 0 {
+		return nil, 0, errMissingUser
+	}
 	var total int64
 	for _, v := range sections {
 		total += v.Bytes

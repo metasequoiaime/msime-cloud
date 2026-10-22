@@ -210,12 +210,12 @@ func (s *Server) chatStreamOnce(w http.ResponseWriter, r *http.Request, v chatRe
 		return nil
 	}
 	// dispatch 处理一个完整的 SSE 事件的 data；done 为 true 表示收到 `[DONE]`。
-	dispatch := func(data string) (done bool, err error) {
-		if data == "[DONE]" {
+	dispatch := func(data []byte) (done bool, err error) {
+		if bytes.Equal(data, []byte("[DONE]")) {
 			return true, nil
 		}
 		var chunk chatStreamChunk
-		if json.Unmarshal([]byte(data), &chunk) != nil {
+		if json.Unmarshal(data, &chunk) != nil {
 			return false, errChatStreamEvent
 		}
 		if len(chunk.Error) > 0 && string(chunk.Error) != "null" {
@@ -256,29 +256,36 @@ func (s *Server) chatStreamOnce(w http.ResponseWriter, r *http.Request, v chatRe
 	scanner.Buffer(make([]byte, 0, 4096), contract.UpstreamResponseBytes)
 	scanner.Split(splitSSELines())
 	firstLine := true
-	var data []string
+	var data []byte
+	dataReady := false
 	done := false
 	for !done && err == nil && scanner.Scan() {
-		line := scanner.Text()
+		line := scanner.Bytes()
 		if firstLine {
 			// SSE 只剥离流开头的一个 BOM，后续字段和正文中的同一字符必须保留。
-			line = strings.TrimPrefix(line, "\ufeff")
+			line = bytes.TrimPrefix(line, []byte("\ufeff"))
 			firstLine = false
 		}
 		switch {
-		case line == "":
-			if len(data) > 0 {
-				done, err = dispatch(strings.Join(data, "\n"))
+		case len(line) == 0:
+			if dataReady {
+				done, err = dispatch(data)
 				data = data[:0]
+				dataReady = false
 			}
-		case strings.HasPrefix(line, "data:"):
-			data = append(data, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
+		case bytes.HasPrefix(line, []byte("data:")):
+			if dataReady {
+				data = append(data, '\n')
+			}
+			// `Scanner` 的字节只在下次 `Scan` 前有效，先复制到可复用的事件缓冲区。
+			data = append(data, bytes.TrimPrefix(bytes.TrimPrefix(line, []byte("data:")), []byte(" "))...)
+			dataReady = true
 		}
 		// 注释行（以冒号开头的心跳）和 event、id、retry 字段不影响内容，直接忽略。
 	}
 	if !done && err == nil {
-		if err = scanner.Err(); err == nil && len(data) > 0 {
-			done, err = dispatch(strings.Join(data, "\n"))
+		if err = scanner.Err(); err == nil && dataReady {
+			done, err = dispatch(data)
 		}
 	}
 	if err == nil && ctx.Err() != nil {

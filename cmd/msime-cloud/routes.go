@@ -180,12 +180,12 @@ func adminSummary(route account.AdminRoute) string {
 	return strings.Join(parts, "; ")
 }
 
-// adminGuide is every line of docs/admin.md naming the route, by its path up to the first parameter, so describe shows the request bodies and permissions the tables do not carry.
+// adminGuide 按首个参数之前的路径收集文档中提到该接口的行，供 describe 展示路由表未包含的请求体和权限。
 func adminGuide(path string) []string {
 	base, _, _ := strings.Cut(path, "{")
 	base = strings.TrimSuffix(base, "/")
 	var lines []string
-	for _, line := range strings.Split(docs.Admin, "\n") {
+	for line := range strings.SplitSeq(docs.Admin, "\n") {
 		if mentions(line, base) {
 			lines = append(lines, strings.TrimSpace(line))
 		}

@@ -58,7 +58,7 @@ func describeSessionAgent(header string) (platform, name, version string) {
 		}
 	}
 	if legacyAgent.MatchString(header) {
-		if p := strings.ToLower(header[len("MSIME/"):]); sessionPlatforms[p] {
+		if p := legacySessionPlatform(header[len("MSIME/"):]); p != "" {
 			return p, "", ""
 		}
 		return "", "", ""
@@ -72,6 +72,34 @@ func describeSessionAgent(header string) (platform, name, version string) {
 		where = ua.Device
 	}
 	return "web", ua.Name + " · " + where, ""
+}
+
+func legacySessionPlatform(platform string) string {
+	if sessionPlatforms[platform] {
+		return platform
+	}
+	upper := false
+	for i := range platform {
+		if platform[i] >= utf8.RuneSelf {
+			platform = strings.ToLower(platform)
+			if sessionPlatforms[platform] {
+				return platform
+			}
+			return ""
+		}
+		if platform[i] >= 'A' && platform[i] <= 'Z' {
+			upper = true
+		}
+	}
+	if !upper {
+		return ""
+	}
+	for _, known := range [...]string{"android", "ios", "macos", "windows", "linux", "harmony"} {
+		if len(platform) == len(known) && strings.EqualFold(platform, known) {
+			return known
+		}
+	}
+	return ""
 }
 
 // sessions 处理 GET /v1/users/me/sessions：列出本人未撤销、未过期的会话，当前请求所用的会话标记 current。匿名账号是另一个用户，不会出现在真实账号的列表里。

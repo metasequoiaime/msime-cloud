@@ -200,7 +200,7 @@ func number(value any, present bool) float64 {
 }
 func numberIn(value any, max float64) (float64, bool) {
 	n := number(value, true)
-	return n, !math.IsNaN(n) && !math.IsInf(n, 0) && n >= 0 && n <= max
+	return n, bounded(n, max)
 }
 func enumArray(table map[string]any, key string, allowed []string) ([]string, bool) {
 	items, ok := table[key].([]any)

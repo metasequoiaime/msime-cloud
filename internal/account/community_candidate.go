@@ -854,6 +854,17 @@ func (a *Service) communityCandidateSync(w http.ResponseWriter, r *http.Request)
 		a.error(w, e)
 		return
 	}
+	if len(items) == 0 {
+		exists, err := a.store.userExists(r.Context(), p.UserID)
+		if err != nil {
+			a.error(w, err)
+			return
+		}
+		if !exists {
+			a.error(w, errMissingUser)
+			return
+		}
+	}
 	write(w, 200, map[string]any{"skins": items})
 }
 

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/binary"
@@ -160,7 +161,16 @@ func (b *qqBot) downloadMedia(ctx context.Context, raw string, limit int64) ([]b
 	if resp.ContentLength > limit {
 		return nil, errors.New("attachment too large")
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	reader := io.LimitReader(resp.Body, limit+1)
+	var body []byte
+	if resp.ContentLength > 0 {
+		// 声明长度已经过上限检查；额外预留最小读取空间，避免读到 EOF 前再扩容。
+		buffer := bytes.NewBuffer(make([]byte, 0, int(resp.ContentLength)+bytes.MinRead))
+		_, err = buffer.ReadFrom(reader)
+		body = buffer.Bytes()
+	} else {
+		body, err = io.ReadAll(reader)
+	}
 	if err != nil {
 		return nil, errors.New("attachment download failed")
 	}

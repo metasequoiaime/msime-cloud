@@ -621,10 +621,26 @@ func (s crashSpike) notification() Notification {
 var crashPlatformNames = map[string]string{"windows": "Windows", "macos": "macOS", "linux": "Linux", "android": "Android", "ios": "iOS", "harmonyos": "HarmonyOS", "harmony": "HarmonyOS", "ohos": "HarmonyOS"}
 
 func crashPlatformName(platform string) string {
+	if name, ok := crashPlatformNames[platform]; ok {
+		return name
+	}
+	if crashPlatformASCIILower(platform) {
+		return platform
+	}
 	if name, ok := crashPlatformNames[strings.ToLower(platform)]; ok {
 		return name
 	}
 	return platform
+}
+
+// crashPlatformASCIILower 判断平台名是否只含非大写 ASCII 字节；非 ASCII 输入交给 Unicode 小写转换。
+func crashPlatformASCIILower(platform string) bool {
+	for i := 0; i < len(platform); i++ {
+		if platform[i] >= utf8.RuneSelf || platform[i] >= 'A' && platform[i] <= 'Z' {
+			return false
+		}
+	}
+	return true
 }
 
 // lockCrashSpikes 先取得跨副本事务锁，再用独立语句筛选待告警分组，排除已修复及静默期内已告警的分组。
@@ -774,7 +790,21 @@ const crashStackLines = 256
 
 // crashPlatform maps a client-reported platform name to the canonical key that overviewPlatform computes in SQL: windows (also win), macos (also mac, darwin), linux, android, ios (also ipados), harmonyos (also harmony, ohos); any other name is kept lowercased.
 func crashPlatform(platform string) string {
-	switch platform = strings.ToLower(platform); platform {
+	switch platform {
+	case "win":
+		return "windows"
+	case "mac", "darwin":
+		return "macos"
+	case "ipados":
+		return "ios"
+	case "harmony", "ohos":
+		return "harmonyos"
+	}
+	if crashPlatformASCIILower(platform) {
+		return platform
+	}
+	platform = strings.ToLower(platform)
+	switch platform {
 	case "win":
 		return "windows"
 	case "mac", "darwin":

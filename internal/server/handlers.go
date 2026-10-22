@@ -622,10 +622,12 @@ func (s *Server) transcribe(w http.ResponseWriter, r *http.Request) {
 // dictionary match can replace an upstream character-by-character misinterpretation.
 // Engine owns correction and whole-input matching; no provider or user state is mutated.
 func (s *Server) nativeCloudCandidates(r *http.Request, text string, limit int) ([]string, bool) {
-	clean := make([]string, 0, limit)
+	if s.config.Engine.Binary == "" {
+		return []string{}, false
+	}
 	raw, err := s.config.Engine.Query(r.Context(), map[string]any{"operation": "cloud_candidates", "text": text, "limit": limit})
 	if err != nil {
-		return clean, false
+		return []string{}, false
 	}
 	var result struct {
 		Normalized string `json:"normalized_segmentation"`
@@ -634,8 +636,9 @@ func (s *Server) nativeCloudCandidates(r *http.Request, text string, limit int) 
 		} `json:"candidates"`
 	}
 	if json.Unmarshal(raw, &result) != nil {
-		return clean, false
+		return []string{}, false
 	}
+	clean := make([]string, 0, min(limit, len(result.Candidates)))
 	seen := map[string]bool{}
 	for _, item := range result.Candidates {
 		word := strings.TrimSpace(item.Word)

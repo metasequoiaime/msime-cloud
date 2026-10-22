@@ -1,6 +1,7 @@
 package account
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 
@@ -48,6 +49,17 @@ func TestCandidatePositionsPaginationUsesContextIndex(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, more, err := store.CandidatePositions(t.Context(), tc.user, tc.context, tc.offset, tc.limit)
+			if tc.user == "positions-query-missing" {
+				if !errors.Is(err, errMissingUser) {
+					t.Fatalf("不存在用户应返回 errMissingUser，实际 %v", err)
+				}
+				select {
+				case <-trace.queries:
+				case <-t.Context().Done():
+					t.Fatal("没有记录到固定候选分页查询")
+				}
+				return
+			}
 			if err != nil || more != tc.more || !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("固定候选分页结果=%+v，has_more=%t，错误=%v；期望=%+v，has_more=%t", got, more, err, tc.want, tc.more)
 			}

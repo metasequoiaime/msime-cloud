@@ -2,3 +2,8 @@
 export function firstLine(text: string): string {
   return text.split("\n")[0].trim();
 }
+
+// initial 取名称的首个 Unicode 字符，供头像复用。
+export function initial(name: string): string {
+  return (Array.from(name.trim())[0] ?? "?").toUpperCase();
+}

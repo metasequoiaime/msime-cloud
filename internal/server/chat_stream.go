@@ -210,13 +210,18 @@ func (s *Server) chatStreamOnce(w http.ResponseWriter, r *http.Request, v chatRe
 		return nil
 	}
 	var out *chatStreamOut
+	var chunk *chatStreamChunk
 	// dispatch 处理一个完整的 SSE 事件的 data；done 为 true 表示收到 `[DONE]`。
 	dispatch := func(data []byte) (done bool, err error) {
 		if bytes.Equal(data, []byte("[DONE]")) {
 			return true, nil
 		}
-		var chunk chatStreamChunk
-		if json.Unmarshal(data, &chunk) != nil {
+		if chunk == nil {
+			chunk = &chatStreamChunk{}
+		}
+		// 每次分发后清零复用的容器，避免字段残留和等待后续事件时保留正文。
+		defer func() { *chunk = chatStreamChunk{} }()
+		if json.Unmarshal(data, chunk) != nil {
 			return false, errChatStreamEvent
 		}
 		if len(chunk.Error) > 0 && string(chunk.Error) != "null" {

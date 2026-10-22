@@ -464,7 +464,18 @@ func (c cli) do(server string, r request, token string) (*http.Response, error) 
 	return c.doOnce(server, r, token)
 }
 
+func validateServerURL(base string) error {
+	u, err := url.Parse(base)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(base, "#") {
+		return errors.New("invalid_server_url")
+	}
+	return nil
+}
+
 func (c cli) doOnce(server string, r request, token string) (*http.Response, error) {
+	if err := validateServerURL(server); err != nil {
+		return nil, usageError{err.Error()}
+	}
 	target := strings.TrimRight(server, "/") + r.path
 	if len(r.query) > 0 {
 		separator := "?"

@@ -56,11 +56,13 @@ func TestQQResearchQueryScanCompatibility(t *testing.T) {
 		`org:metasequoiaime label:"org:other"`, `"org:metasequoiaime"`, `org:metasequoiaime \foo`,
 		"org:metasequoiaime\tbug", "org:metasequoiaime \x00", "org:metasequoiaime\u00a0bug", "org:metasequoiaime \u0085",
 		"org:metasequoiaime \xff foo", "\xff org:metasequoiaime", "org:metasequoiaime İ K ſ", "repo:metasequoiaime/mſime",
+		"org:metasequoİaime", "ORG:METASEQUOİAIME IS:PR", "repo:metasequoiaime/msİme",
+		"REPO:METASEQUOİAIME/MSİME LABEL:BUG", "org:metasequoİaime OR bug", "org:metasequoİaime org:other",
 	} {
 		checkQQResearchQueryScan(t, query)
 	}
 	random := rand.New(rand.NewSource(1061))
-	units := []string{"org:metasequoiaime", "repo:metasequoiaime/msime", "org:other", "user:example", "repo:", "-org:", "label:", "a", "水", "bug", "OR", "not", "IS:PR", "'", ":", " ", "  ", "\t", "\n", "\u00a0", "\u2003", `"`, `(`, `)`, `\`, "İ", "K", "ſ", "\xff", "\xe4\xb8"}
+	units := []string{"org:metasequoiaime", "repo:metasequoiaime/msime", "org:metasequoİaime", "repo:metasequoiaime/msİme", "org:other", "user:example", "repo:", "-org:", "label:", "a", "水", "bug", "OR", "not", "IS:PR", "'", ":", " ", "  ", "\t", "\n", "\u00a0", "\u2003", `"`, `(`, `)`, `\`, "İ", "K", "ſ", "\xff", "\xe4\xb8"}
 	for range 10000 {
 		var query strings.Builder
 		if random.Intn(2) == 0 {
@@ -81,7 +83,7 @@ func TestQQResearchQueryScanCompatibility(t *testing.T) {
 }
 
 func FuzzQQResearchQueryScan(f *testing.F) {
-	for _, query := range []string{"org:metasequoiaime", `org:metasequoiaime label:"help wanted"`, `org:metasequoiaime label:"a"b`, "org:metasequoiaime \xff foo", "OR org:metasequoiaime", "org:metasequoiaime İ K"} {
+	for _, query := range []string{"org:metasequoiaime", `org:metasequoiaime label:"help wanted"`, `org:metasequoiaime label:"a"b`, "org:metasequoiaime \xff foo", "OR org:metasequoiaime", "org:metasequoiaime İ K", "org:metasequoİaime", "repo:metasequoiaime/msİme"} {
 		f.Add(query)
 	}
 	f.Fuzz(func(t *testing.T, query string) { checkQQResearchQueryScan(t, query) })
@@ -125,6 +127,19 @@ func TestQQResearchQueryScanAllocationBudget(t *testing.T) {
 				t.Fatalf("搜索限定校验分配 %s，超过128字节预算", result.MemString())
 			}
 		})
+	}
+}
+
+func TestQQResearchQueryScanASCIIAllocation(t *testing.T) {
+	if raceEnabled {
+		t.Skip("竞态模式会随机丢弃正则对象池，不要求严格零分配")
+	}
+	for _, query := range []string{"org:metasequoiaime is:pr", "ORG:METASEQUOIAIME IS:PR", `ORG:METASEQUOIAIME LABEL:"HELP WANTED"`} {
+		var allowed bool
+		allocs := testing.AllocsPerRun(100, func() { allowed = qqResearchScopedSearch(query) })
+		if !allowed || allocs != 0 {
+			t.Errorf("查询=%q：允许=%v，分配 %.0f 次，期望允许且零分配", query, allowed, allocs)
+		}
 	}
 }
 

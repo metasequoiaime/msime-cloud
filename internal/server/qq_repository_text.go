@@ -19,7 +19,11 @@ func qqRepositoryText(response githubapp.Response, operation string) (string, er
 	if response.Decode(&file) != nil || file.Encoding != "base64" {
 		return "", errors.New(operation + ": invalid response")
 	}
-	raw, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(file.Content, "\n", ""))
+	// 解码器会忽略 CR/LF；仅按实际编码字节数分配输出，避免复制编码文本或为空行预留容量。
+	encodedSize := len(file.Content) - strings.Count(file.Content, "\r") - strings.Count(file.Content, "\n")
+	raw := make([]byte, base64.StdEncoding.DecodedLen(encodedSize))
+	n, err := base64.StdEncoding.Decode(raw, []byte(file.Content))
+	raw = raw[:n]
 	if err != nil || !utf8.Valid(raw) {
 		return "", errors.New(operation + ": invalid content")
 	}

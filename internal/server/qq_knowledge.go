@@ -2585,7 +2585,8 @@ func (s *Server) qqKnowledgeMaterial(ctx context.Context, question string, ask *
 		// 每个平台的最新正式版都附上更新内容；附上后资料总长超过 qqAnswerContextRunes 时，只给用户提到的平台附。
 		list := qqReleasesMaterial(releases, nil)
 		if materialRunes+utf8.RuneCountInString(third.String())+utf8.RuneCountInString(list) > qqAnswerContextRunes {
-			list = qqReleasesMaterial(releases, func(p qqPlatformRelease) bool { return qqMentionsPlatform(question, p) })
+			questionLower := strings.ToLower(question)
+			list = qqReleasesMaterial(releases, func(p qqPlatformRelease) bool { return qqMentionsPlatformLower(questionLower, p) })
 		}
 		third.WriteString("### 各平台最新版本（GitHub Release）\n" + list + "\n")
 	}

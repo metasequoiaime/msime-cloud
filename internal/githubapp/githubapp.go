@@ -295,7 +295,7 @@ func (c Client) doFormat(ctx context.Context, token, method, path string, body a
 		return Response{}, requestError{cause: err}
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	raw, err := readResponseBody(resp.Body, limit, resp.ContentLength)
 	if err != nil {
 		return Response{Status: resp.StatusCode, Header: resp.Header}, requestError{cause: err}
 	}
@@ -303,6 +303,29 @@ func (c Client) doFormat(ctx context.Context, token, method, path string, body a
 		return Response{Status: resp.StatusCode, Header: resp.Header}, errors.New("GitHub response too large")
 	}
 	return Response{resp.StatusCode, raw, resp.Header}, nil
+}
+
+// readResponseBody 为合法的声明长度直接分配正文，未知长度沿用分块读取。
+// 实际读取仍受 limit+1 限制，少报长度时继续检查尾部，不把声明长度当成成功依据。
+func readResponseBody(reader io.Reader, limit, length int64) ([]byte, error) {
+	reader = io.LimitReader(reader, limit+1)
+	if length <= 0 || length > limit {
+		return io.ReadAll(reader)
+	}
+	body := make([]byte, int(length))
+	for read := 0; read < len(body); {
+		n, err := reader.Read(body[read:])
+		read += n
+		if err != nil {
+			if err == io.EOF {
+				err = nil
+			}
+			return body[:read], err
+		}
+	}
+	// 不用 ReadFull，避免丢弃与最后一段正文同时返回的非 EOF 错误。
+	tail, err := io.ReadAll(reader)
+	return append(body, tail...), err
 }
 
 // readRequestTimeout 限制共享读取的时间，每个调用者仍可以独立取消等待。

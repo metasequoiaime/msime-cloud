@@ -186,7 +186,9 @@ func (s *Server) chatStreamOnce(w http.ResponseWriter, r *http.Request, v chatRe
 	rc := http.NewResponseController(w)
 	streaming := false
 	var pending []string
-	var content strings.Builder
+	// 正文只用于字节上限与非空判断，逐段检查即可，避免保留和反复扫描累计文本。
+	contentBytes := 0
+	hasContent := false
 	finished := false
 	write := func(frames ...string) error {
 		if !streaming {
@@ -224,9 +226,12 @@ func (s *Server) chatStreamOnce(w http.ResponseWriter, r *http.Request, v chatRe
 		}
 		choice := chunk.Choices[0]
 		if choice.Delta.Content != nil {
-			content.WriteString(*choice.Delta.Content)
-			if content.Len() > contract.OutputTextBytes {
+			contentBytes += len(*choice.Delta.Content)
+			if contentBytes > contract.OutputTextBytes {
 				return false, errChatStreamTooLong
+			}
+			if !hasContent && strings.TrimSpace(*choice.Delta.Content) != "" {
+				hasContent = true
 			}
 		}
 		if choice.FinishReason != nil {
@@ -238,7 +243,7 @@ func (s *Server) chatStreamOnce(w http.ResponseWriter, r *http.Request, v chatRe
 		out := chatStreamOut{ID: chunk.ID, Object: "chat.completion.chunk", Created: chunk.Created, Model: chunk.Model, Choices: []chatStreamChoice{{Index: 0, Delta: chatStreamDelta{Role: choice.Delta.Role, Content: choice.Delta.Content}, FinishReason: choice.FinishReason}}}
 		b, _ := json.Marshal(out)
 		frame := "data: " + string(b) + "\n\n"
-		if !streaming && strings.TrimSpace(content.String()) == "" {
+		if !streaming && !hasContent {
 			pending = append(pending, frame)
 			return false, nil
 		}
@@ -285,7 +290,7 @@ func (s *Server) chatStreamOnce(w http.ResponseWriter, r *http.Request, v chatRe
 			err = errChatStreamTruncated
 		}
 	}
-	accepted := err == nil && strings.TrimSpace(content.String()) != ""
+	accepted := err == nil && hasContent
 	if err == nil && !accepted {
 		err = errUpstreamRejected
 	}

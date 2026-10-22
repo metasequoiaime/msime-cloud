@@ -96,22 +96,30 @@ func (c *cappedReader) Read(p []byte) (int, error) {
 
 // splitSSELines 按 SSE 规则识别 LF、CRLF 和单 CR。CR 立即结束本行，下一次只跳过紧随的 LF，避免为判断 CRLF 等待上游继续发送。
 func splitSSELines() bufio.SplitFunc {
-	skipLF := false
+	state := struct {
+		skipLF  bool
+		scanned int
+	}{}
 	return func(data []byte, atEOF bool) (advance int, token []byte, err error) {
-		if skipLF && len(data) > 0 {
-			skipLF = false
+		if state.skipLF && len(data) > 0 {
+			state.skipLF = false
 			if data[0] == '\n' {
 				advance = 1
 				data = data[1:]
 			}
 		}
-		if i := bytes.IndexAny(data, "\r\n"); i >= 0 {
-			skipLF = data[i] == '\r'
+		// 未读到换行时只检查新补入的字节，避免碎片化长行反复扫描已有前缀。
+		if i := bytes.IndexAny(data[state.scanned:], "\r\n"); i >= 0 {
+			i += state.scanned
+			state.scanned = 0
+			state.skipLF = data[i] == '\r'
 			return advance + i + 1, data[:i], nil
 		}
 		if atEOF && len(data) > 0 {
+			state.scanned = 0
 			return advance + len(data), data, nil
 		}
+		state.scanned = len(data)
 		return advance, nil, nil
 	}
 }

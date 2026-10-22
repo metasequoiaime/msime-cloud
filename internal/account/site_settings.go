@@ -2,7 +2,6 @@ package account
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -17,9 +16,8 @@ import (
 const (
 	siteDownloadMirrorsPath = "/v1/site/download-mirrors"
 	// lanzouURLKey is the site_settings key holding the Lanzou cloud share link for the Windows installer.
-	lanzouURLKey          = "lanzou_url"
-	maxMirrorURLBytes     = 512
-	siteMirrorCacheMaxAge = "public, max-age=60"
+	lanzouURLKey      = "lanzou_url"
+	maxMirrorURLBytes = 512
 )
 
 // SiteDownloadMirrors is the public payload the official website renders on its download page. Both fields are empty strings while no link is set.
@@ -77,13 +75,7 @@ func (a *Service) siteDownloadMirrors(w http.ResponseWriter, r *http.Request) {
 	if s.LanzouURL != "" {
 		out.UpdatedAt = s.UpdatedAt
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Cache-Control", siteMirrorCacheMaxAge)
-	// Shared caches must key the copy by Origin, for the same reason as PublicNotices.
-	w.Header().Set("Vary", "Origin")
-	w.Header().Set("Referrer-Policy", "no-referrer")
-	w.WriteHeader(200)
-	json.NewEncoder(w).Encode(out)
+	writePublicJSON(w, out)
 }
 
 // adminSiteSettings serves GET and POST /api/site-settings; the server gate has already authenticated the admin and checked the mutation origin. Every role may read; writing requires publish_notices.

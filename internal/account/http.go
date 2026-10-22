@@ -403,6 +403,19 @@ func setPrivateResponseHeaders(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 }
+
+// setPublicResponseHeaders 允许公开数据缓存 60 秒；即使请求没有 Origin，也按它区分缓存，保留跨域响应的正确性。
+func setPublicResponseHeaders(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "public, max-age=60")
+	w.Header().Set("Vary", "Origin")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+}
+
+func writePublicJSON(w http.ResponseWriter, value any) {
+	setPublicResponseHeaders(w)
+	httpjson.Write(w, http.StatusOK, value)
+}
+
 func write(w http.ResponseWriter, status int, value any) {
 	setPrivateResponseHeaders(w)
 	httpjson.Write(w, status, value)

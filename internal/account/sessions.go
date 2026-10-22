@@ -1,12 +1,14 @@
 package account
 
 import (
+	"errors"
 	"net/http"
 	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/mileusna/useragent"
 )
 
@@ -101,6 +103,16 @@ func (a *Service) sessions(w http.ResponseWriter, r *http.Request) {
 	if err = rows.Err(); err != nil {
 		a.error(w, err)
 		return
+	}
+	if len(out) == 0 {
+		var present int
+		if err = a.store.pool.QueryRow(r.Context(), "SELECT 1 FROM auth_users WHERE id=$1", p.UserID).Scan(&present); errors.Is(err, pgx.ErrNoRows) {
+			a.error(w, errMissingUser)
+			return
+		} else if err != nil {
+			a.error(w, err)
+			return
+		}
 	}
 	write(w, 200, map[string]any{"sessions": out})
 }

@@ -125,6 +125,15 @@ func (a *Service) preferences(w http.ResponseWriter, r *http.Request) {
 			a.error(w, e)
 			return
 		}
+		if out.Revision == 0 && len(out.Settings) == 0 {
+			if exists, err := a.store.userExists(r.Context(), p.UserID); err != nil {
+				a.error(w, err)
+				return
+			} else if !exists {
+				a.error(w, errMissingUser)
+				return
+			}
+		}
 		write(w, 200, out)
 		return
 	}

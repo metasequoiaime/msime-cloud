@@ -91,6 +91,15 @@ var ErrConflict = errors.New("identity_already_linked")
 // errMissingUser 同时保留数据库层的无行语义和 HTTP 层的凭据失效语义。
 var errMissingUser = errors.Join(ErrInvalid, pgx.ErrNoRows)
 
+func (s *Store) userExists(ctx context.Context, uid string) (bool, error) {
+	var present int
+	err := s.pool.QueryRow(ctx, "SELECT 1 FROM auth_users WHERE id=$1", uid).Scan(&present)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 // ErrRefreshSuperseded 表示提交的刷新令牌在 refreshSupersededGrace 之内刚被另一次刷新轮换掉：会话没有被撤销，调用方应改用并发请求已经拿到的新令牌。它不包装 ErrInvalid，HTTP 层单独映射为 409。
 var ErrRefreshSuperseded = errors.New("refresh_superseded")
 

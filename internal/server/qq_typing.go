@@ -128,14 +128,17 @@ func qqTypingCard(report account.QQTypingReport, today time.Time) string {
 	if report.Devices == 0 {
 		return fmt.Sprintf("已绑定「%s」，但还没有上传过打字统计。\n在水杉输入法里打开%s，过几分钟再来。每台设备要各自打开；找不到这一项就先更新水杉输入法。", report.DisplayName, qqTypingUploadPath)
 	}
-	days := map[string]account.TypingDay{}
-	for _, d := range report.Days {
-		days[d.Day] = d
+	days := make(map[string]int, len(report.Days))
+	for i, d := range report.Days {
+		days[d.Day] = i
 	}
 	day := func(n int) account.TypingDay {
 		var buf [32]byte
 		key := today.AddDate(0, 0, -n).AppendFormat(buf[:0], time.DateOnly)
-		return days[string(key)]
+		if i, ok := days[string(key)]; ok {
+			return report.Days[i]
+		}
+		return account.TypingDay{}
 	}
 	latest := -1
 	for n := range 7 {

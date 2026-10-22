@@ -48,6 +48,46 @@ func TestNativeCloudInputUnavailableAvoidsLowercaseAllocation(t *testing.T) {
 	}
 }
 
+func TestLowerCloudInputCompatibility(t *testing.T) {
+	for _, tc := range []struct {
+		name, input, want string
+	}{
+		{"lowercase", "nihao;shui", "nihao;shui"},
+		{"uppercase", "NIHAO;SHUI", "nihao;shui"},
+		{"mixed", "NiHao;SHUI", "nihao;shui"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := lowerCloudInput(tc.input); got != tc.want {
+				t.Fatalf("小写云候选输入=%q，期望=%q", got, tc.want)
+			}
+		})
+	}
+}
+
+func BenchmarkCloudInputLowercase(b *testing.B) {
+	for _, tc := range []struct {
+		name, input string
+	}{
+		{"lowercase", "nihao;shui"},
+		{"uppercase", "NIHAO;SHUI"},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.Run("previous", func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					_ = strings.ToLower(tc.input)
+				}
+			})
+			b.Run("current", func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					_ = lowerCloudInput(tc.input)
+				}
+			})
+		})
+	}
+}
+
 func TestNativeCloudFailedBinaryReturnsEmptyArray(t *testing.T) {
 	s := &Server{}
 	s.config.Engine.Binary = filepath.Join(t.TempDir(), "missing-engine")

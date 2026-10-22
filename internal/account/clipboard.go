@@ -67,7 +67,11 @@ func (s *Store) userDataTransaction(ctx context.Context, user string) (pgx.Tx, e
 // ClipboardSettings 用一条语句读出同步开关、保留天数和当前密钥编号；没有设置行时是关闭、一直保留、没有密钥。
 func (s *Store) ClipboardSettings(ctx context.Context, user string) (ClipboardSettings, error) {
 	var v ClipboardSettings
-	e := s.pool.QueryRow(ctx, "SELECT COALESCE(bool_or(enabled),false),COALESCE(max(retention_days),0),max(key_id) FROM user_clipboard_settings WHERE user_id=$1", user).Scan(&v.Enabled, &v.RetentionDays, &v.KeyID)
+	e := s.pool.QueryRow(ctx, `SELECT COALESCE(bool_or(cs.enabled),false),COALESCE(max(cs.retention_days),0),max(cs.key_id)
+FROM auth_users u LEFT JOIN user_clipboard_settings cs ON cs.user_id=u.id WHERE u.id=$1 GROUP BY u.id`, user).Scan(&v.Enabled, &v.RetentionDays, &v.KeyID)
+	if errors.Is(e, pgx.ErrNoRows) {
+		return ClipboardSettings{}, errMissingUser
+	}
 	return v, e
 }
 
@@ -241,21 +245,35 @@ func (s *Store) addClipboardTx(ctx context.Context, tx pgx.Tx, user, device stri
 
 // ListClipboard 返回用密钥 key 加密的条目，置顶的在前，最多 50 条。明文条目和其他密钥的条目不返回。
 func (s *Store) ListClipboard(ctx context.Context, user, key string) ([]ClipboardItem, error) {
-	rows, e := s.pool.Query(ctx, `SELECT id,ciphertext,key_id,updated_at,pinned,device FROM user_clipboard WHERE user_id=$1
- AND ciphertext<>'' AND key_id=$2 ORDER BY pinned DESC,sequence DESC LIMIT 50`, user, key)
+	rows, e := s.pool.Query(ctx, `SELECT c.id,c.ciphertext,c.key_id,c.updated_at,c.pinned,c.device FROM auth_users u
+LEFT JOIN LATERAL (SELECT id,ciphertext,key_id,updated_at,pinned,device,sequence FROM user_clipboard
+ WHERE user_id=u.id AND ciphertext<>'' AND key_id=$2 ORDER BY pinned DESC,sequence DESC LIMIT 50) c ON true
+WHERE u.id=$1 ORDER BY c.pinned DESC,c.sequence DESC`, user, key)
 	if e != nil {
 		return nil, e
 	}
 	defer rows.Close()
 	items := []ClipboardItem{}
+	seen := false
 	for rows.Next() {
-		var x ClipboardItem
-		if e = rows.Scan(&x.ID, &x.Ciphertext, &x.KeyID, &x.UpdatedAt, &x.Pinned, &x.Device); e != nil {
+		seen = true
+		var id, ciphertext, keyID, device *string
+		var updatedAt *time.Time
+		var pinned *bool
+		if e = rows.Scan(&id, &ciphertext, &keyID, &updatedAt, &pinned, &device); e != nil {
 			return nil, e
 		}
-		items = append(items, x)
+		if id != nil {
+			items = append(items, ClipboardItem{ID: *id, Ciphertext: *ciphertext, KeyID: *keyID, UpdatedAt: *updatedAt, Pinned: *pinned, Device: *device})
+		}
 	}
-	return items, rows.Err()
+	if e := rows.Err(); e != nil {
+		return nil, e
+	}
+	if !seen {
+		return nil, errMissingUser
+	}
+	return items, nil
 }
 
 // ClipboardSnapshot 在同一数据库快照里读取设置、当前密钥和最多五十条条目，避免轮询时的两次往返。
@@ -271,12 +289,15 @@ LEFT JOIN LATERAL (
  WHERE s.key_id IS NOT NULL AND user_id=$1 AND ciphertext<>'' AND key_id=s.key_id
  ORDER BY pinned DESC,sequence DESC LIMIT 50
 ) c ON true
+WHERE EXISTS (SELECT 1 FROM auth_users WHERE id=$1)
 ORDER BY c.pinned DESC,c.sequence DESC`, user)
 	if err != nil {
 		return settings, nil, err
 	}
 	defer rows.Close()
+	seen := false
 	for rows.Next() {
+		seen = true
 		var item ClipboardItem
 		var id *string
 		var updatedAt *time.Time
@@ -288,7 +309,13 @@ ORDER BY c.pinned DESC,c.sequence DESC`, user)
 			items = append(items, item)
 		}
 	}
-	return settings, items, rows.Err()
+	if e := rows.Err(); e != nil {
+		return settings, nil, e
+	}
+	if !seen {
+		return settings, nil, errMissingUser
+	}
+	return settings, items, nil
 }
 
 func (s *Store) DeleteClipboard(ctx context.Context, user, id string) error {

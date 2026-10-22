@@ -132,7 +132,11 @@ func qqTypingCard(report account.QQTypingReport, today time.Time) string {
 	for _, d := range report.Days {
 		days[d.Day] = d
 	}
-	day := func(n int) account.TypingDay { return days[today.AddDate(0, 0, -n).Format(time.DateOnly)] }
+	day := func(n int) account.TypingDay {
+		var buf [32]byte
+		key := today.AddDate(0, 0, -n).AppendFormat(buf[:0], time.DateOnly)
+		return days[string(key)]
+	}
 	latest := -1
 	for n := range 7 {
 		if day(n).Characters > 0 {

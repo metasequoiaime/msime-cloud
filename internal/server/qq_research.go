@@ -367,9 +367,13 @@ func qqResearchTarget(raw, defaultRepo string) (repo, path string, ok bool) {
 
 // qqResearchScopedSearch 只允许简单的组织内搜索：多次 repo/org 限定会取并集，所以每一个都必须属于本组织。布尔运算和括号可能产生不受限定的分支，遇到时拒绝，由模型拆成多次查询。
 func qqResearchScopedSearch(query string) bool {
+	asciiOnly := true
 	for _, r := range query {
 		if unicode.IsControl(r) || (unicode.IsSpace(r) && r != ' ') {
 			return false
+		}
+		if r >= utf8.RuneSelf {
+			asciiOnly = false
 		}
 	}
 	scoped := false
@@ -386,6 +390,10 @@ func qqResearchScopedSearch(query string) bool {
 		// 词项必须用空格分开，未匹配的引号、括号或转义符直接拒绝，不收集后续匹配位置。
 		if query != "" && query[0] != ' ' {
 			return false
+		}
+		if !asciiOnly {
+			// 非 ASCII 查询沿用先转小写再校验范围的规则，例如 İ 会映射为 i。
+			term = strings.ToLower(term)
 		}
 		if qqASCIIEqualFold(term, "and") || qqASCIIEqualFold(term, "or") || qqASCIIEqualFold(term, "not") {
 			return false

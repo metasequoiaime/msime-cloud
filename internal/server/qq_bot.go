@@ -194,10 +194,11 @@ func (c *QQBotConfig) validate(cfg *Config) error {
 	}
 	seen := map[string]bool{}
 	for _, label := range c.Labels {
-		if label == "" || len(label) > 50 || strings.TrimSpace(label) != label || strings.ContainsAny(label, "\r\n\t,") || seen[strings.ToLower(label)] {
+		lower := strings.ToLower(label)
+		if label == "" || len(label) > 50 || strings.TrimSpace(label) != label || strings.ContainsAny(label, "\r\n\t,") || seen[lower] {
 			return errors.New("qq_bot labels must be unique, at most 50 characters and without commas")
 		}
-		seen[strings.ToLower(label)] = true
+		seen[lower] = true
 	}
 	if len(c.Groups) > 50 {
 		return errors.New("qq_bot groups exceeds 50 entries")

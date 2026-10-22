@@ -1054,7 +1054,7 @@ func (s *Server) rejectDictPR(w http.ResponseWriter, r *http.Request, gh *github
 	respond(w, 200, map[string]any{"ok": true})
 }
 
-// dictRejectionCommentExists reads every reasonably sized page because a prior rejection may be older than the latest 100 comments. If the result is too large or pagination is malformed, it refuses to publish another comment.
+// dictRejectionCommentExists 分页读取评论：之前的驳回可能早于最近 100 条；结果超过合理上限或分页损坏时拒绝继续发布评论。
 func (s *Server) dictRejectionCommentExists(ctx context.Context, gh *githubapp.Client, token string, number int, comment string) (bool, error) {
 	path := "/repos/" + s.dictRepo() + "/issues/" + strconv.Itoa(number) + "/comments?per_page=100&direction=desc&sort=created"
 	last := 1

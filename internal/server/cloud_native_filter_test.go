@@ -29,6 +29,28 @@ func TestCleanNativeCloudCandidatesInvalidAllocationBudget(t *testing.T) {
 	}
 }
 
+func TestCleanCloudCandidatesInvalidAllocationBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		candidates []string
+	}{
+		{"empty", nil},
+		{"invalid", []string{"hello", "你\n好"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			allocations := testing.AllocsPerRun(100, func() {
+				got := cleanCloudCandidates(tc.candidates, nil, 0, false, false, 5)
+				if got == nil || len(got) != 0 {
+					t.Fatalf("无效云候选应返回非 nil 空数组：%v", got)
+				}
+			})
+			if allocations != 0 {
+				t.Fatalf("%s 云候选过滤分配 %.1f 次，期望零分配", tc.name, allocations)
+			}
+		})
+	}
+}
+
 func TestCleanNativeCloudCandidatesFiltering(t *testing.T) {
 	got := cleanNativeCloudCandidates([]nativeCloudCandidate{
 		{Word: " "}, {Word: "hello"}, {Word: "你\n好"}, {Word: " 你好 "}, {Word: "你好"}, {Word: "您好"},

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -485,27 +486,7 @@ func (s *Server) cloud(w http.ResponseWriter, r *http.Request) {
 	if filterMatchLength {
 		queryLength = textutil.UTF16Length(text)
 	}
-	clean := make([]string, 0, n)
-	seen := map[string]bool{}
-	for index, c := range candidates {
-		if filterMatchLength && metadata.MatchedLength[index] != queryLength {
-			continue
-		}
-		c = strings.TrimSpace(c)
-		valid := bounded(c, contract.CandidateBytes) && utf8.ValidString(c)
-		for _, ch := range c {
-			if ch < 32 || ch == 127 || (scheme != "japanese" && unicode.Is(unicode.Latin, ch)) {
-				valid = false
-			}
-		}
-		if valid && !seen[c] {
-			clean = append(clean, c)
-			seen[c] = true
-		}
-		if len(clean) == n {
-			break
-		}
-	}
+	clean := cleanCloudCandidates(candidates, metadata.MatchedLength, queryLength, filterMatchLength, scheme == "japanese", n)
 	if scheme != "japanese" && inputCode.MatchString(text) {
 		native, corrected := s.nativeCloudCandidatesForInput(r, text, n)
 		if len(clean) == 0 || (corrected && len(native) > 0) {
@@ -513,6 +494,37 @@ func (s *Server) cloud(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	respond(w, 200, map[string]any{"candidates": clean})
+}
+
+func cleanCloudCandidates(candidates []string, matchedLength []int, queryLength int, filterMatchLength, japanese bool, limit int) []string {
+	var clean []string
+	for index, c := range candidates {
+		if filterMatchLength && matchedLength[index] != queryLength {
+			continue
+		}
+		c = strings.TrimSpace(c)
+		valid := bounded(c, contract.CandidateBytes) && utf8.ValidString(c)
+		for _, ch := range c {
+			if ch < 32 || ch == 127 || (!japanese && unicode.Is(unicode.Latin, ch)) {
+				valid = false
+			}
+		}
+		if valid {
+			if clean == nil {
+				clean = make([]string, 0, min(limit, len(candidates)))
+			}
+			if !slices.Contains(clean, c) {
+				clean = append(clean, c)
+			}
+			if len(clean) == limit {
+				break
+			}
+		}
+	}
+	if clean == nil {
+		return []string{}
+	}
+	return clean
 }
 
 func (s *Server) nativeCloudCandidatesForInput(r *http.Request, text string, limit int) ([]string, bool) {

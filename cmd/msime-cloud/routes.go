@@ -105,26 +105,31 @@ func find(operations []operation, method, path string) (operation, bool) {
 	return best, bestScore >= 0
 }
 
-// match reports whether path fits template, scoring by the number of literal segments that agreed.
+// match 逐段判断路径是否符合模板，按匹配的字面量段数评分。
 func match(template, path string) (int, bool) {
-	want, have := strings.Split(strings.Trim(template, "/"), "/"), strings.Split(strings.Trim(path, "/"), "/")
+	want, have := strings.Trim(template, "/"), strings.Trim(path, "/")
 	score := 0
-	for i, segment := range want {
+	haveSegment := true
+	for {
+		segment, rest, more := strings.Cut(want, "/")
 		if strings.HasPrefix(segment, "{") && strings.HasSuffix(segment, "...}") {
-			return score, len(have) > i
+			return score, haveSegment
 		}
-		if i >= len(have) {
+		if !haveSegment {
 			return 0, false
 		}
-		if segment == have[i] {
+		var actual string
+		actual, have, haveSegment = strings.Cut(have, "/")
+		if segment == actual {
 			score++
-			continue
-		}
-		if !strings.HasPrefix(segment, "{") || have[i] == "" {
+		} else if !strings.HasPrefix(segment, "{") || actual == "" {
 			return 0, false
 		}
+		if !more {
+			return score, !haveSegment
+		}
+		want = rest
 	}
-	return score, len(want) == len(have)
 }
 
 func listRoutes(out io.Writer, filter string) error {

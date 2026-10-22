@@ -26,9 +26,10 @@ const (
 	// dictPRCountedOpen bounds how many open pull requests the list enriches with entry counts; normally at most one rolling pull request is open.
 	dictPRCountedOpen = 5
 	// dictPREngineBatch keeps each Engine lookup well under its 64 KiB request limit.
-	dictPREngineBatch = 300
-	dictPRReasonChars = 500
-	dictPRMaxKeep     = 5000
+	dictPREngineBatch  = 300
+	dictPRReasonChars  = 500
+	dictPRMaxKeep      = 5000
+	dictPRCommentPages = 20
 )
 
 // Entry check results. A sensitive-word hit outranks an entry the website form would reject, which outranks a duplicate.
@@ -43,6 +44,8 @@ const (
 var dictPRPermissions = map[string]string{"contents": "write", "pull_requests": "write"}
 
 var errDictPRConflict = errors.New("dictionary pull request changed concurrently")
+
+var errDictPRCommentsUncertain = errors.New("dictionary pull request comments could not be checked completely")
 
 // dictPRState 保存本副本审核页的列表、投稿说明搜索索引，以及 NotifyOnce 前的通知缓存。
 type dictPRState struct {
@@ -1009,27 +1012,13 @@ func (s *Server) rejectDictPR(w http.ResponseWriter, r *http.Request, gh *github
 	repo := "/repos/" + s.dictRepo()
 	comment := "审核未通过：" + reason
 	// 关闭请求可能在评论写入后失败；重试前先确认评论是否已经存在，避免再次发布同一条拒绝理由。
-	res, err := gh.Do(ctx, token, "GET", repo+"/issues/"+strconv.Itoa(number)+"/comments?per_page=100&direction=desc&sort=created", nil)
-	if err != nil || !res.OK() {
-		slog.Error("dictionary pull requests: rejection comment lookup failed", "pull", number, "status", res.Status)
+	commented, err := s.dictRejectionCommentExists(ctx, gh, token, number, comment)
+	if err != nil {
+		slog.Error("dictionary pull requests: rejection comment lookup failed", "pull", number, "reason", err.Error())
 		fail(w, 502, "github_uncertain")
 		return
 	}
-	var comments []struct {
-		Body string `json:"body"`
-	}
-	if res.Decode(&comments) != nil || comments == nil {
-		slog.Error("dictionary pull requests: rejection comment lookup returned an invalid response", "pull", number, "status", res.Status)
-		fail(w, 502, "github_uncertain")
-		return
-	}
-	commented := false
-	for _, existing := range comments {
-		if existing.Body == comment {
-			commented = true
-			break
-		}
-	}
+	var res githubapp.Response
 	if !commented {
 		res, err = gh.Do(ctx, token, "POST", repo+"/issues/"+strconv.Itoa(number)+"/comments", map[string]string{"body": comment})
 	}
@@ -1063,6 +1052,46 @@ func (s *Server) rejectDictPR(w http.ResponseWriter, r *http.Request, gh *github
 	unlock()
 	s.auditDictPR(closeCtx, "dict_pr_reject", number, map[string]any{"reason": reason})
 	respond(w, 200, map[string]any{"ok": true})
+}
+
+// dictRejectionCommentExists reads every reasonably sized page because a prior rejection may be older than the latest 100 comments. If the result is too large or pagination is malformed, it refuses to publish another comment.
+func (s *Server) dictRejectionCommentExists(ctx context.Context, gh *githubapp.Client, token string, number int, comment string) (bool, error) {
+	path := "/repos/" + s.dictRepo() + "/issues/" + strconv.Itoa(number) + "/comments?per_page=100&direction=desc&sort=created"
+	last := 1
+	for page := 1; page <= last; page++ {
+		requestPath := path
+		if page > 1 {
+			requestPath += "&page=" + strconv.Itoa(page)
+		}
+		res, err := gh.Do(ctx, token, "GET", requestPath, nil)
+		if err != nil || !res.OK() {
+			return false, errors.Join(errDictPRCommentsUncertain, err)
+		}
+		var comments []struct {
+			Body string `json:"body"`
+		}
+		if res.Decode(&comments) != nil || comments == nil {
+			return false, errDictPRCommentsUncertain
+		}
+		for _, existing := range comments {
+			if existing.Body == comment {
+				return true, nil
+			}
+		}
+		if page == 1 {
+			last = issueLastPage(res.Header)
+			if last == 0 {
+				if res.Header.Get("Link") != "" {
+					return false, errDictPRCommentsUncertain
+				}
+				last = 1
+			}
+			if last > dictPRCommentPages {
+				return false, errDictPRCommentsUncertain
+			}
+		}
+	}
+	return false, nil
 }
 
 // searchDictPRs 为全局搜索匹配缓存投稿的编号、标题和备注，不请求 GitHub。

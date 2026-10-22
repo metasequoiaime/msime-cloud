@@ -1,5 +1,8 @@
 import { z } from "zod";
 import { actionUndoTokenSchema } from "./action-undo.ts";
+import { sections as workSections } from "./community.ts";
+
+export { workSections };
 
 // GET /api/users: one page of 50 accounts. contact is masked by the server; role is an admin role key when a verified email belongs to an enabled admin member, otherwise "user".
 export const userRowSchema = z.object({
@@ -38,7 +41,6 @@ const userSessionSchema = z.object({
 });
 export type UserSession = z.infer<typeof userSessionSchema>;
 
-export const workSections = ["skins", "candidate-skins", "plugins", "dictionaries", "replies", "phrases"] as const;
 const userWorkSchema = z.object({
   section: z.enum(workSections),
   id: z.string(),

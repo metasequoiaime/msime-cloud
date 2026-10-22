@@ -245,6 +245,9 @@ func (a *Service) userDataExport(w http.ResponseWriter, r *http.Request) {
 		batch.Queue(f.query, p.UserID).QueryRow(func(row pgx.Row) error { return row.Scan(&docs[i]) })
 	}
 	if err := a.store.pool.SendBatch(r.Context(), batch).Close(); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			err = errMissingUser
+		}
 		a.error(w, err)
 		return
 	}

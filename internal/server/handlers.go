@@ -531,7 +531,27 @@ func (s *Server) nativeCloudCandidatesForInput(r *http.Request, text string, lim
 	if s.config.Engine.Binary == "" {
 		return []string{}, false
 	}
-	return s.nativeCloudCandidates(r, strings.ToLower(text), limit)
+	return s.nativeCloudCandidates(r, lowerCloudInput(text), limit)
+}
+
+// lowerCloudInput 只在输入含大写 ASCII 字母时创建小写副本；调用方已用 inputCode 校验输入范围。
+func lowerCloudInput(text string) string {
+	for i := 0; i < len(text); i++ {
+		if c := text[i]; c >= 'A' && c <= 'Z' {
+			var lower strings.Builder
+			lower.Grow(len(text))
+			lower.WriteString(text[:i])
+			for ; i < len(text); i++ {
+				c := text[i]
+				if c >= 'A' && c <= 'Z' {
+					c += 'a' - 'A'
+				}
+				lower.WriteByte(c)
+			}
+			return lower.String()
+		}
+	}
+	return text
 }
 
 func jsonNumber(n int) string { return strconv.Itoa(n) }

@@ -23,7 +23,7 @@ func previousQQFAQPlatform(title string) string {
 }
 
 func TestQQFAQPlatformLowercaseCache(t *testing.T) {
-	for _, title := range []string{"安装与启动 > Windows 版为什么启动失败", "macOS 上候选框", "HarmonyOS 安装", "鸿蒙输入法", "没有平台词"} {
+	for _, title := range []string{"安装与启动 > Windows 版为什么启动失败", "macOS 上候选框", "HarmonyOS 安装", "鸿蒙输入法", "没有平台词", "İOS 安装", "\xffWindows 版"} {
 		if got, want := qqFAQPlatform(title), previousQQFAQPlatform(title); got != want {
 			t.Errorf("标题=%q：结果 %q，原结果 %q", title, got, want)
 		}

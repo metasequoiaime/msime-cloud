@@ -268,6 +268,18 @@ func qqFAQPlatform(title string) string {
 			return "各平台"
 		}
 	}
+	upper := false
+	for i := range title {
+		if title[i] >= 'A' && title[i] <= 'Z' {
+			upper = true
+			break
+		}
+	}
+	for _, pair := range qqFAQTitlePlatforms {
+		if strings.Contains(title, pair[0]) || upper && qqContainsASCIIFold(title, pair[0]) {
+			return pair[1]
+		}
+	}
 	lower := strings.ToLower(title)
 	for _, pair := range qqFAQTitlePlatforms {
 		if strings.Contains(lower, pair[0]) {
@@ -275,6 +287,18 @@ func qqFAQPlatform(title string) string {
 		}
 	}
 	return qqFAQDefaultPlatform
+}
+
+func qqContainsASCIIFold(text, word string) bool {
+	if word == "" || len(text) < len(word) {
+		return false
+	}
+	for start := 0; start+len(word) <= len(text); start++ {
+		if qqASCIIEqualFold(text[start:start+len(word)], word) {
+			return true
+		}
+	}
+	return false
 }
 
 // qqPlatformList 是回答时告诉模型的水杉版本清单，取 qqDocPlatforms 里的平台名，去掉 FAQ、通用、各平台这类不是平台的标签（FAQ 按问题细分的标签见 qqFAQPlatform，不在 qqDocPlatforms 里），按文件名排序后去重，用「、」连接。没说平台的问题只挑到 Windows 段落时，模型曾据此说「五笔只有 Windows 有」「水杉只有 Windows 版」，所以要让它知道还有哪些版本；新增平台指南时只要在 qqDocPlatforms 里加一行。

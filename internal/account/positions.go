@@ -69,6 +69,15 @@ func (s *Store) CandidatePositions(ctx context.Context, user, contextKey string,
 	if err = rows.Err(); err != nil {
 		return nil, false, err
 	}
+	if len(out) == 0 {
+		exists, err := s.userExists(ctx, user)
+		if err != nil {
+			return nil, false, err
+		}
+		if !exists {
+			return nil, false, errMissingUser
+		}
+	}
 	more := len(out) > limit
 	if more {
 		out = out[:limit]

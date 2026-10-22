@@ -1045,7 +1045,8 @@ func (s *Server) searchDictPRs(q string) []account.AdminSearchHit {
 	// `#` 加有符号 64 位整数最多占 21 字节，仅用于匹配，不保存在结果中。
 	var numberBuffer [21]byte
 	numberBuffer[0] = '#'
-	var hits []account.AdminSearchHit
+	var hits [adminSearchLimit]account.AdminSearchHit
+	count := 0
 	for _, p := range st.index {
 		if !dictionaryLineContainsLower(p.Title, q) && !dictionaryLineContainsLower(p.Note, q) {
 			prefix := string(strconv.AppendInt(numberBuffer[:1], int64(p.Number), 10))
@@ -1066,13 +1067,17 @@ func (s *Server) searchDictPRs(q string) []account.AdminSearchHit {
 		} else {
 			title = "#" + number + " " + p.Title
 		}
-		hits = append(hits, account.AdminSearchHit{Kind: "dict_pr", ID: number, Title: title, Where: "词库审核", Target: "dictpr"})
+		hits[count] = account.AdminSearchHit{Kind: "dict_pr", ID: number, Title: title, Where: "词库审核", Target: "dictpr"}
+		count++
 		// 全局搜索最多使用前 `adminSearchLimit` 条命中，及时停止构造其余结果。
-		if len(hits) == adminSearchLimit {
+		if count == len(hits) {
 			break
 		}
 	}
-	return hits
+	if count == 0 {
+		return nil
+	}
+	return slices.Clone(hits[:count])
 }
 
 // pendingDictPRs counts open dictionary pull requests for the shell badge, through the same cached read as the list.

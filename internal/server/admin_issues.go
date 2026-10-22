@@ -1349,6 +1349,8 @@ func (s *Server) searchIssues(q string) []account.AdminSearchHit {
 		return nil
 	}
 	number := strings.TrimPrefix(q, "#")
+	// 查询不含 `#` 时可分别匹配仓库和编号，省去完整仓库键的临时拼接。
+	queryHasHash := strings.ContainsRune(q, '#')
 	m := s.issueMemory()
 	m.mu.Lock()
 	items := m.items
@@ -1366,8 +1368,14 @@ func (s *Server) searchIssues(q string) []account.AdminSearchHit {
 			n = string(strconv.AppendInt(numberBuffer[:0], int64(row.Number), 10))
 		}
 		// 复用词条查询的栈上匹配，避免为标题和仓库键创建小写副本。
-		if number != n && !dictionaryLineContainsLower(row.Title, q) && !dictionaryLineContainsLower(row.Repo+"#"+n, q) {
-			continue
+		if number != n && !dictionaryLineContainsLower(row.Title, q) {
+			if queryHasHash {
+				if !dictionaryLineContainsLower(row.Repo+"#"+n, q) {
+					continue
+				}
+			} else if !strings.Contains(n, q) && !dictionaryLineContainsLower(row.Repo, q) {
+				continue
+			}
 		}
 		matched[count] = account.AdminSearchHit{Kind: "issue", ID: row.Repo + "#" + n, Title: "#" + n + " " + row.Title, Where: "问题分诊", Target: "issues"}
 		count++

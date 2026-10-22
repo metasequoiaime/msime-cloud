@@ -122,6 +122,9 @@ type logFilter struct {
 
 // logQL 拼出 LogQL。用户输入只以 strconv.Quote 转义后的字符串字面量出现：Loki 的词法分析器用 strconv.Unquote 解析双引号字符串，两者互为逆运算，所以任何输入都只能是一个字符串值，不能改变查询结构。
 func (f logFilter) logQL(selector string) string {
+	if f.pod == "" && f.level == "" && f.q == "" {
+		return selector
+	}
 	var b strings.Builder
 	if f.pod != "" {
 		b.WriteString(selector[:len(selector)-1])

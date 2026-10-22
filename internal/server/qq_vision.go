@@ -42,7 +42,7 @@ var qqTruncatedDescription = regexp.MustCompile(`"description"\s*:\s*"((?:[^"\\]
 // qqHasImages 判断消息里有没有图片附件。
 func qqHasImages(attachments []qqAttachment) bool {
 	for _, a := range attachments {
-		if strings.HasPrefix(strings.ToLower(a.ContentType), "image/") {
+		if qqImageContentType(a.ContentType) {
 			return true
 		}
 	}
@@ -56,7 +56,7 @@ func (s *Server) qqDescribeImages(ctx context.Context, attachments []qqAttachmen
 		if len(images) == qqVisionImages {
 			break
 		}
-		if strings.HasPrefix(strings.ToLower(a.ContentType), "image/") {
+		if qqImageContentType(a.ContentType) {
 			images = append(images, a)
 		}
 	}

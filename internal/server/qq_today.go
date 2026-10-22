@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/6tail/tyme4go/tyme"
@@ -33,17 +34,38 @@ func qqTodayCard(now time.Time, releases []qqPlatformRelease) string {
 		// tyme4go 支持公元 1 年到 9999 年，北京时间的今天总在范围内。
 		return now.Format("1月2日")
 	}
-	lines := []string{qqTodayHeadline(*day), qqTodaySeason(*day)}
-	if line := qqTodayFestivals(*day); line != "" {
+	card := qqTodayCalendar.get(*day)
+	if line := qqTodayReleases(*day, releases); line != "" {
+		return card + "\n\n" + line
+	}
+	return card
+}
+
+// qqTodayCalendar 只缓存最近一个北京时间日期的静态日历正文，发版动态由每次调用单独生成。
+var qqTodayCalendar qqTodayCalendarCache
+
+type qqTodayCalendarCache struct {
+	mu   sync.Mutex
+	day  tyme.SolarDay
+	text string
+}
+
+func (c *qqTodayCalendarCache) get(day tyme.SolarDay) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.day == day {
+		return c.text
+	}
+	// 持锁计算同一日期的首次结果，避免并发请求重复执行农历和节气换算。
+	lines := []string{qqTodayHeadline(day), qqTodaySeason(day)}
+	if line := qqTodayFestivals(day); line != "" {
 		lines = append(lines, line)
 	}
-	if line := qqTodayHoliday(*day); line != "" {
+	if line := qqTodayHoliday(day); line != "" {
 		lines = append(lines, "【假期】"+line)
 	}
-	if line := qqTodayReleases(*day, releases); line != "" {
-		lines = append(lines, line)
-	}
-	return strings.Join(lines, "\n\n")
+	c.day, c.text = day, strings.Join(lines, "\n\n")
+	return c.text
 }
 
 // qqTodayHeadline 是第一段：「【今天】10月17日 周六」，下一行「农历九月初八 · 丙午马年」，今天是节日时接在农历后面。

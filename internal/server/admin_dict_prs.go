@@ -1007,8 +1007,33 @@ func (s *Server) rejectDictPR(w http.ResponseWriter, r *http.Request, gh *github
 		return
 	}
 	repo := "/repos/" + s.dictRepo()
-	res, err := gh.Do(ctx, token, "POST", repo+"/issues/"+strconv.Itoa(number)+"/comments", map[string]string{"body": "审核未通过：" + reason})
+	comment := "审核未通过：" + reason
+	// 关闭请求可能在评论写入后失败；重试前先确认评论是否已经存在，避免再次发布同一条拒绝理由。
+	res, err := gh.Do(ctx, token, "GET", repo+"/issues/"+strconv.Itoa(number)+"/comments?per_page=100&direction=desc&sort=created", nil)
 	if err != nil || !res.OK() {
+		slog.Error("dictionary pull requests: rejection comment lookup failed", "pull", number, "status", res.Status)
+		fail(w, 502, "github_uncertain")
+		return
+	}
+	var comments []struct {
+		Body string `json:"body"`
+	}
+	if res.Decode(&comments) != nil || comments == nil {
+		slog.Error("dictionary pull requests: rejection comment lookup returned an invalid response", "pull", number, "status", res.Status)
+		fail(w, 502, "github_uncertain")
+		return
+	}
+	commented := false
+	for _, existing := range comments {
+		if existing.Body == comment {
+			commented = true
+			break
+		}
+	}
+	if !commented {
+		res, err = gh.Do(ctx, token, "POST", repo+"/issues/"+strconv.Itoa(number)+"/comments", map[string]string{"body": comment})
+	}
+	if !commented && (err != nil || !res.OK()) {
 		slog.Error("dictionary pull requests: rejection comment failed", "pull", number, "status", res.Status)
 		fail(w, 502, "github_error")
 		return
@@ -1019,13 +1044,21 @@ func (s *Server) rejectDictPR(w http.ResponseWriter, r *http.Request, gh *github
 	res, err = gh.Do(closeCtx, token, "PATCH", repo+"/pulls/"+strconv.Itoa(number), map[string]string{"state": "closed"})
 	gh.Invalidate(repo + "/pulls")
 	switch {
-	case err != nil || res.Status >= 500:
+	case err != nil || !res.OK():
 		slog.Error("dictionary pull requests: close outcome unknown", "pull", number, "status", res.Status)
+		unlock()
+		s.auditDictPR(closeCtx, "dict_pr_reject", number, map[string]any{"reason": reason, "partial": true, "uncertain": true})
 		fail(w, 502, "github_uncertain")
 		return
-	case !res.OK():
-		dictGitHubStatus(w, "close", res.Status)
-		return
+	default:
+		var closed dictPull
+		if res.Decode(&closed) != nil || closed.State != "closed" {
+			slog.Error("dictionary pull requests: close response was invalid", "pull", number, "status", res.Status)
+			unlock()
+			s.auditDictPR(closeCtx, "dict_pr_reject", number, map[string]any{"reason": reason, "partial": true, "uncertain": true})
+			fail(w, 502, "github_uncertain")
+			return
+		}
 	}
 	unlock()
 	s.auditDictPR(closeCtx, "dict_pr_reject", number, map[string]any{"reason": reason})

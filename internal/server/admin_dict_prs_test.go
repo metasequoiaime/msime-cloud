@@ -202,6 +202,14 @@ func (f *fakeDictRepo) serve(w http.ResponseWriter, r *http.Request) {
 		default:
 			f.reply(w, 404, map[string]string{"message": "Not Found"})
 		}
+	case r.Method == "GET" && strings.HasPrefix(path, "/issues/") && strings.HasSuffix(path, "/comments"):
+		n, _ := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(path, "/issues/"), "/comments"))
+		p := f.pull(n)
+		out := make([]map[string]any, 0, len(p.comments))
+		for _, comment := range p.comments {
+			out = append(out, map[string]any{"body": comment})
+		}
+		f.reply(w, 200, out)
 	case r.Method == "POST" && strings.HasPrefix(path, "/issues/") && strings.HasSuffix(path, "/comments"):
 		n, _ := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(path, "/issues/"), "/comments"))
 		p := f.pull(n)
@@ -690,6 +698,38 @@ func TestDictPRReject(t *testing.T) {
 	}
 	if w := dictCall(s, "POST", "/api/dict-prs/12/reject", `{"reason":"x","head_sha":"head12"}`); w.Code != 409 {
 		t.Fatal(w.Code, w.Body.String())
+	}
+}
+
+func TestDictPRRejectCloseFailureIsUncertainAndIdempotent(t *testing.T) {
+	s, f, conn, schema := dictPRServer(t, "")
+	f.status["PATCH /repos/"+dictTestRepo+"/pulls/12"] = 422
+	body := `{"reason":"拼音不规范","head_sha":"head12"}`
+	first := dictCall(s, "POST", "/api/dict-prs/12/reject", body)
+	if first.Code != http.StatusBadGateway || !strings.Contains(first.Body.String(), `"code":"github_uncertain"`) {
+		t.Fatalf("关闭失败应返回 github_uncertain：status=%d body=%s", first.Code, first.Body.String())
+	}
+	if p := f.pull(12); p.state != "open" || len(p.comments) != 1 || p.comments[0] != "审核未通过：拼音不规范" {
+		t.Fatalf("评论已写入但 PR 状态错误：%+v", p)
+	}
+	rows := dictAudit(t, conn, schema)
+	if len(rows) != 1 || rows[0].action != "dict_pr_reject" || rows[0].reason != "拼音不规范" {
+		t.Fatalf("部分成功未记录拒绝审计：%+v", rows)
+	}
+	var partial, uncertain bool
+	if err := conn.QueryRow(t.Context(), `SELECT detail->>'partial' = 'true', detail->>'uncertain' = 'true' FROM `+pgx.Identifier{schema, "admin_audit"}.Sanitize()).Scan(&partial, &uncertain); err != nil {
+		t.Fatal(err)
+	}
+	if !partial || !uncertain {
+		t.Fatalf("部分成功审计未标记不确定状态：partial=%v uncertain=%v", partial, uncertain)
+	}
+
+	second := dictCall(s, "POST", "/api/dict-prs/12/reject", body)
+	if second.Code != http.StatusBadGateway || !strings.Contains(second.Body.String(), `"code":"github_uncertain"`) {
+		t.Fatalf("重试关闭失败应继续返回 github_uncertain：status=%d body=%s", second.Code, second.Body.String())
+	}
+	if p := f.pull(12); len(p.comments) != 1 {
+		t.Fatalf("重试不应重复拒绝评论：%v", p.comments)
 	}
 }
 

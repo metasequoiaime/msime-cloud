@@ -1830,10 +1830,11 @@ const qqWindowsProductQuestion = "这个版本号两个 Windows 版都有：安�
 
 // qqWindowsProduct 判断 Windows 反馈属于哪个产品：isNew 为 true 是 msime 的新实现；question 不为空时看不出来，要先追问。
 func (s *Server) qqWindowsProduct(ctx context.Context, version [3]int, text string) (isNew bool, question string) {
-	if qqWindowsProductTextHasWord(text, qqWindowsNewWords) {
+	matcher := qqWindowsProductText{raw: text}
+	if matcher.hasWord(qqWindowsNewWords) {
 		return true, ""
 	}
-	if qqWindowsProductTextHasWord(text, qqWindowsOldWords) {
+	if matcher.hasWord(qqWindowsOldWords) {
 		return false, ""
 	}
 	if !qqVersionAtLeast(version, qqWindowsNewFrom) {
@@ -1860,11 +1861,19 @@ func (s *Server) qqWindowsProduct(ctx context.Context, version [3]int, text stri
 	return true, ""
 }
 
-func qqWindowsProductTextHasWord(text string, words []string) bool {
+// qqWindowsProductText 在一次产品判断中复用 Unicode 小写结果，ASCII 输入继续直接匹配。
+type qqWindowsProductText struct {
+	raw, lower string
+}
+
+func (m *qqWindowsProductText) hasWord(words []string) bool {
+	text := m.raw
 	for i := range text {
 		if text[i] >= utf8.RuneSelf {
-			lower := strings.ToLower(text)
-			return slices.ContainsFunc(words, func(word string) bool { return strings.Contains(lower, word) })
+			if m.lower == "" {
+				m.lower = strings.ToLower(text)
+			}
+			return slices.ContainsFunc(words, func(word string) bool { return strings.Contains(m.lower, word) })
 		}
 	}
 	return slices.ContainsFunc(words, func(word string) bool {

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
@@ -125,8 +126,15 @@ func qqTypingCard(report account.QQTypingReport, today time.Time) string {
 	if !report.Linked {
 		return "还没绑定水杉账号。@我 发 /bind 拿绑定码，在水杉输入法里输入后就能查。"
 	}
+	// 昵称按单行纯文本显示，避免控制符插入段落或改变整张统计卡片的文字方向；保留 emoji 的零宽连接符。
+	displayName := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Zl, unicode.Zp, unicode.Bidi_Control) {
+			return ' '
+		}
+		return r
+	}, report.DisplayName)
 	if report.Devices == 0 {
-		return fmt.Sprintf("已绑定「%s」，但还没有上传过打字统计。\n在水杉输入法里打开%s，过几分钟再来。每台设备要各自打开；找不到这一项就先更新水杉输入法。", report.DisplayName, qqTypingUploadPath)
+		return fmt.Sprintf("已绑定「%s」，但还没有上传过打字统计。\n在水杉输入法里打开%s，过几分钟再来。每台设备要各自打开；找不到这一项就先更新水杉输入法。", displayName, qqTypingUploadPath)
 	}
 	days := make(map[string]int, len(report.Days))
 	for i, d := range report.Days {
@@ -148,13 +156,13 @@ func qqTypingCard(report account.QQTypingReport, today time.Time) string {
 		}
 	}
 	if latest < 0 {
-		return fmt.Sprintf("「%s」最近 7 天没有打字记录。", report.DisplayName)
+		return fmt.Sprintf("「%s」最近 7 天没有打字记录。", displayName)
 	}
 	d := day(latest)
 	date := today.AddDate(0, 0, -latest)
-	title := fmt.Sprintf("【%s · %d月%d日】", report.DisplayName, date.Month(), date.Day())
+	title := fmt.Sprintf("【%s · %d月%d日】", displayName, date.Month(), date.Day())
 	if latest == 0 {
-		title = fmt.Sprintf("【%s · 今天】", report.DisplayName)
+		title = fmt.Sprintf("【%s · 今天】", displayName)
 	}
 	lines := []string{title + "\n" + qqTypingVolume(d)}
 	if line := qqTypingHabits(d); line != "" {

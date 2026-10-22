@@ -417,8 +417,14 @@ type QQTypingReport struct {
 // QQTypingReport 读出群友 subject 的打字数据，见 QQTypingReport 类型。
 func (a *Service) QQTypingReport(ctx context.Context, subject string, since time.Time) (QQTypingReport, error) {
 	var report QQTypingReport
+	// 绑定、设备累计和每日数据共用快照，避免并发上传或注销时拼出从未存在过的统计。
+	tx, err := a.store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return report, err
+	}
+	defer tx.Rollback(ctx)
 	var user string
-	err := a.store.pool.QueryRow(ctx, `SELECT u.id,COALESCE(NULLIF(btrim(u.display_name),''),'水杉小鹿·'||upper(left(u.id,6)))
+	err = tx.QueryRow(ctx, `SELECT u.id,COALESCE(NULLIF(btrim(u.display_name),''),'水杉小鹿·'||upper(left(u.id,6)))
  FROM qq_account_links l JOIN auth_users u ON u.id=l.user_id AND u.banned_at IS NULL WHERE l.subject=$1`, hash(subject)).Scan(&user, &report.DisplayName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return report, nil
@@ -427,7 +433,7 @@ func (a *Service) QQTypingReport(ctx context.Context, subject string, since time
 		return report, err
 	}
 	report.Linked = true
-	rows, err := a.store.pool.Query(ctx, `SELECT ranks,beyond FROM typing_statistics_devices WHERE user_id=$1`, user)
+	rows, err := tx.Query(ctx, `SELECT ranks,beyond FROM typing_statistics_devices WHERE user_id=$1`, user)
 	if err != nil {
 		return report, err
 	}
@@ -451,7 +457,7 @@ func (a *Service) QQTypingReport(ctx context.Context, subject string, since time
 	if err = rows.Err(); err != nil {
 		return report, err
 	}
-	rows, err = a.store.pool.Query(ctx, `SELECT to_char(day,'YYYY-MM-DD'),characters,active_seconds,hours,categories,sources FROM typing_statistics_days WHERE user_id=$1 AND day>=$2 ORDER BY day`, user, since.Format(time.DateOnly))
+	rows, err = tx.Query(ctx, `SELECT to_char(day,'YYYY-MM-DD'),characters,active_seconds,hours,categories,sources FROM typing_statistics_days WHERE user_id=$1 AND day>=$2 ORDER BY day`, user, since.Format(time.DateOnly))
 	if err != nil {
 		return report, err
 	}

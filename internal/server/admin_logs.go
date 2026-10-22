@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"io"
 	"log/slog"
 	"net"
@@ -538,11 +537,22 @@ type logKey struct {
 }
 
 func (e lokiEntry) key() logKey {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(e.pod))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(e.line))
-	return logKey{e.ns, h.Sum64()}
+	const (
+		fnvOffset = uint64(14695981039346656037)
+		fnvPrime  = uint64(1099511628211)
+	)
+	hash := fnvOffset
+	for i := 0; i < len(e.pod); i++ {
+		hash ^= uint64(e.pod[i])
+		hash *= fnvPrime
+	}
+	// 分隔符仍需参与一次乘法，保持 pod 和 line 的边界语义。
+	hash *= fnvPrime
+	for i := 0; i < len(e.line); i++ {
+		hash ^= uint64(e.line[i])
+		hash *= fnvPrime
+	}
+	return logKey{e.ns, hash}
 }
 
 // logTail 是一个日志流的读取进度。

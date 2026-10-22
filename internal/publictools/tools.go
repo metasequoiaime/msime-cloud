@@ -392,7 +392,16 @@ func HTTP(client *http.Client, base, token string) (Execute, error) {
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
 			return nil, fmt.Errorf("public_api_status_%d", response.StatusCode)
 		}
-		data, err := io.ReadAll(io.LimitReader(response.Body, MaxResponse+1))
+		reader := io.LimitReader(response.Body, MaxResponse+1)
+		var data []byte
+		if response.ContentLength >= bytes.MinRead && response.ContentLength <= MaxResponse {
+			// 大响应按声明长度预留正文与 EOF 探测空间；实际读取仍受上限约束。
+			buffer := bytes.NewBuffer(make([]byte, 0, int(response.ContentLength)+bytes.MinRead))
+			_, err = buffer.ReadFrom(reader)
+			data = buffer.Bytes()
+		} else {
+			data, err = io.ReadAll(reader)
+		}
 		if err != nil || len(data) > MaxResponse {
 			return nil, errors.New("public_api_response_too_large_or_unreadable")
 		}

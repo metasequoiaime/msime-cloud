@@ -1246,64 +1246,12 @@ func qqRemoveLinks(text string) string {
 
 // qqRemoveRawLinks 按 qqLinkPattern 的规则删除链接，但保留链接前后的空白原样。
 func qqRemoveRawLinks(text string) string {
-	removed := 0
-	links := 0
-	for search := 0; ; {
-		begin, end, next, ok := qqNextRawLink(text, search)
-		if !ok {
-			break
-		}
-		removed += end - begin
-		links++
-		search = next
-	}
-	if links == 0 {
-		return text
-	}
-	var out strings.Builder
-	out.Grow(len(text) - removed)
-	start := 0
-	for search := 0; ; {
-		begin, end, next, ok := qqNextRawLink(text, search)
-		if !ok {
-			break
-		}
-		out.WriteString(text[start:begin])
-		start, search = end, next
-	}
-	out.WriteString(text[start:])
-	return out.String()
+	return qqRemoveMatchedRanges(text, qqNextRawLink)
 }
 
 // qqRemoveLinkNotes 删除全角括号包住的裸链接，并保留其他文字和空白原样。
 func qqRemoveLinkNotes(text string) string {
-	removed := 0
-	notes := 0
-	for search := 0; ; {
-		begin, end, next, ok := qqNextLinkNote(text, search)
-		if !ok {
-			break
-		}
-		removed += end - begin
-		notes++
-		search = next
-	}
-	if notes == 0 {
-		return text
-	}
-	var out strings.Builder
-	out.Grow(len(text) - removed)
-	start := 0
-	for search := 0; ; {
-		begin, end, next, ok := qqNextLinkNote(text, search)
-		if !ok {
-			break
-		}
-		out.WriteString(text[start:begin])
-		start, search = end, next
-	}
-	out.WriteString(text[start:])
-	return out.String()
+	return qqRemoveMatchedRanges(text, qqNextLinkNote)
 }
 
 func qqNextLinkNote(text string, search int) (begin, end, next int, ok bool) {

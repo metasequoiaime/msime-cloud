@@ -146,8 +146,8 @@ func TestEveryAccountRouteAuthenticationAndDisabledService(t *testing.T) {
 			if method == "post" && path == "/v1/community/candidate-skins/{id}/download" {
 				expected = 404
 			}
-			// Community and website reads are public, except the author's own sync listing.
-			if method == "get" && (strings.HasPrefix(path, "/v1/community/") || path == siteDownloadMirrorsPath) && path != "/v1/community/candidate-skins/sync" {
+			// 社区和官网读取允许匿名访问，作者自己的同步列表除外。
+			if method == "get" && (strings.HasPrefix(path, "/v1/community/") || path == siteDownloadMirrorsPath || path == siteDownloadStatsPath) && path != "/v1/community/candidate-skins/sync" {
 				if strings.Contains(path, "{id}") {
 					expected = 404
 				} else {

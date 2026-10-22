@@ -556,7 +556,16 @@ func (s *Server) sendUpstream(req *http.Request) ([]byte, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, errors.New("upstream rejected request")
 	}
-	b, err := io.ReadAll(io.LimitReader(resp.Body, contract.UpstreamResponseBytes+1))
+	reader := io.LimitReader(resp.Body, contract.UpstreamResponseBytes+1)
+	var b []byte
+	if resp.ContentLength >= bytes.MinRead && resp.ContentLength <= contract.UpstreamResponseBytes {
+		// 大响应按声明长度预留正文与 EOF 探测空间；小响应保留原缓冲，实际读取仍受上限约束。
+		buffer := bytes.NewBuffer(make([]byte, 0, int(resp.ContentLength)+bytes.MinRead))
+		_, err = buffer.ReadFrom(reader)
+		b = buffer.Bytes()
+	} else {
+		b, err = io.ReadAll(reader)
+	}
 	if err != nil {
 		return nil, upstreamTransportError{cause: err}
 	}

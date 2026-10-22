@@ -307,6 +307,15 @@ COALESCE((SELECT jsonb_agg(jsonb_build_object(
 ) x),'[]'::jsonb)
 FROM diagnostic_snapshots d WHERE d.user_id=$1 AND d.expires_at>now()`, p.UserID, diagnosticAccessListLimit).Scan(&snapshot.ID, &snapshot.CreatedAt, &snapshot.ExpiresAt, &snapshot.Bytes, &snapshot.Sections, &snapshot.TokenHint, &rawAccesses)
 	if errors.Is(err, pgx.ErrNoRows) {
+		exists, existsErr := a.store.userExists(r.Context(), p.UserID)
+		if existsErr != nil {
+			a.error(w, existsErr)
+			return
+		}
+		if !exists {
+			a.error(w, errMissingUser)
+			return
+		}
 		write(w, 200, map[string]any{"snapshot": nil, "accesses": []diagnosticAccess{}})
 		return
 	}

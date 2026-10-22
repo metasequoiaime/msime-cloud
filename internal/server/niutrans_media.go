@@ -388,7 +388,7 @@ func (s *Server) niuTransResources(w http.ResponseWriter, r *http.Request) {
 	}
 	// 资源管理使用账号级签名；客户端只选择单段动作，成功响应保留业务字段，错误由 niuTransJSON 统一处理。
 	action := r.URL.Query().Get("action")
-	if action == "" || len(action) > 64 || strings.ContainsAny(action, "/\\\r\n") {
+	if action == "" || action == "." || action == ".." || len(action) > 64 || strings.ContainsAny(action, "/\\\r\n") {
 		fail(w, http.StatusBadRequest, "resource_action_required")
 		return
 	}

@@ -55,12 +55,9 @@ func (s *Store) RestoreDictionarySnapshot(ctx context.Context, user string, expe
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
-	var current int64
-	if err = tx.QueryRow(ctx, `SELECT COALESCE((SELECT revision FROM user_dictionary_state WHERE user_id=$1),0)`, user).Scan(&current); err != nil {
+	current, err := checkUserDataRevision(ctx, tx, user, expected)
+	if err != nil {
 		return 0, err
-	}
-	if current != expected {
-		return 0, errRevisionConflict
 	}
 	if _, err = tx.Exec(ctx, `CREATE TEMP TABLE msime_restore_stage(seq bigint PRIMARY KEY,data jsonb NOT NULL) ON COMMIT DROP`); err != nil {
 		return 0, err

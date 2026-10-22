@@ -18,12 +18,9 @@ func (s *Store) EditManagedDictionary(ctx context.Context, user string, expected
 		return change, err
 	}
 	defer tx.Rollback(ctx)
-	var current int64
-	if err = tx.QueryRow(ctx, `SELECT COALESCE((SELECT revision FROM user_dictionary_state WHERE user_id=$1),0)`, user).Scan(&current); err != nil {
+	current, err := checkUserDataRevision(ctx, tx, user, expected)
+	if err != nil {
 		return change, err
-	}
-	if current != expected {
-		return change, errRevisionConflict
 	}
 	lookup := func(e DictionaryEntry) (*DictionaryEntry, error) {
 		query := map[string]any{"operation": "dictionary", "kind": e.Kind, "text": e.Code, "word": e.Word, "exact": true, "limit": 1}

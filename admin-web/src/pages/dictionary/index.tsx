@@ -11,6 +11,7 @@ import { Button, buttonVariants } from "../../ui/button";
 import { Banner, Card, CardHeader } from "../../ui/card";
 import { cn } from "../../ui/cn";
 import { splitBytes } from "../../utils/bytes";
+import { lastPathSegment } from "../../utils/path";
 import { FilterChips } from "../../ui/filter-chips";
 import { Empty, ErrorState, SkeletonRows } from "../../ui/states";
 import { FileDetail } from "./detail";
@@ -22,7 +23,7 @@ export function formatBytes(bytes: number): string {
   const { value, unit } = splitBytes(bytes);
   return unit === "B" ? `${value} B` : `${value.toFixed(1)} ${unit}`;
 }
-export function fileName(path: string): string { return path.slice(path.lastIndexOf("/") + 1); }
+export function fileName(path: string): string { return lastPathSegment(path); }
 
 function FileList({ files, selected, onSelect }: { files: DictionaryFile[]; selected?: string; onSelect: (path: string) => void }) {
   if (files.length === 0) return <Empty title="没有匹配的文件" className="py-10" />;

@@ -659,6 +659,11 @@ var (
 	crashSpaces          = regexp.MustCompile(`\s+`)
 )
 
+// normalizeCrashWhitespace 折叠规范化文本中的空白并统一为小写。
+func normalizeCrashWhitespace(text string) string {
+	return strings.ToLower(strings.TrimSpace(crashSpaces.ReplaceAllString(text, " ")))
+}
+
 // crashSystemPrefixes mark frames of the operating system, language runtimes and standard libraries; the first frame whose fields match none of them identifies where the crash happened in our code.
 var crashSystemPrefixes = []string{
 	// Apple
@@ -714,7 +719,7 @@ func normalizeCrashFrame(line string) string {
 	line = crashAddressPattern.ReplaceAllString(line, "")
 	line = crashFrameOffset.ReplaceAllString(line, "")
 	line = crashFrameLineNumber.ReplaceAllString(line, "")
-	return strings.ToLower(strings.TrimSpace(crashSpaces.ReplaceAllString(line, " ")))
+	return normalizeCrashWhitespace(line)
 }
 
 // normalizeCrashMessage 保留消息首个非空行，掩去地址、标识符和数字，让同一故障在不同运行中归为一组。
@@ -727,7 +732,7 @@ func normalizeCrashMessage(message string) string {
 	line = crashUUIDPattern.ReplaceAllString(line, "?")
 	line = crashHexRunPattern.ReplaceAllString(line, "?")
 	line = crashDigitsPattern.ReplaceAllString(line, "#")
-	return strings.ToLower(strings.TrimSpace(crashSpaces.ReplaceAllString(line, " ")))
+	return normalizeCrashWhitespace(line)
 }
 
 // crashMessageMayChange 保守筛选可能被正则替换的行；数字和控制空白先用字节查找，八个连续十六进制字母也覆盖不含数字、嵌在单词中的 UUID，单个空格无需替换。

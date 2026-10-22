@@ -13,6 +13,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
 )
 
 // Telegram notice channel (unit U8).
@@ -36,7 +37,7 @@ func (s *Server) noticeBroadcaster() account.NoticeBroadcaster {
 	return &telegramNotices{
 		endpoint: strings.TrimRight(t.APIURL, "/") + "/bot" + t.botToken + "/sendMessage",
 		chatID:   t.ChatID,
-		client:   &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+		client:   httpclient.New(10 * time.Second),
 	}
 }
 

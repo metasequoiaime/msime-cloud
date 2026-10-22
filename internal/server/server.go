@@ -11,6 +11,7 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 	"github.com/metasequoiaime/MSIME-Backend/internal/skins"
 	"io"
@@ -124,8 +125,8 @@ func New(c Config) (*Server, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
-	s := &Server{config: c, slots: make(chan struct{}, c.MaxConcurrent), buckets: map[string]bucket{}, client: &http.Client{Timeout: time.Duration(c.TimeoutSeconds) * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, skinHeartbeat: skinJobHeartbeat,
-		loki: &http.Client{Timeout: lokiTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, logStreamsDone: make(chan struct{}), logPoll: logStreamPoll, logHeartbeat: logStreamHeartbeat, logMaxDuration: logStreamMaxDuration}
+	s := &Server{config: c, slots: make(chan struct{}, c.MaxConcurrent), buckets: map[string]bucket{}, client: httpclient.New(time.Duration(c.TimeoutSeconds) * time.Second), skinHeartbeat: skinJobHeartbeat,
+		loki: httpclient.New(lokiTimeout), logStreamsDone: make(chan struct{}), logPoll: logStreamPoll, logHeartbeat: logStreamHeartbeat, logMaxDuration: logStreamMaxDuration}
 	s.lifetime, s.stop = context.WithCancel(context.Background())
 	// 30 秒:启动时可能要顺带补迁移,空库要建二十多张表。独立的 -migrate-users 入口本来就按这个额度
 	// 算,两边保持一致。

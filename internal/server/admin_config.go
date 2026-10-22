@@ -7,10 +7,12 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
 )
 
 // AdminGitHubConfig is the GitHub App the admin console reads and writes as: dictionary pull requests, issues, releases and workflow runs. Leaving app_id at 0 ignores the rest of the block and turns every GitHub-backed console endpoint into 404 github_disabled. The installation needs contents:write, pull_requests:write, issues:write, actions:write, checks:read and metadata:read on every repository named here.
@@ -259,5 +261,5 @@ func (c *AdminConfig) adminGitHubClient() *githubapp.Client {
 		return nil
 	}
 	g := c.GitHub
-	return &githubapp.Client{AppID: g.AppID, InstallationID: g.InstallationID, Key: g.key, APIURL: g.APIURL, UserAgent: "MSIME-Backend-admin", HTTP: newGitHubHTTPClient(), Cache: &githubapp.Cache{}}
+	return &githubapp.Client{AppID: g.AppID, InstallationID: g.InstallationID, Key: g.key, APIURL: g.APIURL, UserAgent: "MSIME-Backend-admin", HTTP: httpclient.New(20 * time.Second), Cache: &githubapp.Cache{}}
 }

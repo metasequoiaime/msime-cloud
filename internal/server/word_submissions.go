@@ -28,6 +28,7 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"github.com/metasequoiaime/MSIME-Backend/internal/engine"
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 	"golang.org/x/sync/semaphore"
 )
@@ -236,7 +237,7 @@ type wordSubmitter struct {
 
 func newWordSubmitter(c WordSubmissionsConfig, origins []string, limiter rateLimiter) *wordSubmitter {
 	ws := &wordSubmitter{config: c, origins: origins, limiter: limiter, now: time.Now, writes: semaphore.NewWeighted(1),
-		client: &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+		client: httpclient.New(20 * time.Second)}
 	for _, o := range origins {
 		if u, err := url.Parse(o); err == nil {
 			ws.hostnames = append(ws.hostnames, u.Hostname())

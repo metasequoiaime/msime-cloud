@@ -623,5 +623,57 @@
   },
   "platform.android.voice_offline_fallback": {
     "type": "boolean"
+  },
+  "mixed_input.quick_phrase": {
+    "type": "boolean"
+  },
+  "mixed_input.quick_phrase_frequency": {
+    "type": "boolean"
+  },
+  "sentence_association.grammar_model": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "local_modes.symbol": {
+    "type": "boolean"
+  },
+  "local_modes.date_time_menu": {
+    "type": "boolean"
+  },
+  "second_third_candidate.enabled": {
+    "type": "boolean"
+  },
+  "second_third_candidate.keys": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "input.enumeration_comma_backslash": {
+    "type": "boolean"
+  },
+  "input.enumeration_comma_slash": {
+    "type": "boolean"
+  },
+  "translation.ai": {
+    "type": "boolean"
+  },
+  "ai_assistant.thinking": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "voice_input.polish_thinking": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "keybindings.toggle_english_candidates": {
+    "type": "string",
+    "maxLength": 64
+  },
+  "keybindings.toggle_full_width": {
+    "type": "string",
+    "maxLength": 64
+  },
+  "keybindings.toggle_punctuation": {
+    "type": "string",
+    "maxLength": 64
   }
 }

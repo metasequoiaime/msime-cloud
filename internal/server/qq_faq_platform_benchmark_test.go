@@ -30,6 +30,36 @@ func TestQQFAQPlatformLowercaseCache(t *testing.T) {
 	}
 }
 
+func TestQQFAQPlatformUnicodePriority(t *testing.T) {
+	for _, title := range []string{
+		"İOS 鸿蒙", "LİNUX macOS", "WİNDOWS iOS", "İPAD HarmonyOS",
+		"鸿蒙 İOS", "macOS LİNUX", "iOS WİNDOWS", "HarmonyOS İPAD",
+		"\xffİOS 鸿蒙", "WİNDOWS\xffiOS", "支持哪些系统，去哪里下载 İOS 鸿蒙",
+	} {
+		if got, want := qqFAQPlatform(title), previousQQFAQPlatform(title); got != want {
+			t.Errorf("标题=%q：结果 %q，原结果 %q", title, got, want)
+		}
+	}
+	for _, left := range []string{"WİNDOWS", "macOS", "LİNUX", "İOS", "İPAD", "鸿蒙", "HarmonyOS"} {
+		for _, right := range []string{"Windows", "macOS", "Linux", "iOS", "iPad", "鸿蒙", "HarmonyOS"} {
+			for _, title := range []string{left + " / " + right, right + " / " + left} {
+				if got, want := qqFAQPlatform(title), previousQQFAQPlatform(title); got != want {
+					t.Errorf("标题=%q：结果 %q，原结果 %q", title, got, want)
+				}
+			}
+		}
+	}
+}
+
+func TestQQFAQPlatformCommonTitlesNoAllocation(t *testing.T) {
+	for _, title := range []string{"Windows 版为什么启动失败", "macOS 上候选框", "鸿蒙输入法", "这个问题没有平台词但标题很长"} {
+		allocs := testing.AllocsPerRun(100, func() { qqFAQPlatformBenchmarkResult = qqFAQPlatform(title) })
+		if allocs != 0 {
+			t.Errorf("标题=%q：分配 %.0f 次，期望零分配", title, allocs)
+		}
+	}
+}
+
 var qqFAQPlatformBenchmarkResult string
 
 func BenchmarkQQFAQPlatformLowercaseCache(b *testing.B) {

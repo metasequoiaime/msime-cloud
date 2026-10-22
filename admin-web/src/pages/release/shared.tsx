@@ -1,6 +1,7 @@
 import { formatDateTime } from "../../utils/time";
 import { codeMessage } from "../../api/client";
 import { splitBytes } from "../../utils/bytes";
+import { lastPathSegment } from "../../utils/path";
 import type { Release, ReleaseStatus } from "../../api/release";
 import type { Tone } from "../../ui/pill";
 
@@ -26,7 +27,7 @@ export function releaseDate(release: Release): string {
 }
 
 export function repoShortName(repo: string): string {
-  return repo.split("/").pop() ?? repo;
+  return lastPathSegment(repo);
 }
 
 export function formatSize(bytes: number): string {

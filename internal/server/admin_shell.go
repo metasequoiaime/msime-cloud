@@ -5,10 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	msimebackend "github.com/metasequoiaime/MSIME-Backend"
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
@@ -136,8 +134,8 @@ func (s *Server) adminSearch(w http.ResponseWriter, r *http.Request) {
 		fail(w, 405, "method_not_allowed")
 		return
 	}
-	q := strings.TrimSpace(r.URL.Query().Get("q"))
-	if !utf8.ValidString(q) || utf8.RuneCountInString(q) > account.MaxAdminSearchQuery || strings.ContainsRune(q, 0) {
+	q, ok := account.NormalizeAdminSearchQuery(r.URL.Query().Get("q"))
+	if !ok {
 		fail(w, 400, "invalid_query")
 		return
 	}

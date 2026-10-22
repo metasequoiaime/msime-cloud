@@ -22,6 +22,9 @@ const RequestsPerMinute = 60
 // requestBodyBytes 是单个 MCP 请求体的上限；工具都只有很少的参数。
 const requestBodyBytes = 64 << 10
 
+// toolSchemas 供逐请求构造的 MCP server 并发复用固定工具类型的 schema。
+var toolSchemas = mcp.NewSchemaCache()
+
 // Snapshots 是端点用到的快照存储，由 account.Service 实现。
 type Snapshots interface {
 	OpenDiagnosticSnapshot(ctx context.Context, id, token string) (account.DiagnosticSnapshot, error)
@@ -132,7 +135,7 @@ type ConfigOutput struct {
 
 // NewServer 按快照包含的分类注册只读工具：没有上传的分类不出现对应工具，get_input_events 只在用户勾选了输入事件时出现。
 func NewServer(store Snapshots, snapshot account.DiagnosticSnapshot) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "msime-diagnostics", Title: "水杉输入法诊断快照", Version: "1.0.0"}, &mcp.ServerOptions{Instructions: "只读访问用户主动上传的一份 " + snapshot.Platform + " " + snapshot.AppVersion + " 诊断快照，" + snapshot.ExpiresAt.UTC().Format(time.RFC3339) + " 到期。输入事件只有时间戳、种类和耗时，不含任何输入文本。"})
+	server := mcp.NewServer(&mcp.Implementation{Name: "msime-diagnostics", Title: "水杉输入法诊断快照", Version: "1.0.0"}, &mcp.ServerOptions{SchemaCache: toolSchemas, Instructions: "只读访问用户主动上传的一份 " + snapshot.Platform + " " + snapshot.AppVersion + " 诊断快照，" + snapshot.ExpiresAt.UTC().Format(time.RFC3339) + " 到期。输入事件只有时间戳、种类和耗时，不含任何输入文本。"})
 	readOnly := &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true}
 	sections := snapshot.Sections
 	if sections.CrashLogs != nil {

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
@@ -29,6 +30,21 @@ func TestNativeCloudUnavailableAllocationBudget(t *testing.T) {
 				t.Fatalf("未配置引擎时分配 %.1f 次，期望零分配", allocations)
 			}
 		})
+	}
+}
+
+func TestNativeCloudInputUnavailableAvoidsLowercaseAllocation(t *testing.T) {
+	s := &Server{}
+	r := httptest.NewRequest(http.MethodGet, "/v1/cloud/candidates?text=nihao", nil)
+	text := strings.Repeat("A", 256)
+	allocations := testing.AllocsPerRun(100, func() {
+		candidates, corrected := s.nativeCloudCandidatesForInput(r, text, 5)
+		if candidates == nil || len(candidates) != 0 || corrected {
+			t.Fatalf("未配置引擎应返回非 nil 空候选且不纠正：%v，%v", candidates, corrected)
+		}
+	})
+	if allocations != 0 {
+		t.Fatalf("未配置引擎时处理云候选输入分配 %.1f 次，期望零分配", allocations)
 	}
 }
 

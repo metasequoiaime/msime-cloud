@@ -269,20 +269,19 @@ func qqFAQPlatform(title string) string {
 		}
 	}
 	upper := false
-	for i := range title {
-		if title[i] >= 'A' && title[i] <= 'Z' {
+	for _, r := range title {
+		if r >= 'A' && r <= 'Z' {
 			upper = true
+		}
+		if r >= utf8.RuneSelf && (r < 0x4E00 || r > 0x9FFF) && unicode.ToLower(r) != r {
+			// Unicode 小写转换也可能得到优先级更高的平台词，必须先转换再按固定顺序匹配。
+			title = strings.ToLower(title)
+			upper = false
 			break
 		}
 	}
 	for _, pair := range qqFAQTitlePlatforms {
 		if strings.Contains(title, pair[0]) || upper && qqContainsASCIIFold(title, pair[0]) {
-			return pair[1]
-		}
-	}
-	lower := strings.ToLower(title)
-	for _, pair := range qqFAQTitlePlatforms {
-		if strings.Contains(lower, pair[0]) {
 			return pair[1]
 		}
 	}

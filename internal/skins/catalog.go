@@ -2,6 +2,7 @@
 package skins
 
 import (
+	"bytes"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -202,7 +203,16 @@ func readFile(fsys fs.FS, name string) ([]byte, error) {
 	if err != nil || !info.Mode().IsRegular() || info.Size() > 4<<20 {
 		return nil, ErrInvalid
 	}
-	raw, err := io.ReadAll(io.LimitReader(f, (4<<20)+1))
+	reader := io.LimitReader(f, (4<<20)+1)
+	var raw []byte
+	if info.Size() > 0 {
+		// 按已知大小预留正文与 EOF 探测空间，避免读取时扩容复制。
+		buffer := bytes.NewBuffer(make([]byte, 0, int(info.Size())+bytes.MinRead))
+		_, err = buffer.ReadFrom(reader)
+		raw = buffer.Bytes()
+	} else {
+		raw, err = io.ReadAll(reader)
+	}
 	if err != nil || len(raw) > 4<<20 {
 		return nil, ErrInvalid
 	}

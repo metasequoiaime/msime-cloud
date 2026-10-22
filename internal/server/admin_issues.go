@@ -268,13 +268,50 @@ func issueHasLabel(labels []string, name string) bool {
 
 // issueKind reads the issue type from the conventional GitHub labels.
 func issueKind(labels []string) string {
-	for _, l := range labels {
-		switch strings.ToLower(l) {
+	for _, label := range labels {
+		switch label {
 		case "bug", "问题", "type: bug", "kind/bug":
 			return "bug"
 		case "enhancement", "feature", "feature request", "idea", "suggestion", "建议", "type: feature", "kind/feature":
 			return "idea"
 		case "documentation", "docs", "文档", "type: docs", "kind/docs":
+			return "docs"
+		}
+		upper, nonASCII := false, false
+		for i := range label {
+			if label[i] >= utf8.RuneSelf {
+				nonASCII = true
+				break
+			}
+			if label[i] >= 'A' && label[i] <= 'Z' {
+				upper = true
+			}
+		}
+		if nonASCII {
+			label = strings.ToLower(label)
+		} else if !upper {
+			continue
+		}
+		if kind := issueKindASCII(label); kind != "" {
+			return kind
+		}
+	}
+	return ""
+}
+
+func issueKindASCII(label string) string {
+	for _, candidate := range [...]string{"bug", "type: bug", "kind/bug"} {
+		if len(label) == len(candidate) && qqASCIIEqualFold(label, candidate) {
+			return "bug"
+		}
+	}
+	for _, candidate := range [...]string{"enhancement", "feature", "feature request", "idea", "suggestion", "type: feature", "kind/feature"} {
+		if len(label) == len(candidate) && qqASCIIEqualFold(label, candidate) {
+			return "idea"
+		}
+	}
+	for _, candidate := range [...]string{"documentation", "docs", "type: docs", "kind/docs"} {
+		if len(label) == len(candidate) && qqASCIIEqualFold(label, candidate) {
 			return "docs"
 		}
 	}

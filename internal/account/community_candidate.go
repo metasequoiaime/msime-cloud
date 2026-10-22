@@ -484,6 +484,17 @@ func (a *Service) communityCandidateList(w http.ResponseWriter, r *http.Request)
 		a.error(w, e)
 		return
 	}
+	if scope != "" && len(items) == 0 {
+		exists, err := a.store.userExists(r.Context(), viewer)
+		if err != nil {
+			a.error(w, err)
+			return
+		}
+		if !exists {
+			a.error(w, errMissingUser)
+			return
+		}
+	}
 	writeCommunityPage(w, "skins", items)
 }
 func (a *Service) communityCandidateDetail(w http.ResponseWriter, r *http.Request) {

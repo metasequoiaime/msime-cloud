@@ -230,6 +230,17 @@ func (a *Service) resourceList(w http.ResponseWriter, r *http.Request) {
 		a.error(w, err)
 		return
 	}
+	if scope != "" && len(items) == 0 {
+		exists, err := a.store.userExists(r.Context(), viewer)
+		if err != nil {
+			a.error(w, err)
+			return
+		}
+		if !exists {
+			a.error(w, errMissingUser)
+			return
+		}
+	}
 	writeCommunityPage(w, "items", items)
 }
 func (a *Service) resourceDetail(w http.ResponseWriter, r *http.Request) {

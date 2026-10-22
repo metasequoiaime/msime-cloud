@@ -174,6 +174,18 @@ func limited[T any](items []T, limit int) []T {
 
 // events 按白名单字段重新构造输出，即使存储里多出字段也不会带出去。
 func events(source []account.DiagnosticEvent, in EventInput) []Event {
+	// 无类型筛选时输出长度确定，直接填充一次分配的结果。
+	if in.Kind == "" {
+		count := len(source)
+		if in.Limit > 0 {
+			count = min(count, in.Limit)
+		}
+		out := make([]Event, count)
+		for i, e := range source[:count] {
+			out[i] = Event{TMS: *e.TMS, Kind: e.Kind, DurationMS: e.DurationMS}
+		}
+		return out
+	}
 	out := []Event{}
 	for _, e := range source {
 		if in.Kind != "" && e.Kind != in.Kind {

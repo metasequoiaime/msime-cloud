@@ -30,7 +30,8 @@ func TestQQWindowsProductTextHasWordCompatibility(t *testing.T) {
 		{"İOS 安装包", []string{"ios"}},
 		{"没有匹配词", qqWindowsNewWords},
 	} {
-		got := qqWindowsProductTextHasWord(tc.text, tc.words)
+		matcher := qqWindowsProductText{raw: tc.text}
+		got := matcher.hasWord(tc.words)
 		want := previousQQWindowsProductTextHasWord(tc.text, tc.words)
 		if got != want {
 			t.Errorf("文本=%q：结果 %t，原结果 %t", tc.text, got, want)
@@ -39,7 +40,10 @@ func TestQQWindowsProductTextHasWordCompatibility(t *testing.T) {
 }
 
 func TestQQWindowsProductTextHasWordAllocations(t *testing.T) {
-	if allocations := testing.AllocsPerRun(1000, func() { _ = qqWindowsProductTextHasWord("MetasequoiaIME-PINYIN_Setup", qqWindowsNewWords) }); allocations != 0 {
+	if allocations := testing.AllocsPerRun(1000, func() {
+		matcher := qqWindowsProductText{raw: "MetasequoiaIME-PINYIN_Setup"}
+		_ = matcher.hasWord(qqWindowsNewWords)
+	}); allocations != 0 {
 		t.Errorf("ASCII 文本分配 %.0f 次，期望零分配", allocations)
 	}
 }
@@ -64,7 +68,8 @@ func BenchmarkQQWindowsProductTextHasWord(b *testing.B) {
 		b.Run(tc.name+"/当前实现", func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
-				qqWindowsProductTextBenchmarkResult = qqWindowsProductTextHasWord(tc.text, tc.words)
+				matcher := qqWindowsProductText{raw: tc.text}
+				qqWindowsProductTextBenchmarkResult = matcher.hasWord(tc.words)
 			}
 		})
 	}

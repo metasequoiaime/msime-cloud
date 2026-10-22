@@ -10,6 +10,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
 type SharedWord struct {
@@ -49,7 +51,7 @@ var resourceKinds = map[string]bool{"dictionary": true, "reply": true, "phrase":
 
 // validResourcePhrase 校验短语包里的一条：正文去掉首尾空白后不能为空，可以换行，不能含其他控制字符；分组不能含控制字符。
 func validResourcePhrase(p SharedPhrase) bool {
-	if !utf8.ValidString(p.Text) || strings.TrimSpace(p.Text) == "" || utf16Length(p.Text) > maximumResourcePhraseText {
+	if !utf8.ValidString(p.Text) || strings.TrimSpace(p.Text) == "" || textutil.UTF16Length(p.Text) > maximumResourcePhraseText {
 		return false
 	}
 	for _, c := range p.Text {
@@ -57,7 +59,7 @@ func validResourcePhrase(p SharedPhrase) bool {
 			return false
 		}
 	}
-	return utf8.ValidString(p.Group) && !strings.ContainsFunc(p.Group, unicode.IsControl) && utf16Length(p.Group) <= maximumResourcePhraseGroup
+	return utf8.ValidString(p.Group) && !strings.ContainsFunc(p.Group, unicode.IsControl) && textutil.UTF16Length(p.Group) <= maximumResourcePhraseGroup
 }
 
 type CommunityResource struct {

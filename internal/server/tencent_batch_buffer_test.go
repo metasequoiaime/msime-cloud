@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf16"
 )
 
 // previousTencentTranslationBatches 保留优化前的批次构建，用于差分测试和分配比较。
@@ -18,7 +19,11 @@ func previousTencentTranslationBatches(texts []string) ([]translationPart, []ten
 		if part.text == "" {
 			continue
 		}
-		count := utf16Length(part.text)
+		// 参考计数独立于公共实现，并保留旧批次构建的零分配计数行为。
+		count := 0
+		for _, r := range part.text {
+			count += utf16.RuneLen(r)
+		}
 		if units+count > tencentBatchCharacters && len(batch.texts) > 0 {
 			batches = append(batches, batch)
 			batch, units = tencentTranslationBatch{}, 0

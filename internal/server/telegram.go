@@ -10,10 +10,10 @@ import (
 	"net/http"
 	"strings"
 	"time"
-	"unicode/utf16"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
 // Telegram notice channel (unit U8).
@@ -49,7 +49,7 @@ func telegramText(n account.Notice) string {
 	}
 	// UTF-16 码元数不超过字节数，每个码元最多占三个 UTF-8 字节；只对中间长度的消息计数。
 	bytes := len(n.Title) + len(separator) + len(n.Body)
-	if bytes <= telegramMessageMax || (bytes <= 3*telegramMessageMax && utf16Length(n.Title)+len(separator)+utf16Length(n.Body) <= telegramMessageMax) {
+	if bytes <= telegramMessageMax || (bytes <= 3*telegramMessageMax && textutil.UTF16Length(n.Title)+len(separator)+textutil.UTF16Length(n.Body) <= telegramMessageMax) {
 		return n.Title + separator + n.Body
 	}
 	parts := [3]string{n.Title, separator, n.Body}
@@ -74,19 +74,6 @@ func telegramText(n account.Notice) string {
 		}
 	}
 	return n.Title + separator + n.Body
-}
-
-// telegramLength counts text in UTF-16 code units.
-func telegramLength(text string) int {
-	n := 0
-	for _, r := range text {
-		if size := utf16.RuneLen(r); size > 0 {
-			n += size
-		} else {
-			n++
-		}
-	}
-	return n
 }
 
 // BroadcastNotice 在 Bot API 确认投递后才成功；错误只记录状态和数字错误码，不含请求地址或上游描述。

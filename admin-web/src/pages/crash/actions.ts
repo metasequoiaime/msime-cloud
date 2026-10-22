@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { APIError, useAPI } from "../../api/client";
+import { createActionUndo } from "../../api/action-undo";
 import type { API } from "../../api/client";
 import { keys } from "../../api/keys";
 import { crashIssueCreatedSchema, crashStatusUndoSchema } from "../../api/crash";
@@ -41,16 +42,13 @@ export function useCrashActions(): CrashActions {
     try {
       const result = await api.action({ action: "crash_group_status", id: group.signature, value: to });
       // 旧副本没有有效版本时不提供撤销，不能从页面状态或 previous 猜反向操作。
-      const parsed = crashStatusUndoSchema.safeParse(result.undo);
-      if (parsed.success && parsed.data.id === group.signature) {
-        undo = async () => {
-          try {
-            await api.action(parsed.data);
-          } finally {
-            await refresh();
-          }
-        };
-      }
+      undo = createActionUndo(crashStatusUndoSchema, result.undo, value => value.id === group.signature, async value => {
+        try {
+          await api.action(value);
+        } finally {
+          await refresh();
+        }
+      });
       await refresh();
     } finally {
       clear(group.signature);

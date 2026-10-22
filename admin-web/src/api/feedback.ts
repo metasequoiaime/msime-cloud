@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { actionUndoTokenSchema } from "./action-undo.ts";
 
 // GET /api/feedback：App 内反馈的一页（50 条）。diagnostics 只含服务端白名单里的键，截图字节经 GET /api/feedback/{id}/screenshots/{n} 单独读取。
 export const feedbackTypes = ["bug", "suggestion", "dictionary"] as const;
@@ -8,7 +9,7 @@ export const feedbackTypeLabels: Record<FeedbackType, string> = { bug: "问题",
 export const feedbackStatuses = ["new", "resolved"] as const;
 export const feedbackUndoSchema = z.object({
   action: z.literal("undo_feedback_status"), id: z.string(),
-  value: z.object({ status: z.enum(feedbackStatuses), token: z.string().regex(/^[a-f0-9]{32}$/) }),
+  value: z.object({ status: z.enum(feedbackStatuses), token: actionUndoTokenSchema }),
 });
 export type FeedbackStatus = (typeof feedbackStatuses)[number];
 export const feedbackStatusLabels: Record<FeedbackStatus, string> = { new: "待处理", resolved: "已处理" };

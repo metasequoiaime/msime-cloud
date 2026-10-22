@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { actionUndoTokenSchema } from "./action-undo.ts";
 
 // GET /api/users: one page of 50 accounts. contact is masked by the server; role is an admin role key when a verified email belongs to an enabled admin member, otherwise "user".
 export const userRowSchema = z.object({
@@ -89,6 +90,6 @@ export const unbanResultSchema = z.looseObject({ ok: z.literal(true), affected: 
 export const banUndoSchema = z.object({
   action: z.literal("undo_user_ban"),
   id: z.string(),
-  value: z.object({ token: z.string().regex(/^[a-f0-9]{32}$/), banned: z.boolean() }),
+  value: z.object({ token: actionUndoTokenSchema, banned: z.boolean() }),
   reason: z.string().min(1).optional(),
 }).refine(v => v.value.banned ? !!v.reason?.trim() : v.reason === undefined);

@@ -1,4 +1,5 @@
 import { parsePage } from "../../utils/pagination";
+import { createActionUndo } from "../../api/action-undo";
 import { useCallback, useMemo } from "react";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { errorMessage, useAPI } from "../../api/client";
@@ -57,8 +58,7 @@ export default function FeedbackPage() {
     };
     try {
       const result = await run({ action: resolved ? "resolve_feedback" : "reopen_feedback", id: row.id });
-      const parsed = feedbackUndoSchema.safeParse(result.undo);
-      const undo = parsed.success && parsed.data.id === row.id && parsed.data.value.status === (resolved ? "new" : "resolved") ? async () => { await run(parsed.data); } : undefined;
+      const undo = createActionUndo(feedbackUndoSchema, result.undo, value => value.id === row.id && value.value.status === (resolved ? "new" : "resolved"), run);
       toast({ text: resolved ? "已标记为已处理" : "已重新打开", undo });
     } catch (error) {
       toast(`操作失败：${errorMessage(error)}`);

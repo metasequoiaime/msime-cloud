@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -209,6 +210,9 @@ var releaseTag = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9]*)-(v?[0-9][0-9A-Za-z.
 // releaseTagPlatforms are the tag prefixes that name a platform; any other prefix (a product name such as msime-v1.2.3) is not a platform, so such tags fall back to the installer extension.
 var releaseTagPlatforms = map[string]string{"windows": "windows", "win": "windows", "macos": "macos", "mac": "macos", "osx": "macos", "linux": "linux", "android": "android", "ios": "ios", "harmony": "harmony", "harmonyos": "harmony", "ohos": "harmony"}
 
+var releaseAssetExtensions = map[string]bool{".exe": true, ".msi": true, ".msix": true, ".appx": true, ".dmg": true, ".pkg": true, ".deb": true, ".rpm": true, ".appimage": true, ".flatpak": true, ".snap": true, ".apk": true, ".aab": true, ".ipa": true, ".hap": true, ".app": true, ".sha256": true, ".sha512": true, ".sha256sum": true, ".sig": true, ".asc": true, ".minisig": true, ".txt": true, ".yml": true, ".yaml": true, ".json": true, ".blockmap": true, ".zsync": true}
+var releaseAssetExtensionNames = []string{".exe", ".msi", ".msix", ".appx", ".dmg", ".pkg", ".deb", ".rpm", ".appimage", ".flatpak", ".snap", ".apk", ".aab", ".ipa", ".hap", ".app", ".sha256", ".sha512", ".sha256sum", ".sig", ".asc", ".minisig", ".txt", ".yml", ".yaml", ".json", ".blockmap", ".zsync"}
+
 // releaseTagPlatform 优先按平台标签识别平台和版本，否则保留完整标签作为版本，并按安装包的最后一个扩展名识别平台；未知平台返回空字符串。
 func releaseTagPlatform(tag, asset string) (string, string) {
 	if releaseTag.MatchString(tag) {
@@ -257,7 +261,27 @@ func releaseTagPlatformPrefix(prefix string) (string, bool) {
 // releaseAssetExtension 只转换最后一个扩展名，避免为无关的文件名前缀分配小写副本。
 func releaseAssetExtension(asset string) string {
 	if dot := strings.LastIndexByte(asset, '.'); dot >= 0 {
-		return strings.ToLower(asset[dot:])
+		extension := asset[dot:]
+		if releaseAssetExtensions[extension] {
+			return extension
+		}
+		if len(extension) > 32 {
+			return strings.ToLower(extension)
+		}
+		for i := range extension {
+			if extension[i] >= utf8.RuneSelf {
+				return strings.ToLower(extension)
+			}
+			if extension[i] >= 'A' && extension[i] <= 'Z' {
+				for _, known := range releaseAssetExtensionNames {
+					if len(extension) == len(known) && strings.EqualFold(extension, known) {
+						return known
+					}
+				}
+				return strings.ToLower(extension)
+			}
+		}
+		return extension
 	}
 	return ""
 }

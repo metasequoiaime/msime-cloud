@@ -87,6 +87,8 @@ type Server struct {
 	mu          sync.Mutex
 	buckets     map[string]bucket
 	handler     http.Handler
+	// inputTimezones 复用日期时间输入的时区元数据，容量按副本独立计算。
+	inputTimezones inputTimezoneCache
 	// bucketOldest 是桶更新时间的保守下界，零值表示尚未扫描；由 mu 保护。
 	bucketOldest time.Time
 	// loki 是服务日志页读取 Loki 用的客户端；logStreams 限制同时打开的日志流，logStreamsDone 在优雅关闭开始时关闭以结束它们；logPoll、logHeartbeat 和 logMaxDuration 是日志流的轮询间隔、心跳间隔和单个连接的最长时间，测试会调小。

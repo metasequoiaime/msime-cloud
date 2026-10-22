@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { communityPathForSearch, navGroups, navItems, pageForPath, pageForTarget } from '../src/nav.ts';
+import { sections } from '../src/api/community.ts';
+import { workSections } from '../src/api/users.ts';
 
 const pages = [
   ['skins', '键盘皮肤'], ['candidate-skins', '候选窗皮肤'], ['plugins', '插件'],
@@ -38,4 +40,8 @@ test('旧入口保留分类选择，只有带斜线的合法前缀覆盖 tab', (
   assert.equal(communityPathForSearch({ tab: 'replies', focus: 'plugins' }), '/replies');
   assert.equal(communityPathForSearch({ tab: 'phrases', focus: 'image-skin/one' }), '/phrases');
   assert.equal(communityPathForSearch({ tab: 'unknown' }), '/skins');
+});
+
+test('用户详情和社区接口共用内容分区契约', () => {
+  assert.strictEqual(workSections, sections);
 });

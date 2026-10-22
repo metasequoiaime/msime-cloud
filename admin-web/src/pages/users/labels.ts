@@ -1,6 +1,7 @@
 import { formatNumber } from "../../utils/number";
 import type { Tone } from "../../ui/pill";
 import { relativeTime } from "../../utils/time";
+import { sectionLabels } from "../../api/community";
 import type { UserHistory, UserRow, UserWork } from "../../api/users";
 
 // Role pills follow the design: maintainers in the accent tone, reviewers in info, everyone else muted.
@@ -49,7 +50,6 @@ export function devicePlatform(userAgent: string): string {
   return "其他设备";
 }
 
-const sectionLabels: Record<UserWork["section"], string> = { skins: "键盘皮肤", "candidate-skins": "候选窗皮肤", plugins: "插件", dictionaries: "词库", replies: "回复模板", phrases: "短语包" };
 const moderationLabels: Record<UserWork["moderation"], string> = { pending: "待审核", approved: "已通过", removed: "已下架" };
 
 export function workText(work: UserWork): string {

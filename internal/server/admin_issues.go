@@ -1354,14 +1354,22 @@ func (s *Server) searchIssues(q string) []account.AdminSearchHit {
 	items := m.items
 	m.mu.Unlock()
 	var matched [8]account.AdminSearchHit
+	// 20 字节足以容纳有符号 64 位整数，结果字符串会复制格式化后的编号。
+	var numberBuffer [20]byte
 	count := 0
 	for _, row := range items {
-		n := strconv.Itoa(row.Number)
+		var n string
+		if 0 <= row.Number && row.Number < 100 {
+			// 小编号复用标准库的共享字符串。
+			n = strconv.Itoa(row.Number)
+		} else {
+			n = string(strconv.AppendInt(numberBuffer[:0], int64(row.Number), 10))
+		}
 		// 复用词条查询的栈上匹配，避免为标题和仓库键创建小写副本。
 		if number != n && !dictionaryLineContainsLower(row.Title, q) && !dictionaryLineContainsLower(row.Repo+"#"+n, q) {
 			continue
 		}
-		matched[count] = account.AdminSearchHit{Kind: "issue", ID: issueRef{Repo: row.Repo, N: row.Number}.key(), Title: "#" + n + " " + row.Title, Where: "问题分诊", Target: "issues"}
+		matched[count] = account.AdminSearchHit{Kind: "issue", ID: row.Repo + "#" + n, Title: "#" + n + " " + row.Title, Where: "问题分诊", Target: "issues"}
 		count++
 		if count == len(matched) {
 			break

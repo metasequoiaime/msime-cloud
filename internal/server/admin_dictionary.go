@@ -297,6 +297,9 @@ func dictionaryRows(name, text, query string, page int) ([]dictionaryRow, int) {
 			}
 			continue
 		}
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "//") {
+			continue
+		}
 		queryMatch := true
 		if q != "" {
 			if previousQueryReady && line == previousQueryLine {
@@ -306,7 +309,7 @@ func dictionaryRows(name, text, query string, page int) ([]dictionaryRow, int) {
 				previousQueryLine, previousQueryMatch, previousQueryReady = line, queryMatch, true
 			}
 		}
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "//") || !queryMatch {
+		if !queryMatch {
 			continue
 		}
 		total++

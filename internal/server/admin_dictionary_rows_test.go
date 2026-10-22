@@ -104,6 +104,28 @@ func TestDictionaryRowsLineScanAllocationBudget(t *testing.T) {
 	}
 }
 
+func TestDictionaryRowsCommentQueryBudget(t *testing.T) {
+	var text strings.Builder
+	for i := range 5000 {
+		fmt.Fprintf(&text, "# %s %05d\n", strings.Repeat("注释内容 ", 500), i)
+	}
+	input := text.String()
+	previous := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			_, _ = previousDictionaryRows("custom/words.txt", input, "needle", 1)
+		}
+	})
+	current := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			_, _ = dictionaryRows("custom/words.txt", input, "needle", 1)
+		}
+	})
+	t.Logf("当前 %s，原实现 %s", current, previous)
+	if previous.N == 0 || current.N == 0 || current.NsPerOp() >= previous.NsPerOp()*12/10 {
+		t.Fatalf("注释行查询没有达到预期加速：当前 %s，原实现 %s", current, previous)
+	}
+}
+
 func BenchmarkDictionaryRowsEmptyQuery(b *testing.B) {
 	for _, tc := range []struct{ name, line string }{
 		{"ascii", "SYNTHETIC\tWORD\t100\n"},

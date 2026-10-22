@@ -163,8 +163,8 @@ func (b *qqBot) downloadMedia(ctx context.Context, raw string, limit int64) ([]b
 	}
 	reader := io.LimitReader(resp.Body, limit+1)
 	var body []byte
-	if resp.ContentLength > 0 {
-		// 声明长度已经过上限检查；额外预留最小读取空间，避免读到 EOF 前再扩容。
+	if resp.ContentLength >= bytes.MinRead {
+		// 大附件按已校验的声明长度预留正文与 EOF 探测空间；小附件沿用原读取缓冲。
 		buffer := bytes.NewBuffer(make([]byte, 0, int(resp.ContentLength)+bytes.MinRead))
 		_, err = buffer.ReadFrom(reader)
 		body = buffer.Bytes()

@@ -517,7 +517,10 @@ var qqPlatformWords = map[string][]string{"windows": {"win", "微软"}, "macos":
 
 // qqMentionsPlatform 判断问题里有没有提到平台 p：不分大小写地找平台名、id 和 qqPlatformWords 里的说法。
 func qqMentionsPlatform(question string, p qqPlatformRelease) bool {
-	question = strings.ToLower(question)
+	return qqMentionsPlatformLower(strings.ToLower(question), p)
+}
+
+func qqMentionsPlatformLower(question string, p qqPlatformRelease) bool {
 	if p.Name != "" && strings.Contains(question, strings.ToLower(p.Name)) {
 		return true
 	}

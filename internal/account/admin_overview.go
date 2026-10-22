@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // overviewPlatform 统一客户端平台别名，让近七天和每日活跃统计使用相同的平台键；未知平台保留小写名称。
@@ -19,11 +20,104 @@ var platformAliases = map[string]string{"win": "windows", "mac": "macos", "darwi
 
 // canonicalPlatform 把客户端上报的平台名转为小写，已知别名映射到规范 ID；其他名称原样以小写返回。
 func canonicalPlatform(platform string) string {
-	platform = strings.ToLower(strings.TrimSpace(platform))
+	platform = strings.TrimSpace(platform)
+	if isASCIIPlatform(platform) {
+		if canonical, ok := canonicalPlatformASCII(platform); ok {
+			return canonical
+		}
+		if isASCIILower(platform) {
+			return platform
+		}
+		lower := strings.ToLower(platform)
+		if canonical, ok := platformAliases[lower]; ok {
+			return canonical
+		}
+		return lower
+	}
+	platform = strings.ToLower(platform)
 	if canonical, ok := platformAliases[platform]; ok {
 		return canonical
 	}
 	return platform
+}
+
+func canonicalPlatformASCII(platform string) (string, bool) {
+	if len(platform) == 0 {
+		return "", false
+	}
+	first := platform[0]
+	if first >= 'A' && first <= 'Z' {
+		first += 'a' - 'A'
+	}
+	switch first {
+	case 'a':
+		if asciiPlatformEqualFold(platform, "android") {
+			return "android", true
+		}
+	case 'd':
+		if asciiPlatformEqualFold(platform, "darwin") {
+			return "macos", true
+		}
+	case 'h':
+		if asciiPlatformEqualFold(platform, "harmony") || asciiPlatformEqualFold(platform, "harmonyos") {
+			return "harmony", true
+		}
+	case 'i':
+		if asciiPlatformEqualFold(platform, "ios") || asciiPlatformEqualFold(platform, "ipados") {
+			return "ios", true
+		}
+	case 'l':
+		if asciiPlatformEqualFold(platform, "linux") {
+			return "linux", true
+		}
+	case 'm':
+		if asciiPlatformEqualFold(platform, "macos") || asciiPlatformEqualFold(platform, "mac") {
+			return "macos", true
+		}
+	case 'o':
+		if asciiPlatformEqualFold(platform, "ohos") {
+			return "harmony", true
+		}
+	case 'w':
+		if asciiPlatformEqualFold(platform, "windows") || asciiPlatformEqualFold(platform, "win") {
+			return "windows", true
+		}
+	}
+	return "", false
+}
+
+func asciiPlatformEqualFold(platform, known string) bool {
+	if len(platform) != len(known) {
+		return false
+	}
+	for i := range platform {
+		c := platform[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c != known[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func isASCIIPlatform(platform string) bool {
+	for i := range platform {
+		if platform[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}
+
+func isASCIILower(platform string) bool {
+	for i := range platform {
+		if platform[i] >= 'A' && platform[i] <= 'Z' {
+			return false
+		}
+	}
+	return true
 }
 
 // canonicalPlatformSQL 是 canonicalPlatform 对 column 的 SQL 表达式版本，让以别名上报的行与规范名称归为一组。

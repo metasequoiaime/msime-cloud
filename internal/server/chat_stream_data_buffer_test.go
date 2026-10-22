@@ -56,10 +56,10 @@ func TestChatStreamDataBufferAllocations(t *testing.T) {
 			if !valid {
 				t.Fatal("流式响应未完成")
 			}
-			budget := float64(7000)
+			budget := float64(6400)
 			if raceEnabled {
 				// 竞态构建的编码缓冲池会随机丢弃对象，额外分配需要单独预留余量。
-				budget = 8200
+				budget = 7600
 			}
 			if allocs > budget {
 				t.Fatalf("512 个事件分配 %.0f 次，超过 %.0f 次预算", allocs, budget)

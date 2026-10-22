@@ -219,8 +219,17 @@ func (s *Server) chatStreamOnce(w http.ResponseWriter, r *http.Request, v chatRe
 		if chunk == nil {
 			chunk = &chatStreamChunk{}
 		}
-		// 每次分发后清零复用的容器，避免字段残留和等待后续事件时保留正文。
-		defer func() { *chunk = chatStreamChunk{} }()
+		// 每次分发后清空字段和引用；只保留单个选项的缓冲，避免较大的数组被长期保留或反复清理。
+		defer func() {
+			choices := chunk.Choices
+			if cap(choices) == 1 {
+				clear(choices[:1])
+				choices = choices[:0]
+			} else {
+				choices = nil
+			}
+			*chunk = chatStreamChunk{Choices: choices}
+		}()
 		if json.Unmarshal(data, chunk) != nil {
 			return false, errChatStreamEvent
 		}

@@ -210,6 +210,8 @@ func (s *Server) chatStreamOnce(w http.ResponseWriter, r *http.Request, v chatRe
 		return nil
 	}
 	var out *chatStreamOut
+	var outputBuffer *bytes.Buffer
+	var outputEncoder *json.Encoder
 	var chunk *chatStreamChunk
 	// dispatch 处理一个完整的 SSE 事件的 data；done 为 true 表示收到 `[DONE]`。
 	dispatch := func(data []byte) (done bool, err error) {
@@ -257,14 +259,22 @@ func (s *Server) chatStreamOnce(w http.ResponseWriter, r *http.Request, v chatRe
 		}
 		if out == nil {
 			out = &chatStreamOut{Object: "chat.completion.chunk", Choices: make([]chatStreamChoice, 1)}
+			outputBuffer = &bytes.Buffer{}
+			outputEncoder = json.NewEncoder(outputBuffer)
 		}
 		out.ID, out.Created, out.Model = chunk.ID, chunk.Created, chunk.Model
 		out.Choices[0] = chatStreamChoice{Index: 0, Delta: chatStreamDelta{Role: choice.Delta.Role, Content: choice.Delta.Content}, FinishReason: choice.FinishReason}
-		b, _ := json.Marshal(out)
-		// 编码完成后清掉本段引用，等待后续事件时不额外保留正文。
+		outputBuffer.Reset()
+		_ = outputEncoder.Encode(out)
+		// 编码完成后清掉输出字段中的本段引用。
 		out.ID, out.Model = "", ""
 		out.Choices[0] = chatStreamChoice{}
-		frame := "data: " + string(b) + "\n\n"
+		// 编码器已追加一个换行，再补一个换行结束 SSE 事件。
+		frame := "data: " + string(outputBuffer.Bytes()) + "\n"
+		// 只保留不超过 4 KiB 的编码缓冲，避免大事件占用后续等待期间的内存。
+		if outputBuffer.Cap() > 4096 {
+			*outputBuffer = bytes.Buffer{}
+		}
 		if !streaming && !hasContent {
 			pending = append(pending, frame)
 			return false, nil

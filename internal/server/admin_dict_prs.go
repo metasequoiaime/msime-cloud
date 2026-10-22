@@ -1052,6 +1052,10 @@ func (s *Server) searchDictPRs(q string) []account.AdminSearchHit {
 			title = "#" + strconv.Itoa(p.Number) + " 词库：" + p.Note
 		}
 		hits = append(hits, account.AdminSearchHit{Kind: "dict_pr", ID: strconv.Itoa(p.Number), Title: title, Where: "词库审核", Target: "dictpr"})
+		// 全局搜索最多使用前 `adminSearchLimit` 条命中，及时停止构造其余结果。
+		if len(hits) == adminSearchLimit {
+			break
+		}
 	}
 	return hits
 }

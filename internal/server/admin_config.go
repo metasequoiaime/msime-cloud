@@ -177,10 +177,14 @@ func (g *AdminGitHubConfig) validate() error {
 	}
 	seen := map[string]bool{}
 	for _, repo := range g.IssueRepos {
-		if !githubRepositoryPattern.MatchString(repo) || seen[strings.ToLower(repo)] {
+		if !githubRepositoryPattern.MatchString(repo) {
 			return errors.New("admin github issue_repos must be unique owner/name entries")
 		}
-		seen[strings.ToLower(repo)] = true
+		lower := strings.ToLower(repo)
+		if seen[lower] {
+			return errors.New("admin github issue_repos must be unique owner/name entries")
+		}
+		seen[lower] = true
 	}
 	if len(g.Platforms) > 16 {
 		return errors.New("admin github platforms exceeds 16 entries")

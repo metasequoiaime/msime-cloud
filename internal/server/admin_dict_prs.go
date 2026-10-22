@@ -1044,7 +1044,8 @@ func (s *Server) searchDictPRs(q string) []account.AdminSearchHit {
 	var hits []account.AdminSearchHit
 	for _, p := range st.index {
 		title := "#" + strconv.Itoa(p.Number) + " " + p.Title
-		if !strings.Contains(strings.ToLower(title), q) && !strings.Contains(strings.ToLower(p.Note), q) {
+		// 复用词条查询的栈上小写匹配，避免逐条复制标题和投稿备注。
+		if !dictionaryLineContainsLower(title, q) && !dictionaryLineContainsLower(p.Note, q) {
 			continue
 		}
 		// Website pull request titles only count entries, so the submitter's note names the pull request when there is one.

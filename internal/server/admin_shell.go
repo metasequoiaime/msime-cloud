@@ -157,7 +157,14 @@ func (s *Server) adminSearch(w http.ResponseWriter, r *http.Request) {
 
 // interleaveSearchHits takes one hit from each source in turn, keeping each source's own order, until limit hits are collected or every source is exhausted.
 func interleaveSearchHits(limit int, sources ...[]account.AdminSearchHit) []account.AdminSearchHit {
-	hits := []account.AdminSearchHit{}
+	capacity := 0
+	if limit > 0 {
+		for _, source := range sources {
+			capacity += len(source)
+		}
+		capacity = min(capacity, limit)
+	}
+	hits := make([]account.AdminSearchHit, 0, capacity)
 	for index := 0; len(hits) < limit; index++ {
 		added := false
 		for _, source := range sources {

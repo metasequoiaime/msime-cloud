@@ -261,12 +261,8 @@ ORDER BY published_at DESC,id DESC LIMIT $3`, platform, channel, noticePublicLim
 		a.error(w, err)
 		return
 	}
-	// The feed is the same for every caller, so clients and shared caches may keep it for 60s; publishing or archiving shows up within that window.
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Cache-Control", "public, max-age=60")
-	// The CORS middleware adds Access-Control-Allow-Origin only to requests that carry an Origin, so a cached copy must be keyed by it even when this request had none; otherwise an app's copy could be served to the website's cross-origin fetch.
-	w.Header().Set("Vary", "Origin")
-	w.Header().Set("Referrer-Policy", "no-referrer")
+	setPublicResponseHeaders(w)
 	w.WriteHeader(200)
 	w.Write(append(raw, '\n'))
 }

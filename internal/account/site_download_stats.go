@@ -1,7 +1,6 @@
 package account
 
 import (
-	"encoding/json"
 	"net/http"
 	"time"
 )
@@ -46,10 +45,5 @@ func (a *Service) siteDownloadStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stats.GeneratedAt = stats.GeneratedAt.UTC()
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Cache-Control", siteMirrorCacheMaxAge)
-	w.Header().Set("Vary", "Origin")
-	w.Header().Set("Referrer-Policy", "no-referrer")
-	w.WriteHeader(200)
-	json.NewEncoder(w).Encode(stats)
+	writePublicJSON(w, stats)
 }

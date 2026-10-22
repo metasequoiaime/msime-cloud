@@ -130,7 +130,7 @@ func qqQuoteFromFields(fields qqQuoteEventFields, m qqGroupMessage) qqQuote {
 				}
 			}
 			for _, a := range e.Attachments {
-				if !own[a.URL] && strings.HasPrefix(strings.ToLower(a.ContentType), "image/") {
+				if !own[a.URL] && qqImageContentType(a.ContentType) {
 					q.Images = append(q.Images, a)
 				}
 			}

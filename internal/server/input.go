@@ -110,8 +110,8 @@ func (s *Server) inputQuery(w http.ResponseWriter, r *http.Request) {
 		if v.Timezone == "" {
 			v.Timezone = "UTC"
 		}
-		location, err := time.LoadLocation(v.Timezone)
-		if err != nil || len(v.Timezone) > 128 {
+		location, err := s.inputTimezones.load(v.Timezone)
+		if err != nil {
 			fail(w, 400, "invalid_timezone")
 			return
 		}

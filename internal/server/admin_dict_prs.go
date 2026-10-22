@@ -1032,27 +1032,41 @@ func (s *Server) rejectDictPR(w http.ResponseWriter, r *http.Request, gh *github
 	respond(w, 200, map[string]any{"ok": true})
 }
 
-// searchDictPRs matches q against the cached dictionary pull requests (number, title and submitter note) for the global search; it never calls GitHub.
+// searchDictPRs 为全局搜索匹配缓存投稿的编号、标题和备注，不请求 GitHub。
 func (s *Server) searchDictPRs(q string) []account.AdminSearchHit {
 	q = strings.ToLower(strings.TrimSpace(q))
 	if q == "" {
 		return nil
 	}
+	queryNumber, queryTitle, queryHasSpace := strings.Cut(q, " ")
 	st := s.dictPRState()
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	// `#` 加有符号 64 位整数最多占 21 字节，仅用于匹配，不保存在结果中。
+	var numberBuffer [21]byte
+	numberBuffer[0] = '#'
 	var hits []account.AdminSearchHit
 	for _, p := range st.index {
-		title := "#" + strconv.Itoa(p.Number) + " " + p.Title
-		// 复用词条查询的栈上小写匹配，避免逐条复制标题和投稿备注。
-		if !dictionaryLineContainsLower(title, q) && !dictionaryLineContainsLower(p.Note, q) {
-			continue
+		if !dictionaryLineContainsLower(p.Title, q) && !dictionaryLineContainsLower(p.Note, q) {
+			prefix := string(strconv.AppendInt(numberBuffer[:1], int64(p.Number), 10))
+			matched := strings.Contains(prefix, q)
+			if queryHasSpace {
+				// 编号不含空格，跨分隔符的查询只能以第一个空格对齐。
+				matched = strings.HasSuffix(prefix, queryNumber) && qqCommandPrefixEqualFold(p.Title, queryTitle)
+			}
+			if !matched {
+				continue
+			}
 		}
-		// Website pull request titles only count entries, so the submitter's note names the pull request when there is one.
+		// 仅命中后构造显示标题；有备注时以投稿备注命名。
+		number := strconv.Itoa(p.Number)
+		var title string
 		if p.Note != "" {
-			title = "#" + strconv.Itoa(p.Number) + " 词库：" + p.Note
+			title = "#" + number + " 词库：" + p.Note
+		} else {
+			title = "#" + number + " " + p.Title
 		}
-		hits = append(hits, account.AdminSearchHit{Kind: "dict_pr", ID: strconv.Itoa(p.Number), Title: title, Where: "词库审核", Target: "dictpr"})
+		hits = append(hits, account.AdminSearchHit{Kind: "dict_pr", ID: number, Title: title, Where: "词库审核", Target: "dictpr"})
 		// 全局搜索最多使用前 `adminSearchLimit` 条命中，及时停止构造其余结果。
 		if len(hits) == adminSearchLimit {
 			break

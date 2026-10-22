@@ -1353,18 +1353,23 @@ func (s *Server) searchIssues(q string) []account.AdminSearchHit {
 	m.mu.Lock()
 	items := m.items
 	m.mu.Unlock()
-	var hits []account.AdminSearchHit
+	var matched [8]account.AdminSearchHit
+	count := 0
 	for _, row := range items {
 		n := strconv.Itoa(row.Number)
 		if number != n && !strings.Contains(strings.ToLower(row.Title), q) && !strings.Contains(strings.ToLower(row.Repo+"#"+n), q) {
 			continue
 		}
-		hits = append(hits, account.AdminSearchHit{Kind: "issue", ID: issueRef{Repo: row.Repo, N: row.Number}.key(), Title: "#" + n + " " + row.Title, Where: "问题分诊", Target: "issues"})
-		if len(hits) == 8 {
+		matched[count] = account.AdminSearchHit{Kind: "issue", ID: issueRef{Repo: row.Repo, N: row.Number}.key(), Title: "#" + n + " " + row.Title, Where: "问题分诊", Target: "issues"}
+		count++
+		if count == len(matched) {
 			break
 		}
 	}
-	return hits
+	if count == 0 {
+		return nil
+	}
+	return slices.Clone(matched[:count])
 }
 
 // pendingIssues 为外壳角标统计未关闭且未分诊的 issue。只读未关闭 issue 的分页（与 GET /api/issues 共用同一批缓存的读取），不读评论和已关闭 issue：评论只用于响应时间，而 msime-windows 30 天内的评论需要第二页，按顺序读完会超出 adminShellGitHubBudget。

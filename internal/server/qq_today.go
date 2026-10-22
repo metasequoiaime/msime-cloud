@@ -109,7 +109,7 @@ func qqTodayFestivalNames(day tyme.SolarDay) []string {
 
 // qqTodayHoliday 是法定假日那一行，按优先级只写一句：放假中写「国庆节假期第 3 天，还剩 5 天」；今天或明天调休上班时写出来，周末上班最容易忘；否则写「下一个是中秋节（9月25日起），还有 67 天」。段标题「【假期】」由 qqTodayCard 加。库里没有往后 qqTodayHolidayDays 天的安排时返回空字符串。
 func qqTodayHoliday(day tyme.SolarDay) string {
-	if h := day.GetLegalHoliday(); h != nil {
+	if h := qqTodayLegalHoliday(day); h != nil {
 		if h.IsWork() {
 			return "今天调休上班（" + h.GetName() + "）"
 		}
@@ -125,21 +125,19 @@ func qqTodayHoliday(day tyme.SolarDay) string {
 		}
 		return h.GetName() + "假期最后一天"
 	}
-	if h := day.Next(1).GetLegalHoliday(); h != nil && h.IsWork() {
+	if h := qqTodayLegalHoliday(day.Next(1)); h != nil && h.IsWork() {
 		return fmt.Sprintf("明天周%s调休上班（%s）", day.Next(1).GetWeek().GetName(), h.GetName())
 	}
-	for n := 1; n <= qqTodayHolidayDays; n++ {
-		next := day.Next(n)
-		if h := next.GetLegalHoliday(); h != nil && !h.IsWork() {
-			return fmt.Sprintf("下一个是%s（%d月%d日起），还有 %d 天", h.GetName(), next.GetMonth(), next.GetDay(), n)
-		}
+	if h := qqTodayNextRest(day); h != nil {
+		next := h.GetDay()
+		return fmt.Sprintf("下一个是%s（%d月%d日起），还有 %d 天", h.GetName(), next.GetMonth(), next.GetDay(), next.Subtract(day))
 	}
 	return ""
 }
 
 // qqTodayRest 判断这一天是不是同一个假期里放假的一天。
 func qqTodayRest(day tyme.SolarDay, name string) bool {
-	h := day.GetLegalHoliday()
+	h := qqTodayLegalHoliday(day)
 	return h != nil && !h.IsWork() && h.GetName() == name
 }
 

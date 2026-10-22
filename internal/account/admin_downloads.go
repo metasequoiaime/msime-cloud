@@ -214,7 +214,7 @@ func releaseTagPlatform(tag, asset string) (string, string) {
 	if releaseTag.MatchString(tag) {
 		// 正则保证平台前缀不含横线，直接切原标签，省去捕获结果切片。
 		prefix, version, _ := strings.Cut(tag, "-")
-		if platform, ok := releaseTagPlatforms[strings.ToLower(prefix)]; ok {
+		if platform, ok := releaseTagPlatformPrefix(prefix); ok {
 			return platform, version
 		}
 	}
@@ -235,6 +235,23 @@ func releaseTagPlatform(tag, asset string) (string, string) {
 		}
 	}
 	return "", tag
+}
+
+func releaseTagPlatformPrefix(prefix string) (string, bool) {
+	if platform, ok := releaseTagPlatforms[prefix]; ok {
+		return platform, true
+	}
+	for i := range prefix {
+		if prefix[i] >= 'A' && prefix[i] <= 'Z' {
+			for known, platform := range releaseTagPlatforms {
+				if len(prefix) == len(known) && strings.EqualFold(prefix, known) {
+					return platform, true
+				}
+			}
+			break
+		}
+	}
+	return "", false
 }
 
 // releaseAssetExtension 只转换最后一个扩展名，避免为无关的文件名前缀分配小写副本。

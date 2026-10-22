@@ -209,6 +209,7 @@ func (s *Server) chatStreamOnce(w http.ResponseWriter, r *http.Request, v chatRe
 		}
 		return nil
 	}
+	var out *chatStreamOut
 	// dispatch 处理一个完整的 SSE 事件的 data；done 为 true 表示收到 `[DONE]`。
 	dispatch := func(data []byte) (done bool, err error) {
 		if bytes.Equal(data, []byte("[DONE]")) {
@@ -240,8 +241,15 @@ func (s *Server) chatStreamOnce(w http.ResponseWriter, r *http.Request, v chatRe
 		if choice.Delta.Role == "" && choice.Delta.Content == nil && choice.FinishReason == nil {
 			return false, nil
 		}
-		out := chatStreamOut{ID: chunk.ID, Object: "chat.completion.chunk", Created: chunk.Created, Model: chunk.Model, Choices: []chatStreamChoice{{Index: 0, Delta: chatStreamDelta{Role: choice.Delta.Role, Content: choice.Delta.Content}, FinishReason: choice.FinishReason}}}
+		if out == nil {
+			out = &chatStreamOut{Object: "chat.completion.chunk", Choices: make([]chatStreamChoice, 1)}
+		}
+		out.ID, out.Created, out.Model = chunk.ID, chunk.Created, chunk.Model
+		out.Choices[0] = chatStreamChoice{Index: 0, Delta: chatStreamDelta{Role: choice.Delta.Role, Content: choice.Delta.Content}, FinishReason: choice.FinishReason}
 		b, _ := json.Marshal(out)
+		// 编码完成后清掉本段引用，等待后续事件时不额外保留正文。
+		out.ID, out.Model = "", ""
+		out.Choices[0] = chatStreamChoice{}
 		frame := "data: " + string(b) + "\n\n"
 		if !streaming && !hasContent {
 			pending = append(pending, frame)

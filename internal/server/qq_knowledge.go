@@ -250,10 +250,10 @@ var qqDocPlatforms = map[string]string{
 // qqFAQDefaultPlatform 是 FAQ 里没有标出平台的问题的标签：faq.md 开头写着「其余排查以 Windows 为主」，原来整篇标成「FAQ」，模型看不出哪一问只适用于 Windows，曾把 Windows 才有的「候选窗补充字体」答给 Linux 用户。
 const qqFAQDefaultPlatform = "FAQ · 以 Windows 正式版为主"
 
-// qqFAQAllPlatforms 是 FAQ 里适用于所有平台的问题（按标题里的字样认），qqFAQTitlePlatforms 是标题里出现的平台字样和对应的标签，按顺序取第一个匹配的。
+// qqFAQAllPlatforms 是 FAQ 里适用于所有平台的问题（按标题里的字样认），qqFAQTitlePlatforms 是标题里出现的小写平台字样和对应的标签，按顺序取第一个匹配的。
 var (
 	qqFAQAllPlatforms   = []string{"支持哪些系统，去哪里下载", "GitHub 下载太慢", "有鸿蒙"}
-	qqFAQTitlePlatforms = [][2]string{{"Windows", "Windows"}, {"macOS", "macOS"}, {"Linux", "Linux"}, {"iOS", "iOS"}, {"iPad", "iOS"}, {"鸿蒙", "鸿蒙"}, {"HarmonyOS", "鸿蒙"}}
+	qqFAQTitlePlatforms = [][2]string{{"windows", "Windows"}, {"macos", "macOS"}, {"linux", "Linux"}, {"ios", "iOS"}, {"ipad", "iOS"}, {"鸿蒙", "鸿蒙"}, {"harmonyos", "鸿蒙"}}
 )
 
 // qqFAQPlatform 按标题给 FAQ 的一问打平台标签：适用于所有平台的几问标「各平台」，标题里写了平台的标这个平台，其余标 qqFAQDefaultPlatform。标题是整条标题链（例如「安装与启动 > iOS 版为什么不在 App Store？」），平台字样不区分大小写。
@@ -265,7 +265,7 @@ func qqFAQPlatform(title string) string {
 	}
 	lower := strings.ToLower(title)
 	for _, pair := range qqFAQTitlePlatforms {
-		if strings.Contains(lower, strings.ToLower(pair[0])) {
+		if strings.Contains(lower, pair[0]) {
 			return pair[1]
 		}
 	}

@@ -1349,8 +1349,13 @@ func (s *Server) searchIssues(q string) []account.AdminSearchHit {
 		return nil
 	}
 	number := strings.TrimPrefix(q, "#")
-	// 查询不含 `#` 时可分别匹配仓库和编号，省去完整仓库键的临时拼接。
-	queryHasHash := strings.ContainsRune(q, '#')
+	// 编号不含 `#`，跨仓库键分隔符的查询只能以最后一个 `#` 对齐。
+	hashIndex := strings.LastIndexByte(q, '#')
+	queryHasHash := hashIndex >= 0
+	var repoSuffix, numberPrefix string
+	if queryHasHash {
+		repoSuffix, numberPrefix = q[:hashIndex], q[hashIndex+1:]
+	}
 	m := s.issueMemory()
 	m.mu.Lock()
 	items := m.items
@@ -1370,7 +1375,8 @@ func (s *Server) searchIssues(q string) []account.AdminSearchHit {
 		// 复用词条查询的栈上匹配，避免为标题和仓库键创建小写副本。
 		if number != n && !dictionaryLineContainsLower(row.Title, q) {
 			if queryHasHash {
-				if !dictionaryLineContainsLower(row.Repo+"#"+n, q) {
+				if !(strings.HasPrefix(n, numberPrefix) && issueRepoHasLowerSuffix(row.Repo, repoSuffix)) &&
+					!(strings.ContainsRune(row.Repo, '#') && dictionaryLineContainsLower(row.Repo, q)) {
 					continue
 				}
 			} else if !strings.Contains(n, q) && !dictionaryLineContainsLower(row.Repo, q) {
@@ -1387,6 +1393,24 @@ func (s *Server) searchIssues(q string) []account.AdminSearchHit {
 		return nil
 	}
 	return slices.Clone(matched[:count])
+}
+
+// issueRepoHasLowerSuffix 按 `strings.ToLower` 的规则比较仓库后缀；`suffix` 必须已转小写。
+func issueRepoHasLowerSuffix(repo, suffix string) bool {
+	for len(suffix) > 0 {
+		if len(repo) == 0 {
+			return false
+		}
+		r, size := utf8.DecodeLastRuneInString(repo)
+		want, suffixSize := utf8.DecodeLastRuneInString(suffix)
+		// 不使用 `EqualFold`，避免将末尾 sigma 等字符的折叠规则带入原有小写匹配。
+		if unicode.ToLower(r) != want {
+			return false
+		}
+		repo = repo[:len(repo)-size]
+		suffix = suffix[:len(suffix)-suffixSize]
+	}
+	return true
 }
 
 // pendingIssues 为外壳角标统计未关闭且未分诊的 issue。只读未关闭 issue 的分页（与 GET /api/issues 共用同一批缓存的读取），不读评论和已关闭 issue：评论只用于响应时间，而 msime-windows 30 天内的评论需要第二页，按顺序读完会超出 adminShellGitHubBudget。

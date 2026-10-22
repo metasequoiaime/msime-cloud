@@ -186,16 +186,22 @@ func scanCandidateSkin(row interface{ Scan(...any) error }) (CommunityCandidateS
 	return s, err
 }
 
-// candidateExtension is the lowercased extension of an accepted image path, or "" when the path is not png, jpg or jpeg.
+// candidateExtension 返回允许的图片扩展名；不符合 png、jpg 或 jpeg 时返回空字符串。
 func candidateExtension(path string) string {
 	i := strings.LastIndexByte(path, '.')
 	if i < 0 {
 		return ""
 	}
-	switch ext := strings.ToLower(path[i+1:]); ext {
-	case "png":
-		return "png"
-	case "jpg", "jpeg":
+	ext := path[i+1:]
+	if len(ext) == 3 {
+		if (ext[0] == 'p' || ext[0] == 'P') && (ext[1] == 'n' || ext[1] == 'N') && (ext[2] == 'g' || ext[2] == 'G') {
+			return "png"
+		}
+		if (ext[0] == 'j' || ext[0] == 'J') && (ext[1] == 'p' || ext[1] == 'P') && (ext[2] == 'g' || ext[2] == 'G') {
+			return "jpeg"
+		}
+	}
+	if len(ext) == 4 && (ext[0] == 'j' || ext[0] == 'J') && (ext[1] == 'p' || ext[1] == 'P') && (ext[2] == 'e' || ext[2] == 'E') && (ext[3] == 'g' || ext[3] == 'G') {
 		return "jpeg"
 	}
 	return ""

@@ -1830,11 +1830,10 @@ const qqWindowsProductQuestion = "这个版本号两个 Windows 版都有：安�
 
 // qqWindowsProduct 判断 Windows 反馈属于哪个产品：isNew 为 true 是 msime 的新实现；question 不为空时看不出来，要先追问。
 func (s *Server) qqWindowsProduct(ctx context.Context, version [3]int, text string) (isNew bool, question string) {
-	lower := strings.ToLower(text)
-	switch {
-	case slices.ContainsFunc(qqWindowsNewWords, func(w string) bool { return strings.Contains(lower, w) }):
+	if qqWindowsProductTextHasWord(text, qqWindowsNewWords) {
 		return true, ""
-	case slices.ContainsFunc(qqWindowsOldWords, func(w string) bool { return strings.Contains(lower, w) }):
+	}
+	if qqWindowsProductTextHasWord(text, qqWindowsOldWords) {
 		return false, ""
 	}
 	if !qqVersionAtLeast(version, qqWindowsNewFrom) {
@@ -1859,6 +1858,37 @@ func (s *Server) qqWindowsProduct(ctx context.Context, version [3]int, text stri
 		return false, qqWindowsProductQuestion
 	}
 	return true, ""
+}
+
+func qqWindowsProductTextHasWord(text string, words []string) bool {
+	for i := range text {
+		if text[i] >= utf8.RuneSelf {
+			lower := strings.ToLower(text)
+			return slices.ContainsFunc(words, func(word string) bool { return strings.Contains(lower, word) })
+		}
+	}
+	return slices.ContainsFunc(words, func(word string) bool {
+		if len(word) > len(text) {
+			return false
+		}
+		for start := 0; start+len(word) <= len(text); start++ {
+			match := true
+			for i := range word {
+				c := text[start+i]
+				if c >= 'A' && c <= 'Z' {
+					c += 'a' - 'A'
+				}
+				if c != word[i] {
+					match = false
+					break
+				}
+			}
+			if match {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 // qqNewestRelease 返回 repo 里前缀为 prefix 的 Release（含预发布，不含草稿）中最大的版本号；查询失败或没有时 ok 为 false。读请求带 ETag 缓存。

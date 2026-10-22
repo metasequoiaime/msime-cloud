@@ -387,11 +387,10 @@ func qqResearchScopedSearch(query string) bool {
 		if query != "" && query[0] != ' ' {
 			return false
 		}
-		term = strings.ToLower(term)
-		if term == "and" || term == "or" || term == "not" {
+		if qqASCIIEqualFold(term, "and") || qqASCIIEqualFold(term, "or") || qqASCIIEqualFold(term, "not") {
 			return false
 		}
-		if strings.Contains(term, "repo:") || strings.Contains(term, "org:") || strings.Contains(term, "user:") {
+		if qqContainsASCIIFold(term, "repo:") || qqContainsASCIIFold(term, "org:") || qqContainsASCIIFold(term, "user:") {
 			if !qqResearchScope.MatchString(term) {
 				return false
 			}

@@ -201,12 +201,21 @@ func events(source []account.DiagnosticEvent, in EventInput) []Event {
 
 // record 写访问记录：工具名、调用参数、返回条数和结果的 JSON 字节数。写不进去时调用失败，保证用户在 App 里能看到每一次读取。
 func record(ctx context.Context, store Snapshots, id string, req *mcp.CallToolRequest, count int, out any) error {
-	body, err := json.Marshal(out)
-	if err != nil {
+	var size jsonByteCounter
+	if err := json.NewEncoder(&size).Encode(out); err != nil {
 		return err
 	}
-	if err = store.RecordDiagnosticAccess(ctx, id, req.Params.Name, req.Params.Arguments, count, len(body)); err != nil {
+	// Encoder 会额外写一个换行；审计仍按原先 Marshal 的 JSON 字节数记录。
+	if err := store.RecordDiagnosticAccess(ctx, id, req.Params.Name, req.Params.Arguments, count, int(size)-1); err != nil {
 		return errors.New("access log unavailable")
 	}
 	return nil
+}
+
+// jsonByteCounter 只累计编码长度，不保留诊断内容的额外副本。
+type jsonByteCounter int
+
+func (n *jsonByteCounter) Write(p []byte) (int, error) {
+	*n += jsonByteCounter(len(p))
+	return len(p), nil
 }

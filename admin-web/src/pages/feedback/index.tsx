@@ -8,6 +8,7 @@ import { feedbackListSchema, feedbackPlatforms, feedbackStatusLabels, feedbackSt
 import type { FeedbackRow } from "../../api/feedback";
 import { keys } from "../../api/keys";
 import { relativeTime } from "../../utils/time";
+import { firstLine } from "../../utils/text";
 import { PageIntro } from "../../shell/page-intro";
 import { usePageSearch, useSetPageSearch } from "../../shell/page-search";
 import { noPermissionHint, usePermissions } from "../../shell/permissions";
@@ -21,9 +22,6 @@ import { useToast } from "../../ui/toast";
 import { FeedbackDrawer } from "./drawer";
 
 const ALL = "all";
-
-// 列表里只显示正文第一行，全文和诊断信息在抽屉里看。
-const firstLine = (text: string) => text.split("\n")[0].trim();
 
 export default function FeedbackPage() {
   const api = useAPI();

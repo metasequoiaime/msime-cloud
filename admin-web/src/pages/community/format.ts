@@ -3,6 +3,7 @@ import { formatDateTime } from "../../utils/time";
 import { splitBytes } from "../../utils/bytes";
 import type { Item, Section } from "../../api/community";
 import { candidateCategoryLabel, pluginKindLabels } from "../../api/community";
+import { firstLine } from "../../utils/text";
 
 export function formatTime(value: string | null | undefined): string {
   return value ? formatDateTime(value) : "—";
@@ -36,7 +37,7 @@ export function previewLines(section: Section, item: Item): string[] {
       return (item.prompt ?? "").split("\n").map(line => line.trim()).filter(Boolean).slice(0, 3);
     case "phrases":
       // 每条短语只取第一行，多行模板在抽屉里看全文。
-      return (item.phrases ?? []).map(text => text.split("\n")[0].trim()).filter(Boolean);
+      return (item.phrases ?? []).map(firstLine).filter(Boolean);
     case "candidate-skins":
       return [item.package_id ?? "", `v${item.version ?? "?"} · ${item.file_count ?? 0} 个文件 · ${formatBytes(item.size ?? 0)}`, item.description ?? ""].filter(Boolean);
     case "plugins":

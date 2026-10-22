@@ -43,13 +43,43 @@ func (s *Server) qqGitHubRepos() []string {
 func qqIssueState(state, reason string, labels []string) string {
 	if state != "open" {
 		for _, label := range labels {
-			switch strings.ToLower(label) {
+			switch label {
 			case "invalid":
 				return "已关闭（无效）"
 			case "duplicate":
 				return "已关闭（重复）"
 			case "wontfix":
 				return "已关闭（不修）"
+			}
+			upper, nonASCII := false, false
+			for i := range label {
+				if label[i] >= utf8.RuneSelf {
+					nonASCII = true
+					break
+				}
+				if label[i] >= 'A' && label[i] <= 'Z' {
+					upper = true
+				}
+			}
+			if nonASCII {
+				label = strings.ToLower(label)
+				switch label {
+				case "invalid":
+					return "已关闭（无效）"
+				case "duplicate":
+					return "已关闭（重复）"
+				case "wontfix":
+					return "已关闭（不修）"
+				}
+			} else if upper {
+				switch {
+				case qqASCIIEqualFold(label, "invalid"):
+					return "已关闭（无效）"
+				case qqASCIIEqualFold(label, "duplicate"):
+					return "已关闭（重复）"
+				case qqASCIIEqualFold(label, "wontfix"):
+					return "已关闭（不修）"
+				}
 			}
 		}
 	}

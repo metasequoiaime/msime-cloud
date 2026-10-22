@@ -551,14 +551,49 @@ func qqMentionsPlatform(question string, p qqPlatformRelease) bool {
 }
 
 func qqMentionsPlatformLower(question string, p qqPlatformRelease) bool {
-	if p.Name != "" && strings.Contains(question, strings.ToLower(p.Name)) {
+	if p.Name != "" && qqContainsLowerPlatformWord(question, p.Name) {
 		return true
 	}
-	if p.ID != "" && strings.Contains(question, strings.ToLower(p.ID)) {
+	if p.ID != "" && qqContainsLowerPlatformWord(question, p.ID) {
 		return true
 	}
 	for _, word := range qqPlatformWords[p.ID] {
 		if strings.Contains(question, word) {
+			return true
+		}
+	}
+	return false
+}
+
+func qqContainsLowerPlatformWord(question, word string) bool {
+	if word == "" {
+		return false
+	}
+	upper := false
+	for i := range word {
+		if word[i] >= utf8.RuneSelf {
+			return strings.Contains(question, strings.ToLower(word))
+		}
+		if word[i] >= 'A' && word[i] <= 'Z' {
+			upper = true
+		}
+	}
+	if !upper {
+		return strings.Contains(question, word)
+	}
+	for start := 0; start+len(word) <= len(question); start++ {
+		match := true
+		for i := range word {
+			c := word[i]
+			if c >= 'A' && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			if question[start+i] != c {
+				match = false
+				break
+			}
+		}
+		if match {
 			return true
 		}
 	}

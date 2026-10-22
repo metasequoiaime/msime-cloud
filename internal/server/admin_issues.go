@@ -1357,7 +1357,8 @@ func (s *Server) searchIssues(q string) []account.AdminSearchHit {
 	count := 0
 	for _, row := range items {
 		n := strconv.Itoa(row.Number)
-		if number != n && !strings.Contains(strings.ToLower(row.Title), q) && !strings.Contains(strings.ToLower(row.Repo+"#"+n), q) {
+		// 复用词条查询的栈上匹配，避免为标题和仓库键创建小写副本。
+		if number != n && !dictionaryLineContainsLower(row.Title, q) && !dictionaryLineContainsLower(row.Repo+"#"+n, q) {
 			continue
 		}
 		matched[count] = account.AdminSearchHit{Kind: "issue", ID: issueRef{Repo: row.Repo, N: row.Number}.key(), Title: "#" + n + " " + row.Title, Where: "问题分诊", Target: "issues"}

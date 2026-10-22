@@ -33,9 +33,9 @@ func TestDictPRSearchCaseNormalizationAllocationBudget(t *testing.T) {
 					t.Fatalf("未命中词库投稿搜索返回了结果：%#v", got)
 				}
 			})
-			// 当前仍逐条构造带编号的标题，小写匹配不应再创建副本。
-			if allocations > count {
-				t.Fatalf("未命中词库投稿搜索分配 %.0f 次，期望最多 %d 次", allocations, count)
+			// 未命中记录不应构造显示标题或小写副本。
+			if allocations != 0 {
+				t.Fatalf("未命中词库投稿搜索分配 %.0f 次，期望零分配", allocations)
 			}
 		})
 	}

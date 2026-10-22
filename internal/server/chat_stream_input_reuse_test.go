@@ -20,6 +20,10 @@ func TestChatStreamInputReuseFields(t *testing.T) {
 		{"空值事件", `null`, ""},
 		{"空值选项", `{"choices":null}`, ""},
 		{"空选项数组", `{"choices":[]}`, ""},
+		{"空值选项元素", `{"choices":[null]}`, ""},
+		{"仅转发首个选项", `{"choices":[{"delta":{"content":"尾"}},{"delta":{"role":"assistant","content":"不应转发"},"finish_reason":"stop"}]}`, tailOut},
+		{"首个选项为空值", `{"choices":[null,{"delta":{"content":"不应转发"}}]}`, ""},
+		{"大量空选项", `{"choices":[{}` + strings.Repeat(`,{}`, 127) + `]}`, ""},
 		{"空增量", `{"choices":[{"delta":{}}]}`, ""},
 		{"空值增量", `{"choices":[{"delta":null}]}`, ""},
 		{"空值增量字段", `{"choices":[{"delta":{"role":null,"content":null},"finish_reason":null}]}`, ""},
@@ -27,6 +31,9 @@ func TestChatStreamInputReuseFields(t *testing.T) {
 		{"仅结束原因", `{"choices":[{"finish_reason":"stop"}]}`, `data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\n"},
 		{"同事件重复增量", `{"choices":[{"delta":{"role":"assistant"},"delta":{"content":"尾"}}]}`, `data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"尾"},"finish_reason":null}]}` + "\n\n"},
 		{"同事件重复选项", `{"choices":[{"delta":{"role":"assistant"}}],"choices":[{"delta":{"content":"尾"}}]}`, `data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"尾"},"finish_reason":null}]}` + "\n\n"},
+		{"同事件选项缩短", `{"choices":[{"delta":{"role":"assistant"}},{"delta":{"content":"不应转发"}}],"choices":[{"delta":{"content":"尾"}}]}`, `data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"尾"},"finish_reason":null}]}` + "\n\n"},
+		{"同事件选项清空后恢复", `{"choices":[{"delta":{"role":"assistant"}}],"choices":[],"choices":[{"delta":{"content":"尾"}}]}`, tailOut},
+		{"同事件选项空值后恢复", `{"choices":[{"delta":{"role":"assistant"}}],"choices":null,"choices":[{"delta":{"content":"尾"}}]}`, tailOut},
 		{"空值错误", `{"error":null,"choices":[{"delta":{"content":"尾"}}]}`, tailOut},
 	} {
 		for _, oneByte := range []bool{false, true} {

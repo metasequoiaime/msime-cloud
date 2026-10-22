@@ -334,11 +334,12 @@ func TestServiceMinutesAccumulate(t *testing.T) {
 	}
 }
 
-// A minute's verdict is stored once: a second write of the same minute neither replaces it nor rolls the minute into the daily table again. The newest minute is the shared status, and the previous verdicts carry the streaks.
+// 每分钟的判定只写入一次，重复写入不覆盖结果或重复累计日汇总；最新分钟作为共享状态，历史判定保留连续次数。
 func TestServiceVerdictsCountEachMinuteOnce(t *testing.T) {
 	a, db := monitoringService(t)
 	ctx := context.Background()
-	minute := time.Now().UTC().Truncate(time.Minute)
+	// 固定在 UTC 中午，让三次采样始终落在同一天，避免执行时间改变日汇总预期。
+	minute := time.Date(2026, time.January, 2, 12, 0, 0, 0, time.UTC)
 	if latest, err := a.LatestServiceVerdicts(ctx); err != nil || len(latest) != 0 {
 		t.Fatalf("latest before any probe = %+v, %v", latest, err)
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"iter"
 	"slices"
 	"strconv"
 	"strings"
@@ -958,31 +959,44 @@ func pluginDataText(raw []byte) (string, bool) {
 	return unsafe.String(unsafe.SliceData(raw), len(raw)), true
 }
 
+// pluginDataLineCapacity 按物理行数预估去重表容量；超过条目上限时不预分配，避免稀疏文本放大内存。
+func pluginDataLineCapacity(text string, maxEntries int) int {
+	capacity := strings.Count(text, "\n")
+	if text != "" && text[len(text)-1] != '\n' {
+		capacity++
+	}
+	if capacity > maxEntries {
+		return 0
+	}
+	return capacity
+}
+
+// pluginDataLines 按需跳过空行和注释，并去掉每行末尾的一个 CR，包括没有 LF 的最后一行。
+func pluginDataLines(text string) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		for remaining := text; remaining != ""; {
+			remaining = strings.TrimLeft(remaining, "\n")
+			if remaining == "" {
+				return
+			}
+			line, rest, _ := strings.Cut(remaining, "\n")
+			remaining = rest
+			line = strings.TrimSuffix(line, "\r")
+			if line != "" && !strings.HasPrefix(line, "#") && !yield(line) {
+				return
+			}
+		}
+	}
+}
+
 // validHelpcodeTable 是辅助码表的严格语法：每行为空行、`#` 开头的注释或 `<字>=<码>`。`<字>` 恰好是一个非 ASCII、非空白、非控制字符的 Unicode 标量，`<码>` 恰好是 1 到 2 个小写 ASCII 字母（更长的拒绝，不像 Engine 的宽松解析器那样截断），`=` 两侧不允许空格；1 到 30000 条，同一个字出现两次拒绝。
 func validHelpcodeTable(raw []byte) bool {
 	text, ok := pluginDataText(raw)
 	if !ok {
 		return false
 	}
-	capacity := strings.Count(text, "\n")
-	if text != "" && text[len(text)-1] != '\n' {
-		capacity++
-	}
-	if capacity > maxHelpcodeEntries {
-		capacity = 0
-	}
-	seen := make(map[string]bool, capacity)
-	for text != "" {
-		text = strings.TrimLeft(text, "\n")
-		if text == "" {
-			break
-		}
-		line, rest, _ := strings.Cut(text, "\n")
-		text = rest
-		line = strings.TrimSuffix(line, "\r")
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
+	seen := make(map[string]bool, pluginDataLineCapacity(text, maxHelpcodeEntries))
+	for line := range pluginDataLines(text) {
 		char, code, found := strings.Cut(line, "=")
 		r, size := utf8.DecodeRuneInString(char)
 		if !found || char == "" || size != len(char) || r < utf8.RuneSelf || unicode.IsSpace(r) || unicode.IsControl(r) {
@@ -1018,25 +1032,8 @@ func validWordbookEntries(raw []byte) bool {
 		}
 		return true
 	}
-	capacity := strings.Count(text, "\n")
-	if text != "" && text[len(text)-1] != '\n' {
-		capacity++
-	}
-	if capacity > maxWordbookEntries {
-		capacity = 0
-	}
-	seen := make(map[string]bool, capacity)
-	for text != "" {
-		text = strings.TrimLeft(text, "\n")
-		if text == "" {
-			break
-		}
-		line, rest, _ := strings.Cut(text, "\n")
-		text = rest
-		line = strings.TrimSuffix(line, "\r")
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
+	seen := make(map[string]bool, pluginDataLineCapacity(text, maxWordbookEntries))
+	for line := range pluginDataLines(text) {
 		word, rest, found := strings.Cut(line, "\t")
 		if !found {
 			return false

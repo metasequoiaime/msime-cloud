@@ -1,9 +1,11 @@
 package account
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -30,7 +32,8 @@ func (a *Service) resourceApply(w http.ResponseWriter, r *http.Request) {
 	var kind string
 	var version int64
 	var raw []byte
-	err := a.store.pool.QueryRow(r.Context(), `SELECT kind,revision,content FROM community_resources WHERE id=$1 AND (moderation<>'removed' OR owner_id=$2)`, id, p.UserID).Scan(&kind, &version, &raw)
+	var createdAt time.Time
+	err := a.store.pool.QueryRow(r.Context(), `SELECT kind,revision,content,created_at FROM community_resources WHERE id=$1 AND (moderation<>'removed' OR owner_id=$2)`, id, p.UserID).Scan(&kind, &version, &raw, &createdAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, 404, "not_found")
 		return
@@ -69,20 +72,28 @@ func (a *Service) resourceApply(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(r.Context())
 	// 锁定资源后同时读取个人词库版本，避免事务内为两个版本检查分别往返。
+	// 资源 ID 可以在删除后被客户端重用；因此仅比较 revision 不足以证明事务内仍是预览过的那一行。
+	// 同时核对 kind、created_at 和 JSONB 内容，防止旧快照被导入新作品。
+	var currentKind string
+	var currentCreatedAt time.Time
+	var currentRaw []byte
 	var revision int64
 	var resourceExists bool
 	err = tx.QueryRow(r.Context(), `WITH resource AS MATERIALIZED (
- SELECT revision FROM community_resources
+ SELECT kind,revision,created_at,content FROM community_resources
  WHERE id=$1 AND (moderation<>'removed' OR owner_id=$2) FOR SHARE
 )
-SELECT COALESCE((SELECT revision FROM resource),0),
+SELECT COALESCE((SELECT kind FROM resource),''),
+ COALESCE((SELECT revision FROM resource),0),
+ COALESCE((SELECT created_at FROM resource),'epoch'::timestamptz),
+ COALESCE((SELECT content FROM resource),'{}'::jsonb),
  COALESCE((SELECT revision FROM user_dictionary_state WHERE user_id=$2),0),
- EXISTS(SELECT 1 FROM resource)`, id, p.UserID).Scan(&version, &revision, &resourceExists)
+ EXISTS(SELECT 1 FROM resource)`, id, p.UserID).Scan(&currentKind, &version, &currentCreatedAt, &currentRaw, &revision, &resourceExists)
 	if err != nil {
 		a.error(w, err)
 		return
 	}
-	if !resourceExists || version != *input.ResourceRevision {
+	if !resourceExists || currentKind != kind || version != *input.ResourceRevision || !currentCreatedAt.Equal(createdAt) || !bytes.Equal(currentRaw, raw) {
 		writeError(w, 409, "resource_revision_conflict")
 		return
 	}

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { actionUndoTokenSchema } from "./action-undo.ts";
 
 // 社区管理：六类内容分区、各自的列表、计数和抽屉详情。
 
@@ -28,7 +29,11 @@ export type CandidateCategory = (typeof candidateCategories)[number];
 export const categoryUndoSchema = z.object({
   action: z.enum(["set_skin_category", "set_candidate_skin_category"]),
   section: z.enum(["skins", "candidate-skins"]), id: z.string(),
-  value: z.object({ category: z.enum(candidateCategories), token: z.string().regex(/^[a-f0-9]{32}$/) }),
+  value: z.object({ category: z.enum(candidateCategories), token: actionUndoTokenSchema }),
+});
+export const moderationUndoSchema = z.object({
+  action: z.literal("undo_moderation"), section: z.enum(sections), id: z.string(),
+  value: z.object({ token: actionUndoTokenSchema, moderation: moderationSchema, previous: z.enum(["pending", "approved"]).nullable(), reason: z.string().nullable() }),
 });
 export const candidateCategoryLabels: Record<CandidateCategory, string> = { nature: "自然", guofeng: "国风", acg: "二次元", cute: "可爱", food: "美食", tech: "科技夜色", minimal: "简约", other: "其他" };
 

@@ -1,10 +1,10 @@
 import { useCallback } from "react";
-import { z } from "zod";
 import { useQueryClient } from "@tanstack/react-query";
+import { createActionUndo } from "../../api/action-undo";
 import { errorMessage, isAPIError, useAPI } from "../../api/client";
 import { keys } from "../../api/keys";
 import type { CandidateCategory, Moderation, Section } from "../../api/community";
-import { candidateCategoryLabels, categoryUndoSchema, moderationSchema, removeReasons, sections } from "../../api/community";
+import { candidateCategoryLabels, categoryUndoSchema, moderationUndoSchema, removeReasons } from "../../api/community";
 import { useConfirm } from "../../ui/confirm";
 import { useToast } from "../../ui/toast";
 
@@ -20,11 +20,6 @@ export type Target = { section: Section; id: string; name: string; moderation: M
 function approveValue(target: Target) {
   return { from: target.moderation, ...(target.created_at ? { created_at: target.created_at } : {}), ...(target.updated_at ? { updated_at: target.updated_at } : {}), ...(target.edit_token ? { edit_token: target.edit_token } : {}) };
 }
-
-const moderationUndoSchema = z.object({
-  action: z.literal("undo_moderation"), section: z.enum(sections), id: z.string(),
-  value: z.object({ token: z.string().regex(/^[a-f0-9]{32}$/), moderation: moderationSchema, previous: z.enum(["pending", "approved"]).nullable(), reason: z.string().nullable() }),
-});
 
 // useModeration 封装审核确认与提示；审核和分类撤销都使用服务端返回的真实前态及版本。
 export function useModeration() {
@@ -51,9 +46,7 @@ export function useModeration() {
 
   // 缺少有效撤销信息的旧副本不显示按钮；不从旧页面猜测操作前状态。
   const undoFrom = useCallback((result: Awaited<ReturnType<typeof run>>, target: Target) => {
-    const parsed = moderationUndoSchema.safeParse(result.undo);
-    if (!parsed.success || parsed.data.section !== target.section || parsed.data.id !== target.id) return undefined;
-    return async () => { await run(parsed.data); };
+    return createActionUndo(moderationUndoSchema, result.undo, value => value.section === target.section && value.id === target.id, run);
   }, [run]);
 
   const approve = useCallback(async (target: Target) => {
@@ -95,8 +88,7 @@ export function useModeration() {
     const action = target.section === "skins" ? "set_skin_category" : "set_candidate_skin_category";
     try {
       const result = await run({ action, section: target.section, id: target.id, value: { category: to, expected: from } });
-      const parsed = categoryUndoSchema.safeParse(result.undo);
-      const undo = parsed.success && parsed.data.action === action && parsed.data.section === target.section && parsed.data.id === target.id ? async () => { await run(parsed.data); } : undefined;
+      const undo = createActionUndo(categoryUndoSchema, result.undo, value => value.action === action && value.section === target.section && value.id === target.id, run);
       toast({ text: `「${target.name}」的分类已改为「${candidateCategoryLabels[to]}」`, undo });
     } catch (error) {
       toast(`操作失败：${errorMessage(error)}`);

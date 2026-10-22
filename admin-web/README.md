@@ -28,6 +28,8 @@ pnpm dev
 
 `src/utils/blob.ts` 共用 Blob 到 data URL 的读取，管理接口图片与候选窗本地预览复用它；清理函数先解绑回调，再取消仍在进行的读取。本地图片的大小限制由预览保留，接口图片继续沿用原有凭据、请求取消和缓存。
 
+`src/api/action-undo.ts` 共用后台撤销版本的格式校验，以及服务端撤销快照的解析和回调创建。审核、分类、账号封禁、崩溃与反馈复用它；各页面保留目标和前态检查、冲突文案及缓存刷新，校验不通过的旧响应不显示撤销。
+
 ## CSP
 
 后台的 CSP 是 `script-src 'self'; style-src 'self'; img-src 'self' data:`，不允许 eval、内联 `<style>` 和外链图片。因此：

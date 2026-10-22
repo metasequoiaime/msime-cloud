@@ -1,11 +1,12 @@
 import { z } from "zod";
+import { actionUndoTokenSchema } from "./action-undo.ts";
 
 export const crashStatusSchema = z.enum(["open", "known", "fixed"]);
 export type CrashStatus = z.infer<typeof crashStatusSchema>;
 
 export const crashStatusUndoSchema = z.object({
   action: z.literal("crash_group_status"), id: z.string(),
-  value: z.object({ status: crashStatusSchema, token: z.string().regex(/^[a-f0-9]{32}$/) }),
+  value: z.object({ status: crashStatusSchema, token: actionUndoTokenSchema }),
 });
 
 // GET /api/crash-groups row. devices_7d is null while clients do not report install ids.
@@ -70,7 +71,7 @@ export const crashStatusTone = { open: "bad", known: "warn", fixed: "ok" } as co
 // Telemetry reports lowercase platform ids; the console shows the product names.
 const platformOrder = ["windows", "macos", "linux", "android", "ios", "harmonyos", "harmony", "ohos"];
 
-export { platformName } from "../utils/platform";
+export { platformName } from "../utils/platform.ts";
 
 export function comparePlatforms(a: string, b: string): number {
   const rank = (p: string) => {

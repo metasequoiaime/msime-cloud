@@ -1,4 +1,5 @@
 import { useCallback, useMemo } from "react";
+import { createActionUndo } from "../../api/action-undo";
 import { useQueryClient } from "@tanstack/react-query";
 import { errorMessage, useAPI } from "../../api/client";
 import { keys } from "../../api/keys";
@@ -39,15 +40,13 @@ export function useUserActions() {
 
   // 不从旧页面猜测封禁原因；缺少有效版本的旧响应不提供撤销。
   const undoFrom = useCallback((value: unknown, id: string, banned: boolean) => {
-    const parsed = banUndoSchema.safeParse(value);
-    if (!parsed.success || parsed.data.id !== id || parsed.data.value.banned !== banned) return undefined;
-    return async () => {
+    return createActionUndo(banUndoSchema, value, undo => undo.id === id && undo.value.banned === banned, async undo => {
       try {
-        await api.action(parsed.data);
+        await api.action(undo);
       } finally {
         await refresh();
       }
-    };
+    });
   }, [api, refresh]);
 
   const ban = useCallback(async (user: BanTarget) => {

@@ -60,14 +60,14 @@ func TestQQMediaDownloadBufferBoundaries(t *testing.T) {
 		{"恰好上限", "12345678", -1, 8, http.StatusOK, nil, "", 8},
 		{"少报长度", "12345678", 1, 8, http.StatusOK, nil, "", 8},
 		{"多报长度", "12", 8, 8, http.StatusOK, nil, "", 2},
-		{"少报长度后扩容", string(bytes.Repeat([]byte("x"), 8192)), 1, 8192, http.StatusOK, nil, "", 8192},
-		{"少报长度后扩容超限", string(bytes.Repeat([]byte("x"), 8200)), 1, 8192, http.StatusOK, nil, "attachment too large", 8193},
+		{"少报长度后扩容", string(bytes.Repeat([]byte("x"), 8192)), 512, 8192, http.StatusOK, nil, "", 8192},
+		{"少报长度后扩容超限", string(bytes.Repeat([]byte("x"), 8200)), 512, 8192, http.StatusOK, nil, "attachment too large", 8193},
 		{"未知长度超限", "123456789tail", -1, 8, http.StatusOK, nil, "attachment too large", 9},
 		{"少报长度超限", "123456789tail", 1, 8, http.StatusOK, nil, "attachment too large", 9},
 		{"声明长度超限", "123456789", 9, 8, http.StatusOK, nil, "attachment too large", 0},
 		{"状态失败", "synthetic-private-body", -1, 8, http.StatusForbidden, nil, "attachment download answered 403", 0},
 		{"读取失败", "12", -1, 8, http.StatusOK, errors.New("synthetic-private-error"), "attachment download failed", 2},
-		{"已知长度读取失败", "12", 8, 8, http.StatusOK, errors.New("synthetic-private-error"), "attachment download failed", 2},
+		{"已知长度读取失败", "12", 512, 1024, http.StatusOK, errors.New("synthetic-private-error"), "attachment download failed", 2},
 		{"零上限空附件", "", 0, 0, http.StatusOK, nil, "", 0},
 		{"零上限非空附件", "1tail", -1, 0, http.StatusOK, nil, "attachment too large", 1},
 	} {
@@ -114,12 +114,27 @@ func TestQQMediaDownloadBufferAllocationBudget(t *testing.T) {
 	}
 }
 
+func TestQQMediaDownloadSmallBufferAllocationBudget(t *testing.T) {
+	for _, size := range []int{32, 256} {
+		data := bytes.Repeat([]byte("x"), size)
+		baseline := testing.Benchmark(func(b *testing.B) { benchmarkQQMediaDownloadBuffer(b, data, -1, qqImageBytes) })
+		result := testing.Benchmark(func(b *testing.B) { benchmarkQQMediaDownloadBuffer(b, data, int64(size), qqImageBytes) })
+		if got, budget := result.AllocedBytesPerOp(), baseline.AllocedBytesPerOp()+32; got > budget {
+			t.Fatalf("%d B 小附件分配 %d B，未知长度读取预算为 %d B", size, got, budget)
+		}
+	}
+}
+
 func BenchmarkQQMediaDownloadBuffer(b *testing.B) {
 	for _, tc := range []struct {
 		name   string
 		size   int
 		length bool
 	}{
+		{"32B已知长度", 32, true},
+		{"32B未知长度", 32, false},
+		{"256B已知长度", 256, true},
+		{"256B未知长度", 256, false},
 		{"短附件", 512, true},
 		{"1536KiB已知长度", 1536 << 10, true},
 		{"1536KiB未知长度", 1536 << 10, false},

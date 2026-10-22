@@ -78,6 +78,17 @@ func TestSkinReadFileAllocationBudget(t *testing.T) {
 	}
 }
 
+func TestSkinReadSmallFileAllocationBudget(t *testing.T) {
+	for _, size := range []int{32, 256} {
+		data := bytes.Repeat([]byte("x"), size)
+		baseline := testing.Benchmark(func(b *testing.B) { benchmarkSkinReadFile(b, data, previousSkinReadFile) })
+		result := testing.Benchmark(func(b *testing.B) { benchmarkSkinReadFile(b, data, readFile) })
+		if got, budget := result.AllocedBytesPerOp(), baseline.AllocedBytesPerOp()+32; got > budget {
+			t.Fatalf("%d B 小资源分配 %d B，原读取预算为 %d B", size, got, budget)
+		}
+	}
+}
+
 func BenchmarkSkinReadFile(b *testing.B) {
 	benchmarkSkinReadFileSizes(b, readFile)
 }
@@ -91,6 +102,8 @@ func benchmarkSkinReadFileSizes(b *testing.B, read func(fs.FS, string) ([]byte, 
 		name string
 		size int
 	}{
+		{"32B资源", 32},
+		{"256B资源", 256},
 		{"短资源", 512},
 		{"1536KiB资源", 1536 << 10},
 		{"4MiB资源", 4 << 20},
@@ -155,12 +168,12 @@ func TestSkinReadFileBoundaries(t *testing.T) {
 		{name: "空文件"},
 		{name: "缩短为空文件", size: 10},
 		{name: "大小超限直接拒绝", data: []byte("abc"), size: (4 << 20) + 1, wantErr: ErrInvalid},
-		{name: "实际超限限制读取", data: bytes.Repeat([]byte("x"), (4<<20)+10), size: 1, wantErr: ErrInvalid, wantRead: (4 << 20) + 1},
+		{name: "实际超限限制读取", data: bytes.Repeat([]byte("x"), (4<<20)+10), size: 512, wantErr: ErrInvalid, wantRead: (4 << 20) + 1},
 		{name: "目录拒绝读取", size: 1, mode: fs.ModeDir, wantErr: ErrInvalid},
 		{name: "打开失败", openErr: failure, wantErr: ErrNotFound},
 		{name: "属性读取失败", statErr: failure, wantErr: ErrInvalid},
-		{name: "读取失败", size: 1, readErr: failure, wantErr: ErrInvalid},
-		{name: "部分数据伴随错误", data: []byte("abc"), size: 3, readErr: failure, wantErr: ErrInvalid, wantRead: 3},
+		{name: "读取失败", size: 512, readErr: failure, wantErr: ErrInvalid},
+		{name: "部分数据伴随错误", data: []byte("abc"), size: 512, readErr: failure, wantErr: ErrInvalid, wantRead: 3},
 		{name: "回退读取失败", data: []byte("abc"), readErr: failure, wantErr: ErrInvalid, wantRead: 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

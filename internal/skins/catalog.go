@@ -205,8 +205,8 @@ func readFile(fsys fs.FS, name string) ([]byte, error) {
 	}
 	reader := io.LimitReader(f, (4<<20)+1)
 	var raw []byte
-	if info.Size() > 0 {
-		// 按已知大小预留正文与 EOF 探测空间，避免读取时扩容复制。
+	if info.Size() >= bytes.MinRead {
+		// 大资源按已知大小预留正文与 EOF 探测空间；小资源沿用原读取缓冲。
 		buffer := bytes.NewBuffer(make([]byte, 0, int(info.Size())+bytes.MinRead))
 		_, err = buffer.ReadFrom(reader)
 		raw = buffer.Bytes()

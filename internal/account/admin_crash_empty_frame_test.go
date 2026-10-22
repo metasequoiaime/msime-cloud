@@ -26,6 +26,18 @@ func TestNormalizeCrashEmptyFrame(t *testing.T) {
 	}
 }
 
+func TestNormalizeCrashWhitespace(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{
+		{"  Foo\t Bar\n", "foo bar"},
+		{"水杉\u3000输入法", "水杉\u3000输入法"},
+		{"", ""},
+	} {
+		if got := normalizeCrashWhitespace(tc.input); got != tc.want {
+			t.Errorf("输入 %q，规范化为 %q，期望 %q", tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestNormalizeCrashEmptyFrameAllocations(t *testing.T) {
 	for _, line := range []string{"", "\t\r\n ", strings.Repeat("\u2003", 1024)} {
 		var frame string

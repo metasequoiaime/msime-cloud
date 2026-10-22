@@ -166,7 +166,17 @@ func (a *Service) preferences(w http.ResponseWriter, r *http.Request) {
 	write(w, 200, out)
 }
 func (a *Service) preferencesSchema(w http.ResponseWriter, r *http.Request) {
-	if _, ok := a.principal(w, r, false); !ok {
+	p, ok := a.principal(w, r, false)
+	if !ok {
+		return
+	}
+	exists, err := a.store.userExists(r.Context(), p.UserID)
+	if err != nil {
+		a.error(w, err)
+		return
+	}
+	if !exists {
+		a.error(w, errMissingUser)
 		return
 	}
 	write(w, 200, preferenceSchemaJSON)

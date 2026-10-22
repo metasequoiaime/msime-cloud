@@ -507,13 +507,21 @@ func (s *Server) cloud(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if scheme != "japanese" && inputCode.MatchString(text) {
-		native, corrected := s.nativeCloudCandidates(r, strings.ToLower(text), n)
+		native, corrected := s.nativeCloudCandidatesForInput(r, text, n)
 		if len(clean) == 0 || (corrected && len(native) > 0) {
 			clean = native
 		}
 	}
 	respond(w, 200, map[string]any{"candidates": clean})
 }
+
+func (s *Server) nativeCloudCandidatesForInput(r *http.Request, text string, limit int) ([]string, bool) {
+	if s.config.Engine.Binary == "" {
+		return []string{}, false
+	}
+	return s.nativeCloudCandidates(r, strings.ToLower(text), limit)
+}
+
 func jsonNumber(n int) string { return strconv.Itoa(n) }
 func (s *Server) transcribe(w http.ResponseWriter, r *http.Request) {
 	if !enabled(w, s.config.Transcription) {

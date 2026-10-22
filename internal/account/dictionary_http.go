@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/engine"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
 // dictionaryDownloadTimeout 为完整快照和 TSV 下载保留大词库传输时间，与整包数据导出一致。
@@ -65,7 +66,7 @@ func (a *Service) validateDictionary(ctx context.Context, kind string, entries [
 			if (!utf8.ValidString(e.Word) || !utf8.ValidString(e.Code)) && !utf8.ValidString(e.Word+e.Code) {
 				return nil, engine.ErrInvalid
 			}
-			if strings.ContainsAny(e.Word, "\x00\t\r\n") || strings.ContainsAny(e.Code, "\x00\t\r\n") || strings.TrimSpace(e.Word) == "" || (kind == "quick" && utf16Length(e.Word) > 199) {
+			if strings.ContainsAny(e.Word, "\x00\t\r\n") || strings.ContainsAny(e.Code, "\x00\t\r\n") || strings.TrimSpace(e.Word) == "" || (kind == "quick" && textutil.UTF16Length(e.Word) > 199) {
 				return nil, engine.ErrInvalid
 			}
 		}

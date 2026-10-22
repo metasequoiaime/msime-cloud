@@ -1,5 +1,7 @@
 package server
 
+import "github.com/metasequoiaime/MSIME-Backend/internal/textutil"
+
 // 腾讯要求每次总长度严格低于 6000；补充平面字符保守按两个 UTF-16 码元计数。
 const tencentBatchCharacters = 5999
 
@@ -31,7 +33,7 @@ func tencentTranslationBatches(texts []string) ([]translationPart, []tencentTran
 		if part.text == "" {
 			continue
 		}
-		count := utf16Length(part.text)
+		count := textutil.UTF16Length(part.text)
 		if units+count > tencentBatchCharacters && len(batch.texts) > 0 {
 			end := len(batch.texts)
 			// 限制每批容量，向一个批次追加元素时不能覆盖后续批次。

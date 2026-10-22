@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 	"github.com/metasequoiaime/MSIME-Backend/internal/uuid"
 )
 
@@ -88,7 +89,7 @@ func (p *feedbackPayload) validate() string {
 	switch {
 	case !feedbackTypes[p.Type]:
 		return "invalid_feedback_type"
-	case !resourceText(p.Text, 1, maxFeedbackText, true) || utf16Length(p.Text) > maxFeedbackText:
+	case !resourceText(p.Text, 1, maxFeedbackText, true) || textutil.UTF16Length(p.Text) > maxFeedbackText:
 		return "invalid_feedback_text"
 	case !sessionPlatforms[p.Platform]:
 		return "invalid_platform"

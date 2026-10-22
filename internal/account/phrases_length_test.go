@@ -5,53 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"unicode/utf16"
 )
-
-var utf16LengthResult int
-
-func TestUTF16LengthMatchesEncoding(t *testing.T) {
-	for _, text := range []string{
-		"", "ASCII\x00", "水杉云", "a字😀z", "\ud7ff\ue000\uffff", "\U00010000\U0010ffff",
-		"\xff", "\xc0\xaf", "\xed\xa0\x80", "\xf0\x90", "字\xff😀",
-	} {
-		if got, want := utf16Length(text), len(utf16.Encode([]rune(text))); got != want {
-			t.Errorf("%q 的 UTF-16 长度为 %d，期望 %d", text, got, want)
-		}
-	}
-}
-
-func TestUTF16LengthDoesNotAllocate(t *testing.T) {
-	for name, text := range map[string]string{
-		"ascii":   strings.Repeat("a", 2000),
-		"chinese": strings.Repeat("字", 2000),
-		"emoji":   strings.Repeat("😀", 1000),
-	} {
-		t.Run(name, func(t *testing.T) {
-			if got := testing.AllocsPerRun(20, func() { utf16LengthResult = utf16Length(text) }); got != 0 {
-				t.Fatalf("仅统计长度分配了 %g 次，期望 0 次", got)
-			}
-			if utf16LengthResult != 2000 {
-				t.Fatalf("UTF-16 长度为 %d，期望 2000", utf16LengthResult)
-			}
-		})
-	}
-}
-
-func BenchmarkUTF16Length(b *testing.B) {
-	for name, text := range map[string]string{
-		"ascii":   strings.Repeat("a", 2000),
-		"chinese": strings.Repeat("字", 2000),
-		"emoji":   strings.Repeat("😀", 1000),
-	} {
-		b.Run(name, func(b *testing.B) {
-			b.ReportAllocs()
-			for b.Loop() {
-				utf16LengthResult = utf16Length(text)
-			}
-		})
-	}
-}
 
 func BenchmarkPhraseValidationLargeList(b *testing.B) {
 	for _, tc := range []struct {

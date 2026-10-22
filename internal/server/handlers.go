@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 	"io"
 	"log/slog"
 	"mime/multipart"
@@ -482,7 +483,7 @@ func (s *Server) cloud(w http.ResponseWriter, r *http.Request) {
 	filterMatchLength := scheme != "japanese" && metadata.MatchedLength != nil
 	queryLength := 0
 	if filterMatchLength {
-		queryLength = utf16Length(text)
+		queryLength = textutil.UTF16Length(text)
 	}
 	clean := make([]string, 0, n)
 	seen := map[string]bool{}

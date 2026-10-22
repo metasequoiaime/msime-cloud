@@ -9,6 +9,19 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
 
+// telegramLength 保留独立的参考计数，供公告截断差分测试使用。
+func telegramLength(text string) int {
+	n := 0
+	for _, r := range text {
+		if size := utf16.RuneLen(r); size > 0 {
+			n += size
+		} else {
+			n++
+		}
+	}
+	return n
+}
+
 func previousTelegramText(n account.Notice) string {
 	text := n.Title
 	if n.Body != "" {

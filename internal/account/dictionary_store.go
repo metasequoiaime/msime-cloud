@@ -269,7 +269,9 @@ func (s *Store) StreamDictionary(ctx context.Context, user, kind string, emit fu
 		return err
 	}
 	defer rows.Close()
+	emitted := false
 	for rows.Next() {
+		emitted = true
 		var e DictionaryEntry
 		if err = rows.Scan(&e.ID, &e.Kind, &e.Code, &e.Word, &e.Weight, &e.Revision, &e.UpdatedAt); err != nil {
 			return err
@@ -278,7 +280,19 @@ func (s *Store) StreamDictionary(ctx context.Context, user, kind string, emit fu
 			return err
 		}
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !emitted {
+		exists, err := s.userExists(ctx, user)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return errMissingUser
+		}
+	}
+	return nil
 }
 
 // StreamDictionarySnapshot 用一条 SQL 读取全量覆盖快照。
@@ -369,7 +383,9 @@ func (s *Store) StreamWindowsDictionary(ctx context.Context, user, kind string, 
 		return err
 	}
 	defer rows.Close()
+	emitted := false
 	for rows.Next() {
+		emitted = true
 		var raw []byte
 		var entry DictionaryEntry
 		if err = rows.Scan(&raw); err != nil {
@@ -382,5 +398,17 @@ func (s *Store) StreamWindowsDictionary(ctx context.Context, user, kind string, 
 			return err
 		}
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !emitted {
+		exists, err := s.userExists(ctx, user)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return errMissingUser
+		}
+	}
+	return nil
 }

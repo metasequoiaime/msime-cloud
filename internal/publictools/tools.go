@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -369,7 +370,7 @@ func HTTP(client *http.Client, base, token string) (Execute, error) {
 		return nil, errors.New("invalid_public_api_url")
 	}
 	isolated := *client
-	isolated.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	isolated.CheckRedirect = httpclient.StopRedirect
 	isolated.Jar = nil
 	return func(ctx context.Context, r Request) (json.RawMessage, error) {
 		req, err := http.NewRequestWithContext(ctx, r.Method, strings.TrimRight(base, "/")+r.Path, bytes.NewReader(r.Body))

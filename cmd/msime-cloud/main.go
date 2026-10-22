@@ -19,6 +19,7 @@ import (
 
 	msimebackend "github.com/metasequoiaime/MSIME-Backend"
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
 )
 
 const usage = `usage: msime-cloud <command> [arguments]
@@ -486,7 +487,7 @@ func (c cli) doOnce(server string, r request, token string) (*http.Response, err
 	}
 	// 不跟随重定向，避免将令牌、验证码或上传正文发送到其他地址。
 	isolated := *c.client
-	isolated.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	isolated.CheckRedirect = httpclient.StopRedirect
 	return isolated.Do(req)
 }
 

@@ -246,11 +246,6 @@ func (s *Server) adminGitHubApp(w http.ResponseWriter) (*githubapp.Client, bool)
 	return s.adminGitHub, true
 }
 
-// newGitHubHTTPClient is the transport for GitHub API calls: bounded, and never following redirects.
-func newGitHubHTTPClient() *http.Client {
-	return &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-}
-
 // startAdminJobs starts the console's background jobs; each runs until s.lifetime ends and is waited for by Close.
 func (s *Server) startAdminJobs() {
 	for _, job := range []func(context.Context){s.releaseSnapshotJob, s.statusProbeJob, s.crashSpikeJob} {

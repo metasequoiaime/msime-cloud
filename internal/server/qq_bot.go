@@ -30,6 +30,7 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 )
 
@@ -368,7 +369,7 @@ func qqEventFields(raw json.RawMessage) (keys, numbers, nested []string) {
 
 func newQQBot(c QQBotConfig) *qqBot {
 	b := &qqBot{config: c, key: qqBotKey(c.secret), now: time.Now, mediaHosts: qqMediaHosts,
-		client: &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+		client: httpclient.New(15 * time.Second)}
 	b.mediaClient = newQQMediaClient(&b.mediaHosts)
 	return b
 }

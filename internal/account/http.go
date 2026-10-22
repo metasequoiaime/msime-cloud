@@ -8,6 +8,7 @@ import (
 	"errors"
 	"github.com/metasequoiaime/MSIME-Backend/internal/digest"
 	"github.com/metasequoiaime/MSIME-Backend/internal/engine"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 	"log/slog"
 	"net"
@@ -90,7 +91,7 @@ func New(ctx context.Context, c Config) (*Service, error) {
 		}
 	}
 	lifetime, cancel := context.WithCancel(context.Background())
-	a := &Service{store: db, config: c, client: &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, cancel: cancel, done: make(chan struct{})}
+	a := &Service{store: db, config: c, client: httpclient.New(10 * time.Second), cancel: cancel, done: make(chan struct{})}
 	a.verifiers = makeVerifiers(lifetime, c, a.client)
 	if c.Google.Desktop.ClientID != "" {
 		// Validate already proved the key decodes to 32 bytes.

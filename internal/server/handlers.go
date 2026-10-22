@@ -630,31 +630,51 @@ func (s *Server) nativeCloudCandidates(r *http.Request, text string, limit int) 
 		return []string{}, false
 	}
 	var result struct {
-		Normalized string `json:"normalized_segmentation"`
-		Candidates []struct {
-			Word string `json:"word"`
-		} `json:"candidates"`
+		Normalized string                 `json:"normalized_segmentation"`
+		Candidates []nativeCloudCandidate `json:"candidates"`
 	}
 	if json.Unmarshal(raw, &result) != nil {
 		return []string{}, false
 	}
-	clean := make([]string, 0, min(limit, len(result.Candidates)))
-	seen := map[string]bool{}
-	for _, item := range result.Candidates {
+	return cleanNativeCloudCandidates(result.Candidates, limit), cloudPinyinCorrected(result.Normalized, text)
+}
+
+type nativeCloudCandidate struct {
+	Word string `json:"word"`
+}
+
+func cleanNativeCloudCandidates(candidates []nativeCloudCandidate, limit int) []string {
+	if len(candidates) == 0 {
+		return []string{}
+	}
+	var clean []string
+	var seen map[string]struct{}
+	for _, item := range candidates {
 		word := strings.TrimSpace(item.Word)
-		if !bounded(word, contract.CandidateBytes) || !utf8.ValidString(word) || seen[word] {
+		if !bounded(word, contract.CandidateBytes) || !utf8.ValidString(word) {
 			continue
 		}
 		if strings.ContainsFunc(word, func(ch rune) bool { return ch < 32 || ch == 127 || unicode.Is(unicode.Latin, ch) }) {
 			continue
 		}
+		if seen != nil {
+			if _, ok := seen[word]; ok {
+				continue
+			}
+		} else {
+			clean = make([]string, 0, min(limit, len(candidates)))
+			seen = make(map[string]struct{}, min(limit, len(candidates)))
+		}
 		clean = append(clean, word)
-		seen[word] = true
+		seen[word] = struct{}{}
 		if len(clean) == limit {
 			break
 		}
 	}
-	return clean, cloudPinyinCorrected(result.Normalized, text)
+	if clean == nil {
+		return []string{}
+	}
+	return clean
 }
 
 // cloudPinyinCorrected 判断忽略空格和单引号后，引擎是否改变了输入拼音。

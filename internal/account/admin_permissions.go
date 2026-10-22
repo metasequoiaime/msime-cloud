@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -100,7 +101,7 @@ func (a *Service) adminPermissionsAction(w http.ResponseWriter, r *http.Request,
 	case !slices.Contains(AllAdminPermissions(), v.Permission):
 		writeError(w, 400, "invalid_permission")
 		return
-	case len(v.Role) == 0 || len(v.Role) > 32 || strings.ToLower(v.Role) != v.Role:
+	case len(v.Role) == 0 || len(v.Role) > 32 || !adminRoleLowercase(v.Role):
 		writeError(w, 400, "invalid_role")
 		return
 	case v.Action == "revoke" && v.Role == RoleMaintainer && v.Permission == PermManagePermissions:
@@ -146,4 +147,17 @@ SELECT name,(SELECT count(*) FROM changed) FROM locked`, v.Role, v.Permission, a
 		return
 	}
 	write(w, 200, map[string]any{"ok": true, "affected": affected})
+}
+
+// adminRoleLowercase 判断角色是否已经是小写，ASCII 输入走无分配快路径，其他字符保留 Unicode 小写规则。
+func adminRoleLowercase(role string) bool {
+	for i := range role {
+		if role[i] >= utf8.RuneSelf {
+			return strings.ToLower(role) == role
+		}
+		if role[i] >= 'A' && role[i] <= 'Z' {
+			return false
+		}
+	}
+	return true
 }

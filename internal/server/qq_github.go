@@ -602,40 +602,77 @@ func qqContainsLowerPlatformWord(question, word string) bool {
 
 // qqReleasesForMembers 是「版本」命令发到群里的各平台最新版本，每个平台一行「Windows：0.10.1（10-11）｜新版 Windows 预览 0.2.1（10-08，测试中）」：版本号去掉 tag 前缀，日期只写月和日，不写仓库名。曾经直接发交给模型的那份，每行都带「（msime 仓库）」和 macos-v0.52.0 这类原始 tag，Windows 新实现的版本号比正式版小，群友以为是旧版。
 func qqReleasesForMembers(list []qqPlatformRelease) string {
-	var b strings.Builder
+	// 按完整 tag 和带日期的格式预留上界，避免逐个标签和逐行拼接时产生临时字符串。
+	var capacity int
 	for _, p := range list {
-		parts := []string{}
+		capacity += len(p.Name) + len("：\n")
 		if p.Stable != nil {
-			parts = append(parts, qqReleaseLabel(p.Stable, p.Prefix, ""))
+			capacity += len(p.Stable.TagName) + len("（00-00）")
 		}
 		if p.Preview != nil {
-			parts = append(parts, "预览版 "+qqReleaseLabel(p.Preview, p.Prefix, ""))
+			capacity += len(p.Preview.TagName) + len("｜预览版 （00-00）")
 		}
-		for _, r := range p.NextGen {
-			parts = append(parts, "新版 "+p.Name+" 预览 "+qqReleaseLabel(&r, p.NextGenPrefix, "测试中"))
+		for i := range p.NextGen {
+			capacity += len(p.NextGen[i].TagName) + len(p.Name) + len("｜新版  预览 （00-00，测试中）")
 		}
-		if len(parts) == 0 {
-			parts = append(parts, "还没有发布")
+		if p.Stable == nil && p.Preview == nil && len(p.NextGen) == 0 {
+			capacity += len("还没有发布")
 		}
-		fmt.Fprintf(&b, "%s：%s\n", p.Name, strings.Join(parts, "｜"))
+	}
+	var b strings.Builder
+	b.Grow(capacity)
+	for _, p := range list {
+		b.WriteString(p.Name)
+		b.WriteString("：")
+		hasPart := false
+		if p.Stable != nil {
+			appendQQReleaseLabel(&b, p.Stable, p.Prefix, "")
+			hasPart = true
+		}
+		if p.Preview != nil {
+			if hasPart {
+				b.WriteString("｜")
+			}
+			b.WriteString("预览版 ")
+			appendQQReleaseLabel(&b, p.Preview, p.Prefix, "")
+			hasPart = true
+		}
+		for i := range p.NextGen {
+			if hasPart {
+				b.WriteString("｜")
+			}
+			b.WriteString("新版 ")
+			b.WriteString(p.Name)
+			b.WriteString(" 预览 ")
+			appendQQReleaseLabel(&b, &p.NextGen[i], p.NextGenPrefix, "测试中")
+			hasPart = true
+		}
+		if !hasPart {
+			b.WriteString("还没有发布")
+		}
+		b.WriteByte('\n')
 	}
 	return b.String()
 }
 
-// qqReleaseLabel 是群友看的一个版本「0.10.1（10-11）」：tag 去掉 prefix，括号里是发布的月和日（PublishedAt 的第 6 到 10 个字符），note 不为空时接在日期后面；没有发布时间时括号里只写 note，两样都没有就不加括号。
-func qqReleaseLabel(r *qqRelease, prefix, note string) string {
-	var inside []string
-	if len(r.PublishedAt) >= 10 {
-		inside = append(inside, r.PublishedAt[5:10])
+// appendQQReleaseLabel 直接追加群友看的版本「0.10.1（10-11）」：tag 去掉 prefix，日期只取月日，note 不为空时接在日期后面；没有日期时只写 note，两样都没有就不加括号。
+func appendQQReleaseLabel(b *strings.Builder, r *qqRelease, prefix, note string) {
+	b.WriteString(strings.TrimPrefix(r.TagName, prefix))
+	hasDate := len(r.PublishedAt) >= 10
+	if !hasDate && note == "" {
+		return
+	}
+	b.WriteString("（")
+	if hasDate {
+		b.WriteString(r.PublishedAt[5:10])
 	}
 	if note != "" {
-		inside = append(inside, note)
+		if hasDate {
+			b.WriteString("，")
+		}
+		b.WriteString(note)
 	}
-	label := strings.TrimPrefix(r.TagName, prefix)
-	if len(inside) > 0 {
-		label += "（" + strings.Join(inside, "，") + "）"
-	}
-	return label
+	b.WriteString("）")
 }
 
 // qqStatsTTL 是仓库统计在本副本的缓存时间：每次统计要打十几次搜索接口，而 GitHub 的搜索接口每分钟只给 30 次。qqStatsParallel 是统计时每个仓库同时发的搜索请求数，不再加大，免得撞上 GitHub 对并发请求的次级限流。

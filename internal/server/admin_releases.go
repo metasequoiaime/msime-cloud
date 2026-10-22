@@ -868,19 +868,24 @@ func (s *Server) searchReleases(q string) []account.AdminSearchHit {
 	}
 	s.releaseIndex.mu.Lock()
 	defer s.releaseIndex.mu.Unlock()
-	var hits []account.AdminSearchHit
+	var matched [8]account.AdminSearchHit
+	count := 0
 	// Platforms in config order keep the result stable between calls.
 	for _, p := range s.config.Admin.GitHub.Platforms {
 		for _, hit := range s.releaseIndex.byPlatform[p.ID] {
 			if strings.Contains(hit.lowerTitle, q) || strings.Contains(hit.lowerTag, q) {
-				hits = append(hits, hit.AdminSearchHit)
-				if len(hits) == 8 {
-					return hits
+				matched[count] = hit.AdminSearchHit
+				count++
+				if count == len(matched) {
+					return slices.Clone(matched[:])
 				}
 			}
 		}
 	}
-	return hits
+	if count == 0 {
+		return nil
+	}
+	return slices.Clone(matched[:count])
 }
 
 // releaseSnapshotJob records the release asset download counts once a day until ctx ends.

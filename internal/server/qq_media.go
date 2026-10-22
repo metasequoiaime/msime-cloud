@@ -91,9 +91,12 @@ func qqMediaURL(raw string, hosts []string) (string, error) {
 }
 
 func qqMediaHostAllowed(host string, hosts []string) bool {
-	host = strings.ToLower(host)
 	for _, suffix := range hosts {
-		if host == strings.TrimPrefix(suffix, ".") || strings.HasSuffix(host, suffix) {
+		bare := strings.TrimPrefix(suffix, ".")
+		if len(host) == len(bare) && strings.EqualFold(host, bare) {
+			return true
+		}
+		if len(host) >= len(suffix) && strings.EqualFold(host[len(host)-len(suffix):], suffix) {
 			return true
 		}
 	}

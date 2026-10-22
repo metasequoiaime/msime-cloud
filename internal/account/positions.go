@@ -23,12 +23,9 @@ func (s *Store) SetCandidatePosition(ctx context.Context, user string, expected 
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
-	var revision int64
-	if err = tx.QueryRow(ctx, `SELECT COALESCE((SELECT revision FROM user_dictionary_state WHERE user_id=$1),0)`, user).Scan(&revision); err != nil {
+	revision, err := checkUserDataRevision(ctx, tx, user, expected)
+	if err != nil {
 		return 0, err
-	}
-	if revision != expected {
-		return 0, errRevisionConflict
 	}
 	batch := &pgx.Batch{}
 	if p.Position > 0 {

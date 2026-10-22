@@ -102,12 +102,9 @@ func (s *Store) mutateCandidate(ctx context.Context, user string, expected int64
 		return result, err
 	}
 	defer tx.Rollback(ctx)
-	var revision int64
-	if err = tx.QueryRow(ctx, `SELECT COALESCE((SELECT revision FROM user_dictionary_state WHERE user_id=$1),0)`, user).Scan(&revision); err != nil {
+	revision, err := checkUserDataRevision(ctx, tx, user, expected)
+	if err != nil {
 		return result, err
-	}
-	if revision != expected {
-		return result, errRevisionConflict
 	}
 	raw, err := cfg.QuerySnapshot(ctx, map[string]any{"operation": operation, "query": query, "action": action}, dictionaryQuerySnapshot(tx, user, query))
 	if err != nil {

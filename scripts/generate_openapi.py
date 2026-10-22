@@ -400,6 +400,11 @@ paths['/v1/site/download-mirrors']={'get':{'summary':'官网下载镜像链接',
     'description':'公开只读，供官网下载页展示 Windows 安装包的蓝奏云盘链接，由管理员在后台「站点设置」中修改。与 /v1/notices 共用按 IP 每分钟 1200 次的限流（不占用登录等用户接口的 120 次）；成功响应带 Cache-Control: public, max-age=60 和 Vary: Origin，允许官网和边缘缓存短时缓存。用户体系未启用时返回 503。',
     'responses':{'200':{'description':'成功','content':{'application/json':{'schema':site_mirrors}}},'429':{'description':'请求过多','headers':{'Retry-After':{'description':'重试等待秒数','schema':{'type':'integer'}}}},'503':{'description':'用户体系未启用或数据库不可用'}}}}
 
+site_download_stats=obj({'total':count('累计镜像下载次数'),'platforms':{'type':'object','additionalProperties':count('该平台累计镜像下载次数')},'generated_at':string(format='date-time')},['total','platforms','generated_at'])
+paths['/v1/site/download-stats']={'get':{'summary':'官网累计镜像下载统计','tags':['官网'],'security':[],
+    'description':'公开只读，汇总全部历史 kind=download 且 channel=cn-mirror 的已接受事件。total 等于 platforms 各项之和，未知平台归入 other；平台别名归一，windows-rust 归为 windowsRust。不返回事件明细或个人信息。官网将这份计数与已有 GitHub 安装包快照相加，显示统一累计下载。镜像按点击计数，不代表安装人数或完成下载人数。成功响应允许缓存 60 秒，与公告、镜像链接共用独立的每 IP 每分钟 1200 次额度；用户体系未启用时返回 503。',
+    'responses':{'200':{'description':'成功','content':{'application/json':{'schema':site_download_stats}}},'429':{'description':'请求过多'},'503':{'description':'用户体系未启用或数据库不可用'}}}}
+
 # Anonymous website word form (msime-web#213). Errors here use a plain-string error plus code, which the website form reads.
 word_error=obj({'error':string(description='可直接展示给用户的中文说明。'),'code':string()},['error','code'])
 word_rejected=obj({'error':string(),'code':string(enum=['invalid_entries']),'rejected':{'type':'array','items':obj({'index':{'type':'integer','minimum':0,'description':'entries 中的下标。'},'code':string(enum=['word_required','invalid_word','word_too_long','pinyin_required','invalid_pinyin','invalid_syllable','syllable_count_mismatch','display_required','invalid_display','display_too_long','source_required','invalid_source','source_too_long','gloss_required','invalid_gloss','gloss_too_long','duplicate_entry','already_listed','blocked_word'],description='words 类型用 word_*、pinyin_*、*_syllable*；english 类型用 word_*、display_*；translations 类型用 source_*、gloss_*；duplicate_entry 与 already_listed 各类型通用。 blocked_word 表示该词条命中管理后台配置的屏蔽词，各类型通用；只给出类别，不会返回具体屏蔽词。'),'reason':string(description='可直接展示在该行旁的中文说明。')},['index','code','reason'])}},['error','code'])

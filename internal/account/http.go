@@ -236,7 +236,7 @@ func (a *Service) clientAddress(r *http.Request) string {
 }
 
 func IsPath(path string) bool {
-	return strings.HasPrefix(path, "/v1/community/") || path == siteDownloadMirrorsPath || path == TelemetryPath || path == FeedbackPath || strings.HasPrefix(path, "/v1/auth/") || path == "/v1/users/me" || strings.HasPrefix(path, "/v1/users/me/") || strings.HasPrefix(path, DiagnosticsMCPPrefix)
+	return strings.HasPrefix(path, "/v1/community/") || path == siteDownloadMirrorsPath || path == siteDownloadStatsPath || path == TelemetryPath || path == FeedbackPath || strings.HasPrefix(path, "/v1/auth/") || path == "/v1/users/me" || strings.HasPrefix(path, "/v1/users/me/") || strings.HasPrefix(path, DiagnosticsMCPPrefix)
 }
 
 // accountRouteTimeout 是每条挂载路由的上下文时限：默认 15 秒；大文件传输单独延长，包括词库快照恢复和下载、TSV 下载、整包数据导出、候选窗皮肤发布或替换、插件包发布或下载，以及带截图的反馈。
@@ -262,7 +262,7 @@ func accountRouteTimeout(pattern string) time.Duration {
 // accountRouteRate 返回 pattern 对应的按地址额度及其每分钟上限。每个 App 和官网访客都会拉取的可缓存公开接口用一份更大的独立额度，匿名遥测用一份更小的独立额度，两者都不会挤占登录、刷新令牌和社区接口的额度。
 func accountRouteRate(pattern string) (string, int) {
 	switch pattern {
-	case "GET " + NoticesPath, "GET " + siteDownloadMirrorsPath:
+	case "GET " + NoticesPath, "GET " + siteDownloadMirrorsPath, "GET " + siteDownloadStatsPath:
 		return "feed-ip:", publicFeedRateLimit
 	case "POST " + TelemetryPath:
 		return "telemetry-ip:", telemetryRateLimit
@@ -281,6 +281,7 @@ func Mount(mux *http.ServeMux, a *Service) {
 		"PUT /v1/community/resources/{id}/rating":          (*Service).resourceRate,
 		"GET /v1/community/stats":                          (*Service).communityStats,
 		"GET /v1/site/download-mirrors":                    (*Service).siteDownloadMirrors,
+		"GET /v1/site/download-stats":                      (*Service).siteDownloadStats,
 		"GET /v1/community/candidate-skins":                (*Service).communityCandidateList,
 		"POST /v1/community/candidate-skins":               (*Service).communityCandidatePublish,
 		"GET /v1/community/candidate-skins/sync":           (*Service).communityCandidateSync,

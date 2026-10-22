@@ -476,3 +476,7 @@ Android 使用 `platform.android.*` 字段：既有的主题、键盘布局、�
 ## 管理后台
 
 新增由 Go 服务提供静态文件的 [Admin Web 项目](admin-web/README.md)，随同一镜像、同一端口启动，通过 `admin.msime.app` 独立 Host 提供服务。共 16 个页面：数据概览、词库 PR 审核、社区事后审核与举报、GitHub Issue 分诊、App 内用户反馈、敏感词库、用户与封禁、下载记录、公告推送（含 Telegram）、发布管理、云端监控、崩溃分组、系统状态与故障事件、服务日志（来自集群 Loki 的各副本实时日志）、角色权限与操作日志、个人中心与个人访问令牌。默认关闭，需要 PostgreSQL 12 及以上、后台迁移和 Google 管理员白名单（或独立管理员密钥）；GitHub、上游服务额度、Telegram 渠道和服务日志的 Loki 按需配置。角色权限、配置项、公开接口（`/v1/notices`、`/v1/community/reports`、遥测）以及需要客户端配合的改动见 [管理后台文档](docs/admin.md)。
+
+### 官网累计下载补充计数
+
+`GET /v1/site/download-stats` 公开返回全部历史 `cn-mirror` 下载事件的 `total`、`platforms` 与 `generated_at`，供官网与现有 GitHub 安装包快照相加。累计下载包含国内镜像；本接口只提供镜像补充值，不能再次加入后台的 GitHub 差分。计数按事件 ID 去重，不按安装用户去重，镜像点击不代表完成下载。公开响应不含事件明细、账号或访问者资料。复用已有表与公开信息流限流，无需迁移或新增配置；官网依赖此接口部署后接入。

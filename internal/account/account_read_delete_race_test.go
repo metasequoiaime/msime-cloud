@@ -103,3 +103,17 @@ func TestDownloadLinkAfterAccountDeletionRaceReturns401(t *testing.T) {
 		t.Fatalf("unexpected response %d %s", w.Code, w.Body.String())
 	}
 }
+
+func TestClipboardAfterAccountDeletionRaceReturns401(t *testing.T) {
+	w := runAccountReadDeleteRace(t, "/v1/users/me/clipboard", func(*Service) {})
+	if w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "invalid_credentials") {
+		t.Fatalf("unexpected response %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestClipboardKeysAfterAccountDeletionRaceReturns401(t *testing.T) {
+	w := runAccountReadDeleteRace(t, "/v1/users/me/clipboard/keys?device_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", func(*Service) {})
+	if w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "invalid_credentials") {
+		t.Fatalf("unexpected response %d %s", w.Code, w.Body.String())
+	}
+}

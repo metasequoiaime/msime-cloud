@@ -64,6 +64,12 @@ func TestClipboardRetentionUsesOneQuery(t *testing.T) {
 			if wantErr != nil {
 				wantDays = 0
 			}
+			if state == "missing" {
+				if !errors.Is(err, errMissingUser) {
+					t.Fatalf("不存在用户读取剪贴板设置应返回 errMissingUser，实际 %v", err)
+				}
+				return
+			}
 			if err != nil || settings.RetentionDays != wantDays || settings.Enabled != (key != "") || (settings.KeyID == nil) != (key == "") || (settings.KeyID != nil && *settings.KeyID != key) {
 				t.Fatal("保留期、同步开关或密钥不正确", settings, err)
 			}
@@ -124,6 +130,12 @@ ON CONFLICT(user_id) DO UPDATE SET enabled=true,key_id=excluded.key_id,retention
 				t.Fatalf("锁等待后返回错误：%v，期望 %v", err, wantErr)
 			}
 			after, err := db.ClipboardSettings(ctx, uid)
+			if change == "delete" {
+				if !errors.Is(err, errMissingUser) {
+					t.Fatalf("删除用户后读取剪贴板设置应返回 errMissingUser，实际 %v", err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}

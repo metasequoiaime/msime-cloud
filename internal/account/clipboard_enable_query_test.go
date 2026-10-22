@@ -67,6 +67,9 @@ func TestEnableClipboardUsesOneQuery(t *testing.T) {
 				wantDays = 7
 			}
 			if err != nil || settings.Enabled != (wantErr == nil) || settings.RetentionDays != wantDays || (settings.KeyID == nil) != (key == "") || (settings.KeyID != nil && *settings.KeyID != key) {
+				if state == "missing" && errors.Is(err, errMissingUser) {
+					return
+				}
 				t.Fatal("开启同步改变了保留期或密钥，或未保留封禁限制", settings, err)
 			}
 			if key != "" {

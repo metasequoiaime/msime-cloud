@@ -108,7 +108,7 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null || git diff --name-only "$BASE" HEAD | grep -qE '^(Dockerfile|\.dockerignore|third_party/|native/|internal/engine/|internal/publictools/|cmd/msime-cloud/tools[^/]*\.go|internal/server/(input|word_submissions|cloud_native_test|native_e2e_test|qq_public_tools[^/]*)\.go|scripts/(fetch_engine_resources|smoke_container|test_native)\.py)'; then
+          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null || git diff --name-only "$BASE" HEAD | grep -qE '^(Dockerfile|\.dockerignore|third_party/|native/|internal/engine/|internal/account/(candidate_actions|community_resource_apply|community_resources|dictionary|dictionary_catalog|dictionary_manage|dictionary_query|dictionary_query_snapshot|dictionary_windows_format|positions|ranking|snapshot_capacity|snapshot_http|snapshot_restore|transaction_failure)_test\.go|internal/publictools/|cmd/msime-cloud/tools[^/]*\.go|internal/server/(input|word_submissions|cloud_native_test|native_e2e_test|qq_public_tools[^/]*)\.go|scripts/(fetch_engine_resources|smoke_container|test_native)\.py)'; then
             echo "native=true" >> "$GITHUB_OUTPUT"
           else
             echo "native=false" >> "$GITHUB_OUTPUT"

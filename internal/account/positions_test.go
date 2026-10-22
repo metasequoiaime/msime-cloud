@@ -3,6 +3,7 @@ package account
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -114,7 +115,32 @@ func TestFixedPositionsHTTPAndNativeReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	positions, _, err = s.CandidatePositions(ctx, one.User.ID, "", 0, 200)
-	if err != nil || len(positions) != 0 {
-		t.Fatal("position cascade", positions, err)
+	if !errors.Is(err, errMissingUser) || len(positions) != 0 {
+		t.Fatal("已注销账号仍可读取固定候选", positions, err)
+	}
+	var count int
+	if err := s.pool.QueryRow(ctx, "SELECT count(*) FROM user_candidate_positions WHERE user_id=$1", one.User.ID).Scan(&count); err != nil || count != 0 {
+		t.Fatal("固定候选未随账号级联删除", count, err)
+	}
+}
+
+func TestFixedPositionsAccountDeletion(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	user := complete(t, s, Identity{"email", "positions-delete@example.test"})
+	p := CandidatePosition{Context: "ni'hao", Code: "ni'hao", Word: "你好", Position: 1}
+	if _, err := s.SetCandidatePosition(ctx, user.User.ID, 0, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteUser(ctx, user.User.ID); err != nil {
+		t.Fatal(err)
+	}
+	positions, _, err := s.CandidatePositions(ctx, user.User.ID, "", 0, 200)
+	if !errors.Is(err, errMissingUser) || len(positions) != 0 {
+		t.Fatal("已注销账号仍可读取固定候选", positions, err)
+	}
+	var count int
+	if err := s.pool.QueryRow(ctx, "SELECT count(*) FROM user_candidate_positions WHERE user_id=$1", user.User.ID).Scan(&count); err != nil || count != 0 {
+		t.Fatal("固定候选未随账号级联删除", count, err)
 	}
 }

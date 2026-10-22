@@ -141,7 +141,7 @@ func (s *Server) loadQQKnowledge(ctx context.Context) ([]qqSection, error) {
 	// 先固定前 50 份文档和结果槽位，避免并发完成顺序改变段落编号。
 	files := 0
 	for _, entry := range entries {
-		if entry.Type != "file" || !strings.HasSuffix(strings.ToLower(entry.Name), ".md") {
+		if entry.Type != "file" || !qqMarkdownFileName(entry.Name) {
 			continue
 		}
 		entries[files] = entry
@@ -195,6 +195,11 @@ func (s *Server) loadQQKnowledge(ctx context.Context) ([]qqSection, error) {
 		return nil, errors.New("knowledge is empty")
 	}
 	return sections, nil
+}
+
+// qqMarkdownFileName 只比较文件名末尾的 ASCII 扩展名，避免为筛选文档复制整个文件名。
+func qqMarkdownFileName(name string) bool {
+	return len(name) >= len(".md") && qqASCIIEqualFold(name[len(name)-len(".md"):], ".md")
 }
 
 // qqMarkdownHeading 按标题正则的语义扫描一行，避免为每个标题建立捕获切片。

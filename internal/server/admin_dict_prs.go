@@ -26,9 +26,10 @@ const (
 	// dictPRCountedOpen bounds how many open pull requests the list enriches with entry counts; normally at most one rolling pull request is open.
 	dictPRCountedOpen = 5
 	// dictPREngineBatch keeps each Engine lookup well under its 64 KiB request limit.
-	dictPREngineBatch = 300
-	dictPRReasonChars = 500
-	dictPRMaxKeep     = 5000
+	dictPREngineBatch  = 300
+	dictPRReasonChars  = 500
+	dictPRMaxKeep      = 5000
+	dictPRCommentPages = 20
 )
 
 // Entry check results. A sensitive-word hit outranks an entry the website form would reject, which outranks a duplicate.
@@ -43,6 +44,8 @@ const (
 var dictPRPermissions = map[string]string{"contents": "write", "pull_requests": "write"}
 
 var errDictPRConflict = errors.New("dictionary pull request changed concurrently")
+
+var errDictPRCommentsUncertain = errors.New("dictionary pull request comments could not be checked completely")
 
 // dictPRState 保存本副本审核页的列表、投稿说明搜索索引，以及 NotifyOnce 前的通知缓存。
 type dictPRState struct {
@@ -1007,8 +1010,19 @@ func (s *Server) rejectDictPR(w http.ResponseWriter, r *http.Request, gh *github
 		return
 	}
 	repo := "/repos/" + s.dictRepo()
-	res, err := gh.Do(ctx, token, "POST", repo+"/issues/"+strconv.Itoa(number)+"/comments", map[string]string{"body": "审核未通过：" + reason})
-	if err != nil || !res.OK() {
+	comment := "审核未通过：" + reason
+	// 关闭请求可能在评论写入后失败；重试前先确认评论是否已经存在，避免再次发布同一条拒绝理由。
+	commented, err := s.dictRejectionCommentExists(ctx, gh, token, number, comment)
+	if err != nil {
+		slog.Error("dictionary pull requests: rejection comment lookup failed", "pull", number, "reason", err.Error())
+		fail(w, 502, "github_uncertain")
+		return
+	}
+	var res githubapp.Response
+	if !commented {
+		res, err = gh.Do(ctx, token, "POST", repo+"/issues/"+strconv.Itoa(number)+"/comments", map[string]string{"body": comment})
+	}
+	if !commented && (err != nil || !res.OK()) {
 		slog.Error("dictionary pull requests: rejection comment failed", "pull", number, "status", res.Status)
 		fail(w, 502, "github_error")
 		return
@@ -1019,17 +1033,65 @@ func (s *Server) rejectDictPR(w http.ResponseWriter, r *http.Request, gh *github
 	res, err = gh.Do(closeCtx, token, "PATCH", repo+"/pulls/"+strconv.Itoa(number), map[string]string{"state": "closed"})
 	gh.Invalidate(repo + "/pulls")
 	switch {
-	case err != nil || res.Status >= 500:
+	case err != nil || !res.OK():
 		slog.Error("dictionary pull requests: close outcome unknown", "pull", number, "status", res.Status)
+		unlock()
+		s.auditDictPR(closeCtx, "dict_pr_reject", number, map[string]any{"reason": reason, "partial": true, "uncertain": true})
 		fail(w, 502, "github_uncertain")
 		return
-	case !res.OK():
-		dictGitHubStatus(w, "close", res.Status)
-		return
+	default:
+		var closed dictPull
+		if res.Decode(&closed) != nil || closed.State != "closed" {
+			slog.Error("dictionary pull requests: close response was invalid", "pull", number, "status", res.Status)
+			unlock()
+			s.auditDictPR(closeCtx, "dict_pr_reject", number, map[string]any{"reason": reason, "partial": true, "uncertain": true})
+			fail(w, 502, "github_uncertain")
+			return
+		}
 	}
 	unlock()
 	s.auditDictPR(closeCtx, "dict_pr_reject", number, map[string]any{"reason": reason})
 	respond(w, 200, map[string]any{"ok": true})
+}
+
+// dictRejectionCommentExists 分页读取评论：之前的驳回可能早于最近 100 条；结果超过合理上限或分页损坏时拒绝继续发布评论。
+func (s *Server) dictRejectionCommentExists(ctx context.Context, gh *githubapp.Client, token string, number int, comment string) (bool, error) {
+	path := "/repos/" + s.dictRepo() + "/issues/" + strconv.Itoa(number) + "/comments?per_page=100&direction=desc&sort=created"
+	last := 1
+	for page := 1; page <= last; page++ {
+		requestPath := path
+		if page > 1 {
+			requestPath += "&page=" + strconv.Itoa(page)
+		}
+		res, err := gh.Do(ctx, token, "GET", requestPath, nil)
+		if err != nil || !res.OK() {
+			return false, errors.Join(errDictPRCommentsUncertain, err)
+		}
+		var comments []struct {
+			Body string `json:"body"`
+		}
+		if res.Decode(&comments) != nil || comments == nil {
+			return false, errDictPRCommentsUncertain
+		}
+		for _, existing := range comments {
+			if existing.Body == comment {
+				return true, nil
+			}
+		}
+		if page == 1 {
+			last = issueLastPage(res.Header)
+			if last == 0 {
+				if res.Header.Get("Link") != "" {
+					return false, errDictPRCommentsUncertain
+				}
+				last = 1
+			}
+			if last > dictPRCommentPages {
+				return false, errDictPRCommentsUncertain
+			}
+		}
+	}
+	return false, nil
 }
 
 // searchDictPRs 为全局搜索匹配缓存投稿的编号、标题和备注，不请求 GitHub。

@@ -221,6 +221,15 @@ func pluginSeedLiteral(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
+// pluginSeedDOBlock 选择正文中不存在的美元引用分隔符，避免元数据提前结束匿名代码块。
+func pluginSeedDOBlock(body string) string {
+	delimiter := "$$"
+	for i := 1; strings.Contains(body, delimiter); i++ {
+		delimiter = fmt.Sprintf("$seed_%d$", i)
+	}
+	return "DO " + delimiter + " " + body + " " + delimiter + ";"
+}
+
 func pluginSeedSHA256(b []byte) string {
 	return digest.SHA256(b)
 }
@@ -232,9 +241,9 @@ func renderPluginSeed(packs []pluginSeedPack, role string, source []string) stri
 	out = append(out, "BEGIN;", "SET LOCAL ROLE "+role+";", "SET LOCAL lock_timeout = '5s';", "SET LOCAL statement_timeout = '60s';",
 		"SELECT pg_advisory_xact_lock(hashtextextended("+owner+",0));",
 		"INSERT INTO auth_users(id,display_name) VALUES("+owner+","+pluginSeedLiteral(pluginSeedPublisherName)+") ON CONFLICT DO NOTHING;",
-		"DO $$ BEGIN IF EXISTS(SELECT 1 FROM auth_identities WHERE user_id="+owner+") OR EXISTS(SELECT 1 FROM auth_sessions WHERE user_id="+owner+") THEN RAISE EXCEPTION 'starter publisher is interactive'; END IF; END $$;",
+		pluginSeedDOBlock("BEGIN IF EXISTS(SELECT 1 FROM auth_identities WHERE user_id="+owner+") OR EXISTS(SELECT 1 FROM auth_sessions WHERE user_id="+owner+") THEN RAISE EXCEPTION 'starter publisher is interactive'; END IF; END"),
 		// moderation 列来自管理后台的迁移（admin_ops_schema.sql），缺列时先报清楚原因，而不是在插入时撞上 column does not exist。
-		"DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid='community_plugins'::regclass AND attname='moderation' AND NOT attisdropped) THEN RAISE EXCEPTION 'community_plugins has no moderation column; deploy the new backend or run -migrate-users first'; END IF; END $$;")
+		pluginSeedDOBlock("BEGIN IF NOT EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid='community_plugins'::regclass AND attname='moderation' AND NOT attisdropped) THEN RAISE EXCEPTION 'community_plugins has no moderation column; deploy the new backend or run -migrate-users first'; END IF; END"))
 	var newer []string
 	for _, p := range packs {
 		if !slices.Contains(legacyPluginKinds, p.kind) && !slices.Contains(newer, p.kind) {
@@ -248,7 +257,7 @@ func renderPluginSeed(packs []pluginSeedPack, role string, source []string) stri
 		for i, kind := range newer {
 			probes[i] = "pg_get_constraintdef(oid) LIKE '%''" + kind + "''%'"
 		}
-		out = append(out, "DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='community_plugins'::regclass AND conname='community_plugins_kind_known' AND "+strings.Join(probes, " AND ")+") THEN RAISE EXCEPTION 'community_plugins kind constraint predates "+strings.Join(newer, ", ")+"; deploy the new backend or run -migrate-users first'; END IF; END $$;")
+		out = append(out, pluginSeedDOBlock("BEGIN IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='community_plugins'::regclass AND conname='community_plugins_kind_known' AND "+strings.Join(probes, " AND ")+") THEN RAISE EXCEPTION 'community_plugins kind constraint predates "+strings.Join(newer, ", ")+"; deploy the new backend or run -migrate-users first'; END IF; END"))
 	}
 	wanted := make([]string, len(packs))
 	for i, p := range packs {
@@ -260,8 +269,8 @@ func renderPluginSeed(packs []pluginSeedPack, role string, source []string) stri
 				strings.Join([]string{id, owner, kind, pluginID, name, description, version, license, "decode('" + hex.EncodeToString(p.manifest) + "','hex')", "decode('" + hex.EncodeToString(p.archive) + "','hex')", "'" + p.digest + "'", "'approved'"}, ",")+
 				") ON CONFLICT(id) DO NOTHING;",
 			// 不比较 moderation：运维下架后重新执行种子不应失败，也不会把作品恢复上架。
-			"DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM community_plugins WHERE id="+id+" AND owner_id="+owner+" AND kind="+kind+" AND plugin_id="+pluginID+" AND name="+name+" AND description="+description+" AND version="+version+" AND license="+license+
-				" AND encode(sha256(manifest),'hex')='"+manifestSum+"' AND sha256='"+archiveSum+"' AND request_sha256='"+p.digest+"') THEN RAISE EXCEPTION 'starter plugin % differs from the reviewed pack; publish a new version instead of overwriting', "+id+"; END IF; END $$;")
+			pluginSeedDOBlock("BEGIN IF NOT EXISTS(SELECT 1 FROM community_plugins WHERE id="+id+" AND owner_id="+owner+" AND kind="+kind+" AND plugin_id="+pluginID+" AND name="+name+" AND description="+description+" AND version="+version+" AND license="+license+
+				" AND encode(sha256(manifest),'hex')='"+manifestSum+"' AND sha256='"+archiveSum+"' AND request_sha256='"+p.digest+"') THEN RAISE EXCEPTION 'starter plugin % differs from the reviewed pack; publish a new version instead of overwriting', "+id+"; END IF; END"))
 		wanted[i] = "(" + kind + "," + pluginID + ")"
 	}
 	// 客户端按 (kind, plugin_id) 安装，同名的用户作品会与精选包互相替换；列出来交给运维判断。

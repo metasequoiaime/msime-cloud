@@ -448,11 +448,20 @@ func sanitizeCandidateImages(files map[string][]byte, preview string) (map[strin
 			if !a.decode() {
 				return nil, "candidate_skin_image_invalid"
 			}
-			out.Write(a.clean)
+			// 清理后的容器独立于上传数据，直接接管；容量过大时仍压紧。
+			if cap(a.clean) > 2*len(a.clean) {
+				out.Write(a.clean)
+			} else {
+				out = *bytes.NewBuffer(a.clean)
+			}
 		} else if candidateExtension(path) == "gif" {
 			var clean []byte
 			clean, err = cleanCandidateGIF(data)
-			out.Write(clean)
+			if cap(clean) > 2*len(clean) {
+				out.Write(clean)
+			} else {
+				out = *bytes.NewBuffer(clean)
+			}
 		} else if candidateExtension(path) == "png" {
 			if decoded, err = png.Decode(bytes.NewReader(data)); err == nil {
 				err = pngEncoder.Encode(&out, decoded)

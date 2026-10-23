@@ -33,7 +33,7 @@ func (c cli) postJSON(server, path string, body any, v any) error {
 	if err != nil {
 		return err
 	}
-	data, err = readCLIResponse(response.Body)
+	data, err = readCLIResponse(response)
 	response.Body.Close()
 	if err != nil {
 		return err

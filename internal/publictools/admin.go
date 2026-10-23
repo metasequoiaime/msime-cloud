@@ -134,22 +134,7 @@ func AdminCall(ctx context.Context, execute Execute, name string, arguments json
 	if name == "submit_qq_draft" {
 		timeout = 130 * time.Second
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	if err := ctx.Err(); err != nil {
-		return Result{}, err
-	}
-	data, err := execute(ctx, Request{Method: method, Path: path, Body: body, NeedsToken: true})
-	if err != nil {
-		return Result{}, err
-	}
-	if err := ctx.Err(); err != nil {
-		return Result{}, err
-	}
-	if len(data) > MaxResponse || !json.Valid(data) {
-		return Result{}, errors.New("invalid_tool_response")
-	}
-	return Result{Source: path, Data: data}, nil
+	return executeToolRequest(ctx, execute, Request{Method: method, Path: path, Body: body, NeedsToken: true}, timeout)
 }
 
 func NewAdminServer(execute Execute, version string) *mcp.Server {

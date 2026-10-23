@@ -578,4 +578,4 @@ PostgreSQL 集成测试需要设置 `MSIME_TEST_DATABASE_URL`，数据库名必�
 
 键盘皮肤的列表、详情和编辑表单共用绘制规则；列表在卡片进入视口附近后读取完整设计，包含照片背景。候选窗皮肤根据 `skin.toml` 的基础主题、当前明暗配色、横纵布局、窗口几何、背景和装饰图片绘制固定候选词；只能切换清单声明支持的布局与明暗模式。编辑清单和替换图片会即时更新预览；作者上传的截图另在「作者上传的预览图」中查看。系统字体和窗口特效仍由客户端平台决定。
 
-`GET /api/candidate-skins/{id}/image?path=<包内路径>` 为候选窗实际预览读取背景及装饰图片，所有已登录管理员均可读取，包括私有、下架作品。仅返回指定作品中已存储的 PNG/JPEG；不访问外部地址或服务器文件系统。成功返回图片原始字节和对应 `Content-Type`，并设置 `Cache-Control: no-store`、`X-Content-Type-Options: nosniff`。无效作品 ID 返回 400 `invalid_id`；缺少路径、不安全路径及非 PNG/JPEG 路径返回 400 `invalid_path`；作品或图片不存在返回 404 `not_found`；未登录返回 401。前端按作品版本与包内路径缓存，作品更新后重新读取。
+`GET /api/candidate-skins/{id}/image?path=<包内路径>` 为候选窗实际预览读取背景及装饰图片，所有已登录管理员均可读取，包括私有、下架作品。仅返回指定作品中已存储的 PNG、JPEG、APNG、GIF、WebP 资源；不访问外部地址或服务器文件系统。成功返回图片原始字节和对应 `Content-Type`，并设置 `Cache-Control: no-store`、`X-Content-Type-Options: nosniff`。无效作品 ID 返回 400 `invalid_id`；缺少路径、不安全路径及不支持的图片扩展名返回 400 `invalid_path`；作品或图片不存在返回 404 `not_found`；未登录返回 401。前端按作品版本与包内路径缓存，作品更新后重新读取。

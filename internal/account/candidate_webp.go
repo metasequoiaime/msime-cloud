@@ -3,7 +3,10 @@ package account
 import (
 	"bytes"
 	"encoding/binary"
+	"image"
 
+	"golang.org/x/image/vp8"
+	"golang.org/x/image/vp8l"
 	"golang.org/x/image/webp"
 )
 
@@ -99,8 +102,22 @@ func candidateWebPFrame(chunks []candidateWebPChunk, width, height int) ([]byte,
 	if bits == nil {
 		return nil, false
 	}
-	raw := candidateWebPEncode(candidateWebPChunk{kind, bits})
-	config, err := webp.DecodeConfig(bytes.NewReader(raw))
+	// 直接读取位流头，避免复制完整临时容器；bytes.Reader 也可省去 VP8L 的额外读取缓冲。
+	var config image.Config
+	var err error
+	if kind == "VP8 " {
+		// 与 webp.DecodeConfig 的 VP8 长度限制保持一致。
+		if len(bits) > 1<<31-1 {
+			return nil, false
+		}
+		decoder := vp8.NewDecoder()
+		decoder.Init(bytes.NewReader(bits), len(bits))
+		var header vp8.FrameHeader
+		header, err = decoder.DecodeFrameHeader()
+		config.Width, config.Height = header.Width, header.Height
+	} else {
+		config, err = vp8l.DecodeConfig(bytes.NewReader(bits))
+	}
 	if err != nil || config.Width < 1 || config.Height < 1 || config.Width > maxCandidateSide || config.Height > maxCandidateSide {
 		return nil, false
 	}
@@ -108,7 +125,7 @@ func candidateWebPFrame(chunks []candidateWebPChunk, width, height int) ([]byte,
 		return nil, false
 	}
 	if alpha == nil {
-		return raw, true
+		return candidateWebPEncode(candidateWebPChunk{kind, bits}), true
 	}
 	header := make([]byte, 10)
 	header[0] = 0x10

@@ -34,7 +34,7 @@ const qqFAQPrompt = `你在为开源输入法「水杉输入法」的常见问�
 
 只输出一个 JSON 对象，值都是字符串：
 - question：FAQ 的问题标题，一句话，以问号结尾，不超过 40 个汉字，写成用户会怎么问的样子。
-- answer：答案正文，简体中文 Markdown，只写管理员给出的内容，不要补充他没说的事实；可以分段，操作步骤用有序列表；不写链接。写成完整的几句话，交代适用的平台或场景再给做法，不少于 60 个字；管理员给的信息实在不够写这么多时也不要编造。
+- answer：答案正文，简体中文 Markdown，只写管理员给出的内容，不要补充他没说的事实；可以分段，操作步骤用有序列表；正文不写链接，代码中的 URL 参数保留原样。写成完整的几句话，交代适用的平台或场景再给做法，不少于 60 个字；管理员给的信息实在不够写这么多时也不要编造。
 - category：从下面列出的 FAQ 分类里选一个最合适的，必须原样照抄分类名。
 - question_tw、answer_tw：question 和 answer 的繁体中文（台湾用语）译文；程序名、命令、文件名和引号里的应用选项保留原文，代码块原样照抄、一个字都不改。
 - valid：内容里确实有一个问题和它的答案时写 "yes"，否则写 "no"。
@@ -135,7 +135,7 @@ func qqInsertFAQ(faq string, index int, question, answer, footer string) (string
 			end = lineStart - 1
 		}
 	}
-	answer = strings.TrimSpace(answer)
+	answer = qqFAQTrimAnswer(answer)
 	var out strings.Builder
 	out.Grow(len(faq) + len(question) + len(answer) + 9)
 	out.WriteString(faq[:insertAt])
@@ -208,7 +208,11 @@ func (s *Server) qqSummariseFAQ(ctx context.Context, text string, categories []s
 		return entry, err
 	}
 	for _, field := range []*string{&entry.Question, &entry.Answer, &entry.Category, &entry.QuestionTW, &entry.AnswerTW, &entry.Valid} {
-		*field = strings.TrimSpace(*field)
+		if field == &entry.Answer || field == &entry.AnswerTW {
+			*field = qqFAQTrimAnswer(*field)
+		} else {
+			*field = strings.TrimSpace(*field)
+		}
 		if utf8.RuneCountInString(*field) > qqFAQRunes {
 			return entry, errors.New("model field too long")
 		}
@@ -226,8 +230,10 @@ func (s *Server) qqSummariseFAQ(ctx context.Context, text string, categories []s
 	}
 	// 答案里不允许出现一至三级 Markdown 标题，免得打乱 FAQ 的分类和问题结构；代码块中的井号保持原样。
 	for _, answer := range []*string{&entry.Answer, &entry.AnswerTW} {
-		if strings.Contains(*answer, "://") {
-			*answer = qqRemoveRawLinks(*answer)
+		var valid bool
+		*answer, valid = qqFAQRemoveProseLinks(*answer)
+		if !valid {
+			return entry, errors.New("model translation changed code blocks")
 		}
 		if qqFAQAnswerHasHeading(*answer) {
 			return entry, errors.New("model answer contains headings")

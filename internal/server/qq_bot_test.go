@@ -4366,11 +4366,20 @@ func TestQQBotInterimReplies(t *testing.T) {
 		return fake.replyTexts()[before:]
 	}
 
-	// 答得快：只有答案；处理完以后计时器已经停掉，过了阈值也不会冒出一句「我想一下」。
+	// 未人为延迟的回答也可能因调度超过阈值；过渡语只能在超时后出现，处理完后不能再补发。
 	qqThinkingDelay = 300 * time.Millisecond
+	started := time.Now()
 	replies := deliver("m-fast", "五笔怎么切换", nil)
+	elapsed := time.Since(started)
+	if len(replies) == 2 && (replies[0] != qqReplyThinking || elapsed < qqThinkingDelay) {
+		t.Fatal("过渡语顺序或触发时机错误", replies, elapsed)
+	}
+	if len(replies) < 1 || len(replies) > 2 || replies[len(replies)-1] != answer {
+		t.Fatal(replies)
+	}
+	// 已确认处理完成，再等过原阈值，验证计时器不会补发过渡语。
 	time.Sleep(400 * time.Millisecond)
-	if all := fake.replyTexts(); len(replies) != 1 || replies[0] != answer || len(all) != 1 {
+	if all := fake.replyTexts(); len(all) != len(replies) {
 		t.Fatal(replies, all)
 	}
 

@@ -8,7 +8,6 @@ import (
 	"image/color"
 	"image/draw"
 	"image/jpeg"
-	_ "image/png"
 	"io"
 	"log/slog"
 	"net/http"
@@ -56,15 +55,8 @@ func (a *Service) present(u User) User {
 
 // normalizeAvatar 在完整解码前校验尺寸和 JPEG 扫描数，再将 PNG 或 JPEG 居中裁为正方形，透明像素铺白底并重编码为不含元数据的 256×256 JPEG。
 func normalizeAvatar(data []byte) ([]byte, error) {
-	config, format, e := image.DecodeConfig(bytes.NewReader(data))
-	if e != nil || (format != "png" && format != "jpeg") || config.Width < 1 || config.Height < 1 || config.Width > maxAvatarSourceSide || config.Height > maxAvatarSourceSide {
-		return nil, errInvalidAvatar
-	}
-	if format == "jpeg" && jpegScans(data) > maxJPEGScans {
-		return nil, errInvalidAvatar
-	}
-	source, _, e := image.Decode(bytes.NewReader(data))
-	if e != nil {
+	source, _, _, ok := DecodePNGJPEG(data, maxAvatarSourceSide, 0)
+	if !ok {
 		return nil, errInvalidAvatar
 	}
 	bounds := source.Bounds()
@@ -75,7 +67,7 @@ func normalizeAvatar(data []byte) ([]byte, error) {
 	draw.Draw(out, out.Bounds(), image.NewUniform(color.White), image.Point{}, draw.Src)
 	xdraw.CatmullRom.Scale(out, out.Bounds(), source, crop, xdraw.Over, nil)
 	var encoded bytes.Buffer
-	if e = jpeg.Encode(&encoded, out, &jpeg.Options{Quality: 88}); e != nil {
+	if e := jpeg.Encode(&encoded, out, &jpeg.Options{Quality: 88}); e != nil {
 		return nil, e
 	}
 	return encoded.Bytes(), nil

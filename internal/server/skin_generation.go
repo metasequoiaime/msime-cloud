@@ -5,9 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"image"
-	_ "image/jpeg"
-	_ "image/png"
 	"net/http"
 	"strings"
 	"time"
@@ -91,17 +88,9 @@ func (s *Server) generateSkinArtwork(w http.ResponseWriter, r *http.Request) {
 		fail(w, 502, "invalid_skin_artwork")
 		return
 	}
-	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil || (format != "png" && format != "jpeg") || cfg.Width < 1 || cfg.Height < 1 || cfg.Width > 2048 || cfg.Height > 2048 {
-		fail(w, 502, "invalid_skin_artwork")
-		return
-	}
 	// 尺寸和 JPEG 扫描数通过后再完整解码，避免把只有有效文件头的损坏图片当作成功插画。
-	if format == "jpeg" && account.JPEGScanLimitExceeded(data) {
-		fail(w, 502, "invalid_skin_artwork")
-		return
-	}
-	if _, _, err := image.Decode(bytes.NewReader(data)); err != nil {
+	_, cfg, format, valid := account.DecodePNGJPEG(data, 2048, 0)
+	if !valid {
 		fail(w, 502, "invalid_skin_artwork")
 		return
 	}

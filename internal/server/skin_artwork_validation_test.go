@@ -5,12 +5,57 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"image"
+	"image/gif"
 	"image/jpeg"
 	"image/png"
 	"net/http"
 	"strconv"
 	"testing"
 )
+
+func TestSkinArtworkImageLimits(t *testing.T) {
+	for _, format := range []string{"png", "jpeg", "gif"} {
+		for _, size := range [][2]int{{2048, 1}, {1, 2048}, {2049, 1}, {1, 2049}} {
+			t.Run(format+"/"+strconv.Itoa(size[0])+"x"+strconv.Itoa(size[1]), func(t *testing.T) {
+				var encoded bytes.Buffer
+				source := image.NewRGBA(image.Rect(0, 0, size[0], size[1]))
+				var err error
+				switch format {
+				case "png":
+					err = png.Encode(&encoded, source)
+				case "jpeg":
+					err = jpeg.Encode(&encoded, source, nil)
+				case "gif":
+					err = gif.Encode(&encoded, source, nil)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				data := base64.StdEncoding.EncodeToString(encoded.Bytes())
+				s := fixture(t, func(w http.ResponseWriter, r *http.Request) {
+					respond(w, 200, map[string]any{"data": []any{map[string]string{"b64_json": data}}})
+				})
+				t.Cleanup(s.Close)
+				s.config.Images = s.config.Chat.Endpoint
+				w := call(s, "POST", "/v1/skins/generate", `{"prompt":"合成插画"}`)
+				if format == "gif" || size[0] > 2048 || size[1] > 2048 {
+					if w.Code != http.StatusBadGateway || !bytes.Contains(w.Body.Bytes(), []byte("invalid_skin_artwork")) {
+						t.Fatalf("不支持的图片应被拒绝：status=%d", w.Code)
+					}
+					return
+				}
+				var result struct {
+					Image         string `json:"b64_json"`
+					MIME          string `json:"mime_type"`
+					Width, Height int
+				}
+				if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Image != data || result.MIME != "image/"+format || result.Width != size[0] || result.Height != size[1] {
+					t.Fatalf("边长上限内的图片或响应发生变化：status=%d", w.Code)
+				}
+			})
+		}
+	}
+}
 
 func TestSkinArtworkRejectsTruncatedImages(t *testing.T) {
 	for _, format := range []string{"png", "jpeg"} {

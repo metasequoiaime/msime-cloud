@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"image"
 	"image/jpeg"
 	"image/png"
 	"io"
@@ -139,23 +138,16 @@ func normalizeFeedbackScreenshots(ctx context.Context, uploads [][]byte) ([]feed
 
 // normalizeScreenshot 在完整解码前校验尺寸和 JPEG 扫描数，再按原格式重新编码 PNG 或 JPEG，去掉元数据；pool 允许同次提交的 PNG 共享压缩工作区，nil 表示独立分配。
 func normalizeScreenshot(data []byte, pool png.EncoderBufferPool) (feedbackScreenshot, error) {
-	config, format, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil || (format != "png" && format != "jpeg") || config.Width < 1 || config.Height < 1 || config.Width > maxFeedbackScreenshotSide || config.Height > maxFeedbackScreenshotSide || config.Width*config.Height > maxFeedbackScreenshotPixels {
-		return feedbackScreenshot{}, errInvalidScreenshot
-	}
-	if format == "jpeg" && jpegScans(data) > maxJPEGScans {
-		return feedbackScreenshot{}, errInvalidScreenshot
-	}
-	source, _, err := image.Decode(bytes.NewReader(data))
-	if err != nil {
+	source, _, format, ok := DecodePNGJPEG(data, maxFeedbackScreenshotSide, maxFeedbackScreenshotPixels)
+	if !ok {
 		return feedbackScreenshot{}, errInvalidScreenshot
 	}
 	var out bytes.Buffer
 	if format == "png" {
-		err = (&png.Encoder{CompressionLevel: png.BestCompression, BufferPool: pool}).Encode(&out, source)
+		err := (&png.Encoder{CompressionLevel: png.BestCompression, BufferPool: pool}).Encode(&out, source)
 		return feedbackScreenshot{"image/png", out.Bytes()}, err
 	}
-	err = jpeg.Encode(&out, source, &jpeg.Options{Quality: 90})
+	err := jpeg.Encode(&out, source, &jpeg.Options{Quality: 90})
 	return feedbackScreenshot{"image/jpeg", out.Bytes()}, err
 }
 

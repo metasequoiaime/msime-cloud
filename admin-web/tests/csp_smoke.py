@@ -2333,6 +2333,8 @@ def main() -> int:
                 check_dictpr_trim_pending(context, base, problems)
                 check_pending_form_drafts(context, base, problems)
                 check_issue_reply_draft_switch(context, base, problems)
+                from issue_reply_pending_smoke import check_issue_reply_pending
+                check_issue_reply_pending(browser, base)
                 from issue_undo_smoke import check_issue_undo
                 check_issue_undo(browser, base)
             finally:

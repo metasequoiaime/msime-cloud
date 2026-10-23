@@ -2,7 +2,7 @@ import { formatNumber } from "../../utils/number";
 import { formatHours } from "../../utils/duration";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { errorMessage, isGithubDisabled, useAPI } from "../../api/client";
@@ -232,7 +232,10 @@ export default function IssuesPage() {
   const getRowId = useCallback((row: IssueRow) => issueKey(row), []);
   const searchText = useCallback((row: IssueRow) => `#${row.number} ${row.title} ${row.author} ${row.labels.join(" ")} ${platformName(row.platform)}`, [platformName]);
 
+  const replyMutationKey = keys.page("issues", "reply", openKey);
+  const replyPending = useIsMutating({ mutationKey: replyMutationKey, exact: true }) > 0;
   const sendReply = useMutation({
+    mutationKey: replyMutationKey,
     mutationFn: (v: { ref: IssueRef; draft: ReplyDraft }) => runAction({ action: "comment", items: [v.ref], body: v.draft.body.trim() }),
     onSuccess: (_result, v) => {
       // 仅清理本次提交的草稿对象，保留继续输入、重开抽屉或切换 Issue 后的新草稿。
@@ -311,13 +314,14 @@ export default function IssuesPage() {
       onTriage={row => void triage([row])}
       onCloseIssue={row => void close([row])}
       onReopen={row => void reopen([row])}
-      composer={<DrawerComposer value={reply && reply.issueKey === openKey ? reply.body : ""} onChange={body => setReply({ issueKey: openKey, body })} templates={replyTemplates} sending={sendReply.isPending}
+      composer={<DrawerComposer value={reply && reply.issueKey === openKey ? reply.body : ""} onChange={body => setReply({ issueKey: openKey, body })} templates={replyTemplates} sending={replyPending}
         onSend={() => {
           if (!canTriage) {
             toast(noPermissionHint);
             return;
           }
           if (!reply || reply.issueKey !== openKey || !reply.body.trim()) return;
+          if (client.isMutating({ mutationKey: replyMutationKey, exact: true })) return;
           sendReply.mutate({ ref: openRef, draft: reply });
         }} />}
     />}

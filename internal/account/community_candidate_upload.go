@@ -49,7 +49,7 @@ func readCandidateUpload(w http.ResponseWriter, r *http.Request, input any, reso
 func (input *candidateUpload) prepare(requireLicense bool) (pkg skins.Package, digest, code string) {
 	input.Name = strings.TrimSpace(input.Name)
 	input.Description = strings.TrimSpace(input.Description)
-	if !resourceText(input.Name, 1, 32, false) || !resourceText(input.Description, 0, 280, true) {
+	if !validCommunityTextMetadata(input.Name, input.Description) {
 		return pkg, "", "invalid_skin_metadata"
 	}
 	if code := validCandidateResourceFiles(input.Manifest, input.Files, input.extendedResources); code != "" {

@@ -157,7 +157,7 @@ func pluginPublishMetadataCode(id, name, description, kind, pluginID, version st
 		return "invalid_community_id"
 	}
 	// 客户端拒绝含任何控制字符的列表标题，以及含换行、制表符以外控制字符的说明。
-	if !resourceText(name, 1, 32, false) || !resourceText(description, 0, 280, true) {
+	if !validCommunityTextMetadata(name, description) {
 		return "invalid_plugin_metadata"
 	}
 	if !slices.Contains(pluginKinds, kind) {

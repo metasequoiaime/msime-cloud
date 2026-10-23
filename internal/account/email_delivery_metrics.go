@@ -51,9 +51,7 @@ func emailDeliveryStatus(err error) string {
 		if failure.permanent {
 			return emailDeliveryRejected
 		}
-		if failure.accepted {
-			return emailDeliveryAccepted
-		}
 	}
+	// DATA 阶段失败只说明邮件可能已投递，不能当作供应商已确认接受。
 	return emailDeliveryFailed
 }

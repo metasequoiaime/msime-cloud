@@ -8,7 +8,6 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 	"io"
 	"log/slog"
-	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -624,18 +623,12 @@ func (s *Server) transcribe(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "wav_required")
 		return
 	}
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	file, _ := writer.CreateFormFile("file", "audio.wav")
-	_, _ = file.Write(audio)
-	_ = writer.WriteField("model", s.config.Transcription.Model)
-	_ = writer.WriteField("response_format", "json")
-	if languageValue != "" {
-		_ = writer.WriteField("language", languageValue)
-	}
-	_ = writer.Close()
 	mr, call := metered(r, "transcription", wavSeconds(audio))
-	b, err := s.upstream(mr, s.config.Transcription, "POST", writer.FormDataContentType(), &body)
+	req, err := transcriptionRequest(mr.Context(), s.config.Transcription, audio, languageValue)
+	var b []byte
+	if err == nil {
+		b, err = s.doUpstream(req)
+	}
 	var result struct {
 		Text          string `json:"text"`
 		Transcription string `json:"transcription"`

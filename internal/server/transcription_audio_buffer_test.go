@@ -72,10 +72,6 @@ func TestTranscriptionAudioBufferAllocationBudget(t *testing.T) {
 		t.Run(fmt.Sprint(size), func(t *testing.T) {
 			// 预算包含 multipart 解析、音频校验、上游表单构造和转写响应。
 			budget := int64(size)*5/2 + 1<<20
-			if raceEnabled {
-				// 竞态构建中，上游表单的 bytes.Buffer 扩容还会多分配一份音频容量。
-				budget += int64(size) / 2
-			}
 			result := testing.Benchmark(func(b *testing.B) { benchmarkTranscriptionAudioBuffer(b, size, true) })
 			if got := result.AllocedBytesPerOp(); got > budget {
 				t.Fatalf("转写分配 %d B，预算 %d B", got, budget)

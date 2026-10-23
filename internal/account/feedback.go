@@ -15,6 +15,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/metasequoiaime/MSIME-Backend/internal/boundedio"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 	"github.com/metasequoiaime/MSIME-Backend/internal/uuid"
@@ -197,7 +198,7 @@ func readFeedbackForm(w http.ResponseWriter, r *http.Request) (feedbackPayload, 
 				return payload, nil, false
 			}
 			seenPayload = true
-			raw, err := io.ReadAll(io.LimitReader(part, maxFeedbackPayload+1))
+			raw, err := boundedio.ReadAll(part, -1, maxFeedbackPayload)
 			if err != nil && httpjson.IsBodyTooLarge(err) {
 				writeError(w, 413, "feedback_too_large")
 				return payload, nil, false
@@ -229,7 +230,7 @@ func readFeedbackForm(w http.ResponseWriter, r *http.Request) (feedbackPayload, 
 				// 限制每张切片的容量，追加字节时不能覆盖后面的截图。
 				data = all[start:len(all):len(all)]
 			} else {
-				data, err = io.ReadAll(io.LimitReader(part, maxFeedbackScreenshot+1))
+				data, err = boundedio.ReadAll(part, -1, maxFeedbackScreenshot)
 			}
 			if err != nil {
 				if httpjson.IsBodyTooLarge(err) {

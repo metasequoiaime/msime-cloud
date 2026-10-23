@@ -8,13 +8,14 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/metasequoiaime/MSIME-Backend/internal/boundedio"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
@@ -179,7 +180,7 @@ func (a *Service) identity(ctx context.Context, c Challenge, credential string) 
 		if res.StatusCode != 200 {
 			return Identity{}, nil, ErrInvalid
 		}
-		b, e := io.ReadAll(io.LimitReader(res.Body, 65537))
+		b, e := boundedio.ReadAll(res.Body, -1, 65536)
 		if e != nil || len(b) > 65536 {
 			return Identity{}, nil, ErrInvalid
 		}

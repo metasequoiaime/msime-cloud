@@ -597,7 +597,7 @@ func (s *Server) transcribe(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case "model", "language", "response_format":
-			v, e := io.ReadAll(io.LimitReader(part, 257))
+			v, e := boundedio.ReadAll(part, -1, 256)
 			if e != nil || len(v) > 256 {
 				fail(w, 400, "invalid_field")
 				return

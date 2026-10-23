@@ -244,38 +244,42 @@ func (s *Server) qqSummariseFAQ(ctx context.Context, text string, categories []s
 	return entry, nil
 }
 
-// qqSameCodeBlocks 保证简繁答案的代码块逐字相同，逐块比较原文片段，避免为列表和拼接结果分配内存。
+// qqSameCodeBlocks 保证简繁答案的完整代码围栏逐字相同；未关闭围栏会吞掉后续 FAQ，必须拒绝。
 func qqSameCodeBlocks(a, b string) bool {
 	for {
-		var first, second string
-		first, a = qqNextCodeBlock(a)
-		second, b = qqNextCodeBlock(b)
-		if first != second {
+		first, nextA, validA := qqNextCodeBlock(a)
+		second, nextB, validB := qqNextCodeBlock(b)
+		if !validA || !validB || first != second {
 			return false
 		}
 		if first == "" {
 			return true
 		}
+		a, b = nextA, nextB
 	}
 }
 
-// qqNextCodeBlock 保留原正则的语义：开头不要求位于行首，首个换行前都是头部，正文遇到首组三反引号结束。
-func qqNextCodeBlock(text string) (block, rest string) {
-	start := strings.Index(text, "```")
-	if start < 0 {
-		return "", ""
+// qqNextCodeBlock 按共用围栏规则返回完整原文片段和后续正文；valid 表示没有遇到未关闭围栏。
+func qqNextCodeBlock(text string) (block, rest string, valid bool) {
+	if !strings.ContainsAny(text, "`~") {
+		return "", "", true
 	}
-	newline := strings.IndexByte(text[start+3:], '\n')
-	if newline < 0 {
-		return "", ""
+	var fence qqMarkdownFence
+	start := 0
+	for offset := 0; offset < len(text); {
+		end := len(text)
+		if newline := strings.IndexByte(text[offset:], '\n'); newline >= 0 {
+			end = offset + newline
+		}
+		if fence.consume(qqMarkdownLeadingSpace(text[offset:end])) {
+			if fence.length == 0 {
+				return text[start:end], text[end:], true
+			}
+			start = offset
+		}
+		offset = end + 1
 	}
-	body := start + 3 + newline + 1
-	close := strings.Index(text[body:], "```")
-	if close < 0 {
-		return "", ""
-	}
-	end := body + close + 3
-	return text[start:end], text[end:]
+	return "", "", fence.length == 0
 }
 
 // qqRepoFile 读仓库 ref 上的一个文本文件。

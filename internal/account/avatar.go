@@ -8,12 +8,13 @@ import (
 	"image/color"
 	"image/draw"
 	"image/jpeg"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
 
 	xdraw "golang.org/x/image/draw"
 )
@@ -96,7 +97,7 @@ func (a *Service) putAvatar(w http.ResponseWriter, r *http.Request) {
 		a.error(w, e)
 		return
 	}
-	data, e := io.ReadAll(io.LimitReader(r.Body, maxAvatarUploadBytes+1))
+	data, e := httpclient.ReadBody(r.Body, r.ContentLength, maxAvatarUploadBytes)
 	if e != nil {
 		writeError(w, 400, "invalid_avatar")
 		return

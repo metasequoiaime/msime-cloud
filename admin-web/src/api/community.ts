@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { paginatedSchema } from "./paginated.ts";
 import { actionUndoTokenSchema } from "./action-undo.ts";
 
 // 社区管理：六类内容分区、各自的列表、计数和抽屉详情。
@@ -84,7 +85,7 @@ export const itemSchema = z.object({
 });
 export type Item = z.infer<typeof itemSchema>;
 
-export const listSchema = z.object({ items: z.array(itemSchema), page: z.number(), total: z.number(), has_more: z.boolean() });
+export const listSchema = paginatedSchema(itemSchema);
 
 // 卡片预览只读取设计或清单，完整审核信息在打开详情时加载。
 export const contentPreviewSchema = z.object({ content: z.unknown() });

@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
@@ -68,7 +69,8 @@ func (s *Server) voiceContribution(w http.ResponseWriter, r *http.Request) {
 		fail(w, 415, "multipart_required")
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, voiceContributionAudioBytes+voiceContributionPayloadBytes+64<<10)
+	const maxBodyBytes = voiceContributionAudioBytes + voiceContributionPayloadBytes + 64<<10
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	reader, err := r.MultipartReader()
 	if err != nil {
 		fail(w, 400, "invalid_multipart")
@@ -111,7 +113,12 @@ func (s *Server) voiceContribution(w http.ResponseWriter, r *http.Request) {
 				fail(w, 400, "invalid_audio")
 				return
 			}
-			audio, err = io.ReadAll(io.LimitReader(part, voiceContributionAudioBytes+1))
+			// 请求总长度只作容量提示；未知、小请求或超限提示沿用标准缓冲，仍按实际音频长度校验。
+			lengthHint := int64(-1)
+			if r.ContentLength >= 4<<10 && r.ContentLength <= maxBodyBytes {
+				lengthHint = min(r.ContentLength, voiceContributionAudioBytes)
+			}
+			audio, err = httpclient.ReadBody(part, lengthHint, voiceContributionAudioBytes)
 			if httpjson.IsBodyTooLarge(err) || len(audio) > voiceContributionAudioBytes {
 				fail(w, 413, "audio_too_large")
 				return

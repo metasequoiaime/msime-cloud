@@ -61,7 +61,9 @@ export default function DictionaryPage() {
       <Link to="/dictpr" className={buttonVariants({ size: "sm", variant: "outline" })}>投稿审核</Link>
       {tree.data?.url && <a href={tree.data.url} target="_blank" rel="noreferrer" className={buttonVariants({ size: "sm", variant: "outline" })}><ExternalLink size={14} aria-hidden="true" />词库仓库</a>}
     </PageIntro>
-    {tree.isError ? <ErrorState error={tree.error} onRetry={() => void tree.refetch()} /> : <>
+    {tree.isError && !tree.data ? <ErrorState error={tree.error} onRetry={() => void tree.refetch()} /> : <>
+      {/* 刷新失败时保留已加载的目录和编辑器，避免卸载后丢失草稿及当前输入。 */}
+      {tree.isError && <ErrorState className="mb-3.5" error={tree.error} onRetry={() => void tree.refetch()} />}
       <div hidden={focused}><DictionarySearch onOpen={(path, query) => navigate(fileSection({ path }), path, query)} /></div>
       {tree.data?.truncated && <Banner tone="warn" className="mb-3.5">GitHub 返回的目录超过单次读取上限，当前目录不完整。</Banner>}
       {pendingPath && <Banner tone="warn" className="mb-3.5"><div className="flex flex-wrap items-center justify-between gap-2"><span>当前文件有待提交变更，切换文件会放弃这些变更。</span><div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => setPendingPath(undefined)}>继续编辑</Button><Button size="sm" variant="danger-outline" onClick={() => { setDirty(false); setSection(pendingPath.section); setSelected(pendingPath); setPendingPath(undefined); }}>放弃并切换</Button></div></div></Banner>}

@@ -101,7 +101,9 @@ export function FileDetail({ path, initialQuery = "", onDirty, focused, onToggle
     {conflict && <Banner tone="warn" className="mb-3">文件已更新，当前草稿无法提交。请先记录待提交的内容，再放弃草稿并基于新版本编辑。</Banner>}
     {data && <p className="mb-3 text-[12px] text-muted">{!data.editable ? "只读词库支持选择、复制和搜索。" : !permitted ? noPermissionHint : custom ? translation ? "译文直接编辑，保存时追加修正记录。" : "已有词条只读；在表格末尾直接录入，或复制已有词条后补词。" : "直接输入覆盖单元格，双击或 F2 修改内容；切换单元格自动暂存。"}</p>}
     {saveError && <p role="alert" className="mb-3 text-[13px] text-bad">{saveError}</p>}
-    {content.isPending ? <SkeletonRows rows={8} /> : content.isError ? <ErrorState error={content.error} onRetry={() => void content.refetch()} /> : data ? <>
+    {/* 后台刷新失败仍保留表格实例，避免丢失请求等待期间输入的内容。 */}
+    {content.isError && data && <ErrorState className="mb-3" error={content.error} onRetry={() => void content.refetch()} />}
+    {content.isPending ? <SkeletonRows rows={8} /> : content.isError && !data ? <ErrorState error={content.error} onRetry={() => void content.refetch()} /> : data ? <>
       <div className="mb-3 flex flex-wrap justify-between gap-2 text-[12px] text-muted"><span aria-live="polite">{content.isFetching ? "正在搜索…" : query ? `找到 ${formatNumber(data.total)} 条「${query}」的匹配` : `共 ${formatNumber(data.total)} 条词条`} · {data.encoding}</span><span>{data.editable ? custom ? "只追加" : "可编辑" : "只读"} · <span className="font-mono">{data.sha.slice(0, 8)}</span></span></div>
       {query && data.total === 0 && <p className="mb-3 text-[13px] text-muted">未找到「{query}」</p>}
       <DictionarySheet ref={sheet} key={`${page}:${query}`} path={path} originals={data.rows} labels={labels} defaults={defaults} drafts={drafts} editable={editable} locked={locked} hasMore={data.has_more} focused={focused}

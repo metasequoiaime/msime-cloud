@@ -320,7 +320,7 @@ func (s *Server) niuTransDownload(w http.ResponseWriter, r *http.Request, target
 	mediaType, _, _ := mime.ParseMediaType(contentType)
 	if mediaType == "application/json" || strings.HasSuffix(mediaType, "+json") {
 		var body []byte
-		body, err = io.ReadAll(io.LimitReader(resp.Body, niuTransResponseBytes+1))
+		body, err = readNiuTransResponseBody(resp)
 		if err != nil {
 			err = upstreamTransportError{cause: err}
 			upstreamError(w, r, err)
@@ -449,7 +449,7 @@ func (s *Server) sendNiuTrans(r *http.Request, target, method, contentType strin
 		return nil, "", err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, niuTransResponseBytes+1))
+	data, err := readNiuTransResponseBody(resp)
 	if err != nil {
 		return nil, "", upstreamTransportError{cause: err}
 	}
@@ -460,4 +460,16 @@ func (s *Server) sendNiuTrans(r *http.Request, target, method, contentType strin
 		return nil, "", io.ErrUnexpectedEOF
 	}
 	return data, resp.Header.Get("Content-Type"), nil
+}
+
+// readNiuTransResponseBody 在实际读取上限内，借助可信范围内的声明长度减少扩容复制。
+func readNiuTransResponseBody(resp *http.Response) ([]byte, error) {
+	reader := io.LimitReader(resp.Body, niuTransResponseBytes+1)
+	if resp.ContentLength >= bytes.MinRead && resp.ContentLength <= niuTransResponseBytes {
+		// 长度只作分配提示；预留 EOF 探测空间，少报长度时仍读取到实际上限。
+		buffer := bytes.NewBuffer(make([]byte, 0, int(resp.ContentLength)+bytes.MinRead))
+		_, err := buffer.ReadFrom(reader)
+		return buffer.Bytes(), err
+	}
+	return io.ReadAll(reader)
 }

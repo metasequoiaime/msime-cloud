@@ -58,7 +58,7 @@ func saveCommunityContent(section string, create bool) adminActionFunc {
 			return actionResult{}, actionFail(400, "invalid_value")
 		}
 		input.Name, input.Description = strings.TrimSpace(input.Name), strings.TrimSpace(input.Description)
-		if !resourceText(input.Name, 1, 32, false) || !resourceText(input.Description, 0, 280, true) || !validUserID(input.OwnerID) {
+		if !validCommunityTextMetadata(input.Name, input.Description) || !validUserID(input.OwnerID) {
 			return actionResult{}, actionFail(400, "invalid_value")
 		}
 		if input.Moderation != "pending" && input.Moderation != "approved" && input.Moderation != "removed" {

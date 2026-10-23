@@ -275,7 +275,7 @@ func (a *Service) resourcePublish(w http.ResponseWriter, r *http.Request) {
 	input.ID = strings.ToLower(input.ID)
 	input.Name = strings.TrimSpace(input.Name)
 	input.Description = strings.TrimSpace(input.Description)
-	if len(input.ID) != 36 || !validCommunityID(input.ID) || !resourceText(input.Name, 1, 32, false) || !resourceText(input.Description, 0, 280, true) || input.Revision < 0 {
+	if len(input.ID) != 36 || !validCommunityID(input.ID) || !validCommunityTextMetadata(input.Name, input.Description) || input.Revision < 0 {
 		writeError(w, 400, "invalid_resource_metadata")
 		return
 	}

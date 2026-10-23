@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
 // ServiceMetricBatch 是一次冲刷的增量；失败后沿用 ID，只允许丢弃过期行，不能混入新调用。
@@ -23,12 +25,12 @@ func (a *Service) RecordServiceMetricBatch(ctx context.Context, batch ServiceMet
 		return errors.New("invalid service metric batch ID")
 	}
 	for _, row := range batch.Hours {
-		if !serviceKeyPattern.MatchString(row.Service) || row.Calls < 0 || row.Errors < 0 || row.Usage < 0 {
+		if !textutil.ValidShortKey(row.Service) || row.Calls < 0 || row.Errors < 0 || row.Usage < 0 {
 			return errors.New("invalid service metric")
 		}
 	}
 	for _, row := range batch.Minutes {
-		if !serviceKeyPattern.MatchString(row.Service) || row.Calls < 0 || row.Errors < 0 {
+		if !textutil.ValidShortKey(row.Service) || row.Calls < 0 || row.Errors < 0 {
 			return errors.New("invalid service minute")
 		}
 	}

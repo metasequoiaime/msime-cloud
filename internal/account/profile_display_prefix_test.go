@@ -4,15 +4,14 @@ import (
 	"math/rand"
 	"strings"
 	"testing"
-	"unicode"
 	"unicode/utf8"
 	"unsafe"
 )
 
-// 冻结原来的昵称规范化流程，验证字符规则、截断和空白处理保持兼容。
+// 验证昵称规范化的字符规则、截断和空白处理保持稳定。
 func previousProfileDisplayName(name string) string {
 	name = strings.TrimSpace(name)
-	if name == "" || !utf8.ValidString(name) || strings.IndexFunc(name, unicode.IsControl) >= 0 {
+	if name == "" || !utf8.ValidString(name) || strings.IndexFunc(name, unsafeDisplayNameRune) >= 0 {
 		return ""
 	}
 	if runes := []rune(name); len(runes) > 64 {
@@ -39,8 +38,8 @@ func TestProfileDisplayNamePrefixCompatibility(t *testing.T) {
 		check(name)
 	}
 	random := rand.New(rand.NewSource(699))
-	valid := []string{"a", "水", "😀", "e\u0301", "\ufffd", " ", "\u3000", "\u200b", "\u2028", "\u0301"}
-	invalid := []string{"\xff", "\xfe", "\xf0\x9f", "\xc0\xaf", "\xed\xa0\x80", "\xf4\x90\x80\x80", "\x00", "\n", "\u0085"}
+	valid := []string{"a", "水", "😀", "e\u0301", "\ufffd", " ", "\u3000", "\u200b", "\u0301"}
+	invalid := []string{"\xff", "\xfe", "\xf0\x9f", "\xc0\xaf", "\xed\xa0\x80", "\xf4\x90\x80\x80", "\x00", "\n", "\u0085", "\u2028", "\u2029", "\u202e"}
 	for range 2000 {
 		var name strings.Builder
 		for range random.Intn(300) {
@@ -53,6 +52,14 @@ func TestProfileDisplayNamePrefixCompatibility(t *testing.T) {
 			text = text[:at] + bad + text[at:]
 		}
 		check(text)
+	}
+}
+
+func TestProfileDisplayNameRejectsLineSeparatorsAndBidiControls(t *testing.T) {
+	for _, name := range []string{"甲\u2028乙", "甲\u2029乙", "甲\u202e乙"} {
+		if got := profileDisplayName(name); got != "" {
+			t.Errorf("profileDisplayName(%q) = %q，期望拒绝不安全字符", name, got)
+		}
 	}
 }
 

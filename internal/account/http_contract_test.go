@@ -25,13 +25,16 @@ func apiRequest(t *testing.T, handler http.Handler, method, path, body, token st
 	return w
 }
 
-func TestAccountHTTPProfileRejectsNULName(t *testing.T) {
+func TestAccountHTTPProfileRejectsUnsafeNameCharacters(t *testing.T) {
 	db := testStore(t)
 	mux := http.NewServeMux()
 	Mount(mux, &Service{store: db})
 	user := complete(t, db, Identity{"email", "profile-nul@example.test"})
 	apiRequest(t, mux, "PATCH", "/v1/users/me", `{"display_name":"原有昵称"}`, user.AccessToken, 204)
-	for _, name := range []string{"\x00", "before\x00after", " \x00 "} {
+	for _, name := range []string{
+		"\x00", "before\x00after", " \x00 ", "甲\n乙", "甲\r乙", "甲\t乙",
+		"甲\u0085乙", "甲\u2028乙", "甲\u2029乙", "甲\u202e乙",
+	} {
 		t.Run(fmt.Sprintf("%q", name), func(t *testing.T) {
 			body, err := json.Marshal(map[string]string{"display_name": name})
 			if err != nil {

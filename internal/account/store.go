@@ -994,15 +994,15 @@ func (s *Store) Prune(ctx context.Context) {
 		"DELETE FROM typing_statistics_days WHERE day<current_date-" + strconv.Itoa(typingStatisticsRetentionDays),
 		"DELETE FROM typing_statistics_devices WHERE updated_at<now()-interval '" + strconv.Itoa(typingStatisticsRetentionDays) + " days'",
 		"DELETE FROM qq_link_codes WHERE expires_at<now()",
-		// 语音贡献只保留 voiceContributionRetentionDays 天。
-		"DELETE FROM voice_contributions WHERE created_at<now()-interval '" + strconv.Itoa(voiceContributionRetentionDays) + " days'",
 		// 云剪贴板按用户设置的保留天数清理，置顶的条目不受保留期影响；0 表示一直保留。
 		"DELETE FROM user_clipboard c USING user_clipboard_settings cs WHERE cs.user_id=c.user_id AND cs.retention_days>0 AND NOT c.pinned AND c.updated_at<now()-make_interval(days=>cs.retention_days)",
 		// 云剪贴板只保存密文；滚动升级期间旧版本副本可能还会写入明文条目，这里把它们删掉。
-		"DELETE FROM user_clipboard WHERE ciphertext=''"} {
+		"DELETE FROM user_clipboard WHERE ciphertext=''",
+		// 与 `DeleteUserData` 一致，先锁剪贴板再锁语音贡献；语音只保留 `voiceContributionRetentionDays` 天。
+		"DELETE FROM voice_contributions WHERE created_at<now()-interval '" + strconv.Itoa(voiceContributionRetentionDays) + " days'"} {
 		batch.Queue(q)
 	}
-	// 清理任务互不依赖，合并成一次批量请求，保留原来的逐条执行顺序。
+	// 清理任务合并成一次批量请求，隐式事务中的表锁顺序须与用户清空一致。
 	_ = s.pool.SendBatch(ctx, batch).Close()
 }
 

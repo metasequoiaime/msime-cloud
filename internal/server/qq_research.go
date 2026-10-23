@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/publictools"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -395,7 +396,7 @@ func qqResearchScopedSearch(query string) bool {
 			// 非 ASCII 查询沿用先转小写再校验范围的规则，例如 İ 会映射为 i。
 			term = strings.ToLower(term)
 		}
-		if qqASCIIEqualFold(term, "and") || qqASCIIEqualFold(term, "or") || qqASCIIEqualFold(term, "not") {
+		if textutil.EqualFoldASCII(term, "and") || textutil.EqualFoldASCII(term, "or") || textutil.EqualFoldASCII(term, "not") {
 			return false
 		}
 		if qqContainsASCIIFold(term, "repo:") || qqContainsASCIIFold(term, "org:") || qqContainsASCIIFold(term, "user:") {

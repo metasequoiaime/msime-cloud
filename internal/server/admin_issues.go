@@ -18,6 +18,7 @@ import (
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
 // Issue triage (unit U3): the issues of admin.github.issue_repos.
@@ -301,17 +302,17 @@ func issueKind(labels []string) string {
 
 func issueKindASCII(label string) string {
 	for _, candidate := range [...]string{"bug", "type: bug", "kind/bug"} {
-		if len(label) == len(candidate) && qqASCIIEqualFold(label, candidate) {
+		if len(label) == len(candidate) && textutil.EqualFoldASCII(label, candidate) {
 			return "bug"
 		}
 	}
 	for _, candidate := range [...]string{"enhancement", "feature", "feature request", "idea", "suggestion", "type: feature", "kind/feature"} {
-		if len(label) == len(candidate) && qqASCIIEqualFold(label, candidate) {
+		if len(label) == len(candidate) && textutil.EqualFoldASCII(label, candidate) {
 			return "idea"
 		}
 	}
 	for _, candidate := range [...]string{"documentation", "docs", "type: docs", "kind/docs"} {
-		if len(label) == len(candidate) && qqASCIIEqualFold(label, candidate) {
+		if len(label) == len(candidate) && textutil.EqualFoldASCII(label, candidate) {
 			return "docs"
 		}
 	}

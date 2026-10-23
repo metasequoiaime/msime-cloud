@@ -195,29 +195,29 @@ func knownPluginExtension(ext string) (string, bool) {
 	if len(ext) == 2 {
 		switch fold(ext[0]) {
 		case '7':
-			if asciiExtensionEqualFold(ext, "7z") {
+			if textutil.EqualFoldASCII(ext, "7z") {
 				return "7z", true
 			}
 		case 'g':
-			if asciiExtensionEqualFold(ext, "gz") {
+			if textutil.EqualFoldASCII(ext, "gz") {
 				return "gz", true
 			}
 		case 'l':
-			if asciiExtensionEqualFold(ext, "lz") {
+			if textutil.EqualFoldASCII(ext, "lz") {
 				return "lz", true
 			}
 		case 'm':
-			if asciiExtensionEqualFold(ext, "md") {
+			if textutil.EqualFoldASCII(ext, "md") {
 				return "md", true
 			}
 		case 'x':
-			if asciiExtensionEqualFold(ext, "xz") {
+			if textutil.EqualFoldASCII(ext, "xz") {
 				return "xz", true
 			}
 		}
 		return "", false
 	}
-	if len(ext) == 4 && asciiExtensionEqualFold(ext, "lzma") {
+	if len(ext) == 4 && textutil.EqualFoldASCII(ext, "lzma") {
 		return "lzma", true
 	}
 	if len(ext) != 3 {
@@ -225,64 +225,48 @@ func knownPluginExtension(ext string) (string, bool) {
 	}
 	switch fold(ext[0]) {
 	case 'a':
-		if asciiExtensionEqualFold(ext, "apk") {
+		if textutil.EqualFoldASCII(ext, "apk") {
 			return "apk", true
 		}
 	case 'b':
-		if asciiExtensionEqualFold(ext, "bz2") {
+		if textutil.EqualFoldASCII(ext, "bz2") {
 			return "bz2", true
 		}
 	case 'c':
-		if asciiExtensionEqualFold(ext, "cab") {
+		if textutil.EqualFoldASCII(ext, "cab") {
 			return "cab", true
 		}
 	case 'j':
-		if asciiExtensionEqualFold(ext, "jar") {
+		if textutil.EqualFoldASCII(ext, "jar") {
 			return "jar", true
 		}
 	case 'o':
-		if asciiExtensionEqualFold(ext, "ogg") {
+		if textutil.EqualFoldASCII(ext, "ogg") {
 			return "ogg", true
 		}
 	case 'r':
-		if asciiExtensionEqualFold(ext, "rar") {
+		if textutil.EqualFoldASCII(ext, "rar") {
 			return "rar", true
 		}
 	case 't':
 		for _, known := range [...]string{"tar", "tgz", "txt", "tsv"} {
-			if asciiExtensionEqualFold(ext, known) {
+			if textutil.EqualFoldASCII(ext, known) {
 				return known, true
 			}
 		}
 	case 'w':
-		if asciiExtensionEqualFold(ext, "wav") {
+		if textutil.EqualFoldASCII(ext, "wav") {
 			return "wav", true
 		}
 	case 'z':
-		if asciiExtensionEqualFold(ext, "zst") {
+		if textutil.EqualFoldASCII(ext, "zst") {
 			return "zst", true
 		}
-		if asciiExtensionEqualFold(ext, "zip") {
+		if textutil.EqualFoldASCII(ext, "zip") {
 			return "zip", true
 		}
 	}
 	return "", false
-}
-
-func asciiExtensionEqualFold(name, known string) bool {
-	if len(name) != len(known) {
-		return false
-	}
-	for i := range name {
-		c := name[i]
-		if c >= 'A' && c <= 'Z' {
-			c += 'a' - 'A'
-		}
-		if c != known[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func pluginAudio(name string) bool {

@@ -1,4 +1,4 @@
-// Package textutil 提供各功能共用的文本计数方法。
+// Package textutil 提供各功能共用的文本处理方法。
 package textutil
 
 // UTF16Length 统计 UTF-16 码元数，不构造编码切片；补充平面字符计两个码元。

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -101,16 +102,12 @@ func AdminCall(ctx context.Context, execute Execute, name string, arguments json
 		if err := json.Unmarshal(fields["id"], &in.ID); err != nil {
 			return Result{}, err
 		}
-		prefix := "D"
+		prefix := byte('D')
 		path = "/api/qq-bot/drafts/"
 		if name == "get_qq_doc_gap" {
-			prefix, path = "F", "/api/qq-bot/doc-gaps/"
+			prefix, path = 'F', "/api/qq-bot/doc-gaps/"
 		}
-		if len(in.ID) < 2 {
-			return Result{}, errors.New("invalid_tool_arguments")
-		}
-		id, err := strconv.ParseInt(in.ID[1:], 10, 64)
-		if err != nil || id <= 0 || prefix+strconv.FormatInt(id, 10) != in.ID {
+		if _, ok := textutil.ParsePrefixedID(in.ID, prefix); !ok {
 			return Result{}, errors.New("invalid_tool_arguments")
 		}
 		path += in.ID

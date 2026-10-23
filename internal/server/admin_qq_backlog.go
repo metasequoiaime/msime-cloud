@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
 type adminQQDraft struct {
@@ -52,20 +53,16 @@ func (s *Server) adminQQBacklog(w http.ResponseWriter, r *http.Request) {
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/qq-bot/")
 	resource, code, detail := strings.Cut(path, "/")
-	prefix := "D"
+	prefix := byte('D')
 	if resource == "doc-gaps" {
-		prefix = "F"
+		prefix = 'F'
 	}
 	var id int64
 	limit, offset := 20, 0
 	if detail {
-		if !strings.HasPrefix(code, prefix) || len(code) < 2 {
-			fail(w, 400, "invalid_id")
-			return
-		}
-		var err error
-		id, err = strconv.ParseInt(code[1:], 10, 64)
-		if err != nil || id <= 0 || prefix+strconv.FormatInt(id, 10) != code {
+		var ok bool
+		id, ok = textutil.ParsePrefixedID(code, prefix)
+		if !ok {
 			fail(w, 400, "invalid_id")
 			return
 		}

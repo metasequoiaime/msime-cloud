@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
 func (s *Server) adminQQDraftWrite(w http.ResponseWriter, r *http.Request) {
@@ -18,8 +19,8 @@ func (s *Server) adminQQDraftWrite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	code, action, hasAction := strings.Cut(strings.TrimPrefix(r.URL.Path, "/api/qq-bot/drafts/"), "/")
-	id, err := strconv.ParseInt(strings.TrimPrefix(code, "D"), 10, 64)
-	if err != nil || id <= 0 || code != qqDraftCode(id) || r.URL.RawQuery != "" || r.URL.ForceQuery {
+	id, ok := textutil.ParsePrefixedID(code, 'D')
+	if !ok || r.URL.RawQuery != "" || r.URL.ForceQuery {
 		fail(w, 400, "invalid_id")
 		return
 	}

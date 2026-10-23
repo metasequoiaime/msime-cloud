@@ -24,9 +24,9 @@ import (
 
 const usage = `usage: msime-cloud <command> [arguments]
 
-  tools                                  list the shared public query tools as JSON
-  tool NAME [json|-]                     run one read-only dictionary or public-data tool
-  mcp                                    serve the same tools over MCP stdio
+  tools [--admin]                        list public or admin tools as JSON
+  tool [--admin] NAME [json|-]           run one tool
+  mcp [--admin]                          serve public or admin tools over MCP stdio
   routes [filter]                        list the operations: method, path, auth, summary
   describe METHOD PATH                   print one operation: parameters, request body and responses
   call METHOD PATH [json|-] [-q name=value]... [-F name=value|name=@file]... [-o file]

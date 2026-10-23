@@ -2074,7 +2074,7 @@ func (s *Server) fileQQReport(ctx context.Context, repo, platformLabel string, r
 		Number int64 `json:"number"`
 	}
 	if r.Decode(&created) != nil || created.Number <= 0 {
-		return 0, false, errors.New("create: invalid response")
+		return 0, false, fmt.Errorf("%w: invalid create response", errQQIssueUncertain)
 	}
 	return created.Number, false, nil
 }
@@ -2089,7 +2089,7 @@ func (s *Server) qqIssueLock(ctx context.Context, repo string) (func(), error) {
 
 func githubFailure(phase string, r githubapp.Response, err error) error {
 	if err != nil {
-		return fmt.Errorf("%s: %s", phase, err.Error())
+		return fmt.Errorf("%s: %w", phase, err)
 	}
 	return fmt.Errorf("%s: status %d", phase, r.Status)
 }

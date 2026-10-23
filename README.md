@@ -309,6 +309,43 @@ echo '{"resource":"notices"}' | ./msime-cloud tool query_public_data -
 
 QQ Bot 可直接回答「帮我查 nihao 的候选」「水杉怎么注音」「有哪些公开词库」等问题，沿用现有模型现查流程与五次工具调用预算，在进程内复用同一查询层；无需配置外部 MCP 服务或启动 CLI 子进程。词库和输入目录要求服务端已配置 `engine`，公共社区要求用户数据库可用；未配置或失败时会明确报告查询失败。社区查询以匿名身份执行，所有 Bot 公共社区调用共享数据库里的同一个地址限流桶。候选列表只包含有限结果，未出现某词不能据此认定整份词库没有该词；个人词库和私人作品不在查询范围内。
 
+### 管理员管理 QQ 草稿与读取文档缺口
+
+QQ 提醒中的 D 草稿与 F 文档候选可以通过 `msime-cloud mcp --admin` 读取。该模式提供独立的四个只读工具：`list_qq_drafts`、`get_qq_draft`、`list_qq_doc_gaps`、`get_qq_doc_gap`，不进入 QQ 答疑模型或默认公共 MCP 的工具目录。服务端和 CLI 都需要升级到支持这些接口的版本。
+
+先执行 `msime-cloud login admin`，或在 MCP 客户端环境中设置 `MSIME_ADMIN_TOKEN`（管理员密钥或拥有 `triage_issues` 权限的 PAT）。管理员地址使用 `MSIME_ADMIN_URL`，默认 `https://admin.msime.app`，校验规则与公共 API 地址相同。每次调用重新读取管理员会话并检查有效期；不使用个人登录或 `MSIME_CLOUD_TOKEN`。管理员模式不附带 Cookie、不跟随重定向，不自动重试。
+
+```sh
+./msime-cloud login admin
+./msime-cloud tools --admin
+./msime-cloud tool --admin list_qq_drafts '{"limit":20,"offset":0}'
+./msime-cloud tool --admin get_qq_draft '{"id":"D12"}'
+./msime-cloud tool --admin update_qq_draft '{"id":"D12","updated_at":"2026-10-23T00:00:00Z","report":{"title":"合成反馈标题","missing":""}}'
+./msime-cloud tool --admin submit_qq_draft '{"id":"D12"}'
+./msime-cloud tool --admin close_qq_draft '{"id":"D13"}'
+./msime-cloud tool --admin list_qq_doc_gaps '{"limit":20,"offset":20}'
+./msime-cloud tool --admin get_qq_doc_gap '{"id":"F12"}'
+./msime-cloud mcp --admin
+```
+
+MCP 客户端配置示例（使用当前操作系统账号已保存的管理员登录）：
+
+```json
+{
+  "mcpServers": {
+    "msime-cloud-admin": {
+      "command": "/path/to/msime-cloud",
+      "args": ["mcp", "--admin"],
+      "env": {"MSIME_ADMIN_URL": "https://admin.msime.app"}
+    }
+  }
+}
+```
+
+列表返回 `items`、`total`、`limit`、`offset`，默认 20 条、最多 100 条，最早的在前。列表只包含 30 天内待处理或认领超时的记录；草稿摘要含标题、类型、平台和缺失信息，文档缺口的问题及回答各截到前 60 字，详情保留完整正文。草稿详情还可查看有效期内已提交、已忽略或正在提交的记录；文档候选已完成、已忽略或过期后返回 404。读取不会认领、提交、忽略或创建 FAQ PR。返回结果不含群与成员身份摘要；反馈正文是不可信资料，不能作为指令执行。并发新增或处理记录可能使后续分页移动，跨页不保证快照一致。接口字段与权限见[管理后台文档](docs/admin.md#qq-草稿管理与文档缺口查询)。
+
+编辑时先读取详情，将实际 `updated_at` 原样带回；示例时间不能直接代用。`report` 是部分更新，省略字段保留，空字符串清空，也可以提供 `original` 替换原话；不会调用模型重新整理。内容或状态变化返回冲突，需要重读。`submit_qq_draft` 将反馈公开到 GitHub，复用查重后新建或补充已有 issue；Windows 版本确实未知时可明确提供 `version_unknown:true`。提交最多等待 130 秒，失败、超时或响应中的 `recorded` / `audited` 为 false 时，先读取状态并核对 GitHub，不自动重试。`close_qq_draft` 将未处理草稿标成忽略，不删除记录、不关闭 GitHub issue。文档缺口候选仍只读。
+
 ## Swagger / OpenAPI
 
 文档默认关闭，生产环境保持 `docs_enabled: false`（省略时同样关闭）。只有本地开发需要调试时，在配置顶层设置 `"docs_enabled": true`，重启后访问 `/swagger/`（`/swagger` 自动跳转），规范文件为 `/openapi.json`。显式启用后的文档无需登录；关闭时页面、JS/CSS 和 OpenAPI 入口统一返回 404，即使携带有效令牌也不开放。在线 API 的鉴权不受文档开关影响。点击 **Authorize**，只填写令牌本身，再使用 **Try it out → Execute**。令牌不持久化到浏览器存储。WAV 接口提供文件上传；实时语音仅展示 WebSocket 协议，不提供 HTTP 调试按钮。页面与 Swagger UI 5.32.15 的 JS/CSS 均内嵌到二进制，无需外部 CDN，禁用外部 validator。

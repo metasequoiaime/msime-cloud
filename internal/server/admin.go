@@ -88,6 +88,11 @@ var adminServerRoutes = []struct {
 	{"/api/dictionary/file", (*Server).adminDictionary},
 	{"/api/dictionary/search", (*Server).adminDictionary},
 	{"/api/dictionary/changes", (*Server).adminDictionary},
+	// QQ 积压查询与草稿管理：admin_qq_backlog.go、admin_qq_draft_write.go
+	{"/api/qq-bot/drafts", (*Server).adminQQBacklog},
+	{"/api/qq-bot/drafts/{}", (*Server).adminQQBacklog},
+	{"/api/qq-bot/doc-gaps", (*Server).adminQQBacklog},
+	{"/api/qq-bot/doc-gaps/{}", (*Server).adminQQBacklog},
 	// U3 issues: admin_issues.go
 	{"/api/issues", (*Server).adminIssues},
 	{"/api/issues/", (*Server).adminIssues},
@@ -132,6 +137,11 @@ func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) bool {
 	if strings.HasPrefix(r.URL.Path, "/api/") {
 		base := r.Context()
 		timeout := 15 * time.Second
+		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/qq-bot/drafts/") && strings.HasSuffix(r.URL.Path, "/issue") {
+			timeout = 2 * time.Minute
+			controller := http.NewResponseController(w)
+			_ = controller.SetWriteDeadline(time.Now().Add(timeout + 5*time.Second))
+		}
 		if r.Method == http.MethodPost && r.URL.Path == "/api/actions" {
 			// 社区编辑可携带完整插件包，为上传延长上下文与连接期限。
 			timeout = 90 * time.Second
@@ -225,7 +235,7 @@ func (s *Server) adminAccess(ctx context.Context, actor, email string) (account.
 	return account.AdminAccess{Actor: actor, Email: strings.ToLower(email), Role: role, Permissions: perms}, nil
 }
 
-// requirePerm writes 403 permission_denied and returns false when the caller lacks perm. Every console write checks one; reads are open to every role.
+// requirePerm 在缺少权限时返回 403。写操作和包含 QQ 原始反馈的读取都检查相应权限。
 func requirePerm(w http.ResponseWriter, r *http.Request, perm string) bool {
 	if account.AdminCan(r.Context(), perm) {
 		return true

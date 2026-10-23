@@ -8,12 +8,12 @@ import (
 	"net/url"
 	"path"
 	"slices"
-	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpquery"
 	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 	textunicode "golang.org/x/text/encoding/unicode"
 )
@@ -124,14 +124,10 @@ func (s *Server) dictionaryFile(w http.ResponseWriter, r *http.Request, gh *gith
 		fail(w, http.StatusBadRequest, "invalid_dictionary_path")
 		return
 	}
-	page := 1
-	if value := query.Get("page"); value != "" {
-		parsed, err := strconv.Atoi(value)
-		page = parsed
-		if err != nil || page < 1 || page > 1000000 {
-			fail(w, 400, "invalid_page")
-			return
-		}
+	page, validPage := httpquery.Int(query, "page", 1, 1, 1000000)
+	if !validPage {
+		fail(w, 400, "invalid_page")
+		return
 	}
 	q := query.Get("q")
 	if len(q) > 200 || !plainText(q) {

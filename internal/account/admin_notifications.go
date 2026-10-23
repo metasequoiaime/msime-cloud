@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpquery"
 )
 
 // Console notifications (unit U11). Other units only call Notify or NotifyNow.
@@ -180,14 +181,10 @@ type notificationItem struct {
 
 // adminNotifications serves GET /api/notifications?limit=20: the caller's newest notifications, read or not, and the unread count.
 func (a *Service) adminNotifications(w http.ResponseWriter, r *http.Request, _ string) {
-	limit := 20
-	if raw := r.URL.Query().Get("limit"); raw != "" {
-		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed < 1 || parsed > maxNotificationLimit {
-			writeError(w, 400, "invalid_limit")
-			return
-		}
-		limit = parsed
+	limit, validLimit := httpquery.Int(r.URL.Query(), "limit", 20, 1, maxNotificationLimit)
+	if !validLimit {
+		writeError(w, 400, "invalid_limit")
+		return
 	}
 	access, _ := AdminAccessFrom(r.Context())
 	items := []notificationItem{}

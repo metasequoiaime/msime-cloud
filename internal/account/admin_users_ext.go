@@ -3,7 +3,6 @@ package account
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -144,10 +144,7 @@ func checkBanVersion(value json.RawMessage, current string) error {
 	var v struct {
 		Token string `json:"token"`
 	}
-	if httpjson.DecodeValue(bytes.NewReader(value), &v) != nil || len(v.Token) != 32 {
-		return actionFail(400, "invalid_value")
-	}
-	if _, err := hex.DecodeString(v.Token); err != nil {
+	if httpjson.DecodeValue(bytes.NewReader(value), &v) != nil || !textutil.ValidHex(v.Token, 16) {
 		return actionFail(400, "invalid_value")
 	}
 	if v.Token != current {

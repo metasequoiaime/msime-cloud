@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/digest"
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
 // issueVersionEvent 保留时间线顺序与事件身份；评论和操作事件的 ID 不共用编号空间。
@@ -24,11 +24,7 @@ type issueVersionEvent struct {
 }
 
 func issueValidVersion(version string) bool {
-	if len(version) != sha256.Size*2 {
-		return false
-	}
-	_, err := hex.DecodeString(version)
-	return err == nil
+	return textutil.ValidHex(version, sha256.Size)
 }
 
 // issueVersion 绕过读取缓存，以最新状态及最后一页事件识别同秒内状态改走又改回。

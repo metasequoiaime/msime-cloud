@@ -3,13 +3,13 @@ package account
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -116,10 +116,7 @@ func actionUndoFeedbackStatus(a *Service, ctx context.Context, tx pgx.Tx, v acti
 		Status string `json:"status"`
 		Token  string `json:"token"`
 	}
-	if httpjson.DecodeValue(bytes.NewReader(v.Value), &value) != nil || (value.Status != "new" && value.Status != "resolved") || len(value.Token) != 32 {
-		return actionResult{}, actionFail(400, "invalid_value")
-	}
-	if _, err := hex.DecodeString(value.Token); err != nil {
+	if httpjson.DecodeValue(bytes.NewReader(v.Value), &value) != nil || (value.Status != "new" && value.Status != "resolved") || !textutil.ValidHex(value.Token, 16) {
 		return actionResult{}, actionFail(400, "invalid_value")
 	}
 	var previous string

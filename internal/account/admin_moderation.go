@@ -3,7 +3,6 @@ package account
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -14,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -89,8 +89,7 @@ func deleteContent(query, editableSection string) adminActionFunc {
 				return actionResult{}, actionFail(400, "invalid_value")
 			}
 			if value.EditToken != nil {
-				token, err := hex.DecodeString(*value.EditToken)
-				if err != nil || len(token) != 16 {
+				if !textutil.ValidHex(*value.EditToken, 16) {
 					return actionResult{}, actionFail(400, "invalid_value")
 				}
 			}
@@ -162,10 +161,7 @@ func setSkinCategory(section, table string) adminActionFunc {
 			return actionResult{}, actionFail(400, "invalid_category")
 		}
 		if value.Token != nil {
-			if len(v.IDs) != 0 || len(*value.Token) != 32 {
-				return actionResult{}, actionFail(400, "invalid_value")
-			}
-			if _, err := hex.DecodeString(*value.Token); err != nil {
+			if len(v.IDs) != 0 || !textutil.ValidHex(*value.Token, 16) {
 				return actionResult{}, actionFail(400, "invalid_value")
 			}
 		}

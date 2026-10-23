@@ -3,11 +3,11 @@ package account
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"errors"
 	"net/http"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -139,8 +139,7 @@ func actionUndoModeration(a *Service, ctx context.Context, tx pgx.Tx, v actionRe
 }
 
 func validModerationSnapshot(v moderationSnapshot) bool {
-	token, err := hex.DecodeString(v.Token)
-	if err != nil || len(token) != 16 {
+	if !textutil.ValidHex(v.Token, 16) {
 		return false
 	}
 	if v.Moderation != "pending" && v.Moderation != "approved" && v.Moderation != "removed" {

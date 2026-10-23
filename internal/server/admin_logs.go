@@ -217,8 +217,12 @@ type logLineJSON struct {
 }
 
 func (e lokiEntry) JSON() logLineJSON {
+	return e.jsonWithHash(e.key().hash)
+}
+
+func (e lokiEntry) jsonWithHash(hash uint64) logLineJSON {
 	ts := strconv.FormatInt(e.ns, 10)
-	out := logLineJSON{ID: ts + ":" + strconv.FormatUint(e.key().hash, 16), TS: ts, Pod: e.pod}
+	out := logLineJSON{ID: ts + ":" + strconv.FormatUint(hash, 16), TS: ts, Pod: e.pod}
 	rest := e.line
 	if ts, stream, after, ok := cutCRIPrefix(rest); ok {
 		out.Time, out.Stream, rest = ts, stream, after
@@ -422,21 +426,23 @@ func (s *Server) lokiPods(ctx context.Context, window time.Duration, at time.Tim
 
 // sortLogEntries 按时间升序排列，最新的在最后；时间相同的按副本和内容排，保证结果稳定。
 func sortLogEntries(entries []lokiEntry) {
-	slices.SortStableFunc(entries, func(a, b lokiEntry) int {
-		if a.ns != b.ns {
-			if a.ns < b.ns {
-				return -1
-			}
-			return 1
-		}
-		if c := strings.Compare(a.pod, b.pod); c != 0 {
-			return c
-		}
-		return strings.Compare(a.line, b.line)
-	})
+	slices.SortStableFunc(entries, compareLogEntries)
 }
 
-func logLinesJSON(entries []lokiEntry) []logLineJSON {
+func compareLogEntries(a, b lokiEntry) int {
+	if a.ns != b.ns {
+		if a.ns < b.ns {
+			return -1
+		}
+		return 1
+	}
+	if c := strings.Compare(a.pod, b.pod); c != 0 {
+		return c
+	}
+	return strings.Compare(a.line, b.line)
+}
+
+func logLinesJSON[E interface{ JSON() logLineJSON }](entries []E) []logLineJSON {
 	out := make([]logLineJSON, len(entries))
 	for i, e := range entries {
 		out[i] = e.JSON()
@@ -562,6 +568,16 @@ func (e lokiEntry) key() logKey {
 	return logKey{e.ns, hash}
 }
 
+// logStreamEntry 在流的去重与输出阶段携带已计算的摘要；原始 Loki 行保持只读。
+type logStreamEntry struct {
+	lokiEntry
+	hash uint64
+}
+
+func (e logStreamEntry) JSON() logLineJSON {
+	return e.lokiEntry.jsonWithHash(e.hash)
+}
+
 // logTail 是一个日志流的读取进度。
 type logTail struct {
 	query string
@@ -578,7 +594,7 @@ type logTail struct {
 type logGap struct{ from, to int64 }
 
 // pollLogs 读取到 now 为止的新行，回看并去重。同时间戳分页按已读行数扩大请求，发送额度仍为每页五百条；超过单时间戳上限或落后太多时返回明确的缺口范围。
-func (s *Server) pollLogs(ctx context.Context, t *logTail, now int64) (out []lokiEntry, gaps []logGap, err error) {
+func (s *Server) pollLogs(ctx context.Context, t *logTail, now int64) (out []logStreamEntry, gaps []logGap, err error) {
 	if t.readAt == nil {
 		t.readAt = map[int64]int{}
 	}
@@ -630,7 +646,7 @@ func (s *Server) pollLogs(ctx context.Context, t *logTail, now int64) (out []lok
 				break
 			}
 			t.seen[k] = struct{}{}
-			out = append(out, e)
+			out = append(out, logStreamEntry{lokiEntry: e, hash: k.hash})
 			added++
 			n++
 		}
@@ -675,7 +691,7 @@ func (s *Server) pollLogs(ctx context.Context, t *logTail, now int64) (out []lok
 			delete(t.readAt, ns)
 		}
 	}
-	sortLogEntries(out)
+	slices.SortStableFunc(out, func(a, b logStreamEntry) int { return compareLogEntries(a.lokiEntry, b.lokiEntry) })
 	return out, gaps, nil
 }
 
@@ -830,8 +846,11 @@ func (s *Server) adminLogsStream(w http.ResponseWriter, r *http.Request) {
 			return ctx.Err() == nil && lokiFailed(err)
 		}
 		sortLogEntries(entries)
-		for _, e := range entries {
-			t.seen[e.key()] = struct{}{}
+		lines := make([]logLineJSON, len(entries))
+		for i, e := range entries {
+			key := e.key()
+			t.seen[key] = struct{}{}
+			lines[i] = e.jsonWithHash(key.hash)
 		}
 		if len(entries) > 0 {
 			// 回填只取了最新的 backfill 行，更早的行不再补发，否则会乱序出现在已显示的行之前。
@@ -839,7 +858,7 @@ func (s *Server) adminLogsStream(w http.ResponseWriter, r *http.Request) {
 		}
 		backfillPending = false
 		failures = 0
-		return send("lines", strconv.FormatInt(t.cursor, 10), map[string]any{"lines": logLinesJSON(entries)})
+		return send("lines", strconv.FormatInt(t.cursor, 10), map[string]any{"lines": lines})
 	}
 	if !sendBackfill() {
 		return

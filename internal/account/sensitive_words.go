@@ -318,6 +318,13 @@ func (s *sensitiveWords) record(ctx context.Context, store *Store, hits []Sensit
 	}
 }
 
+// 批次可能来自不同副本的无序 map，按主键顺序更新，避免交叉持锁。
+const sensitiveHitsUpsertSQL = `INSERT INTO admin_sensitive_hits(word_id,day,count)
+SELECT h.word_id,h.day::date,h.count FROM unnest($1::bigint[],$2::text[],$3::bigint[]) AS h(word_id,day,count)
+JOIN admin_sensitive_words w ON w.id=h.word_id
+ORDER BY h.word_id,h.day::date
+ON CONFLICT (word_id,day) DO UPDATE SET count=admin_sensitive_hits.count+EXCLUDED.count`
+
 // flush writes the pending hit counts in one statement. Counts for words deleted meanwhile are dropped; on failure the counts are merged back.
 func (s *sensitiveWords) flush(ctx context.Context, store *Store, now time.Time) error {
 	s.reload.Lock()
@@ -333,10 +340,7 @@ func (s *sensitiveWords) flush(ctx context.Context, store *Store, now time.Time)
 	for key, n := range pending {
 		ids, days, counts = append(ids, key.word), append(days, key.day), append(counts, n)
 	}
-	_, err := store.pool.Exec(ctx, `INSERT INTO admin_sensitive_hits(word_id,day,count)
-SELECT h.word_id,h.day::date,h.count FROM unnest($1::bigint[],$2::text[],$3::bigint[]) AS h(word_id,day,count)
-JOIN admin_sensitive_words w ON w.id=h.word_id
-ON CONFLICT (word_id,day) DO UPDATE SET count=admin_sensitive_hits.count+EXCLUDED.count`, ids, days, counts)
+	_, err := store.pool.Exec(ctx, sensitiveHitsUpsertSQL, ids, days, counts)
 	if err != nil {
 		s.mu.Lock()
 		if s.pending == nil {

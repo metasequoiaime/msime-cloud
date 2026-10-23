@@ -56,6 +56,9 @@ var feedbackList = adminList{
 
 // adminFeedbackScreenshot 返回一张反馈截图，match 是 `<反馈 ID>/screenshots/<0–2>`。响应禁止缓存并且沙箱化，和候选窗皮肤预览图一样。
 func (a *Service) adminFeedbackScreenshot(w http.ResponseWriter, r *http.Request, match string) {
+	if !requirePerm(w, r, PermTriageIssues) {
+		return
+	}
 	id, rest, ok := strings.Cut(match, "/screenshots/")
 	position, err := strconv.Atoi(rest)
 	if !ok || err != nil || position < 0 || position >= maxFeedbackScreenshots || len(rest) != 1 || len(id) != 36 || !validCommunityID(id) {

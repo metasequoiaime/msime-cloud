@@ -199,6 +199,33 @@ func TestAdminMePage(t *testing.T) {
 	}
 }
 
+func TestAdminMeCountsCommunityDeletions(t *testing.T) {
+	db := testStore(t)
+	truncateAdminPersonal(t, db)
+	a := &Service{store: db}
+	email := "reviewer@example.test"
+	actor := "google:reviewer:" + email
+	access := AdminAccess{Actor: actor, Email: email, Role: "reviewer", Permissions: []string{PermReviewCommunity}}
+	actions := []string{"delete_skin", "delete_candidate_skin", "delete_plugin", "delete_dictionary", "delete_reply", "delete_phrase"}
+	for i, action := range actions {
+		// 同一邮箱的网页会话和个人令牌均计入；其他管理员、上个月和无关操作不计入。
+		if _, err := db.pool.Exec(t.Context(), `INSERT INTO admin_audit(action,target,actor,created_at) VALUES
+($1,'session',$2,now()),($1,'token',$3,now()),
+($1,'other','google:other:other@example.test',now()),
+($1,'last-month',$2,date_trunc('month',now(),'UTC')-interval '1 second'),
+('admin_pref_set','weekly_digest',$2,now())`, action, actor, "pat:"+email); err != nil {
+			t.Fatal(err)
+		}
+		me := decodeMe(t, meRequest(a, access, "GET", "", ""))
+		if want := int64(2 * (i + 1)); me.Stats.Community != want {
+			t.Fatalf("%s 后社区处理量为 %d，期望 %d", action, me.Stats.Community, want)
+		}
+		if me.Stats.DictPRs != 0 || me.Stats.Issues != 0 || me.Stats.AvgHandleHours != nil {
+			t.Fatalf("删除审计影响了其他个人统计：%+v", me.Stats)
+		}
+	}
+}
+
 func TestAdminPersonalAccessTokens(t *testing.T) {
 	db := testStore(t)
 	ctx := context.Background()

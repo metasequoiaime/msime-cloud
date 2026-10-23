@@ -1,4 +1,4 @@
-// Package publictools 定义 QQ Bot、MCP 和 CLI 共用的公共只读查询。
+// Package publictools 定义 QQ Bot、MCP 和 CLI 共用的公共查询，以及仅显式管理员入口使用的独立只读目录。
 package publictools
 
 import (
@@ -364,10 +364,14 @@ func NewServer(execute Execute, version string) *mcp.Server {
 
 // HTTP 使用管理员选定的服务地址；公共查询不附带任何会话，输入查询只使用显式令牌。
 func HTTP(client *http.Client, base, token string) (Execute, error) {
+	return httpTransport(client, base, token, "public")
+}
+
+func httpTransport(client *http.Client, base, token, scope string) (Execute, error) {
 	u, err := url.Parse(base)
 	// 空查询和空片段同样会吞掉后续拼接的工具路径，必须在发请求或启动 MCP 前拒绝。
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(base, "#") {
-		return nil, errors.New("invalid_public_api_url")
+		return nil, errors.New("invalid_" + scope + "_api_url")
 	}
 	isolated := *client
 	isolated.CheckRedirect = httpclient.StopRedirect
@@ -386,11 +390,11 @@ func HTTP(client *http.Client, base, token string) (Execute, error) {
 		}
 		response, err := isolated.Do(req)
 		if err != nil {
-			return nil, errors.New("public_api_unavailable")
+			return nil, errors.New(scope + "_api_unavailable")
 		}
 		defer response.Body.Close()
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
-			return nil, fmt.Errorf("public_api_status_%d", response.StatusCode)
+			return nil, fmt.Errorf("%s_api_status_%d", scope, response.StatusCode)
 		}
 		reader := io.LimitReader(response.Body, MaxResponse+1)
 		var data []byte
@@ -403,7 +407,7 @@ func HTTP(client *http.Client, base, token string) (Execute, error) {
 			data, err = io.ReadAll(reader)
 		}
 		if err != nil || len(data) > MaxResponse {
-			return nil, errors.New("public_api_response_too_large_or_unreadable")
+			return nil, errors.New(scope + "_api_response_too_large_or_unreadable")
 		}
 		return data, nil
 	}, nil

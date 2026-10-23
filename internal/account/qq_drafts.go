@@ -186,7 +186,12 @@ WHERE id IN (SELECT id FROM locked WHERE `+qqDraftUnclaimed+` AND created_at>clo
 
 // OpenQQDrafts 列出有效期内还没提交的草稿（包括认领超时的），最早的在前，另外返回这样的草稿一共有多少份。原来最新的在前，积压超过 limit 份时最早的那些永远排不到，30 天后被 Store.Prune 悄悄删掉；最早的在前，快过期的先被看到。
 func (a *Service) OpenQQDrafts(ctx context.Context, limit int) ([]QQDraft, int, error) {
-	rows, err := a.store.pool.Query(ctx, `SELECT id,subject,original,report,created_at,count(*) OVER() FROM qq_drafts WHERE `+qqDraftUnclaimed+` AND created_at>now()-$1::interval ORDER BY created_at ASC, id ASC LIMIT $2`, QQDraftWindow.String(), limit)
+	return a.OpenQQDraftsPage(ctx, limit, 0)
+}
+
+// OpenQQDraftsPage 按原列表顺序分页，越过末页时仍返回有效记录总数。
+func (a *Service) OpenQQDraftsPage(ctx context.Context, limit, offset int) ([]QQDraft, int, error) {
+	rows, err := a.store.pool.Query(ctx, `SELECT id,subject,original,report,created_at,count(*) OVER() FROM qq_drafts WHERE `+qqDraftUnclaimed+` AND created_at>now()-$1::interval ORDER BY created_at ASC, id ASC LIMIT $2 OFFSET $3`, QQDraftWindow.String(), limit, offset)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -200,5 +205,12 @@ func (a *Service) OpenQQDrafts(ctx context.Context, limit int) ([]QQDraft, int, 
 		}
 		drafts = append(drafts, d)
 	}
-	return drafts, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	rows.Close()
+	if len(drafts) == 0 && offset > 0 {
+		err = a.store.pool.QueryRow(ctx, `SELECT count(*) FROM qq_drafts WHERE `+qqDraftUnclaimed+` AND created_at>now()-$1::interval`, QQDraftWindow.String()).Scan(&total)
+	}
+	return drafts, total, err
 }

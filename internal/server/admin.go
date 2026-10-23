@@ -88,6 +88,11 @@ var adminServerRoutes = []struct {
 	{"/api/dictionary/file", (*Server).adminDictionary},
 	{"/api/dictionary/search", (*Server).adminDictionary},
 	{"/api/dictionary/changes", (*Server).adminDictionary},
+	// QQ 积压只读查询：admin_qq_backlog.go
+	{"/api/qq-bot/drafts", (*Server).adminQQBacklog},
+	{"/api/qq-bot/drafts/{}", (*Server).adminQQBacklog},
+	{"/api/qq-bot/doc-gaps", (*Server).adminQQBacklog},
+	{"/api/qq-bot/doc-gaps/{}", (*Server).adminQQBacklog},
 	// U3 issues: admin_issues.go
 	{"/api/issues", (*Server).adminIssues},
 	{"/api/issues/", (*Server).adminIssues},
@@ -225,7 +230,7 @@ func (s *Server) adminAccess(ctx context.Context, actor, email string) (account.
 	return account.AdminAccess{Actor: actor, Email: strings.ToLower(email), Role: role, Permissions: perms}, nil
 }
 
-// requirePerm writes 403 permission_denied and returns false when the caller lacks perm. Every console write checks one; reads are open to every role.
+// requirePerm 在缺少权限时返回 403。写操作和包含 QQ 原始反馈的读取都检查相应权限。
 func requirePerm(w http.ResponseWriter, r *http.Request, perm string) bool {
 	if account.AdminCan(r.Context(), perm) {
 		return true

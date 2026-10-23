@@ -58,7 +58,12 @@ func (a *Service) QQFAQCandidate(ctx context.Context, id int64) (QQFAQCandidate,
 
 // OpenQQFAQCandidates 列出有效期内还没处理的候选（包括认领超时的），最早的在前，另外返回这样的候选一共有多少条：和 OpenQQDrafts 一样，积压超过 limit 条时最早的那些原来排不到就过期了。
 func (a *Service) OpenQQFAQCandidates(ctx context.Context, limit int) ([]QQFAQCandidate, int, error) {
-	rows, err := a.store.pool.Query(ctx, `SELECT id,question,answer,created_at,count(*) OVER() FROM qq_faq_candidates WHERE `+qqFAQCandidateClaimable+` AND created_at>now()-$1::interval ORDER BY created_at ASC, id ASC LIMIT $2`, QQFAQCandidateWindow.String(), limit)
+	return a.OpenQQFAQCandidatesPage(ctx, limit, 0)
+}
+
+// OpenQQFAQCandidatesPage 按原列表顺序分页，越过末页时仍返回有效记录总数。
+func (a *Service) OpenQQFAQCandidatesPage(ctx context.Context, limit, offset int) ([]QQFAQCandidate, int, error) {
+	rows, err := a.store.pool.Query(ctx, `SELECT id,question,answer,created_at,count(*) OVER() FROM qq_faq_candidates WHERE `+qqFAQCandidateClaimable+` AND created_at>now()-$1::interval ORDER BY created_at ASC, id ASC LIMIT $2 OFFSET $3`, QQFAQCandidateWindow.String(), limit, offset)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -72,7 +77,14 @@ func (a *Service) OpenQQFAQCandidates(ctx context.Context, limit int) ([]QQFAQCa
 		}
 		out = append(out, c)
 	}
-	return out, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	rows.Close()
+	if len(out) == 0 && offset > 0 {
+		err = a.store.pool.QueryRow(ctx, `SELECT count(*) FROM qq_faq_candidates WHERE `+qqFAQCandidateClaimable+` AND created_at>now()-$1::interval`, QQFAQCandidateWindow.String()).Scan(&total)
+	}
+	return out, total, err
 }
 
 // ClaimQQFAQCandidate 认领一条还没处理的候选准备写进 FAQ（state 改成 writing），返回是否认领到：两个管理员同时发「写进FAQ F3」时只有一个能认领，不会开两个 PR。认领超过 QQFAQCandidateClaimTimeout 还在 writing 的可以重新认领。

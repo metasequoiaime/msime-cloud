@@ -32,6 +32,7 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
 // QQ 群反馈机器人。群友在 QQ 群里 @机器人 描述遇到的问题或想要的功能，QQ 开放平台把事件以 Webhook 推到 qqBotEventsPath；服务端校验 Ed25519 签名、按消息 id 在所有副本间去重后立即应答，再在后台处理：大多数消息按知识库答疑；管理员明确要求记录（「提issue」命令或「记一下」这类说法）的具体 bug 或需求，用 chat 端点整理成结构化反馈，先对照知识库确认不是已有功能或正常现象，再用管理后台的 GitHub App 新建 issue，或补充到已有的同一问题下，最后在群里被动回复 issue 编号。官方机器人只能收到 @它 的消息，收不到群里的其他聊天。群友的原话、昵称和 openid 不写进 issue，也不写进日志：issue 里只有模型转述后的内容，并且打断了 @ 提及、# 引用和链接。
@@ -1611,14 +1612,11 @@ func qqReportPlatform(platform string) string {
 			return known
 		}
 	}
-	for i := 0; i < len(platform); i++ {
-		if platform[i] >= utf8.RuneSelf {
-			// EqualFold 只覆盖等长的 ASCII 变体；保留原实现对 Unicode 大小写的兼容语义。
-			lower := strings.ToLower(platform)
-			if _, known := qqPlatformNames[lower]; known {
-				return lower
-			}
-			return ""
+	if !textutil.IsASCII(platform) {
+		// EqualFold 只覆盖等长的 ASCII 变体；保留原实现对 Unicode 大小写的兼容语义。
+		lower := strings.ToLower(platform)
+		if _, known := qqPlatformNames[lower]; known {
+			return lower
 		}
 	}
 	return ""
@@ -1868,13 +1866,11 @@ type qqWindowsProductText struct {
 
 func (m *qqWindowsProductText) hasWord(words []string) bool {
 	text := m.raw
-	for i := range text {
-		if text[i] >= utf8.RuneSelf {
-			if m.lower == "" {
-				m.lower = strings.ToLower(text)
-			}
-			return slices.ContainsFunc(words, func(word string) bool { return strings.Contains(m.lower, word) })
+	if !textutil.IsASCII(text) {
+		if m.lower == "" {
+			m.lower = strings.ToLower(text)
 		}
+		return slices.ContainsFunc(words, func(word string) bool { return strings.Contains(m.lower, word) })
 	}
 	return slices.ContainsFunc(words, func(word string) bool {
 		if len(word) > len(text) {

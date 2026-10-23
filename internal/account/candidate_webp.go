@@ -140,6 +140,16 @@ func candidateWebPFrame(chunks []candidateWebPChunk, width, height int) ([]byte,
 	), true
 }
 
+// candidateWebPFramePayload 只接收 candidateWebPFrame 构造的静态帧，移除 RIFF 头
+// 和仅供静态解码使用的可选 VP8X 块，保留已清理且补齐偶数字节的 ALPH 与位流块。
+func candidateWebPFramePayload(frame []byte) []byte {
+	payload := frame[12:]
+	if string(payload[:4]) == "VP8X" {
+		payload = payload[8+10:]
+	}
+	return payload
+}
+
 // parseCandidateWebP 按 RIFF/ANMF 结构预检边界和帧数，清除 EXIF、XMP、ICCP
 // 与未知块；循环次数、背景色、帧区域、混合、处置和时长保持不变。
 func parseCandidateWebP(data []byte) (*candidateWebP, string) {
@@ -154,7 +164,7 @@ func parseCandidateWebP(data []byte) (*candidateWebP, string) {
 	a := &candidateWebP{}
 	var header, anim []byte
 	var static []candidateWebPChunk
-	var clean []byte
+	animationSize := 0
 	for i, chunk := range chunks {
 		switch chunk.kind {
 		case "VP8X":
@@ -168,13 +178,11 @@ func parseCandidateWebP(data []byte) (*candidateWebP, string) {
 			}
 			header[0] &= 0x12
 			header[1], header[2], header[3] = 0, 0, 0
-			clean = candidateWebPAppend(clean, "VP8X", header)
 		case "ANIM":
 			if header == nil || header[0]&2 == 0 || anim != nil || a.images != 0 || len(chunk.body) != 6 {
 				return nil, invalid
 			}
 			anim = chunk.body
-			clean = candidateWebPAppend(clean, "ANIM", anim)
 		case "ANMF":
 			if anim == nil || len(chunk.body) < 16 {
 				return nil, invalid
@@ -198,15 +206,7 @@ func parseCandidateWebP(data []byte) (*candidateWebP, string) {
 				return nil, invalid
 			}
 			a.frames = append(a.frames, frame)
-			// 静态帧的 VP8X 是解码适配层；ANMF 内只写 ALPH 和位流块。
-			filtered, _ := candidateWebPChunks(frame[12:])
-			payload := bytes.Clone(h)
-			for _, f := range filtered {
-				if f.kind != "VP8X" {
-					payload = candidateWebPAppend(payload, f.kind, f.body)
-				}
-			}
-			clean = candidateWebPAppend(clean, "ANMF", payload)
+			animationSize += 8 + len(h) + len(candidateWebPFramePayload(frame))
 		case "ALPH", "VP8 ", "VP8L":
 			if header != nil && header[0]&2 != 0 {
 				return nil, invalid
@@ -226,7 +226,24 @@ func parseCandidateWebP(data []byte) (*candidateWebP, string) {
 		if a.images == 0 {
 			return nil, invalid
 		}
-		a.clean = candidateWebPContainer(clean)
+		// 校验后按清理后的实际长度一次分配，直接写入控制头和帧载荷。
+		// 总长度不超过已校验的输入；ANMF 的 16 字节控制头与补齐后的子块均为偶数长度。
+		clean := candidateWebPBuffer(8 + len(header) + 8 + len(anim) + animationSize)
+		clean = candidateWebPAppend(clean, "VP8X", header)
+		clean = candidateWebPAppend(clean, "ANIM", anim)
+		frameIndex := 0
+		for _, chunk := range chunks {
+			if chunk.kind != "ANMF" {
+				continue
+			}
+			payload := candidateWebPFramePayload(a.frames[frameIndex])
+			frameIndex++
+			clean = append(clean, "ANMF"...)
+			clean = binary.LittleEndian.AppendUint32(clean, uint32(16+len(payload)))
+			clean = append(clean, chunk.body[:16]...)
+			clean = append(clean, payload...)
+		}
+		a.clean = clean
 	}
 	return a, ""
 }

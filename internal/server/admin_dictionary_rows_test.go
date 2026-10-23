@@ -121,7 +121,14 @@ func TestDictionaryRowsCommentQueryBudget(t *testing.T) {
 		}
 	})
 	t.Logf("当前 %s，原实现 %s", current, previous)
-	if previous.N == 0 || current.N == 0 || current.NsPerOp() >= previous.NsPerOp()*12/10 {
+	if previous.N == 0 || current.N == 0 {
+		t.Fatal("注释行查询没有完成基准测量")
+	}
+	if current.AllocedBytesPerOp() >= previous.AllocedBytesPerOp() {
+		t.Fatalf("注释行查询没有减少分配：当前 %d 字节，原实现 %d 字节", current.AllocedBytesPerOp(), previous.AllocedBytesPerOp())
+	}
+	// 覆盖率仅插桩生产函数，测试文件中的参考实现不插桩，耗时不可比；普通 race 检查仍执行原速度门槛，所有构建都检查分配改善。
+	if testing.CoverMode() == "" && current.NsPerOp() >= previous.NsPerOp()*12/10 {
 		t.Fatalf("注释行查询没有达到预期加速：当前 %s，原实现 %s", current, previous)
 	}
 }

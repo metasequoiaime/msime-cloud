@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpdeadline"
 	"github.com/metasequoiaime/MSIME-Backend/internal/skins"
 )
 
@@ -23,9 +24,7 @@ func (input *candidateUpload) setCandidateResources(extended bool) {
 
 // readCandidateUpload 延长本次上传的连接期限，先校验分类声明，再按上传大小上限读取请求体。
 func readCandidateUpload(w http.ResponseWriter, r *http.Request, input any, resourcesEnabled bool) (withCategory, ok bool) {
-	controller := http.NewResponseController(w)
-	_ = controller.SetReadDeadline(time.Now().Add(candidatePublishTimeout))
-	_ = controller.SetWriteDeadline(time.Now().Add(candidatePublishTimeout + 5*time.Second))
+	httpdeadline.Extend(w, candidatePublishTimeout, candidatePublishTimeout+5*time.Second)
 	query := r.URL.Query()
 	withCategory, ok = candidateIncludeCategory(query)
 	if !ok {

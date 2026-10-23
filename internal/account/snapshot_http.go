@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpdeadline"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 )
 
@@ -53,10 +54,8 @@ func (a *Service) restoreDictionarySnapshot(w http.ResponseWriter, r *http.Reque
 		writeError(w, 503, "snapshot_restore_busy")
 		return
 	}
-	controller := http.NewResponseController(w)
-	// Extend only this upload's socket deadlines; other API timeouts are unchanged.
-	_ = controller.SetReadDeadline(time.Now().Add(snapshotRestoreTimeout))
-	_ = controller.SetWriteDeadline(time.Now().Add(snapshotRestoreTimeout + 5*time.Second))
+	// 仅延长本次上传的连接期限。
+	httpdeadline.Extend(w, snapshotRestoreTimeout, snapshotRestoreTimeout+5*time.Second)
 	r.Body = http.MaxBytesReader(w, r.Body, snapshotRestoreBytes)
 	revision, err := a.store.RestoreDictionarySnapshot(r.Context(), user.UserID, expected, r.Body, a.engine)
 	if err != nil {

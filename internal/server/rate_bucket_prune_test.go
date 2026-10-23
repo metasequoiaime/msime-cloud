@@ -160,6 +160,9 @@ func TestRateBucketPruneScanBudget(t *testing.T) {
 		t.Run(id, func(t *testing.T) {
 			client := Client{ID: id, RequestsPerMinute: rateBucketTestBudget}
 			previous, current := rateBucketPruneServer(10001, now), rateBucketPruneServer(10001, now)
+			// 首次满桶调用会建立回收下界，先预热两份状态，避免短基准把首次扫描计入热路径。
+			_ = previousRateBucketAllow(previous, client, now)
+			_ = current.allow(client, now)
 			var got bool
 			baseline := testing.Benchmark(func(b *testing.B) {
 				for b.Loop() {

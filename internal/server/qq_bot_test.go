@@ -241,7 +241,7 @@ var qqIssuesPath = regexp.MustCompile(`^/repos/([^/]+/[^/]+)/issues$`)
 
 // qqFake 同时扮演 chat 端点、QQ 开放平台和 GitHub REST API。
 type qqFake struct {
-	t  *testing.T
+	t  testing.TB
 	mu sync.Mutex
 	// chat
 	summary   string
@@ -831,7 +831,7 @@ var qqTestKnowledge = map[string]string{
 // qqAppAuthor 是机器人自己（测试里的 App 42，slug msime-bot）写的 issue 和评论带的作者字段，拼在 JSON 对象里。
 const qqAppAuthor = `"user":{"login":"msime-bot[bot]"},"performed_via_github_app":{"id":42}`
 
-func qqServer(t *testing.T) (*Server, *qqFake, *qqLimiter) {
+func qqServer(t testing.TB) (*Server, *qqFake, *qqLimiter) {
 	t.Helper()
 	fake := &qqFake{t: t, summary: qqBugSummary, duplicate: `{"duplicate":0}`, selected: `{"sections":[1]}`, answer: `{"type":"answered","answer":"在设置的「输入方案」里选五笔。"}`}
 	s := fixture(t, fake.ServeHTTP)

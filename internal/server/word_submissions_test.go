@@ -43,7 +43,7 @@ var (
 	wordsTestKey     *rsa.PrivateKey
 )
 
-func wordsKey(t *testing.T) *rsa.PrivateKey {
+func wordsKey(t testing.TB) *rsa.PrivateKey {
 	t.Helper()
 	wordsTestKeyOnce.Do(func() {
 		var err error

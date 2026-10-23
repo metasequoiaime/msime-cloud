@@ -2,6 +2,7 @@ import { cloneElement, useId, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { errorMessage, useAPI } from "../../api/client";
+import { invalidateQueries } from "../../api/cache";
 import type { Detail, Section } from "../../api/community";
 import { candidateCategories, candidateCategoryLabels, moderationLabels } from "../../api/community";
 import { keys } from "../../api/keys";
@@ -89,9 +90,7 @@ export function ContentEditor({ section, detail, onClose, onSaved }: { section: 
       await api.action({ action: `${detail ? "update" : "create"}_${actionKinds[section]}`, section, id, value });
     },
     onSuccess: () => {
-      void client.invalidateQueries({ queryKey: keys.page("community") });
-      void client.invalidateQueries({ queryKey: keys.shell });
-      void client.invalidateQueries({ queryKey: keys.page("users") });
+      void invalidateQueries(client, keys.page("community"), keys.shell, keys.page("users"));
       toast(`「${name.trim()}」已保存`);
       onSaved(id);
     },

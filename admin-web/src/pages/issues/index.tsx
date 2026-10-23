@@ -6,6 +6,7 @@ import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/
 import type { UseQueryResult } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { errorMessage, isGithubDisabled, useAPI } from "../../api/client";
+import { invalidateQueries } from "../../api/cache";
 import { keys } from "../../api/keys";
 import { issueActionResultSchema, issueDetailSchema, issueKey, issuePath, issueRef, issuesSchema, parseIssueKey } from "../../api/issues";
 import type { IssueAction, IssueDetail, IssueEvent, IssuePlatform, IssueRef, IssueRow, IssueState, IssueStateFilter } from "../../api/issues";
@@ -135,10 +136,7 @@ export default function IssuesPage() {
     enabled: Boolean(openRef),
   });
 
-  const refresh = useCallback(() => Promise.all([
-    client.invalidateQueries({ queryKey: keys.page("issues") }),
-    client.invalidateQueries({ queryKey: keys.shell }),
-  ]), [client]);
+  const refresh = useCallback(() => invalidateQueries(client, keys.page("issues"), keys.shell), [client]);
 
   const mutation = useMutation({
     mutationFn: (input: ActionInput) => api.post("issues/actions", issueActionResultSchema, input),

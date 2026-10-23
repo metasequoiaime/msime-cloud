@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { createActionUndo } from "../../api/action-undo";
 import { errorMessage, isAPIError, useAPI } from "../../api/client";
+import { invalidateQueries } from "../../api/cache";
 import { keys } from "../../api/keys";
 import type { CandidateCategory, Moderation, Section } from "../../api/community";
 import { candidateCategoryLabels, categoryUndoSchema, moderationUndoSchema, removeReasons } from "../../api/community";
@@ -28,10 +29,7 @@ export function useModeration() {
   const confirm = useConfirm();
   const toast = useToast();
 
-  const refresh = useCallback(() => Promise.all([
-    client.invalidateQueries({ queryKey: keys.page("community") }),
-    client.invalidateQueries({ queryKey: keys.shell }),
-  ]), [client]);
+  const refresh = useCallback(() => invalidateQueries(client, keys.page("community"), keys.shell), [client]);
 
   const run = useCallback(async (body: Parameters<typeof api.action>[0]) => {
     // 首次操作和撤销共用审核专用错误提示。

@@ -6,6 +6,7 @@ import { differenceInCalendarDays } from "date-fns";
 import { Copy } from "lucide-react";
 import { useAuth } from "../../auth";
 import { errorMessage, useAPI } from "../../api/client";
+import { invalidateQueries } from "../../api/cache";
 import { keys } from "../../api/keys";
 import { issuedTokenSchema, meActionSchema, meSchema, prefRows } from "../../api/me";
 import type { Me, MeAction, MeSession } from "../../api/me";
@@ -118,8 +119,8 @@ function Preferences({ me }: { me: Me }) {
       if (context?.previous && client.getQueryCache().find({ queryKey: meKey, exact: true }) === context.query) client.setQueryData(meKey, context.previous);
       toast(`操作失败：${errorMessage(error)}`);
     },
-    // The notify_* preferences filter the bell's list and unread count on the server, so both refresh with the profile.
-    onSettled: () => Promise.all([client.invalidateQueries({ queryKey: meKey }), client.invalidateQueries({ queryKey: keys.shell }), client.invalidateQueries({ queryKey: keys.notifications })]),
+    // 服务端按通知偏好过滤通知列表和未读数，因此两者都要随个人资料一起刷新。
+    onSettled: () => invalidateQueries(client, meKey, keys.shell, keys.notifications),
   });
   return <SectionCard title="通知偏好">
     {prefRows.map(row => (

@@ -2,6 +2,7 @@ import { useCallback, useMemo } from "react";
 import { createActionUndo } from "../../api/action-undo";
 import { useQueryClient } from "@tanstack/react-query";
 import { errorMessage, useAPI } from "../../api/client";
+import { invalidateQueries } from "../../api/cache";
 import { keys } from "../../api/keys";
 import { banResultSchema, unbanResultSchema, banUndoSchema } from "../../api/users";
 import { useConfirm } from "../../ui/confirm";
@@ -16,12 +17,8 @@ export function useUserActions() {
   const client = useQueryClient();
   const confirm = useConfirm();
   const toast = useToast();
-  // A ban changes the list, stats and detail, and removes community content, which moves the shell's pending-community badge.
-  const refresh = useCallback(() => Promise.all([
-    client.invalidateQueries({ queryKey: keys.page("users") }),
-    client.invalidateQueries({ queryKey: keys.page("community") }),
-    client.invalidateQueries({ queryKey: keys.shell }),
-  ]), [client]);
+  // 封禁会改变用户列表、统计和详情，并移除社区内容，因此也要刷新外壳的社区待审核数。
+  const refresh = useCallback(() => invalidateQueries(client, keys.page("users"), keys.page("community"), keys.shell), [client]);
 
   const runBan = useCallback(async (id: string, reason: string) => {
     try {

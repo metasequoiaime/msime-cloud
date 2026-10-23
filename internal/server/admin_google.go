@@ -42,7 +42,8 @@ func (c *AdminGoogleConfig) validate(host string) error {
 		c.RedirectURI = "https://" + host + adminCallbackPath
 	}
 	u, err := url.Parse(c.RedirectURI)
-	if err != nil || u.Hostname() != host || u.User != nil || u.Path != adminCallbackPath || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || (u.Scheme != "https" && !(u.Scheme == "http" && host == "admin.localhost")) {
+	// url.Parse 不保留空片段的标记，必须检查原始地址，避免把带 # 的回调传给 Google。
+	if err != nil || u.Hostname() != host || u.User != nil || u.Path != adminCallbackPath || u.RawQuery != "" || u.ForceQuery || strings.Contains(c.RedirectURI, "#") || (u.Scheme != "https" && !(u.Scheme == "http" && host == "admin.localhost")) {
 		return errors.New("invalid admin Google redirect_uri")
 	}
 	if strings.TrimSpace(c.ClientID) != c.ClientID || len(c.ClientID) > 255 || c.secret == "" || strings.ContainsAny(c.secret, "\r\n") {

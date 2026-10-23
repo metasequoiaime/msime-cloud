@@ -13214,7 +13214,12 @@
         "tags": [
           "皮肤社区"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "userSession": []
+          }
+        ],
         "parameters": [
           {
             "name": "q",
@@ -13781,7 +13786,12 @@
         "tags": [
           "皮肤社区"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "userSession": []
+          }
+        ],
         "parameters": [
           {
             "name": "id",
@@ -14756,7 +14766,12 @@
         "tags": [
           "皮肤社区"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "userSession": []
+          }
+        ],
         "parameters": [
           {
             "name": "q",
@@ -15501,7 +15516,12 @@
         "tags": [
           "皮肤社区"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "userSession": []
+          }
+        ],
         "parameters": [
           {
             "name": "id",
@@ -16245,7 +16265,12 @@
         "tags": [
           "皮肤社区"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "userSession": []
+          }
+        ],
         "parameters": [
           {
             "name": "id",
@@ -16318,7 +16343,12 @@
         "tags": [
           "皮肤社区"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "userSession": []
+          }
+        ],
         "parameters": [
           {
             "name": "id",
@@ -16577,7 +16607,12 @@
         "tags": [
           "插件社区"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "userSession": []
+          }
+        ],
         "parameters": [
           {
             "name": "q",
@@ -17099,7 +17134,12 @@
         "tags": [
           "插件社区"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "userSession": []
+          }
+        ],
         "parameters": [
           {
             "name": "id",
@@ -17604,7 +17644,12 @@
         "tags": [
           "创作社区"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "userSession": []
+          }
+        ],
         "parameters": [
           {
             "name": "kind",
@@ -18058,7 +18103,12 @@
         "tags": [
           "创作社区"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "userSession": []
+          }
+        ],
         "parameters": [
           {
             "name": "id",

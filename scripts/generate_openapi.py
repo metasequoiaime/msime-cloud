@@ -265,6 +265,8 @@ moderation_param = {'name':'fields','in':'query','schema':string(enum=['','moder
 saved_fields = {'saved':{'type':'boolean','description':'当前用户是否收藏，匿名为 false。仅在请求带 fields=saved 时出现。'},'saves':{'type':'integer','description':'收藏总数。仅在请求带 fields=saved 时出现。'}}
 community_fields_param = {'name':'fields','in':'query','schema':string(enum=['','moderation','saved','moderation,saved'],default=''),'description':'逗号分隔：moderation 表示在自己的作品上接收 moderation 审核状态；saved 表示每个条目带上 saved 与 saves。其他值返回 400 invalid_fields。不带此参数时响应与以前逐字节相同。'}
 community_scope_param = {'name':'scope','in':'query','schema':string(enum=['','mine','saved'],default=''),'description':'mine 只列出自己的作品（含已下架）；saved 只列出自己收藏的作品，按收藏时间倒序。两者都需要用户会话，否则 401 user_session_required；其他值返回 400 invalid_scope。'}
+# 空要求允许匿名浏览，用户会话用于个人字段、作者权限与 mine/saved 范围。
+community_optional_security = [{}, {'userSession':[]}]
 save_request = obj({'saved':{'type':'boolean'}},['saved'],True)
 save_response = obj({'saved':{'type':'boolean'},'saves':{'type':'integer','description':'收藏总数'}},['saved','saves'])
 screening_responses = {'422':{'description':'名称、描述或内容命中拦截级敏感词（blocked_content），未保存；请修改后再提交','content':{'application/json':{'schema':{'$ref':'#/components/schemas/Error'}}}},'503':{'description':'服务不可用；或敏感词检查暂时不可用（screening_unavailable，带 Retry-After，未保存，稍后重试）','headers':{'Retry-After':{'description':'screening_unavailable 时的重试等待秒数','schema':{'type':'integer'}}}}}
@@ -290,7 +292,7 @@ for path,method,title,body,response,status in [
     if method=='patch' and path=='/v1/community/skins/{id}': parameters.append(moderation_param)
     if method=='get' and path=='/v1/community/skins': parameters.append({'name':'category','in':'query','schema':string(enum=candidate_categories),'description':'只列出该图库分类的作品；未知分类返回 400 invalid_category。'})
     if response is community_skin or method=='get' and path=='/v1/community/skins': parameters.append(category_include_param)
-    operation={'summary':title,'tags':['皮肤社区'],'security':[] if method=='get' else [{'userSession':[]}], 'parameters':parameters,
+    operation={'summary':title,'tags':['皮肤社区'],'security':community_optional_security if method=='get' else [{'userSession':[]}], 'parameters':parameters,
       'description':'仅支持数据型 Apple 键盘 v1。发布最多 50 款，重试使用相同 UUID；下载人数按账号去重。登录即可评分，不能给自己的作品评分（403 download_before_rating_or_own_skin），已下架的作品不能评分（404）。收藏请求体为 {"saved":bool}，重复提交结果相同，返回收藏状态与收藏总数；已下架的作品只有作者本人可收藏，其他人 404。列表每页 20 条，不包含照片字节。作者自己已下架的作品只对作者可见。'+('仅作者可修改（他人或不存在返回 404 skin_not_found），请求体只有 category（缺省、null 或未知值返回 400 invalid_category），返回与详情相同的作品；不改变审核状态，设为当前值同样返回 200。' if method=='patch' else '')+'详见 docs/skin-community.md。',
       'responses':{status:{'description':'成功','content':{'application/json':{'schema':response}}},**{c:{'description':m} for c,m in [('400','参数无效'),('401','需要用户登录'),('403','正在评价自己的作品'),('404','皮肤不存在或非作者'),('409','发布配额已满或 UUID 冲突'),('429','请求过多'),('503','服务不可用')]}}}
     if body: operation['requestBody']={'required':True,'content':{'application/json':{'schema':body}}}
@@ -327,7 +329,7 @@ for path,method,title,body,response,status,description in [
     if path=='/v1/community/candidate-skins/{id}' and method=='get': parameters.append(fields)
     if method=='get' and path=='/v1/community/candidate-skins': parameters.append({'name':'category','in':'query','schema':string(enum=candidate_categories),'description':'只列出该图库分类的作品。'})
     if response is community_candidate_skin or method=='get' and path=='/v1/community/candidate-skins': parameters.append(category_include_param)
-    operation={'summary':title,'tags':['皮肤社区'],'security':[] if method=='get' and not path.endswith('/sync') or method=='post' and path.endswith('/download') else [{'userSession':[]}],'parameters':parameters,
+    operation={'summary':title,'tags':['皮肤社区'],'security':community_optional_security if (method=='get' and not path.endswith('/sync')) or (method=='post' and path.endswith('/download')) else [{'userSession':[]}],'parameters':parameters,
       'description':description+' 详见 docs/skin-community.md。',
       'responses':{status:{'description':'成功','content':{'application/json':{'schema':response}}},**{c:{'description':m} for c,m in [('400','参数、清单或图片无效'),('401','需要用户登录'),('403','正在评价自己的作品'),('404','皮肤不存在、已下架、为他人的私有作品或非作者'),('409','配额已满、UUID 冲突或替换包 id 不符'),('415','需要 application/json'),('429','请求过多'),('503','服务不可用或图片处理繁忙')]}}}
     if body: operation['requestBody']={'required':True,'content':{'application/json':{'schema':body}}}
@@ -356,7 +358,7 @@ for path,method,title,body,response,status,description in [
     if '{id}' in path: parameters.append({'name':'id','in':'path','required':True,'schema':string(format='uuid')})
     elif method=='get': parameters=[{'name':'q','in':'query','schema':string(maxLength=128)},{'name':'kind','in':'query','schema':string(enum=['',*plugin_kinds],default='')},{'name':'offset','in':'query','schema':{'type':'integer','minimum':0,'maximum':100000,'default':0}},community_scope_param]
     if method=='get' and path in ('/v1/community/plugins','/v1/community/plugins/{id}'): parameters += [community_fields_param,plugin_kinds_param]
-    operation={'summary':title,'tags':['插件社区'],'security':[] if method=='get' else [{'userSession':[]}],'parameters':parameters,
+    operation={'summary':title,'tags':['插件社区'],'security':community_optional_security if method=='get' else [{'userSession':[]}],'parameters':parameters,
       'description':description+' 详见 docs/plugin-community.md。',
       'responses':{status:{'description':'成功','content':{'application/json':{'schema':response}}},**{c:{'description':m} for c,m in [('400','参数、清单或 zip 包无效'),('401','需要用户登录'),('403','正在评价自己的作品'),('404','插件不存在、已下架或非作者'),('409','配额已满或 UUID 冲突'),('415','需要 application/json'),('429','请求过多'),('503','服务不可用或校验繁忙')]}}}
     if body: operation['requestBody']={'required':True,'content':{'application/json':{'schema':body}}}
@@ -382,7 +384,7 @@ for path,method,title,body,response in [
     if '{id}' in path: parameters.append({'name':'id','in':'path','required':True,'schema':string(format='uuid')})
     elif method=='get': parameters=[{'name':'kind','in':'query','required':True,'schema':string(enum=['dictionary','reply','phrase'])},{'name':'scope','in':'query','schema':string(enum=['','saved','mine'])},{'name':'q','in':'query','schema':string(maxLength=128)},{'name':'offset','in':'query','schema':{'type':'integer','minimum':0,'maximum':1000000}}]
     if method=='get' and path in ('/v1/community/resources','/v1/community/resources/{id}'): parameters.append(moderation_param)
-    operation={'summary':title,'tags':['创作社区'],'security':[] if method=='get' else [{'userSession':[]}],'parameters':parameters,
+    operation={'summary':title,'tags':['创作社区'],'security':community_optional_security if method=='get' else [{'userSession':[]}],'parameters':parameters,
       'description':'发现和详情公开；saved/mine 范围需要用户会话。词库仅携带显式选定的 1–128 条记录，由 Engine 校验；回复仅携带提示词（不含密钥）；短语包仅携带 1–200 条无编码常用语（content.phrases），客户端本地安装进常用语。列表只返回请求的 kind，旧客户端不会收到短语包。每账号最多 50 份。新建 revision=0，更新携带当前 revision，冲突返回 409；相同内容重试不增加版本。收藏按账号去重。登录即可评分，不需要先收藏；不能给自己的作品评分（403 save_before_rating_or_own_resource），不存在或已下架的作品返回 404 resource_not_found。查看版本不会自动覆盖个人词库。',
       'responses':{'200':{'description':'成功','content':{'application/json':{'schema':response}}},**{code:{'description':message} for code,message in [('400','内容无效'),('401','需要登录'),('403','正在评价自己的作品'),('404','作品不存在或非作者'),('409','版本冲突或达到上限'),('429','请求过多'),('503','服务不可用')]}}}
     if body: operation['requestBody']={'required':True,'content':{'application/json':{'schema':body}}}

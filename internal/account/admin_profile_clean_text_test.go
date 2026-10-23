@@ -3,7 +3,6 @@ package account
 import (
 	"strings"
 	"testing"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -109,7 +108,7 @@ func adminProfileTextBeforeClean(s string, max int) string {
 		if c == utf8.RuneError && size == 1 {
 			continue
 		}
-		if !unicode.IsControl(c) {
+		if !adminProfileTextUnsafeRuneBefore(c) {
 			out = append(out, c)
 		}
 	}

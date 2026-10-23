@@ -288,6 +288,56 @@ func TestPluginSeedQuoting(t *testing.T) {
 	}
 }
 
+func TestPluginSeedDOBlock(t *testing.T) {
+	for _, tt := range []struct {
+		body, delimiter string
+	}{
+		{"BEGIN NULL; END", "$$"},
+		{"BEGIN PERFORM '$$'; END", "$seed_1$"},
+		{"BEGIN\nPERFORM '$$ $seed_1$ $seed_2$';\nEND", "$seed_3$"},
+	} {
+		if got, want := pluginSeedDOBlock(tt.body), "DO "+tt.delimiter+" "+tt.body+" "+tt.delimiter+";"; got != want {
+			t.Fatalf("匿名块正文或分隔符不符：%q，期望 %q", got, want)
+		}
+	}
+}
+
+func TestPluginSeedDollarQuotingExecutes(t *testing.T) {
+	s := testStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	var role string
+	if err := s.pool.QueryRow(ctx, `SELECT current_user`).Scan(&role); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"name", "description", "version"} {
+		t.Run(field, func(t *testing.T) {
+			root := t.TempDir()
+			value := "$$ $seed_1$ $seed_2$ Bob's"
+			manifest := pluginSeedEffect("quote-"+field, "合成插件", "合成说明")
+			switch field {
+			case "name":
+				manifest = strings.Replace(manifest, `name = "合成插件"`, fmt.Sprintf("name = %q", value), 1)
+			case "description":
+				manifest = strings.Replace(manifest, `description = "合成说明"`, fmt.Sprintf("description = %q", value), 1)
+			case "version":
+				manifest = strings.Replace(manifest, `version = "1.0.0"`, fmt.Sprintf("version = %q", value), 1)
+			}
+			pluginSeedDir(t, root, "quote-"+field, map[string]string{"plugin.toml": manifest})
+			sql := renderPluginSeedOK(t, root, role)
+			for range 2 {
+				if _, err := s.pool.Exec(ctx, sql); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var got string
+			if err := s.pool.QueryRow(ctx, "SELECT "+field+" FROM community_plugins WHERE plugin_id=$1", "quote-"+field).Scan(&got); err != nil || got != value {
+				t.Fatalf("字段未原样保存：%q，错误：%v", got, err)
+			}
+		})
+	}
+}
+
 func TestPluginSeedRefusesWhatPublishRejects(t *testing.T) {
 	refused := func(t *testing.T, root string, want ...string) {
 		t.Helper()

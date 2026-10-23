@@ -17,7 +17,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -148,22 +147,7 @@ func Call(ctx context.Context, execute Execute, name string, arguments json.RawM
 }
 
 // schemas 与对外展示的定义同源，避免 Bot、CLI 和 MCP 各自接受不同参数。
-var schemas = sync.OnceValue(func() map[string]*jsonschema.Resolved {
-	out := make(map[string]*jsonschema.Resolved)
-	for _, tool := range Definitions() {
-		raw, _ := json.Marshal(tool.InputSchema)
-		var schema jsonschema.Schema
-		if err := json.Unmarshal(raw, &schema); err != nil {
-			panic(err)
-		}
-		resolved, err := schema.Resolve(nil)
-		if err != nil {
-			panic(err)
-		}
-		out[tool.Name] = resolved
-	}
-	return out
-})
+var schemas = cachedToolSchemas(Definitions)
 
 func validate(name string, arguments json.RawMessage) error {
 	schema, ok := schemas()[name]

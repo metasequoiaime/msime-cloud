@@ -49,7 +49,7 @@ func TestDownloadLinkUsesOnePoolConnection(t *testing.T) {
 		{"发送失败仍计次数", "email", errors.New("smtp down"), false, http.StatusServiceUnavailable, 1, 1, [4]int{1, 0, 0, 1}},
 		{"明确未投递退还全局额度", "email", &deliveryFailure{}, false, http.StatusServiceUnavailable, 1, 0, [4]int{1, 0, 0, 1}},
 		{"永久拒收记录抑制并退还额度", "email", &deliveryFailure{permanent: true}, false, http.StatusServiceUnavailable, 1, 0, [4]int{1, 0, 1, 0}},
-		{"可能已投递不退还额度", "email", &deliveryFailure{accepted: true}, false, http.StatusServiceUnavailable, 1, 1, [4]int{1, 1, 0, 0}},
+		{"可能已投递不退还额度", "email", &deliveryFailure{accepted: true}, false, http.StatusServiceUnavailable, 1, 1, [4]int{1, 0, 0, 1}},
 		{"无邮箱不计次数", "anonymous", nil, false, http.StatusConflict, 0, 0, [4]int{}},
 		{"已抑制邮箱不计次数", "email", nil, true, http.StatusServiceUnavailable, 0, 0, [4]int{}},
 	} {

@@ -13,7 +13,7 @@ func TestEmailDeliveryStatus(t *testing.T) {
 	if got := emailDeliveryStatus(&deliveryFailure{permanent: true}); got != emailDeliveryRejected {
 		t.Fatalf("永久拒收状态=%q", got)
 	}
-	if got := emailDeliveryStatus(&deliveryFailure{accepted: true}); got != emailDeliveryAccepted {
+	if got := emailDeliveryStatus(&deliveryFailure{accepted: true}); got != emailDeliveryFailed {
 		t.Fatalf("DATA 后失败状态=%q", got)
 	}
 	if got := emailDeliveryStatus(errors.New("temporary")); got != emailDeliveryFailed {

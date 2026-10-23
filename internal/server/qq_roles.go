@@ -95,7 +95,7 @@ func (s *Server) qqIsAdmin(ctx context.Context, group, member, eventRole string)
 			r.unlisted = map[string]bool{}
 		}
 		r.unlisted[group] = true
-		slog.Info("qq bot: group roles ignored, group not in qq_bot.groups", "group_openid", group)
+		slog.Info("qq bot: group roles ignored, group not in qq_bot.groups")
 	}
 	if slices.Contains(s.qq.config.Admins, member) {
 		r.mu.Unlock()

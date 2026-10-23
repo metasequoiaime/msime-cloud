@@ -31,12 +31,15 @@ type qqRoles struct {
 	unavailableUntil time.Time
 	// unlisted 记下已经打过「群身份不算数」日志的群。
 	unlisted map[string]bool
+	// sequence 在锁内为事件和查询分配顺序，避免较早发出的查询覆盖新身份。
+	sequence uint64
 }
 
 type qqRoleEntry struct {
-	group string
-	admin bool
-	at    time.Time
+	group    string
+	admin    bool
+	at       time.Time
+	sequence uint64
 }
 
 // qqAPIError 是开放平台接口的失败：HTTP 状态和错误码。
@@ -107,7 +110,8 @@ func (s *Server) qqIsAdmin(ctx context.Context, group, member, eventRole string)
 		if r.entries == nil {
 			r.entries = map[string]qqRoleEntry{}
 		}
-		r.entries[key] = qqRoleEntry{group: group, admin: admin, at: now}
+		r.sequence++
+		r.entries[key] = qqRoleEntry{group: group, admin: admin, at: now, sequence: r.sequence}
 		r.mu.Unlock()
 		return admin
 	}
@@ -115,11 +119,13 @@ func (s *Server) qqIsAdmin(ctx context.Context, group, member, eventRole string)
 		r.mu.Unlock()
 		return entry.admin
 	}
-	unavailable := now.Before(r.unavailableUntil)
-	r.mu.Unlock()
-	if unavailable {
+	if now.Before(r.unavailableUntil) {
+		r.mu.Unlock()
 		return false
 	}
+	r.sequence++
+	sequence := r.sequence
+	r.mu.Unlock()
 	role, err := s.qq.memberRole(ctx, group, member)
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -139,11 +145,15 @@ func (s *Server) qqIsAdmin(ctx context.Context, group, member, eventRole string)
 		}
 		return false
 	}
+	// 等待 HTTP 响应时可能已有事件或较晚发出的查询更新了同一成员，旧结果不能恢复或撤销新权限。
+	if entry, ok := r.entries[key]; ok && entry.sequence > sequence {
+		return entry.admin
+	}
 	admin := role == "owner" || role == "admin"
 	if r.entries == nil {
 		r.entries = map[string]qqRoleEntry{}
 	}
-	r.entries[key] = qqRoleEntry{group: group, admin: admin, at: now}
+	r.entries[key] = qqRoleEntry{group: group, admin: admin, at: now, sequence: sequence}
 	return admin
 }
 

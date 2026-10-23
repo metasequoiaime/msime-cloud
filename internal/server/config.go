@@ -208,6 +208,9 @@ func (c *Config) Validate() error {
 	ids, tokens := map[string]bool{}, map[string]bool{}
 	for i := range c.Clients {
 		v := &c.Clients[i]
+		if strings.HasPrefix(v.ID, "user:") {
+			return errors.New("client IDs must not start with user: (reserved for authenticated users)")
+		}
 		token := os.Getenv(v.TokenEnv)
 		if v.ID == "" || ids[v.ID] || len(token) < 32 || tokens[token] || strings.ContainsAny(token, " \r\n\t") {
 			return errors.New("client IDs and tokens must be unique; tokens require at least 32 non-whitespace bytes")

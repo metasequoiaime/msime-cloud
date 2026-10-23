@@ -14,7 +14,7 @@ export MSIME_CLIENT_TOKEN="$(openssl rand -hex 32)"
 go run ./cmd/msime-server -config config.json
 ```
 
-客户端用 `Authorization: Bearer <MSIME_CLIENT_TOKEN>` 访问。每台设备分配独立随机令牌和客户端 ID；添加到 `clients` 数组，通过不同环境变量注入。不要把服务商密钥或公共共享令牌编入客户端。更换配置和令牌后重启服务。
+客户端用 `Authorization: Bearer <MSIME_CLIENT_TOKEN>` 访问。每台设备分配独立随机令牌和客户端 ID；添加到 `clients` 数组，通过不同环境变量注入。客户端 ID 不能以 `user:` 开头（区分大小写），该前缀保留给登录用户，使用时服务拒绝启动。若现有 ID 使用了此前未禁止的前缀，升级前先改名；改名后原设备身份的插画任务和小牛媒体任务编号失效，需要重新创建或上传。不要把服务商密钥或公共共享令牌编入客户端。更换配置和令牌后重启服务。
 
 ```sh
 curl -H "Authorization: Bearer $MSIME_CLIENT_TOKEN" \

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -401,16 +400,7 @@ func httpTransport(client *http.Client, base, token, scope string) (Execute, err
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
 			return nil, fmt.Errorf("%s_api_status_%d", scope, response.StatusCode)
 		}
-		reader := io.LimitReader(response.Body, MaxResponse+1)
-		var data []byte
-		if response.ContentLength >= bytes.MinRead && response.ContentLength <= MaxResponse {
-			// 大响应按声明长度预留正文与 EOF 探测空间；实际读取仍受上限约束。
-			buffer := bytes.NewBuffer(make([]byte, 0, int(response.ContentLength)+bytes.MinRead))
-			_, err = buffer.ReadFrom(reader)
-			data = buffer.Bytes()
-		} else {
-			data, err = io.ReadAll(reader)
-		}
+		data, err := httpclient.ReadResponseBody(response, MaxResponse)
 		if err != nil || len(data) > MaxResponse {
 			return nil, errors.New(scope + "_api_response_too_large_or_unreadable")
 		}

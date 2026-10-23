@@ -1,20 +1,20 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
 )
 
 // 管理员提 issue 时附带的图片和视频。GitHub 的 issue 接口不能上传附件，所以服务端从 QQ 下载附件，按文件头核实类型后写进公开的 R2 bucket（auth.avatars 的 bucket，前缀 qq-feedback/，经它的 public_base_url 提供），再把链接写进 issue 正文或补充评论。公开域名是我们自己的，所以对象的 Content-Type 一律取服务端认出的类型，只放行常见的图片和视频格式：HTML、SVG 之类能在浏览器里执行脚本的内容不会被托管。
@@ -161,16 +161,7 @@ func (b *qqBot) downloadMedia(ctx context.Context, raw string, limit int64) ([]b
 	if resp.ContentLength > limit {
 		return nil, errors.New("attachment too large")
 	}
-	reader := io.LimitReader(resp.Body, limit+1)
-	var body []byte
-	if resp.ContentLength >= bytes.MinRead {
-		// 大附件按已校验的声明长度预留正文与 EOF 探测空间；小附件沿用原读取缓冲。
-		buffer := bytes.NewBuffer(make([]byte, 0, int(resp.ContentLength)+bytes.MinRead))
-		_, err = buffer.ReadFrom(reader)
-		body = buffer.Bytes()
-	} else {
-		body, err = io.ReadAll(reader)
-	}
+	body, err := httpclient.ReadResponseBody(resp, limit)
 	if err != nil {
 		return nil, errors.New("attachment download failed")
 	}

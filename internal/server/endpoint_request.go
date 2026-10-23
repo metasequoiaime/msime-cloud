@@ -17,3 +17,16 @@ func (e Endpoint) newRequest(ctx context.Context, method string, body io.Reader)
 	}
 	return req, nil
 }
+
+// newJSONRequest 创建期望 JSON 响应的请求；正文类型可为 JSON、表单或 multipart，留空时不添加 Content-Type。
+func (e Endpoint) newJSONRequest(ctx context.Context, method, contentType string, body io.Reader) (*http.Request, error) {
+	req, err := e.newRequest(ctx, method, body)
+	if err != nil {
+		return nil, err
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	req.Header.Set("Accept", "application/json")
+	return req, nil
+}

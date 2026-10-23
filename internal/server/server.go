@@ -434,27 +434,19 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 	respond(w, 200, map[string]any{"api_version": contract.APIVersion, "cloud": s.config.Cloud.URL != "", "chat": s.config.Chat.URL != "", "translation": s.translationEnabled(), "transcription": s.config.Transcription.URL != "", "streaming_transcription": s.config.Streaming.URL != ""})
 }
 func (s *Server) upstream(r *http.Request, e Endpoint, method, contentType string, body io.Reader) ([]byte, error) {
-	req, err := e.newRequest(r.Context(), method, body)
+	req, err := e.newJSONRequest(r.Context(), method, contentType, body)
 	if err != nil {
 		return nil, err
 	}
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
-	}
-	req.Header.Set("Accept", "application/json")
 	return s.doUpstream(req)
 }
 
 // upstreamJSON 直接从上游响应流解码 JSON；只在调用方需要原始字节时才使用 upstream。
 func (s *Server) upstreamJSON(r *http.Request, e Endpoint, method, contentType string, body io.Reader, dst any) (bool, error) {
-	req, err := e.newRequest(r.Context(), method, body)
+	req, err := e.newJSONRequest(r.Context(), method, contentType, body)
 	if err != nil {
 		return false, err
 	}
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
-	}
-	req.Header.Set("Accept", "application/json")
 	return s.doUpstreamJSON(req, dst)
 }
 

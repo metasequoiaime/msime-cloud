@@ -38,7 +38,7 @@ func transcriptionRequest(ctx context.Context, endpoint Endpoint, audio []byte, 
 		}
 		body, _ = replay()
 	}
-	req, err := endpoint.newRequest(ctx, http.MethodPost, body)
+	req, err := endpoint.newJSONRequest(ctx, http.MethodPost, writer.FormDataContentType(), body)
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +46,5 @@ func transcriptionRequest(ctx context.Context, endpoint Endpoint, audio []byte, 
 		req.ContentLength = int64(len(prefix) + len(audio) + framing.Len())
 		req.GetBody = replay
 	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Accept", "application/json")
 	return req, nil
 }

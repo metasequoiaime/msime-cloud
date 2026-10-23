@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { paginatedSchema } from "./paginated.ts";
 import { actionUndoTokenSchema } from "./action-undo.ts";
 import { sections as workSections } from "./community.ts";
 
@@ -19,7 +20,7 @@ export const userRowSchema = z.object({
   ban_reason: z.string(),
 });
 export type UserRow = z.infer<typeof userRowSchema>;
-export const usersSchema = z.object({ items: z.array(userRowSchema), page: z.number(), total: z.number(), has_more: z.boolean() });
+export const usersSchema = paginatedSchema(userRowSchema);
 
 // GET /api/users/stats: totals for the stat tiles and per-role counts for the filter chips.
 export const userStatsSchema = z.object({

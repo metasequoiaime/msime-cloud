@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { paginatedSchema } from "./paginated.ts";
 
 // Issue triage: GET /api/issues, GET /api/issues/{owner}/{repo}/{n} and POST /api/issues/actions (internal/server/admin_issues.go).
 
@@ -31,12 +32,10 @@ export type IssueRow = z.infer<typeof issueRowSchema>;
 export const issuePlatformSchema = z.object({ id: z.string(), name: z.string(), label: z.string(), assignee: z.string() });
 export type IssuePlatform = z.infer<typeof issuePlatformSchema>;
 
-export const issuesSchema = z.object({
-  items: z.array(issueRowSchema),
+export const issuesSchema = paginatedSchema(issueRowSchema).extend({
   page: z.number().int().positive(),
   page_size: z.number().int().positive(),
   total: z.number().int().nonnegative(),
-  has_more: z.boolean(),
   repos: z.array(z.string()),
   platforms: z.array(issuePlatformSchema),
   // unavailable lists the configured repositories GitHub could not be read for.

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { paginatedSchema } from "./paginated.ts";
 import { candidateCategoryLabel, sectionLabels as communitySectionLabels } from "./community.ts";
 import type { Permission } from "./shell.ts";
 import { roleLabel } from "./shell.ts";
@@ -58,7 +59,7 @@ export const auditEntrySchema = z.object({
 export type AuditEntry = z.infer<typeof auditEntrySchema>;
 
 // GET /api/audit?page=: 50 entries per page, newest first.
-export const auditListSchema = z.object({ items: z.array(auditEntrySchema), page: z.number(), total: z.number(), has_more: z.boolean() });
+export const auditListSchema = paginatedSchema(auditEntrySchema);
 
 // actorName shows an audit actor the way the console names people: the local part of the email.
 export function actorName(actor: string | undefined): string {

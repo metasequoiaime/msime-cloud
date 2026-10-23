@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { paginatedSchema } from "./paginated.ts";
 import { actionUndoTokenSchema } from "./action-undo.ts";
 
 // GET /api/feedback：App 内反馈的一页（50 条）。diagnostics 只含服务端白名单里的键，截图字节经 GET /api/feedback/{id}/screenshots/{n} 单独读取。
@@ -33,7 +34,7 @@ export const feedbackRowSchema = z.object({
   screenshots: z.number().int().nonnegative(),
 });
 export type FeedbackRow = z.infer<typeof feedbackRowSchema>;
-export const feedbackListSchema = z.object({ items: z.array(feedbackRowSchema), page: z.number(), total: z.number(), has_more: z.boolean() });
+export const feedbackListSchema = paginatedSchema(feedbackRowSchema);
 
 // 诊断信息键的中文名；没有列出的键按原样显示。
 export const diagnosticLabels: Record<string, string> = {

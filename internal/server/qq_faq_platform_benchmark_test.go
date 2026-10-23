@@ -30,6 +30,14 @@ func TestQQFAQPlatformLowercaseCache(t *testing.T) {
 	}
 }
 
+func TestQQFAQPlatformPreservesUnicodeWordBytes(t *testing.T) {
+	for _, title := range []string{"ABC 鸿草输入问题", "ABC 鸡菜输入问题", "ABC 鸿蒙输入问题"} {
+		if got, want := qqFAQPlatform(title), previousQQFAQPlatform(title); got != want {
+			t.Errorf("标题=%q：平台=%q，期望=%q", title, got, want)
+		}
+	}
+}
+
 func TestQQFAQPlatformUnicodePriority(t *testing.T) {
 	for _, title := range []string{
 		"İOS 鸿蒙", "LİNUX macOS", "WİNDOWS iOS", "İPAD HarmonyOS",

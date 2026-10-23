@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -73,11 +74,11 @@ func qqIssueState(state, reason string, labels []string) string {
 				}
 			} else if upper {
 				switch {
-				case qqASCIIEqualFold(label, "invalid"):
+				case textutil.EqualFoldASCII(label, "invalid"):
 					return "已关闭（无效）"
-				case qqASCIIEqualFold(label, "duplicate"):
+				case textutil.EqualFoldASCII(label, "duplicate"):
 					return "已关闭（重复）"
-				case qqASCIIEqualFold(label, "wontfix"):
+				case textutil.EqualFoldASCII(label, "wontfix"):
 					return "已关闭（不修）"
 				}
 			}

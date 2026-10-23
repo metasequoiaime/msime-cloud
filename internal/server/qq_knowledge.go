@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -199,7 +200,7 @@ func (s *Server) loadQQKnowledge(ctx context.Context) ([]qqSection, error) {
 
 // qqMarkdownFileName 只比较文件名末尾的 ASCII 扩展名，避免为筛选文档复制整个文件名。
 func qqMarkdownFileName(name string) bool {
-	return len(name) >= len(".md") && qqASCIIEqualFold(name[len(name)-len(".md"):], ".md")
+	return len(name) >= len(".md") && textutil.EqualFoldASCII(name[len(name)-len(".md"):], ".md")
 }
 
 // qqMarkdownHeading 按标题正则的语义扫描一行，避免为每个标题建立捕获切片。
@@ -293,7 +294,7 @@ func qqContainsASCIIFold(text, word string) bool {
 		return false
 	}
 	for start := 0; start+len(word) <= len(text); start++ {
-		if qqASCIIEqualFold(text[start:start+len(word)], word) {
+		if textutil.EqualFoldASCII(text[start:start+len(word)], word) {
 			return true
 		}
 	}

@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
 // overviewPlatform 统一客户端平台别名，让近七天和每日活跃统计使用相同的平台键；未知平台保留小写名称。
@@ -51,55 +53,39 @@ func canonicalPlatformASCII(platform string) (string, bool) {
 	}
 	switch first {
 	case 'a':
-		if asciiPlatformEqualFold(platform, "android") {
+		if textutil.EqualFoldASCII(platform, "android") {
 			return "android", true
 		}
 	case 'd':
-		if asciiPlatformEqualFold(platform, "darwin") {
+		if textutil.EqualFoldASCII(platform, "darwin") {
 			return "macos", true
 		}
 	case 'h':
-		if asciiPlatformEqualFold(platform, "harmony") || asciiPlatformEqualFold(platform, "harmonyos") {
+		if textutil.EqualFoldASCII(platform, "harmony") || textutil.EqualFoldASCII(platform, "harmonyos") {
 			return "harmony", true
 		}
 	case 'i':
-		if asciiPlatformEqualFold(platform, "ios") || asciiPlatformEqualFold(platform, "ipados") {
+		if textutil.EqualFoldASCII(platform, "ios") || textutil.EqualFoldASCII(platform, "ipados") {
 			return "ios", true
 		}
 	case 'l':
-		if asciiPlatformEqualFold(platform, "linux") {
+		if textutil.EqualFoldASCII(platform, "linux") {
 			return "linux", true
 		}
 	case 'm':
-		if asciiPlatformEqualFold(platform, "macos") || asciiPlatformEqualFold(platform, "mac") {
+		if textutil.EqualFoldASCII(platform, "macos") || textutil.EqualFoldASCII(platform, "mac") {
 			return "macos", true
 		}
 	case 'o':
-		if asciiPlatformEqualFold(platform, "ohos") {
+		if textutil.EqualFoldASCII(platform, "ohos") {
 			return "harmony", true
 		}
 	case 'w':
-		if asciiPlatformEqualFold(platform, "windows") || asciiPlatformEqualFold(platform, "win") {
+		if textutil.EqualFoldASCII(platform, "windows") || textutil.EqualFoldASCII(platform, "win") {
 			return "windows", true
 		}
 	}
 	return "", false
-}
-
-func asciiPlatformEqualFold(platform, known string) bool {
-	if len(platform) != len(known) {
-		return false
-	}
-	for i := range platform {
-		c := platform[i]
-		if c >= 'A' && c <= 'Z' {
-			c += 'a' - 'A'
-		}
-		if c != known[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func isASCIIPlatform(platform string) bool {

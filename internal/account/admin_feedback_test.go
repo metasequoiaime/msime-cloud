@@ -71,6 +71,12 @@ func TestAdminFeedbackListScreenshotsAndStatus(t *testing.T) {
 	if w.Result().Header.Get("Content-Security-Policy") != "sandbox; default-src 'none'" || w.Result().Header.Get("X-Content-Type-Options") != "nosniff" {
 		t.Fatal("screenshot security headers", w.Header())
 	}
+	readonly := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		a.AdminHTTP(w, r.WithContext(WithAdminAccess(r.Context(), AdminAccess{
+			Actor: "google:readonly", Role: "readonly", Permissions: []string{PermViewCloudUsage},
+		})))
+	})
+	apiRequest(t, readonly, "GET", "/api/feedback/"+bug.ID+"/screenshots/0", "", "", 403)
 	if w = apiRequest(t, admin, "GET", "/api/feedback/"+bug.ID+"/screenshots/1", "", "", 200); w.Header().Get("Content-Type") != "image/jpeg" {
 		t.Fatal(w.Header())
 	}

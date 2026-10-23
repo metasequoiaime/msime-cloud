@@ -19,10 +19,12 @@ func TestCommunityQueryParsingAllocationBudget(t *testing.T) {
 	}{
 		{"skins", "offset=2&q=needle&scope=mine", "user_session_required", 401, a.communityList},
 		{"candidate", "offset=2&q=needle&scope=mine", "user_session_required", 401, a.communityCandidateList},
+		{"candidate-canvas", "offset=2&q=needle&scope=mine&resources=canvas-v1", "user_session_required", 401, a.communityCandidateList},
 		{"plugins", "offset=2&q=needle&scope=mine", "user_session_required", 401, a.communityPluginList},
 		{"resources", "kind=phrase&q=needle&scope=mine", "login_required", 401, a.resourceList},
 		{"skin-detail", "fields=moderation&include=bad", "invalid_include", 400, a.communityDetail},
 		{"candidate-detail", "fields=moderation&include=bad", "invalid_include", 400, a.communityCandidateDetail},
+		{"candidate-detail-canvas", "fields=moderation&include=bad&resources=canvas-v1", "invalid_include", 400, a.communityCandidateDetail},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			base := httptest.NewRequest("GET", "/?"+tc.query, nil)

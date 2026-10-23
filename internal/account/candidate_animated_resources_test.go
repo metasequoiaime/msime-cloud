@@ -175,7 +175,7 @@ func TestCandidateAnimatedResourcesRejectMalformed(t *testing.T) {
 func TestCandidateResourceNegotiation(t *testing.T) {
 	for _, query := range []string{"", "?resources=canvas-v1", "?resources=unknown"} {
 		w := httptest.NewRecorder()
-		extended, ok := candidateResources(w, httptest.NewRequest("GET", "/"+query, nil), true)
+		extended, ok := candidateResources(w, httptest.NewRequest("GET", "/"+query, nil).URL.Query(), true)
 		if ok != (query != "?resources=unknown") || extended != (query == "?resources=canvas-v1") {
 			t.Fatal(query)
 		}
@@ -211,7 +211,7 @@ func TestCandidateResourceNegotiation(t *testing.T) {
 // 开关关闭时仍可读取已存在的扩展包，但不承诺或接受新的扩展上传。
 func TestCandidateResourcesDisabledDoesNotAdvertiseOrEnableUploads(t *testing.T) {
 	w := httptest.NewRecorder()
-	extended, ok := candidateResources(w, httptest.NewRequest("GET", "/?resources=canvas-v1", nil), false)
+	extended, ok := candidateResources(w, httptest.NewRequest("GET", "/?resources=canvas-v1", nil).URL.Query(), false)
 	if !ok || !extended || w.Header().Get(candidateResourcesHeader) != "" {
 		t.Fatal("关闭时错误声明能力或拒绝扩展读取")
 	}

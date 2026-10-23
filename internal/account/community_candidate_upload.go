@@ -26,12 +26,13 @@ func readCandidateUpload(w http.ResponseWriter, r *http.Request, input any, reso
 	controller := http.NewResponseController(w)
 	_ = controller.SetReadDeadline(time.Now().Add(candidatePublishTimeout))
 	_ = controller.SetWriteDeadline(time.Now().Add(candidatePublishTimeout + 5*time.Second))
-	withCategory, ok = candidateIncludeCategory(r.URL.Query())
+	query := r.URL.Query()
+	withCategory, ok = candidateIncludeCategory(query)
 	if !ok {
 		writeError(w, 400, "invalid_include")
 		return false, false
 	}
-	extended, ok := candidateResources(w, r, resourcesEnabled)
+	extended, ok := candidateResources(w, query, resourcesEnabled)
 	if !ok {
 		return false, false
 	}

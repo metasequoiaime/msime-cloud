@@ -469,11 +469,11 @@ func sanitizeCandidateImages(files map[string][]byte, preview string) (map[strin
 }
 
 func (a *Service) communityCandidateList(w http.ResponseWriter, r *http.Request) {
-	extended, ok := candidateResources(w, r, a.config.Community.CanvasResources)
+	query := r.URL.Query()
+	extended, ok := candidateResources(w, query, a.config.Community.CanvasResources)
 	if !ok {
 		return
 	}
-	query := r.URL.Query()
 	offset, search, code := communityListPage(query)
 	if code != "" {
 		writeError(w, 400, code)
@@ -544,11 +544,11 @@ func (a *Service) communityCandidateList(w http.ResponseWriter, r *http.Request)
 	writeCommunityPage(w, "skins", items)
 }
 func (a *Service) communityCandidateDetail(w http.ResponseWriter, r *http.Request) {
-	extended, ok := candidateResources(w, r, a.config.Community.CanvasResources)
+	query := r.URL.Query()
+	extended, ok := candidateResources(w, query, a.config.Community.CanvasResources)
 	if !ok {
 		return
 	}
-	query := r.URL.Query()
 	fields, ok := candidateFields(query)
 	if !ok {
 		writeError(w, 400, "invalid_fields")
@@ -805,7 +805,7 @@ SELECT $1,files.path,files.bytes
 FROM unnest($2::text[],$3::bytea[]) AS files(path,bytes)`, []any{id, paths, contents}
 }
 func (a *Service) communityCandidateDownload(w http.ResponseWriter, r *http.Request) {
-	extended, ok := candidateResources(w, r, a.config.Community.CanvasResources)
+	extended, ok := candidateResources(w, r.URL.Query(), a.config.Community.CanvasResources)
 	if !ok {
 		return
 	}
@@ -890,7 +890,7 @@ func (a *Service) communityCandidateDelete(w http.ResponseWriter, r *http.Reques
 
 // communityCandidateSync lists every row the account owns, private ones included, as the identifiers a client needs to reconcile its local packages. It is not paginated: an account holds at most maxCandidateLibraryRows rows.
 func (a *Service) communityCandidateSync(w http.ResponseWriter, r *http.Request) {
-	extended, ok := candidateResources(w, r, a.config.Community.CanvasResources)
+	extended, ok := candidateResources(w, r.URL.Query(), a.config.Community.CanvasResources)
 	if !ok {
 		return
 	}

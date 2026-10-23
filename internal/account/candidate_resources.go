@@ -1,14 +1,16 @@
 package account
 
-import "net/http"
+import (
+	"net/http"
+	"net/url"
+)
 
 const candidateResourcesVersion = "canvas-v1"
 const candidateResourcesHeader = "X-MSIME-Candidate-Resources"
 
-// candidateResources 使用独立能力声明，保持现有 JSON 形状不变。
-// 新客户端须先探测响应头：旧部署会忽略未知查询键，不能据 200 就认定支持。
-func candidateResources(w http.ResponseWriter, r *http.Request, enabled bool) (extended, ok bool) {
-	switch r.URL.Query().Get("resources") {
+// candidateResources 复用已解析的查询参数，使用独立能力声明保持现有 JSON 形状不变；新客户端须先探测响应头，旧部署会忽略未知查询键，不能据 200 就认定支持。
+func candidateResources(w http.ResponseWriter, query url.Values, enabled bool) (extended, ok bool) {
+	switch query.Get("resources") {
 	case "":
 	case candidateResourcesVersion:
 		extended = true

@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"crypto/sha1"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -182,7 +181,7 @@ func (s *Server) createDictionaryPR(ctx context.Context, gh *githubapp.Client, i
 		return result, err
 	}
 	title := "feat(dictionary): 更新 " + input.Path + " 的词条"
-	if err := write("PUT", "/contents/"+input.Path, map[string]any{"message": title, "content": base64.StdEncoding.EncodeToString([]byte(next)), "sha": input.SHA, "branch": branch}, nil); err != nil {
+	if err := write("PUT", "/contents/"+input.Path, githubContentBody(next, title, input.SHA, branch), nil); err != nil {
 		return result, err
 	}
 	var pull struct {

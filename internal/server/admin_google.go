@@ -327,8 +327,8 @@ func (s *Server) adminAuthRoute(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 func (s *Server) adminGoogleCallback(w http.ResponseWriter, r *http.Request) {
+	// 回调不改共享的流程 Cookie，避免迟到响应清掉新流程；旧流程由服务端一次性消费，Cookie 按签发时限过期。
 	denied := func() {
-		s.adminCookie(w, "", true, -1)
 		http.Redirect(w, r, "/?login_error=google_denied", http.StatusSeeOther)
 	}
 	query := r.URL.Query()
@@ -374,7 +374,6 @@ func (s *Server) adminGoogleCallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.adminCookie(w, "", true, -1)
 	s.adminCookie(w, value, false, 8*60*60)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }

@@ -90,17 +90,18 @@ func qqContactMayStartBefore(text string, end, pattern int) bool {
 }
 
 func qqContainsContactKeywordBefore(text string, end int, keywords ...string) bool {
-	text = text[:min(end, len(text))]
 	for _, keyword := range keywords {
-		if strings.Contains(text, keyword) {
+		// 关键词可以从边界前开始并在边界后结束；多看其余字节，不把边界后的完整关键词算进来。
+		if strings.Contains(text[:min(end+len(keyword)-1, len(text))], keyword) {
 			return true
 		}
 	}
 	return false
 }
 
-// qqRedactContactsBefore 只处理摘要前的联系方式；摘要后的匹配不会影响结果，可以跳过整段正文的复制。
+// qqRedactContactsBefore 优先处理摘要前的联系方式；被跳过的匹配移入摘要时，从原文完整脱敏。
 func qqRedactContactsBefore(text string, maxRunes int) string {
+	original := text
 	end := qqRuneEnd(text, maxRunes)
 	if end == len(text) {
 		return qqRedactContacts(text)
@@ -134,7 +135,7 @@ func qqRedactContactsBefore(text string, maxRunes int) string {
 		text = pattern.ReplaceAllString(text, qqContactRedacted)
 		end = qqRuneEnd(text, maxRunes)
 	}
-	// 前面的替换可能缩短正文，使原本在摘要后的匹配移到摘要内；再检查一次以保持完整脱敏的结果。
+	// 替换会缩短正文；跳过的规则进入摘要时必须按原文完整处理，避免补查中的替换再次移入更早的规则。
 	for i, pattern := range qqContactPatterns {
 		if skipped&(1<<i) == 0 {
 			continue
@@ -146,8 +147,7 @@ func qqRedactContactsBefore(text string, maxRunes int) string {
 		if match == nil || match[0] >= end {
 			continue
 		}
-		text = pattern.ReplaceAllString(text, qqContactRedacted)
-		end = qqRuneEnd(text, maxRunes)
+		return qqRedactContacts(original)
 	}
 	return text
 }
@@ -246,7 +246,7 @@ func qqGapTopicMayContainContact(text string) bool {
 	if strings.ContainsAny(prefix, "@+0123456789qQvVwWxX") {
 		return true
 	}
-	if strings.Contains(prefix, "扣扣") || strings.Contains(prefix, "群") || strings.Contains(prefix, "微信") {
+	if qqContainsContactKeywordBefore(text, end, "扣扣", "群", "微信") {
 		return true
 	}
 	if runes < qqGapRunes || end == len(text) {

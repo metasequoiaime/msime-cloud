@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { APIError } from "./client";
+import { APIError } from "./client.ts";
 
 // 一行日志。id 用于重连去重，旧副本可省略；ts 是 Loki 的纳秒时间戳（十进制字符串，也是续传游标）；time 和 stream 来自 CRI 前缀；level 是解析出的 slog 级别，无法识别时为空；message 已去掉 CRI 前缀和 slog 的时间与级别。
 export const logLineSchema = z.object({
@@ -39,14 +39,15 @@ export type StreamEvent = { event: string; id: string; data: string };
 // parseSSE 把一段 text/event-stream 文本拆成完整的事件，返回事件和尚未结束的剩余部分。注释行（心跳）和 retry 字段被忽略。
 export function parseSSE(buffer: string): { events: StreamEvent[]; rest: string } {
   const events: StreamEvent[] = [];
-  const normalized = buffer.replace(/\r\n?/g, "\n");
-  const frames = normalized.split("\n\n");
+  // 保留未结束帧的原始换行，避免下一块的 LF 与已归一化的 CR 拼成假空行。
+  // CRLF 必须作为一个换行匹配，不能回退成 CR 与 LF 两个换行。
+  const frames = buffer.split(/(?:\r\n|\r(?!\n)|\n){2}/);
   const rest = frames.pop() ?? "";
   for (const frame of frames) {
     let event = "message";
     let id = "";
     const data: string[] = [];
-    for (const line of frame.split("\n")) {
+    for (const line of frame.split(/\r\n|\r|\n/)) {
       if (!line || line.startsWith(":")) continue;
       const colon = line.indexOf(":");
       const field = colon < 0 ? line : line.slice(0, colon);

@@ -13,68 +13,6 @@ import (
 // deepLRequestBodyBytes 是 DeepL 文本翻译的请求体上限，按表单编码后的字节数计算。
 const deepLRequestBodyBytes = 128 << 10
 
-const deepLQueryHex = "0123456789ABCDEF"
-
-func deepLQueryEscapeSafe(c byte) bool {
-	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.' || c == '~'
-}
-
-func deepLQueryEscapeLen(text string) int {
-	length := len(text)
-	for i := 0; i < len(text); i++ {
-		if text[i] == ' ' {
-			continue
-		}
-		if !deepLQueryEscapeSafe(text[i]) {
-			length += 2
-		}
-	}
-	return length
-}
-
-func deepLAppendQueryEscape(builder *strings.Builder, text string) {
-	var buffer [1024]byte
-	used := 0
-	for i := 0; i < len(text); i++ {
-		c := text[i]
-		width := 1
-		if c != ' ' && !deepLQueryEscapeSafe(c) {
-			width = 3
-		}
-		if used+width > len(buffer) {
-			builder.Write(buffer[:used])
-			used = 0
-		}
-		switch {
-		case c == ' ':
-			buffer[used] = '+'
-			used++
-		case deepLQueryEscapeSafe(c):
-			buffer[used] = c
-			used++
-		default:
-			buffer[used] = '%'
-			buffer[used+1] = deepLQueryHex[c>>4]
-			buffer[used+2] = deepLQueryHex[c&15]
-			used += 3
-		}
-	}
-	if used > 0 {
-		builder.Write(buffer[:used])
-	}
-}
-
-func deepLQueryEscape(text string) string {
-	length := deepLQueryEscapeLen(text)
-	if length == len(text) {
-		return text
-	}
-	var builder strings.Builder
-	builder.Grow(length)
-	deepLAppendQueryEscape(&builder, text)
-	return builder.String()
-}
-
 type deepLTranslationBatch struct {
 	body  string
 	texts []string
@@ -95,10 +33,10 @@ func deepLTranslationBatches(v translationRequest) []deepLTranslationBatch {
 	texts := v.list()
 	if len(texts) == 1 {
 		var body strings.Builder
-		body.Grow(len(prefix) + len("&text=") + deepLQueryEscapeLen(texts[0]))
+		body.Grow(len(prefix) + len("&text=") + formQueryEscapeLen(texts[0]))
 		body.WriteString(prefix)
 		body.WriteString("&text=")
-		deepLAppendQueryEscape(&body, texts[0])
+		appendFormQueryEscape(&body, texts[0])
 		return []deepLTranslationBatch{{body: body.String(), texts: texts}}
 	}
 	start, bodyBytes := 0, len(prefix)
@@ -110,12 +48,12 @@ func deepLTranslationBatches(v translationRequest) []deepLTranslationBatch {
 		body.WriteString(prefix)
 		for _, text := range texts[start:end] {
 			body.WriteString("&text=")
-			deepLAppendQueryEscape(&body, text)
+			appendFormQueryEscape(&body, text)
 		}
 		batches = append(batches, deepLTranslationBatch{body: body.String(), texts: texts[start:end]})
 	}
 	for i, text := range texts {
-		fieldBytes := len("&text=") + deepLQueryEscapeLen(text)
+		fieldBytes := len("&text=") + formQueryEscapeLen(text)
 		if bodyBytes+fieldBytes > deepLRequestBodyBytes && i > start {
 			appendBatch(i)
 			start, bodyBytes = i, len(prefix)

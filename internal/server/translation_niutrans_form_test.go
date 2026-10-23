@@ -40,6 +40,7 @@ func TestNiuTransFormRequestAllocationBudget(t *testing.T) {
 func TestNiuTransTextFormMatchesPrevious(t *testing.T) {
 	cases := [][6]string{
 		{},
+		{" ", "synthetic-key", " ", " ", " ", "word word"},
 		{"synthetic-app", "synthetic-key", "zh", "en", "1700000000000", "word"},
 		{"应用 +%&=", "合成密钥", "auto", "en", "1700000000000", "水杉 😀\n +%&="},
 		{"\x00app", "key\x00", "from +&=", "to +&=", "time +&=", "\xff\xfe\x00"},

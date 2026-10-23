@@ -2,31 +2,11 @@ package server
 
 import (
 	"fmt"
-	"math/rand"
 	"net/url"
 	"reflect"
 	"strings"
 	"testing"
 )
-
-func TestDeepLQueryEscapeMatchesNetURL(t *testing.T) {
-	random := rand.New(rand.NewSource(20261021))
-	for _, text := range []string{"", "word", "词 😀 +%&=\n\x00", strings.Repeat("中", 1024)} {
-		if got, want := deepLQueryEscape(text), url.QueryEscape(text); got != want {
-			t.Fatalf("转义结果不兼容：输入=%q，结果=%q，期望=%q", text, got, want)
-		}
-	}
-	for range 1000 {
-		data := make([]byte, random.Intn(256))
-		for i := range data {
-			data[i] = byte(random.Intn(256))
-		}
-		text := string(data)
-		if got, want := deepLQueryEscape(text), url.QueryEscape(text); got != want {
-			t.Fatalf("随机转义结果不兼容：输入=%q，结果=%q，期望=%q", text, got, want)
-		}
-	}
-}
 
 func TestDeepLTranslationBatchEscapeAllocationBudget(t *testing.T) {
 	v := translationRequest{Texts: make([]string, translationBatchLimit), Source: "zh", Target: "en"}
@@ -108,7 +88,7 @@ func TestDeepLTranslationBatchBuilderMatchesPrevious(t *testing.T) {
 	}
 	for _, source := range []string{"zh", "AUTO", "en-US"} {
 		for _, size := range []int{1, 9, translationBatchLimit} {
-			for _, text := range []string{"", "word", "词 😀 +%&=\n\x00", strings.Repeat("%", 8192), strings.Repeat("中", 2730)} {
+			for _, text := range []string{"", "word", " ", "word word", "词 😀 +%&=\n\x00", strings.Repeat("%", 8192), strings.Repeat("中", 2730)} {
 				v := translationRequest{Texts: make([]string, size), Source: source, Target: "zh-Hans"}
 				for i := range v.Texts {
 					v.Texts[i] = text

@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { candidateCategoryLabel } from "./community";
-import type { Permission } from "./shell";
-import { roleLabel } from "./shell";
-export { initial } from "../utils/text";
+import { candidateCategoryLabel, sectionLabels as communitySectionLabels } from "./community.ts";
+import type { Permission } from "./shell.ts";
+import { roleLabel } from "./shell.ts";
+export { initial } from "../utils/text.ts";
 
 // Matrix row labels, in AllAdminPermissions order.
 export const permissionLabels: Record<Permission, string> = {
@@ -74,7 +74,7 @@ const prefLabels: Record<string, string> = {
   weekly_digest: "每周摘要邮件",
 };
 
-const sectionLabels: Record<string, string> = { skins: "键盘皮肤", "candidate-skins": "候选窗皮肤", plugins: "插件", dictionaries: "社区词库", replies: "回复模板" };
+const sectionLabels: Record<string, string> = { ...communitySectionLabels, dictionaries: "社区词库" };
 const crashStates: Record<string, string> = { open: "未处理", known: "已知问题", fixed: "已修复" };
 
 function text(value: unknown): string {
@@ -109,9 +109,12 @@ export function describeAudit(entry: AuditEntry): string {
     case "delete_plugin": return `删除了插件「${target}」${suffix}`;
     case "delete_dictionary": return `删除了社区词库「${target}」${suffix}`;
     case "delete_reply": return `删除了回复「${target}」${suffix}`;
+    case "delete_phrase": return `删除了短语包「${target}」${suffix}`;
     case "ban_user": return `封禁了账号 ${target}${suffix}`;
     case "unban_user": return `解封了账号 ${target}`;
     case "undo_user_ban": return `撤销了账号 ${target} 的封禁状态操作${suffix}`;
+    case "resolve_feedback": return `将反馈${item}标记为已处理${suffix}`;
+    case "reopen_feedback": return `重新打开了反馈${item}${suffix}`;
     case "undo_feedback_status": return "撤销了反馈的处理状态操作";
     case "revoke_session": case "revoke_sessions": return `撤销了账号 ${target} 的登录会话`;
     case "add_sensitive_word": return `添加了敏感词${text(d.pattern) ? `「${text(d.pattern)}」` : ""}`;

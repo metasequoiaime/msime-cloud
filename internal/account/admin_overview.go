@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
@@ -23,7 +22,7 @@ var platformAliases = map[string]string{"win": "windows", "mac": "macos", "darwi
 // canonicalPlatform 把客户端上报的平台名转为小写，已知别名映射到规范 ID；其他名称原样以小写返回。
 func canonicalPlatform(platform string) string {
 	platform = strings.TrimSpace(platform)
-	if isASCIIPlatform(platform) {
+	if textutil.IsASCII(platform) {
 		if canonical, ok := canonicalPlatformASCII(platform); ok {
 			return canonical
 		}
@@ -86,15 +85,6 @@ func canonicalPlatformASCII(platform string) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-func isASCIIPlatform(platform string) bool {
-	for i := range platform {
-		if platform[i] >= utf8.RuneSelf {
-			return false
-		}
-	}
-	return true
 }
 
 func isASCIILower(platform string) bool {

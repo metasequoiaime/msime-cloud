@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 	textunicode "golang.org/x/text/encoding/unicode"
 )
 
@@ -405,10 +406,8 @@ func dictionaryASCIIContainsFold(line, query string) bool {
 	if query == "" {
 		return true
 	}
-	for i := range query {
-		if query[i] >= utf8.RuneSelf {
-			return false
-		}
+	if !textutil.IsASCII(query) {
+		return false
 	}
 	if len(query) > len(line) {
 		return false
@@ -508,10 +507,8 @@ func dictionaryASCIIShortLineContainsLower(line, query string) (matched, ok bool
 			upper = true
 		}
 	}
-	for i := range len(query) {
-		if query[i] >= utf8.RuneSelf {
-			return false, true
-		}
+	if !textutil.IsASCII(query) {
+		return false, true
 	}
 	if !upper {
 		return strings.Contains(line, query), true

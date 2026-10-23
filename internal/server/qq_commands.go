@@ -300,10 +300,8 @@ func qqIssueRef(text string) []string {
 
 // qqIssueRefASCII 解析不含全角字符的 issue 引用，返回 false 让调用方回退到原有宽度折叠和正则规则。
 func qqIssueRefASCII(text string) ([]string, bool) {
-	for i := range len(text) {
-		if text[i] >= utf8.RuneSelf {
-			return nil, false
-		}
+	if !textutil.IsASCII(text) {
+		return nil, false
 	}
 	hash := strings.IndexByte(text, '#')
 	if hash < 0 {

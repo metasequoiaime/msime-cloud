@@ -126,7 +126,7 @@ func (a *Service) adminMe(w http.ResponseWriter, r *http.Request, _ string) {
 	}
 	batch.Queue(`WITH mine AS (
  SELECT action,target FROM admin_audit WHERE created_at>=date_trunc('month',now(),'UTC') AND `+adminActorClause("actor", access)+`
- AND (action LIKE 'dict\_pr\_%' OR action LIKE 'issue\_%' OR action IN ('delete_skin','delete_candidate_skin','delete_plugin','delete_dictionary','delete_reply'))
+ AND (action LIKE 'dict\_pr\_%' OR action LIKE 'issue\_%' OR action IN ('delete_skin','delete_candidate_skin','delete_plugin','delete_dictionary','delete_reply','delete_phrase'))
 ), moderated AS (
  SELECT created_at,moderated_at FROM community_skins WHERE moderated_at>=date_trunc('month',now(),'UTC') AND moderation<>'pending' AND `+adminActorClause("moderated_by", access)+`
  UNION ALL SELECT created_at,moderated_at FROM community_resources WHERE moderated_at>=date_trunc('month',now(),'UTC') AND moderation<>'pending' AND `+adminActorClause("moderated_by", access)+`
@@ -135,7 +135,7 @@ func (a *Service) adminMe(w http.ResponseWriter, r *http.Request, _ string) {
 )
 SELECT audit_stats.dict_prs,moderation_stats.total+audit_stats.deleted,audit_stats.issues,moderation_stats.avg_hours::float8
 FROM (SELECT count(DISTINCT target) FILTER (WHERE action LIKE 'dict\_pr\_%') AS dict_prs,
- count(*) FILTER (WHERE action IN ('delete_skin','delete_candidate_skin','delete_plugin','delete_dictionary','delete_reply')) AS deleted,
+ count(*) FILTER (WHERE action IN ('delete_skin','delete_candidate_skin','delete_plugin','delete_dictionary','delete_reply','delete_phrase')) AS deleted,
  count(DISTINCT target) FILTER (WHERE action LIKE 'issue\_%') AS issues FROM mine) audit_stats
 	CROSS JOIN (SELECT count(*) AS total,avg(extract(epoch FROM moderated_at-created_at))/3600 AS avg_hours FROM moderated) moderation_stats`, arg).QueryRow(func(row pgx.Row) error {
 		return row.Scan(&stats.DictPRsMonth, &stats.CommunityMonth, &stats.IssuesMonth, &stats.AvgHandleHours)

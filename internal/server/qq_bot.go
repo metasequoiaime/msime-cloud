@@ -565,7 +565,7 @@ func (s *Server) acceptQQMessage(ctx context.Context, raw json.RawMessage) bool 
 	m.Quote = qqQuoteFromFields(qqQuoteEventFields{MessageType: m.MessageType, MsgElements: m.MsgElements, MessageReference: m.MessageReference}, m)
 	if groups := s.qq.config.Groups; len(groups) > 0 && !slices.Contains(groups, m.GroupOpenID) {
 		// 开放平台只给 group_openid，不给群号；记下被拦下的群标识，方便把要接受的群填进 qq_bot.groups。
-		slog.Info("qq bot: message from unlisted group", "group_openid", m.GroupOpenID)
+		slog.Info("qq bot: message from unlisted group")
 		return true
 	}
 	// 先登记后台任务再认领消息 id：正在关停的副本不认领，开放平台重推后由其他副本处理；反过来先认领再发现关停，重推的事件会被当成重复丢掉。

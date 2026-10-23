@@ -128,22 +128,7 @@ func Call(ctx context.Context, execute Execute, name string, arguments json.RawM
 	if err != nil {
 		return Result{}, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	if err := ctx.Err(); err != nil {
-		return Result{}, err
-	}
-	data, err := execute(ctx, r)
-	if err != nil {
-		return Result{}, err
-	}
-	if err := ctx.Err(); err != nil {
-		return Result{}, err
-	}
-	if len(data) > MaxResponse || !json.Valid(data) {
-		return Result{}, errors.New("invalid_tool_response")
-	}
-	return Result{Source: r.Path, Data: data}, nil
+	return executeToolRequest(ctx, execute, r, 15*time.Second)
 }
 
 // schemas 与对外展示的定义同源，避免 Bot、CLI 和 MCP 各自接受不同参数。

@@ -288,11 +288,8 @@ func (a *Service) qqLinks(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if len(links) == 0 {
-			if exists, err := a.store.userExists(r.Context(), p.UserID); err != nil {
+			if err := a.store.requireUserExists(r.Context(), p.UserID); err != nil {
 				a.error(w, err)
-				return
-			} else if !exists {
-				a.error(w, errMissingUser)
 				return
 			}
 		}

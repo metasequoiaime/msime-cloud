@@ -94,11 +94,8 @@ func (a *Service) downloadLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if email == "" {
-		if exists, err := a.store.userExists(r.Context(), p.UserID); err != nil {
+		if err := a.store.requireUserExists(r.Context(), p.UserID); err != nil {
 			a.error(w, err)
-			return
-		} else if !exists {
-			a.error(w, errMissingUser)
 			return
 		}
 		writeError(w, 409, "no_verified_email")

@@ -326,6 +326,13 @@ func (s *Server) lokiGet(ctx context.Context, path string, params url.Values, v 
 		body = buffer.(*bytes.Buffer)
 		body.Reset()
 	}
+	if resp.ContentLength >= bytes.MinRead && resp.ContentLength <= maxLokiResponseBytes {
+		// 声明长度只作分配提示；复用已有容量，并预留 EOF 探测空间。
+		capacity := int(resp.ContentLength) + bytes.MinRead
+		if body.Cap() < capacity {
+			body = bytes.NewBuffer(make([]byte, 0, capacity))
+		}
+	}
 	defer func() {
 		if body.Cap() <= maxLokiPooledResponseBytes {
 			body.Reset()

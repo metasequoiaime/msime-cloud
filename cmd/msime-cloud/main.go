@@ -24,8 +24,8 @@ import (
 
 const usage = `usage: msime-cloud <command> [arguments]
 
-  tools [--admin]                        list public or admin read-only tools as JSON
-  tool [--admin] NAME [json|-]           run one read-only tool
+  tools [--admin]                        list public or admin tools as JSON
+  tool [--admin] NAME [json|-]           run one tool
   mcp [--admin]                          serve public or admin tools over MCP stdio
   routes [filter]                        list the operations: method, path, auth, summary
   describe METHOD PATH                   print one operation: parameters, request body and responses

@@ -16,6 +16,7 @@ import (
 type adminQQDraft struct {
 	ID        string    `json:"id"`
 	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at,omitzero"`
 	ExpiresAt time.Time `json:"expires_at"`
 	State     string    `json:"state"`
 	Title     string    `json:"title"`
@@ -36,8 +37,12 @@ type adminQQDocGap struct {
 	Answer    string    `json:"answer"`
 }
 
-// adminQQBacklog 只读取数据库，不触发整理、认领或 GitHub 操作。
+// adminQQBacklog 读取积压，草稿写操作交给独立处理函数；查询本身不触发整理、认领或 GitHub 操作。
 func (s *Server) adminQQBacklog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/qq-bot/drafts/D") {
+		s.adminQQDraftWrite(w, r)
+		return
+	}
 	if r.Method != http.MethodGet {
 		fail(w, 405, "method_not_allowed")
 		return
@@ -157,7 +162,7 @@ func adminDraftView(d account.QQDraft, detail bool) adminQQDraft {
 	}
 	out := adminQQDraft{ID: fmt.Sprintf("D%d", d.ID), CreatedAt: d.CreatedAt, ExpiresAt: d.CreatedAt.Add(account.QQDraftWindow), State: state, Title: report.Title, Kind: report.Kind, Platform: report.Platform, Missing: report.Missing}
 	if detail {
-		out.Original, out.Report, out.IssueRef = d.Original, &report, d.IssueRef
+		out.Original, out.Report, out.IssueRef, out.UpdatedAt = d.Original, &report, d.IssueRef, d.UpdatedAt
 	}
 	return out
 }

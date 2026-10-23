@@ -83,11 +83,15 @@ func TestAdminToolsMCPAndPublicIsolation(t *testing.T) {
 	}
 	defer client.Close()
 	listed, err := client.ListTools(t.Context(), nil)
-	if err != nil || len(listed.Tools) != 4 {
+	if err != nil || len(listed.Tools) != 7 {
 		t.Fatal(listed, err)
 	}
 	for _, tool := range listed.Tools {
-		if !HasAdmin(tool.Name) || Has(tool.Name) || tool.Annotations == nil || !tool.Annotations.ReadOnlyHint || !tool.Annotations.IdempotentHint {
+		read := strings.HasPrefix(tool.Name, "get_") || strings.HasPrefix(tool.Name, "list_")
+		if !HasAdmin(tool.Name) || Has(tool.Name) || tool.Annotations == nil || tool.Annotations.ReadOnlyHint != read || tool.Annotations.IdempotentHint != (read || tool.Name == "close_qq_draft") {
+			t.Fatal(tool)
+		}
+		if !read && (tool.Annotations.DestructiveHint == nil || !*tool.Annotations.DestructiveHint) {
 			t.Fatal(tool)
 		}
 	}
@@ -152,5 +156,50 @@ func TestAdminHTTPIsolationAndErrors(t *testing.T) {
 		if _, err := AdminHTTP(&client, base, ""); err == nil {
 			t.Fatal(base)
 		}
+	}
+}
+
+func TestAdminDraftMutationRouting(t *testing.T) {
+	calls := 0
+	for _, tc := range []struct{ name, args, method, path, body string }{
+		{"update_qq_draft", `{"id":"D12","updated_at":"2026-10-23T00:00:00Z","report":{"title":"合成修改"}}`, "PATCH", "/api/qq-bot/drafts/D12", `{"updated_at":"2026-10-23T00:00:00Z","report":{"title":"合成修改"}}`},
+		{"submit_qq_draft", `{"id":"D12","version_unknown":true}`, "POST", "/api/qq-bot/drafts/D12/issue", `{"version_unknown":true}`},
+		{"close_qq_draft", `{"id":"D12"}`, "POST", "/api/qq-bot/drafts/D12/close", `{}`},
+	} {
+		_, err := AdminCall(t.Context(), func(_ context.Context, r Request) (json.RawMessage, error) {
+			calls++
+			var got, want any
+			_ = json.Unmarshal(r.Body, &got)
+			_ = json.Unmarshal([]byte(tc.body), &want)
+			gotJSON, _ := json.Marshal(got)
+			wantJSON, _ := json.Marshal(want)
+			if r.Method != tc.method || r.Path != tc.path || !r.NeedsToken || string(gotJSON) != string(wantJSON) {
+				t.Fatal(r, string(r.Body))
+			}
+			return json.RawMessage(`{"ok":true}`), nil
+		}, tc.name, json.RawMessage(tc.args))
+		if err != nil {
+			t.Fatal(tc.name, err)
+		}
+	}
+	for _, tc := range []struct{ name, args string }{
+		{"update_qq_draft", `{"id":"D12","report":{"title":"合成修改"}}`},
+		{"update_qq_draft", `{"id":"D12","updated_at":"now"}`},
+		{"update_qq_draft", `{"id":"D12","updated_at":"now","report":{}}`},
+		{"update_qq_draft", `{"id":"D12","updated_at":"now","report":{"intent":true}}`},
+		{"update_qq_draft", `{"id":"D12","updated_at":"now","report":{"title":null}}`},
+		{"submit_qq_draft", `{"id":"F12"}`},
+		{"submit_qq_draft", `{"id":"D12","repo":"o/other"}`},
+		{"submit_qq_draft", `{"id":"D12","version_unknown":"yes"}`},
+		{"close_qq_draft", `{"id":"D12/issue"}`},
+		{"close_qq_draft", `{"id":"D12","force":true}`},
+	} {
+		_, err := AdminCall(t.Context(), func(context.Context, Request) (json.RawMessage, error) { calls++; return nil, nil }, tc.name, json.RawMessage(tc.args))
+		if err == nil {
+			t.Fatal(tc)
+		}
+	}
+	if calls != 3 {
+		t.Fatal("无效写入发出了请求", calls)
 	}
 }

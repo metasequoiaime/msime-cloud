@@ -80,10 +80,12 @@ func TestAdminToolCLIAuthentication(t *testing.T) {
 }
 
 func TestAdminToolCLIMCPStdio(t *testing.T) {
+	requests := make(chan string, 4)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/qq-bot/drafts/D12" || r.Header.Get("Authorization") != "Bearer synthetic-admin" {
+		if !strings.HasPrefix(r.URL.Path, "/api/qq-bot/drafts/D12") || r.Header.Get("Authorization") != "Bearer synthetic-admin" {
 			t.Error("管理员 MCP 未使用独立端点和凭据")
 		}
+		requests <- r.Method + " " + r.URL.Path
 		fmt.Fprint(w, `{"id":"D12","original":"合成反馈"}`)
 	}))
 	defer srv.Close()
@@ -112,7 +114,7 @@ func TestAdminToolCLIMCPStdio(t *testing.T) {
 	}
 	defer client.Close()
 	listed, err := client.ListTools(ctx, nil)
-	if err != nil || len(listed.Tools) != 4 {
+	if err != nil || len(listed.Tools) != 7 {
 		t.Fatal(listed, err)
 	}
 	for _, tool := range listed.Tools {
@@ -127,6 +129,25 @@ func TestAdminToolCLIMCPStdio(t *testing.T) {
 	raw, _ := json.Marshal(got.StructuredContent)
 	if !strings.Contains(string(raw), "合成反馈") {
 		t.Fatal(string(raw))
+	}
+	if got := <-requests; got != "GET /api/qq-bot/drafts/D12" {
+		t.Fatal(got)
+	}
+	for _, tc := range []struct {
+		name, method, path string
+		args               map[string]any
+	}{
+		{"update_qq_draft", "PATCH", "/api/qq-bot/drafts/D12", map[string]any{"id": "D12", "updated_at": "2026-10-23T00:00:00Z", "report": map[string]any{"title": "合成修改"}}},
+		{"submit_qq_draft", "POST", "/api/qq-bot/drafts/D12/issue", map[string]any{"id": "D12"}},
+		{"close_qq_draft", "POST", "/api/qq-bot/drafts/D12/close", map[string]any{"id": "D12"}},
+	} {
+		got, err := client.CallTool(ctx, &mcp.CallToolParams{Name: tc.name, Arguments: tc.args})
+		if err != nil || got.IsError {
+			t.Fatal(tc.name, got, err)
+		}
+		if got := <-requests; got != tc.method+" "+tc.path {
+			t.Fatal(got)
+		}
 	}
 	_ = client.Close()
 	select {

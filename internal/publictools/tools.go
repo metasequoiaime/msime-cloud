@@ -1,4 +1,4 @@
-// Package publictools 定义 QQ Bot、MCP 和 CLI 共用的公共查询，以及仅显式管理员入口使用的独立只读目录。
+// Package publictools 定义 QQ Bot、MCP 和 CLI 共用的公共查询，以及仅显式管理员入口使用的独立管理工具目录。
 package publictools
 
 import (

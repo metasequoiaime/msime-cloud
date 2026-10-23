@@ -24,18 +24,27 @@ type candidateWebPChunk struct {
 }
 
 func candidateWebPChunks(data []byte) ([]candidateWebPChunk, bool) {
-	var chunks []candidateWebPChunk
-	for len(data) > 0 {
-		if len(data) < 8 {
+	// 先完整校验并计数，避免密集元数据让描述符数组反复扩容，损坏尾部也无需分配。
+	count := 0
+	for remaining := data; len(remaining) > 0; count++ {
+		if len(remaining) < 8 {
 			return nil, false
 		}
-		size := uint64(binary.LittleEndian.Uint32(data[4:]))
+		size := uint64(binary.LittleEndian.Uint32(remaining[4:]))
 		padded := size + size%2
-		if padded > uint64(len(data)-8) {
+		if padded > uint64(len(remaining)-8) {
 			return nil, false
 		}
-		chunks = append(chunks, candidateWebPChunk{string(data[:4]), data[8 : 8+int(size)]})
-		data = data[8+int(padded):]
+		remaining = remaining[8+int(padded):]
+	}
+	if count == 0 {
+		return nil, true
+	}
+	chunks := make([]candidateWebPChunk, count)
+	for i := range chunks {
+		size := int(binary.LittleEndian.Uint32(data[4:]))
+		chunks[i] = candidateWebPChunk{string(data[:4]), data[8 : 8+size]}
+		data = data[8+size+size%2:]
 	}
 	return chunks, true
 }

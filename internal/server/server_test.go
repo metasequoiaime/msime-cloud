@@ -17,7 +17,7 @@ import (
 
 const testToken = "test-client-token-0000000000000000000000"
 
-func fixture(t *testing.T, h http.HandlerFunc) *Server {
+func fixture(t testing.TB, h http.HandlerFunc) *Server {
 	t.Helper()
 	t.Setenv("TEST_CLIENT_TOKEN", testToken)
 	t.Setenv("TEST_UPSTREAM_TOKEN", "provider-secret")

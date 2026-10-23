@@ -76,7 +76,12 @@ func Definitions() []*mcp.Tool {
 }
 
 func tool(name, description string, properties map[string]any, required ...string) *mcp.Tool {
-	return &mcp.Tool{Name: name, Description: description, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true}, InputSchema: map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}}
+	schema := map[string]any{"type": "object", "properties": properties, "additionalProperties": false}
+	// 没有必填参数时省略 required；nil 切片编码成 null 会被 Claude Code 拒绝。
+	if len(required) > 0 {
+		schema["required"] = required
+	}
+	return &mcp.Tool{Name: name, Description: description, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true}, InputSchema: schema}
 }
 func field(kind, description string) map[string]any {
 	return map[string]any{"type": kind, "description": description}

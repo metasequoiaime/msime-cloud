@@ -203,3 +203,22 @@ func TestAdminDraftMutationRouting(t *testing.T) {
 		t.Fatal("无效写入发出了请求", calls)
 	}
 }
+
+func TestToolSchemasRequiredArrays(t *testing.T) {
+	for _, def := range append(Definitions(), AdminDefinitions()...) {
+		raw, err := json.Marshal(def.InputSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var schema map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			t.Fatal(err)
+		}
+		if required, exists := schema["required"]; exists {
+			var fields []string
+			if string(required) == "null" || json.Unmarshal(required, &fields) != nil {
+				t.Fatalf("%s 的 required 不是数组：%s", def.Name, required)
+			}
+		}
+	}
+}

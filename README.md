@@ -328,6 +328,15 @@ QQ 提醒中的 D 草稿与 F 文档候选可以通过 `msime-cloud mcp --admin`
 ./msime-cloud mcp --admin
 ```
 
+Claude Code 可直接注册这个 MCP 服务，让 AI 在对话中发现并调用上述工具：
+
+```sh
+claude mcp add --scope user --transport stdio msime-cloud-admin -- /path/to/msime-cloud mcp --admin
+claude mcp get msime-cloud-admin
+```
+
+`/path/to/msime-cloud` 换成已安装的新版本绝对路径；先完成上面的管理员登录，并升级提供草稿接口的服务端。连接后在 Claude Code 中可以直接说「列出待处理草稿」「编辑 D12 的标题」「把 D12 转成 issue」「关闭 D13」。无需手写 `tool` 命令。已有会话可在 `/mcp` 中重新连接，或新开会话加载配置。
+
 MCP 客户端配置示例（使用当前操作系统账号已保存的管理员登录）：
 
 ```json

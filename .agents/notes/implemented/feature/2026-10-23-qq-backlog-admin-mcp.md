@@ -16,6 +16,8 @@ QQ 提醒中的 D 草稿和 F 文档候选保存在 PostgreSQL，现有 MCP 只�
 
 `submit_qq_draft` 在认领时读取最新快照，复用 QQ 的 Windows 产品分流、跨副本仓库锁、查重、建 issue 或补充评论。明确的 GitHub 拒绝和写入前失败释放租约；写入结果不确定保留租约，沿用五分钟超时恢复规则，禁止工具自动重试。GitHub 接收成功后，即使请求取消，也独立限时登记 issue 和操作者；登记或审计失败用响应中的 `recorded` / `audited` 告知，不能再次提交。提交服务端上限两分钟，工具上限 130 秒，均短于认领期限。写工具声明可修改数据，只有关闭标注幂等。
 
+工具没有必填参数时省略 JSON Schema 的 `required`，有必填参数时编码成数组；不发送 `required:null`。Go MCP SDK 接受该空值不代表客户端接受，Claude Code 会因此拒绝整个工具列表。CLI 安装后通过 Claude Code 的 MCP 连接检查验证真实客户端可以发现目录。
+
 ## Alternatives considered
 
 - 直接加入公共工具目录能复用所有入口，但群聊模型与公共客户端会发现私有工作流，且公共传输刻意不读取管理员会话。显式管理员模式保持原有隔离，见[公共工具决定](../../implemented/feature/2026-10-16-qqbot-public-tools.md)。

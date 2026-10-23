@@ -839,6 +839,11 @@ func (s *Store) Me(ctx context.Context, uid string) (User, []Identity, error) {
 	return u, ids, nil
 }
 
+// unsafeDisplayNameRune 判断昵称中会破坏单行文本或文本方向的字符。
+func unsafeDisplayNameRune(r rune) bool {
+	return unicode.IsControl(r) || unicode.In(r, unicode.Zl, unicode.Zp, unicode.Bidi_Control)
+}
+
 // profileDisplayName 将身份提供方的昵称规范化为用户接口接受的格式；完整校验后最多保留前 64 个字符。
 func profileDisplayName(name string) string {
 	name = strings.TrimSpace(name)
@@ -852,7 +857,7 @@ func profileDisplayName(name string) string {
 				return ""
 			}
 		}
-		if unicode.IsControl(r) {
+		if unsafeDisplayNameRune(r) {
 			return ""
 		}
 		if count == 64 {

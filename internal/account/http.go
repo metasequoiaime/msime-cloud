@@ -837,7 +837,7 @@ func (a *Service) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v.Name = strings.TrimSpace(v.Name)
-	if !utf8.ValidString(v.Name) || utf8.RuneCountInString(v.Name) > 64 || strings.ContainsRune(v.Name, 0) {
+	if !utf8.ValidString(v.Name) || utf8.RuneCountInString(v.Name) > 64 || strings.ContainsFunc(v.Name, unsafeDisplayNameRune) {
 		writeError(w, 400, "invalid_display_name")
 		return
 	}

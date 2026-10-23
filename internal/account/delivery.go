@@ -179,6 +179,23 @@ func (d delivery) smtpAuthenticate(client *smtp.Client) error {
 	return client.Auth(smtp.PlainAuth("", c.Username, os.Getenv(c.PasswordEnv), c.Host))
 }
 
+// mailBodyBase64 按 RFC 2045 将正文编码为每行至多 76 字符的 Base64，行间使用 CRLF。
+func mailBodyBase64(body string) string {
+	encoded := base64.StdEncoding.EncodeToString([]byte(body))
+	if len(encoded) <= 76 {
+		return encoded
+	}
+	var out strings.Builder
+	out.Grow(len(encoded) + 2*((len(encoded)-1)/76))
+	for len(encoded) > 76 {
+		out.WriteString(encoded[:76])
+		out.WriteString("\r\n")
+		encoded = encoded[76:]
+	}
+	out.WriteString(encoded)
+	return out.String()
+}
+
 // smtpSend 投递一封 UTF-8 纯文本邮件，主题用 Q 编码，正文 base64。
 func (d delivery) smtpSend(client *smtp.Client, target, subject, body string) error {
 	from := d.config.Email.From
@@ -191,7 +208,7 @@ func (d delivery) smtpSend(client *smtp.Client, target, subject, body string) er
 		}
 		return &deliveryFailure{accepted: false}
 	}
-	message := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n%s\r\n", from, target, mime.QEncoding.Encode("UTF-8", subject), base64.StdEncoding.EncodeToString([]byte(body)))
+	message := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n%s\r\n", from, target, mime.QEncoding.Encode("UTF-8", subject), mailBodyBase64(body))
 	writer, e := client.Data()
 	if e != nil {
 		return &deliveryFailure{accepted: false}

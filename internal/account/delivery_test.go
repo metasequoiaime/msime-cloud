@@ -59,6 +59,21 @@ func TestAliyunSMSRequestAndProviderRejection(t *testing.T) {
 	}
 }
 
+func TestMailBodyBase64(t *testing.T) {
+	for _, body := range []string{"", "a", "ab", strings.Repeat("a", 56), strings.Repeat("a", 57), strings.Repeat("a", 58), strings.Repeat("a", 114), strings.Repeat("a", 115), strings.Repeat("合成邮件🙂\r\n第二行\n", 100)} {
+		encoded := mailBodyBase64(body)
+		for _, line := range strings.Split(encoded, "\r\n") {
+			if len(line) > 76 || strings.ContainsAny(line, "\r\n") {
+				t.Fatalf("MIME Base64 折行不符合要求：%q", line)
+			}
+		}
+		decoded, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil || string(decoded) != body {
+			t.Fatalf("正文未原样保留：字节数=%d，错误=%v", len(body), err)
+		}
+	}
+}
+
 func TestSMTPPermanentRecipientFailure(t *testing.T) {
 	if !smtpPermanentError(&textproto.Error{Code: 550, Msg: "recipient rejected"}) {
 		t.Fatal("550 收件人拒收应判定为永久失败")
@@ -172,6 +187,11 @@ func TestSMTPTLSDelivery(t *testing.T) {
 	pieces := strings.SplitN(message, "\r\n\r\n", 2)
 	if len(pieces) != 2 || !strings.Contains(message, "To: user@example.test") {
 		t.Fatal("邮件头错误")
+	}
+	for _, line := range strings.Split(strings.TrimSuffix(pieces[1], "\r\n"), "\r\n") {
+		if len(line) > 76 {
+			t.Fatalf("MIME Base64 行长为 %d，超过 76 字符", len(line))
+		}
 	}
 	body, e := base64.StdEncoding.DecodeString(strings.TrimSpace(pieces[1]))
 	if e != nil || !strings.Contains(string(body), "123456") {

@@ -110,6 +110,51 @@ func readCLIRequest(body io.Reader, limit int64) ([]byte, error) {
 	return data, nil
 }
 
+// appendCLIFormFile 将文件有限写入最终表单缓冲，避免大文件的完整临时副本。
+func appendCLIFormFile(buffer *bytes.Buffer, form *multipart.Writer, name string, file *os.File, limit int) error {
+	// 小文件沿用有限读取，超过探测长度后再查询文件大小和分配复制缓冲。
+	prefix, err := io.ReadAll(io.LimitReader(file, min(int64(limit)+1, bytes.MinRead+1)))
+	if err == nil && len(prefix) > limit {
+		err = fmt.Errorf("request exceeds %d bytes", limit)
+	}
+	if err != nil {
+		return fmt.Errorf("cannot read %s: %w", file.Name(), err)
+	}
+	part, err := form.CreateFormFile(name, filepath.Base(file.Name()))
+	if err != nil {
+		return err
+	}
+	copyBufferSize := 32 << 10
+	if len(prefix) > bytes.MinRead {
+		if info, statErr := file.Stat(); statErr == nil && info.Mode().IsRegular() && info.Size() >= int64(len(prefix)) && info.Size() <= int64(limit) {
+			copyBufferSize = int(min(max(info.Size()-int64(len(prefix))+1, bytes.MinRead), 32<<10))
+			// 大小只作分配提示；显式分配，连同已写入的表单头和最终闭合边界一起保留。
+			capacity := buffer.Len() + int(info.Size()) + len(form.Boundary()) + 8
+			if buffer.Cap() < capacity {
+				data := make([]byte, buffer.Len(), capacity)
+				copy(data, buffer.Bytes())
+				*buffer = *bytes.NewBuffer(data)
+			}
+		}
+	}
+	if _, err := part.Write(prefix); err != nil {
+		return err
+	}
+	if len(prefix) <= bytes.MinRead {
+		return nil
+	}
+	// 保留实际上限和额外一字节探测，文件在读取期间变化时也按实际正文判断。
+	remaining := limit - len(prefix)
+	written, err := io.CopyBuffer(part, io.LimitReader(file, int64(remaining)+1), make([]byte, copyBufferSize))
+	if err == nil && written > int64(remaining) {
+		err = fmt.Errorf("request exceeds %d bytes", limit)
+	}
+	if err != nil {
+		return fmt.Errorf("cannot read %s: %w", file.Name(), err)
+	}
+	return nil
+}
+
 func main() {
 	c := cli{env: os.Getenv, stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr, client: &http.Client{Timeout: requestTimeout}, now: time.Now, browse: openBrowser}
 	os.Exit(c.run(os.Args[1:]))
@@ -262,17 +307,10 @@ func (c cli) parseCall(args []string) (request, error) {
 				file.Close()
 				return r, fmt.Errorf("request exceeds %d bytes", maxCLIRequestBytes)
 			}
-			data, readErr := readCLIRequest(file, int64(remaining))
+			readErr := appendCLIFormFile(&buffer, form, name, file, remaining)
 			file.Close()
 			if readErr != nil {
-				return r, fmt.Errorf("cannot read %s: %w", path, readErr)
-			}
-			part, err := form.CreateFormFile(name, filepath.Base(path))
-			if err != nil {
-				return r, err
-			}
-			if _, err = part.Write(data); err != nil {
-				return r, err
+				return r, readErr
 			}
 			if buffer.Len() > maxCLIRequestBytes {
 				return r, fmt.Errorf("request exceeds %d bytes", maxCLIRequestBytes)

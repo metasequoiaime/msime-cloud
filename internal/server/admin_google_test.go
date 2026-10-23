@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -177,7 +178,31 @@ func TestAdminGoogleFlow(t *testing.T) {
 	if w := call("GET", path, "", nil); w.Code != 303 || len(store.sessions) != 0 {
 		t.Fatal("missing binding cookie accepted")
 	}
+	// 模拟旧请求成功前浏览器已开始新流程，迟到的成功响应也必须保留新绑定。
+	newState := strings.Repeat("b", 64)
+	store.flows[newState] = account.AdminLoginFlow{}
+	target, _ := url.Parse("https://admin.msime.app")
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issued := httptest.NewRecorder()
+	s.adminCookie(issued, newState, true, 600)
+	jar.SetCookies(target, issued.Result().Cookies())
 	w := call("GET", path, "", cookie)
+	jar.SetCookies(target, w.Result().Cookies())
+	flowKept := false
+	for _, c := range jar.Cookies(target) {
+		if c.Name == s.adminCookieName(true) && c.Value == newState {
+			flowKept = true
+		}
+	}
+	if !flowKept {
+		t.Error("旧登录成功响应清掉了新流程Cookie")
+	}
+	if _, ok := store.flows[newState]; !ok {
+		t.Error("旧登录成功回调消费了新流程")
+	}
 	if w.Code != 303 || w.Header().Get("Location") != "/" || len(store.sessions) != 1 {
 		t.Fatal(w.Code, w.Body.String())
 	}

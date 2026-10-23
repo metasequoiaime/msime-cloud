@@ -112,7 +112,7 @@ func TestAdminGoogleCallbackQueryValidation(t *testing.T) {
 				if w.Code != 503 || !strings.Contains(w.Body.String(), `"code":"admin_auth_unavailable"`) || len(cookies) != 0 {
 					t.Fatalf("存储故障响应变化：%d %s %v", w.Code, w.Body.String(), cookies)
 				}
-			} else if w.Code != 303 || w.Header().Get("Location") != "/?login_error=google_denied" || len(cookies) != 1 || cookies[0].Name != s.adminCookieName(true) || cookies[0].MaxAge != -1 {
+			} else if w.Code != 303 || w.Header().Get("Location") != "/?login_error=google_denied" || len(cookies) != 0 {
 				t.Fatalf("拒绝响应或流程Cookie变化：%d %s %v", w.Code, w.Header().Get("Location"), cookies)
 			}
 		})

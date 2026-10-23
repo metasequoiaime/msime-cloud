@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -11,7 +12,6 @@ import (
 	"net/url"
 	"os/exec"
 	"runtime"
-	"strings"
 	"time"
 )
 
@@ -39,7 +39,7 @@ func (c cli) postJSON(server, path string, body any, v any) error {
 		return err
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
-		if _, err = fmt.Fprintln(c.stdout, strings.TrimSpace(string(data))); err != nil {
+		if err = c.writeLine(bytes.TrimSpace(data)); err != nil {
 			return err
 		}
 		return statusError{response.Status}

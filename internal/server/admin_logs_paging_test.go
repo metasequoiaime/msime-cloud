@@ -174,7 +174,7 @@ func TestPollLogsSameTimestampCountsRawDuplicates(t *testing.T) {
 	}
 	loki.add(lokiEntry{ns: at, pod: "p", line: "unique after duplicates"})
 	tail := &logTail{query: "{}", seen: map[logKey]struct{}{}, cursor: at - 1, floor: at - 1}
-	var all []lokiEntry
+	var all []logStreamEntry
 	for range 4 {
 		entries, gaps, err := s.pollLogs(context.Background(), tail, at+int64(time.Second))
 		if err != nil || len(gaps) != 0 {

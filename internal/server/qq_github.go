@@ -433,7 +433,7 @@ func qqReleaseNotes(body string) string {
 
 // qqReleaseNotesVisibleSegments 按代码围栏切出需要处理的连续正文片段；围栏内内容不经过图片和 HTML 过滤，片段本身仍保留跨行 Markdown 结构。
 func qqReleaseNotesVisibleSegments(body string, yield func(string)) {
-	fenced := false
+	var fence qqMarkdownFence
 	segmentStart := 0
 	for offset := 0; offset < len(body); {
 		lineEnd := len(body)
@@ -443,18 +443,18 @@ func qqReleaseNotesVisibleSegments(body string, yield func(string)) {
 			next = lineEnd + 1
 		}
 		line := body[offset:lineEnd]
-		if strings.HasPrefix(strings.TrimSpace(line), "```") {
-			if !fenced && segmentStart < offset {
+		wasFenced := fence.length > 0
+		if fence.consume(strings.TrimSpace(line)) {
+			if !wasFenced && segmentStart < offset {
 				yield(body[segmentStart:offset])
 			}
-			fenced = !fenced
 			segmentStart = next
-		} else if fenced {
+		} else if fence.length > 0 {
 			segmentStart = next
 		}
 		offset = next
 	}
-	if !fenced && segmentStart < len(body) {
+	if fence.length == 0 && segmentStart < len(body) {
 		yield(body[segmentStart:])
 	}
 }

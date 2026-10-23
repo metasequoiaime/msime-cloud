@@ -873,7 +873,8 @@ func qqSplitMarkdown(name, markdown string) []qqSection {
 	var titles []string
 	var body strings.Builder
 	bodyRunes, bodyTruncated := 0, false
-	fenced, intro := false, false
+	var fence qqMarkdownFence
+	intro := false
 	appendBody := func(line, leading string) {
 		if bodyTruncated {
 			return
@@ -950,11 +951,9 @@ func qqSplitMarkdown(name, markdown string) []qqSection {
 		}
 		// 代码块检测与段落开头裁剪复用前导空白扫描，后续正文仍保留缩进。
 		leading := qqMarkdownLeadingSpace(line)
-		if strings.HasPrefix(leading, "```") {
-			fenced = !fenced
-		}
+		fence.consume(leading)
 		level, headingText, headingOK := 0, "", false
-		if !fenced && strings.HasPrefix(line, "#") {
+		if fence.length == 0 && strings.HasPrefix(line, "#") {
 			level, headingText, headingOK = qqMarkdownHeading(line)
 		}
 		if headingOK {
@@ -1522,7 +1521,7 @@ func qqPlainTextCanReuse(md string) bool {
 	if md == "" {
 		return true
 	}
-	if md[0] == '|' || qqLineMarkerEnd(md) != 0 {
+	if md[0] == '|' || strings.HasPrefix(md, "~~~") || qqLineMarkerEnd(md) != 0 {
 		return false
 	}
 	previousSpace := false
@@ -1609,12 +1608,13 @@ func qqPlainText(md string) string {
 		return trimmed
 	}
 	text := md
-	if strings.Contains(md, "```") {
+	if strings.Contains(md, "```") || strings.Contains(md, "~~~") {
 		var body strings.Builder
-		fenced, filtered := false, false
+		var fence qqMarkdownFence
+		filtered := false
 		separator, offset := "", 0
 		for line := range strings.SplitSeq(md, "\n") {
-			if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			if fence.consume(strings.TrimSpace(line)) {
 				if !filtered {
 					filtered = true
 					if offset > 0 {
@@ -1623,8 +1623,7 @@ func qqPlainText(md string) string {
 						separator = "\n"
 					}
 				}
-				fenced = !fenced
-			} else if filtered && !fenced {
+			} else if filtered && fence.length == 0 {
 				// 沿用按保留行连接的换行规则，空行也占一个位置。
 				body.WriteString(separator)
 				body.WriteString(line)

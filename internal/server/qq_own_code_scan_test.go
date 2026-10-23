@@ -12,13 +12,19 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
 
-// 固定原来的正则及去重规则，核对边界消耗、编号顺序和三个编号的上限。
-var previousQQOwnCodePattern = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])D\s?([0-9]{1,6})(?:[^A-Za-z0-9]|$)`)
+// 参考正则只消耗前分隔符，另查编号后边界，允许相邻编号共用同一个分隔符。
+var (
+	referenceQQOwnCodePattern = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])D\s?([0-9]{1,6})`)
+	referenceQQOwnCodeSuffix  = regexp.MustCompile(`(?i)^[A-Za-z0-9]`)
+)
 
-func previousQQOwnCodeIDs(question string) []int64 {
+func referenceQQOwnCodeIDs(question string) []int64 {
 	var ids []int64
-	for _, match := range previousQQOwnCodePattern.FindAllStringSubmatch(question, -1) {
-		id, err := strconv.ParseInt(match[1], 10, 64)
+	for _, match := range referenceQQOwnCodePattern.FindAllStringSubmatchIndex(question, -1) {
+		if referenceQQOwnCodeSuffix.MatchString(question[match[1]:]) {
+			continue
+		}
+		id, err := strconv.ParseInt(question[match[2]:match[3]], 10, 64)
 		if err != nil || id <= 0 || slices.Contains(ids, id) || len(ids) == 3 {
 			continue
 		}
@@ -48,17 +54,17 @@ func assertQQOwnCodeLookups(t *testing.T, question string, want []int64) {
 	}
 }
 
-func TestQQOwnCodeScanCompatibility(t *testing.T) {
+func TestQQOwnCodeScanReferences(t *testing.T) {
 	for _, tc := range []struct {
 		text string
 		want []int64
 	}{
 		{"", nil},
 		{"普通问题、3D、AD3、D3D11", nil},
-		{"D1 D2 D3 D4 D5", []int64{1, 3, 5}},
-		{"D0 D1 D2 D3 D4", []int64{2, 4}},
-		{"D1， D1 D2 D3 D4", []int64{1, 3}},
-		{"D1\xffD2\xfeD3", []int64{1, 3}},
+		{"D1 D2 D3 D4 D5", []int64{1, 2, 3}},
+		{"D0 D1 D2 D3 D4", []int64{1, 2, 3}},
+		{"D1， D1 D2 D3 D4", []int64{1, 2, 3}},
+		{"D1\xffD2\xfeD3", []int64{1, 2, 3}},
 		{"D1， D2， D3， D4", []int64{1, 2, 3}},
 		{"d 000001， D1， D000000， D000002， D3", []int64{1, 2, 3}},
 		{"D1234567， D123456， D1A， D2_， D3-", []int64{123456, 2, 3}},
@@ -69,8 +75,8 @@ func TestQQOwnCodeScanCompatibility(t *testing.T) {
 		{strings.Repeat("D0， ", 4096) + "D1， D2， D3", []int64{1, 2, 3}},
 		{strings.Repeat("D1， ", 4096) + "D2， D3", []int64{1, 2, 3}},
 	} {
-		if got := previousQQOwnCodeIDs(tc.text); !slices.Equal(got, tc.want) {
-			t.Fatalf("旧实现基准=%v，期望 %v；输入=%q", got, tc.want, tc.text)
+		if got := referenceQQOwnCodeIDs(tc.text); !slices.Equal(got, tc.want) {
+			t.Fatalf("正则参考=%v，期望 %v；输入=%q", got, tc.want, tc.text)
 		}
 		assertQQOwnCodeLookups(t, tc.text, tc.want)
 	}
@@ -82,7 +88,7 @@ func TestQQOwnCodeScanCompatibility(t *testing.T) {
 			question.WriteString(units[random.Intn(len(units))])
 		}
 		text := question.String()
-		assertQQOwnCodeLookups(t, text, previousQQOwnCodeIDs(text))
+		assertQQOwnCodeLookups(t, text, referenceQQOwnCodeIDs(text))
 	}
 }
 
@@ -121,12 +127,12 @@ func BenchmarkQQOwnCodeIDs(b *testing.B) {
 		{"zeros", strings.Repeat("D0， ", 4096) + "D1， D2， D3。"},
 		{"no_matches", strings.Repeat("普通问题，AD3 和 D3D11 不是草稿。", 4096)},
 	} {
-		want := previousQQOwnCodeIDs(tc.question)
+		want := referenceQQOwnCodeIDs(tc.question)
 		for _, implementation := range []struct {
 			name string
 			run  func(string) []int64
 		}{
-			{"previous", previousQQOwnCodeIDs},
+			{"reference", referenceQQOwnCodeIDs},
 			{"current", qqOwnCodeIDs},
 		} {
 			b.Run(tc.name+"/"+implementation.name, func(b *testing.B) {

@@ -593,14 +593,7 @@ func (c cli) print(response *http.Response, output string) error {
 		}
 		fallthrough
 	case strings.HasPrefix(kind, "text/"):
-		// 复用正文缓冲补齐单个 LF，避免字符串转换和格式化缓冲复制。
-		data = bytes.TrimRight(data, "\n")
-		if len(data) == cap(data) {
-			// 未知长度读取可能恰好填满容量，只为最终输出分配，避免按比例扩容。
-			data = append(make([]byte, 0, len(data)+1), data...)
-		}
-		data = append(data, '\n')
-		_, err = c.stdout.Write(data)
+		err = c.writeLine(bytes.TrimRight(data, "\n"))
 	default:
 		if !failed {
 			return fmt.Errorf("the response is %s (%d bytes); pass -o <file> to save it", kind, len(data))
@@ -613,6 +606,17 @@ func (c cli) print(response *http.Response, output string) error {
 		return statusError{response.Status}
 	}
 	return nil
+}
+
+// writeLine 复用调用方拥有的字节缓冲，单次写入正文和一个 LF。
+func (c cli) writeLine(data []byte) error {
+	if len(data) == cap(data) {
+		// 未知长度读取可能恰好填满容量，只为最终输出分配，避免按比例扩容。
+		data = append(make([]byte, 0, len(data)+1), data...)
+	}
+	data = append(data, '\n')
+	_, err := c.stdout.Write(data)
+	return err
 }
 
 func (c cli) login(args []string) error {
@@ -682,7 +686,7 @@ func (c cli) signIn(server, challenge, credential string) error {
 		return err
 	}
 	if response.StatusCode != http.StatusOK {
-		if _, err = fmt.Fprintln(c.stdout, strings.TrimSpace(string(data))); err != nil {
+		if err = c.writeLine(bytes.TrimSpace(data)); err != nil {
 			return err
 		}
 		return statusError{response.Status}
@@ -697,8 +701,7 @@ func (c cli) signIn(server, challenge, credential string) error {
 	}
 	// The tokens stay in the credentials file; only the user is shown.
 	user, _ := json.MarshalIndent(json.RawMessage(tokens.User), "", "  ")
-	_, err = fmt.Fprintln(c.stdout, string(user))
-	return err
+	return c.writeLine(user)
 }
 
 func (c cli) logout(args []string) error {

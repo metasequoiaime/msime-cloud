@@ -155,10 +155,7 @@ func TestCLIResponseBufferAllocationBudget(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			const size = 8 << 20
 			result := testing.Benchmark(func(b *testing.B) { benchmarkCLIResponseBuffer(b, size, true, postJSON) })
-			budget := int64(size)*9/2 + 128<<10
-			if postJSON {
-				budget = int64(size)*3/2 + 128<<10
-			}
+			budget := int64(size)*3/2 + 128<<10
 			if got := result.AllocedBytesPerOp(); got > budget {
 				t.Fatalf("控制响应分配 %d B，预算 %d B", got, budget)
 			}

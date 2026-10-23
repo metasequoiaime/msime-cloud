@@ -586,13 +586,21 @@ func (c cli) print(response *http.Response, output string) error {
 	switch {
 	case len(data) == 0:
 	case kind == "application/json" || strings.HasSuffix(kind, "+json"):
-		var indented bytes.Buffer
-		if json.Indent(&indented, data, "", "  ") == nil {
+		// 标准库先预留两倍正文容量；直接分配避免 Grow 在竞态构建中产生临时副本。
+		indented := bytes.NewBuffer(make([]byte, 0, 2*len(data)))
+		if json.Indent(indented, data, "", "  ") == nil {
 			data = indented.Bytes()
 		}
-		_, err = fmt.Fprintln(c.stdout, strings.TrimRight(string(data), "\n"))
+		fallthrough
 	case strings.HasPrefix(kind, "text/"):
-		_, err = fmt.Fprintln(c.stdout, strings.TrimRight(string(data), "\n"))
+		// 复用正文缓冲补齐单个 LF，避免字符串转换和格式化缓冲复制。
+		data = bytes.TrimRight(data, "\n")
+		if len(data) == cap(data) {
+			// 未知长度读取可能恰好填满容量，只为最终输出分配，避免按比例扩容。
+			data = append(make([]byte, 0, len(data)+1), data...)
+		}
+		data = append(data, '\n')
+		_, err = c.stdout.Write(data)
 	default:
 		if !failed {
 			return fmt.Errorf("the response is %s (%d bytes); pass -o <file> to save it", kind, len(data))

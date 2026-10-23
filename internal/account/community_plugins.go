@@ -298,7 +298,7 @@ func (a *Service) communityPluginDetail(w http.ResponseWriter, r *http.Request) 
 
 // communityPluginSave 收藏或取消收藏插件。已下架的作品只有作者本人可以收藏。
 func (a *Service) communityPluginSave(w http.ResponseWriter, r *http.Request) {
-	a.communitySave(w, r, communitySaveTarget{items: "community_plugins", saves: "community_plugin_saves", column: "pack_id", visible: "(s.moderation<>'removed' OR s.owner_id=$2)", notFound: "plugin_not_found"})
+	a.communitySave(w, r, communityPluginSaveTarget)
 }
 
 func (a *Service) communityPluginPublish(w http.ResponseWriter, r *http.Request) {

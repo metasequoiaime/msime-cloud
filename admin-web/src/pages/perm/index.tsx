@@ -26,15 +26,17 @@ export default function PermPage() {
   const query = useQuery({ queryKey: permKey, queryFn: ({ signal }) => api.get("permissions", permissionsSchema, { signal }) });
   return <>
     <PageIntro page="perm" />
+    {query.isError && <ErrorState className="mb-3.5" error={query.error} onRetry={() => query.refetch()} />}
     <div className="grid gap-3.5">
       <div className="grid items-start gap-3.5 min-[1100px]:grid-cols-2">
         <SectionCard title="角色与权限">
-          {query.isPending ? <SkeletonRows rows={8} /> : query.isError ? <ErrorState className="m-4" error={query.error} onRetry={() => query.refetch()} /> : <Matrix data={query.data} />}
+          {query.isPending ? <SkeletonRows rows={8} /> : query.data && <Matrix data={query.data} />}
         </SectionCard>
         <AuditLog />
       </div>
       <SectionCard title="管理员">
-        {query.isPending ? <SkeletonRows rows={3} /> : query.isError ? <ErrorState className="m-4" error={query.error} onRetry={() => query.refetch()} /> : <Members data={query.data} />}
+        {/* 刷新失败时保留已加载的表单，避免卸载后丢失邮箱和角色草稿。 */}
+        {query.isPending ? <SkeletonRows rows={3} /> : query.data && <Members data={query.data} />}
       </SectionCard>
     </div>
   </>;

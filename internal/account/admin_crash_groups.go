@@ -179,6 +179,39 @@ var crashSummaryQuery = `SELECT
  round(count(*) FILTER (WHERE kind='session')::numeric/NULLIF(count(*) FILTER (WHERE kind IN ('session','session_crash')),0),4)::float8
 	FROM admin_events WHERE kind IN ('download','crash','active','session','session_crash') AND created_at>=now()-interval '7 days' AND ($1='' OR ` + overviewPlatform("platform") + `=$1)`
 
+const (
+	crashGroupListQueryAll = `WITH c AS (` + crashGroupCounts + `)
+SELECT ` + crashGroupColumns + ` FROM admin_crash_groups g LEFT JOIN c USING(signature)
+WHERE ($2='' OR g.platform=$2)
+ORDER BY COALESCE(c.c7,0) DESC,g.last_seen DESC,g.signature LIMIT $3`
+	crashGroupListQueryPlatform = `WITH c AS (` + crashGroupCountsBase + ` AND signature IN (SELECT signature FROM admin_crash_groups WHERE platform=$2) GROUP BY signature)
+SELECT ` + crashGroupColumns + ` FROM admin_crash_groups g LEFT JOIN c USING(signature)
+WHERE ($2='' OR g.platform=$2)
+ORDER BY COALESCE(c.c7,0) DESC,g.last_seen DESC,g.signature LIMIT $3`
+	crashGroupDetailQuery = `WITH c AS (` + crashGroupCounts + `)
+SELECT ` + crashGroupColumns + `,
+ s.id IS NOT NULL,COALESCE(s.id,''),COALESCE(s.platform,''),COALESCE(s.version,''),
+ COALESCE(s.message,''),COALESCE(s.stack,''),COALESCE(s.resolved,false),COALESCE(s.created_at,g.last_seen)
+FROM admin_crash_groups g LEFT JOIN c USING(signature)
+LEFT JOIN LATERAL (
+ SELECT id,platform,version,message,stack,resolved,created_at FROM admin_events
+ WHERE kind='crash' AND signature=$1 ORDER BY created_at DESC,id DESC LIMIT $2
+) s ON true
+WHERE g.signature=$1 ORDER BY s.created_at DESC,s.id DESC`
+	crashSpikeQuery = `WITH c AS (` + crashGroupCounts + `)
+SELECT g.signature,g.platform,g.title,c.c7,c.p7 FROM admin_crash_groups g JOIN c USING(signature)
+WHERE g.status<>'fixed' AND c.c7>c.p7*$3::float8 AND (c.c7>=$2 OR (c.p7=0 AND g.first_seen>=now()-interval '7 days'))
+ AND NOT EXISTS (SELECT 1 FROM admin_notifications n WHERE n.kind=$4 AND n.target_id=g.signature AND n.created_at>now()-$5::interval)
+ORDER BY c.c7 DESC,g.signature`
+)
+
+func crashGroupListQuery(platform bool) string {
+	if platform {
+		return crashGroupListQueryPlatform
+	}
+	return crashGroupListQueryAll
+}
+
 // adminCrashGroups serves GET /api/crash-groups?platform=.
 func (a *Service) adminCrashGroups(w http.ResponseWriter, r *http.Request, _ string) {
 	query := r.URL.Query()
@@ -223,18 +256,15 @@ func (a *Service) adminCrashGroups(w http.ResponseWriter, r *http.Request, _ str
 			selectedGroups = p.Count
 		}
 	}
-	countsQuery := crashGroupCounts
+	listQuery := crashGroupListQueryAll
 	if platform != "" && selectedGroups <= totalGroups/2 {
 		// 复用平台计数，只为至多半数分组的平台提前限定签名，避免多数平台的额外关联开销。
 		// 按分组自身的平台选签名，不能用可能与分组不同的事件平台代替。
-		countsQuery = crashGroupCountsBase + ` AND signature IN (SELECT signature FROM admin_crash_groups WHERE platform=$2) GROUP BY signature`
+		listQuery = crashGroupListQueryPlatform
 	}
 	var items []crashGroupRow
 	batch := &pgx.Batch{}
-	batch.Queue(`WITH c AS (`+countsQuery+`)
-SELECT `+crashGroupColumns+` FROM admin_crash_groups g LEFT JOIN c USING(signature)
-WHERE ($2='' OR g.platform=$2)
-ORDER BY COALESCE(c.c7,0) DESC,g.last_seen DESC,g.signature LIMIT $3`, "", platform, crashGroupsLimit+1).Query(func(rows pgx.Rows) error {
+	batch.Queue(listQuery, "", platform, crashGroupsLimit+1).Query(func(rows pgx.Rows) error {
 		defer rows.Close()
 		var err error
 		items, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (crashGroupRow, error) { return scanCrashGroup(row) })
@@ -279,16 +309,7 @@ type crashGroupQuerier interface {
 }
 
 func readCrashGroup(ctx context.Context, q crashGroupQuerier, signature string, samples int) (crashGroupRow, []crashSample, error) {
-	rows, err := q.Query(ctx, `WITH c AS (`+crashGroupCounts+`)
-SELECT `+crashGroupColumns+`,
- s.id IS NOT NULL,COALESCE(s.id,''),COALESCE(s.platform,''),COALESCE(s.version,''),
- COALESCE(s.message,''),COALESCE(s.stack,''),COALESCE(s.resolved,false),COALESCE(s.created_at,g.last_seen)
-FROM admin_crash_groups g LEFT JOIN c USING(signature)
-LEFT JOIN LATERAL (
- SELECT id,platform,version,message,stack,resolved,created_at FROM admin_events
- WHERE kind='crash' AND signature=$1 ORDER BY created_at DESC,id DESC LIMIT $2
-) s ON true
-WHERE g.signature=$1 ORDER BY s.created_at DESC,s.id DESC`, signature, samples)
+	rows, err := q.Query(ctx, crashGroupDetailQuery, signature, samples)
 	if err != nil {
 		return crashGroupRow{}, nil, err
 	}
@@ -648,11 +669,7 @@ func lockCrashSpikes(ctx context.Context, tx pgx.Tx) ([]crashSpike, error) {
 	var spikes []crashSpike
 	batch := &pgx.Batch{}
 	batch.Queue(`SELECT pg_advisory_xact_lock($1)`, crashSpikeLock)
-	batch.Queue(`WITH c AS (`+crashGroupCounts+`)
-SELECT g.signature,g.platform,g.title,c.c7,c.p7 FROM admin_crash_groups g JOIN c USING(signature)
-WHERE g.status<>'fixed' AND c.c7>c.p7*$3::float8 AND (c.c7>=$2 OR (c.p7=0 AND g.first_seen>=now()-interval '7 days'))
- AND NOT EXISTS (SELECT 1 FROM admin_notifications n WHERE n.kind=$4 AND n.target_id=g.signature AND n.created_at>now()-$5::interval)
-ORDER BY c.c7 DESC,g.signature`, "", crashSpikeMinimum, crashSpikeRise, NotifyCrashSpike, crashSpikeQuiet).Query(func(rows pgx.Rows) error {
+	batch.Queue(crashSpikeQuery, "", crashSpikeMinimum, crashSpikeRise, NotifyCrashSpike, crashSpikeQuiet).Query(func(rows pgx.Rows) error {
 		var err error
 		spikes, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (crashSpike, error) {
 			var s crashSpike

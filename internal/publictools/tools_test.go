@@ -250,6 +250,22 @@ func TestHTTPAuthIsolationAndResponseLimits(t *testing.T) {
 	}
 }
 
+func TestHTTPRejectsNilClient(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		make func() (Execute, error)
+	}{
+		{"public", func() (Execute, error) { return HTTP(nil, "https://example.test", "") }},
+		{"admin", func() (Execute, error) { return AdminHTTP(nil, "https://example.test", "") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := tc.make(); err == nil {
+				t.Fatal("nil HTTP client should be rejected")
+			}
+		})
+	}
+}
+
 func TestMCPToolCatalogAndCalls(t *testing.T) {
 	execute := func(_ context.Context, r Request) (json.RawMessage, error) {
 		return json.RawMessage(`{"query":"synthetic"}`), nil

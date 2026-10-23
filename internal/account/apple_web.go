@@ -2,7 +2,6 @@ package account
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/metasequoiaime/MSIME-Backend/internal/randombytes"
 )
 
 // AppleServicesID 是 Apple 网页登录用的 Services ID（不是 iOS 的 App ID）。它出现在 `auth.apple.client_ids` 里时 Apple 网页登录才算启用：授权地址用它作 client_id，回调里的 ID Token 受众也是它。
@@ -84,11 +84,7 @@ func validPKCEVerifier(v string) bool {
 }
 
 func randomGrant() string {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
-	}
-	return base64.RawURLEncoding.EncodeToString(b)
+	return base64.RawURLEncoding.EncodeToString(randombytes.New(32))
 }
 
 // appleWebEnabled 只在 Services ID 已配置进 `auth.apple.client_ids` 时为真。

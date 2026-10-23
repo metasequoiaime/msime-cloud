@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -16,6 +15,7 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	msimebackend "github.com/metasequoiaime/MSIME-Backend"
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
+	"github.com/metasequoiaime/MSIME-Backend/internal/randombytes"
 	"golang.org/x/oauth2"
 )
 
@@ -125,11 +125,7 @@ func (s *Server) initAdminGoogle() {
 	}
 }
 func adminRandom() string {
-	var value [32]byte
-	if _, err := rand.Read(value[:]); err != nil {
-		panic(err)
-	}
-	return hex.EncodeToString(value[:])
+	return hex.EncodeToString(randombytes.New(32))
 }
 func (s *Server) adminCookieName(flow bool) string {
 	name := "__Host-msime_admin"

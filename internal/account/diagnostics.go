@@ -3,7 +3,6 @@ package account
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/metasequoiaime/MSIME-Backend/internal/randombytes"
 	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
@@ -209,20 +209,12 @@ func validateDiagnosticConfig(value any, depth int, entries *int) string {
 
 // newDiagnosticToken 返回 msk_ 加 43 位 base64url（32 字节随机数）的令牌和它的 SHA-256。
 func newDiagnosticToken() (token, digest string) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
-	}
-	token = "msk_" + base64.RawURLEncoding.EncodeToString(b)
+	token = "msk_" + base64.RawURLEncoding.EncodeToString(randombytes.New(32))
 	return token, hash(token)
 }
 
 func newDiagnosticID() string {
-	b := make([]byte, 12)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
-	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(randombytes.New(12))
 }
 
 func diagnosticTokenHint(token string) string { return token[len(token)-4:] }

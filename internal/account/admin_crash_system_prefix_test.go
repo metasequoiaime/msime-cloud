@@ -53,6 +53,18 @@ func TestCrashSystemPrefixScanBudget(t *testing.T) {
 		})
 	}
 	baseline, current := measure(previousCrashSystemPrefixScan), measure(crashSystemFrame)
+	if testing.CoverMode() == "" {
+		// 短时采样可能夹入调度停顿；各取三次中的最小值，比较较少受停顿干扰的扫描成本。
+		// 输入固定且实现不含随机分支，真正退化为全表扫描仍须满足下方原有的两倍速度门槛。
+		for range 2 {
+			if sample := measure(previousCrashSystemPrefixScan); sample.NsPerOp() < baseline.NsPerOp() {
+				baseline = sample
+			}
+			if sample := measure(crashSystemFrame); sample.NsPerOp() < current.NsPerOp() {
+				current = sample
+			}
+		}
+	}
 	t.Logf("原扫描：%s；当前：%s", baseline, current)
 	// Go 不给 _test.go 中的旧实现插桩，生产函数的覆盖率计数会使两边的计时条件不同。
 	// 覆盖率运行仍执行上述真实函数；两倍耗时门槛由 Linux、Windows 的常规竞态 CI 执行。

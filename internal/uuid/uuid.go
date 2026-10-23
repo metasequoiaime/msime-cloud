@@ -2,16 +2,14 @@
 package uuid
 
 import (
-	"crypto/rand"
 	"encoding/hex"
+
+	"github.com/metasequoiaime/MSIME-Backend/internal/randombytes"
 )
 
 // NewV4 使用密码学安全随机数生成 RFC 9562 UUID v4，返回小写、带连字符的字符串。
 func NewV4() (string, error) {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
+	b := randombytes.New(16)
 	b[6] = b[6]&0x0f | 0x40
 	b[8] = b[8]&0x3f | 0x80
 	h := hex.EncodeToString(b)

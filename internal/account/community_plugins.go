@@ -118,7 +118,13 @@ func communityPluginSelect(saved bool) string {
 	return communityPluginSelectQuery(saved, false)
 }
 
+var communityPluginQueries = newCommunitySelectQueries(buildCommunityPluginSelectQuery)
+
 func communityPluginSelectQuery(saved, page bool) string {
+	return communityPluginQueries.selectQuery(saved, page)
+}
+
+func buildCommunityPluginSelectQuery(saved, page bool) string {
 	from := ` FROM community_plugins p JOIN auth_users u ON u.id=p.owner_id `
 	ratingID := "p.id"
 	if page {

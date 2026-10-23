@@ -8,12 +8,12 @@ import (
 	"image"
 	_ "image/jpeg"
 	_ "image/png"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
 )
 
 // Skin artwork is returned inline: clients never download a model-supplied URL.
@@ -61,16 +61,7 @@ func (s *Server) generateSkinArtwork(w http.ResponseWriter, r *http.Request) {
 		upstreamError(w, r, err)
 		return
 	}
-	reader := io.LimitReader(response.Body, 12*1024*1024+1)
-	var raw []byte
-	if response.ContentLength >= bytes.MinRead && response.ContentLength <= 12*1024*1024 {
-		// 大响应按声明长度预留正文与 EOF 探测空间；小响应保留原缓冲，实际读取仍受上限约束。
-		buffer := bytes.NewBuffer(make([]byte, 0, int(response.ContentLength)+bytes.MinRead))
-		_, err = buffer.ReadFrom(reader)
-		raw = buffer.Bytes()
-	} else {
-		raw, err = io.ReadAll(reader)
-	}
+	raw, err := httpclient.ReadResponseBody(response, 12*1024*1024)
 	if err != nil {
 		err = upstreamTransportError{cause: err}
 		s.observe("images", started, err, 0)

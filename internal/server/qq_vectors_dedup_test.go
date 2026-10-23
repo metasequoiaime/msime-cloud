@@ -64,7 +64,7 @@ func TestQQDocVectorsAvoidPreparingDuplicateContent(t *testing.T) {
 	}
 }
 
-func TestQQDocVectorsDuplicateUpdatesKeepPreviousSemantics(t *testing.T) {
+func TestQQDocVectorsDuplicateUpdatesSelectLastSection(t *testing.T) {
 	base := qqSection{Doc: "合成指南", Title: "设置", Text: "已保存正文"}
 	changed, later := base, base
 	changed.Text, later.Text = "首次更新正文", "后续重复正文"
@@ -79,10 +79,11 @@ func TestQQDocVectorsDuplicateUpdatesKeepPreviousSemantics(t *testing.T) {
 		want     qqSection
 		updates  int
 	}{
-		{"新段落保留首次正文", nil, []qqSection{base, changed, other, later}, base, 2},
-		{"未变化段落后仍可更新", []qqSection{base}, []qqSection{base, changed, other, later}, changed, 2},
-		{"首次更新后忽略其余重复", []qqSection{base}, []qqSection{changed, base, later, other}, changed, 2},
-		{"已有全部 ID 时首次更新后忽略重复", []qqSection{base, other}, []qqSection{changed, later, other}, changed, 1},
+		{"新段落保留最后正文", nil, []qqSection{base, changed, other, later}, later, 2},
+		{"未变化段落后仍可更新", []qqSection{base}, []qqSection{base, changed, other, later}, later, 2},
+		{"忽略较早的重复正文", []qqSection{base}, []qqSection{changed, base, later, other}, later, 2},
+		{"已有全部 ID 时保留最后正文", []qqSection{base, other}, []qqSection{changed, later, other}, later, 1},
+		{"最后正文未变化时忽略较早更新", []qqSection{base, other}, []qqSection{changed, base, other}, base, 0},
 		{"全部未变化时不重算", []qqSection{base, other}, []qqSection{base, other, base}, base, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

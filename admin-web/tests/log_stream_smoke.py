@@ -68,6 +68,18 @@ def check_log_stream_replay(browser, base):
         legacy = {**common, "message": "旧副本未提供标识"}
         page.evaluate("lines => window.sendLogLines(lines)", [legacy, legacy])
         expect(log.get_by_text(legacy["message"], exact=True)).to_have_count(2)
+
+        # 网络中断后自动重连；连接持续打开时也要及时清除旧错误。
+        stream_count = page.evaluate("window.logStreams.length")
+        page.evaluate("window.logStreams.at(-1).controller.error(new TypeError('测试断线'))")
+        expect(page.get_by_role("alert").filter(has_text="测试断线")).to_be_visible()
+        page.wait_for_function("count => window.logStreams.length === count + 1", arg=stream_count)
+        recovered = {**common, "id": "recovered", "message": "连接恢复后的日志"}
+        page.evaluate("lines => window.sendLogLines(lines)", [recovered])
+        expect(log.get_by_text(recovered["message"], exact=True)).to_have_count(1)
+        expect(page.get_by_role("status").filter(has_text="实时")).to_be_visible()
+        expect(page.get_by_role("alert")).to_have_count(0)
+        expect(log.get_by_text(first["message"], exact=True)).to_have_count(1)
         assert not errors, errors
         assert not page.evaluate("window.cspViolations"), page.evaluate("window.cspViolations")
     finally:

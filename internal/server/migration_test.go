@@ -16,7 +16,7 @@ import (
 
 // 给一个用例开一套一次性 schema,并把 MSIME_TEST_DATABASE_URL 指过去。**不迁移** —— 要不要迁移由
 // 用例自己决定,这正是自动迁移相关用例要验的东西。返回管理连接和 schema 名,方便直接查元数据。
-func disposableSchema(t *testing.T) (*pgx.Conn, string) {
+func disposableSchema(t testing.TB) (*pgx.Conn, string) {
 	t.Helper()
 	dsn := os.Getenv("MSIME_TEST_DATABASE_URL")
 	if dsn == "" {

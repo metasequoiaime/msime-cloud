@@ -59,16 +59,7 @@ func (a *Service) CreateSkinJob(ctx context.Context, id, owner string, perOwner,
 	uid, userOwner := strings.CutPrefix(owner, "user:")
 	if userOwner {
 		setup.Queue("SELECT banned_at IS NOT NULL FROM auth_users WHERE id=$1 FOR UPDATE", uid).QueryRow(func(row pgx.Row) error {
-			var banned bool
-			if err := row.Scan(&banned); errors.Is(err, pgx.ErrNoRows) {
-				return ErrInvalid
-			} else if err != nil {
-				return err
-			}
-			if banned {
-				return ErrBanned
-			}
-			return nil
+			return scanUserWritePermission(row, ErrInvalid)
 		})
 	} else {
 		setup.Queue(skinJobsLock)

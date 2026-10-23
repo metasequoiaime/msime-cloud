@@ -43,23 +43,15 @@ type ClipboardSettings struct {
 var clipboardRetentionDays = map[int]bool{0: true, 1: true, 7: true, 30: true}
 
 // 所有写入锁定同一用户行，保证并发去重和每用户五十条的上限。
-// The ban check reads banned_at under the same row lock that ban_user takes, so a write whose session was checked before a ban either commits before the ban (which then hides what it wrote) or sees the ban and fails with ErrBanned; it can no longer publish after the ban has committed.
+// 在与 ban_user 相同的用户行锁内读取封禁状态，保证写入先于封禁提交，或在看到封禁后返回 ErrBanned。
 func (s *Store) userDataTransaction(ctx context.Context, user string) (pgx.Tx, error) {
 	tx, e := s.pool.Begin(ctx)
 	if e != nil {
 		return nil, e
 	}
-	var banned bool
-	if e = tx.QueryRow(ctx, "SELECT banned_at IS NOT NULL FROM auth_users WHERE id=$1 FOR UPDATE", user).Scan(&banned); errors.Is(e, pgx.ErrNoRows) {
-		tx.Rollback(ctx)
-		return nil, errMissingUser
-	} else if e != nil {
+	if e = scanUserWritePermission(tx.QueryRow(ctx, "SELECT banned_at IS NOT NULL FROM auth_users WHERE id=$1 FOR UPDATE", user), errMissingUser); e != nil {
 		tx.Rollback(ctx)
 		return nil, e
-	}
-	if banned {
-		tx.Rollback(ctx)
-		return nil, ErrBanned
 	}
 	return tx, nil
 }
@@ -86,9 +78,8 @@ func clipboardState(ctx context.Context, tx pgx.Tx, user string) (bool, *string,
 // SetClipboardEnabled 打开或关闭云剪贴板。关闭时在同一个事务里删除全部条目、当前密钥、封装和设备登记，再次打开时由第一台设备重新生成密钥。
 func (s *Store) SetClipboardEnabled(ctx context.Context, user string, enabled bool) error {
 	if enabled {
-		var banned bool
 		// 开启时在用户行锁内复查封禁，冲突更新只改开关，保留最新的密钥和保留期。
-		err := s.pool.QueryRow(ctx, `WITH locked_user AS MATERIALIZED (
+		return scanUserWritePermission(s.pool.QueryRow(ctx, `WITH locked_user AS MATERIALIZED (
  SELECT id,banned_at IS NOT NULL AS banned FROM auth_users WHERE id=$1 FOR UPDATE
 ), updated AS (
  INSERT INTO user_clipboard_settings(user_id,enabled)
@@ -96,17 +87,7 @@ func (s *Store) SetClipboardEnabled(ctx context.Context, user string, enabled bo
  ON CONFLICT(user_id) DO UPDATE SET enabled=true
  RETURNING user_id
 )
-SELECT banned FROM locked_user`, user).Scan(&banned)
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return errMissingUser
-			}
-			return err
-		}
-		if banned {
-			return ErrBanned
-		}
-		return nil
+SELECT banned FROM locked_user`, user), errMissingUser)
 	}
 	tx, e := s.userDataTransaction(ctx, user)
 	if e != nil {
@@ -126,9 +107,8 @@ SELECT banned FROM locked_user`, user).Scan(&banned)
 
 // SetClipboardRetention 写入保留天数，不改变同步开关；超过保留期的条目由 Store.Prune 删除。
 func (s *Store) SetClipboardRetention(ctx context.Context, user string, days int) error {
-	var banned bool
 	// 锁定用户后复查封禁；冲突时仅更新保留天数，保留等待期间提交的同步开关和密钥。
-	err := s.pool.QueryRow(ctx, `WITH locked_user AS MATERIALIZED (
+	return scanUserWritePermission(s.pool.QueryRow(ctx, `WITH locked_user AS MATERIALIZED (
  SELECT id,banned_at IS NOT NULL AS banned FROM auth_users WHERE id=$1 FOR UPDATE
 ), updated AS (
  INSERT INTO user_clipboard_settings(user_id,retention_days)
@@ -136,17 +116,7 @@ func (s *Store) SetClipboardRetention(ctx context.Context, user string, days int
  ON CONFLICT(user_id) DO UPDATE SET retention_days=excluded.retention_days
  RETURNING user_id
 )
-SELECT banned FROM locked_user`, user, days).Scan(&banned)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return errMissingUser
-		}
-		return err
-	}
-	if banned {
-		return ErrBanned
-	}
-	return nil
+SELECT banned FROM locked_user`, user, days), errMissingUser)
 }
 
 // PinClipboard 置顶或取消置顶本人的一条剪贴板条目；不是本人的或不存在时返回 errDataNotFound。

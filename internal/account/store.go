@@ -938,23 +938,12 @@ func (s *Store) UpdateName(ctx context.Context, uid, name string) error {
 	if strings.TrimSpace(name) == "" {
 		name = defaultUserName(uid)
 	}
-	var banned bool
-	err := s.pool.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+	return scanUserWritePermission(s.pool.QueryRow(ctx, `WITH locked AS MATERIALIZED (
  SELECT id,banned_at IS NOT NULL AS banned FROM auth_users WHERE id=$1 FOR UPDATE
 ), updated AS (
  UPDATE auth_users u SET display_name=$2 FROM locked l WHERE u.id=l.id AND NOT l.banned
 )
-SELECT banned FROM locked`, uid, name).Scan(&banned)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrInvalid
-	}
-	if err != nil {
-		return err
-	}
-	if banned {
-		return ErrBanned
-	}
-	return nil
+SELECT banned FROM locked`, uid, name), ErrInvalid)
 }
 func (s *Store) DeleteUser(ctx context.Context, uid string) error {
 	_, e := s.pool.Exec(ctx, "DELETE FROM auth_users WHERE id=$1", uid)

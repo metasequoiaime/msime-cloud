@@ -266,13 +266,8 @@ func (a *Service) communityPluginList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if scope != "" && len(items) == 0 {
-		exists, err := a.store.userExists(r.Context(), viewer)
-		if err != nil {
+		if err := a.store.requireUserExists(r.Context(), viewer); err != nil {
 			a.error(w, err)
-			return
-		}
-		if !exists {
-			a.error(w, errMissingUser)
 			return
 		}
 	}

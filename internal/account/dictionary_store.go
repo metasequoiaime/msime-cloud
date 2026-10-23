@@ -50,12 +50,8 @@ func (s *Store) DictionaryEntries(ctx context.Context, user, kind, search string
 		return nil, false, err
 	}
 	if len(out) == 0 {
-		exists, err := s.userExists(ctx, user)
-		if err != nil {
+		if err := s.requireUserExists(ctx, user); err != nil {
 			return nil, false, err
-		}
-		if !exists {
-			return nil, false, errMissingUser
 		}
 	}
 	more := len(out) > limit
@@ -242,12 +238,8 @@ func (s *Store) DictionaryChanges(ctx context.Context, user string, after int64,
 		return nil, false, err
 	}
 	if len(result) == 0 {
-		exists, err := s.userExists(ctx, user)
-		if err != nil {
+		if err := s.requireUserExists(ctx, user); err != nil {
 			return nil, false, err
-		}
-		if !exists {
-			return nil, false, errMissingUser
 		}
 	}
 	more := len(result) > limit
@@ -259,10 +251,8 @@ func (s *Store) DictionaryChanges(ctx context.Context, user string, after int64,
 
 // StreamDictionary exports one database snapshot without retaining the user's entire dictionary in memory.
 func (s *Store) StreamDictionary(ctx context.Context, user, kind string, emit func(DictionaryEntry) error) error {
-	if exists, err := s.userExists(ctx, user); err != nil {
+	if err := s.requireUserExists(ctx, user); err != nil {
 		return err
-	} else if !exists {
-		return errMissingUser
 	}
 	rows, err := s.pool.Query(ctx, `SELECT id,kind,code,word,weight,revision,updated_at FROM user_dictionary_entries WHERE user_id=$1 AND kind=$2 ORDER BY code,word,id`, user, kind)
 	if err != nil {
@@ -284,12 +274,8 @@ func (s *Store) StreamDictionary(ctx context.Context, user, kind string, emit fu
 		return err
 	}
 	if !emitted {
-		exists, err := s.userExists(ctx, user)
-		if err != nil {
+		if err := s.requireUserExists(ctx, user); err != nil {
 			return err
-		}
-		if !exists {
-			return errMissingUser
 		}
 	}
 	return nil
@@ -373,10 +359,8 @@ func streamDictionarySnapshotKind(ctx context.Context, q snapshotQuerier, user, 
 // StreamWindowsDictionary matches the Windows manager export selection: pinyin
 // includes multi-character upserts, while other kinds export user insertions.
 func (s *Store) StreamWindowsDictionary(ctx context.Context, user, kind string, emit func(DictionaryEntry) error) error {
-	if exists, err := s.userExists(ctx, user); err != nil {
+	if err := s.requireUserExists(ctx, user); err != nil {
 		return err
-	} else if !exists {
-		return errMissingUser
 	}
 	rows, err := s.pool.Query(ctx, `SELECT entry FROM user_dictionary_overlay WHERE user_id=$1 AND kind=$2 AND NOT deleted AND (($2='pinyin' AND char_length(word)>1) OR ($2<>'pinyin' AND COALESCE(entry->>'user_inserted','true')='true')) ORDER BY code,word`, user, kind)
 	if err != nil {
@@ -402,12 +386,8 @@ func (s *Store) StreamWindowsDictionary(ctx context.Context, user, kind string, 
 		return err
 	}
 	if !emitted {
-		exists, err := s.userExists(ctx, user)
-		if err != nil {
+		if err := s.requireUserExists(ctx, user); err != nil {
 			return err
-		}
-		if !exists {
-			return errMissingUser
 		}
 	}
 	return nil

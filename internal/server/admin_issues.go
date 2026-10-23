@@ -278,17 +278,8 @@ func issueKind(labels []string) string {
 		case "documentation", "docs", "文档", "type: docs", "kind/docs":
 			return "docs"
 		}
-		upper, nonASCII := false, false
-		for i := range label {
-			if label[i] >= utf8.RuneSelf {
-				nonASCII = true
-				break
-			}
-			if label[i] >= 'A' && label[i] <= 'Z' {
-				upper = true
-			}
-		}
-		if nonASCII {
+		upper, ascii := textutil.HasUpperASCII(label)
+		if !ascii {
 			label = strings.ToLower(label)
 		} else if !upper {
 			continue

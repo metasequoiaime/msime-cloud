@@ -1039,20 +1039,11 @@ var (
 
 // qqProcessLabel 判断流程标签；ASCII 标签直接逐字节比较，避免为每个 GitHub 标签创建小写副本。
 func qqProcessLabel(label string) bool {
-	nonASCII, upper := false, false
-	for i := range label {
-		if label[i] >= utf8.RuneSelf {
-			nonASCII = true
-			break
-		}
-		if label[i] >= 'A' && label[i] <= 'Z' {
-			upper = true
-		}
-	}
-	if !nonASCII && !upper {
+	upper, ascii := textutil.HasUpperASCII(label)
+	if ascii && !upper {
 		return slices.Contains(qqProcessLabels, label) || slices.ContainsFunc(qqProcessLabelPrefixes, func(prefix string) bool { return strings.HasPrefix(label, prefix) })
 	}
-	if nonASCII {
+	if !ascii {
 		lower := strings.ToLower(label)
 		return slices.Contains(qqProcessLabels, lower) || slices.ContainsFunc(qqProcessLabelPrefixes, func(prefix string) bool { return strings.HasPrefix(lower, prefix) })
 	}

@@ -39,6 +39,14 @@ type CommunityDesign struct {
 	PhotoPosition      *float64 `json:"photoPosition,omitempty"`
 }
 
+// communityDesignNonNull 只记录字段是否为非 null，不保留可能很大的照片值。
+type communityDesignNonNull bool
+
+func (v *communityDesignNonNull) UnmarshalJSON(raw []byte) error {
+	*v = communityDesignNonNull(!bytes.Equal(raw, []byte("null")))
+	return nil
+}
+
 func validRange(value, min, max float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= min && value <= max
 }
@@ -49,12 +57,12 @@ func parseCommunityDesign(raw json.RawMessage) (CommunityDesign, error) {
 	if err := d.Decode(&v); err != nil {
 		return v, err
 	}
-	var fields map[string]json.RawMessage
+	var fields map[string]communityDesignNonNull
 	if json.Unmarshal(raw, &fields) != nil {
 		return v, ErrInvalid
 	}
 	for _, key := range []string{"background", "keyBackground", "keyForeground", "accent", "actionBackground", "cornerRadius", "borderWidth", "shadow", "pattern", "monospaced"} {
-		if len(fields[key]) == 0 || string(fields[key]) == "null" {
+		if !fields[key] {
 			return v, ErrInvalid
 		}
 	}

@@ -2305,6 +2305,9 @@ def main() -> int:
                 check_dictionary_revisions(browser, base)
                 check_dictionary_refresh_failures(browser, base)
                 check_dictionary_initial_failures(browser, base)
+                from permission_drafts_smoke import check_permission_drafts, check_permission_initial_failure
+                check_permission_drafts(browser, base)
+                check_permission_initial_failure(browser, base)
                 check_preferences_pending(context, base, problems)
                 check_notice_pending(context, base, problems)
                 check_notice_pending_focus(context, base, problems)

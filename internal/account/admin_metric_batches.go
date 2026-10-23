@@ -2,7 +2,6 @@ package account
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 
@@ -21,7 +20,7 @@ func (a *Service) RecordServiceMetricBatch(ctx context.Context, batch ServiceMet
 	if len(batch.Hours) == 0 && len(batch.Minutes) == 0 {
 		return nil
 	}
-	if id, err := hex.DecodeString(batch.ID); err != nil || len(id) != 32 {
+	if !textutil.ValidHex(batch.ID, 32) {
 		return errors.New("invalid service metric batch ID")
 	}
 	for _, row := range batch.Hours {

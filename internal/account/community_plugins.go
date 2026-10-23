@@ -18,6 +18,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/metasequoiaime/MSIME-Backend/internal/digest"
+	"github.com/metasequoiaime/MSIME-Backend/internal/packageid"
 )
 
 // pluginTransferTimeout is how long a publish or a download may take end to end: either moves up to 11.3 MB of JSON, which the default 15 s route context and the server's read and write deadlines would cut off on a slow link.
@@ -162,7 +163,7 @@ func pluginPublishMetadataCode(id, name, description, kind, pluginID, version st
 	if !slices.Contains(pluginKinds, kind) {
 		return "invalid_kind"
 	}
-	if !validPluginID(pluginID) || !pluginBoundedText(version, 32) {
+	if !packageid.Valid(pluginID) || !pluginBoundedText(version, 32) {
 		return "invalid_plugin_metadata"
 	}
 	if archiveSize < 1 || archiveSize > maxPluginArchiveBytes {

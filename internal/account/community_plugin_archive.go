@@ -18,6 +18,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
+	"github.com/metasequoiaime/MSIME-Backend/internal/packageid"
 	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
@@ -117,20 +118,6 @@ type pluginPack struct {
 	Version  string
 	License  string
 	Manifest []byte
-}
-
-// validPluginID 沿用客户端的标识符形状，并拒绝 Windows 无法按原名安装的尾点与 nul 目录。
-func validPluginID(id string) bool {
-	if id == "" || len(id) > 64 || !isASCIIAlnum(id[0]) || id == "nul" || strings.HasSuffix(id, ".") {
-		return false
-	}
-	for i := 0; i < len(id); i++ {
-		c := id[i]
-		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '.' || c == '-' || c == '_') {
-			return false
-		}
-	}
-	return true
 }
 
 func isASCIIAlnum(c byte) bool {
@@ -614,7 +601,7 @@ func validPluginArchive(archive []byte) (pluginPack, string) {
 	if !pluginManifestKeys(table, kind) {
 		return pluginPack{}, "invalid_plugin_manifest"
 	}
-	if m.ID == nil || !validPluginID(*m.ID) || slices.Contains(builtinPluginIDs[kind], *m.ID) {
+	if m.ID == nil || !packageid.Valid(*m.ID) || slices.Contains(builtinPluginIDs[kind], *m.ID) {
 		return pluginPack{}, "invalid_plugin_manifest"
 	}
 	if m.Name == nil || !pluginBoundedText(*m.Name, 80) || m.Version == nil || !pluginBoundedText(*m.Version, 32) || m.License == nil || !pluginBoundedText(*m.License, 64) {

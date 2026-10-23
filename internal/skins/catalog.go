@@ -11,13 +11,13 @@ import (
 	"math"
 	"os"
 	"path"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
 	"unicode/utf8"
 
 	checksum "github.com/metasequoiaime/MSIME-Backend/internal/digest"
+	"github.com/metasequoiaime/MSIME-Backend/internal/packageid"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -25,7 +25,6 @@ import (
 var builtin embed.FS
 var ErrNotFound = errors.New("skin_not_found")
 var ErrInvalid = errors.New("invalid_skin")
-var idPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 var builtinIDs = []string{"fluent", "wechat", "graphite", "willow_green"}
 
 // 内置资源随二进制固定，每款皮肤按需加载一次元数据，返回时再复制可变切片。
@@ -39,7 +38,7 @@ var builtinLoads = func() map[string]func() (Package, error) {
 
 // SafeID 额外拒绝 Windows 无法按原名安装的尾点目录与 nul 设备目录。
 func SafeID(id string) bool {
-	return id != "nul" && !strings.HasSuffix(id, ".") && idPattern.MatchString(id)
+	return packageid.Valid(id)
 }
 func Builtin(id string) bool { return slices.Contains(builtinIDs, id) }
 

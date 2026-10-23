@@ -44,7 +44,7 @@ const codeMessages: Record<string, string> = {
   invalid_candidate_skin_package: "候选窗皮肤清单或图片引用不符合要求。",
   candidate_skin_busy: "图片处理繁忙，请稍后重试。",
   candidate_skin_file_path: "图片包内路径无效，请使用安全的相对路径。",
-  candidate_skin_file_type: "候选窗皮肤只支持清单引用的 PNG、JPEG 图片。",
+  candidate_skin_file_type: "候选窗皮肤只支持清单引用的 PNG、JPEG、APNG、GIF、WebP 图片，预览图须使用 PNG/JPEG。",
   candidate_skin_image_invalid: "皮肤图片无法读取，或尺寸超出限制。",
   candidate_skin_license_required: "公开候选窗皮肤必须在清单中声明素材许可。",
   candidate_skin_preview_required: "候选窗皮肤清单必须指定预览图。",

@@ -76,7 +76,7 @@ export function ContentEditor({ section, detail, onClose, onSaved }: { section: 
         if (manifestFile && manifestFile.size > 65536) throw new Error("皮肤清单不能超过 64 KiB。");
         Object.assign(value, { category, visibility, manifest: manifestFile ? await manifestFile.text() : manifest });
         if (files.length) {
-          if (files.length > 3 || files.reduce((sum, entry) => sum + entry.file.size, 0) > 2 * 1024 * 1024) throw new Error("候选窗皮肤最多 3 张图片，总大小不超过 2 MiB。");
+          if (files.length > 37 || files.reduce((sum, entry) => sum + entry.file.size, 0) > 2 * 1024 * 1024) throw new Error("候选窗皮肤最多 37 张图片，总大小不超过 2 MiB。");
           const images: Record<string, string> = {};
           for (const { file, path } of files) {
             if (Object.hasOwn(images, path)) throw new Error("图片路径重复，请重新选择。");
@@ -133,10 +133,10 @@ export function ContentEditor({ section, detail, onClose, onSaved }: { section: 
           <Field label="可见性"><select className={inputClass} value={visibility} onChange={event => setVisibility(event.target.value as typeof visibility)}><option value="public">公开图库</option><option value="private">作者私有库</option></select></Field>
           <Field label="导入 skin.toml（可选）"><input type="file" accept=".toml" className={inputClass} onChange={event => setManifestFile(event.target.files?.[0] ?? null)} /></Field>
           <Field label="皮肤清单（skin.toml）"><textarea required={!manifestFile} disabled={Boolean(manifestFile)} rows={8} className={`${inputClass} font-mono text-xs`} value={manifestFile ? `将使用文件「${manifestFile.name}」的内容` : manifest} onChange={event => setManifest(event.target.value)} /></Field>
-          <Field label={detail ? "替换全部图片（可选）" : "皮肤图片"}><input type="file" multiple accept=".png,.jpg,.jpeg" required={!detail} className={inputClass} onChange={event => setFiles(Array.from(event.target.files ?? []).map(file => ({ file, path: detail?.files?.find(existing => existing.path.split("/").at(-1) === file.name)?.path ?? file.name })))} /></Field>
+          <Field label={detail ? "替换全部图片（可选）" : "皮肤图片"}><input type="file" multiple accept=".png,.jpg,.jpeg,.apng,.gif,.webp" required={!detail} className={inputClass} onChange={event => setFiles(Array.from(event.target.files ?? []).map(file => ({ file, path: detail?.files?.find(existing => existing.path.split("/").at(-1) === file.name)?.path ?? file.name })))} /></Field>
           {files.map((entry, index) => <Field key={entry.file.name} label={`${entry.file.name} 的包内路径`}><input required className={inputClass} value={entry.path} onChange={event => setFiles(current => current.map((item, at) => at === index ? { ...item, path: event.target.value } : item))} /></Field>)}
           <CandidateDraftPreview name={name} manifest={manifest} manifestFile={manifestFile} files={files} detail={detail} />
-          <p className="m-0 text-xs leading-relaxed text-muted">选择清单引用的全部图片，文件名须与清单一致。最多 3 张，每张不超过 1 MiB，总共不超过 2 MiB。{detail && "不选新图片时保留现有图片。"}</p>
+          <p className="m-0 text-xs leading-relaxed text-muted">选择清单引用的全部图片，文件名须与清单一致。支持 PNG、JPEG、APNG、GIF 和 WebP，最多 37 张，每张不超过 1 MiB，总共不超过 2 MiB；预览图仍须使用 PNG/JPEG。{detail && "不选新图片时保留现有图片。"}</p>
         </>}
       </fieldset>
       {save.isError && <p role="alert" className="mt-3 text-sm text-bad">{errorMessage(save.error)}</p>}

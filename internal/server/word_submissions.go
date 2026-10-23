@@ -159,11 +159,7 @@ func (c *WordSubmissionsConfig) validate(authEnabled bool, origins []string) err
 	if !githubBranchPattern.MatchString(g.Branch) || strings.Contains(g.Branch, "..") || strings.HasPrefix(g.Branch, wordSubmissionBranches) {
 		return errors.New("word_submissions github branch is invalid")
 	}
-	if g.APIURL == "" {
-		g.APIURL = defaultGitHubAPIURL
-	}
-	g.APIURL = strings.TrimSuffix(g.APIURL, "/")
-	if !plainHTTPSURL(g.APIURL, true) {
+	if !normalizeAPIBaseURL(&g.APIURL, defaultGitHubAPIURL) {
 		return errors.New("word_submissions github api_url must be an HTTPS URL without query or credentials")
 	}
 	key, err := parseGitHubAppKey(os.Getenv(g.PrivateKeyEnv))
@@ -172,12 +168,6 @@ func (c *WordSubmissionsConfig) validate(authEnabled bool, origins []string) err
 	}
 	g.key = key
 	return nil
-}
-
-func plainHTTPSURL(raw string, allowEmptyPath bool) bool {
-	u, err := url.Parse(raw)
-	// 空片段解析后不留标记，但原始地址的 # 仍会吞掉后续拼接的接口路径。
-	return err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil && u.RawQuery == "" && !u.ForceQuery && !strings.Contains(raw, "#") && (allowEmptyPath || u.Path != "")
 }
 
 // GitHub hands out PKCS#1 keys; converted keys are PKCS#8. Secret stores that cannot hold newlines often store the PEM with literal \n sequences, so those are accepted too.

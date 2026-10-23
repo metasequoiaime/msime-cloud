@@ -240,11 +240,7 @@ func (c *QQBotConfig) validate(cfg *Config) error {
 	if c.ImprovementRepo != "" && c.ImprovementRepo != "none" && !githubRepositoryPattern.MatchString(c.ImprovementRepo) {
 		return errors.New("qq_bot improvement_repo must be owner/name or none")
 	}
-	if c.APIURL == "" {
-		c.APIURL = defaultQQBotAPIURL
-	}
-	c.APIURL = strings.TrimSuffix(c.APIURL, "/")
-	if !plainHTTPSURL(c.APIURL, true) {
+	if !normalizeAPIBaseURL(&c.APIURL, defaultQQBotAPIURL) {
 		return errors.New("qq_bot api_url must be an HTTPS URL without query or credentials")
 	}
 	return nil

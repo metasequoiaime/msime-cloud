@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/metasequoiaime/MSIME-Backend/internal/boundedio"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
 
 	segmentjson "github.com/segmentio/encoding/json"
@@ -143,7 +144,7 @@ func (s *Server) niuTransUpload(w http.ResponseWriter, r *http.Request, e NiuTra
 				return
 			}
 		} else {
-			value, readErr := io.ReadAll(io.LimitReader(part, 257))
+			value, readErr := boundedio.ReadAll(part, -1, 256)
 			if readErr != nil || len(value) == 0 || len(value) > 256 || strings.ContainsAny(string(value), "\r\n") {
 				fail(w, http.StatusBadRequest, "invalid_field")
 				return

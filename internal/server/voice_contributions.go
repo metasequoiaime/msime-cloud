@@ -97,7 +97,7 @@ func (s *Server) voiceContribution(w http.ResponseWriter, r *http.Request) {
 				fail(w, 400, "invalid_payload")
 				return
 			}
-			raw, err := io.ReadAll(io.LimitReader(part, voiceContributionPayloadBytes+1))
+			raw, err := boundedio.ReadAll(part, -1, voiceContributionPayloadBytes)
 			if err != nil || len(raw) > voiceContributionPayloadBytes {
 				fail(w, 400, "invalid_payload")
 				return

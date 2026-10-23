@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
+	"github.com/metasequoiaime/MSIME-Backend/internal/boundedio"
 	"github.com/metasequoiaime/MSIME-Backend/internal/engine"
 	"io"
 	"net/url"
@@ -125,7 +126,7 @@ func LoadConfig(path string) (Config, error) {
 	}
 	defer f.Close()
 	// 多读一个字节区分真实文件结尾和大小截断，避免把上限之外的内容当成不存在。
-	data, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
+	data, err := boundedio.ReadAll(f, -1, 1<<20)
 	if err != nil {
 		return c, err
 	}

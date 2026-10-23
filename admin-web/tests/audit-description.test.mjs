@@ -40,3 +40,12 @@ test('未知动作和分区仍保留兼容显示', () => {
   assert.equal(describe('future_action', { reason: '测试原因' }), 'future_action synthetic-item（测试原因）');
   assert.equal(describe('approve_content', { section: 'future' }), '通过了社区内容「synthetic-item」');
 });
+
+test('社区审核审计使用后端 detail 中的作品名和批量数量', () => {
+  for (const [section, label] of sections) {
+    assert.equal(describe('approve_content', { section, name: '合成作品' }, section), `通过了${label}「合成作品」`);
+    assert.equal(describe('remove_content', { section, name: '合成作品', reason: '测试原因' }, section), `下架了${label}「合成作品」（测试原因）`);
+    assert.equal(describe('undo_moderation', { section, name: '合成作品' }, section), `撤销了${label}「合成作品」的审核操作`);
+    assert.equal(describe('approve_content', { section, count: 6 }, section), `通过了${label} 6 项`);
+  }
+});

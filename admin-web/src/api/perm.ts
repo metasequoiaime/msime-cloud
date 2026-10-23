@@ -90,7 +90,9 @@ export function describeAudit(entry: AuditEntry): string {
   const suffix = reason ? `（${reason}）` : "";
   const count = text(d.count);
   const section = sectionLabels[text(d.section)] ?? "社区内容";
-  const item = target ? `「${target}」` : count ? ` ${count} 项` : "";
+  // 社区审核动作的 target 是分区名，作品名和批量数量由后端写入 detail；兼容旧审计记录的 target 作品名。
+  const itemName = text(d.name);
+  const item = itemName ? `「${itemName}」` : count ? ` ${count} 项` : target ? `「${target}」` : "";
   switch (entry.action) {
     case "create_skin": case "create_candidate_skin": case "create_plugin": return `新增了${section}「${text(d.name) || target}」`;
     case "update_skin": case "update_candidate_skin": case "update_plugin": return `编辑了${section}「${text(d.name) || target}」`;

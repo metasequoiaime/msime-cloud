@@ -1855,7 +1855,7 @@ func (s *Server) qqAnswerQuestion(ctx context.Context, history []account.QQTurn,
 			return qqAnswer{}, errors.New("model returned an empty answer")
 		}
 	default:
-		return qqAnswer{}, errors.New("model returned an unknown answer type " + strconv.Quote(answer.Type))
+		return qqAnswer{}, errors.New("model returned an unknown answer type")
 	}
 	return answer, nil
 }
@@ -2433,7 +2433,7 @@ func (s *Server) qqTriage(ctx context.Context, feedback string) (string, error) 
 		}
 		return "", errors.New("model returned an existing feature without an answer")
 	default:
-		return "", errors.New("model returned an unknown decision " + strconv.Quote(verdict.Decision))
+		return "", errors.New("model returned an unknown decision")
 	}
 }
 

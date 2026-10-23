@@ -143,7 +143,10 @@ function Security({ me }: { me: Me }) {
   const toast = useToast();
   const confirm = useConfirm();
   const [issued, setIssued] = useState<string | null>(null);
+  const mutationKey = keys.page("me", "token", me.email);
+  const pending = useIsMutating({ mutationKey, exact: true }) > 0;
   const regenerate = useMutation({
+    mutationKey,
     mutationFn: () => api.post("me", issuedTokenSchema, { action: "regenerate_token" } satisfies MeAction),
     onSuccess: result => {
       setIssued(result.token);
@@ -177,11 +180,12 @@ function Security({ me }: { me: Me }) {
           {me.token ? `msime_pat_••••${me.token.last4} · ${expiry}` : "尚未生成 · 用于脚本和 API 调用，有效期 30 天"}
         </div>
       </div>
-      <Button size="sm" variant="outline" className="h-8 rounded-[9px] px-3 text-[13px]" disabled={!canRegenerate || regenerate.isPending}
+      <Button size="sm" variant="outline" className="h-8 rounded-[9px] px-3 text-[13px]" disabled={!canRegenerate || pending}
         title={canRegenerate ? undefined : "只能在浏览器登录会话中生成令牌，令牌不能为自己续期"}
         onClick={async () => {
           if (me.token && await confirm({ title: "重新生成个人访问令牌？", description: "旧令牌会立即失效，使用它的脚本需要换成新令牌。", okLabel: "重新生成", tone: "primary" }) === null) return;
-          regenerate.mutate();
+          // 切页返回也等待同一账号的签发和资料刷新；确认框等待期间仍需复查。
+          if (!client.isMutating({ mutationKey, exact: true })) regenerate.mutate();
         }}>{me.token ? "重新生成" : "生成"}</Button>
       {issued && <div className="w-full rounded-xl bg-accent-soft px-3.5 py-3">
         <div className="text-xs font-semibold text-accent-ink">新令牌只显示这一次，请立即复制保存</div>

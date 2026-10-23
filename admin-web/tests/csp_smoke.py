@@ -2298,6 +2298,8 @@ def main() -> int:
                 check_auth_logout_flush(context, base, problems)
                 check_auth_logout_inflight(context, base, problems)
                 check_auth_toast_identity(context, base, problems)
+                from admin_token_pending_smoke import check_admin_token_pending
+                check_admin_token_pending(browser, base)
                 check_profile_rollback(context, base, problems)
                 check_dictionary_editor_actions(context, base, problems)
                 check_dictionary_editor_navigation(context, base, problems)

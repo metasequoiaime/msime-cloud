@@ -47,11 +47,29 @@ func candidateWebPAppend(dst []byte, kind string, body []byte) []byte {
 	return dst
 }
 
+// candidateWebPBuffer 按全部编码块的长度一次预留容器，返回可继续追加块的 RIFF 头。
+func candidateWebPBuffer(size int) []byte {
+	data := make([]byte, 12, 12+size)
+	copy(data, "RIFF")
+	binary.LittleEndian.PutUint32(data[4:], uint32(size+4))
+	copy(data[8:], "WEBP")
+	return data
+}
+
 func candidateWebPContainer(chunks []byte) []byte {
-	data := append([]byte("RIFF"), make([]byte, 4)...)
-	data = append(data, "WEBP"...)
-	data = append(data, chunks...)
-	binary.LittleEndian.PutUint32(data[4:], uint32(len(data)-8))
+	return append(candidateWebPBuffer(len(chunks)), chunks...)
+}
+
+// candidateWebPEncode 直接把已校验的块写入最终容器，避免先拼接整份载荷再复制。
+func candidateWebPEncode(chunks ...candidateWebPChunk) []byte {
+	size := 0
+	for _, chunk := range chunks {
+		size += 8 + len(chunk.body) + len(chunk.body)%2
+	}
+	data := candidateWebPBuffer(size)
+	for _, chunk := range chunks {
+		data = candidateWebPAppend(data, chunk.kind, chunk.body)
+	}
 	return data
 }
 
@@ -81,7 +99,7 @@ func candidateWebPFrame(chunks []candidateWebPChunk, width, height int) ([]byte,
 	if bits == nil {
 		return nil, false
 	}
-	raw := candidateWebPContainer(candidateWebPAppend(nil, kind, bits))
+	raw := candidateWebPEncode(candidateWebPChunk{kind, bits})
 	config, err := webp.DecodeConfig(bytes.NewReader(raw))
 	if err != nil || config.Width < 1 || config.Height < 1 || config.Width > maxCandidateSide || config.Height > maxCandidateSide {
 		return nil, false
@@ -98,10 +116,11 @@ func candidateWebPFrame(chunks []candidateWebPChunk, width, height int) ([]byte,
 		header[4+i] = byte((config.Width - 1) >> (8 * i))
 		header[7+i] = byte((config.Height - 1) >> (8 * i))
 	}
-	clean := candidateWebPAppend(nil, "VP8X", header)
-	clean = candidateWebPAppend(clean, "ALPH", alpha)
-	clean = candidateWebPAppend(clean, kind, bits)
-	return candidateWebPContainer(clean), true
+	return candidateWebPEncode(
+		candidateWebPChunk{"VP8X", header},
+		candidateWebPChunk{"ALPH", alpha},
+		candidateWebPChunk{kind, bits},
+	), true
 }
 
 // parseCandidateWebP 按 RIFF/ANMF 结构预检边界和帧数，清除 EXIF、XMP、ICCP

@@ -17,6 +17,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/segmentio/encoding v0.5.4
+	github.com/yuin/goldmark v1.8.6
 	golang.org/x/image v0.45.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sync v0.22.0

@@ -224,15 +224,13 @@ func (s *Server) qqSummariseFAQ(ctx context.Context, text string, categories []s
 	if entry.Answer == "" || entry.AnswerTW == "" || !slices.Contains(categories, entry.Category) {
 		return entry, errors.New("model returned an invalid FAQ entry")
 	}
-	// 答案里不允许出现二级或一级标题，免得打乱 FAQ 的分类结构；也去掉链接。
+	// 答案里不允许出现一至三级 Markdown 标题，免得打乱 FAQ 的分类和问题结构；代码块中的井号保持原样。
 	for _, answer := range []*string{&entry.Answer, &entry.AnswerTW} {
 		if strings.Contains(*answer, "://") {
 			*answer = qqRemoveRawLinks(*answer)
 		}
-		for line := range strings.SplitSeq(*answer, "\n") {
-			if strings.HasPrefix(line, "# ") || strings.HasPrefix(line, "## ") || strings.HasPrefix(line, "### ") {
-				return entry, errors.New("model answer contains headings")
-			}
+		if qqFAQAnswerHasHeading(*answer) {
+			return entry, errors.New("model answer contains headings")
 		}
 	}
 	if !qqSameCodeBlocks(entry.Answer, entry.AnswerTW) {

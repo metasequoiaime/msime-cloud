@@ -22,25 +22,7 @@ func (s *Store) StreamFullDictionarySnapshot(ctx context.Context, user string, e
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	seen := false
-	for rows.Next() {
-		seen = true
-		var raw []byte
-		if err = rows.Scan(&raw); err != nil {
-			return err
-		}
-		if err = emit(raw); err != nil {
-			return err
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if !seen {
-		return errMissingUser
-	}
-	return nil
+	return emitDictionarySnapshotRows(rows, emit)
 }
 
 // streamFullDictionarySnapshotWithFooter 为全部记录补上数量和校验和，统一独立下载与 ZIP 导出格式。

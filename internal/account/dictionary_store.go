@@ -335,25 +335,7 @@ func streamDictionarySnapshotKind(ctx context.Context, q snapshotQuerier, user, 
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	seen := false
-	for rows.Next() {
-		seen = true
-		var raw []byte
-		if err = rows.Scan(&raw); err != nil {
-			return err
-		}
-		if err = emit(raw); err != nil {
-			return err
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if !seen {
-		return errMissingUser
-	}
-	return nil
+	return emitDictionarySnapshotRows(rows, emit)
 }
 
 // StreamWindowsDictionary matches the Windows manager export selection: pinyin

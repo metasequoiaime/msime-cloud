@@ -42,7 +42,9 @@ def call(method, url, body=None, token=None):
         with urllib.request.urlopen(request, timeout=20) as response:
             return json.loads(response.read() or b"{}")
     except urllib.error.HTTPError as error:
-        sys.exit(f"{method} {url}: {error.code} {error.read().decode()[:300]}")
+        # 供应商错误正文可能含应用密钥或令牌，不能写入终端与 CI 日志。
+        error.close()
+        sys.exit(f"{method} {url}: HTTP {error.code}")
 
 
 def main():

@@ -991,8 +991,9 @@ func (s *Store) Prune(ctx context.Context) {
 		"DELETE FROM qq_improvement_events WHERE created_at<now()-interval '60 days'",
 		"DELETE FROM qq_selftest_cases WHERE created_at<now()-interval '180 days'",
 		// 打字统计只保留 typingStatisticsRetentionDays 天；很久没上传的设备连同它的每日汇总一起删除。绑定码过期即删。
-		"DELETE FROM typing_statistics_days WHERE day<current_date-" + strconv.Itoa(typingStatisticsRetentionDays),
+		// 与用户清空及设备淘汰一致，先锁设备再通过级联删除锁每日汇总。
 		"DELETE FROM typing_statistics_devices WHERE updated_at<now()-interval '" + strconv.Itoa(typingStatisticsRetentionDays) + " days'",
+		"DELETE FROM typing_statistics_days WHERE day<current_date-" + strconv.Itoa(typingStatisticsRetentionDays),
 		"DELETE FROM qq_link_codes WHERE expires_at<now()",
 		// 云剪贴板按用户设置的保留天数清理，置顶的条目不受保留期影响；0 表示一直保留。
 		"DELETE FROM user_clipboard c USING user_clipboard_settings cs WHERE cs.user_id=c.user_id AND cs.retention_days>0 AND NOT c.pinned AND c.updated_at<now()-make_interval(days=>cs.retention_days)",

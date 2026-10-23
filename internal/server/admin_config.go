@@ -159,11 +159,7 @@ func (g *AdminGitHubConfig) validate() error {
 		return errors.New("admin github private_key_env must hold the GitHub App RSA private key (PEM, PKCS#1 or PKCS#8)")
 	}
 	g.key = key
-	if g.APIURL == "" {
-		g.APIURL = githubapp.DefaultAPIURL
-	}
-	g.APIURL = strings.TrimSuffix(g.APIURL, "/")
-	if !plainHTTPSURL(g.APIURL, true) {
+	if !normalizeAPIBaseURL(&g.APIURL, githubapp.DefaultAPIURL) {
 		return errors.New("admin github api_url must be an HTTPS URL without query or credentials")
 	}
 	if g.DictionaryRepo == "" {
@@ -229,11 +225,7 @@ func (t *AdminTelegramConfig) validate() error {
 	if !telegramBotTokenPattern.MatchString(t.botToken) {
 		return errors.New("admin telegram bot_token_env must hold a Telegram bot token")
 	}
-	if t.APIURL == "" {
-		t.APIURL = defaultTelegramAPIURL
-	}
-	t.APIURL = strings.TrimSuffix(t.APIURL, "/")
-	if !plainHTTPSURL(t.APIURL, true) {
+	if !normalizeAPIBaseURL(&t.APIURL, defaultTelegramAPIURL) {
 		return errors.New("admin telegram api_url must be an HTTPS URL without query or credentials")
 	}
 	return nil

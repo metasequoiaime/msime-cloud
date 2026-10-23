@@ -74,6 +74,33 @@ func TestValidateDiagnosticUpload(t *testing.T) {
 	}
 }
 
+func TestValidateDiagnosticClientLabels(t *testing.T) {
+	for _, field := range []string{"platform", "app_version"} {
+		for _, tc := range []struct {
+			value string
+			valid bool
+		}{
+			{"Android_15", true}, {"1.4.0+build", true}, {"a._+-", true}, {strings.Repeat("A", 64), true},
+			{"", false}, {"+build", false}, {"a b", false}, {"a\n", false}, {"中文", false}, {strings.Repeat("A", 65), false},
+		} {
+			events := []DiagnosticEvent{}
+			v := diagnosticUpload{Platform: "android", AppVersion: "1.0.0", TTL: "one_day", Sections: DiagnosticSections{InputEvents: &events}}
+			if field == "platform" {
+				v.Platform = tc.value
+			} else {
+				v.AppVersion = tc.value
+			}
+			want := "invalid_client"
+			if tc.valid {
+				want = ""
+			}
+			if got := validateDiagnosticUpload(v); got != want {
+				t.Errorf("字段 %s=%q：错误码=%q，期望=%q", field, tc.value, got, want)
+			}
+		}
+	}
+}
+
 func TestDiagnosticTokenAndArguments(t *testing.T) {
 	token, digest := newDiagnosticToken()
 	if !regexp.MustCompile(`^msk_[A-Za-z0-9_-]{43}$`).MatchString(token) || digest != hash(token) || diagnosticTokenHint(token) != token[len(token)-4:] {

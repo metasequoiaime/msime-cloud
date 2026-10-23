@@ -17,6 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
 // DiagnosticsMCPPrefix 是诊断快照远程 MCP 端点的路径前缀，完整路径是 /mcp/s/{id}。它不在 /v1 下，不用用户会话而用快照令牌鉴权，IsPath 让它绕过全局 Bearer 检查。
@@ -59,7 +60,6 @@ var diagnosticTTLs = map[string]time.Duration{"one_hour": time.Hour, "one_day": 
 var diagnosticCredentialKey = regexp.MustCompile(`(?i)token|secret|password|api_key|key$`)
 
 var diagnosticIDPattern = regexp.MustCompile(`^[0-9a-f]{24}$`)
-var diagnosticLabelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$`)
 
 // ValidDiagnosticID 判断 id 是否是快照 ID 的格式（24 位小写十六进制）。
 func ValidDiagnosticID(id string) bool { return diagnosticIDPattern.MatchString(id) }
@@ -120,7 +120,7 @@ type diagnosticUpload struct {
 
 // validateDiagnosticUpload 校验整份上传，任何一处不合规都拒绝整份。返回值是错误码，空字符串表示通过。
 func validateDiagnosticUpload(v diagnosticUpload) string {
-	if !diagnosticLabelPattern.MatchString(v.Platform) || !diagnosticLabelPattern.MatchString(v.AppVersion) {
+	if !textutil.ValidClientLabel(v.Platform) || !textutil.ValidClientLabel(v.AppVersion) {
 		return "invalid_client"
 	}
 	if _, ok := diagnosticTTLs[v.TTL]; !ok {

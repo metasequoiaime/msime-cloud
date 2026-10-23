@@ -79,13 +79,19 @@ export async function openLogStream(query: URLSearchParams, options: { token: st
     throw new APIError(response.status, code);
   }
   const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
-  let buffer = "";
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) return;
-    buffer += value;
-    const parsed = parseSSE(buffer);
-    buffer = parsed.rest;
-    for (const event of parsed.events) options.onEvent(event);
+  try {
+    let buffer = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) return;
+      buffer += value;
+      const parsed = parseSSE(buffer);
+      buffer = parsed.rest;
+      for (const event of parsed.events) options.onEvent(event);
+    }
+  } finally {
+    // 解析或回调失败时也关闭上游，避免重连继续占用旧日志连接；清理错误不能覆盖原始错误。
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
   }
 }

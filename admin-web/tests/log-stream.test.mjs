@@ -61,3 +61,23 @@ test('日志流逐字节读取 CRLF 和 UTF-8，分块不会丢失事件', async
   await openLogStream(new URLSearchParams(), { token: '', signal: new AbortController().signal, onEvent: event => received.push(event) });
   assert.deepEqual(received, [{ event: 'lines', id: '123', data: '{"message":"合成日志"}' }]);
 });
+
+test('日志事件处理失败时取消仍打开的流，取消失败也保留原始错误', async context => {
+  for (const failCancel of [false, true]) {
+    let canceled = false;
+    context.mock.method(globalThis, 'fetch', async () => new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('event: lines\ndata: {invalid synthetic json}\n\n'));
+      },
+      cancel() {
+        canceled = true;
+        if (failCancel) throw new Error('合成流取消失败');
+      },
+    })));
+    await assert.rejects(openLogStream(new URLSearchParams(), {
+      token: '', signal: new AbortController().signal,
+      onEvent(event) { JSON.parse(event.data); },
+    }), SyntaxError);
+    assert.equal(canceled, true, '事件处理失败后，上游连接仍未取消');
+  }
+});

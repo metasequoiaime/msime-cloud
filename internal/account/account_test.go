@@ -21,7 +21,7 @@ import (
 	jose "github.com/go-jose/go-jose/v4"
 )
 
-func testStore(t *testing.T) *Store {
+func testStore(t testing.TB) *Store {
 	t.Helper()
 	dsn := os.Getenv("MSIME_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -44,7 +44,7 @@ func testStore(t *testing.T) *Store {
 	}
 	return s
 }
-func complete(t *testing.T, s *Store, identity Identity) Tokens {
+func complete(t testing.TB, s *Store, identity Identity) Tokens {
 	t.Helper()
 	ctx := context.Background()
 	id := randomToken()

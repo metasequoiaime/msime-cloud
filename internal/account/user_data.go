@@ -185,13 +185,14 @@ var userDataExportFiles = []userDataExportFile{
 }
 
 // streamVoiceContributions 流式导出本人的语音样本；音频用 JSON 的 base64 表示，避免把所有样本一次性读进内存。
-func (s *Store) streamVoiceContributions(ctx context.Context, user string, write func(json.RawMessage) error) error {
+func (s *Store) streamVoiceContributions(ctx context.Context, user string, out io.Writer) error {
 	rows, err := s.pool.Query(ctx, `SELECT id,language,provider,duration_ms,transcript,app_version,audio_mime,audio,created_at
 FROM voice_contributions WHERE user_id=$1 ORDER BY created_at,id`, user)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
+	encoder := json.NewEncoder(out)
 	for rows.Next() {
 		var (
 			id, language, provider, transcript, appVersion, audioMIME string
@@ -213,11 +214,7 @@ FROM voice_contributions WHERE user_id=$1 ORDER BY created_at,id`, user)
 			Audio      []byte    `json:"audio_base64"`
 			CreatedAt  time.Time `json:"created_at"`
 		}{id, language, provider, durationMS, transcript, appVersion, audioMIME, audio, createdAt}
-		raw, err := json.Marshal(record)
-		if err != nil {
-			return err
-		}
-		if err := write(raw); err != nil {
+		if err := encoder.Encode(record); err != nil {
 			return err
 		}
 	}
@@ -275,10 +272,7 @@ func (a *Service) userDataExport(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := entry("voice.ndjson")
 	if err == nil {
-		err = a.store.streamVoiceContributions(r.Context(), p.UserID, func(raw json.RawMessage) error {
-			_, e := out.Write(append(raw, '\n'))
-			return e
-		})
+		err = a.store.streamVoiceContributions(r.Context(), p.UserID, out)
 	}
 	if err != nil {
 		panic(http.ErrAbortHandler)

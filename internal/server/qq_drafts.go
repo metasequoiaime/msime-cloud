@@ -71,9 +71,9 @@ func qqParseDraftCommand(text string) (command, id, extra string, ok bool) {
 			text = text[1:]
 		} else if strings.HasPrefix(text, "：") {
 			text = text[len("："):]
-			for len(text) > 0 && qqRegexpSpace(text[0]) {
-				text = text[1:]
-			}
+		}
+		for len(text) > 0 && qqRegexpSpace(text[0]) {
+			text = text[1:]
 		}
 		if strings.HasPrefix(text, "#") {
 			text = text[1:]

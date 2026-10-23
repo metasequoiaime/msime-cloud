@@ -149,15 +149,21 @@ func (c cli) adminSignIn(open bool) error {
 // adminKey is where the admin session for admin is kept, apart from user sessions for the same host.
 func adminKey(admin string) string { return "admin " + admin }
 
-// googleState checks that the address the server built is a plain Google authorization URL returning to target, and returns its state. The address is opened in a browser, so anything else is refused rather than opened.
+// googleState 只接受 Google OAuth 授权端点，并完整解析查询参数、核对回调地址后返回 state。
 func googleState(raw, target string) (string, error) {
 	refused := errors.New("the server's Google sign-in address is not one this command opens")
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme != "https" || parsed.Host != "accounts.google.com" || parsed.User != nil || parsed.Fragment != "" || len(raw) > 4096 {
 		return "", refused
 	}
-	query := parsed.Query()
-	if len(query["redirect_uri"]) != 1 || query.Get("redirect_uri") != target || len(query["state"]) != 1 {
+	// 同时兼容新旧授权端点，按转义路径匹配，拒绝其他页面及编码后的路径别名。
+	switch parsed.EscapedPath() {
+	case "/o/oauth2/auth", "/o/oauth2/v2/auth":
+	default:
+		return "", refused
+	}
+	query, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil || len(query["redirect_uri"]) != 1 || query.Get("redirect_uri") != target || len(query["state"]) != 1 {
 		return "", refused
 	}
 	state := query.Get("state")

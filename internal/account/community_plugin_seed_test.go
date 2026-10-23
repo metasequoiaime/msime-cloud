@@ -484,6 +484,21 @@ func TestPluginSeedProvenance(t *testing.T) {
 	if !strings.Contains(sql, "-- Source: https://example.test/plugins.git at commit "+commit+"\n") || strings.Contains(sql, "token") || strings.Contains(sql, "WARNING") {
 		t.Fatal(sql[:300])
 	}
+	for _, remote := range []string{
+		"https://example.test/plugins.git\nSELECT 'synthetic-provenance-statement'; --",
+		"/tmp/synthetic-plugins\r\nSELECT 'synthetic-provenance-statement'; --",
+		"https://user:synthetic-secret@example.test:invalid/plugins.git",
+		"https://user:synthetic-secret@[invalid/plugins.git",
+	} {
+		git("remote", "set-url", "origin", remote)
+		t.Run(remote, func(t *testing.T) {
+			lines := pluginSeedProvenance(root)
+			if strings.ContainsAny(lines[0], "\r\n") || strings.Contains(lines[0], "synthetic-secret") || !strings.Contains(lines[0], commit) {
+				t.Fatalf("来源注释包含换行、凭据或缺少提交：%q", lines[0])
+			}
+		})
+	}
+
 	if err := os.WriteFile(filepath.Join(root, "neon", "NOTES.md"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}

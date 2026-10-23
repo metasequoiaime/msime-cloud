@@ -218,5 +218,26 @@ class SeedTests(unittest.TestCase):
         self.assertEqual(seed.sanitize_remote("git@example.test:org/skins.git"), "git@example.test:org/skins.git")
 
 
+    def test_git_provenance_keeps_remote_in_one_comment(self):
+        git = ["git", "-C", str(self.root), "-c", "user.name=t", "-c", "user.email=t@example.test", "-c", "commit.gpgsign=false"]
+        for args in (["init", "-q"], ["commit", "--allow-empty", "-q", "-m", "fixture"], ["remote", "add", "origin", "https://example.test/skins.git"]):
+            subprocess.run(git + args, check=True, timeout=30, capture_output=True)
+        commit = subprocess.run(git + ["rev-parse", "HEAD"], check=True, timeout=30, capture_output=True, text=True).stdout.strip()
+        for remote in (
+            "https://example.test/skins.git\nSELECT 'synthetic-provenance-statement'; --",
+            "/tmp/synthetic-skins\r\nSELECT 'synthetic-provenance-statement'; --",
+            "https://user:synthetic-secret@example.test:invalid/skins.git",
+            "https://user:synthetic-secret@[invalid/skins.git",
+        ):
+            with self.subTest(remote=remote):
+                subprocess.run(git + ["remote", "set-url", "origin", remote], check=True, timeout=30, capture_output=True)
+                lines = seed.provenance(self.root)
+                self.assertNotIn("\n", lines[0])
+                self.assertNotIn("\r", lines[0])
+                self.assertNotIn("synthetic-secret", lines[0])
+                self.assertIn(commit, lines[0])
+                self.assertNotIn("\nSELECT 'synthetic-provenance-statement'", seed.render([], "msime_backend", lines))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -296,7 +296,11 @@ func pluginSeedProvenance(root string) []string {
 	} else if u, err := url.Parse(remote); err == nil && u.User != nil {
 		u.User = nil
 		remote = u.String()
+	} else if err != nil && strings.Contains(remote, "://") {
+		// 无法解析的 URL 可能仍含凭据，不能把未经脱敏的原文写到 SQL。
+		remote = "(origin URL 无效，已省略)"
 	}
+	remote = strings.NewReplacer("\r", "\\r", "\n", "\\n").Replace(remote)
 	lines := []string{"-- Source: " + remote + " at commit " + commit}
 	if status, err := git("status", "--porcelain", "--untracked-files=all", "--", "."); err != nil || status != "" {
 		lines = append(lines, "-- WARNING: the checkout has uncommitted changes; this SQL reflects the files on disk, not the commit above.")

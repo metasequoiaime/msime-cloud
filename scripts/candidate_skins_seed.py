@@ -499,8 +499,11 @@ def unverified(table):
 
 
 def sanitize_remote(url):
-    """Drop credentials from an https remote so they never land in reviewed SQL."""
-    parts = urlsplit(url)
+    """删除来源 URL 中的凭据，无法解析时不输出原文。"""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return "(origin URL 无效，已省略)"
     if parts.scheme and "@" in parts.netloc:
         return urlunsplit(parts._replace(netloc=parts.netloc.rsplit("@", 1)[1]))
     return url
@@ -518,6 +521,7 @@ def provenance(checkout):
         remote = sanitize_remote(git("remote", "get-url", "origin"))
     except (OSError, subprocess.SubprocessError):
         remote = "(no origin remote)"
+    remote = remote.replace("\r", "\\r").replace("\n", "\\n")
     lines = [f"-- Source: {remote} at commit {commit}"]
     if git("status", "--porcelain", "--untracked-files=all"):
         lines.append("-- WARNING: the checkout has uncommitted changes; this SQL reflects the files on disk, not the commit above.")

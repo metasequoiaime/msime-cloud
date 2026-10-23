@@ -344,14 +344,23 @@ func (s *Server) syncQQDocVectors(ctx context.Context) (int, error) {
 	// 数据库已有本轮全部段落时直接复用哈希表做去重标记，避免更新一段时再分配整张 pending 表；首次同步或部分命中仍使用独立表，避免把缺失 ID 逐个扩进数据库返回的 map。
 	useHashMarkers := len(hashes) == uniqueEstimate
 	var pending map[string]struct{}
-	for i, section := range sections {
-		// 只对本轮已经选中更新的 ID 去重，未变化的段落不能遮住后续同 ID 的更新。
+	// 召回选择同 ID 的最后一段，同步必须选取同一正文；未变化的段落也要标记，避免较早的同名段落覆盖它。
+	for i := len(sections) - 1; i >= 0; i-- {
+		section := sections[i]
+		previousHash := hashes[ids[i]]
 		if useHashMarkers {
-			if hashes[ids[i]] == qqPendingVectorHash {
+			if previousHash == qqPendingVectorHash {
 				continue
 			}
-		} else if _, ok := pending[ids[i]]; ok {
-			continue
+			hashes[ids[i]] = qqPendingVectorHash
+		} else {
+			if _, ok := pending[ids[i]]; ok {
+				continue
+			}
+			if pending == nil {
+				pending = make(map[string]struct{}, uniqueEstimate)
+			}
+			pending[ids[i]] = struct{}{}
 		}
 		text := ""
 		h := ""
@@ -362,7 +371,7 @@ func (s *Server) syncQQDocVectors(ctx context.Context) (int, error) {
 			text = qqDocVectorText(section)
 			h = qqContentHash(text)
 		}
-		if hashes[ids[i]] == h {
+		if previousHash == h {
 			continue
 		}
 		if text == "" {
@@ -373,17 +382,12 @@ func (s *Server) syncQQDocVectors(ctx context.Context) (int, error) {
 			items = make([]account.QQKnowledgeItem, 0, uniqueEstimate)
 			texts = make([]string, 0, uniqueEstimate)
 		}
-		if useHashMarkers {
-			hashes[ids[i]] = qqPendingVectorHash
-		} else {
-			if pending == nil {
-				pending = make(map[string]struct{}, uniqueEstimate)
-			}
-			pending[ids[i]] = struct{}{}
-		}
 		items = append(items, account.QQKnowledgeItem{ID: ids[i], Kind: "doc", Title: section.Doc + " · " + section.Title, Summary: qqTruncate(section.Text, qqHistorySummaryRunes), ContentHash: h, UpdatedAt: s.qq.now()})
 		texts = append(texts, text)
 	}
+	// 批量请求仍按选中段落在文档中的顺序发送。
+	slices.Reverse(items)
+	slices.Reverse(texts)
 	if err := s.qqEmbedItems(ctx, items, texts); err != nil {
 		return 0, err
 	}

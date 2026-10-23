@@ -2,11 +2,9 @@
 package skins
 
 import (
-	"bytes"
 	"embed"
 	"encoding/json"
 	"errors"
-	"io"
 	"io/fs"
 	"math"
 	"os"
@@ -16,6 +14,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"github.com/metasequoiaime/MSIME-Backend/internal/boundedio"
 	checksum "github.com/metasequoiaime/MSIME-Backend/internal/digest"
 	"github.com/metasequoiaime/MSIME-Backend/internal/packageid"
 	"github.com/pelletier/go-toml/v2"
@@ -203,16 +202,7 @@ func readFile(fsys fs.FS, name string) ([]byte, error) {
 	if err != nil || !info.Mode().IsRegular() || info.Size() > 4<<20 {
 		return nil, ErrInvalid
 	}
-	reader := io.LimitReader(f, (4<<20)+1)
-	var raw []byte
-	if info.Size() >= bytes.MinRead {
-		// 大资源按已知大小预留正文与 EOF 探测空间；小资源沿用原读取缓冲。
-		buffer := bytes.NewBuffer(make([]byte, 0, int(info.Size())+bytes.MinRead))
-		_, err = buffer.ReadFrom(reader)
-		raw = buffer.Bytes()
-	} else {
-		raw, err = io.ReadAll(reader)
-	}
+	raw, err := boundedio.ReadAll(f, info.Size(), 4<<20)
 	if err != nil || len(raw) > 4<<20 {
 		return nil, ErrInvalid
 	}

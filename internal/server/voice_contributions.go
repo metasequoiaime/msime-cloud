@@ -12,7 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
-	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
+	"github.com/metasequoiaime/MSIME-Backend/internal/boundedio"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
@@ -118,7 +118,7 @@ func (s *Server) voiceContribution(w http.ResponseWriter, r *http.Request) {
 			if r.ContentLength >= 4<<10 && r.ContentLength <= maxBodyBytes {
 				lengthHint = min(r.ContentLength, voiceContributionAudioBytes)
 			}
-			audio, err = httpclient.ReadBody(part, lengthHint, voiceContributionAudioBytes)
+			audio, err = boundedio.ReadAll(part, lengthHint, voiceContributionAudioBytes)
 			if httpjson.IsBodyTooLarge(err) || len(audio) > voiceContributionAudioBytes {
 				fail(w, 413, "audio_too_large")
 				return

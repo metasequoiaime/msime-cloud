@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
 // TelemetryPath 是服务端经 Route 挂载的匿名事件接口；IsPath 让它绕过 Bearer 中间件，accountRouteRate 按这个路由给它独立的额度，所以服务端必须原样挂载在这个路径上。
@@ -29,12 +31,8 @@ const telemetryActivityRetentionDays = 90
 
 var telemetryKinds = map[string]bool{"download": true, "crash": true, "active": true, "session": true, "session_crash": true}
 
-var (
-	// telemetryChannel is a distribution channel key such as github or cn-mirror; the console maps known keys to labels.
-	telemetryChannel = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
-	// telemetryInstallID is an anonymous random installation id; it must not carry user or hardware identifiers.
-	telemetryInstallID = regexp.MustCompile(`^[A-Za-z0-9_-]{16,64}$`)
-)
+// telemetryInstallID 是匿名随机安装 ID，不能携带用户或硬件标识。
+var telemetryInstallID = regexp.MustCompile(`^[A-Za-z0-9_-]{16,64}$`)
 
 // telemetryEvent 是 `POST /v1/telemetry/events` 的请求体。第一版协议之后新增的字段都是可选的，旧客户端无需修改；未知字段返回 400 `invalid_json`。
 type telemetryEvent struct {
@@ -64,7 +62,7 @@ func (v telemetryEvent) valid() bool {
 	if v.Artifact != "" && !resourceText(v.Artifact, 1, 64, false) {
 		return false
 	}
-	if v.Channel != "" && !telemetryChannel.MatchString(v.Channel) {
+	if v.Channel != "" && !textutil.ValidShortKey(v.Channel) {
 		return false
 	}
 	if v.InstallID != "" && !telemetryInstallID.MatchString(v.InstallID) {

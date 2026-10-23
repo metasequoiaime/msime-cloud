@@ -13,6 +13,7 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
 // AdminGitHubConfig is the GitHub App the admin console reads and writes as: dictionary pull requests, issues, releases and workflow runs. Leaving app_id at 0 ignores the rest of the block and turns every GitHub-backed console endpoint into 404 github_disabled. The installation needs contents:write, pull_requests:write, issues:write, actions:write, checks:read and metadata:read on every repository named here.
@@ -86,7 +87,6 @@ const (
 
 var (
 	adminPlatformIDPattern  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
-	adminServiceKeyPattern  = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
 	githubLoginPattern      = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$`)
 	githubWorkflowPattern   = regexp.MustCompile(`^[A-Za-z0-9._-]{1,100}\.ya?ml$`)
 	telegramChatIDPattern   = regexp.MustCompile(`^(?:-?[0-9]{1,20}|@[A-Za-z0-9_]{5,32})$`)
@@ -109,7 +109,7 @@ func (c *AdminConfig) validateConsole() error {
 	keys := map[string]bool{}
 	for i := range c.Services {
 		v := &c.Services[i]
-		if !adminServiceKeyPattern.MatchString(v.Key) || keys[v.Key] {
+		if !textutil.ValidShortKey(v.Key) || keys[v.Key] {
 			return fmt.Errorf("admin service %d: key must be a unique lowercase identifier", i)
 		}
 		keys[v.Key] = true

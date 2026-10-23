@@ -5,20 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"regexp"
 	"slices"
 	"strconv"
 	"time"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 
 	"github.com/jackc/pgx/v5"
 )
 
 // Upstream service monitoring storage (unit U10): metric buckets, daily availability and incidents. The collectors and the /api/status and /api/cloud handlers are in the server package.
-
-// serviceKeyPattern is the admin.services key format; "database" is the status page's own probe.
-var serviceKeyPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
 
 // Retention of the monitoring tables: the status page shows 60 days, the cloud page the current month and the last 24 hours.
 const (
@@ -106,7 +103,7 @@ func (a *Service) RecordServiceProbes(ctx context.Context, at time.Time, probes 
 	day := at.UTC().Format(time.DateOnly)
 	batch := &pgx.Batch{}
 	for _, p := range probes {
-		if !serviceKeyPattern.MatchString(p.Service) {
+		if !textutil.ValidShortKey(p.Service) {
 			return errors.New("invalid service key")
 		}
 		ok := 0
@@ -179,7 +176,7 @@ func (a *Service) RecordServiceVerdicts(ctx context.Context, minute time.Time, v
 	day := minute.Format(time.DateOnly)
 	batch := &pgx.Batch{}
 	for _, v := range verdicts {
-		if !serviceKeyPattern.MatchString(v.Service) || !verdictStates[v.State] {
+		if !textutil.ValidShortKey(v.Service) || !verdictStates[v.State] {
 			return 0, errors.New("invalid service verdict")
 		}
 		ok := 0
@@ -359,7 +356,7 @@ func (a *Service) Incidents(ctx context.Context, limit int) ([]Incident, error) 
 
 // OpenAutoIncident opens the probe's incident for service unless one is already open, notifying the console in the same transaction. It reports whether a new incident was opened.
 func (a *Service) OpenAutoIncident(ctx context.Context, service, title, description string) (bool, error) {
-	if !serviceKeyPattern.MatchString(service) || !resourceText(title, 1, 200, false) || !resourceText(description, 0, 5000, true) {
+	if !textutil.ValidShortKey(service) || !resourceText(title, 1, 200, false) || !resourceText(description, 0, 5000, true) {
 		return false, ErrInvalid
 	}
 	n, err := normalizeNotification(Notification{Kind: NotifyIncident, Title: title, TargetPage: "status"})
@@ -455,7 +452,7 @@ func actionOpenIncident(a *Service, ctx context.Context, tx pgx.Tx, v actionRequ
 	if err != nil {
 		return actionResult{}, err
 	}
-	if value.Service == nil || !serviceKeyPattern.MatchString(*value.Service) || !a.monitoredService(*value.Service) {
+	if value.Service == nil || !textutil.ValidShortKey(*value.Service) || !a.monitoredService(*value.Service) {
 		return actionResult{}, actionFail(400, "invalid_service")
 	}
 	if value.Title == nil {

@@ -46,11 +46,11 @@ const channelLabels: Record<string, string> = {
   "google-play": "Google Play",
 };
 
-// channelLabel names a row's channel: snapshot rows are the GitHub Release channel, telemetry rows use the reported channel key.
+// channelLabel 按来源显示渠道；遥测的未知键保留原文，不能把原型属性当作已知标签。
 export function channelLabel(row: Pick<DownloadRow, "source" | "channel">): string {
   if (row.source === "github_release") return "GitHub Release";
   if (!row.channel) return "未上报渠道";
-  return channelLabels[row.channel] ?? row.channel;
+  return Object.hasOwn(channelLabels, row.channel) ? channelLabels[row.channel] : row.channel;
 }
 
 // GET/POST /api/site-settings: the Lanzou cloud link the official website's download page offers for the Windows installer. updated_at and updated_by stay set after the link is cleared.

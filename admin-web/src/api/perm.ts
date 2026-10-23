@@ -81,6 +81,16 @@ function text(value: unknown): string {
   return typeof value === "string" || typeof value === "number" ? String(value) : "";
 }
 
+function sensitiveWordLabel(detail: Record<string, unknown>, target: string): string {
+  const patterns = Array.isArray(detail.patterns) ? detail.patterns.map(text).filter(Boolean) : [];
+  if (patterns.length === 1) return `敏感词「${patterns[0]}」`;
+  const count = text(detail.count);
+  if (count) return ` ${count} 个敏感词`;
+  const batch = /^(\d+) words$/.exec(target);
+  if (batch) return ` ${batch[1]} 个敏感词`;
+  return target ? `敏感词「${target}」` : "敏感词";
+}
+
 // describeAudit phrases an audit entry from its action and detail, for example 「通过了词库 PR #210（5 条）」. Unknown actions fall back to the raw action name so nothing is hidden.
 export function describeAudit(entry: AuditEntry): string {
   const d = entry.detail;
@@ -120,8 +130,8 @@ export function describeAudit(entry: AuditEntry): string {
     case "undo_feedback_status": return "撤销了反馈的处理状态操作";
     case "revoke_session": case "revoke_sessions": return `撤销了账号 ${target} 的登录会话`;
     case "add_sensitive_word": return `添加了敏感词${text(d.pattern) ? `「${text(d.pattern)}」` : ""}`;
-    case "set_sensitive_word_level": return "调整了敏感词处理方式";
-    case "delete_sensitive_word": return "删除了敏感词";
+    case "set_sensitive_word_level": return `调整了${sensitiveWordLabel(d, target)}的处理方式`;
+    case "delete_sensitive_word": return `删除了${sensitiveWordLabel(d, target)}`;
     case "save_notice_draft": return `保存了公告草稿${text(d.title) ? `「${text(d.title)}」` : ""}`;
     case "publish_notice": return `发布公告${text(d.title) ? `「${text(d.title)}」` : ""}`;
     case "archive_notice": return `归档了公告${text(d.title) ? `「${text(d.title)}」` : ""}`;

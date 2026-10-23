@@ -2,7 +2,6 @@ package account
 
 import (
 	"context"
-	"crypto/rand"
 	_ "embed"
 	"encoding/hex"
 	"errors"
@@ -17,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/metasequoiaime/MSIME-Backend/internal/digest"
+	"github.com/metasequoiaime/MSIME-Backend/internal/randombytes"
 )
 
 //go:embed schema.sql
@@ -167,11 +167,7 @@ type Tokens struct {
 }
 
 func randomToken() string {
-	b := make([]byte, 32)
-	if _, e := rand.Read(b); e != nil {
-		panic(e)
-	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(randombytes.New(32))
 }
 func hash(s string) string { return digest.SHA256([]byte(s)) }
 

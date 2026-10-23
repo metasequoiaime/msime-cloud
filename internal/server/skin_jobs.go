@@ -3,13 +3,14 @@ package server
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/metasequoiaime/MSIME-Backend/internal/randombytes"
 )
 
 // Jobs are short-lived drafts, not saved skins: at most eight bounded image responses are retained, for ten minutes. With a database the jobs live in the shared skin_jobs table (skin_jobs_shared.go) and the caps apply to the whole deployment; without one they live in this process, which is only correct for a single replica.
@@ -59,12 +60,7 @@ func (s *Server) createSkinArtworkJob(w http.ResponseWriter, r *http.Request) {
 		fail(w, 401, "unauthorized")
 		return
 	}
-	var nonce [24]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
-		fail(w, 503, "job_unavailable")
-		return
-	}
-	id := hex.EncodeToString(nonce[:])
+	id := hex.EncodeToString(randombytes.New(24))
 	body, _ := json.Marshal(input)
 	if s.accounts != nil {
 		s.createSharedSkinJob(w, r, id, owner, body)

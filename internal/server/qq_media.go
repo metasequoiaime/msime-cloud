@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -15,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
+	"github.com/metasequoiaime/MSIME-Backend/internal/randombytes"
 )
 
 // 管理员提 issue 时附带的图片和视频。GitHub 的 issue 接口不能上传附件，所以服务端从 QQ 下载附件，按文件头核实类型后写进公开的 R2 bucket（auth.avatars 的 bucket，前缀 qq-feedback/，经它的 public_base_url 提供），再把链接写进 issue 正文或补充评论。公开域名是我们自己的，所以对象的 Content-Type 一律取服务端认出的类型，只放行常见的图片和视频格式：HTML、SVG 之类能在浏览器里执行脚本的内容不会被托管。
@@ -213,9 +213,7 @@ func (s *Server) publishQQMedia(ctx context.Context, attachments []qqAttachment)
 
 // qqMediaName 是对象名的随机部分，32 个十六进制字符，猜不出也不会重复。
 func qqMediaName() string {
-	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(randombytes.New(16))
 }
 
 // qqMediaSection 是写进 issue 正文或评论的附件一节：图片直接显示，视频给链接（GitHub 只内嵌它自己托管的视频）；有没能保存的附件时注明个数。没有附件时为空。存好的附件是原图原视频，开头注明没有脱敏，维护者看到个人信息时知道要删。

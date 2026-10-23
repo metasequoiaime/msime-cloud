@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/rand"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/boundedio"
+	"github.com/metasequoiaime/MSIME-Backend/internal/randombytes"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
@@ -125,10 +125,7 @@ func sealProviderToken(key []byte, identity Identity, token string) ([]byte, err
 	if e != nil {
 		return nil, e
 	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, e = rand.Read(nonce); e != nil {
-		return nil, e
-	}
+	nonce := randombytes.New(gcm.NonceSize())
 	return gcm.Seal(nonce, nonce, []byte(token), []byte(identity.Provider+":"+identity.Subject)), nil
 }
 

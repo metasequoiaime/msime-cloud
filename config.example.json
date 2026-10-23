@@ -168,7 +168,8 @@
       "secret_access_key_env": "MSIME_R2_SECRET_ACCESS_KEY"
     },
     "community": {
-      "official_skin_publishers": []
+      "official_skin_publishers": [],
+      "canvas_resources": false
     }
   }
 }

@@ -17,15 +17,16 @@ import (
 	"unicode"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
 	"github.com/metasequoiaime/MSIME-Backend/internal/digest"
 	"github.com/metasequoiaime/MSIME-Backend/internal/skins"
 	"github.com/pelletier/go-toml/v2"
 )
 
-// Limits for user-published candidate-window skin packages. crates/client-services/src/skin/candidate_community.rs mirrors them so the client can refuse a package before uploading it.
+// 社区候选皮肤的资源预算与客户端保持一致。扩展资源通过 resources=canvas-v1 声明支持。
 const (
-	// The manifest can reference only the preview, the decoration image and the background image, and every uploaded file must be referenced, so three files is the real bound.
-	maxCandidateFiles         = 3
+	// 预览、旧装饰、背景、两张九宫格来源与最多 32 个挂件；每个文件都必须被引用。
+	maxCandidateFiles         = contract.CandidateSkinFiles
 	maxCandidateFileBytes     = 1 << 20
 	maxCandidatePackageBytes  = 2 << 20
 	maxCandidatePreviewBytes  = 256 << 10
@@ -186,32 +187,45 @@ func scanCandidateSkin(row interface{ Scan(...any) error }) (CommunityCandidateS
 	return s, err
 }
 
-// candidateExtension 返回允许的图片扩展名；不符合 png、jpg 或 jpeg 时返回空字符串。
+// candidateExtension 返回允许上传的图片媒体子类型；APNG 与 PNG 共用解码路径和媒体类型。
 func candidateExtension(path string) string {
 	i := strings.LastIndexByte(path, '.')
 	if i < 0 {
 		return ""
 	}
 	ext := path[i+1:]
-	if len(ext) == 3 {
-		if (ext[0] == 'p' || ext[0] == 'P') && (ext[1] == 'n' || ext[1] == 'N') && (ext[2] == 'g' || ext[2] == 'G') {
-			return "png"
-		}
-		if (ext[0] == 'j' || ext[0] == 'J') && (ext[1] == 'p' || ext[1] == 'P') && (ext[2] == 'g' || ext[2] == 'G') {
-			return "jpeg"
-		}
-	}
-	if len(ext) == 4 && (ext[0] == 'j' || ext[0] == 'J') && (ext[1] == 'p' || ext[1] == 'P') && (ext[2] == 'e' || ext[2] == 'E') && (ext[3] == 'g' || ext[3] == 'G') {
+	switch {
+	case strings.EqualFold(ext, "png"), strings.EqualFold(ext, "apng"):
+		return "png"
+	case strings.EqualFold(ext, "jpg"), strings.EqualFold(ext, "jpeg"):
 		return "jpeg"
+	case strings.EqualFold(ext, "gif"):
+		return "gif"
+	case strings.EqualFold(ext, "webp"):
+		return "webp"
 	}
 	return ""
 }
 
-// validCandidateFiles 执行无需解码图片的结构校验；可以继续上传时返回空字符串，否则返回错误码。
+// validCandidateFiles 保留未协商客户端的旧资源约束。
 func validCandidateFiles(manifest string, files map[string][]byte) string {
-	if len(files) < 1 || len(files) > maxCandidateFiles {
+	return validCandidateResourceFiles(manifest, files, false)
+}
+
+func candidateLegacyImage(path string) bool {
+	lower := strings.ToLower(path)
+	return strings.HasSuffix(lower, ".png") || strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg")
+}
+
+func validCandidateResourceFiles(manifest string, files map[string][]byte, extended bool) string {
+	limit := contract.CandidateSkinLegacyFiles
+	if extended {
+		limit = maxCandidateFiles
+	}
+	if len(files) < 1 || len(files) > limit {
 		return "candidate_skin_file_path"
 	}
+
 	paths := make([]string, 0, len(files))
 	for path := range files {
 		paths = append(paths, path)
@@ -231,7 +245,7 @@ func validCandidateFiles(manifest string, files map[string][]byte) string {
 			}
 			remaining = rest
 		}
-		if candidateExtension(path) == "" {
+		if candidateExtension(path) == "" || !extended && !candidateLegacyImage(path) {
 			return "candidate_skin_file_type"
 		}
 		loweredPath := strings.ToLower(path)
@@ -300,7 +314,7 @@ func validCandidatePackage(manifest string, files map[string][]byte, requireLice
 	if pkg.Preview == "" {
 		return pkg, "candidate_skin_preview_required"
 	}
-	if _, uploaded := files[pkg.Preview]; !uploaded || candidateExtension(pkg.Preview) == "" {
+	if _, uploaded := files[pkg.Preview]; !uploaded || !candidateLegacyImage(pkg.Preview) {
 		return pkg, "candidate_skin_file_type"
 	}
 	license := candidatePackageLicense(pkg)
@@ -314,6 +328,9 @@ func validCandidatePackage(manifest string, files map[string][]byte, requireLice
 		}
 	}
 	referenced := map[string]bool{pkg.Preview: true}
+	for _, image := range pkg.ReferencedImages() {
+		referenced[image] = true
+	}
 	if decoration := pkg.CandidateWindow.Decoration.Image; decoration != "" {
 		referenced[decoration] = true
 	}
@@ -354,10 +371,11 @@ func (p *candidatePNGBufferPool) Put(buffer *png.EncoderBuffer) {
 	p.buffer = buffer
 }
 
-// sanitizeCandidateImages 按扩展名选择解码器完整解码每张图片：静态 PNG 和 JPEG 解码后重新编码，从而去掉 EXIF、XMP、ICC 和文本块；APNG 走 parseCandidateAPNG 的块级清理，保留动画并逐帧解码校验。尺寸、APNG 帧数和 JPEG 扫描段数都在完整解码前从文件头读取，APNG 的每幅画面都按整张画布计入整包像素上限。
+// sanitizeCandidateImages 先对全部文件预检尺寸、帧数与整包像素预算，再完整解码。PNG/JPEG/GIF 重新编码，APNG/WebP 按块清理并逐帧校验；动画按完整画布逐帧计费。
 func sanitizeCandidateImages(files map[string][]byte, preview string) (map[string][]byte, string) {
 	pixels := 0
 	animated := map[string]*candidateAPNG{}
+	webps := map[string]*candidateWebP{}
 	for path, data := range files {
 		var config image.Config
 		var err error
@@ -371,6 +389,21 @@ func sanitizeCandidateImages(files map[string][]byte, preview string) (map[strin
 			config.Width, config.Height, images = a.width, a.height, a.images
 		} else if candidateExtension(path) == "png" {
 			config, err = png.DecodeConfig(bytes.NewReader(data))
+		} else if candidateExtension(path) == "gif" {
+			var code string
+			config.Width, config.Height, images, code = candidateGIFConfig(data)
+			if code != "" {
+				return nil, code
+			}
+		} else if candidateExtension(path) == "webp" {
+			a, code := parseCandidateWebP(data)
+			if code != "" {
+				return nil, code
+			}
+			webps[path] = a
+			config.Width, config.Height, images = a.width, a.height, a.images
+		} else if candidateExtension(path) != "jpeg" {
+			return nil, "candidate_skin_image_invalid"
 		} else if jpegScans(data) > maxJPEGScans {
 			return nil, "candidate_skin_image_invalid"
 		} else {
@@ -405,6 +438,15 @@ func sanitizeCandidateImages(files map[string][]byte, preview string) (map[strin
 			} else {
 				out = *bytes.NewBuffer(a.clean)
 			}
+		} else if a := webps[path]; a != nil {
+			if !a.decode() {
+				return nil, "candidate_skin_image_invalid"
+			}
+			out.Write(a.clean)
+		} else if candidateExtension(path) == "gif" {
+			var clean []byte
+			clean, err = cleanCandidateGIF(data)
+			out.Write(clean)
 		} else if candidateExtension(path) == "png" {
 			if decoded, err = png.Decode(bytes.NewReader(data)); err == nil {
 				err = pngEncoder.Encode(&out, decoded)
@@ -428,6 +470,10 @@ func sanitizeCandidateImages(files map[string][]byte, preview string) (map[strin
 
 func (a *Service) communityCandidateList(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
+	extended, ok := candidateResources(w, query, a.config.Community.CanvasResources)
+	if !ok {
+		return
+	}
 	offset, search, code := communityListPage(query)
 	if code != "" {
 		writeError(w, 400, code)
@@ -460,7 +506,7 @@ func (a *Service) communityCandidateList(w http.ResponseWriter, r *http.Request)
 	// 先选本页皮肤，再计算文件与互动统计，避免处理 OFFSET 跳过的包。
 	rows, e := a.store.pool.Query(r.Context(), `WITH candidate_page AS MATERIALIZED (
  SELECT s.id FROM community_candidate_skins s JOIN auth_users u ON u.id=s.owner_id `+join+`
- WHERE strpos(lower(s.name),lower($2))>0 AND (`+communityMineCondition(scope, "s", "$3")+`) AND (s.visibility='public' OR ($3<>'' AND $5 AND s.owner_id=$1)) AND (s.moderation<>'removed' OR s.owner_id=$1) AND (`+categoryCondition+`)
+ WHERE strpos(lower(s.name),lower($2))>0 AND (`+communityMineCondition(scope, "s", "$3")+`) AND (s.visibility='public' OR ($3<>'' AND $5 AND s.owner_id=$1)) AND (s.moderation<>'removed' OR s.owner_id=$1) AND (`+categoryCondition+`)`+candidateResourceFilter(extended)+`
  ORDER BY `+order+` LIMIT 21 OFFSET $4
 ) `+candidateSkinSelectQuery(fields["saved"], true)+join+`ORDER BY `+order, viewer, search, scope, offset, sync, category)
 	if e != nil {
@@ -499,6 +545,10 @@ func (a *Service) communityCandidateList(w http.ResponseWriter, r *http.Request)
 }
 func (a *Service) communityCandidateDetail(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
+	extended, ok := candidateResources(w, query, a.config.Community.CanvasResources)
+	if !ok {
+		return
+	}
 	fields, ok := candidateFields(query)
 	if !ok {
 		writeError(w, 400, "invalid_fields")
@@ -511,7 +561,7 @@ func (a *Service) communityCandidateDetail(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	// A private row is the owner's alone, and only an opted-in client can decode it; everyone else gets the same 404 as for a missing id.
-	v, e := scanCandidateSkin(a.store.pool.QueryRow(r.Context(), candidateSkinSelect(fields["saved"])+`WHERE s.id=$2 AND (s.visibility='public' OR ($3 AND s.owner_id=$1)) AND (s.moderation<>'removed' OR s.owner_id=$1)`, a.communityViewer(r), r.PathValue("id"), sync))
+	v, e := scanCandidateSkin(a.store.pool.QueryRow(r.Context(), candidateSkinSelect(fields["saved"])+`WHERE s.id=$2 AND (s.visibility='public' OR ($3 AND s.owner_id=$1)) AND (s.moderation<>'removed' OR s.owner_id=$1)`+candidateResourceFilter(extended), a.communityViewer(r), r.PathValue("id"), sync))
 	if errors.Is(e, pgx.ErrNoRows) {
 		writeError(w, 404, "skin_not_found")
 		return
@@ -557,7 +607,7 @@ func (a *Service) communityCandidatePublish(w http.ResponseWriter, r *http.Reque
 		// 缺省为 other。分类不计入 request_sha256：同一内容的重试无论带什么分类都返回已存的作品，之后改分类走 PATCH。
 		Category *string `json:"category"`
 	}
-	withCategory, ok := readCandidateUpload(w, r, &input)
+	withCategory, ok := readCandidateUpload(w, r, &input, a.config.Community.CanvasResources)
 	if !ok {
 		return
 	}
@@ -755,6 +805,10 @@ SELECT $1,files.path,files.bytes
 FROM unnest($2::text[],$3::bytea[]) AS files(path,bytes)`, []any{id, paths, contents}
 }
 func (a *Service) communityCandidateDownload(w http.ResponseWriter, r *http.Request) {
+	extended, ok := candidateResources(w, r.URL.Query(), a.config.Community.CanvasResources)
+	if !ok {
+		return
+	}
 	p, authErr := a.Authenticate(r.Context(), strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
 	// 无有效凭据时允许匿名下载；查询失败或取消不能伪装成未登录。
 	if authErr != nil && !errors.Is(authErr, ErrInvalid) && !errors.Is(authErr, ErrBanned) {
@@ -781,7 +835,7 @@ func (a *Service) communityCandidateDownload(w http.ResponseWriter, r *http.Requ
 	var manifest []byte
 	var files map[string][]byte
 	batch := &pgx.Batch{}
-	batch.Queue(`SELECT package_id,manifest FROM community_candidate_skins WHERE id=$1 AND ((visibility='public' AND moderation<>'removed') OR owner_id=$2) FOR SHARE`, r.PathValue("id"), viewer).QueryRow(func(row pgx.Row) error {
+	batch.Queue(`SELECT package_id,manifest FROM community_candidate_skins s WHERE id=$1 AND ((visibility='public' AND moderation<>'removed') OR owner_id=$2)`+candidateResourceFilter(extended)+` FOR SHARE`, r.PathValue("id"), viewer).QueryRow(func(row pgx.Row) error {
 		return row.Scan(&packageID, &manifest)
 	})
 	batch.Queue(`SELECT path,bytes FROM community_candidate_skin_files WHERE skin_id=$1 ORDER BY path`, r.PathValue("id")).Query(func(rows pgx.Rows) error {
@@ -797,6 +851,18 @@ func (a *Service) communityCandidateDownload(w http.ResponseWriter, r *http.Requ
 	if errors.Is(e, pgx.ErrNoRows) {
 		writeError(w, 404, "skin_not_found")
 		return
+	}
+	// 行锁等待期间可能发生替换；读取文件后再按实际响应复查，拒绝时整笔事务回滚，
+	// 不让旧客户端收到扩展包，也不留下下载计数。
+	if e == nil && !extended {
+		incompatible := len(files) > contract.CandidateSkinLegacyFiles
+		for path := range files {
+			incompatible = incompatible || !candidateLegacyImage(path)
+		}
+		if incompatible {
+			writeError(w, 404, "skin_not_found")
+			return
+		}
 	}
 	if e == nil {
 		e = tx.Commit(r.Context())
@@ -824,11 +890,15 @@ func (a *Service) communityCandidateDelete(w http.ResponseWriter, r *http.Reques
 
 // communityCandidateSync lists every row the account owns, private ones included, as the identifiers a client needs to reconcile its local packages. It is not paginated: an account holds at most maxCandidateLibraryRows rows.
 func (a *Service) communityCandidateSync(w http.ResponseWriter, r *http.Request) {
+	extended, ok := candidateResources(w, r.URL.Query(), a.config.Community.CanvasResources)
+	if !ok {
+		return
+	}
 	p, ok := a.principal(w, r, false)
 	if !ok {
 		return
 	}
-	rows, e := a.store.pool.Query(r.Context(), `SELECT id,package_id,request_sha256,visibility,updated_at FROM community_candidate_skins WHERE owner_id=$1 ORDER BY updated_at DESC,id`, p.UserID)
+	rows, e := a.store.pool.Query(r.Context(), `SELECT id,package_id,request_sha256,visibility,updated_at FROM community_candidate_skins s WHERE owner_id=$1`+candidateResourceFilter(extended)+` ORDER BY updated_at DESC,id`, p.UserID)
 	if e != nil {
 		a.error(w, e)
 		return
@@ -875,7 +945,7 @@ func (a *Service) communityCandidateReplace(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var input candidateUpload
-	withCategory, ok := readCandidateUpload(w, r, &input)
+	withCategory, ok := readCandidateUpload(w, r, &input, a.config.Community.CanvasResources)
 	if !ok {
 		return
 	}

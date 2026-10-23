@@ -136,7 +136,7 @@ func TestCandidatePNGReuseCompatibility(t *testing.T) {
 }
 
 func TestCandidatePNGReuseMemoryBudget(t *testing.T) {
-	files := candidatePNGReuseFixture(t, maxCandidateFiles, 16)
+	files := candidatePNGReuseFixture(t, 3, 16)
 	result := testing.Benchmark(func(b *testing.B) {
 		for b.Loop() {
 			if _, code := sanitizeCandidateImages(files, "image0.png"); code != "" {

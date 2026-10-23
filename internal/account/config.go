@@ -62,6 +62,8 @@ type AnonymousConfig struct {
 
 // CommunityConfig 是社区功能中只由部署方决定的设置。
 type CommunityConfig struct {
+	// CanvasResources 默认关闭；所有副本升级后再开启，避免旧副本向旧客户端返回扩展包。
+	CanvasResources bool `json:"canvas_resources"`
 	// OfficialSkinPublishers 列出官方发布账号的用户 ID（`auth_users.id`，64 位小写十六进制）。这些账号发布候选窗皮肤时不受每账号 20 款公开作品和每小时 10 次公开发布的限制，改用更宽的官方上限（见 community_candidate.go），审核、包校验、license 要求和每账号 100 款的总数上限不变。
 	OfficialSkinPublishers []string `json:"official_skin_publishers"`
 }

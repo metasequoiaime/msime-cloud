@@ -72,7 +72,7 @@ func TestReadCandidateUpload(t *testing.T) {
 			r := httptest.NewRequest("PUT", "/v1/community/candidate-skins/test"+tc.query, strings.NewReader(tc.body))
 			r.Header.Set("Content-Type", "application/json")
 			var input candidateUpload
-			withCategory, ok := readCandidateUpload(w, r, &input)
+			withCategory, ok := readCandidateUpload(w, r, &input, false)
 			if tc.code != "" {
 				if ok || w.Code != 400 || !strings.Contains(w.Body.String(), `"`+tc.code+`"`) {
 					t.Fatal(ok, w.Code, w.Body.String())

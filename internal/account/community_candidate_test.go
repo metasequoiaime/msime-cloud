@@ -780,7 +780,7 @@ func TestCommunityCandidateSkinSchemaRejectsUnsafeRows(t *testing.T) {
 		{file("/abs.png", "4"), id},
 		{file("a\\b.png", "4"), id},
 		{file("style.css", "4"), id},
-		{file("x.webp", "4"), id},
+		{file("x.svg", "4"), id},
 		{file("big.png", "1048577"), id},
 		{file("empty.png", "0"), id},
 		{file("preview.png", "4"), id},
@@ -1221,6 +1221,8 @@ func TestCandidateSkinReservedIDConstraintUpgrade(t *testing.T) {
 	}
 	for _, statement := range []string{
 		`INSERT INTO candidate_skins(id,manifest) VALUES('autumn_osmanthus','schema_version = 1')`,
+		`INSERT INTO candidate_skins(id,manifest) VALUES('canvas','schema_version = 2')`,
+		`UPDATE community_candidate_skins SET package_id='wechat_scroll' WHERE package_id='microsoft'`,
 		`UPDATE community_candidate_skins SET package_id='default' WHERE package_id='microsoft'`,
 	} {
 		if _, err = db.pool.Exec(t.Context(), statement); err == nil {

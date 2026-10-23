@@ -1,0 +1,864 @@
+{
+ "templates": {
+  "canvas": {
+   "id": "canvas-fixture",
+   "manifest": "schema_version = 2\nid = '{id}'\nname = 'Synthetic canvas'\nversion = '1'\nbase = 'canvas'\n[supports]\nlayouts = ['horizontal', 'vertical']\nthemes = ['dark', 'light']\n[candidate_window]\nmin_width_dip = 0\n",
+   "files": []
+  }
+ },
+ "cases": [
+  {
+   "name": "canvas without images",
+   "reason": null,
+   "template": "canvas",
+   "append": "",
+   "base": "system"
+  },
+  {
+   "name": "canvas requires v2",
+   "reason": "base = canvas requires schema_version 2",
+   "template": "canvas",
+   "append": "",
+   "replace": [
+    [
+     "schema_version = 2",
+     "schema_version = 1"
+    ]
+   ]
+  },
+  {
+   "name": "reserved canvas",
+   "reason": "invalid skin id",
+   "template": "canvas",
+   "append": "",
+   "id": "canvas"
+  },
+  {
+   "name": "reserved wechat_scroll",
+   "reason": "invalid skin id",
+   "template": "canvas",
+   "append": "",
+   "id": "wechat_scroll"
+  },
+  {
+   "name": "wechat_scroll base",
+   "reason": null,
+   "template": "canvas",
+   "append": "",
+   "base": "system",
+   "replace": [
+    [
+     "base = 'canvas'",
+     "base = 'wechat_scroll'"
+    ]
+   ]
+  },
+  {
+   "name": "non-canvas ignores canvas-only keys",
+   "reason": null,
+   "template": "canvas",
+   "append": "border_image = 1\ndecorations = 'ignored'\ncontent_insets_dip = false\n",
+   "replace": [
+    [
+     "base = 'canvas'",
+     "base = 'system'"
+    ]
+   ]
+  },
+  {
+   "name": "all canvas image references",
+   "reason": null,
+   "template": "canvas",
+   "append": "[candidate_window.border_image]\nsource = 'panel.png'\nlight_source = 'light.apng'\nslice_dip = [1,2,3,4]\nstretch_dip = [1,2]\nwidth_dip = [2]\nfill = false\n[candidate_window.content_insets_dip]\ntop = 200\nright = 500\n[candidate_window.outer_insets_dip]\nbottom = 500\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nanchor = 'top-left'\noffset_x_dip = -2000\noffset_y_dip = 2000\nwidth_dip = 2000\nheight_dip = 1\nz_index = -1000\n",
+   "files": [
+    "panel.png",
+    "light.apng",
+    "pin.gif"
+   ]
+  },
+  {
+   "name": "invalid backdrop",
+   "reason": "invalid backdrop",
+   "template": "canvas",
+   "append": "backdrop = []\n"
+  },
+  {
+   "name": "invalid fit_content",
+   "reason": "invalid fit_content",
+   "template": "canvas",
+   "append": "fit_content = []\n"
+  },
+  {
+   "name": "invalid expand_panel",
+   "reason": "invalid expand_panel",
+   "template": "canvas",
+   "append": "expand_panel = []\n"
+  },
+  {
+   "name": "invalid expand_rows",
+   "reason": "invalid expand_rows",
+   "template": "canvas",
+   "append": "expand_rows = []\n"
+  },
+  {
+   "name": "invalid horizontal",
+   "reason": "invalid horizontal geometry",
+   "template": "canvas",
+   "append": "horizontal = []\n"
+  },
+  {
+   "name": "invalid vertical",
+   "reason": "invalid vertical geometry",
+   "template": "canvas",
+   "append": "vertical = []\n"
+  },
+  {
+   "name": "backdrop and expand bounds",
+   "reason": null,
+   "template": "canvas",
+   "append": "backdrop = 'mica'\nfit_content = false\nexpand_panel = true\nexpand_rows = 8\n"
+  },
+  {
+   "name": "expand_rows 1",
+   "reason": "invalid expand_rows",
+   "template": "canvas",
+   "append": "expand_rows = 1\n"
+  },
+  {
+   "name": "expand_rows 9",
+   "reason": "invalid expand_rows",
+   "template": "canvas",
+   "append": "expand_rows = 9\n"
+  },
+  {
+   "name": "expand_rows 2.0",
+   "reason": "invalid expand_rows",
+   "template": "canvas",
+   "append": "expand_rows = 2.0\n"
+  },
+  {
+   "name": "expand_rows true",
+   "reason": "invalid expand_rows",
+   "template": "canvas",
+   "append": "expand_rows = true\n"
+  },
+  {
+   "name": "padding 65",
+   "reason": "invalid padding",
+   "template": "canvas",
+   "append": "padding = 65\n"
+  },
+  {
+   "name": "padding '4.01em'",
+   "reason": "invalid padding",
+   "template": "canvas",
+   "append": "padding = '4.01em'\n"
+  },
+  {
+   "name": "padding false",
+   "reason": "invalid padding",
+   "template": "canvas",
+   "append": "padding = false\n"
+  },
+  {
+   "name": "padding 'url(x)'",
+   "reason": "invalid padding",
+   "template": "canvas",
+   "append": "padding = 'url(x)'\n"
+  },
+  {
+   "name": "padding nan",
+   "reason": "invalid padding",
+   "template": "canvas",
+   "append": "padding = nan\n"
+  },
+  {
+   "name": "padding bounds",
+   "reason": null,
+   "template": "canvas",
+   "append": "padding = '4em'\n"
+  },
+  {
+   "name": "item_gap 65",
+   "reason": "invalid item_gap",
+   "template": "canvas",
+   "append": "item_gap = 65\n"
+  },
+  {
+   "name": "item_gap '4.01em'",
+   "reason": "invalid item_gap",
+   "template": "canvas",
+   "append": "item_gap = '4.01em'\n"
+  },
+  {
+   "name": "item_gap false",
+   "reason": "invalid item_gap",
+   "template": "canvas",
+   "append": "item_gap = false\n"
+  },
+  {
+   "name": "item_gap 'url(x)'",
+   "reason": "invalid item_gap",
+   "template": "canvas",
+   "append": "item_gap = 'url(x)'\n"
+  },
+  {
+   "name": "item_gap nan",
+   "reason": "invalid item_gap",
+   "template": "canvas",
+   "append": "item_gap = nan\n"
+  },
+  {
+   "name": "item_gap bounds",
+   "reason": null,
+   "template": "canvas",
+   "append": "item_gap = '4em'\n"
+  },
+  {
+   "name": "item_extra_height 65",
+   "reason": "invalid item_extra_height",
+   "template": "canvas",
+   "append": "item_extra_height = 65\n"
+  },
+  {
+   "name": "item_extra_height '4.01em'",
+   "reason": "invalid item_extra_height",
+   "template": "canvas",
+   "append": "item_extra_height = '4.01em'\n"
+  },
+  {
+   "name": "item_extra_height false",
+   "reason": "invalid item_extra_height",
+   "template": "canvas",
+   "append": "item_extra_height = false\n"
+  },
+  {
+   "name": "item_extra_height 'url(x)'",
+   "reason": "invalid item_extra_height",
+   "template": "canvas",
+   "append": "item_extra_height = 'url(x)'\n"
+  },
+  {
+   "name": "item_extra_height nan",
+   "reason": "invalid item_extra_height",
+   "template": "canvas",
+   "append": "item_extra_height = nan\n"
+  },
+  {
+   "name": "item_extra_height bounds",
+   "reason": null,
+   "template": "canvas",
+   "append": "item_extra_height = '4em'\n"
+  },
+  {
+   "name": "number_inset 65",
+   "reason": "invalid number_inset",
+   "template": "canvas",
+   "append": "number_inset = 65\n"
+  },
+  {
+   "name": "number_inset '4.01em'",
+   "reason": "invalid number_inset",
+   "template": "canvas",
+   "append": "number_inset = '4.01em'\n"
+  },
+  {
+   "name": "number_inset false",
+   "reason": "invalid number_inset",
+   "template": "canvas",
+   "append": "number_inset = false\n"
+  },
+  {
+   "name": "number_inset 'url(x)'",
+   "reason": "invalid number_inset",
+   "template": "canvas",
+   "append": "number_inset = 'url(x)'\n"
+  },
+  {
+   "name": "number_inset nan",
+   "reason": "invalid number_inset",
+   "template": "canvas",
+   "append": "number_inset = nan\n"
+  },
+  {
+   "name": "number_inset bounds",
+   "reason": null,
+   "template": "canvas",
+   "append": "number_inset = '4em'\n"
+  },
+  {
+   "name": "item_padding_right 65",
+   "reason": "invalid item_padding_right",
+   "template": "canvas",
+   "append": "item_padding_right = 65\n"
+  },
+  {
+   "name": "item_padding_right '4.01em'",
+   "reason": "invalid item_padding_right",
+   "template": "canvas",
+   "append": "item_padding_right = '4.01em'\n"
+  },
+  {
+   "name": "item_padding_right false",
+   "reason": "invalid item_padding_right",
+   "template": "canvas",
+   "append": "item_padding_right = false\n"
+  },
+  {
+   "name": "item_padding_right 'url(x)'",
+   "reason": "invalid item_padding_right",
+   "template": "canvas",
+   "append": "item_padding_right = 'url(x)'\n"
+  },
+  {
+   "name": "item_padding_right nan",
+   "reason": "invalid item_padding_right",
+   "template": "canvas",
+   "append": "item_padding_right = nan\n"
+  },
+  {
+   "name": "item_padding_right bounds",
+   "reason": null,
+   "template": "canvas",
+   "append": "item_padding_right = '4em'\n"
+  },
+  {
+   "name": "number_gap 65",
+   "reason": "invalid number_gap",
+   "template": "canvas",
+   "append": "number_gap = 65\n"
+  },
+  {
+   "name": "number_gap '4.01em'",
+   "reason": "invalid number_gap",
+   "template": "canvas",
+   "append": "number_gap = '4.01em'\n"
+  },
+  {
+   "name": "number_gap false",
+   "reason": "invalid number_gap",
+   "template": "canvas",
+   "append": "number_gap = false\n"
+  },
+  {
+   "name": "number_gap 'url(x)'",
+   "reason": "invalid number_gap",
+   "template": "canvas",
+   "append": "number_gap = 'url(x)'\n"
+  },
+  {
+   "name": "number_gap nan",
+   "reason": "invalid number_gap",
+   "template": "canvas",
+   "append": "number_gap = nan\n"
+  },
+  {
+   "name": "number_gap bounds",
+   "reason": null,
+   "template": "canvas",
+   "append": "number_gap = '4em'\n"
+  },
+  {
+   "name": "item_min_width valid",
+   "reason": null,
+   "template": "canvas",
+   "append": "item_min_width = '40em'\n"
+  },
+  {
+   "name": "item_min_width invalid",
+   "reason": "invalid item_min_width",
+   "template": "canvas",
+   "append": "item_min_width = 501\n"
+  },
+  {
+   "name": "selected_bar_width valid",
+   "reason": null,
+   "template": "canvas",
+   "append": "selected_bar_width = '1em'\n"
+  },
+  {
+   "name": "selected_bar_width invalid",
+   "reason": "invalid selected_bar_width",
+   "template": "canvas",
+   "append": "selected_bar_width = 17\n"
+  },
+  {
+   "name": "number_scale valid",
+   "reason": null,
+   "template": "canvas",
+   "append": "number_scale = 2\n"
+  },
+  {
+   "name": "number_scale invalid",
+   "reason": "invalid number_scale",
+   "template": "canvas",
+   "append": "number_scale = 2.1\n"
+  },
+  {
+   "name": "selected_bar_height_em valid",
+   "reason": null,
+   "template": "canvas",
+   "append": "selected_bar_height_em = 0\n"
+  },
+  {
+   "name": "selected_bar_height_em invalid",
+   "reason": "invalid selected_bar_height_em",
+   "template": "canvas",
+   "append": "selected_bar_height_em = -1\n"
+  },
+  {
+   "name": "page_arrow_style valid",
+   "reason": null,
+   "template": "canvas",
+   "append": "page_arrow_style = 'triangle'\n"
+  },
+  {
+   "name": "page_arrow_style invalid",
+   "reason": "invalid page_arrow_style",
+   "template": "canvas",
+   "append": "page_arrow_style = 'circle'\n"
+  },
+  {
+   "name": "preedit_margin_dip valid",
+   "reason": null,
+   "template": "canvas",
+   "append": "preedit_margin_dip = [0,1,2,500]\n"
+  },
+  {
+   "name": "preedit_margin_dip invalid",
+   "reason": "invalid preedit_margin_dip",
+   "template": "canvas",
+   "append": "preedit_margin_dip = [1,2,3]\n"
+  },
+  {
+   "name": "selected_bar_inside bool",
+   "reason": null,
+   "template": "canvas",
+   "append": "selected_bar_inside = true\n"
+  },
+  {
+   "name": "selected_bar_inside numeric",
+   "reason": "invalid selected_bar_inside",
+   "template": "canvas",
+   "append": "selected_bar_inside = 1\n"
+  },
+  {
+   "name": "item_corners_follow_card bool",
+   "reason": null,
+   "template": "canvas",
+   "append": "item_corners_follow_card = true\n"
+  },
+  {
+   "name": "item_corners_follow_card numeric",
+   "reason": "invalid item_corners_follow_card",
+   "template": "canvas",
+   "append": "item_corners_follow_card = 1\n"
+  },
+  {
+   "name": "justify_rows bool",
+   "reason": null,
+   "template": "canvas",
+   "append": "justify_rows = true\n"
+  },
+  {
+   "name": "justify_rows numeric",
+   "reason": "invalid justify_rows",
+   "template": "canvas",
+   "append": "justify_rows = 1\n"
+  },
+  {
+   "name": "trim_hidden_preedit_gap bool",
+   "reason": null,
+   "template": "canvas",
+   "append": "trim_hidden_preedit_gap = true\n"
+  },
+  {
+   "name": "trim_hidden_preedit_gap numeric",
+   "reason": "invalid trim_hidden_preedit_gap",
+   "template": "canvas",
+   "append": "trim_hidden_preedit_gap = 1\n"
+  },
+  {
+   "name": "horizontal padding",
+   "reason": null,
+   "template": "canvas",
+   "append": "[candidate_window.horizontal]\npadding = '0.5em'\n"
+  },
+  {
+   "name": "vertical invalid padding",
+   "reason": "invalid padding",
+   "template": "canvas",
+   "append": "[candidate_window.vertical]\npadding = 65\n"
+  },
+  {
+   "name": "toolbar icon radius",
+   "reason": null,
+   "template": "canvas",
+   "append": "[toolbar]\nicon_corner_radius_dip = 16\n"
+  },
+  {
+   "name": "toolbar icon radius overflow",
+   "reason": "invalid icon_corner_radius_dip",
+   "template": "canvas",
+   "append": "[toolbar]\nicon_corner_radius_dip = 17\n"
+  },
+  {
+   "name": "content_insets_dip type",
+   "reason": "invalid content_insets_dip",
+   "template": "canvas",
+   "append": "content_insets_dip = 1\n"
+  },
+  {
+   "name": "content_insets_dip left bound",
+   "reason": null,
+   "template": "canvas",
+   "append": "[candidate_window.content_insets_dip]\nleft = 500\n"
+  },
+  {
+   "name": "content_insets_dip left overflow",
+   "reason": "invalid content_insets_dip",
+   "template": "canvas",
+   "append": "[candidate_window.content_insets_dip]\nleft = 501\n"
+  },
+  {
+   "name": "outer_insets_dip type",
+   "reason": "invalid outer_insets_dip",
+   "template": "canvas",
+   "append": "outer_insets_dip = 1\n"
+  },
+  {
+   "name": "outer_insets_dip left bound",
+   "reason": null,
+   "template": "canvas",
+   "append": "[candidate_window.outer_insets_dip]\nleft = 500\n"
+  },
+  {
+   "name": "outer_insets_dip left overflow",
+   "reason": "invalid outer_insets_dip",
+   "template": "canvas",
+   "append": "[candidate_window.outer_insets_dip]\nleft = 501\n"
+  },
+  {
+   "name": "content top overflow",
+   "reason": "invalid content_insets_dip",
+   "template": "canvas",
+   "append": "[candidate_window.content_insets_dip]\ntop = 201\n"
+  },
+  {
+   "name": "line gap 101",
+   "reason": "invalid line_gap_dip",
+   "template": "canvas",
+   "append": "line_gap_dip = 101\n"
+  },
+  {
+   "name": "line gap -1",
+   "reason": "invalid line_gap_dip",
+   "template": "canvas",
+   "append": "line_gap_dip = -1\n"
+  },
+  {
+   "name": "line gap true",
+   "reason": "invalid line_gap_dip",
+   "template": "canvas",
+   "append": "line_gap_dip = true\n"
+  },
+  {
+   "name": "line gap bound",
+   "reason": null,
+   "template": "canvas",
+   "append": "line_gap_dip = 100\n"
+  },
+  {
+   "name": "border table type",
+   "reason": "invalid border_image",
+   "template": "canvas",
+   "append": "border_image = []\n"
+  },
+  {
+   "name": "border source 'missing.png'",
+   "reason": "invalid border_image source",
+   "template": "canvas",
+   "append": "[candidate_window.border_image]\nsource = 'missing.png'\nslice_dip = [2]\n",
+   "files": [
+    "panel.png",
+    "panel.jpg"
+   ]
+  },
+  {
+   "name": "border source 'panel.jpg'",
+   "reason": "invalid border_image source",
+   "template": "canvas",
+   "append": "[candidate_window.border_image]\nsource = 'panel.jpg'\nslice_dip = [2]\n",
+   "files": [
+    "panel.png",
+    "panel.jpg"
+   ]
+  },
+  {
+   "name": "border light_source 'missing.png'",
+   "reason": "invalid border_image light_source",
+   "template": "canvas",
+   "append": "[candidate_window.border_image]\nsource = 'panel.png'\nslice_dip = [2]\nlight_source = 'missing.png'\n",
+   "files": [
+    "panel.png",
+    "panel.jpg"
+   ]
+  },
+  {
+   "name": "border slice_dip [1,2,3]",
+   "reason": "invalid slice_dip",
+   "template": "canvas",
+   "append": "[candidate_window.border_image]\nsource = 'panel.png'\nslice_dip = [1,2,3]\n",
+   "files": [
+    "panel.png",
+    "panel.jpg"
+   ]
+  },
+  {
+   "name": "border stretch_dip [501]",
+   "reason": "invalid stretch_dip",
+   "template": "canvas",
+   "append": "[candidate_window.border_image]\nsource = 'panel.png'\nslice_dip = [2]\nstretch_dip = [501]\n",
+   "files": [
+    "panel.png",
+    "panel.jpg"
+   ]
+  },
+  {
+   "name": "border width_dip [-1]",
+   "reason": "invalid width_dip",
+   "template": "canvas",
+   "append": "[candidate_window.border_image]\nsource = 'panel.png'\nslice_dip = [2]\nwidth_dip = [-1]\n",
+   "files": [
+    "panel.png",
+    "panel.jpg"
+   ]
+  },
+  {
+   "name": "border fill 1",
+   "reason": "invalid fill",
+   "template": "canvas",
+   "append": "[candidate_window.border_image]\nsource = 'panel.png'\nslice_dip = [2]\nfill = 1\n",
+   "files": [
+    "panel.png",
+    "panel.jpg"
+   ]
+  },
+  {
+   "name": "border requires slices",
+   "reason": "invalid border_image slice_dip",
+   "template": "canvas",
+   "append": "[candidate_window.border_image]\nsource = 'panel.png'\n",
+   "files": [
+    "panel.png"
+   ]
+  },
+  {
+   "name": "decorations array type",
+   "reason": "invalid decorations",
+   "template": "canvas",
+   "append": "decorations = false\n"
+  },
+  {
+   "name": "too many decorations",
+   "reason": "too many decorations",
+   "template": "canvas",
+   "append": "[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n",
+   "files": [
+    "pin.gif"
+   ]
+  },
+  {
+   "name": "32 decorations",
+   "reason": null,
+   "template": "canvas",
+   "append": "[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\n",
+   "files": [
+    "pin.gif"
+   ]
+  },
+  {
+   "name": "decoration image 'missing.png'",
+   "reason": "invalid decoration image",
+   "template": "canvas",
+   "append": "[[candidate_window.decorations]]\nimage = 'missing.png'\nwidth_dip = 10\nheight_dip = 10\n",
+   "files": [
+    "pin.gif"
+   ]
+  },
+  {
+   "name": "decoration anchor 'top-center'",
+   "reason": "invalid decoration anchor",
+   "template": "canvas",
+   "append": "[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\nanchor = 'top-center'\n",
+   "files": [
+    "pin.gif"
+   ]
+  },
+  {
+   "name": "decoration offset_x_dip -2001",
+   "reason": "invalid decoration offset_x_dip",
+   "template": "canvas",
+   "append": "[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\noffset_x_dip = -2001\n",
+   "files": [
+    "pin.gif"
+   ]
+  },
+  {
+   "name": "decoration offset_y_dip inf",
+   "reason": "invalid decoration offset_y_dip",
+   "template": "canvas",
+   "append": "[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\noffset_y_dip = inf\n",
+   "files": [
+    "pin.gif"
+   ]
+  },
+  {
+   "name": "decoration z_index 2.5",
+   "reason": "invalid decoration z_index",
+   "template": "canvas",
+   "append": "[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\nz_index = 2.5\n",
+   "files": [
+    "pin.gif"
+   ]
+  },
+  {
+   "name": "decoration z_index 1001",
+   "reason": "invalid decoration z_index",
+   "template": "canvas",
+   "append": "[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\nz_index = 1001\n",
+   "files": [
+    "pin.gif"
+   ]
+  },
+  {
+   "name": "decoration width_dip 0",
+   "reason": "invalid decoration width_dip",
+   "template": "canvas",
+   "append": "[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 0\nheight_dip = 10\n",
+   "files": [
+    "pin.gif"
+   ]
+  },
+  {
+   "name": "decoration height_dip 2001",
+   "reason": "invalid decoration height_dip",
+   "template": "canvas",
+   "append": "[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 2001\n",
+   "files": [
+    "pin.gif"
+   ]
+  },
+  {
+   "name": "anchor top-left",
+   "reason": null,
+   "template": "canvas",
+   "append": "[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\nanchor = 'top-left'\n",
+   "files": [
+    "pin.gif"
+   ]
+  },
+  {
+   "name": "anchor top-right",
+   "reason": null,
+   "template": "canvas",
+   "append": "[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\nanchor = 'top-right'\n",
+   "files": [
+    "pin.gif"
+   ]
+  },
+  {
+   "name": "anchor bottom-left",
+   "reason": null,
+   "template": "canvas",
+   "append": "[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\nanchor = 'bottom-left'\n",
+   "files": [
+    "pin.gif"
+   ]
+  },
+  {
+   "name": "anchor bottom-right",
+   "reason": null,
+   "template": "canvas",
+   "append": "[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\nanchor = 'bottom-right'\n",
+   "files": [
+    "pin.gif"
+   ]
+  },
+  {
+   "name": "anchor left",
+   "reason": null,
+   "template": "canvas",
+   "append": "[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\nanchor = 'left'\n",
+   "files": [
+    "pin.gif"
+   ]
+  },
+  {
+   "name": "anchor right",
+   "reason": null,
+   "template": "canvas",
+   "append": "[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\nanchor = 'right'\n",
+   "files": [
+    "pin.gif"
+   ]
+  },
+  {
+   "name": "anchor top",
+   "reason": null,
+   "template": "canvas",
+   "append": "[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\nanchor = 'top'\n",
+   "files": [
+    "pin.gif"
+   ]
+  },
+  {
+   "name": "anchor bottom",
+   "reason": null,
+   "template": "canvas",
+   "append": "[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\nanchor = 'bottom'\n",
+   "files": [
+    "pin.gif"
+   ]
+  },
+  {
+   "name": "anchor center",
+   "reason": null,
+   "template": "canvas",
+   "append": "[[candidate_window.decorations]]\nimage = 'pin.gif'\nwidth_dip = 10\nheight_dip = 10\nanchor = 'center'\n",
+   "files": [
+    "pin.gif"
+   ]
+  },
+  {
+   "name": "em lexical  1em",
+   "reason": "invalid padding",
+   "template": "canvas",
+   "append": "padding = ' 1em'\n"
+  },
+  {
+   "name": "em lexical 0_1em",
+   "reason": "invalid padding",
+   "template": "canvas",
+   "append": "padding = '0_1em'\n"
+  },
+  {
+   "name": "em lexical 0x1p0em",
+   "reason": "invalid padding",
+   "template": "canvas",
+   "append": "padding = '0x1p0em'\n"
+  },
+  {
+   "name": "em lexical 1 em",
+   "reason": "invalid padding",
+   "template": "canvas",
+   "append": "padding = '1 em'\n"
+  },
+  {
+   "name": "em lexical 1e-1em",
+   "reason": null,
+   "template": "canvas",
+   "append": "padding = '1e-1em'\n"
+  }
+ ]
+}

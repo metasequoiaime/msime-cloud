@@ -9,6 +9,9 @@ func TestCandidateExtensionUppercaseDoesNotAllocate(t *testing.T) {
 		{"assets/PREVIEW.PNG", "png"},
 		{"assets/PREVIEW.JPEG", "jpeg"},
 		{"assets/PREVIEW.JPG", "jpeg"},
+		{"assets/PREVIEW.APNG", "png"},
+		{"assets/ANIMATION.GIF", "gif"},
+		{"assets/ANIMATION.WeBp", "webp"},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			if got := candidateExtension(tc.path); got != tc.want {

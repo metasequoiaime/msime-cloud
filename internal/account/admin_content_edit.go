@@ -175,7 +175,7 @@ func saveAdminCandidate(ctx context.Context, tx pgx.Tx, id string, input content
 			return err
 		}
 	}
-	if code := validCandidateFiles(input.Manifest, input.Files); code != "" {
+	if code := validCandidateResourceFiles(input.Manifest, input.Files, true); code != "" {
 		return actionFail(400, code)
 	}
 	pkg, code := validCandidatePackage(input.Manifest, input.Files, input.Visibility == "public")

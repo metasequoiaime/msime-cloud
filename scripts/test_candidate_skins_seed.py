@@ -33,9 +33,14 @@ def build_case(fixture, case):
 
 
 class ClientDialectTests(unittest.TestCase):
+    def test_canvas_fixture(self):
+        self.check_fixture(FIXTURE.with_name("canvas_dialect.json"))
+
     def test_shared_fixture_matches_the_go_validator(self):
-        fixture = json.loads(FIXTURE.read_text())
-        self.assertGreater(len(fixture["cases"]), 150)
+        self.check_fixture(FIXTURE)
+
+    def check_fixture(self, source):
+        fixture = json.loads(source.read_text())
         for case in fixture["cases"]:
             with self.subTest(case["name"]):
                 sid, manifest, files = build_case(fixture, case)

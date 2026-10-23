@@ -175,6 +175,7 @@ func readFeedbackForm(w http.ResponseWriter, r *http.Request) (feedbackPayload, 
 		return payload, nil, false
 	}
 	var screenshots [][]byte
+	var screenshotBuffer *bytes.Buffer
 	seenPayload := false
 	for {
 		part, err := reader.NextPart()
@@ -214,7 +215,22 @@ func readFeedbackForm(w http.ResponseWriter, r *http.Request) (feedbackPayload, 
 				writeError(w, 400, "too_many_screenshots")
 				return payload, nil, false
 			}
-			data, err := io.ReadAll(io.LimitReader(part, maxFeedbackScreenshot+1))
+			var data []byte
+			var err error
+			if r.ContentLength >= 4<<10 && r.ContentLength <= maxFeedbackBody {
+				if screenshotBuffer == nil {
+					// 三张截图共用一次有界预分配，避免图片大小或顺序不同时重复预留整份请求的容量。
+					capacity := min(r.ContentLength, maxFeedbackScreenshots*maxFeedbackScreenshot)
+					screenshotBuffer = bytes.NewBuffer(make([]byte, 0, int(capacity)+bytes.MinRead))
+				}
+				start := screenshotBuffer.Len()
+				_, err = screenshotBuffer.ReadFrom(io.LimitReader(part, maxFeedbackScreenshot+1))
+				all := screenshotBuffer.Bytes()
+				// 限制每张切片的容量，追加字节时不能覆盖后面的截图。
+				data = all[start:len(all):len(all)]
+			} else {
+				data, err = io.ReadAll(io.LimitReader(part, maxFeedbackScreenshot+1))
+			}
 			if err != nil {
 				if httpjson.IsBodyTooLarge(err) {
 					writeError(w, 413, "feedback_too_large")

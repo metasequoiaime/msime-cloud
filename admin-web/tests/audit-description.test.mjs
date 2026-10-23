@@ -49,3 +49,10 @@ test('社区审核审计使用后端 detail 中的作品名和批量数量', () 
     assert.equal(describe('approve_content', { section, count: 6 }, section), `通过了${label} 6 项`);
   }
 });
+
+test('敏感词审计保留规则目标和批量数量', () => {
+  assert.equal(describe('set_sensitive_word_level', { level: 'review' }, '加V'), '调整了敏感词「加V」的处理方式');
+  assert.equal(describe('delete_sensitive_word', {}, '代购'), '删除了敏感词「代购」');
+  assert.equal(describe('set_sensitive_word_level', { count: 2, patterns: ['加V', '代购'], level: 'review' }, '2 words'), '调整了 2 个敏感词的处理方式');
+  assert.equal(describe('delete_sensitive_word', { count: 2, patterns: ['加V', '代购'] }, '2 words'), '删除了 2 个敏感词');
+});

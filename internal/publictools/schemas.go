@@ -2,6 +2,7 @@ package publictools
 
 import (
 	"encoding/json"
+	"errors"
 	"sync"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -26,4 +27,23 @@ func cachedToolSchemas(definitions func() []*mcp.Tool) func() map[string]*jsonsc
 		}
 		return out
 	})
+}
+
+// validateToolArguments 按入口自己的目录校验参数，只返回固定错误码，不暴露参数或 Schema 细节。
+func validateToolArguments(catalog map[string]*jsonschema.Resolved, name string, arguments json.RawMessage) error {
+	schema, ok := catalog[name]
+	if !ok {
+		return errors.New("unknown_tool")
+	}
+	if len(arguments) == 0 {
+		arguments = json.RawMessage(`{}`)
+	}
+	if len(arguments) > MaxArguments {
+		return errors.New("invalid_tool_arguments")
+	}
+	var value any
+	if json.Unmarshal(arguments, &value) != nil || schema.Validate(value) != nil {
+		return errors.New("invalid_tool_arguments")
+	}
+	return nil
 }

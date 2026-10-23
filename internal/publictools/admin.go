@@ -62,16 +62,8 @@ func HasAdmin(name string) bool {
 
 // AdminCall 将参数限定为已注册的草稿操作与查询，传输层无法收到任意路径或方法。
 func AdminCall(ctx context.Context, execute Execute, name string, arguments json.RawMessage) (Result, error) {
-	schema, ok := adminSchemas()[name]
-	if !ok {
-		return Result{}, errors.New("unknown_tool")
-	}
-	if len(arguments) == 0 {
-		arguments = json.RawMessage(`{}`)
-	}
-	var value any
-	if len(arguments) > MaxArguments || json.Unmarshal(arguments, &value) != nil || schema.Validate(value) != nil {
-		return Result{}, errors.New("invalid_tool_arguments")
+	if err := validateToolArguments(adminSchemas(), name, arguments); err != nil {
+		return Result{}, err
 	}
 	var path string
 	method := http.MethodGet

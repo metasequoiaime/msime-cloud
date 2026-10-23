@@ -121,7 +121,7 @@ func Has(name string) bool {
 
 // Call 对三个入口使用同一套严格校验，先构造受限请求再交给传输层。
 func Call(ctx context.Context, execute Execute, name string, arguments json.RawMessage) (Result, error) {
-	if err := validate(name, arguments); err != nil {
+	if err := validateToolArguments(schemas(), name, arguments); err != nil {
 		return Result{}, err
 	}
 	r, err := build(name, arguments)
@@ -148,24 +148,6 @@ func Call(ctx context.Context, execute Execute, name string, arguments json.RawM
 
 // schemas 与对外展示的定义同源，避免 Bot、CLI 和 MCP 各自接受不同参数。
 var schemas = cachedToolSchemas(Definitions)
-
-func validate(name string, arguments json.RawMessage) error {
-	schema, ok := schemas()[name]
-	if !ok {
-		return errors.New("unknown_tool")
-	}
-	if len(arguments) == 0 {
-		arguments = json.RawMessage(`{}`)
-	}
-	if len(arguments) > MaxArguments {
-		return errors.New("invalid_tool_arguments")
-	}
-	var value any
-	if json.Unmarshal(arguments, &value) != nil || schema.Validate(value) != nil {
-		return errors.New("invalid_tool_arguments")
-	}
-	return nil
-}
 
 func decode(arguments json.RawMessage, out any) error {
 	if len(arguments) == 0 {

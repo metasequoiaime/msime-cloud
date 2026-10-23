@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "../../auth";
 import { errorMessage, isAPIError, useAPI } from "../../api/client";
+import { invalidateQueries } from "../../api/cache";
 import { keys } from "../../api/keys";
 import { actorName, auditListSchema, changeResultSchema, describeAudit, initial, permissionLabel, permissionsSchema } from "../../api/perm";
 import type { Member, Permissions, Role } from "../../api/perm";
@@ -52,8 +53,8 @@ function Matrix({ data }: { data: Permissions }) {
     mutationFn: (v: { role: Role; permission: string; grant: boolean }) => api.post("permissions", changeResultSchema, { action: v.grant ? "grant" : "revoke", role: v.role.key, permission: v.permission }),
     onSuccess: (_r, v) => toast(`${v.grant ? "已授予" : "已收回"}「${v.role.name}」：${permissionLabel(v.permission)}`),
     onError: (error, v) => toast(isAPIError(error, "protected") && v.role.key === "maintainer" ? "维护者必须保留权限管理" : `操作失败：${errorMessage(error)}`),
-    // The caller's own role may have changed, so the shell's permissions are refreshed too.
-    onSettled: () => Promise.all([client.invalidateQueries({ queryKey: keys.page("perm") }), client.invalidateQueries({ queryKey: keys.shell })]),
+    // 当前用户自己的角色可能已变化，因此也要刷新外壳中的权限。
+    onSettled: () => invalidateQueries(client, keys.page("perm"), keys.shell),
   });
   return <div className="overflow-x-auto px-5 py-4">
     <table className="w-full min-w-[460px] table-fixed border-separate border-spacing-x-0 border-spacing-y-1 text-sm" aria-label="角色权限矩阵">

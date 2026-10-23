@@ -1,6 +1,7 @@
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { errorMessage, useAPI } from "../../api/client";
+import { invalidateQueries } from "../../api/cache";
 import type { Entry, PRState, PRSummary } from "../../api/dictpr";
 import { approveSchema, authorLabel, flagLabels, flagTones, kindLabels, prDetailSchema, rejectSchema, stateLabels, stateTones, trimSchema } from "../../api/dictpr";
 import { keys } from "../../api/keys";
@@ -55,7 +56,7 @@ export function PRDetailCard({ pr, repo, overrides, setOverrides, onNext, onPrev
   const keep = entries.filter(isChecked).map(entry => entry.index);
   const counts = data?.pull.counts ?? { total: entries.length, new: 0, dup: 0, flagged: 0 };
 
-  const refresh = () => Promise.all([client.invalidateQueries({ queryKey: keys.page("dictpr") }), client.invalidateQueries({ queryKey: keys.shell })]);
+  const refresh = () => invalidateQueries(client, keys.page("dictpr"), keys.shell);
   const trimKey = keys.page("dictpr", "trim", number);
   const pendingTrims = useIsMutating({ mutationKey: trimKey, exact: true });
 

@@ -5,6 +5,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { relativeTime } from "../utils/time";
 import { Bell } from "lucide-react";
 import { errorMessage, useAPI } from "../api/client";
+import { invalidateQueries } from "../api/cache";
 import { keys } from "../api/keys";
 import { notificationKindLabels, notificationsReadSchema, notificationsSchema } from "../api/shell";
 import type { Notification } from "../api/shell";
@@ -30,7 +31,7 @@ export function NotificationBell({ unread }: { unread: number }) {
   });
   const markRead = useMutation({
     mutationFn: (body: { ids: string[] } | { all: true; up_to_id: string }) => api.post("notifications/read", notificationsReadSchema, body),
-    onSettled: () => Promise.all([client.invalidateQueries({ queryKey: keys.notifications }), client.invalidateQueries({ queryKey: keys.shell })]),
+    onSettled: () => invalidateQueries(client, keys.notifications, keys.shell),
   });
   // While the popover is closed the cached list goes stale (and a read made from it settles after the query is disabled), so the badge follows the 60s /api/shell poll; the open popover shows the count that came with its list.
   const count = open && list.data ? list.data.unread : unread;

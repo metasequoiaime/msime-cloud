@@ -163,7 +163,13 @@ func candidateSkinSelect(saved bool) string {
 	return candidateSkinSelectQuery(saved, false)
 }
 
+var candidateSkinQueries = newCommunitySelectQueries(buildCandidateSkinSelectQuery)
+
 func candidateSkinSelectQuery(saved, page bool) string {
+	return candidateSkinQueries.selectQuery(saved, page)
+}
+
+func buildCandidateSkinSelectQuery(saved, page bool) string {
 	from := ` FROM community_candidate_skins s JOIN auth_users u ON u.id=s.owner_id `
 	skinID := "s.id"
 	if page {

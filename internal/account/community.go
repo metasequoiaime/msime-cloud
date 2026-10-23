@@ -301,7 +301,40 @@ func communitySkinSelect(saved bool) string {
 	return communitySkinSelectQuery(saved, false)
 }
 
+// communitySelectQueries 复用详情、目录与可选收藏字段的四种固定查询，不缓存用户参数或查询结果。
+type communitySelectQueries struct {
+	detail, detailSaved, page, pageSaved string
+}
+
+func newCommunitySelectQueries(build func(saved, page bool) string) communitySelectQueries {
+	return communitySelectQueries{
+		detail:      build(false, false),
+		detailSaved: build(true, false),
+		page:        build(false, true),
+		pageSaved:   build(true, true),
+	}
+}
+
+func (q *communitySelectQueries) selectQuery(saved, page bool) string {
+	if page {
+		if saved {
+			return q.pageSaved
+		}
+		return q.page
+	}
+	if saved {
+		return q.detailSaved
+	}
+	return q.detail
+}
+
+var communitySkinQueries = newCommunitySelectQueries(buildCommunitySkinSelectQuery)
+
 func communitySkinSelectQuery(saved, page bool) string {
+	return communitySkinQueries.selectQuery(saved, page)
+}
+
+func buildCommunitySkinSelectQuery(saved, page bool) string {
 	from := ` FROM community_skins s JOIN auth_users u ON u.id=s.owner_id `
 	ratingID := "s.id"
 	design := "s.design"

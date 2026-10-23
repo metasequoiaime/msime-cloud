@@ -770,9 +770,9 @@ func (s *Server) adminLogsStream(w http.ResponseWriter, r *http.Request) {
 	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	lastWrite := time.Now()
-	write := func(frame string) bool {
+	write := func(frame []byte) bool {
 		_ = rc.SetWriteDeadline(time.Now().Add(logStreamWriteTimeout))
-		if _, err := io.WriteString(w, frame); err != nil {
+		if _, err := w.Write(frame); err != nil {
 			return false
 		}
 		if err := rc.Flush(); err != nil {
@@ -786,16 +786,9 @@ func (s *Server) adminLogsStream(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return false
 		}
-		var b strings.Builder
-		if id != "" {
-			b.WriteString("id: " + id + "\n")
-		}
-		b.WriteString("event: " + event + "\ndata: ")
-		b.Write(data)
-		b.WriteString("\n\n")
-		return write(b.String())
+		return write(logStreamFrame(event, id, data))
 	}
-	if !write("retry: 5000\n\n") {
+	if !write([]byte("retry: 5000\n\n")) {
 		return
 	}
 
@@ -876,7 +869,7 @@ func (s *Server) adminLogsStream(w http.ResponseWriter, r *http.Request) {
 				if !sendBackfill() {
 					return
 				}
-				if time.Since(lastWrite) >= s.logHeartbeat && !write(": ping\n\n") {
+				if time.Since(lastWrite) >= s.logHeartbeat && !write([]byte(": ping\n\n")) {
 					return
 				}
 				continue
@@ -906,9 +899,38 @@ func (s *Server) adminLogsStream(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
-			if time.Since(lastWrite) >= s.logHeartbeat && !write(": ping\n\n") {
+			if time.Since(lastWrite) >= s.logHeartbeat && !write([]byte(": ping\n\n")) {
 				return
 			}
 		}
 	}
+}
+
+// logStreamFrame 接管 `json.Marshal` 返回的独占正文缓冲，允许覆写原切片。
+// 容量充足时原地移出帧头空间；不足时只为完整 SSE 帧分配一次，保持单次写出。
+func logStreamFrame(event, id string, data []byte) []byte {
+	prefix := len("event: ") + len(event) + len("\ndata: ")
+	if id != "" {
+		prefix += len("id: ") + len(id) + 1
+	}
+	size := prefix + len(data) + 2
+	var frame []byte
+	if cap(data) >= size {
+		frame = data[:size]
+	} else {
+		frame = make([]byte, size)
+	}
+	copy(frame[prefix:], data)
+	offset := 0
+	if id != "" {
+		offset += copy(frame[offset:], "id: ")
+		offset += copy(frame[offset:], id)
+		frame[offset] = '\n'
+		offset++
+	}
+	offset += copy(frame[offset:], "event: ")
+	offset += copy(frame[offset:], event)
+	copy(frame[offset:], "\ndata: ")
+	frame[len(frame)-2], frame[len(frame)-1] = '\n', '\n'
+	return frame
 }

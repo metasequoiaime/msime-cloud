@@ -95,7 +95,8 @@ func TestQQFAQAnswerValidationMatchesPreviousForUnchangedSyntax(t *testing.T) {
 		strings.Repeat("字", qqFAQRunes+1),
 	}
 	random := rand.New(rand.NewSource(650))
-	units := []string{"合成正文", "普通#井号", " ", "\t", "\r\n", "\n", "\u3000", "https://example.test", "\xff", "\x00"}
+	// 每行先写正文，避免把新增的缩进代码校验混入旧语义对照；缩进代码由专门回归覆盖。
+	units := []string{"合成正文", "普通#井号", " ", "\t", "\r\n合成正文", "\n合成正文", "\u3000", "https://example.test", "\xff", "\x00"}
 	for range 200 {
 		var text strings.Builder
 		for range random.Intn(80) {

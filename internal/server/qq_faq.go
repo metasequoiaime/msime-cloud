@@ -242,8 +242,11 @@ func (s *Server) qqSummariseFAQ(ctx context.Context, text string, categories []s
 	return entry, nil
 }
 
-// qqSameCodeBlocks 保证简繁答案的完整代码围栏逐字相同；未关闭围栏会吞掉后续 FAQ，必须拒绝。
+// qqSameCodeBlocks 保证简繁答案的代码块逐字相同；未关闭围栏必须拒绝。
 func qqSameCodeBlocks(a, b string) bool {
+	if qqFAQCodeNeedsParser(a) || qqFAQCodeNeedsParser(b) {
+		return qqFAQSameParsedCode(a, b)
+	}
 	for {
 		first, nextA, validA := qqNextCodeBlock(a)
 		second, nextB, validB := qqNextCodeBlock(b)

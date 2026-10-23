@@ -31,6 +31,27 @@ func TestAdminProfileTextPrefix(t *testing.T) {
 	}
 }
 
+func adminProfileTextUnsafeRuneBefore(r rune) bool {
+	return unicode.IsControl(r) || unicode.In(r, unicode.Zl, unicode.Zp, unicode.Bidi_Control)
+}
+
+func TestAdminProfileTextRejectsLineSeparatorsAndBidiControls(t *testing.T) {
+	for _, tc := range []struct {
+		name, text, want string
+	}{
+		{"line_separator", "甲\u2028乙", "甲乙"},
+		{"paragraph_separator", "甲\u2029乙", "甲乙"},
+		{"bidi_override", "甲\u202e乙", "甲乙"},
+		{"bidi_isolate", "甲\u2066乙\u2069丙", "甲乙丙"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := adminProfileText(tc.text, 200); got != tc.want {
+				t.Fatalf("实际 %q，期望 %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestAdminProfileTextPrefixCompatibility(t *testing.T) {
 	cases := []string{
 		"", " \t\n\u2003", "水杉 😀 输入法", "\ufffd\xff\ufffd", "\xe2\x82\xac", "\xed\xa0\x80", "\xf4\x90\x80\x80",
@@ -146,7 +167,7 @@ func adminProfileTextBeforePrefix(s string, max int) string {
 		if len(out) == max {
 			break
 		}
-		if !unicode.IsControl(c) {
+		if !adminProfileTextUnsafeRuneBefore(c) {
 			out = append(out, c)
 		}
 	}

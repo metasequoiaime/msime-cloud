@@ -58,11 +58,8 @@ func TestTranslationRecorderStorageAllocationBudget(t *testing.T) {
 				for i := range v.Texts {
 					v.Texts[i], want[i] = "source", "word"
 				}
-				// 单条只节省少量分配，增加采样以平滑 race 模式下 JSON 编码池的随机丢弃。
-				runs := 50
-				if count == 1 {
-					runs = 1000
-				}
+				// 所有批量场景都增加采样，平滑 race 模式下 JSON 编码池随机丢弃带来的分配波动。
+				const runs = 1000
 				measure := func(previous bool) float64 {
 					var got []string
 					var ok bool

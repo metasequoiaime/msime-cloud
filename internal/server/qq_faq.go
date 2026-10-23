@@ -51,9 +51,18 @@ type qqFAQEntry struct {
 	Valid      string `json:"valid"`
 }
 
-// qqFAQCategories 列出 FAQ 的二级标题。
+// qqFAQCategories 列出 FAQ 在代码围栏外的二级标题。
 func qqFAQCategories(faq string) []string {
 	var categories []string
+	if qqFAQHasFences(faq) {
+		qqFAQTextLines(faq, func(_ int, line string) bool {
+			if strings.HasPrefix(line, "## ") {
+				categories = append(categories, strings.TrimSpace(line[3:]))
+			}
+			return true
+		})
+		return categories
+	}
 	for offset := 0; offset < len(faq); {
 		index := qqNextFAQCategory(faq, offset)
 		if index < 0 {
@@ -98,21 +107,22 @@ func qqNextFAQCategory(faq string, start int) int {
 }
 
 // qqInsertFAQ 把一条问答插到第 index 个二级标题那一节的末尾：下一个二级标题之前，或者页尾核对说明（以 footer 开头的段落）之前，都没有时接在文末。
+// 分类或页尾标记在代码围栏内时忽略；追加位置落在未关闭围栏内时拒绝插入，原文保持不变。
 func qqInsertFAQ(faq string, index int, question, answer, footer string) (string, bool) {
 	if index < 0 {
 		return faq, false
 	}
-	// 按标题标记定位并核对行首，避免先统计全部分类或逐行扫描前面的正文。
-	offset := qqNextFAQCategory(faq, 0)
-	for ; offset >= 0 && index > 0; index-- {
-		offset = qqNextFAQCategory(faq, offset+3)
-	}
+	offset := qqFAQCategoryOffset(faq, index)
 	if offset < 0 {
 		return faq, false
 	}
 	heading, body, _ := strings.Cut(faq[offset:], "\n")
 	insertAt := offset + len(heading)
-	if bodyEnd := qqFAQInsertBodyEnd(body, footer); bodyEnd > 0 {
+	bodyEnd := qqFAQInsertBodyEnd(body, footer)
+	if bodyEnd < 0 {
+		return faq, false
+	}
+	if bodyEnd > 0 {
 		body = body[:bodyEnd]
 		for end := len(body); end > 0; {
 			lineEnd := end
@@ -150,6 +160,9 @@ func qqInsertFAQ(faq string, index int, question, answer, footer string) (string
 func qqFAQInsertBodyEnd(body, footer string) int {
 	if body == "" || footer == "" {
 		return 0
+	}
+	if qqFAQHasFences(body) {
+		return qqFAQFencedBodyEnd(body, footer)
 	}
 	end := len(body)
 	if strings.HasPrefix(body, "## ") {

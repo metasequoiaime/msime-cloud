@@ -2,7 +2,7 @@ package server
 
 import "strings"
 
-// qqMarkdownFence 记录当前代码围栏的字符和长度；三个 Markdown 读取路径共用边界规则。
+// qqMarkdownFence 记录当前代码围栏的字符和长度，各 Markdown 读取路径共用边界规则。
 type qqMarkdownFence struct {
 	char   byte
 	length int

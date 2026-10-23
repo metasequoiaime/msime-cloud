@@ -26,7 +26,7 @@ func TestQQFAQCategoryInlineMarkers(t *testing.T) {
 	for _, faq := range []string{
 		"正文 ### 非分类\n## 真分类", "正文 ## \n##", "正文 ## \n##\t非分类\n## 真分类",
 		"正文 ## \r## 非行首\n## 真分类\r\n", "## 首分类\n\x00## 非分类\n## \xff\xe4\xb8",
-		"正文 ## \n```\n## 围栏内分类\n```\n## 末分类", "正文 ## \n ## 缩进非分类\n## 真分类",
+		"正文 ## \n ## 缩进非分类\n## 真分类",
 	} {
 		cases = append(cases, struct{ name, faq string }{"边界", faq})
 	}

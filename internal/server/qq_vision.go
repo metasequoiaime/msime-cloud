@@ -100,7 +100,7 @@ func (s *Server) qqDescribeImage(ctx context.Context, a qqAttachment) (string, e
 	}
 	content := []map[string]any{
 		{"type": "text", "text": "请描述这张截图。"},
-		{"type": "image_url", "image_url": map[string]string{"url": "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(body)}},
+		{"type": "image_url", "image_url": map[string]string{"url": qqVisionDataURL(contentType, body)}},
 	}
 	payload, _ := json.Marshal(map[string]any{"model": s.qq.config.Model, "max_tokens": 2000, "response_format": map[string]string{"type": "json_object"},
 		"messages": []map[string]any{{"role": "system", "content": qqVisionPrompt}, {"role": "user", "content": content}, {"role": "user", "content": jsonObjectInstruction}}})
@@ -142,6 +142,25 @@ func (s *Server) qqDescribeImage(ctx context.Context, a qqAttachment) (string, e
 		return "", errors.New("empty description")
 	}
 	return description, nil
+}
+
+// qqVisionDataURL 把图片编码进一次预留的地址缓冲，避免建立完整的中间字符串。
+func qqVisionDataURL(contentType string, body []byte) string {
+	var out strings.Builder
+	out.Grow(len("data:") + len(contentType) + len(";base64,") + base64.StdEncoding.EncodedLen(len(body)))
+	out.WriteString("data:")
+	out.WriteString(contentType)
+	out.WriteString(";base64,")
+	// 完整块按 3 字节对齐，只有最后一块可能需要 base64 补位。
+	const blockBytes = 3 * 256
+	var encoded [4 * 256]byte
+	for len(body) > 0 {
+		n := min(len(body), blockBytes)
+		base64.StdEncoding.Encode(encoded[:], body[:n])
+		out.Write(encoded[:base64.StdEncoding.EncodedLen(n)])
+		body = body[n:]
+	}
+	return out.String()
 }
 
 // qqWithShot 把截图描述接在问题后面；描述为空时原样返回。

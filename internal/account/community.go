@@ -208,7 +208,27 @@ func communitySavedScope(scope, saves, column, alias string) (join, order string
 // communitySaveTarget 描述一种社区条目的收藏：items 是条目表（查询里的别名为 s），saves 是收藏表，column 是收藏表里指向条目的列，visible 是条目对当前用户（$2）可见、可以收藏的条件，notFound 是不可见时的错误码，与该条目的详情接口一致。
 type communitySaveTarget struct {
 	items, saves, column, visible, notFound string
+	saveQuery, deleteQuery, statusQuery     string
 }
+
+func newCommunitySaveTarget(items, saves, column, visible, notFound string) communitySaveTarget {
+	return communitySaveTarget{
+		items:       items,
+		saves:       saves,
+		column:      column,
+		visible:     visible,
+		notFound:    notFound,
+		saveQuery:   `INSERT INTO ` + saves + `(` + column + `,user_id) SELECT s.id,$2 FROM ` + items + ` s WHERE s.id=$1 AND ` + visible + ` FOR SHARE OF s ON CONFLICT DO NOTHING`,
+		deleteQuery: `DELETE FROM ` + saves + ` WHERE ` + column + `=$1 AND user_id=$2`,
+		statusQuery: `SELECT EXISTS(SELECT 1 FROM ` + items + ` s WHERE s.id=$1 AND ` + visible + `),(SELECT count(*) FROM ` + saves + ` WHERE ` + column + `=$1)`,
+	}
+}
+
+var (
+	communitySkinSaveTarget          = newCommunitySaveTarget("community_skins", "community_skin_saves", "skin_id", "(s.moderation<>'removed' OR s.owner_id=$2)", "skin_not_found")
+	communityCandidateSkinSaveTarget = newCommunitySaveTarget("community_candidate_skins", "community_candidate_skin_saves", "skin_id", "(s.visibility='public' OR s.owner_id=$2) AND (s.moderation<>'removed' OR s.owner_id=$2)", "skin_not_found")
+	communityPluginSaveTarget        = newCommunitySaveTarget("community_plugins", "community_plugin_saves", "pack_id", "(s.moderation<>'removed' OR s.owner_id=$2)", "plugin_not_found")
+)
 
 // communitySave 处理 `PUT …/{id}/save`：请求体 `{"saved":bool}`，重复提交结果相同，返回收藏后的状态和收藏总数。条目不存在或对当前用户不可见时返回 404，取消收藏也一样，这时事务回滚，什么都不改。
 func (a *Service) communitySave(w http.ResponseWriter, r *http.Request, t communitySaveTarget) {
@@ -232,13 +252,13 @@ func (a *Service) communitySave(w http.ResponseWriter, r *http.Request, t commun
 	batch := &pgx.Batch{}
 	if input.Saved {
 		// 先锁定可见作品，等待删除或下架提交后重新检查，避免收藏插入触发外键错误。
-		batch.Queue(`INSERT INTO `+t.saves+`(`+t.column+`,user_id) SELECT s.id,$2 FROM `+t.items+` s WHERE s.id=$1 AND `+t.visible+` FOR SHARE OF s ON CONFLICT DO NOTHING`, id, p.UserID)
+		batch.Queue(t.saveQuery, id, p.UserID)
 	} else {
-		batch.Queue(`DELETE FROM `+t.saves+` WHERE `+t.column+`=$1 AND user_id=$2`, id, p.UserID)
+		batch.Queue(t.deleteQuery, id, p.UserID)
 	}
 	var visible bool
 	var saves int
-	batch.Queue(`SELECT EXISTS(SELECT 1 FROM `+t.items+` s WHERE s.id=$1 AND `+t.visible+`),(SELECT count(*) FROM `+t.saves+` WHERE `+t.column+`=$1)`, id, p.UserID).QueryRow(func(row pgx.Row) error {
+	batch.Queue(t.statusQuery, id, p.UserID).QueryRow(func(row pgx.Row) error {
 		return row.Scan(&visible, &saves)
 	})
 	if e = tx.SendBatch(r.Context(), batch).Close(); e != nil {
@@ -408,7 +428,7 @@ func (a *Service) writeCommunitySkin(w http.ResponseWriter, r *http.Request, vie
 
 // communitySaveSkin 收藏或取消收藏键盘皮肤。已下架的作品只有作者本人可以收藏。
 func (a *Service) communitySaveSkin(w http.ResponseWriter, r *http.Request) {
-	a.communitySave(w, r, communitySaveTarget{items: "community_skins", saves: "community_skin_saves", column: "skin_id", visible: "(s.moderation<>'removed' OR s.owner_id=$2)", notFound: "skin_not_found"})
+	a.communitySave(w, r, communitySkinSaveTarget)
 }
 func (a *Service) communityPublish(w http.ResponseWriter, r *http.Request) {
 	p, ok := a.principal(w, r, false)

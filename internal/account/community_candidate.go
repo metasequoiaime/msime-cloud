@@ -573,7 +573,7 @@ func (a *Service) communityCandidateDetail(w http.ResponseWriter, r *http.Reques
 
 // communityCandidateSave 收藏或取消收藏候选窗皮肤。别人的私有作品和已下架的作品返回 404，作者本人的不受限制。
 func (a *Service) communityCandidateSave(w http.ResponseWriter, r *http.Request) {
-	a.communitySave(w, r, communitySaveTarget{items: "community_candidate_skins", saves: "community_candidate_skin_saves", column: "skin_id", visible: "(s.visibility='public' OR s.owner_id=$2) AND (s.moderation<>'removed' OR s.owner_id=$2)", notFound: "skin_not_found"})
+	a.communitySave(w, r, communityCandidateSkinSaveTarget)
 }
 func (a *Service) communityCandidatePreview(w http.ResponseWriter, r *http.Request) {
 	var path string

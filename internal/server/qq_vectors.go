@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -67,12 +66,7 @@ func (s *Server) qqEmbeddingURL() string {
 	if s.qq == nil || s.qq.config.EmbeddingModel == "none" {
 		return ""
 	}
-	u, err := url.Parse(s.config.Chat.URL)
-	if err != nil || u.Host == "" {
-		return ""
-	}
-	u.Path = path.Join(strings.TrimSuffix(u.Path, "/chat/completions"), "embeddings")
-	return u.String()
+	return chatAPIURL(s.config.Chat.URL, "embeddings")
 }
 
 // qqEmbed 把 texts 算成向量，顺序与输入一致。

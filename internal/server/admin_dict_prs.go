@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -683,12 +682,8 @@ func (s *Server) trimFiles(ctx context.Context, gh *githubapp.Client, token stri
 			continue
 		}
 		content := trimDictionaryContent(f.head, drop)
-		res, err := gh.Do(ctx, token, "PUT", repo+"/contents/"+f.kind.file, map[string]string{
-			"message": "chore(custom): drop " + strconv.Itoa(len(drop)) + " entries during review",
-			"content": base64.StdEncoding.EncodeToString([]byte(content)),
-			"sha":     f.blobSHA,
-			"branch":  p.Head.Ref,
-		})
+		res, err := gh.Do(ctx, token, "PUT", repo+"/contents/"+f.kind.file, githubContentBody(content,
+			"chore(custom): drop "+strconv.Itoa(len(drop))+" entries during review", f.blobSHA, p.Head.Ref))
 		switch {
 		case err != nil || res.Status >= 500:
 			return head, p.Title, removed, phaseError(errWordsUncertain, "commit "+f.kind.file, githubResponse{status: res.Status}, err)

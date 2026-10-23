@@ -299,12 +299,8 @@ func (ws *wordSubmitter) submit(ctx context.Context, sub submission) (int, error
 	}
 	// The blob SHA makes this a compare-and-swap: if the file changed on the branch since it was read, GitHub rejects the write and the visitor is asked to submit again.
 	updated := appendSubmissionLines(content, sub, baseContent)
-	r, err := ws.githubRequest(ctx, token, "PUT", repo+"/contents/"+sub.kind.file, map[string]string{
-		"message": submissionCommitMessage(sub),
-		"content": base64.StdEncoding.EncodeToString([]byte(updated)),
-		"sha":     file.SHA,
-		"branch":  branch,
-	})
+	r, err := ws.githubRequest(ctx, token, "PUT", repo+"/contents/"+sub.kind.file,
+		githubContentBody(updated, submissionCommitMessage(sub), file.SHA, branch))
 	switch {
 	case err != nil || r.status >= 500:
 		return 0, phaseError(errWordsUncertain, "commit "+sub.kind.file, r, err)

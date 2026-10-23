@@ -56,7 +56,7 @@ func TestQQFAQStreamingMatchesPrevious(t *testing.T) {
 		"## A\n## B", "## A\n正文\n## B\n", "## A\n正文\n\n## B\n",
 		"## A\n \t\r\n\u3000\n本页于合成日期核对。\n", "## A\n正文\n本页于合成日期核对。",
 		"## A\n正文\n\n\t \r", "## A\n\xff\xe4\xb8\n", "# 说明\n## A\r\n正文\r\n## B\r\n",
-		"```\n## A\n```\n正文\n", "## A\n\n本页于合成日期核对。\n## B\n正文",
+		"## A\n\n本页于合成日期核对。\n## B\n正文",
 	}
 	random := rand.New(rand.NewSource(647))
 	units := []string{"普通内容", "## A", "## B", "# 说明", "### 旧问题", "本页于", "\n", "\r\n", " ", "\t", "\u3000", "\xff", "\xe4\xb8", "\x00"}

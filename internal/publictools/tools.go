@@ -314,6 +314,9 @@ func HTTP(client *http.Client, base, token string) (Execute, error) {
 }
 
 func httpTransport(client *http.Client, base, token, scope string) (Execute, error) {
+	if client == nil {
+		return nil, errors.New("nil_" + scope + "_http_client")
+	}
 	u, err := url.Parse(base)
 	// 空查询和空片段同样会吞掉后续拼接的工具路径，必须在发请求或启动 MCP 前拒绝。
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(base, "#") {

@@ -187,6 +187,7 @@ function LiveLogs({ token, onUnauthorized }: { token: string; onUnauthorized: ()
           setLokiDown(true);
           break;
       }
+      setFailure(null);
     };
     const run = async () => {
       let attempt = 0;

@@ -338,6 +338,36 @@ func monitoringServer(t *testing.T, upstream http.HandlerFunc) *Server {
 	return monitoringReplica(t, upstream)
 }
 
+func manualMonitoringServer(t *testing.T, upstream http.HandlerFunc) *Server {
+	t.Helper()
+	admin, schema := disposableSchema(t)
+	s := monitoringReplica(t, upstream)
+	// 手动探针从空序列开始，避免回拨到当天时与启动探针占用同一分钟。
+	if _, err := admin.Exec(t.Context(), "TRUNCATE "+pgx.Identifier{schema, "admin_service_verdicts"}.Sanitize()+", "+pgx.Identifier{schema, "admin_service_daily"}.Sanitize()); err != nil {
+		t.Fatalf("清理启动探针状态：%v", err)
+	}
+	return s
+}
+
+func TestStatusProbeSequenceStartsInStartupMinute(t *testing.T) {
+	s := manualMonitoringServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"测试"}}]}`)
+	})
+	ctx := t.Context()
+	// 首个手动探针与真实启动探针使用同一分钟，覆盖午夜前回拨测试时间的情况。
+	now := time.Now().Truncate(time.Minute).Add(-time.Minute)
+	for range 4 {
+		s.metrics.record("chat", now, 4*time.Second, false, 0)
+	}
+	for i := 1; i <= incidentOpenAfter; i++ {
+		s.statusTick(ctx, now.Add(time.Duration(i)*time.Minute))
+	}
+	incidents, err := s.accounts.Incidents(ctx, 5)
+	if err != nil || len(incidents) != 1 || incidents[0].Service != "chat" || incidents[0].State != "open" || !incidents[0].Auto {
+		t.Fatalf("启动分钟打断了手动探针序列：%+v，错误：%v", incidents, err)
+	}
+}
+
 // monitoringReplica starts a server on the database schema of the running test, so a second call is another replica of the first.
 func monitoringReplica(t *testing.T, upstream http.HandlerFunc) *Server {
 	t.Helper()
@@ -426,7 +456,7 @@ func sameUTCDay(now time.Time, ticks int) time.Time {
 
 // End to end against PostgreSQL: slow upstream calls degrade the service, three bad probes open one automatic incident, the pages report the minute rollup and the month's quota, and five good probes resolve the incident.
 func TestStatusProbeAndPages(t *testing.T) {
-	s := monitoringServer(t, func(w http.ResponseWriter, r *http.Request) {
+	s := manualMonitoringServer(t, func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(10 * time.Millisecond)
 		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"测试"}}]}`)
 	})

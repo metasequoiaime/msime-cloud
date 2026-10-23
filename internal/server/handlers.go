@@ -3,8 +3,8 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/metasequoiaime/MSIME-Backend/internal/boundedio"
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
-	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
 	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 	"io"
 	"log/slog"
@@ -591,7 +591,7 @@ func (s *Server) transcribe(w http.ResponseWriter, r *http.Request) {
 			if r.ContentLength >= 4<<10 && r.ContentLength <= contract.MultipartBodyBytes {
 				lengthHint = min(r.ContentLength, contract.AudioFileBytes)
 			}
-			audio, e = httpclient.ReadBody(part, lengthHint, contract.AudioFileBytes)
+			audio, e = boundedio.ReadAll(part, lengthHint, contract.AudioFileBytes)
 			if e != nil || len(audio) == 0 || len(audio) > contract.AudioFileBytes {
 				fail(w, 413, "audio_too_large_or_empty")
 				return

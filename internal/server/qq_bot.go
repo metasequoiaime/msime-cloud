@@ -28,6 +28,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
+	"github.com/metasequoiaime/MSIME-Backend/internal/boundedio"
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
@@ -488,7 +489,7 @@ func (s *Server) qqBotEvents(w http.ResponseWriter, r *http.Request) {
 		fail(w, 503, "feature_disabled")
 		return
 	}
-	body, err := httpclient.ReadBody(http.MaxBytesReader(w, r.Body, qqBotBodyBytes), r.ContentLength, qqBotBodyBytes)
+	body, err := boundedio.ReadAll(http.MaxBytesReader(w, r.Body, qqBotBodyBytes), r.ContentLength, qqBotBodyBytes)
 	if httpjson.IsBodyTooLarge(err) {
 		fail(w, 413, "request_too_large")
 		return

@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
+	"github.com/metasequoiaime/MSIME-Backend/internal/boundedio"
 
 	xdraw "golang.org/x/image/draw"
 )
@@ -97,7 +97,7 @@ func (a *Service) putAvatar(w http.ResponseWriter, r *http.Request) {
 		a.error(w, e)
 		return
 	}
-	data, e := httpclient.ReadBody(r.Body, r.ContentLength, maxAvatarUploadBytes)
+	data, e := boundedio.ReadAll(r.Body, r.ContentLength, maxAvatarUploadBytes)
 	if e != nil {
 		writeError(w, 400, "invalid_avatar")
 		return

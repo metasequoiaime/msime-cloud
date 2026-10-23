@@ -13,13 +13,13 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpquery"
 	"github.com/metasequoiaime/MSIME-Backend/internal/skins"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -636,12 +636,7 @@ func enabled(w http.ResponseWriter, e Endpoint) bool {
 }
 func bounded(v string, n int) bool { return strings.TrimSpace(v) != "" && len(v) <= n }
 func intQuery(query url.Values, name string, defaultValue, maximum int) (int, bool) {
-	v := query.Get(name)
-	if v == "" {
-		return defaultValue, true
-	}
-	i, err := strconv.Atoi(v)
-	return i, err == nil && i > 0 && i <= maximum
+	return httpquery.Int(query, name, defaultValue, 1, maximum)
 }
 
 // CloseAccounts 应在 HTTP 请求排空后调用，释放用户数据库资源。

@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"path"
 	"regexp"
 	"slices"
 	"strings"
@@ -460,16 +459,15 @@ func (s *Server) qqWebSearch(ctx context.Context, query string) string {
 	if query == "" || utf8.RuneCountInString(query) > 200 {
 		return "搜索关键词为空或太长。"
 	}
-	u, err := url.Parse(s.config.Chat.URL)
-	if err != nil || u.Host == "" {
+	endpoint := chatAPIURL(s.config.Chat.URL, "messages")
+	if endpoint == "" {
 		return "联网搜索暂时用不了。"
 	}
-	u.Path = path.Join(strings.TrimSuffix(u.Path, "/chat/completions"), "messages")
 	payload, _ := json.Marshal(map[string]any{"model": s.qq.config.Model, "max_tokens": 1500,
 		"tools":    []map[string]any{{"type": "web_search_20250305", "name": "web_search", "max_uses": 1}},
 		"messages": []map[string]string{{"role": "user", "content": query}}})
 	e := s.config.Chat.Endpoint
-	e.URL = u.String()
+	e.URL = endpoint
 	req, err := e.newRequest(ctx, http.MethodPost, bytes.NewReader(payload))
 	if err != nil {
 		return "联网搜索暂时用不了。"

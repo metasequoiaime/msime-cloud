@@ -65,7 +65,7 @@ type feedbackPart struct {
 	data                        []byte
 }
 
-func feedbackForm(t *testing.T, parts ...feedbackPart) (*bytes.Buffer, string) {
+func feedbackForm(t testing.TB, parts ...feedbackPart) (*bytes.Buffer, string) {
 	t.Helper()
 	var body bytes.Buffer
 	w := multipart.NewWriter(&body)

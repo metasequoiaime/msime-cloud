@@ -88,8 +88,8 @@ type cli struct {
 	browse func(string) error
 }
 
-func readCLIResponse(body io.Reader) ([]byte, error) {
-	data, err := io.ReadAll(io.LimitReader(body, maxCLIResponseBytes+1))
+func readCLIResponse(response *http.Response) ([]byte, error) {
+	data, err := httpclient.ReadResponseBody(response, maxCLIResponseBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -466,7 +466,7 @@ func (c cli) refresh(server string, used session) (session, error) {
 		return session{}, err
 	}
 	defer response.Body.Close()
-	data, err := readCLIResponse(response.Body)
+	data, err := readCLIResponse(response)
 	if err != nil {
 		return session{}, err
 	}
@@ -578,7 +578,7 @@ func (c cli) print(response *http.Response, output string) error {
 		_, err = fmt.Fprintln(c.stdout, string(saved))
 		return err
 	}
-	data, err := readCLIResponse(response.Body)
+	data, err := readCLIResponse(response)
 	if err != nil {
 		return err
 	}
@@ -669,7 +669,7 @@ func (c cli) signIn(server, challenge, credential string) error {
 		return err
 	}
 	defer response.Body.Close()
-	data, err := readCLIResponse(response.Body)
+	data, err := readCLIResponse(response)
 	if err != nil {
 		return err
 	}

@@ -848,10 +848,9 @@ func (s *Server) qqDraftDetail(ctx context.Context, draft account.QQDraft, admin
 	return b.String()
 }
 
-// qqOwnCodeIDs 按原正则的非重叠规则读取草稿编号，凑齐三个不同的正编号后停止，不收集全文匹配。
+// qqOwnCodeIDs 读取独立的草稿编号，允许相邻编号共用分隔符；凑齐三个不同的正编号后停止。
 func qqOwnCodeIDs(question string) []int64 {
 	var ids []int64
-	matchedEnd := 0
 	for offset := 0; offset < len(question); {
 		next := strings.IndexAny(question[offset:], "Dd")
 		if next < 0 {
@@ -860,10 +859,6 @@ func qqOwnCodeIDs(question string) []int64 {
 		start := offset + next
 		offset = start + 1
 		if start > 0 {
-			// 前一次匹配已消耗的分隔符不能作为下一个编号的前缀。
-			if start == matchedEnd {
-				continue
-			}
 			before, _ := utf8.DecodeLastRuneInString(question[:start])
 			if qqOwnCodeLetterOrDigit(before) {
 				continue
@@ -887,13 +882,12 @@ func qqOwnCodeIDs(question string) []int64 {
 			continue
 		}
 		if end < len(question) {
-			after, size := utf8.DecodeRuneInString(question[end:])
+			after, _ := utf8.DecodeRuneInString(question[end:])
 			if qqOwnCodeLetterOrDigit(after) {
 				continue
 			}
-			end += size
 		}
-		offset, matchedEnd = end, end
+		offset = end
 		if id == 0 || slices.Contains(ids, id) {
 			continue
 		}

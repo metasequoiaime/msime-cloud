@@ -25,11 +25,12 @@ type operation struct {
 }
 
 const (
-	authNone    = "none"
-	authUser    = "user"
-	authAny     = "device-or-user"
-	authAdmin   = "admin"
-	adminPrefix = "/api/"
+	authNone         = "none"
+	authUser         = "user"
+	authOptionalUser = "optional-user"
+	authAny          = "device-or-user"
+	authAdmin        = "admin"
+	adminPrefix      = "/api/"
 )
 
 // catalog is every operation the CLI knows: /v1 from the OpenAPI document, /api from the tables the admin site dispatches with.
@@ -75,17 +76,28 @@ func catalog() ([]operation, error) {
 	return operations, nil
 }
 
-// authOf names an OpenAPI security requirement: an empty list is anonymous, deviceToken alongside userSession accepts either.
+// authOf 根据 OpenAPI 的安全要求区分匿名、可选用户会话和必需的凭据。
 func authOf(security json.RawMessage) string {
 	var requirements []map[string]json.RawMessage
 	_ = json.Unmarshal(security, &requirements)
 	if len(requirements) == 0 {
 		return authNone
 	}
+	optional, user := false, false
 	for _, requirement := range requirements {
+		optional = optional || len(requirement) == 0
+		if _, ok := requirement["userSession"]; ok {
+			user = true
+		}
 		if _, ok := requirement["deviceToken"]; ok {
 			return authAny
 		}
+	}
+	if optional {
+		if user {
+			return authOptionalUser
+		}
+		return authNone
 	}
 	return authUser
 }

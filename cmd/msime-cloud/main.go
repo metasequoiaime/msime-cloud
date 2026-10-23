@@ -75,6 +75,8 @@ type statusError struct{ status string }
 
 func (e statusError) Error() string { return "the server answered " + e.status }
 
+var errSessionEnded = errors.New("the session has ended; sign in again with `msime-cloud login start`")
+
 type cli struct {
 	env    func(string) string
 	stdin  io.Reader
@@ -322,7 +324,12 @@ func (c cli) send(r request) (*http.Response, error) {
 	if token := c.env("MSIME_CLOUD_TOKEN"); token != "" {
 		return c.do(server, r, token)
 	}
-	return c.sendKeptSession(r)
+	response, err := c.sendKeptSession(r)
+	// 会话被服务端明确撤销后仍可公开浏览；其他刷新错误保留，避免悄悄丢失身份。
+	if auth == authOptionalUser && errors.Is(err, errSessionEnded) {
+		return c.do(server, r, "")
+	}
+	return response, err
 }
 
 // sendKeptSession 使用本地保存的用户会话，必要时刷新；退出不能改用环境令牌的身份。
@@ -429,7 +436,7 @@ func (c cli) refresh(server string, used session) (session, error) {
 		if err = sessions.putLocked(server, nil); err != nil {
 			return session{}, err
 		}
-		return session{}, errors.New("the session has ended; sign in again with `msime-cloud login start`")
+		return session{}, errSessionEnded
 	}
 	if response.StatusCode != http.StatusOK {
 		return session{}, fmt.Errorf("refreshing the session failed with %s: %s", response.Status, strings.TrimSpace(string(data)))

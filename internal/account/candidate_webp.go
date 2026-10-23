@@ -23,30 +23,58 @@ type candidateWebPChunk struct {
 	body []byte
 }
 
-func candidateWebPChunks(data []byte) ([]candidateWebPChunk, bool) {
-	// 先完整校验并计数，避免密集元数据让描述符数组反复扩容，损坏尾部也无需分配。
-	count := 0
-	for remaining := data; len(remaining) > 0; count++ {
+// candidateWebPChunkReader 只保存当前块的视图，不为元数据创建描述符数组或类型字符串。
+// remaining 必须先由 candidateWebPReadChunks 完整校验，随后才能调用 next。
+type candidateWebPChunkReader struct {
+	remaining  []byte
+	kind, body []byte
+}
+
+func candidateWebPReadChunks(data []byte) (candidateWebPChunkReader, bool) {
+	// 保留先检查整个容器边界的顺序，尾部损坏仍优先于画布或帧数超限。
+	for remaining := data; len(remaining) > 0; {
 		if len(remaining) < 8 {
-			return nil, false
+			return candidateWebPChunkReader{}, false
 		}
 		size := uint64(binary.LittleEndian.Uint32(remaining[4:]))
 		padded := size + size%2
 		if padded > uint64(len(remaining)-8) {
-			return nil, false
+			return candidateWebPChunkReader{}, false
 		}
 		remaining = remaining[8+int(padded):]
 	}
-	if count == 0 {
-		return nil, true
+	return candidateWebPChunkReader{remaining: data}, true
+}
+
+func (r *candidateWebPChunkReader) next() bool {
+	if len(r.remaining) == 0 {
+		return false
 	}
-	chunks := make([]candidateWebPChunk, count)
-	for i := range chunks {
-		size := int(binary.LittleEndian.Uint32(data[4:]))
-		chunks[i] = candidateWebPChunk{string(data[:4]), data[8 : 8+size]}
-		data = data[8+size+size%2:]
+	size := int(binary.LittleEndian.Uint32(r.remaining[4:]))
+	r.kind, r.body = r.remaining[:4], r.remaining[8:8+size]
+	r.remaining = r.remaining[8+size+size%2:]
+	return true
+}
+
+// candidateWebPReadFrame 只收集绘制块；合法静态帧至多有 ALPH 和一个位流块。
+func candidateWebPReadFrame(data []byte, width, height int) ([]byte, bool) {
+	chunks, ok := candidateWebPReadChunks(data)
+	if !ok {
+		return nil, false
 	}
-	return chunks, true
+	var selected [2]candidateWebPChunk
+	count := 0
+	for chunks.next() {
+		switch string(chunks.kind) {
+		case "ALPH", "VP8 ", "VP8L":
+			if count == len(selected) {
+				return nil, false
+			}
+			selected[count] = candidateWebPChunk{string(chunks.kind), chunks.body}
+			count++
+		}
+	}
+	return candidateWebPFrame(selected[:count], width, height)
 }
 
 func candidateWebPAppend(dst []byte, kind string, body []byte) []byte {
@@ -166,21 +194,22 @@ func parseCandidateWebP(data []byte) (*candidateWebP, string) {
 	if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WEBP" || uint64(binary.LittleEndian.Uint32(data[4:]))+8 != uint64(len(data)) {
 		return nil, invalid
 	}
-	chunks, ok := candidateWebPChunks(data[12:])
-	if !ok || len(chunks) == 0 {
+	chunks, ok := candidateWebPReadChunks(data[12:])
+	if !ok || len(data) == 12 {
 		return nil, invalid
 	}
 	a := &candidateWebP{}
 	var header, anim []byte
 	var static []candidateWebPChunk
 	animationSize := 0
-	for i, chunk := range chunks {
-		switch chunk.kind {
+	for i := 0; chunks.next(); i++ {
+		body := chunks.body
+		switch string(chunks.kind) {
 		case "VP8X":
-			if i != 0 || len(chunk.body) != 10 {
+			if i != 0 || len(body) != 10 {
 				return nil, invalid
 			}
-			header = bytes.Clone(chunk.body)
+			header = bytes.Clone(body)
 			a.width, a.height = 1+candidateWebPUint24(header[4:]), 1+candidateWebPUint24(header[7:])
 			if a.width > maxCandidateSide || a.height > maxCandidateSide {
 				return nil, "candidate_skin_too_large"
@@ -188,15 +217,15 @@ func parseCandidateWebP(data []byte) (*candidateWebP, string) {
 			header[0] &= 0x12
 			header[1], header[2], header[3] = 0, 0, 0
 		case "ANIM":
-			if header == nil || header[0]&2 == 0 || anim != nil || a.images != 0 || len(chunk.body) != 6 {
+			if header == nil || header[0]&2 == 0 || anim != nil || a.images != 0 || len(body) != 6 {
 				return nil, invalid
 			}
-			anim = chunk.body
+			anim = body
 		case "ANMF":
-			if anim == nil || len(chunk.body) < 16 {
+			if anim == nil || len(body) < 16 {
 				return nil, invalid
 			}
-			h := chunk.body[:16]
+			h := body[:16]
 			x, y := 2*candidateWebPUint24(h), 2*candidateWebPUint24(h[3:])
 			w, height := 1+candidateWebPUint24(h[6:]), 1+candidateWebPUint24(h[9:])
 			if x+w > a.width || y+height > a.height || h[15]&0xfc != 0 {
@@ -206,11 +235,7 @@ func parseCandidateWebP(data []byte) (*candidateWebP, string) {
 			if a.images > maxCandidateAnimationFrames {
 				return nil, "candidate_skin_too_large"
 			}
-			frameChunks, ok := candidateWebPChunks(chunk.body[16:])
-			if !ok {
-				return nil, invalid
-			}
-			frame, ok := candidateWebPFrame(frameChunks, w, height)
+			frame, ok := candidateWebPReadFrame(body[16:], w, height)
 			if !ok {
 				return nil, invalid
 			}
@@ -220,7 +245,7 @@ func parseCandidateWebP(data []byte) (*candidateWebP, string) {
 			if header != nil && header[0]&2 != 0 {
 				return nil, invalid
 			}
-			static = append(static, chunk)
+			static = append(static, candidateWebPChunk{string(chunks.kind), body})
 		}
 	}
 	if header == nil || header[0]&2 == 0 {
@@ -241,15 +266,16 @@ func parseCandidateWebP(data []byte) (*candidateWebP, string) {
 		clean = candidateWebPAppend(clean, "VP8X", header)
 		clean = candidateWebPAppend(clean, "ANIM", anim)
 		frameIndex := 0
-		for _, chunk := range chunks {
-			if chunk.kind != "ANMF" {
+		chunks.remaining = data[12:]
+		for chunks.next() {
+			if string(chunks.kind) != "ANMF" {
 				continue
 			}
 			payload := candidateWebPFramePayload(a.frames[frameIndex])
 			frameIndex++
 			clean = append(clean, "ANMF"...)
 			clean = binary.LittleEndian.AppendUint32(clean, uint32(16+len(payload)))
-			clean = append(clean, chunk.body[:16]...)
+			clean = append(clean, chunks.body[:16]...)
 			clean = append(clean, payload...)
 		}
 		a.clean = clean

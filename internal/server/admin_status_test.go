@@ -342,6 +342,9 @@ func manualMonitoringServer(t *testing.T, upstream http.HandlerFunc) *Server {
 	t.Helper()
 	admin, schema := disposableSchema(t)
 	s := monitoringReplica(t, upstream)
+	// 判定可见不代表后续裁剪已结束；与探针共用锁，避免清理两表时发生反向取锁。
+	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
 	// 手动探针从空序列开始，避免回拨到当天时与启动探针占用同一分钟。
 	if _, err := admin.Exec(t.Context(), "TRUNCATE "+pgx.Identifier{schema, "admin_service_verdicts"}.Sanitize()+", "+pgx.Identifier{schema, "admin_service_daily"}.Sanitize()); err != nil {
 		t.Fatalf("清理启动探针状态：%v", err)

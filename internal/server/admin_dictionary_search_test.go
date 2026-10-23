@@ -2,7 +2,9 @@ package server
 
 import (
 	"fmt"
+	"math"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -15,6 +17,41 @@ type dictionarySearchResponse struct {
 	HasMore    bool                   `json:"has_more"`
 	Revision   string                 `json:"revision"`
 	Truncated  bool                   `json:"truncated"`
+}
+
+func TestDictionarySearchCursorQuery(t *testing.T) {
+	f := &dictionaryMock{text: "甲\tjia\t1\n"}
+	s := &Server{adminGitHub: dictionaryMockClient(t, f), config: Config{Admin: AdminConfig{GitHub: AdminGitHubConfig{DictionaryRepo: dictTestRepo}}}}
+	for _, tc := range []struct {
+		query string
+		files int
+	}{
+		{"", 3}, {"&cursor=", 3}, {"&cursor=&cursor=bad", 3},
+		{"&cursor=0&cursor=bad", 3}, {"&cursor=%2B1", 2}, {"&cursor=01", 2},
+		{"&cursor=3", 0}, {"&cursor=-1", -1}, {"&cursor=%201", -1},
+		{"&cursor=1%20", -1}, {"&cursor=bad&cursor=0", -1},
+		{"&cursor=999999999999999999999999999999", -1},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			w := dictionaryDirect(s, "GET", "/api/dictionary/search?q=甲&revision="+strings.Repeat("c", 40)+tc.query, "", false)
+			if tc.files < 0 {
+				if w.Code != 400 || !strings.Contains(w.Body.String(), `"code":"invalid_query"`) {
+					t.Fatal(w.Code, w.Body.String())
+				}
+				return
+			}
+			result := decodeDict[dictionarySearchResponse](t, w)
+			if w.Code != 200 || len(result.Files) != tc.files || result.NextCursor != 3 {
+				t.Fatal(w.Code, w.Body.String())
+			}
+		})
+	}
+	// 本机 int 上界通过解析后，仍需查询不可变树才能判断是否超出文件数。
+	before := len(f.requests)
+	w := dictionaryDirect(s, "GET", "/api/dictionary/search?q=甲&revision="+strings.Repeat("c", 40)+"&cursor="+strconv.Itoa(math.MaxInt), "", false)
+	if w.Code != 400 || !strings.Contains(w.Body.String(), `"code":"invalid_query"`) || len(f.requests) <= before {
+		t.Fatal(w.Code, w.Body.String(), f.requests[before:])
+	}
 }
 
 func TestDictionarySearchAcrossFilesAndRevisions(t *testing.T) {

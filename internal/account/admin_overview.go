@@ -5,9 +5,9 @@ import (
 	"maps"
 	"net/http"
 	"slices"
-	"strconv"
 	"strings"
 
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpquery"
 	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
@@ -212,14 +212,10 @@ var adminOverviewQuery = `SELECT json_build_object(
 //
 // The community counters leave out removed content, like GET /v1/community/stats. services lists admin.services; without them the upstreams the status probe derives from the deployment (DerivedServices), and without those the services the probe has recorded. services_configured says only whether admin.services is set.
 func (a *Service) adminOverview(w http.ResponseWriter, r *http.Request, _ string) {
-	days := 30
-	if raw := r.URL.Query().Get("days"); raw != "" {
-		parsed, err := strconv.Atoi(raw)
-		if err != nil || (parsed != 7 && parsed != 30) {
-			writeError(w, 400, "invalid_days")
-			return
-		}
-		days = parsed
+	days, ok := httpquery.Int(r.URL.Query(), "days", 30, 7, 30)
+	if !ok || (days != 7 && days != 30) {
+		writeError(w, 400, "invalid_days")
+		return
 	}
 	var err error
 	keys, names, providers := []string{}, []string{}, []string{}

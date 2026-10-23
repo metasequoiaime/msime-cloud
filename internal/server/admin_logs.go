@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpquery"
 )
 
 // 服务日志页：从集群的 Loki 读取后端各副本的日志（`GET /api/logs` 和 `GET /api/logs/stream`）。
@@ -735,14 +736,10 @@ func (s *Server) adminLogsStream(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "invalid_since")
 		return
 	}
-	backfill := defaultLogBackfill
-	if v := query.Get("backfill"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 0 || n > maxLogBackfill {
-			fail(w, 400, "invalid_backfill")
-			return
-		}
-		backfill = n
+	backfill, ok := httpquery.Int(query, "backfill", defaultLogBackfill, 0, maxLogBackfill)
+	if !ok {
+		fail(w, 400, "invalid_backfill")
+		return
 	}
 	now := time.Now()
 	cursor := int64(0)

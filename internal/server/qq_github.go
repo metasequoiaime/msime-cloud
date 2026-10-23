@@ -52,17 +52,8 @@ func qqIssueState(state, reason string, labels []string) string {
 			case "wontfix":
 				return "已关闭（不修）"
 			}
-			upper, nonASCII := false, false
-			for i := range label {
-				if label[i] >= utf8.RuneSelf {
-					nonASCII = true
-					break
-				}
-				if label[i] >= 'A' && label[i] <= 'Z' {
-					upper = true
-				}
-			}
-			if nonASCII {
+			upper, ascii := textutil.HasUpperASCII(label)
+			if !ascii {
 				label = strings.ToLower(label)
 				switch label {
 				case "invalid":
@@ -570,14 +561,9 @@ func qqContainsLowerPlatformWord(question, word string) bool {
 	if word == "" {
 		return false
 	}
-	upper := false
-	for i := range word {
-		if word[i] >= utf8.RuneSelf {
-			return strings.Contains(question, strings.ToLower(word))
-		}
-		if word[i] >= 'A' && word[i] <= 'Z' {
-			upper = true
-		}
+	upper, ascii := textutil.HasUpperASCII(word)
+	if !ascii {
+		return strings.Contains(question, strings.ToLower(word))
 	}
 	if !upper {
 		return strings.Contains(question, word)

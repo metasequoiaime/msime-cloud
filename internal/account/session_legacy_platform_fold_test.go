@@ -14,7 +14,7 @@ func previousLegacySessionPlatform(platform string) string {
 }
 
 func TestLegacySessionPlatformCompatibility(t *testing.T) {
-	for _, platform := range []string{"Android", "IOS", "MacOS", "WINDOWS", "Linux", "Harmony", "unknown", "İOS", "\xff"} {
+	for _, platform := range []string{"Android", "IOS", "MacOS", "WINDOWS", "Linux", "Harmony", "unknown", "İOS", "WİNDOWS", "A中文", "中文Z", "A\xff", "\xffZ", "\xff"} {
 		if got, want := legacySessionPlatform(platform), previousLegacySessionPlatform(platform); got != want {
 			t.Errorf("平台=%q：结果 %q，原结果 %q", platform, got, want)
 		}

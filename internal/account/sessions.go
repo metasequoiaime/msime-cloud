@@ -10,6 +10,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/mileusna/useragent"
+
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
 // maxListedSessions 是「我的设备」一次列出的会话上限，按最近活跃倒序。
@@ -78,18 +80,13 @@ func legacySessionPlatform(platform string) string {
 	if sessionPlatforms[platform] {
 		return platform
 	}
-	upper := false
-	for i := range platform {
-		if platform[i] >= utf8.RuneSelf {
-			platform = strings.ToLower(platform)
-			if sessionPlatforms[platform] {
-				return platform
-			}
-			return ""
+	upper, ascii := textutil.HasUpperASCII(platform)
+	if !ascii {
+		platform = strings.ToLower(platform)
+		if sessionPlatforms[platform] {
+			return platform
 		}
-		if platform[i] >= 'A' && platform[i] <= 'Z' {
-			upper = true
-		}
+		return ""
 	}
 	if !upper {
 		return ""

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -66,6 +67,74 @@ func TestEndpointRequestRejectsInvalidConstruction(t *testing.T) {
 	} {
 		endpoint := Endpoint{URL: tc.url, token: "synthetic-token"}
 		if req, err := endpoint.newRequest(t.Context(), tc.method, strings.NewReader("synthetic")); err == nil || req != nil {
+			t.Fatalf("非法请求应返回错误且不产生请求：method=%q，url=%q", tc.method, tc.url)
+		}
+	}
+}
+
+func TestEndpointJSONRequest(t *testing.T) {
+	for _, token := range []string{"", "synthetic-upstream-token"} {
+		for _, contentType := range []string{"", "application/json", "application/x-www-form-urlencoded; charset=utf-8", "multipart/form-data; boundary=synthetic"} {
+			t.Run(token+"/"+contentType, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				endpoint := Endpoint{URL: "https://upstream.example.test/v1/translate?mode=synthetic", token: token}
+				const payload = "合成正文 +%&="
+				req, err := endpoint.newJSONRequest(ctx, http.MethodPost, contentType, strings.NewReader(payload))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer req.Body.Close()
+				if req.Context() != ctx || req.Method != http.MethodPost || req.URL.String() != endpoint.URL {
+					t.Fatal("请求未保留上下文、方法或地址")
+				}
+				wantHeader := http.Header{"Accept": {"application/json"}}
+				if contentType != "" {
+					wantHeader.Set("Content-Type", contentType)
+				}
+				if token != "" {
+					wantHeader.Set("Authorization", "Bearer "+token)
+				}
+				if !reflect.DeepEqual(req.Header, wantHeader) {
+					t.Fatalf("请求头变化：结果=%v，期望=%v", req.Header, wantHeader)
+				}
+				body, err := io.ReadAll(req.Body)
+				if err != nil || string(body) != payload || req.ContentLength != int64(len(payload)) || req.GetBody == nil {
+					t.Fatalf("正文或重放信息变化：正文=%q，错误=%v", body, err)
+				}
+				replay, err := req.GetBody()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer replay.Close()
+				replayed, err := io.ReadAll(replay)
+				if err != nil || string(replayed) != payload {
+					t.Fatalf("重放正文变化：正文=%q，错误=%v", replayed, err)
+				}
+				cancel()
+				if !errors.Is(req.Context().Err(), context.Canceled) {
+					t.Fatal("取消未传播到上游请求")
+				}
+			})
+		}
+	}
+}
+
+func TestEndpointJSONRequestEmptyBodyAndInvalidConstruction(t *testing.T) {
+	endpoint := Endpoint{URL: "https://upstream.example.test/v1/models"}
+	req, err := endpoint.newJSONRequest(t.Context(), http.MethodGet, "", nil)
+	if err != nil || req == nil {
+		t.Fatalf("无正文请求构造失败：%v", err)
+	}
+	if req.Method != http.MethodGet || req.Body != nil || req.ContentLength != 0 || req.GetBody != nil || len(req.Header) != 1 || req.Header.Get("Accept") != "application/json" {
+		t.Fatal("无正文请求的行为改变")
+	}
+	for _, tc := range []struct{ url, method string }{
+		{"https://upstream.example.test", "invalid method"},
+		{":invalid", http.MethodPost},
+	} {
+		endpoint := Endpoint{URL: tc.url, token: "synthetic-token"}
+		if req, err := endpoint.newJSONRequest(t.Context(), tc.method, "application/json", strings.NewReader("synthetic")); err == nil || req != nil {
 			t.Fatalf("非法请求应返回错误且不产生请求：method=%q，url=%q", tc.method, tc.url)
 		}
 	}

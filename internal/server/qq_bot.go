@@ -1745,12 +1745,10 @@ func (s *Server) qqChatWith(ctx context.Context, model, system, user string, out
 	e := s.config.Chat
 	payload, _ := json.Marshal(chatRequest{Model: model, MaxTokens: contract.ChatMaxTokens, ResponseFormat: &responseFormat{Type: "json_object"},
 		Messages: []message{{Role: "system", Content: system}, {Role: "user", Content: user}, {Role: "user", Content: jsonObjectInstruction}}})
-	req, err := e.newRequest(ctx, http.MethodPost, bytes.NewReader(payload))
+	req, err := e.newJSONRequest(ctx, http.MethodPost, "application/json", bytes.NewReader(payload))
 	if err != nil {
 		return errors.New("invalid chat endpoint")
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
 	b, err := s.doUpstream(req)
 	if err != nil {
 		return err

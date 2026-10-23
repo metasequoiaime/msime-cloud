@@ -78,12 +78,10 @@ func (s *Server) qqEmbed(ctx context.Context, texts []string) ([][]float32, erro
 	payload, _ := json.Marshal(map[string]any{"model": s.qq.config.EmbeddingModel, "input": texts})
 	e := s.config.Chat.Endpoint
 	e.URL = endpoint
-	req, err := e.newRequest(ctx, http.MethodPost, bytes.NewReader(payload))
+	req, err := e.newJSONRequest(ctx, http.MethodPost, "application/json", bytes.NewReader(payload))
 	if err != nil {
 		return nil, errors.New("invalid embedding endpoint")
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
 	b, err := s.doUpstream(req)
 	if err != nil {
 		return nil, err

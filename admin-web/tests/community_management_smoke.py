@@ -40,7 +40,7 @@ def check_community_management(browser, base):
         route.fulfill(json={"items": items[section], "page": 1, "total": len(items[section]), "has_more": False})
 
     def detail(route):
-        section, item_id = route.request.url.split("/api/")[1].split("/")
+        section, item_id = route.request.url.split("/api/")[1].split("?")[0].split("/")
         route.fulfill(json=details[(section, item_id)])
 
     def action(route):
@@ -57,7 +57,7 @@ def check_community_management(browser, base):
             value = body["value"]
             item = {**smoke.FIXTURES["/api/skins"]["items"][0], "id": item_id, "name": value["name"], "description": value["description"], "moderation": value["moderation"], "edit_token": "current-token"}
             items[section] = [item]
-            details[(section, item_id)] = {**smoke.FIXTURES["/api/skins/smoke-skin"], **item, "reports": [], "content": value.get("design", "manifest"), "edit_token": "current-token"}
+            details[(section, item_id)] = {**smoke.FIXTURES["/api/skins/smoke-skin"], **item, "reports": [], "content": value.get("design", value.get("manifest", "manifest")), "edit_token": "current-token"}
         route.fulfill(json={"ok": True, "affected": 1, "id": item_id})
 
     for section in sections:
@@ -154,6 +154,10 @@ def check_community_management(browser, base):
             form.get_by_label(archive_label, exact=True).set_input_files({"name": "plugin.zip" if tab == "plugins" else "preview.png", "mimeType": "application/octet-stream", "buffer": payload})
             if tab == "candidate-skins":
                 form.get_by_label("皮肤清单（skin.toml）", exact=True).fill("synthetic manifest")
+                form.get_by_label(archive_label, exact=True).set_input_files([
+                    {"name": name, "mimeType": "image/png", "buffer": payload}
+                    for name in ("preview.png", "panel.png", "light.png", "pin.png")
+                ])
                 form.get_by_label("preview.png 的包内路径", exact=True).fill("assets/preview.png")
             form.get_by_role("button", name="保存", exact=True).click()
             expect(form.get_by_role("button", name="保存中…")).to_be_disabled()
@@ -161,9 +165,71 @@ def check_community_management(browser, base):
             value = posts[-1]["value"]
             encoded = value["archive"] if tab == "plugins" else value["files"]["assets/preview.png"]
             assert base64.b64decode(encoded) == payload
+            if tab == "candidate-skins":
+                assert set(value["files"]) == {"assets/preview.png", "panel.png", "light.png", "pin.png"}
             pending.pop().fulfill(status=400, json={"error": {"code": "invalid_value"}})
             expect(form.get_by_label("名称", exact=True)).to_be_enabled()
             expect(form.get_by_label("名称", exact=True)).to_have_value(f"管理测试{label}")
+            if tab == "candidate-skins":
+                upload = form.get_by_label(archive_label, exact=True)
+                assert set(upload.get_attribute("accept").split(",")) == {".png", ".jpg", ".jpeg", ".apng", ".gif", ".webp"}
+
+                def select_resources(names, sizes=None):
+                    upload.set_input_files([
+                        {"name": name, "mimeType": "application/octet-stream", "buffer": b"x" * sizes[index] if sizes else payload}
+                        for index, name in enumerate(names)
+                    ])
+
+                # 超出资源数量、单文件或整包预算时，表单保留草稿且不发送请求。
+                for names, sizes in [
+                    ([f"image-{index}.png" for index in range(38)], None),
+                    (["large.png"], [1024 * 1024 + 1]),
+                    (["first.png", "second.png", "third.png"], [1024 * 1024, 1024 * 1024, 1]),
+                ]:
+                    before = len(posts)
+                    select_resources(names, sizes)
+                    form.get_by_role("button", name="保存", exact=True).click()
+                    expect(form.get_by_role("alert")).to_contain_text("超过")
+                    expect(form.get_by_label("名称", exact=True)).to_be_enabled()
+                    assert len(posts) == before
+
+                # 完整资源上限包含动画格式；验证路径和字节原样进入管理接口。
+                names = ["preview.png"] + [f"image-{index}.{('png', 'jpg', 'jpeg', 'apng', 'gif', 'webp')[index % 6]}" for index in range(36)]
+                select_resources(names)
+                form.get_by_role("button", name="保存", exact=True).click()
+                wait_pending()
+                assert set(posts[-1]["value"]["files"]) == set(names)
+                assert all(base64.b64decode(data) == payload for data in posts[-1]["value"]["files"].values())
+                pending.pop().fulfill(status=400, json={"error": {"code": "invalid_value"}})
+                expect(form.get_by_label("名称", exact=True)).to_be_enabled()
+
+                select_resources(["first.png", "second.png"], [1024 * 1024, 1024 * 1024])
+                form.get_by_role("button", name="保存", exact=True).click()
+                wait_pending()
+                assert sum(len(base64.b64decode(data)) for data in posts[-1]["value"]["files"].values()) == 2 * 1024 * 1024
+                pending.pop().fulfill(status=400, json={"error": {"code": "invalid_value"}})
+                expect(form.get_by_label("名称", exact=True)).to_be_enabled()
+
+                # 新增成功后再从详情编辑，替换资源也能超过旧三张限制。
+                select_resources(names)
+                form.get_by_role("button", name="保存", exact=True).click()
+                wait_pending()
+                commit(pending.pop())
+                expect(form).to_be_hidden()
+                candidate_drawer = page.get_by_role("dialog", name="管理测试候选窗皮肤", exact=True)
+                candidate_drawer.get_by_role("button", name="编辑", exact=True).click()
+                form = page.get_by_role("dialog", name="编辑候选窗皮肤", exact=True)
+                form.get_by_label("替换全部图片（可选）", exact=True).set_input_files([
+                    {"name": name, "mimeType": "application/octet-stream", "buffer": payload}
+                    for name in names
+                ])
+                form.get_by_role("button", name="保存", exact=True).click()
+                wait_pending()
+                assert posts[-1]["action"] == "update_candidate_skin"
+                assert posts[-1]["value"]["edit_token"] == "current-token"
+                assert set(posts[-1]["value"]["files"]) == set(names)
+                pending.pop().fulfill(status=400, json={"error": {"code": "invalid_value"}})
+                expect(form.get_by_label("名称", exact=True)).to_be_enabled()
             form.get_by_role("button", name="取消", exact=True).click()
 
         assert all("status=" not in url for url in requests)

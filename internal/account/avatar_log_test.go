@@ -41,7 +41,7 @@ func TestAvatarStorageErrorsDoNotLogPrivateDetails(t *testing.T) {
 			if operation == "upload" {
 				response = avatarUpload(t, mux, "image/png", encodedImage(t, "png", 8, 8, color.Black), user.AccessToken, http.StatusBadGateway)
 			} else {
-				message = "旧头像删除失败"
+				message = "公开存储对象删除失败"
 				if _, err := db.SetAvatarKey(context.Background(), user.User.ID, "avatars/synthetic-private-object.jpg"); err != nil {
 					t.Fatal(err)
 				}

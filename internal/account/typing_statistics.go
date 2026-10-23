@@ -287,6 +287,15 @@ func (a *Service) qqLinks(w http.ResponseWriter, r *http.Request) {
 			a.error(w, err)
 			return
 		}
+		if len(links) == 0 {
+			if exists, err := a.store.userExists(r.Context(), p.UserID); err != nil {
+				a.error(w, err)
+				return
+			} else if !exists {
+				a.error(w, errMissingUser)
+				return
+			}
+		}
 		write(w, 200, map[string]any{"links": links})
 		return
 	}
@@ -371,10 +380,29 @@ func (a *Service) CreateQQLinkCode(ctx context.Context, subject string) (string,
 	return code, tx.Commit(ctx)
 }
 
-// UnlinkQQ 解除群友的绑定，返回原来有没有绑定。
+// UnlinkQQ 解除群友的绑定并作废未使用的绑定码，返回原来有没有绑定。
 func (a *Service) UnlinkQQ(ctx context.Context, subject string) (bool, error) {
-	tag, err := a.store.pool.Exec(ctx, `DELETE FROM qq_account_links WHERE subject=$1`, hash(subject))
-	return tag.RowsAffected() > 0, err
+	tx, err := a.store.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+	// 和发码共用群友锁；锁后用新语句读取，才能清除等待期间刚生成的码。
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "qq-link-code:"+hash(subject)); err != nil {
+		return false, err
+	}
+	// 先删除绑定码，等待正在兑换的事务结束，再用独立语句的新快照删除它刚写入的绑定。
+	if _, err := tx.Exec(ctx, `DELETE FROM qq_link_codes WHERE subject=$1`, hash(subject)); err != nil {
+		return false, err
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM qq_account_links WHERE subject=$1`, hash(subject))
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 // QQTypingReport 是机器人 /stats 用的数据：群友绑定的账号、这个账号从 since 起每天的计数（各设备相加，按日期从早到晚），以及各设备候选位次的合计。没有绑定或账号被封禁时 Linked 为 false；Devices 是上传过的设备数，为 0 表示还没打开上传。
@@ -389,8 +417,14 @@ type QQTypingReport struct {
 // QQTypingReport 读出群友 subject 的打字数据，见 QQTypingReport 类型。
 func (a *Service) QQTypingReport(ctx context.Context, subject string, since time.Time) (QQTypingReport, error) {
 	var report QQTypingReport
+	// 绑定、设备累计和每日数据共用快照，避免并发上传或注销时拼出从未存在过的统计。
+	tx, err := a.store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return report, err
+	}
+	defer tx.Rollback(ctx)
 	var user string
-	err := a.store.pool.QueryRow(ctx, `SELECT u.id,COALESCE(NULLIF(btrim(u.display_name),''),'水杉小鹿·'||upper(left(u.id,6)))
+	err = tx.QueryRow(ctx, `SELECT u.id,COALESCE(NULLIF(btrim(u.display_name),''),'水杉小鹿·'||upper(left(u.id,6)))
  FROM qq_account_links l JOIN auth_users u ON u.id=l.user_id AND u.banned_at IS NULL WHERE l.subject=$1`, hash(subject)).Scan(&user, &report.DisplayName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return report, nil
@@ -399,7 +433,7 @@ func (a *Service) QQTypingReport(ctx context.Context, subject string, since time
 		return report, err
 	}
 	report.Linked = true
-	rows, err := a.store.pool.Query(ctx, `SELECT ranks,beyond FROM typing_statistics_devices WHERE user_id=$1`, user)
+	rows, err := tx.Query(ctx, `SELECT ranks,beyond FROM typing_statistics_devices WHERE user_id=$1`, user)
 	if err != nil {
 		return report, err
 	}
@@ -423,7 +457,7 @@ func (a *Service) QQTypingReport(ctx context.Context, subject string, since time
 	if err = rows.Err(); err != nil {
 		return report, err
 	}
-	rows, err = a.store.pool.Query(ctx, `SELECT to_char(day,'YYYY-MM-DD'),characters,active_seconds,hours,categories,sources FROM typing_statistics_days WHERE user_id=$1 AND day>=$2 ORDER BY day`, user, since.Format(time.DateOnly))
+	rows, err = tx.Query(ctx, `SELECT to_char(day,'YYYY-MM-DD'),characters,active_seconds,hours,categories,sources FROM typing_statistics_days WHERE user_id=$1 AND day>=$2 ORDER BY day`, user, since.Format(time.DateOnly))
 	if err != nil {
 		return report, err
 	}

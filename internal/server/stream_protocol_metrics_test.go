@@ -12,22 +12,34 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
 )
 
+// 每条消息单独限制读写等待，避免把完整会话的传输速度当作协议断言。
+func writeStreamProtocolMessage(ctx context.Context, c *websocket.Conn, kind websocket.MessageType, data []byte) error {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	return c.Write(ctx, kind, data)
+}
+
+func readStreamProtocolMessage(ctx context.Context, c *websocket.Conn) (websocket.MessageType, []byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	return c.Read(ctx)
+}
+
 func writeStreamProtocolViolation(ctx context.Context, c *websocket.Conn, text bool) error {
 	if text {
-		return c.Write(ctx, websocket.MessageText, []byte("synthetic-invalid-frame"))
+		return writeStreamProtocolMessage(ctx, c, websocket.MessageText, []byte("synthetic-invalid-frame"))
 	}
 	packet := make([]byte, contract.StreamMessageBytes)
 	for sent := 0; sent < contract.StreamSessionBytes; sent += len(packet) {
-		if err := c.Write(ctx, websocket.MessageBinary, packet); err != nil {
+		if err := writeStreamProtocolMessage(ctx, c, websocket.MessageBinary, packet); err != nil {
 			return err
 		}
 	}
-	return c.Write(ctx, websocket.MessageBinary, []byte{0})
+	return writeStreamProtocolMessage(ctx, c, websocket.MessageBinary, []byte{0})
 }
 
 func TestStreamingProtocolViolationsMeterTheirSource(t *testing.T) {
-	// 边界用例须经两段 TLS 转发 32 MiB；联合覆盖率与 race 的共享 runner 需要留出吞吐余量。
-	// 此测试验证字节上限、关闭状态和计量归因，期限不承担性能门禁。
+	// 边界用例须经两段 TLS 转发 32 MiB；联合覆盖率与 race 的共享 runner 需要留出吞吐余量，此测试验证字节上限、关闭状态和计量归因，期限不承担性能门禁。
 	const timeout = 5 * time.Minute
 	for _, upstream := range []bool{false, true} {
 		for _, text := range []bool{false, true} {
@@ -53,19 +65,20 @@ func TestStreamingProtocolViolationsMeterTheirSource(t *testing.T) {
 					defer cancel()
 					if upstream {
 						// 等设备消息通过中继后再发送非法响应，确保连接已完成升级。
-						if _, _, err := c.Read(ctx); err != nil {
+						if _, _, err := readStreamProtocolMessage(ctx, c); err != nil {
 							return
 						}
 						_ = writeStreamProtocolViolation(ctx, c, text)
 					}
 					for {
-						if _, _, err := c.Read(ctx); err != nil {
+						if _, _, err := readStreamProtocolMessage(ctx, c); err != nil {
 							return
 						}
 					}
 				})
 				s.config.Admin.Enabled = true
-				s.config.Streaming = StreamingEndpoint{URL: strings.Replace(s.config.Cloud.URL, "https:", "wss:", 1), token: "synthetic-key", ResourceID: "synthetic-resource", MaxSeconds: int(timeout/time.Second) + 30}
+				// 本用例只验证消息类型和字节边界，会话时长取允许上限，避免先触发时长限制。
+				s.config.Streaming = StreamingEndpoint{URL: strings.Replace(s.config.Cloud.URL, "https:", "wss:", 1), token: "synthetic-key", ResourceID: "synthetic-resource", MaxSeconds: 600}
 				live := httptest.NewTLSServer(s)
 				t.Cleanup(func() { s.Close(); live.Close() })
 				c := dialStream(t, live)
@@ -73,7 +86,7 @@ func TestStreamingProtocolViolationsMeterTheirSource(t *testing.T) {
 				ctx, cancel := context.WithTimeout(t.Context(), timeout)
 				defer cancel()
 				if upstream {
-					if err := c.Write(ctx, websocket.MessageBinary, []byte{0}); err != nil {
+					if err := writeStreamProtocolMessage(ctx, c, websocket.MessageBinary, []byte{0}); err != nil {
 						t.Fatal(err)
 					}
 				} else {
@@ -81,7 +94,7 @@ func TestStreamingProtocolViolationsMeterTheirSource(t *testing.T) {
 				}
 				forwarded := 0
 				for {
-					_, data, err := c.Read(ctx)
+					_, data, err := readStreamProtocolMessage(ctx, c)
 					if err != nil {
 						if websocket.CloseStatus(err) != wantStatus {
 							t.Fatalf("转发 %d 字节后非法消息的关闭状态不正确：%v", forwarded, err)

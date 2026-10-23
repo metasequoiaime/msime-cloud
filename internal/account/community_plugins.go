@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/metasequoiaime/MSIME-Backend/internal/digest"
 )
 
 // pluginTransferTimeout is how long a publish or a download may take end to end: either moves up to 11.3 MB of JSON, which the default 15 s route context and the server's read and write deadlines would cut off on a slow link.
@@ -140,9 +142,8 @@ func scanCommunityPlugin(row interface{ Scan(...any) error }) (CommunityPlugin, 
 
 // pluginRequestDigest identifies one publish request, so an identical retry is answered with the stored row and anything else under the same id is a conflict.
 func pluginRequestDigest(name, description, kind, pluginID, version string, archive []byte) string {
-	sum := sha256.Sum256(archive)
 	h := sha256.New()
-	for _, part := range []string{name, description, kind, pluginID, version, hex.EncodeToString(sum[:])} {
+	for _, part := range []string{name, description, kind, pluginID, version, digest.SHA256(archive)} {
 		h.Write([]byte(part))
 		h.Write([]byte{0})
 	}
@@ -193,33 +194,39 @@ func extendPluginTransfer(w http.ResponseWriter) {
 }
 
 // pluginVisibleKinds 返回本次请求能看到的类型：冻结的 legacyPluginKinds，加上客户端在 `kinds`（逗号分隔）里声明能安装的类型，再加上 `kind` 参数指定的类型。不认识的名字直接忽略而不是返回 400：声明只能放宽结果，不会让响应多出客户端不认识的类型，忽略未知值让声明了未来类型的客户端在后端认识它之前也能正常浏览。不带 `kinds` 或为空时只有旧类型，响应与引入这个参数之前逐字节相同。
-func pluginVisibleKinds(r *http.Request, kind string) []string {
-	visible := slices.Clone(legacyPluginKinds)
-	for _, name := range append(strings.Split(r.URL.Query().Get("kinds"), ","), kind) {
+func pluginVisibleKinds(query url.Values, kind string) []string {
+	// 返回值只供读取；限制容量，使首次追加新类型时复制底层数组，避免修改冻结的旧类型集合。
+	visible := legacyPluginKinds[:len(legacyPluginKinds):len(legacyPluginKinds)]
+	add := func(name string) {
 		if slices.Contains(pluginKinds, name) && !slices.Contains(visible, name) {
 			visible = append(visible, name)
 		}
 	}
+	for name := range strings.SplitSeq(query.Get("kinds"), ",") {
+		add(name)
+	}
+	add(kind)
 	return visible
 }
 
 func (a *Service) communityPluginList(w http.ResponseWriter, r *http.Request) {
-	offset, search, code := communityListPage(r)
+	query := r.URL.Query()
+	offset, search, code := communityListPage(query)
 	if code != "" {
 		writeError(w, 400, code)
 		return
 	}
-	kind := r.URL.Query().Get("kind")
+	kind := query.Get("kind")
 	if kind != "" && !slices.Contains(pluginKinds, kind) {
 		writeError(w, 400, "invalid_kind")
 		return
 	}
-	scope, validScope := communityListScope(r)
+	scope, validScope := communityListScope(query)
 	if !validScope {
 		writeError(w, 400, "invalid_scope")
 		return
 	}
-	fields, ok := communityFields(r, "moderation", "saved")
+	fields, ok := communityFields(query, "moderation", "saved")
 	if !ok {
 		writeError(w, 400, "invalid_fields")
 		return
@@ -230,12 +237,13 @@ func (a *Service) communityPluginList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	join, order := communitySavedScope(scope, "community_plugin_saves", "pack_id", "p")
+	kindCondition := communityTextFilter(kind, "p.kind", "$3") + communitySavedFilterValue(scope, kind, "p.kind", pluginKinds)
 	// 先选本页插件，再读取互动统计，避免为 OFFSET 跳过的插件执行逐条子查询。
 	rows, e := a.store.pool.Query(r.Context(), `WITH plugin_page AS MATERIALIZED (
  SELECT p.id FROM community_plugins p JOIN auth_users u ON u.id=p.owner_id `+join+`
- WHERE strpos(lower(p.name),lower($2))>0 AND ($3='' OR p.kind=$3) AND ($5<>'mine' OR p.owner_id=$1) AND (p.moderation<>'removed' OR p.owner_id=$1) AND p.kind=ANY($6)
+ WHERE strpos(lower(p.name),lower($2))>0 AND (`+kindCondition+`) AND (`+communityMineCondition(scope, "p", "$5")+`) AND (p.moderation<>'removed' OR p.owner_id=$1) AND p.kind=ANY($6)
  ORDER BY `+order+` LIMIT 21 OFFSET $4
-) `+communityPluginSelectQuery(fields["saved"], true)+join+`ORDER BY `+order, viewer, search, kind, offset, scope, pluginVisibleKinds(r, kind))
+) `+communityPluginSelectQuery(fields["saved"], true)+join+`ORDER BY `+order, viewer, search, kind, offset, scope, pluginVisibleKinds(query, kind))
 	if e != nil {
 		a.error(w, e)
 		return
@@ -256,21 +264,29 @@ func (a *Service) communityPluginList(w http.ResponseWriter, r *http.Request) {
 		a.error(w, e)
 		return
 	}
-	more := len(items) > 20
-	if more {
-		items = items[:20]
+	if scope != "" && len(items) == 0 {
+		exists, err := a.store.userExists(r.Context(), viewer)
+		if err != nil {
+			a.error(w, err)
+			return
+		}
+		if !exists {
+			a.error(w, errMissingUser)
+			return
+		}
 	}
-	write(w, 200, map[string]any{"plugins": items, "has_more": more})
+	writeCommunityPage(w, "plugins", items)
 }
 
 func (a *Service) communityPluginDetail(w http.ResponseWriter, r *http.Request) {
-	fields, ok := communityFields(r, "moderation", "saved")
+	query := r.URL.Query()
+	fields, ok := communityFields(query, "moderation", "saved")
 	if !ok {
 		writeError(w, 400, "invalid_fields")
 		return
 	}
 	// 客户端没有声明能安装的类型按不存在处理，与列表看不到它一致。
-	v, e := scanCommunityPlugin(a.store.pool.QueryRow(r.Context(), communityPluginSelect(fields["saved"])+`WHERE p.id=$2 AND (p.moderation<>'removed' OR p.owner_id=$1) AND p.kind=ANY($3)`, a.communityViewer(r), r.PathValue("id"), pluginVisibleKinds(r, "")))
+	v, e := scanCommunityPlugin(a.store.pool.QueryRow(r.Context(), communityPluginSelect(fields["saved"])+`WHERE p.id=$2 AND (p.moderation<>'removed' OR p.owner_id=$1) AND p.kind=ANY($3)`, a.communityViewer(r), r.PathValue("id"), pluginVisibleKinds(query, "")))
 	if errors.Is(e, pgx.ErrNoRows) {
 		writeError(w, 404, "plugin_not_found")
 		return
@@ -508,15 +524,15 @@ func writePluginDownload(w http.ResponseWriter, head pluginDownload, archive []b
 }
 
 func (a *Service) communityPluginRate(w http.ResponseWriter, r *http.Request) {
-	a.rateCommunityItem(w, r, `WITH eligible AS MATERIALIZED (
- SELECT id FROM community_plugins WHERE id=$1 AND owner_id<>$2 AND moderation<>'removed'
+	a.rateCommunityItem(w, r, `WITH visible AS MATERIALIZED (
+ SELECT id,owner_id FROM community_plugins WHERE id=$1 AND moderation<>'removed' FOR SHARE
 ), written AS (
  INSERT INTO community_plugin_ratings(pack_id,user_id,stars)
- SELECT id,$2,$3 FROM eligible
+ SELECT id,$2,$3 FROM visible WHERE owner_id<>$2
  ON CONFLICT(pack_id,user_id) DO UPDATE SET stars=excluded.stars
  RETURNING pack_id
 )
-SELECT EXISTS(SELECT 1 FROM written),EXISTS(SELECT 1 FROM community_plugins WHERE id=$1 AND moderation<>'removed')`, "plugin_not_found", "download_before_rating_or_own_plugin")
+SELECT EXISTS(SELECT 1 FROM written),EXISTS(SELECT 1 FROM visible WHERE owner_id=$2)`, "plugin_not_found", "download_before_rating_or_own_plugin")
 }
 
 func (a *Service) communityPluginDelete(w http.ResponseWriter, r *http.Request) {

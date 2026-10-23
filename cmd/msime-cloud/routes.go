@@ -25,11 +25,12 @@ type operation struct {
 }
 
 const (
-	authNone    = "none"
-	authUser    = "user"
-	authAny     = "device-or-user"
-	authAdmin   = "admin"
-	adminPrefix = "/api/"
+	authNone         = "none"
+	authUser         = "user"
+	authOptionalUser = "optional-user"
+	authAny          = "device-or-user"
+	authAdmin        = "admin"
+	adminPrefix      = "/api/"
 )
 
 // catalog is every operation the CLI knows: /v1 from the OpenAPI document, /api from the tables the admin site dispatches with.
@@ -75,17 +76,28 @@ func catalog() ([]operation, error) {
 	return operations, nil
 }
 
-// authOf names an OpenAPI security requirement: an empty list is anonymous, deviceToken alongside userSession accepts either.
+// authOf 根据 OpenAPI 的安全要求区分匿名、可选用户会话和必需的凭据。
 func authOf(security json.RawMessage) string {
 	var requirements []map[string]json.RawMessage
 	_ = json.Unmarshal(security, &requirements)
 	if len(requirements) == 0 {
 		return authNone
 	}
+	optional, user := false, false
 	for _, requirement := range requirements {
+		optional = optional || len(requirement) == 0
+		if _, ok := requirement["userSession"]; ok {
+			user = true
+		}
 		if _, ok := requirement["deviceToken"]; ok {
 			return authAny
 		}
+	}
+	if optional {
+		if user {
+			return authOptionalUser
+		}
+		return authNone
 	}
 	return authUser
 }
@@ -105,26 +117,31 @@ func find(operations []operation, method, path string) (operation, bool) {
 	return best, bestScore >= 0
 }
 
-// match reports whether path fits template, scoring by the number of literal segments that agreed.
+// match 逐段判断路径是否符合模板，按匹配的字面量段数评分。
 func match(template, path string) (int, bool) {
-	want, have := strings.Split(strings.Trim(template, "/"), "/"), strings.Split(strings.Trim(path, "/"), "/")
+	want, have := strings.Trim(template, "/"), strings.Trim(path, "/")
 	score := 0
-	for i, segment := range want {
+	haveSegment := true
+	for {
+		segment, rest, more := strings.Cut(want, "/")
 		if strings.HasPrefix(segment, "{") && strings.HasSuffix(segment, "...}") {
-			return score, len(have) > i
+			return score, haveSegment
 		}
-		if i >= len(have) {
+		if !haveSegment {
 			return 0, false
 		}
-		if segment == have[i] {
+		var actual string
+		actual, have, haveSegment = strings.Cut(have, "/")
+		if segment == actual {
 			score++
-			continue
-		}
-		if !strings.HasPrefix(segment, "{") || have[i] == "" {
+		} else if !strings.HasPrefix(segment, "{") || actual == "" {
 			return 0, false
 		}
+		if !more {
+			return score, !haveSegment
+		}
+		want = rest
 	}
-	return score, len(want) == len(have)
 }
 
 func listRoutes(out io.Writer, filter string) error {
@@ -175,12 +192,12 @@ func adminSummary(route account.AdminRoute) string {
 	return strings.Join(parts, "; ")
 }
 
-// adminGuide is every line of docs/admin.md naming the route, by its path up to the first parameter, so describe shows the request bodies and permissions the tables do not carry.
+// adminGuide 按首个参数之前的路径收集文档中提到该接口的行，供 describe 展示路由表未包含的请求体和权限。
 func adminGuide(path string) []string {
 	base, _, _ := strings.Cut(path, "{")
 	base = strings.TrimSuffix(base, "/")
 	var lines []string
-	for _, line := range strings.Split(docs.Admin, "\n") {
+	for line := range strings.SplitSeq(docs.Admin, "\n") {
 		if mentions(line, base) {
 			lines = append(lines, strings.TrimSpace(line))
 		}

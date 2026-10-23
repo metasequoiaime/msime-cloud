@@ -361,20 +361,30 @@ func TestAvatarConfigurationValidation(t *testing.T) {
 	t.Setenv("CONFIG_R2_SECRET", "secret")
 	base := Config{Enabled: true, DatabaseEnv: "CONFIG_DB", PepperEnv: "CONFIG_PEPPER",
 		Avatars: AvatarConfig{Bucket: "msime", PublicBaseURL: "https://media.example.test", AccountIDEnv: "CONFIG_R2_ACCOUNT", AccessKeyIDEnv: "CONFIG_R2_KEY", SecretAccessKeyEnv: "CONFIG_R2_SECRET"}}
-	if err := base.Validate(); err != nil {
-		t.Fatal(err)
+	for _, suffix := range []string{"", "/"} {
+		c := base
+		c.Avatars.PublicBaseURL += suffix
+		if err := c.Validate(); err != nil {
+			t.Fatalf("合法根地址被拒绝：%s：%v", c.Avatars.PublicBaseURL, err)
+		}
 	}
 	if newR2Storage(base.Avatars).bucket != "msime" {
 		t.Fatal("bucket not carried into the storage client")
 	}
 	for name, change := range map[string]func(*AvatarConfig){
-		"http base":           func(c *AvatarConfig) { c.PublicBaseURL = "http://media.example.test" },
-		"base with a path":    func(c *AvatarConfig) { c.PublicBaseURL = "https://media.example.test/avatars" },
-		"base with a query":   func(c *AvatarConfig) { c.PublicBaseURL = "https://media.example.test/?x=1" },
-		"base unset":          func(c *AvatarConfig) { c.PublicBaseURL = "" },
-		"account env unnamed": func(c *AvatarConfig) { c.AccountIDEnv = "" },
-		"key env unnamed":     func(c *AvatarConfig) { c.AccessKeyIDEnv = "" },
-		"secret env unnamed":  func(c *AvatarConfig) { c.SecretAccessKeyEnv = "" },
+		"http base":                          func(c *AvatarConfig) { c.PublicBaseURL = "http://media.example.test" },
+		"base with a path":                   func(c *AvatarConfig) { c.PublicBaseURL = "https://media.example.test/avatars" },
+		"base with a query":                  func(c *AvatarConfig) { c.PublicBaseURL = "https://media.example.test/?x=1" },
+		"base with empty query":              func(c *AvatarConfig) { c.PublicBaseURL = "https://media.example.test?" },
+		"root with empty query":              func(c *AvatarConfig) { c.PublicBaseURL = "https://media.example.test/?" },
+		"base with fragment":                 func(c *AvatarConfig) { c.PublicBaseURL = "https://media.example.test/#section" },
+		"base with empty fragment":           func(c *AvatarConfig) { c.PublicBaseURL = "https://media.example.test#" },
+		"root with empty fragment":           func(c *AvatarConfig) { c.PublicBaseURL = "https://media.example.test/#" },
+		"base with empty query and fragment": func(c *AvatarConfig) { c.PublicBaseURL = "https://media.example.test/?#" },
+		"base unset":                         func(c *AvatarConfig) { c.PublicBaseURL = "" },
+		"account env unnamed":                func(c *AvatarConfig) { c.AccountIDEnv = "" },
+		"key env unnamed":                    func(c *AvatarConfig) { c.AccessKeyIDEnv = "" },
+		"secret env unnamed":                 func(c *AvatarConfig) { c.SecretAccessKeyEnv = "" },
 	} {
 		c := base
 		change(&c.Avatars)
@@ -416,6 +426,18 @@ func (failingAvatars) Put(context.Context, string, []byte, string) error {
 }
 func (failingAvatars) Delete(context.Context, string) error { return errors.New("bucket down") }
 
+// uncertainPutAvatars 在对象已写入后返回错误，模拟上游确认响应丢失。
+type uncertainPutAvatars struct {
+	*memoryAvatars
+}
+
+func (u *uncertainPutAvatars) Put(ctx context.Context, key string, body []byte, contentType string) error {
+	if err := u.memoryAvatars.Put(ctx, key, body, contentType); err != nil {
+		return err
+	}
+	return errors.New("write response lost")
+}
+
 func TestAvatarStorageFailure(t *testing.T) {
 	db := testStore(t)
 	a := &Service{store: db, avatars: failingAvatars{}, config: Config{Avatars: AvatarConfig{PublicBaseURL: "https://media.example.test"}}}
@@ -437,6 +459,19 @@ func TestAvatarStorageFailure(t *testing.T) {
 	}
 	if _, err := db.SetAvatarKey(context.Background(), "missing-user", ""); err == nil {
 		t.Fatal("setting the avatar of a missing user succeeded")
+	}
+}
+
+func TestAvatarUploadCleansObjectWhenStorageWriteOutcomeIsUncertain(t *testing.T) {
+	db := testStore(t)
+	storage := &uncertainPutAvatars{memoryAvatars: newMemoryAvatars()}
+	a := &Service{store: db, avatars: storage, config: Config{Avatars: AvatarConfig{PublicBaseURL: "https://media.example.test"}}}
+	mux := http.NewServeMux()
+	Mount(mux, a)
+	user := complete(t, db, Identity{"email", "avatar-uncertain-write@example.test"})
+	avatarUpload(t, mux, "image/png", encodedImage(t, "png", 8, 8, color.Black), user.AccessToken, 502)
+	if keys := storage.keys(); len(keys) != 0 {
+		t.Fatalf("对象存储写入结果未知时留下了孤儿头像：%v", keys)
 	}
 }
 

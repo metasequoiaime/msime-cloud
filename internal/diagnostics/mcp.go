@@ -2,9 +2,11 @@
 package diagnostics
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -19,6 +21,9 @@ const RequestsPerMinute = 60
 
 // requestBodyBytes 是单个 MCP 请求体的上限；工具都只有很少的参数。
 const requestBodyBytes = 64 << 10
+
+// toolSchemas 供逐请求构造的 MCP server 并发复用固定工具类型的 schema。
+var toolSchemas = mcp.NewSchemaCache()
 
 // Snapshots 是端点用到的快照存储，由 account.Service 实现。
 type Snapshots interface {
@@ -68,6 +73,24 @@ func Handler(store Snapshots) http.Handler {
 			fail(w, 503, "diagnostics_unavailable")
 			return
 		}
+		if r.Method == http.MethodPost {
+			// 每个 POST 只接受单条消息，避免旧版批处理把一次共享配额放大为多次快照读取；协议仍由 SDK 解析。
+			defer r.Body.Close()
+			body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, requestBodyBytes))
+			if httpjson.IsBodyTooLarge(err) {
+				fail(w, 413, "request_too_large")
+				return
+			}
+			if err != nil {
+				fail(w, 400, "invalid_mcp_request")
+				return
+			}
+			if trimmed := bytes.TrimSpace(body); len(trimmed) > 0 && trimmed[0] == '[' {
+				fail(w, 400, "invalid_mcp_request")
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+		}
 		server := NewServer(store, snapshot)
 		mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: requestBodyBytes}).ServeHTTP(w, r)
 	})
@@ -112,7 +135,7 @@ type ConfigOutput struct {
 
 // NewServer 按快照包含的分类注册只读工具：没有上传的分类不出现对应工具，get_input_events 只在用户勾选了输入事件时出现。
 func NewServer(store Snapshots, snapshot account.DiagnosticSnapshot) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "msime-diagnostics", Title: "水杉输入法诊断快照", Version: "1.0.0"}, &mcp.ServerOptions{Instructions: "只读访问用户主动上传的一份 " + snapshot.Platform + " " + snapshot.AppVersion + " 诊断快照，" + snapshot.ExpiresAt.UTC().Format(time.RFC3339) + " 到期。输入事件只有时间戳、种类和耗时，不含任何输入文本。"})
+	server := mcp.NewServer(&mcp.Implementation{Name: "msime-diagnostics", Title: "水杉输入法诊断快照", Version: "1.0.0"}, &mcp.ServerOptions{SchemaCache: toolSchemas, Instructions: "只读访问用户主动上传的一份 " + snapshot.Platform + " " + snapshot.AppVersion + " 诊断快照，" + snapshot.ExpiresAt.UTC().Format(time.RFC3339) + " 到期。输入事件只有时间戳、种类和耗时，不含任何输入文本。"})
 	readOnly := &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true}
 	sections := snapshot.Sections
 	if sections.CrashLogs != nil {
@@ -154,12 +177,24 @@ func limited[T any](items []T, limit int) []T {
 
 // events 按白名单字段重新构造输出，即使存储里多出字段也不会带出去。
 func events(source []account.DiagnosticEvent, in EventInput) []Event {
+	// 无类型筛选时输出长度确定，直接填充一次分配的结果。
+	if in.Kind == "" {
+		count := len(source)
+		if in.Limit > 0 {
+			count = min(count, in.Limit)
+		}
+		out := make([]Event, count)
+		for i, e := range source[:count] {
+			out[i] = Event{TMS: *e.TMS, Kind: e.Kind, DurationMS: e.DurationMS}
+		}
+		return out
+	}
 	out := []Event{}
 	for _, e := range source {
 		if in.Kind != "" && e.Kind != in.Kind {
 			continue
 		}
-		out = append(out, Event{TMS: e.TMS, Kind: e.Kind, DurationMS: e.DurationMS})
+		out = append(out, Event{TMS: *e.TMS, Kind: e.Kind, DurationMS: e.DurationMS})
 		if in.Limit > 0 && len(out) == in.Limit {
 			break
 		}
@@ -169,12 +204,21 @@ func events(source []account.DiagnosticEvent, in EventInput) []Event {
 
 // record 写访问记录：工具名、调用参数、返回条数和结果的 JSON 字节数。写不进去时调用失败，保证用户在 App 里能看到每一次读取。
 func record(ctx context.Context, store Snapshots, id string, req *mcp.CallToolRequest, count int, out any) error {
-	body, err := json.Marshal(out)
-	if err != nil {
+	var size jsonByteCounter
+	if err := json.NewEncoder(&size).Encode(out); err != nil {
 		return err
 	}
-	if err = store.RecordDiagnosticAccess(ctx, id, req.Params.Name, req.Params.Arguments, count, len(body)); err != nil {
+	// Encoder 会额外写一个换行；审计仍按原先 Marshal 的 JSON 字节数记录。
+	if err := store.RecordDiagnosticAccess(ctx, id, req.Params.Name, req.Params.Arguments, count, int(size)-1); err != nil {
 		return errors.New("access log unavailable")
 	}
 	return nil
+}
+
+// jsonByteCounter 只累计编码长度，不保留诊断内容的额外副本。
+type jsonByteCounter int
+
+func (n *jsonByteCounter) Write(p []byte) (int, error) {
+	*n += jsonByteCounter(len(p))
+	return len(p), nil
 }

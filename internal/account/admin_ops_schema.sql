@@ -1,4 +1,4 @@
--- Admin console changes to tables outside the admin_* family. This file runs last in the migration because it alters the community and dictionary tables created by the files before it. Every statement is additive and idempotent.
+-- 管理后台对其他业务表的迁移；依赖前面创建的社区和词库表，所有步骤均可重复执行。
 
 -- Community moderation is post-moderation: new uploads are public at once with moderation='pending', and only 'removed' rows are hidden from the public endpoints. Rows that existed before moderation are approved. previous_moderation keeps the state a removal replaced, so restoring (or unbanning the owner) can put it back.
 ALTER TABLE community_skins ADD COLUMN IF NOT EXISTS moderation text NOT NULL DEFAULT 'approved';
@@ -29,7 +29,7 @@ ALTER TABLE community_plugins ADD COLUMN IF NOT EXISTS moderated_by text;
 ALTER TABLE community_plugins ADD COLUMN IF NOT EXISTS moderated_at timestamptz;
 CREATE INDEX IF NOT EXISTS community_plugins_pending ON community_plugins(created_at) WHERE moderation='pending';
 
--- User reports on community content. kind uses the admin section names; item_id has no foreign key because it points into one of five tables.
+-- 社区举报的 kind 使用后台分区名；item_id 指向多张作品表，由删除触发器维持生命周期。
 CREATE TABLE IF NOT EXISTS community_reports (
  id bigserial PRIMARY KEY,
  kind text NOT NULL CONSTRAINT community_reports_kind_known CHECK(kind IN ('skins','candidate-skins','plugins','dictionaries','replies','phrases')),
@@ -57,10 +57,58 @@ BEGIN
  END IF;
 END $$;
 
+-- 举报跟随作品的生命周期；删除作者的级联操作和旧版本副本也必须同步清理。
+CREATE OR REPLACE FUNCTION community_reports_cleanup() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE report_kind text;
+BEGIN
+ IF TG_TABLE_NAME='community_resources' THEN
+  report_kind := CASE OLD.kind WHEN 'dictionary' THEN 'dictionaries' WHEN 'phrase' THEN 'phrases' ELSE 'replies' END;
+ ELSE
+  report_kind := TG_ARGV[0];
+ END IF;
+ -- 使用触发表所在的 schema，避免调用者的 search_path 把清理导向同名表。
+ EXECUTE format('DELETE FROM %I.community_reports WHERE kind=$1 AND item_id=$2',TG_TABLE_SCHEMA) USING report_kind,OLD.id;
+ RETURN OLD;
+END $$;
+DO $$
+DECLARE item record;
+BEGIN
+ FOR item IN SELECT * FROM (VALUES
+  ('community_skins','skins'),
+  ('community_candidate_skins','candidate-skins'),
+  ('community_plugins','plugins'),
+  ('community_resources','resources')
+ ) v(tbl,kind) LOOP
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid=item.tbl::regclass AND tgname='community_reports_cleanup') THEN
+   EXECUTE format('CREATE TRIGGER community_reports_cleanup AFTER DELETE ON %I FOR EACH ROW EXECUTE FUNCTION community_reports_cleanup(%L)',item.tbl,item.kind);
+  END IF;
+  EXECUTE format('ALTER TABLE %I ENABLE TRIGGER community_reports_cleanup',item.tbl);
+ END LOOP;
+END $$;
+-- 旧版本留下的孤立举报不能被以后重用相同 ID 的新作品继承。
+DELETE FROM community_reports r WHERE
+ (kind='skins' AND NOT EXISTS(SELECT 1 FROM community_skins s WHERE s.id=r.item_id)) OR
+ (kind='candidate-skins' AND NOT EXISTS(SELECT 1 FROM community_candidate_skins s WHERE s.id=r.item_id)) OR
+ (kind='plugins' AND NOT EXISTS(SELECT 1 FROM community_plugins s WHERE s.id=r.item_id)) OR
+ (kind IN ('dictionaries','replies','phrases') AND NOT EXISTS(SELECT 1 FROM community_resources s WHERE s.id=r.item_id AND s.kind=CASE r.kind WHEN 'dictionaries' THEN 'dictionary' WHEN 'phrases' THEN 'phrase' ELSE 'reply' END));
+
 -- Account bans. A banned account cannot log in, refresh or use a session.
 ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS banned_at timestamptz;
 ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS ban_reason text;
 ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS banned_by text;
+-- 独立计数只随封禁字段写入递增；常量默认值避免为新增列重写整张用户表。
+ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS ban_revision bigint NOT NULL DEFAULT 0;
+CREATE OR REPLACE FUNCTION auth_user_ban_revision() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ NEW.ban_revision := OLD.ban_revision+1;
+ RETURN NEW;
+END $$;
+DO $$ BEGIN
+ IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid='auth_users'::regclass AND tgname='auth_user_ban_revision') THEN
+  CREATE TRIGGER auth_user_ban_revision BEFORE UPDATE OF banned_at,ban_reason,banned_by ON auth_users FOR EACH ROW EXECUTE FUNCTION auth_user_ban_revision();
+ END IF;
+END $$;
+ALTER TABLE auth_users ENABLE TRIGGER auth_user_ban_revision;
 CREATE INDEX IF NOT EXISTS auth_users_banned ON auth_users(banned_at) WHERE banned_at IS NOT NULL;
 -- The User-Agent a session was created with, truncated, so the admin can tell a user's devices apart.
 ALTER TABLE auth_sessions ADD COLUMN IF NOT EXISTS user_agent text NOT NULL DEFAULT '';

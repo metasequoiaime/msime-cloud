@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -38,13 +39,14 @@ const userDataSummaryQuery = `SELECT id,bytes,items FROM (
  UNION ALL SELECT 4,'clipboard',COALESCE(sum(pg_column_size(t.*)),0),count(*) FROM user_clipboard t WHERE user_id=$1
  UNION ALL SELECT 5,'community',sum(bytes)::bigint,sum(items)::bigint FROM (
   SELECT COALESCE(sum(pg_column_size(t.*)),0) AS bytes,count(*) AS items FROM community_skins t WHERE owner_id=$1
-  UNION ALL SELECT COALESCE(sum(pg_column_size(t.*)),0),count(*) FROM community_candidate_skins t WHERE owner_id=$1
+  UNION ALL SELECT COALESCE(sum(pg_column_size(t.*)),0)+COALESCE(sum(files.bytes),0),count(*) FROM community_candidate_skins t
+  CROSS JOIN LATERAL (SELECT COALESCE(sum(pg_column_size(f.*)),0) AS bytes FROM community_candidate_skin_files f WHERE f.skin_id=t.id) files WHERE t.owner_id=$1
   UNION ALL SELECT COALESCE(sum(pg_column_size(t.*)),0),count(*) FROM community_resources t WHERE owner_id=$1
   UNION ALL SELECT COALESCE(sum(pg_column_size(t.*)),0),count(*) FROM community_plugins t WHERE owner_id=$1
  ) community
  UNION ALL SELECT 6,'voice',COALESCE(sum(octet_length(t.audio)+octet_length(t.transcript)),0),count(*) FROM voice_contributions t WHERE user_id=$1
  UNION ALL SELECT 7,'avatar',0,(SELECT count(*) FROM auth_users WHERE id=$1 AND avatar_key<>'')
-) s ORDER BY o`
+) s WHERE EXISTS (SELECT 1 FROM auth_users WHERE id=$1) ORDER BY o`
 
 // UserDataSummary 返回本人云端数据的分区汇总，分区顺序固定。
 func (s *Store) UserDataSummary(ctx context.Context, user string) ([]UserDataSection, int64, error) {
@@ -56,6 +58,9 @@ func (s *Store) UserDataSummary(ctx context.Context, user string) ([]UserDataSec
 		var v UserDataSection
 		return v, row.Scan(&v.ID, &v.Bytes, &v.Items)
 	})
+	if err == nil && len(sections) == 0 {
+		return nil, 0, errMissingUser
+	}
 	var total int64
 	for _, v := range sections {
 		total += v.Bytes
@@ -243,6 +248,9 @@ func (a *Service) userDataExport(w http.ResponseWriter, r *http.Request) {
 		batch.Queue(f.query, p.UserID).QueryRow(func(row pgx.Row) error { return row.Scan(&docs[i]) })
 	}
 	if err := a.store.pool.SendBatch(r.Context(), batch).Close(); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			err = errMissingUser
+		}
 		a.error(w, err)
 		return
 	}
@@ -277,16 +285,30 @@ func (a *Service) userDataExport(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err = entry("dictionary.ndjson")
 	if err == nil {
-		err = a.store.streamFullDictionarySnapshotWithFooter(r.Context(), p.UserID, func(raw json.RawMessage) error {
-			_, e := out.Write(append(raw, '\n'))
-			return e
-		})
+		err = a.store.streamFullDictionarySnapshotWithFooter(r.Context(), p.UserID, ndjsonWriter(out))
 	}
 	if err == nil {
 		err = archive.Close()
 	}
 	if err != nil {
 		panic(http.ErrAbortHandler)
+	}
+}
+
+// ndjsonWriter 复用当前导出文件的行缓冲，每条记录连同换行只写一次，不修改源 JSON。
+func ndjsonWriter(out io.Writer) func(json.RawMessage) error {
+	var line []byte
+	return func(raw json.RawMessage) error {
+		// 编码器可能已留出换行空间；数据库行没有余量时才使用工作区。
+		if len(raw) < cap(raw) {
+			_, err := out.Write(append(raw, '\n'))
+			return err
+		}
+		line = slices.Grow(line[:0], len(raw)+1)
+		line = append(line, raw...)
+		line = append(line, '\n')
+		_, err := out.Write(line)
+		return err
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -41,8 +42,8 @@ type adminPermissionMember struct {
 // adminPermissions serves GET /api/permissions: the roles, the role × permission matrix and every admin with their role. Configured owners are listed first; they are always maintainers and have no admin_members row of their own, or one that is ignored.
 func (a *Service) adminPermissions(w http.ResponseWriter, r *http.Request, _ string) {
 	ctx := r.Context()
-	// A nil slice would be sent as NULL, and email=ANY(NULL) filters out every member.
-	owners := append([]string{}, a.admin.Owners...)
+	// 空配置仍传空数组，避免 email=ANY(NULL) 把全部成员过滤掉。
+	owners := a.adminOwnersArg()
 	var rolesRaw, matrixRaw, membersRaw json.RawMessage
 	// 配置所有者和普通成员共用一次查询，每人的有效会话数和最近活动共用一次聚合；最近活动仍包含过期会话。
 	err := a.store.pool.QueryRow(ctx, `SELECT
@@ -100,7 +101,7 @@ func (a *Service) adminPermissionsAction(w http.ResponseWriter, r *http.Request,
 	case !slices.Contains(AllAdminPermissions(), v.Permission):
 		writeError(w, 400, "invalid_permission")
 		return
-	case len(v.Role) == 0 || len(v.Role) > 32 || strings.ToLower(v.Role) != v.Role:
+	case len(v.Role) == 0 || len(v.Role) > 32 || !adminRoleLowercase(v.Role):
 		writeError(w, 400, "invalid_role")
 		return
 	case v.Action == "revoke" && v.Role == RoleMaintainer && v.Permission == PermManagePermissions:
@@ -146,4 +147,17 @@ SELECT name,(SELECT count(*) FROM changed) FROM locked`, v.Role, v.Permission, a
 		return
 	}
 	write(w, 200, map[string]any{"ok": true, "affected": affected})
+}
+
+// adminRoleLowercase 判断角色是否已经是小写，ASCII 输入走无分配快路径，其他字符保留 Unicode 小写规则。
+func adminRoleLowercase(role string) bool {
+	for i := range role {
+		if role[i] >= utf8.RuneSelf {
+			return strings.ToLower(role) == role
+		}
+		if role[i] >= 'A' && role[i] <= 'Z' {
+			return false
+		}
+	}
+	return true
 }

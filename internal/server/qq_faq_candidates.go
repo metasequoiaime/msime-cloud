@@ -9,18 +9,26 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
 
-// qqDatabaseWriteDefinitelyRejected 只把 PostgreSQL 明确返回的语句错误视为未写入。连接中断、超时等错误的提交结果可能未知，不能退款后让已经写入的候选再次出现。
-func qqDatabaseWriteDefinitelyRejected(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr)
-}
-
 // 把答案沉淀进文档。机器人现查 GitHub 才答上的问题，说明文档里缺这块；答不上的问题更是。这些都记成「文档候选」（account.QQFAQCandidate，编号 F12 这样），管理员发「文档缺口」看列表，「看 F12」看完整的问题和机器人当时的回答，「写进FAQ F12」用「记录答案」的流程（qq_faq.go）整理成 FAQ 的一条给知识库开 PR，没答上的在后面补上答案：「写进FAQ F12 答：……」；「忽略 F12」拿掉。同一个问题 7 天内只记一次（auth_rates）。写进 FAQ 前先在数据库里认领候选（state 改成 writing），两个管理员同时发只有一个开 PR；没开成时放回，放回不受处理消息的时限影响；副本中途被杀掉来不及放回时，认领超过 5 分钟（account.QQFAQCandidateClaimTimeout）就当作被打断，可以再处理。差评（qq_bad_answers.go，编号 B7 这样）共用「看」「写进FAQ」「忽略」这几个命令。
+
+// qqFAQCandidateSubject 去掉问题中的 Unicode 空白，生成候选去重用的主题；没有空白时直接复用原字符串。
+func qqFAQCandidateSubject(text string) string {
+	if strings.IndexFunc(text, unicode.IsSpace) < 0 {
+		return text
+	}
+	var subject strings.Builder
+	subject.Grow(len(text))
+	for field := range strings.FieldsSeq(text) {
+		subject.WriteString(field)
+	}
+	return subject.String()
+}
 
 const (
 	// qqFAQCandidateList 是「文档缺口」列出的条数，qqFAQCandidateRunes 是候选里问题和答案的长度上限，也是「看 F编号」回复里问题和答案各自的长度上限。
@@ -48,8 +56,16 @@ var (
 	qqFAQViewCommand   = regexp.MustCompile(`(?i)^看\s*[:：]?\s*[#＃]?([fb])\s*([0-9]{1,9})$`)
 )
 
-// qqAnswerPrefix 是「写进FAQ F12 答：……」里答案的开头。
-var qqAnswerPrefix = regexp.MustCompile(`^答[:：]\s*`)
+// qqTrimAnswerPrefix 去掉答案开头的「答:」或「答：」及其后的 ASCII 空白，直接返回原文切片。
+func qqTrimAnswerPrefix(text string) string {
+	if rest, ok := strings.CutPrefix(text, "答:"); ok {
+		return strings.TrimLeft(rest, " \t\n\f\r")
+	}
+	if rest, ok := strings.CutPrefix(text, "答："); ok {
+		return strings.TrimLeft(rest, " \t\n\f\r")
+	}
+	return text
+}
 
 // recordQQFAQCandidate 记下一条文档候选；同一个问题 7 天内只记一次，数据库明确拒绝时退回去重额度，结果不确定时保留额度。在回复之后调用，不跟随处理消息的 ctx、另限 3 秒（写法照 recordQQTurn）：滚动发布取消了 ctx 也要记下。
 func (s *Server) recordQQFAQCandidate(ctx context.Context, question, answer string) {
@@ -62,7 +78,7 @@ func (s *Server) recordQQFAQCandidate(ctx context.Context, question, answer stri
 	if question == "" {
 		return
 	}
-	subject := strings.Join(strings.Fields(question), "")
+	subject := qqFAQCandidateSubject(question)
 	release, err := s.qqReserveDedupe(ctx, "qq-bot-faq-candidate", subject, 7*24*time.Hour)
 	if err != nil {
 		if !errors.Is(err, account.ErrLimited) {
@@ -71,27 +87,39 @@ func (s *Server) recordQQFAQCandidate(ctx context.Context, question, answer stri
 		return
 	}
 	if _, err := s.qqFAQCandidates.AddQQFAQCandidate(ctx, question, qqTruncate(answer, qqFAQCandidateRunes)); err != nil {
-		if qqDatabaseWriteDefinitelyRejected(err) {
+		if account.DatabaseWriteDefinitelyRejected(err) {
 			release()
 		}
 		slog.Warn("qq bot: faq candidate not stored", "reason", err.Error())
 	}
 }
 
-// qqFAQCandidateCommands 处理「文档缺口」「看 F编号」「写进FAQ F编号」「忽略 F编号」，以及差评的「看 B编号」「写进FAQ B编号」「忽略 B编号」（交给 qqBadAnswerCommand），只有管理员能用；返回处理结果的名字，不是这几个命令时返回空字符串。
-func (s *Server) qqFAQCandidateCommands(ctx context.Context, text string, admin bool, reply func(string)) string {
+// qqFAQCommandMatch 按开头动词选择文档候选或差评命令的正则，返回动作和原文匹配结果。
+func qqFAQCommandMatch(text string) (string, []string) {
 	trimmed := strings.TrimSpace(text)
-	action, match := "", []string(nil)
-	for _, command := range []struct {
-		action  string
-		pattern *regexp.Regexp
-	}{{"write", qqFAQWriteCommand}, {"ignore", qqFAQIgnoreCommand}, {"view", qqFAQViewCommand}} {
-		if match = command.pattern.FindStringSubmatch(trimmed); match != nil {
-			action = command.action
-			break
-		}
+	var action string
+	var pattern *regexp.Regexp
+	switch first, _ := utf8.DecodeRuneInString(trimmed); first {
+	case '写', '加', '放', '记':
+		action, pattern = "write", qqFAQWriteCommand
+	case '忽':
+		action, pattern = "ignore", qqFAQIgnoreCommand
+	case '看':
+		action, pattern = "view", qqFAQViewCommand
+	default:
+		return "", nil
 	}
-	if qqCompact(text) != "文档缺口" && match == nil {
+	if match := pattern.FindStringSubmatch(trimmed); match != nil {
+		return action, match
+	}
+	return "", nil
+}
+
+// qqFAQCandidateCommands 处理「文档缺口」「看 F编号」「写进FAQ F编号」「忽略 F编号」，以及差评的「看 B编号」「写进FAQ B编号」「忽略 B编号」（交给 qqBadAnswerCommand），只有管理员能用；返回处理结果的名字，不是这几个命令时返回空字符串。
+// 参数解析使用原文 `text`，列表命令使用已规范化的 `compact`。
+func (s *Server) qqFAQCandidateCommands(ctx context.Context, text, compact string, admin bool, reply func(string)) string {
+	action, match := qqFAQCommandMatch(text)
+	if compact != "文档缺口" && match == nil {
 		return ""
 	}
 	var id int64
@@ -99,7 +127,7 @@ func (s *Server) qqFAQCandidateCommands(ctx context.Context, text string, admin 
 	if match != nil {
 		id, _ = strconv.ParseInt(match[2], 10, 64)
 		if action == "write" {
-			extra = strings.TrimSpace(qqAnswerPrefix.ReplaceAllString(strings.TrimSpace(match[3]), ""))
+			extra = strings.TrimSpace(qqTrimAnswerPrefix(strings.TrimSpace(match[3])))
 		}
 		if strings.EqualFold(match[1], "b") {
 			return s.qqBadAnswerCommand(ctx, action, id, extra, admin, reply)

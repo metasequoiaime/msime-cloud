@@ -7,14 +7,18 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"iter"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/pelletier/go-toml/v2"
+
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
 // 社区插件包的规则与客户端 plugins.rs 和 plugins/import.rs 一致；上传、解压和账号配额另受服务端限制。
@@ -115,9 +119,9 @@ type pluginPack struct {
 	Manifest []byte
 }
 
-// validPluginID is the client's safe_id: 1 to 64 lowercase ASCII letters, digits, dots, dashes and underscores, starting with a letter or digit.
+// validPluginID 沿用客户端的标识符形状，并拒绝 Windows 无法按原名安装的尾点与 nul 目录。
 func validPluginID(id string) bool {
-	if id == "" || len(id) > 64 || !isASCIIAlnum(id[0]) {
+	if id == "" || len(id) > 64 || !isASCIIAlnum(id[0]) || id == "nul" || strings.HasSuffix(id, ".") {
 		return false
 	}
 	for i := 0; i < len(id); i++ {
@@ -191,29 +195,29 @@ func knownPluginExtension(ext string) (string, bool) {
 	if len(ext) == 2 {
 		switch fold(ext[0]) {
 		case '7':
-			if asciiExtensionEqualFold(ext, "7z") {
+			if textutil.EqualFoldASCII(ext, "7z") {
 				return "7z", true
 			}
 		case 'g':
-			if asciiExtensionEqualFold(ext, "gz") {
+			if textutil.EqualFoldASCII(ext, "gz") {
 				return "gz", true
 			}
 		case 'l':
-			if asciiExtensionEqualFold(ext, "lz") {
+			if textutil.EqualFoldASCII(ext, "lz") {
 				return "lz", true
 			}
 		case 'm':
-			if asciiExtensionEqualFold(ext, "md") {
+			if textutil.EqualFoldASCII(ext, "md") {
 				return "md", true
 			}
 		case 'x':
-			if asciiExtensionEqualFold(ext, "xz") {
+			if textutil.EqualFoldASCII(ext, "xz") {
 				return "xz", true
 			}
 		}
 		return "", false
 	}
-	if len(ext) == 4 && asciiExtensionEqualFold(ext, "lzma") {
+	if len(ext) == 4 && textutil.EqualFoldASCII(ext, "lzma") {
 		return "lzma", true
 	}
 	if len(ext) != 3 {
@@ -221,64 +225,48 @@ func knownPluginExtension(ext string) (string, bool) {
 	}
 	switch fold(ext[0]) {
 	case 'a':
-		if asciiExtensionEqualFold(ext, "apk") {
+		if textutil.EqualFoldASCII(ext, "apk") {
 			return "apk", true
 		}
 	case 'b':
-		if asciiExtensionEqualFold(ext, "bz2") {
+		if textutil.EqualFoldASCII(ext, "bz2") {
 			return "bz2", true
 		}
 	case 'c':
-		if asciiExtensionEqualFold(ext, "cab") {
+		if textutil.EqualFoldASCII(ext, "cab") {
 			return "cab", true
 		}
 	case 'j':
-		if asciiExtensionEqualFold(ext, "jar") {
+		if textutil.EqualFoldASCII(ext, "jar") {
 			return "jar", true
 		}
 	case 'o':
-		if asciiExtensionEqualFold(ext, "ogg") {
+		if textutil.EqualFoldASCII(ext, "ogg") {
 			return "ogg", true
 		}
 	case 'r':
-		if asciiExtensionEqualFold(ext, "rar") {
+		if textutil.EqualFoldASCII(ext, "rar") {
 			return "rar", true
 		}
 	case 't':
 		for _, known := range [...]string{"tar", "tgz", "txt", "tsv"} {
-			if asciiExtensionEqualFold(ext, known) {
+			if textutil.EqualFoldASCII(ext, known) {
 				return known, true
 			}
 		}
 	case 'w':
-		if asciiExtensionEqualFold(ext, "wav") {
+		if textutil.EqualFoldASCII(ext, "wav") {
 			return "wav", true
 		}
 	case 'z':
-		if asciiExtensionEqualFold(ext, "zst") {
+		if textutil.EqualFoldASCII(ext, "zst") {
 			return "zst", true
 		}
-		if asciiExtensionEqualFold(ext, "zip") {
+		if textutil.EqualFoldASCII(ext, "zip") {
 			return "zip", true
 		}
 	}
 	return "", false
-}
-
-func asciiExtensionEqualFold(name, known string) bool {
-	if len(name) != len(known) {
-		return false
-	}
-	for i := range name {
-		c := name[i]
-		if c >= 'A' && c <= 'Z' {
-			c += 'a' - 'A'
-		}
-		if c != known[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func pluginAudio(name string) bool {
@@ -462,30 +450,30 @@ func readPluginArchive(archive []byte) (map[string]pluginMember, string) {
 			return nil, "invalid_plugin_archive"
 		}
 		limited := io.LimitReader(r, int64(m.size)+1)
-		head := make([]byte, 512)
-		n, err := io.ReadFull(limited, head)
+		keepData := name == "plugin.toml" && m.size <= maxPluginManifestBytes || pluginDataExtension(name) && m.size <= maxPluginDataBytes
+		bufferSize := 512
+		if keepData {
+			// 大小已受成员与总量上限约束；多读一个字节以完成 CRC 校验并拒绝伪造长度。
+			bufferSize = m.size + 1
+		}
+		buffer := make([]byte, bufferSize)
+		n, err := io.ReadFull(limited, buffer)
 		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
 			r.Close()
 			return nil, "invalid_plugin_archive"
 		}
-		m.head = head[:n]
+		m.head = buffer[:min(n, 512)]
 		read := int64(n)
-		if name == "plugin.toml" && m.size <= maxPluginManifestBytes || pluginDataExtension(name) && m.size <= maxPluginDataBytes {
-			rest, err := io.ReadAll(limited)
-			if err != nil {
-				r.Close()
-				return nil, "invalid_plugin_archive"
-			}
-			m.data = append(m.head, rest...)
-			read += int64(len(rest))
-		} else {
-			copied, err := io.Copy(io.Discard, limited)
-			if err != nil {
-				r.Close()
-				return nil, "invalid_plugin_archive"
-			}
-			read += copied
+		if keepData {
+			m.data = buffer[:n]
 		}
+		// 再读至 EOF，区分 ReadFull 生成的短读错误和底层解压或数据描述符的截断错误。
+		copied, err := io.Copy(io.Discard, limited)
+		if err != nil {
+			r.Close()
+			return nil, "invalid_plugin_archive"
+		}
+		read += copied
 		r.Close()
 		if read != int64(m.size) {
 			return nil, "invalid_plugin_archive"
@@ -584,6 +572,17 @@ var pluginKindKeys = map[string][]string{
 	"wordbook":      {"wordbook"},
 }
 
+// pluginManifestKeys 精确校验公共键与当前类型的专属键，直接读取两份白名单，避免每次校验时合并切片。
+func pluginManifestKeys(table map[string]any, kind string) bool {
+	kindKeys := pluginKindKeys[kind]
+	for key := range table {
+		if !slices.Contains(pluginCommonKeys, key) && !slices.Contains(kindKeys, key) {
+			return false
+		}
+	}
+	return true
+}
+
 // validPluginArchive runs every server-side check on an uploaded pack and returns what is stored, or the error code. It never decodes audio beyond its magic bytes and never executes anything.
 func validPluginArchive(archive []byte) (pluginPack, string) {
 	members, code := readPluginArchive(archive)
@@ -612,7 +611,7 @@ func validPluginArchive(archive []byte) (pluginPack, string) {
 		return pluginPack{}, "invalid_plugin_manifest"
 	}
 	kind := *m.Kind
-	if !pluginKeys(table, append(slices.Clone(pluginCommonKeys), pluginKindKeys[kind]...)...) {
+	if !pluginManifestKeys(table, kind) {
 		return pluginPack{}, "invalid_plugin_manifest"
 	}
 	if m.ID == nil || !validPluginID(*m.ID) || slices.Contains(builtinPluginIDs[kind], *m.ID) {
@@ -836,7 +835,7 @@ func validPluginCommands(table map[string]any, m pluginManifest) bool {
 			return false
 		}
 		template := *row.Template
-		if strings.TrimSpace(template) == "" || utf16Length(template) > maxCommandTemplate || strings.ContainsFunc(template, unicode.IsControl) || !validCommandTemplate(template) {
+		if strings.TrimSpace(template) == "" || textutil.UTF16Length(template) > maxCommandTemplate || strings.ContainsFunc(template, unicode.IsControl) || !validCommandTemplate(template) {
 			return false
 		}
 	}
@@ -878,7 +877,7 @@ func pluginLowercase(s string) bool {
 
 // pluginShortText 是短语文本和符号的共同规则：不是空白、不含控制字符、1 到 max 个 UTF-16 单元。
 func pluginShortText(s string, max int) bool {
-	return strings.TrimSpace(s) != "" && utf8.ValidString(s) && !strings.ContainsFunc(s, unicode.IsControl) && utf16Length(s) <= max
+	return strings.TrimSpace(s) != "" && utf8.ValidString(s) && !strings.ContainsFunc(s, unicode.IsControl) && textutil.UTF16Length(s) <= max
 }
 
 // validPluginPhrases 对应 phrase_table.rs：1 到 2000 个 `[[phrases]]`，每行只有 `key`（1 到 32 个小写 ASCII 字母，K 模式的要求）和 `text`；(`key`,`text`) 不能重复，同一个 key 可以对应多条 text。短语表没有数据文件。
@@ -932,12 +931,48 @@ func validPluginWordbook(table map[string]any, m pluginManifest) (map[string]int
 	return map[string]int{*m.Wordbook.File: maxWordbookBytes}, true
 }
 
-// pluginDataText 校验完整文件为 UTF-8，并剥除开头可选的 BOM，供逐行校验使用。
+// pluginDataText 校验完整文件为 UTF-8，并剥除开头可选的 BOM；校验函数只读字符串，所以直接借用归档缓冲，避免复制整份数据。
 func pluginDataText(raw []byte) (string, bool) {
 	if !utf8.Valid(raw) {
 		return "", false
 	}
-	return strings.TrimPrefix(string(raw), "\uFEFF"), true
+	if bytes.HasPrefix(raw, []byte{0xef, 0xbb, 0xbf}) {
+		raw = raw[3:]
+	}
+	if len(raw) == 0 {
+		return "", true
+	}
+	return unsafe.String(unsafe.SliceData(raw), len(raw)), true
+}
+
+// pluginDataLineCapacity 按物理行数预估去重表容量；超过条目上限时不预分配，避免稀疏文本放大内存。
+func pluginDataLineCapacity(text string, maxEntries int) int {
+	capacity := strings.Count(text, "\n")
+	if text != "" && text[len(text)-1] != '\n' {
+		capacity++
+	}
+	if capacity > maxEntries {
+		return 0
+	}
+	return capacity
+}
+
+// pluginDataLines 按需跳过空行和注释，并去掉每行末尾的一个 CR，包括没有 LF 的最后一行。
+func pluginDataLines(text string) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		for remaining := text; remaining != ""; {
+			remaining = strings.TrimLeft(remaining, "\n")
+			if remaining == "" {
+				return
+			}
+			line, rest, _ := strings.Cut(remaining, "\n")
+			remaining = rest
+			line = strings.TrimSuffix(line, "\r")
+			if line != "" && !strings.HasPrefix(line, "#") && !yield(line) {
+				return
+			}
+		}
+	}
 }
 
 // validHelpcodeTable 是辅助码表的严格语法：每行为空行、`#` 开头的注释或 `<字>=<码>`。`<字>` 恰好是一个非 ASCII、非空白、非控制字符的 Unicode 标量，`<码>` 恰好是 1 到 2 个小写 ASCII 字母（更长的拒绝，不像 Engine 的宽松解析器那样截断），`=` 两侧不允许空格；1 到 30000 条，同一个字出现两次拒绝。
@@ -946,25 +981,8 @@ func validHelpcodeTable(raw []byte) bool {
 	if !ok {
 		return false
 	}
-	capacity := strings.Count(text, "\n")
-	if text != "" && text[len(text)-1] != '\n' {
-		capacity++
-	}
-	if capacity > maxHelpcodeEntries {
-		capacity = 0
-	}
-	seen := make(map[string]bool, capacity)
-	for text != "" {
-		text = strings.TrimLeft(text, "\n")
-		if text == "" {
-			break
-		}
-		line, rest, _ := strings.Cut(text, "\n")
-		text = rest
-		line = strings.TrimSuffix(line, "\r")
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
+	seen := make(map[string]bool, pluginDataLineCapacity(text, maxHelpcodeEntries))
+	for line := range pluginDataLines(text) {
 		char, code, found := strings.Cut(line, "=")
 		r, size := utf8.DecodeRuneInString(char)
 		if !found || char == "" || size != len(char) || r < utf8.RuneSelf || unicode.IsSpace(r) || unicode.IsControl(r) {
@@ -1000,25 +1018,8 @@ func validWordbookEntries(raw []byte) bool {
 		}
 		return true
 	}
-	capacity := strings.Count(text, "\n")
-	if text != "" && text[len(text)-1] != '\n' {
-		capacity++
-	}
-	if capacity > maxWordbookEntries {
-		capacity = 0
-	}
-	seen := make(map[string]bool, capacity)
-	for text != "" {
-		text = strings.TrimLeft(text, "\n")
-		if text == "" {
-			break
-		}
-		line, rest, _ := strings.Cut(text, "\n")
-		text = rest
-		line = strings.TrimSuffix(line, "\r")
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
+	seen := make(map[string]bool, pluginDataLineCapacity(text, maxWordbookEntries))
+	for line := range pluginDataLines(text) {
 		word, rest, found := strings.Cut(line, "\t")
 		if !found {
 			return false
@@ -1126,7 +1127,7 @@ var commandTemplateInstants = []time.Time{time.Date(2026, time.September, 30, 23
 func validCommandTemplate(template string) bool {
 	for _, instant := range commandTemplateInstants {
 		expanded, ok := expandCommandTemplate(template, instant)
-		if !ok || strings.ContainsFunc(expanded, unicode.IsControl) || utf16Length(expanded) > maxCommandTemplate {
+		if !ok || strings.ContainsFunc(expanded, unicode.IsControl) || textutil.UTF16Length(expanded) > maxCommandTemplate {
 			return false
 		}
 	}

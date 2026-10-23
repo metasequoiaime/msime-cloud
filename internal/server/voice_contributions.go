@@ -2,7 +2,6 @@ package server
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -14,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 )
 
 // voiceContributionsPath 是用户自愿上传语音样本的接口。需要用户会话（匿名账号也是用户），配置的客户端令牌不能上传。
@@ -84,8 +84,7 @@ func (s *Server) voiceContribution(w http.ResponseWriter, r *http.Request) {
 		if err == io.EOF {
 			break
 		}
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
+		if httpjson.IsBodyTooLarge(err) {
 			fail(w, 413, "contribution_too_large")
 			return
 		}
@@ -105,9 +104,7 @@ func (s *Server) voiceContribution(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			var v voiceContributionPayload
-			d := json.NewDecoder(bytes.NewReader(raw))
-			d.DisallowUnknownFields()
-			if d.Decode(&v) != nil || d.Decode(new(any)) != io.EOF {
+			if httpjson.DecodeValue(bytes.NewReader(raw), &v) != nil {
 				fail(w, 400, "invalid_payload")
 				return
 			}
@@ -118,7 +115,7 @@ func (s *Server) voiceContribution(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			audio, err = io.ReadAll(io.LimitReader(part, voiceContributionAudioBytes+1))
-			if errors.As(err, &tooLarge) || len(audio) > voiceContributionAudioBytes {
+			if httpjson.IsBodyTooLarge(err) || len(audio) > voiceContributionAudioBytes {
 				fail(w, 413, "audio_too_large")
 				return
 			}
@@ -159,6 +156,10 @@ func (s *Server) voiceContribution(w http.ResponseWriter, r *http.Request) {
 	id, err := s.accounts.SaveVoiceContribution(r.Context(), user, account.VoiceContribution{Language: payload.Language, Provider: payload.Provider, DurationMS: payload.DurationMS, Transcript: transcript, AppVersion: payload.AppVersion, AudioMime: audioMime, Audio: audio})
 	if errors.Is(err, account.ErrBanned) {
 		fail(w, 403, "account_banned")
+		return
+	}
+	if errors.Is(err, account.ErrInvalid) {
+		fail(w, 401, "invalid_credentials")
 		return
 	}
 	if err != nil {

@@ -44,14 +44,15 @@ type fakeDictPull struct {
 
 // fakeDictRepo stands in for the GitHub REST API of the dictionary repository: commits are file maps, branches point at commits, and contents writes are compare-and-swaps on the blob SHA like the real API.
 type fakeDictRepo struct {
-	t       *testing.T
-	mu      sync.Mutex
-	server  *httptest.Server
-	commits map[string]map[string]string
-	pulls   []*fakeDictPull
-	seq     int
-	calls   []string
-	status  map[string]int
+	t            *testing.T
+	mu           sync.Mutex
+	server       *httptest.Server
+	commits      map[string]map[string]string
+	pulls        []*fakeDictPull
+	seq          int
+	calls        []string
+	status       map[string]int
+	commentPages map[int][][]string
 	// beforePut, when set, runs before a contents write is applied, standing in for a commit that lands on the branch between the console's read and its write.
 	beforePut func(p *fakeDictPull)
 }
@@ -69,7 +70,7 @@ const (
 
 // newFakeDictRepo starts with base commit "base1" and these pull requests: #12 open rolling (7 added entries across the three files, including a second copy of a base translation), #11 merged, #10 closed, #9 from a fork and #8 on another branch, which the console must ignore.
 func newFakeDictRepo(t *testing.T) *fakeDictRepo {
-	f := &fakeDictRepo{t: t, commits: map[string]map[string]string{}, status: map[string]int{}}
+	f := &fakeDictRepo{t: t, commits: map[string]map[string]string{}, status: map[string]int{}, commentPages: map[int][][]string{}}
 	f.commits["base1"] = map[string]string{"custom/words.txt": dictTestBaseWords, "custom/english.txt": dictTestBaseEnglish, "custom/translations.txt": dictTestBaseTranslations}
 	f.commits["head12"] = map[string]string{
 		"custom/words.txt":        dictTestBaseWords + "水杉\tshui'shan\t5000\n今天\tjin'tian\t100\n坏\tbad'pin\t5000\n水杉\tshui'shan\t5000\n",
@@ -202,6 +203,29 @@ func (f *fakeDictRepo) serve(w http.ResponseWriter, r *http.Request) {
 		default:
 			f.reply(w, 404, map[string]string{"message": "Not Found"})
 		}
+	case r.Method == "GET" && strings.HasPrefix(path, "/issues/") && strings.HasSuffix(path, "/comments"):
+		n, _ := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(path, "/issues/"), "/comments"))
+		p := f.pull(n)
+		comments := [][]string{p.comments}
+		if pages := f.commentPages[n]; pages != nil {
+			comments = pages
+		}
+		page := 1
+		if raw := r.URL.Query().Get("page"); raw != "" {
+			page, _ = strconv.Atoi(raw)
+		}
+		if page < 1 || page > len(comments) {
+			f.reply(w, 200, []map[string]any{})
+			return
+		}
+		if page < len(comments) {
+			w.Header().Set("Link", "<"+f.server.URL+r.URL.Path+"?per_page=100&page="+strconv.Itoa(len(comments))+">; rel=\"last\"")
+		}
+		out := make([]map[string]any, 0, len(comments[page-1]))
+		for _, comment := range comments[page-1] {
+			out = append(out, map[string]any{"body": comment})
+		}
+		f.reply(w, 200, out)
 	case r.Method == "POST" && strings.HasPrefix(path, "/issues/") && strings.HasSuffix(path, "/comments"):
 		n, _ := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(path, "/issues/"), "/comments"))
 		p := f.pull(n)
@@ -690,6 +714,66 @@ func TestDictPRReject(t *testing.T) {
 	}
 	if w := dictCall(s, "POST", "/api/dict-prs/12/reject", `{"reason":"x","head_sha":"head12"}`); w.Code != 409 {
 		t.Fatal(w.Code, w.Body.String())
+	}
+}
+
+func TestDictPRRejectCloseFailureIsUncertainAndIdempotent(t *testing.T) {
+	s, f, conn, schema := dictPRServer(t, "")
+	f.status["PATCH /repos/"+dictTestRepo+"/pulls/12"] = 422
+	body := `{"reason":"拼音不规范","head_sha":"head12"}`
+	first := dictCall(s, "POST", "/api/dict-prs/12/reject", body)
+	if first.Code != http.StatusBadGateway || !strings.Contains(first.Body.String(), `"code":"github_uncertain"`) {
+		t.Fatalf("关闭失败应返回 github_uncertain：status=%d body=%s", first.Code, first.Body.String())
+	}
+	if p := f.pull(12); p.state != "open" || len(p.comments) != 1 || p.comments[0] != "审核未通过：拼音不规范" {
+		t.Fatalf("评论已写入但 PR 状态错误：%+v", p)
+	}
+	rows := dictAudit(t, conn, schema)
+	if len(rows) != 1 || rows[0].action != "dict_pr_reject" || rows[0].reason != "拼音不规范" {
+		t.Fatalf("部分成功未记录拒绝审计：%+v", rows)
+	}
+	var partial, uncertain bool
+	if err := conn.QueryRow(t.Context(), `SELECT detail->>'partial' = 'true', detail->>'uncertain' = 'true' FROM `+pgx.Identifier{schema, "admin_audit"}.Sanitize()).Scan(&partial, &uncertain); err != nil {
+		t.Fatal(err)
+	}
+	if !partial || !uncertain {
+		t.Fatalf("部分成功审计未标记不确定状态：partial=%v uncertain=%v", partial, uncertain)
+	}
+
+	second := dictCall(s, "POST", "/api/dict-prs/12/reject", body)
+	if second.Code != http.StatusBadGateway || !strings.Contains(second.Body.String(), `"code":"github_uncertain"`) {
+		t.Fatalf("重试关闭失败应继续返回 github_uncertain：status=%d body=%s", second.Code, second.Body.String())
+	}
+	if p := f.pull(12); len(p.comments) != 1 {
+		t.Fatalf("重试不应重复拒绝评论：%v", p.comments)
+	}
+}
+
+func TestDictPRRejectFindsCommentOnLaterPage(t *testing.T) {
+	s, f, _, _ := dictPRServer(t, "")
+	f.status["PATCH /repos/"+dictTestRepo+"/pulls/12"] = 422
+	comment := "审核未通过：拼音不规范"
+	firstPage := make([]string, 100)
+	for i := range firstPage {
+		firstPage[i] = "历史评论" + strconv.Itoa(i)
+	}
+	f.pull(12).comments = append(append([]string{}, firstPage...), comment)
+	f.commentPages[12] = [][]string{firstPage, {comment}}
+	w := dictCall(s, "POST", "/api/dict-prs/12/reject", `{"reason":"拼音不规范","head_sha":"head12"}`)
+	if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), `"code":"github_uncertain"`) {
+		t.Fatalf("第二页已有评论时应继续检查关闭结果：status=%d body=%s", w.Code, w.Body.String())
+	}
+	if len(f.pull(12).comments) != 101 {
+		t.Fatalf("第二页已有评论不应再发布：评论数=%d", len(f.pull(12).comments))
+	}
+	gets := 0
+	for _, call := range f.calls {
+		if call == "GET /repos/"+dictTestRepo+"/issues/12/comments" {
+			gets++
+		}
+	}
+	if gets != 2 {
+		t.Fatalf("应读取两页评论，实际 %d 次：%v", gets, f.calls)
 	}
 }
 

@@ -96,22 +96,30 @@ func (c *cappedReader) Read(p []byte) (int, error) {
 
 // splitSSELines 按 SSE 规则识别 LF、CRLF 和单 CR。CR 立即结束本行，下一次只跳过紧随的 LF，避免为判断 CRLF 等待上游继续发送。
 func splitSSELines() bufio.SplitFunc {
-	skipLF := false
+	state := struct {
+		skipLF  bool
+		scanned int
+	}{}
 	return func(data []byte, atEOF bool) (advance int, token []byte, err error) {
-		if skipLF && len(data) > 0 {
-			skipLF = false
+		if state.skipLF && len(data) > 0 {
+			state.skipLF = false
 			if data[0] == '\n' {
 				advance = 1
 				data = data[1:]
 			}
 		}
-		if i := bytes.IndexAny(data, "\r\n"); i >= 0 {
-			skipLF = data[i] == '\r'
+		// 未读到换行时只检查新补入的字节，避免碎片化长行反复扫描已有前缀。
+		if i := bytes.IndexAny(data[state.scanned:], "\r\n"); i >= 0 {
+			i += state.scanned
+			state.scanned = 0
+			state.skipLF = data[i] == '\r'
 			return advance + i + 1, data[:i], nil
 		}
 		if atEOF && len(data) > 0 {
+			state.scanned = 0
 			return advance + len(data), data, nil
 		}
+		state.scanned = len(data)
 		return advance, nil, nil
 	}
 }
@@ -143,16 +151,13 @@ func (s *Server) chatStreamOnce(w http.ResponseWriter, r *http.Request, v chatRe
 		return false
 	}
 	e := s.config.Chat
-	req, err := http.NewRequestWithContext(ctx, "POST", e.URL, bytes.NewReader(payload))
+	req, err := e.newRequest(ctx, "POST", bytes.NewReader(payload))
 	if err != nil {
 		upstreamError(w, mr, err)
 		return false
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	if e.token != "" {
-		req.Header.Set("Authorization", "Bearer "+e.token)
-	}
 	started := time.Now()
 	// abandoned 判断客户端是否已经断开或不再读取：这时上游的错误只是取消的后果，按放弃处理，不计入上游失败，也不再写错误事件。
 	abandoned := func(err error) bool {
@@ -189,7 +194,9 @@ func (s *Server) chatStreamOnce(w http.ResponseWriter, r *http.Request, v chatRe
 	rc := http.NewResponseController(w)
 	streaming := false
 	var pending []string
-	var content strings.Builder
+	// 正文只用于字节上限与非空判断，逐段检查即可，避免保留和反复扫描累计文本。
+	contentBytes := 0
+	hasContent := false
 	finished := false
 	write := func(frames ...string) error {
 		if !streaming {
@@ -210,13 +217,30 @@ func (s *Server) chatStreamOnce(w http.ResponseWriter, r *http.Request, v chatRe
 		}
 		return nil
 	}
+	var out *chatStreamOut
+	var outputBuffer *bytes.Buffer
+	var outputEncoder *json.Encoder
+	var chunk *chatStreamChunk
 	// dispatch 处理一个完整的 SSE 事件的 data；done 为 true 表示收到 `[DONE]`。
-	dispatch := func(data string) (done bool, err error) {
-		if data == "[DONE]" {
+	dispatch := func(data []byte) (done bool, err error) {
+		if bytes.Equal(data, []byte("[DONE]")) {
 			return true, nil
 		}
-		var chunk chatStreamChunk
-		if json.Unmarshal([]byte(data), &chunk) != nil {
+		if chunk == nil {
+			chunk = &chatStreamChunk{}
+		}
+		// 每次分发后清空字段和引用；只保留单个选项的缓冲，避免较大的数组被长期保留或反复清理。
+		defer func() {
+			choices := chunk.Choices
+			if cap(choices) == 1 {
+				clear(choices[:1])
+				choices = choices[:0]
+			} else {
+				choices = nil
+			}
+			*chunk = chatStreamChunk{Choices: choices}
+		}()
+		if json.Unmarshal(data, chunk) != nil {
 			return false, errChatStreamEvent
 		}
 		if len(chunk.Error) > 0 && string(chunk.Error) != "null" {
@@ -227,9 +251,12 @@ func (s *Server) chatStreamOnce(w http.ResponseWriter, r *http.Request, v chatRe
 		}
 		choice := chunk.Choices[0]
 		if choice.Delta.Content != nil {
-			content.WriteString(*choice.Delta.Content)
-			if content.Len() > contract.OutputTextBytes {
+			contentBytes += len(*choice.Delta.Content)
+			if contentBytes > contract.OutputTextBytes {
 				return false, errChatStreamTooLong
+			}
+			if !hasContent && strings.TrimSpace(*choice.Delta.Content) != "" {
+				hasContent = true
 			}
 		}
 		if choice.FinishReason != nil {
@@ -238,10 +265,25 @@ func (s *Server) chatStreamOnce(w http.ResponseWriter, r *http.Request, v chatRe
 		if choice.Delta.Role == "" && choice.Delta.Content == nil && choice.FinishReason == nil {
 			return false, nil
 		}
-		out := chatStreamOut{ID: chunk.ID, Object: "chat.completion.chunk", Created: chunk.Created, Model: chunk.Model, Choices: []chatStreamChoice{{Index: 0, Delta: chatStreamDelta{Role: choice.Delta.Role, Content: choice.Delta.Content}, FinishReason: choice.FinishReason}}}
-		b, _ := json.Marshal(out)
-		frame := "data: " + string(b) + "\n\n"
-		if !streaming && strings.TrimSpace(content.String()) == "" {
+		if out == nil {
+			out = &chatStreamOut{Object: "chat.completion.chunk", Choices: make([]chatStreamChoice, 1)}
+			outputBuffer = &bytes.Buffer{}
+			outputEncoder = json.NewEncoder(outputBuffer)
+		}
+		out.ID, out.Created, out.Model = chunk.ID, chunk.Created, chunk.Model
+		out.Choices[0] = chatStreamChoice{Index: 0, Delta: chatStreamDelta{Role: choice.Delta.Role, Content: choice.Delta.Content}, FinishReason: choice.FinishReason}
+		outputBuffer.Reset()
+		_ = outputEncoder.Encode(out)
+		// 编码完成后清掉输出字段中的本段引用。
+		out.ID, out.Model = "", ""
+		out.Choices[0] = chatStreamChoice{}
+		// 编码器已追加一个换行，再补一个换行结束 SSE 事件。
+		frame := "data: " + string(outputBuffer.Bytes()) + "\n"
+		// 只保留不超过 4 KiB 的编码缓冲，避免大事件占用后续等待期间的内存。
+		if outputBuffer.Cap() > 4096 {
+			*outputBuffer = bytes.Buffer{}
+		}
+		if !streaming && !hasContent {
 			pending = append(pending, frame)
 			return false, nil
 		}
@@ -254,29 +296,36 @@ func (s *Server) chatStreamOnce(w http.ResponseWriter, r *http.Request, v chatRe
 	scanner.Buffer(make([]byte, 0, 4096), contract.UpstreamResponseBytes)
 	scanner.Split(splitSSELines())
 	firstLine := true
-	var data []string
+	var data []byte
+	dataReady := false
 	done := false
 	for !done && err == nil && scanner.Scan() {
-		line := scanner.Text()
+		line := scanner.Bytes()
 		if firstLine {
 			// SSE 只剥离流开头的一个 BOM，后续字段和正文中的同一字符必须保留。
-			line = strings.TrimPrefix(line, "\ufeff")
+			line = bytes.TrimPrefix(line, []byte("\ufeff"))
 			firstLine = false
 		}
 		switch {
-		case line == "":
-			if len(data) > 0 {
-				done, err = dispatch(strings.Join(data, "\n"))
+		case len(line) == 0:
+			if dataReady {
+				done, err = dispatch(data)
 				data = data[:0]
+				dataReady = false
 			}
-		case strings.HasPrefix(line, "data:"):
-			data = append(data, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
+		case bytes.HasPrefix(line, []byte("data:")):
+			if dataReady {
+				data = append(data, '\n')
+			}
+			// `Scanner` 的字节只在下次 `Scan` 前有效，先复制到可复用的事件缓冲区。
+			data = append(data, bytes.TrimPrefix(bytes.TrimPrefix(line, []byte("data:")), []byte(" "))...)
+			dataReady = true
 		}
 		// 注释行（以冒号开头的心跳）和 event、id、retry 字段不影响内容，直接忽略。
 	}
 	if !done && err == nil {
-		if err = scanner.Err(); err == nil && len(data) > 0 {
-			done, err = dispatch(strings.Join(data, "\n"))
+		if err = scanner.Err(); err == nil && dataReady {
+			done, err = dispatch(data)
 		}
 	}
 	if err == nil && ctx.Err() != nil {
@@ -288,7 +337,7 @@ func (s *Server) chatStreamOnce(w http.ResponseWriter, r *http.Request, v chatRe
 			err = errChatStreamTruncated
 		}
 	}
-	accepted := err == nil && strings.TrimSpace(content.String()) != ""
+	accepted := err == nil && hasContent
 	if err == nil && !accepted {
 		err = errUpstreamRejected
 	}

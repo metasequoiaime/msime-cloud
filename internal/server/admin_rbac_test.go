@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
@@ -119,32 +121,48 @@ func TestAdminRequirePerm(t *testing.T) {
 	}
 }
 
-// Every admin has a budget of its own, so one busy console cannot lock the others out.
+// 每个管理员单独计数，某个后台的密集请求不能占用其他管理员的额度。
 func TestAdminRateLimitPerActor(t *testing.T) {
 	s, _ := adminRBACFixture(t)
-	for i := 0; i < adminRateLimit; i++ {
+	// 夹具的监听器留在虚拟时钟外；下列请求直接调用处理函数，不经过网络。
+	// 请求循环期间时间固定，避免慢机器在第 301 次请求前补充令牌。
+	synctest.Test(t, func(t *testing.T) {
+		for i := 0; i < adminRateLimit; i++ {
+			w := httptest.NewRecorder()
+			s.ServeHTTP(w, adminRequest(s, "GET", "/api/system", "", strings.Repeat("a", 40)))
+			if w.Code != 200 {
+				t.Fatal(i, w.Code)
+			}
+		}
 		w := httptest.NewRecorder()
 		s.ServeHTTP(w, adminRequest(s, "GET", "/api/system", "", strings.Repeat("a", 40)))
-		if w.Code != 200 {
-			t.Fatal(i, w.Code)
+		if w.Code != 429 || w.Header().Get("Retry-After") != "60" {
+			t.Fatal("the legacy token exceeded its budget", w.Code)
 		}
-	}
-	w := httptest.NewRecorder()
-	s.ServeHTTP(w, adminRequest(s, "GET", "/api/system", "", strings.Repeat("a", 40)))
-	if w.Code != 429 || w.Header().Get("Retry-After") != "60" {
-		t.Fatal("the legacy token exceeded its budget", w.Code)
-	}
-	for _, cookie := range []string{strings.Repeat("o", 64), strings.Repeat("r", 64)} {
+		for _, cookie := range []string{strings.Repeat("o", 64), strings.Repeat("r", 64)} {
+			w = httptest.NewRecorder()
+			s.ServeHTTP(w, adminRequest(s, "GET", "/api/system", cookie, ""))
+			if w.Code != 200 {
+				t.Fatal("another admin was limited by the legacy token's traffic", w.Code)
+			}
+		}
+		// 显式推进一个令牌的补充间隔，核对恢复一次请求后仍然限流。
+		time.Sleep(time.Minute / adminRateLimit)
 		w = httptest.NewRecorder()
-		s.ServeHTTP(w, adminRequest(s, "GET", "/api/system", cookie, ""))
+		s.ServeHTTP(w, adminRequest(s, "GET", "/api/system", "", strings.Repeat("a", 40)))
 		if w.Code != 200 {
-			t.Fatal("another admin was limited by the legacy token's traffic", w.Code)
+			t.Fatal("补充一个令牌后请求未恢复", w.Code)
 		}
-	}
+		w = httptest.NewRecorder()
+		s.ServeHTTP(w, adminRequest(s, "GET", "/api/system", "", strings.Repeat("a", 40)))
+		if w.Code != 429 {
+			t.Fatal("补充一个令牌后允许了多次请求", w.Code)
+		}
+	})
 	// With a database the budget is counted in the limiter every replica shares, per actor under the admin scope; a spent budget is still 429 and a database failure 503 with Retry-After.
 	limiter := &fakeLimiter{}
 	s.limits = limiter
-	w = httptest.NewRecorder()
+	w := httptest.NewRecorder()
 	s.ServeHTTP(w, adminRequest(s, "GET", "/api/system", strings.Repeat("r", 64), ""))
 	if w.Code != 200 || len(limiter.calls) != 1 || limiter.calls[0] != "admin|google:reviewer:reviewer@example.test" {
 		t.Fatal("shared admin budget", w.Code, limiter.calls)

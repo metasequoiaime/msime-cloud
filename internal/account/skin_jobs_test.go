@@ -181,10 +181,11 @@ func TestSkinJobStoreRejectsExpiredResults(t *testing.T) {
 			if _, err := a.GetSkinJob(ctx, id, "owner"); !errors.Is(err, ErrSkinJobNotFound) {
 				t.Fatal("过期任务仍可读取", err)
 			}
-			if _, _, err := a.CreateSkinJob(ctx, skinJobID('b'), "owner", 1, 1, 10, time.Minute); err != nil {
+			reservation, _, err := a.CreateSkinJob(ctx, skinJobID('b'), "owner", 1, 1, 10, time.Minute)
+			if err != nil {
 				t.Fatal("过期任务未释放容量", err)
 			}
-			if err := a.DropSkinJob(ctx, skinJobID('b')); err != nil {
+			if err := a.DropSkinJob(ctx, reservation); err != nil {
 				t.Fatal(err)
 			}
 		})

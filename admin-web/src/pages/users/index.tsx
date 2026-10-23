@@ -55,7 +55,7 @@ export default function UsersPage() {
     { id: "active", header: "最近活跃", width: "100px", cell: row => <span className="text-muted">{activeText(row.last_active)}</span> },
     {
       id: "actions", header: "", width: "180px", align: "right", cell: row => {
-        const target = { id: row.id, name: displayName(row), banReason: row.ban_reason };
+        const target = { id: row.id, name: displayName(row) };
         return <>
           <Button size="sm" variant="outline" onClick={event => { event.stopPropagation(); open(row); }}>查看</Button>
           <Button size="sm" variant="outline" disabled={!canBan} title={canBan ? undefined : noPermissionHint}

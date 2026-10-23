@@ -79,3 +79,24 @@ func TestGeneratedBuildMissing(t *testing.T) {
 		t.Fatalf("invalid index: status %d", w.Code)
 	}
 }
+
+func TestCommunityPageDeepLinks(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte(`<div id="root"></div>`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(assetsDirEnv, dir)
+	handler := Handler()
+	for _, path := range []string{"/skins", "/candidate-skins", "/plugins", "/dictionaries", "/replies", "/phrases", "/community"} {
+		t.Run(path, func(t *testing.T) {
+			if !IsPath(path) {
+				t.Errorf("后台未识别页面路径 %s", path)
+			}
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+			if w.Code != 200 || !strings.Contains(w.Body.String(), `id="root"`) {
+				t.Fatalf("页面 %s 返回 %d，期望 SPA 入口", path, w.Code)
+			}
+		})
+	}
+}

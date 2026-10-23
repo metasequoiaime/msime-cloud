@@ -140,11 +140,13 @@ type minuteKey struct {
 	minute  int64
 }
 
-// serviceMetrics aggregates this process's upstream calls per service, by hour and by minute; Server.metrics holds the process's instance. The zero value is ready to use. Both hold only what has not been flushed yet: hours to admin_service_metrics for the cloud page and the daily P95, minutes to admin_service_minutes, where the status probe's leader judges the calls of every replica together.
+// serviceMetrics 保存本副本的小时、分钟增量和待确认批次；小时用于云端监控，分钟供主副本汇总判定状态。零值可直接使用。
 type serviceMetrics struct {
 	mu      sync.Mutex
 	hours   map[hourKey]*metricCounts
 	minutes map[minuteKey]*metricCounts
+	flushMu sync.Mutex
+	batch   *account.ServiceMetricBatch
 }
 
 // record adds one call that finished at at.
@@ -174,21 +176,7 @@ func (m *serviceMetrics) record(service string, at time.Time, latency time.Durat
 	slot.observe(latency, failed, usage)
 }
 
-// take removes and returns the unflushed hourly buckets as database rows.
-func (m *serviceMetrics) take() []account.ServiceMetric {
-	m.mu.Lock()
-	hours := m.hours
-	m.hours = nil
-	m.mu.Unlock()
-	return metricRows(hours)
-}
-
-// takeMinutes removes and returns the unflushed minute buckets as database rows, in (minute, service) order.
-func (m *serviceMetrics) takeMinutes() []account.ServiceMinute {
-	m.mu.Lock()
-	minutes := m.minutes
-	m.minutes = nil
-	m.mu.Unlock()
+func minuteRows(minutes map[minuteKey]*metricCounts) []account.ServiceMinute {
 	rows := make([]account.ServiceMinute, 0, len(minutes))
 	for key, c := range minutes {
 		rows = append(rows, account.ServiceMinute{Service: key.service, Minute: time.Unix(key.minute, 0).UTC(), Calls: c.calls, Errors: c.errors, Latency: c.latency.histogramJSON()})
@@ -199,53 +187,15 @@ func (m *serviceMetrics) takeMinutes() []account.ServiceMinute {
 	return rows
 }
 
-// restoreMinutes puts back minute rows whose flush failed, dropping those older than pendingMinuteRetention.
-func (m *serviceMetrics) restoreMinutes(rows []account.ServiceMinute, now time.Time) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.minutes == nil {
-		m.minutes = map[minuteKey]*metricCounts{}
-	}
-	for _, row := range rows {
-		if now.Sub(row.Minute) > pendingMinuteRetention {
-			continue
-		}
-		key := minuteKey{row.Service, row.Minute.Unix()}
-		slot := m.minutes[key]
-		if slot == nil {
-			slot = &metricCounts{}
-			m.minutes[key] = slot
-		}
-		slot.add(metricCounts{calls: row.Calls, errors: row.Errors, latency: histogramFromJSON(row.Latency)})
-	}
-}
-
-// pending returns a copy of the unflushed hourly buckets without removing them.
+// pending 返回待写入和待确认的小时增量快照，不移除原数据。
 func (m *serviceMetrics) pending() []account.ServiceMetric {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return metricRows(m.hours)
-}
-
-// restore puts back rows whose flush failed, dropping buckets older than pendingRetention so an unreachable database cannot grow memory without bound.
-func (m *serviceMetrics) restore(rows []account.ServiceMetric, now time.Time) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.hours == nil {
-		m.hours = map[hourKey]*metricCounts{}
+	rows := metricRows(m.hours)
+	if m.batch != nil {
+		rows = append(rows, m.batch.Hours...)
 	}
-	for _, row := range rows {
-		if now.Sub(row.Hour) > pendingRetention {
-			continue
-		}
-		key := hourKey{row.Service, row.Hour.Unix()}
-		bucket := m.hours[key]
-		if bucket == nil {
-			bucket = &metricCounts{}
-			m.hours[key] = bucket
-		}
-		bucket.add(rowCounts(row))
-	}
+	return rows
 }
 
 // metricRows lists hourly buckets in (hour, service) order: every replica upserts the same rows each minute, and a common order keeps their transactions from deadlocking.
@@ -264,20 +214,60 @@ func rowCounts(row account.ServiceMetric) metricCounts {
 	return metricCounts{calls: row.Calls, errors: row.Errors, latency: histogramFromJSON(row.Latency), usage: row.Usage}
 }
 
-// flushMetrics writes this process's unflushed hourly and minute buckets to the database, keeping in memory whatever fails to write. Every replica runs it each minute and on Close.
+// flushMetrics 按批次写回小时与分钟增量，失败时保留原批次标识，供每分钟或退出时安全重试。
 func (s *Server) flushMetrics(ctx context.Context) error {
-	var hourErr, minuteErr error
-	if rows := s.metrics.take(); len(rows) > 0 {
-		if hourErr = s.accounts.RecordServiceMetrics(ctx, rows); hourErr != nil {
-			s.metrics.restore(rows, time.Now())
+	return s.metrics.flush(ctx, s.accounts.RecordServiceMetricBatch)
+}
+
+// flush 串行处理待确认批次；新调用留在独立桶内，旧批次确认后在同一轮继续写回。
+func (m *serviceMetrics) flush(ctx context.Context, write func(context.Context, account.ServiceMetricBatch) error) error {
+	m.flushMu.Lock()
+	defer m.flushMu.Unlock()
+	for range 2 {
+		batch := m.nextBatch(time.Now())
+		if batch == nil {
+			return nil
+		}
+		// 在途增量可能已经提交，暂不再叠加到读取到的数据库快照；失败后恢复待确认批次。
+		m.mu.Lock()
+		m.batch = nil
+		m.mu.Unlock()
+		if err := write(ctx, *batch); err != nil {
+			m.mu.Lock()
+			m.batch = batch
+			m.mu.Unlock()
+			return err
 		}
 	}
-	if rows := s.metrics.takeMinutes(); len(rows) > 0 {
-		if minuteErr = s.accounts.RecordServiceMinutes(ctx, rows); minuteErr != nil {
-			s.metrics.restoreMinutes(rows, time.Now())
+	return nil
+}
+
+// nextBatch 在数据库故障期间也裁剪过期桶；重试只裁剪过期行，绝不把新调用并入旧标识。
+func (m *serviceMetrics) nextBatch(now time.Time) *account.ServiceMetricBatch {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key := range m.hours {
+		if now.Sub(time.Unix(key.hour, 0)) > pendingRetention {
+			delete(m.hours, key)
 		}
 	}
-	return errors.Join(hourErr, minuteErr)
+	for key := range m.minutes {
+		if now.Sub(time.Unix(key.minute, 0)) > pendingMinuteRetention {
+			delete(m.minutes, key)
+		}
+	}
+	if m.batch != nil {
+		m.batch.Hours = slices.DeleteFunc(m.batch.Hours, func(row account.ServiceMetric) bool { return now.Sub(row.Hour) > pendingRetention })
+		m.batch.Minutes = slices.DeleteFunc(m.batch.Minutes, func(row account.ServiceMinute) bool { return now.Sub(row.Minute) > pendingMinuteRetention })
+		if len(m.batch.Hours)+len(m.batch.Minutes) == 0 {
+			m.batch = nil
+		}
+	}
+	if m.batch == nil && len(m.hours)+len(m.minutes) > 0 {
+		m.batch = &account.ServiceMetricBatch{ID: adminRandom(), Hours: metricRows(m.hours), Minutes: minuteRows(m.minutes)}
+		m.hours, m.minutes = nil, nil
+	}
+	return m.batch
 }
 
 // meterKey tags a request context with the metered call its upstream request is recorded as.

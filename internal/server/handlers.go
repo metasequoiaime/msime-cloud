@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 	"io"
 	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -190,7 +192,6 @@ func respondTranslations(w http.ResponseWriter, v translationRequest, texts []st
 }
 
 func (s *Server) translate(w http.ResponseWriter, r *http.Request) {
-	endpoints := append([]TranslationEndpoint{s.config.Translation}, s.config.TranslationFallbacks...)
 	if !s.translationEnabled() {
 		if !enabled(w, s.config.Translation.Endpoint) {
 			return
@@ -212,13 +213,19 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var last *httptest.ResponseRecorder
-	for i, e := range endpoints {
+	fallbacks := s.config.TranslationFallbacks
+	// 第零项是主服务，后续项直接读取配置，避免每次请求复制整条服务链。
+	for i := 0; i <= len(fallbacks); i++ {
+		e := s.config.Translation
+		if i > 0 {
+			e = fallbacks[i-1]
+		}
 		if e.URL == "" {
 			continue
 		}
 		// 还有后备服务商时预留实际的上游请求额度；最后一家照常调用。
 		var budget *providerBudget
-		if hasTranslationEndpoint(endpoints[i+1:]) {
+		if hasTranslationEndpoint(fallbacks[i:]) {
 			budget = s.translationBudget(e)
 		}
 		rr := httptest.NewRecorder()
@@ -330,24 +337,31 @@ func (s *Server) translateEndpoint(w http.ResponseWriter, r *http.Request, v tra
 
 // translateSingle 为一条已按上游限制拆好的文本执行实际 HTTP 调用。
 func (s *Server) translateSingle(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint) {
+	if text, ok := s.translateSingleText(w, r, v, e); ok {
+		respond(w, 200, map[string]any{"code": 200, "data": text})
+	}
+}
+
+// translateSingleText 返回已校验的译文，失败时沿用现有错误响应。
+func (s *Server) translateSingleText(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint) (string, bool) {
 	switch e.Provider {
 	case "openai":
-		s.translateOpenAI(w, r, v, e)
+		return s.translateOpenAI(w, r, v, e)
 	case "niutrans":
-		s.translateNiuTransUpstream(w, r, v, e)
+		return s.translateNiuTransUpstream(w, r, v, e)
 	default:
 		v.Source, v.Target = strings.ToUpper(v.Source), strings.ToUpper(v.Target)
 		payload, _ := json.Marshal(v)
-		b, err := s.upstream(r, e.Endpoint, "POST", "application/json", bytes.NewReader(payload))
 		var result struct {
 			Code int    `json:"code"`
 			Data string `json:"data"`
 		}
-		if err != nil || json.Unmarshal(b, &result) != nil || (result.Code != 0 && result.Code != 200) || !bounded(result.Data, contract.OutputTextBytes) {
+		decoded, err := s.upstreamJSON(r, e.Endpoint, "POST", "application/json", bytes.NewReader(payload), &result)
+		if err != nil || !decoded || (result.Code != 0 && result.Code != 200) || !bounded(result.Data, contract.OutputTextBytes) {
 			upstreamError(w, r, err)
-			return
+			return "", false
 		}
-		respond(w, 200, map[string]any{"code": 200, "data": result.Data})
+		return result.Data, true
 	}
 }
 
@@ -360,7 +374,13 @@ const translationSplitConcurrency = 4
 // 并发请求正是 max_concurrent 会挡掉的那种(#3864)。任何一条失败,整次调用就按那条的状态返回:5xx 让
 // 外层改试下一个翻译服务,4xx 原样交给客户端,不会出现一半有译文一半没有的结果。
 func (s *Server) translateEach(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint) ([]string, bool) {
-	results := make([]*httptest.ResponseRecorder, len(v.Texts))
+	// 各条记录器和空缓冲一次预留，响应头由标准库在实际写入时创建。
+	results := make([]struct {
+		response httptest.ResponseRecorder
+		body     bytes.Buffer
+		failed   bool
+	}, len(v.Texts))
+	texts := make([]string, len(v.Texts))
 	slots := make(chan struct{}, translationSplitConcurrency)
 	var wg sync.WaitGroup
 	for i, text := range v.Texts {
@@ -369,25 +389,27 @@ func (s *Server) translateEach(w http.ResponseWriter, r *http.Request, v transla
 		go func() {
 			defer wg.Done()
 			defer func() { <-slots }()
-			rr := httptest.NewRecorder()
+			result := &results[i]
+			rr := &result.response
+			rr.Code, rr.Body = http.StatusOK, &result.body
 			// 每条实际请求单独计量，避免并发调用互相覆盖结果和用量。
 			mr, call := metered(r, "translation", textChars([]string{text}))
-			s.translateSingle(rr, mr, translationRequest{Text: text, Source: v.Source, Target: v.Target}, e)
+			translated, ok := s.translateSingleText(rr, mr, translationRequest{Text: text, Source: v.Source, Target: v.Target}, e)
 			s.settleMeter(call, rr.Code < 500)
-			results[i] = rr
+			if ok {
+				// 直接保存字符串，避免成功结果经内部 JSON 编码和解析再复制正文。
+				texts[i] = translated
+			} else {
+				result.failed = true
+			}
 		}()
 	}
 	wg.Wait()
-	texts := make([]string, len(results))
-	for i, rr := range results {
-		var result struct {
-			Data string `json:"data"`
-		}
-		if rr.Code != 200 || json.Unmarshal(rr.Body.Bytes(), &result) != nil {
-			copyResponse(w, rr)
+	for i := range results {
+		if results[i].failed {
+			copyResponse(w, &results[i].response)
 			return nil, false
 		}
-		texts[i] = result.Data
 	}
 	return texts, true
 }
@@ -462,37 +484,76 @@ func (s *Server) cloud(w http.ResponseWriter, r *http.Request) {
 	filterMatchLength := scheme != "japanese" && metadata.MatchedLength != nil
 	queryLength := 0
 	if filterMatchLength {
-		queryLength = utf16Length(text)
+		queryLength = textutil.UTF16Length(text)
 	}
-	clean := make([]string, 0, n)
-	seen := map[string]bool{}
-	for index, c := range candidates {
-		if filterMatchLength && metadata.MatchedLength[index] != queryLength {
-			continue
-		}
-		c = strings.TrimSpace(c)
-		valid := bounded(c, contract.CandidateBytes) && utf8.ValidString(c)
-		for _, ch := range c {
-			if ch < 32 || ch == 127 || (scheme != "japanese" && unicode.Is(unicode.Latin, ch)) {
-				valid = false
-			}
-		}
-		if valid && !seen[c] {
-			clean = append(clean, c)
-			seen[c] = true
-		}
-		if len(clean) == n {
-			break
-		}
-	}
+	clean := cleanCloudCandidates(candidates, metadata.MatchedLength, queryLength, filterMatchLength, scheme == "japanese", n)
 	if scheme != "japanese" && inputCode.MatchString(text) {
-		native, corrected := s.nativeCloudCandidates(r, strings.ToLower(text), n)
+		native, corrected := s.nativeCloudCandidatesForInput(r, text, n)
 		if len(clean) == 0 || (corrected && len(native) > 0) {
 			clean = native
 		}
 	}
 	respond(w, 200, map[string]any{"candidates": clean})
 }
+
+func cleanCloudCandidates(candidates []string, matchedLength []int, queryLength int, filterMatchLength, japanese bool, limit int) []string {
+	var clean []string
+	for index, c := range candidates {
+		if filterMatchLength && matchedLength[index] != queryLength {
+			continue
+		}
+		c = strings.TrimSpace(c)
+		valid := bounded(c, contract.CandidateBytes) && utf8.ValidString(c)
+		for _, ch := range c {
+			if ch < 32 || ch == 127 || (!japanese && unicode.Is(unicode.Latin, ch)) {
+				valid = false
+			}
+		}
+		if valid {
+			if clean == nil {
+				clean = make([]string, 0, min(limit, len(candidates)))
+			}
+			if !slices.Contains(clean, c) {
+				clean = append(clean, c)
+			}
+			if len(clean) == limit {
+				break
+			}
+		}
+	}
+	if clean == nil {
+		return []string{}
+	}
+	return clean
+}
+
+func (s *Server) nativeCloudCandidatesForInput(r *http.Request, text string, limit int) ([]string, bool) {
+	if s.config.Engine.Binary == "" {
+		return []string{}, false
+	}
+	return s.nativeCloudCandidates(r, lowerCloudInput(text), limit)
+}
+
+// lowerCloudInput 只在输入含大写 ASCII 字母时创建小写副本；调用方已用 inputCode 校验输入范围。
+func lowerCloudInput(text string) string {
+	for i := 0; i < len(text); i++ {
+		if c := text[i]; c >= 'A' && c <= 'Z' {
+			var lower strings.Builder
+			lower.Grow(len(text))
+			lower.WriteString(text[:i])
+			for ; i < len(text); i++ {
+				c := text[i]
+				if c >= 'A' && c <= 'Z' {
+					c += 'a' - 'A'
+				}
+				lower.WriteByte(c)
+			}
+			return lower.String()
+		}
+	}
+	return text
+}
+
 func jsonNumber(n int) string { return strconv.Itoa(n) }
 func (s *Server) transcribe(w http.ResponseWriter, r *http.Request) {
 	if !enabled(w, s.config.Transcription) {
@@ -601,36 +662,59 @@ func (s *Server) transcribe(w http.ResponseWriter, r *http.Request) {
 // dictionary match can replace an upstream character-by-character misinterpretation.
 // Engine owns correction and whole-input matching; no provider or user state is mutated.
 func (s *Server) nativeCloudCandidates(r *http.Request, text string, limit int) ([]string, bool) {
-	clean := make([]string, 0, limit)
+	if s.config.Engine.Binary == "" {
+		return []string{}, false
+	}
 	raw, err := s.config.Engine.Query(r.Context(), map[string]any{"operation": "cloud_candidates", "text": text, "limit": limit})
 	if err != nil {
-		return clean, false
+		return []string{}, false
 	}
 	var result struct {
-		Normalized string `json:"normalized_segmentation"`
-		Candidates []struct {
-			Word string `json:"word"`
-		} `json:"candidates"`
+		Normalized string                 `json:"normalized_segmentation"`
+		Candidates []nativeCloudCandidate `json:"candidates"`
 	}
 	if json.Unmarshal(raw, &result) != nil {
-		return clean, false
+		return []string{}, false
 	}
-	seen := map[string]bool{}
-	for _, item := range result.Candidates {
+	return cleanNativeCloudCandidates(result.Candidates, limit), cloudPinyinCorrected(result.Normalized, text)
+}
+
+type nativeCloudCandidate struct {
+	Word string `json:"word"`
+}
+
+func cleanNativeCloudCandidates(candidates []nativeCloudCandidate, limit int) []string {
+	if len(candidates) == 0 {
+		return []string{}
+	}
+	var clean []string
+	var seen map[string]struct{}
+	for _, item := range candidates {
 		word := strings.TrimSpace(item.Word)
-		if !bounded(word, contract.CandidateBytes) || !utf8.ValidString(word) || seen[word] {
+		if !bounded(word, contract.CandidateBytes) || !utf8.ValidString(word) {
 			continue
 		}
 		if strings.ContainsFunc(word, func(ch rune) bool { return ch < 32 || ch == 127 || unicode.Is(unicode.Latin, ch) }) {
 			continue
 		}
+		if seen != nil {
+			if _, ok := seen[word]; ok {
+				continue
+			}
+		} else {
+			clean = make([]string, 0, min(limit, len(candidates)))
+			seen = make(map[string]struct{}, min(limit, len(candidates)))
+		}
 		clean = append(clean, word)
-		seen[word] = true
+		seen[word] = struct{}{}
 		if len(clean) == limit {
 			break
 		}
 	}
-	return clean, cloudPinyinCorrected(result.Normalized, text)
+	if clean == nil {
+		return []string{}
+	}
+	return clean
 }
 
 // cloudPinyinCorrected 判断忽略空格和单引号后，引擎是否改变了输入拼音。

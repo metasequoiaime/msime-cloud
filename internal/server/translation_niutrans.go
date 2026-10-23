@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -15,35 +14,50 @@ import (
 	segmentjson "github.com/segmentio/encoding/json"
 )
 
-// niutransAuthString 按小牛 v2 协议计算签名，保留空字段和原始字节；URL 编码只用于表单正文。
+// niutransAuthString 按小牛 v2 协议分块计算签名，保留空字段和原始字节；URL 编码只用于表单正文。
 func niutransAuthString(appID, apiKey, source, target, timestamp, text string) string {
-	size := len("apikey=&appId=&from=&srcText=&timestamp=&to=") + len(apiKey) + len(appID) + len(source) + len(text) + len(timestamp) + len(target)
-	canonical := make([]byte, 0, size)
-	canonical = append(canonical, "apikey="...)
-	canonical = append(canonical, apiKey...)
-	canonical = append(canonical, "&appId="...)
-	canonical = append(canonical, appID...)
-	canonical = append(canonical, "&from="...)
-	canonical = append(canonical, source...)
-	canonical = append(canonical, "&srcText="...)
-	canonical = append(canonical, text...)
-	canonical = append(canonical, "&timestamp="...)
-	canonical = append(canonical, timestamp...)
-	canonical = append(canonical, "&to="...)
-	canonical = append(canonical, target...)
-	checksum := md5.Sum(canonical) // #nosec G401 -- 上游协议要求使用 MD5。
-	return hex.EncodeToString(checksum[:])
+	parts := [...]string{"apikey=", apiKey, "&appId=", appID, "&from=", source, "&srcText=", text, "&timestamp=", timestamp, "&to=", target}
+	h := md5.New() // #nosec G401 -- 上游协议要求使用 MD5。
+	// 固定缓冲区同时承接字段和分隔符，避免复制整份签名正文。
+	var buffer [1024]byte
+	used := 0
+	for _, part := range parts {
+		for part != "" {
+			n := copy(buffer[used:], part)
+			used += n
+			part = part[n:]
+			if used == len(buffer) {
+				h.Write(buffer[:])
+				used = 0
+			}
+		}
+	}
+	h.Write(buffer[:used])
+	var checksum [md5.Size]byte
+	h.Sum(checksum[:0])
+	var encoded [md5.Size * 2]byte
+	hex.Encode(encoded[:], checksum[:])
+	return string(encoded[:])
 }
 
 // niutransTextForm 保留字段顺序及 URL 转义，一次拼成正文；签名按原始值生成，十六进制摘要直接写入。
 func niutransTextForm(appID, apiKey, source, target, timestamp, text string) string {
 	auth := niutransAuthString(appID, apiKey, source, target, timestamp, text)
-	return "appId=" + url.QueryEscape(appID) +
-		"&authStr=" + auth +
-		"&from=" + url.QueryEscape(source) +
-		"&srcText=" + url.QueryEscape(text) +
-		"&timestamp=" + url.QueryEscape(timestamp) +
-		"&to=" + url.QueryEscape(target)
+	var form strings.Builder
+	form.Grow(3*(len(appID)+len(source)+len(timestamp)+len(target)+len(text)) + len(auth) + 64)
+	form.WriteString("appId=")
+	appendFormQueryEscape(&form, appID)
+	form.WriteString("&authStr=")
+	form.WriteString(auth)
+	form.WriteString("&from=")
+	appendFormQueryEscape(&form, source)
+	form.WriteString("&srcText=")
+	appendFormQueryEscape(&form, text)
+	form.WriteString("&timestamp=")
+	appendFormQueryEscape(&form, timestamp)
+	form.WriteString("&to=")
+	appendFormQueryEscape(&form, target)
+	return form.String()
 }
 
 // niutransDefaultRequestsPerSecond 是小牛文本翻译当前账号的每秒请求上限：超过时它返回错误码 10001（The QPS Exceeds Maximum Limit 5）。升级套餐后用 requests_per_second 覆盖。
@@ -106,21 +120,21 @@ func (s *Server) translateNiuTrans(w http.ResponseWriter, r *http.Request, v tra
 	return true
 }
 
-func (s *Server) translateNiuTransUpstream(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint) {
+func (s *Server) translateNiuTransUpstream(w http.ResponseWriter, r *http.Request, v translationRequest, e TranslationEndpoint) (string, bool) {
 	source, target := niutransLanguage(v.Source), niutransLanguage(v.Target)
 	timestamp := strconv.FormatInt(time.Now().UnixMilli(), 10)
 	payload := niutransTextForm(e.appID, e.apiKey, source, target, timestamp, v.Text)
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, e.URL, strings.NewReader(payload))
 	if err != nil {
 		upstreamError(w, r, err)
-		return
+		return "", false
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
 	req.Header.Set("Accept", "application/json")
 	body, err := s.doUpstream(req)
 	if err != nil {
 		upstreamError(w, r, err)
-		return
+		return "", false
 	}
 	var result struct {
 		Text      json.RawMessage `json:"tgtText"`
@@ -130,20 +144,20 @@ func (s *Server) translateNiuTransUpstream(w http.ResponseWriter, r *http.Reques
 	// 只借用本次调用的响应字节，忽略未知字段；精确匹配键名，保留原映射对大小写及 null 错误字段的判断。
 	if rest, decodeErr := segmentjson.Parse(body, &result, segmentjson.DontCopyRawMessage|segmentjson.DontMatchCaseInsensitiveStructFields); decodeErr != nil || len(rest) != 0 {
 		upstreamError(w, r, nil)
-		return
+		return "", false
 	}
 	if result.ErrorCode != nil {
 		upstreamError(w, r, niutransError(result.ErrorCode))
-		return
+		return "", false
 	}
 	if result.ErrorMsg != nil {
 		upstreamError(w, r, niutransError(nil))
-		return
+		return "", false
 	}
 	var translated string
 	if json.Unmarshal(result.Text, &translated) != nil || !bounded(translated, contract.OutputTextBytes) {
 		upstreamError(w, r, err)
-		return
+		return "", false
 	}
-	respond(w, 200, map[string]any{"code": 200, "data": translated})
+	return translated, true
 }

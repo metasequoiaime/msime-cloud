@@ -23,12 +23,9 @@ func (s *Store) SetCandidatePosition(ctx context.Context, user string, expected 
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
-	var revision int64
-	if err = tx.QueryRow(ctx, `SELECT COALESCE((SELECT revision FROM user_dictionary_state WHERE user_id=$1),0)`, user).Scan(&revision); err != nil {
+	revision, err := checkUserDataRevision(ctx, tx, user, expected)
+	if err != nil {
 		return 0, err
-	}
-	if revision != expected {
-		return 0, errRevisionConflict
 	}
 	batch := &pgx.Batch{}
 	if p.Position > 0 {
@@ -51,7 +48,12 @@ func (s *Store) SetCandidatePosition(ctx context.Context, user string, expected 
 	return revision, tx.Commit(ctx)
 }
 func (s *Store) CandidatePositions(ctx context.Context, user, contextKey string, offset, limit int) ([]CandidatePosition, bool, error) {
-	rows, err := s.pool.Query(ctx, `SELECT context,code,word,position FROM user_candidate_positions WHERE user_id=$1 AND ($2='' OR context=$2) ORDER BY context,position LIMIT $3 OFFSET $4`, user, contextKey, limit+1, offset)
+	// 有无上下文使用各自固定条件，让通用计划也能按已有联合索引定位。
+	condition := "$2::text=''"
+	if contextKey != "" {
+		condition = "context=$2"
+	}
+	rows, err := s.pool.Query(ctx, `SELECT context,code,word,position FROM user_candidate_positions WHERE user_id=$1 AND `+condition+` ORDER BY context,position LIMIT $3 OFFSET $4`, user, contextKey, limit+1, offset)
 	if err != nil {
 		return nil, false, err
 	}
@@ -66,6 +68,15 @@ func (s *Store) CandidatePositions(ctx context.Context, user, contextKey string,
 	}
 	if err = rows.Err(); err != nil {
 		return nil, false, err
+	}
+	if len(out) == 0 {
+		exists, err := s.userExists(ctx, user)
+		if err != nil {
+			return nil, false, err
+		}
+		if !exists {
+			return nil, false, errMissingUser
+		}
 	}
 	more := len(out) > limit
 	if more {

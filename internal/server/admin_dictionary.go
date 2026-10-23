@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 	textunicode "golang.org/x/text/encoding/unicode"
 )
 
@@ -90,7 +91,11 @@ func (s *Server) dictionaryTree(w http.ResponseWriter, r *http.Request, gh *gith
 		fail(w, http.StatusServiceUnavailable, "github_unavailable")
 		return
 	}
-	files := make([]dictionaryTreeItem, 0, len(result.Tree))
+	// 解码结果只属于本次请求，筛选时复用它的数组，空结果仍编码为 JSON 数组。
+	files := result.Tree[:0]
+	if files == nil {
+		files = []dictionaryTreeItem{}
+	}
 	for _, item := range result.Tree {
 		if item.Type != "blob" || !dictionaryTextPath(item.Path) {
 			continue
@@ -210,7 +215,28 @@ func dictionaryTextPath(name string) bool {
 	if !ok || strings.Contains(file, "/") {
 		return false
 	}
-	base := strings.ToLower(file)
+	// 短文件名在栈上折叠 ASCII 大小写；限制长度以便结果字符串也能使用编译器的栈缓冲。
+	var lower [32]byte
+	ascii := len(file) <= len(lower)
+	if ascii {
+		for i := range len(file) {
+			c := file[i]
+			if c >= utf8.RuneSelf {
+				ascii = false
+				break
+			}
+			if c >= 'A' && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			lower[i] = c
+		}
+	}
+	var base string
+	if ascii {
+		base = string(lower[:len(file)])
+	} else {
+		base = strings.ToLower(file)
+	}
 	stem, _, _ := strings.Cut(base, ".")
 	if slices.Contains([]string{"readme", "license", "licence", "notice", "changelog", "agents"}, stem) {
 		return false
@@ -254,16 +280,37 @@ func dictionaryRows(name, text, query string, page int) ([]dictionaryRow, int) {
 	q := strings.ToLower(query)
 	yamlHeader := strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml")
 	lineNumber := 0
+	previousRaw := ""
+	previousTrimmed := ""
+	previousQueryLine := ""
+	previousQueryMatch := false
+	previousQueryReady := false
 	for raw := range strings.SplitSeq(text, "\n") {
 		lineNumber++
-		line := strings.TrimSpace(raw)
+		line := previousTrimmed
+		if raw != previousRaw {
+			line = strings.TrimSpace(raw)
+			previousRaw, previousTrimmed = raw, line
+		}
 		if yamlHeader {
 			if line == "..." {
 				yamlHeader = false
 			}
 			continue
 		}
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "//") || (q != "" && !dictionaryLineContainsLower(line, q)) {
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "//") {
+			continue
+		}
+		queryMatch := true
+		if q != "" {
+			if previousQueryReady && line == previousQueryLine {
+				queryMatch = previousQueryMatch
+			} else {
+				queryMatch = dictionaryLineContainsLower(line, q)
+				previousQueryLine, previousQueryMatch, previousQueryReady = line, queryMatch, true
+			}
+		}
+		if !queryMatch {
 			continue
 		}
 		total++
@@ -285,11 +332,11 @@ func dictionaryRows(name, text, query string, page int) ([]dictionaryRow, int) {
 			}
 		} else if strings.HasPrefix(name, "sources/korean/") {
 			cols = strings.SplitN(line, ":", 3)
+		} else if !strings.HasSuffix(name, ".md") && !strings.ContainsRune(raw, '\t') {
+			// 原始行的首尾制表符也代表列，不能用去除空白后的 line 判断。
+			cols = strings.Fields(line)
 		} else {
 			cols = strings.Split(strings.TrimSuffix(raw, "\r"), "\t")
-			if len(cols) == 1 && !strings.HasSuffix(name, ".md") {
-				cols = strings.Fields(line)
-			}
 		}
 		rows = append(rows, dictionaryRow{Line: lineNumber, Columns: cols})
 	}
@@ -359,10 +406,8 @@ func dictionaryASCIIContainsFold(line, query string) bool {
 	if query == "" {
 		return true
 	}
-	for i := range query {
-		if query[i] >= utf8.RuneSelf {
-			return false
-		}
+	if !textutil.IsASCII(query) {
+		return false
 	}
 	if len(query) > len(line) {
 		return false
@@ -462,10 +507,8 @@ func dictionaryASCIIShortLineContainsLower(line, query string) (matched, ok bool
 			upper = true
 		}
 	}
-	for i := range len(query) {
-		if query[i] >= utf8.RuneSelf {
-			return false, true
-		}
+	if !textutil.IsASCII(query) {
+		return false, true
 	}
 	if !upper {
 		return strings.Contains(line, query), true

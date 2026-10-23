@@ -64,9 +64,9 @@ var diagnosticLabelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,6
 // ValidDiagnosticID 判断 id 是否是快照 ID 的格式（24 位小写十六进制）。
 func ValidDiagnosticID(id string) bool { return diagnosticIDPattern.MatchString(id) }
 
-// DiagnosticEvent 是 input_events / perf_trace 的一条记录。perf_trace 要求 duration_ms，input_events 可以省略。
+// DiagnosticEvent 是 input_events / perf_trace 的一条记录。t_ms 使用指针区分缺失值与合法零值；perf_trace 要求 duration_ms，input_events 可以省略。
 type DiagnosticEvent struct {
-	TMS        int64  `json:"t_ms"`
+	TMS        *int64 `json:"t_ms"`
 	Kind       string `json:"kind"`
 	DurationMS *int64 `json:"duration_ms,omitempty"`
 }
@@ -160,7 +160,7 @@ func validDiagnosticEvents(events []DiagnosticEvent, durationRequired bool) bool
 		return false
 	}
 	for _, e := range events {
-		if !DiagnosticEventKinds[e.Kind] || e.TMS < 0 || (durationRequired && e.DurationMS == nil) || (e.DurationMS != nil && *e.DurationMS < 0) {
+		if !DiagnosticEventKinds[e.Kind] || e.TMS == nil || *e.TMS < 0 || (durationRequired && e.DurationMS == nil) || (e.DurationMS != nil && *e.DurationMS < 0) {
 			return false
 		}
 	}
@@ -307,6 +307,15 @@ COALESCE((SELECT jsonb_agg(jsonb_build_object(
 ) x),'[]'::jsonb)
 FROM diagnostic_snapshots d WHERE d.user_id=$1 AND d.expires_at>now()`, p.UserID, diagnosticAccessListLimit).Scan(&snapshot.ID, &snapshot.CreatedAt, &snapshot.ExpiresAt, &snapshot.Bytes, &snapshot.Sections, &snapshot.TokenHint, &rawAccesses)
 	if errors.Is(err, pgx.ErrNoRows) {
+		exists, existsErr := a.store.userExists(r.Context(), p.UserID)
+		if existsErr != nil {
+			a.error(w, existsErr)
+			return
+		}
+		if !exists {
+			a.error(w, errMissingUser)
+			return
+		}
 		write(w, 200, map[string]any{"snapshot": nil, "accesses": []diagnosticAccess{}})
 		return
 	}

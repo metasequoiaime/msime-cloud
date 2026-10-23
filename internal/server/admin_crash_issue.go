@@ -173,13 +173,14 @@ func (s *Server) adminCrashIssue(w http.ResponseWriter, r *http.Request) {
 	// The issue now exists on GitHub; record it even if the request deadline ran out or the admin went away during the GitHub call. WithoutCancel keeps the actor for the audit row.
 	recordCtx, cancelRecord := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancelRecord()
-	if err = locked.Record(recordCtx, platform.Repo, created.Number, created.HTMLURL); err != nil {
+	status, err := locked.Record(recordCtx, platform.Repo, created.Number, created.HTMLURL)
+	if err != nil {
 		// The issue exists on GitHub but the group does not point at it; hand the link back so it is not lost.
 		slog.Error("crash issue: record", "signature", signature, "issue", created.HTMLURL, "reason", err.Error())
 		respond(w, 503, map[string]any{"error": map[string]string{"code": "issue_not_recorded", "message": "issue_not_recorded"}, "issue_url": created.HTMLURL})
 		return
 	}
-	respond(w, 200, map[string]any{"ok": true, "status": "known", "issue_url": created.HTMLURL, "number": created.Number, "repo": platform.Repo})
+	respond(w, 200, map[string]any{"ok": true, "status": status, "issue_url": created.HTMLURL, "number": created.Number, "repo": platform.Repo})
 }
 
 func nilIfEmpty(s string) *string {
@@ -252,11 +253,41 @@ func longestBacktickRun(s string) int {
 	return longest
 }
 
-// inlineCode quotes one line as a markdown code span whose delimiter is longer than any backtick run inside it.
+// inlineCode 把空白折叠为一个空格，并用长于正文中任意连续反引号的分隔符包住整行。
 func inlineCode(s string) string {
-	s = strings.Join(strings.Fields(s), " ")
-	fence := strings.Repeat("`", longestBacktickRun(s)+1)
-	return fence + " " + s + " " + fence
+	fields, textBytes, longest := 0, 0, 0
+	first := ""
+	for field := range strings.FieldsSeq(s) {
+		if fields == 0 {
+			first = field
+		}
+		fields++
+		textBytes += len(field)
+		longest = max(longest, longestBacktickRun(field))
+	}
+	if fields == 0 {
+		return "`  `"
+	}
+	fence := strings.Repeat("`", longest+1)
+	if fields == 1 {
+		return fence + " " + first + " " + fence
+	}
+	// 只为最终输出预留空间，不建立字段切片或折叠空白后的中间字符串。
+	var out strings.Builder
+	out.Grow(textBytes + fields - 1 + 2*len(fence) + 2)
+	out.WriteString(fence)
+	out.WriteByte(' ')
+	separator := false
+	for field := range strings.FieldsSeq(s) {
+		if separator {
+			out.WriteByte(' ')
+		}
+		out.WriteString(field)
+		separator = true
+	}
+	out.WriteByte(' ')
+	out.WriteString(fence)
+	return out.String()
 }
 
 // fencedCode quotes text as a fenced code block whose fence is longer than any backtick run inside it.

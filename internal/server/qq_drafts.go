@@ -14,7 +14,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
 
@@ -57,6 +56,82 @@ func createQQDraft(ctx context.Context, store qqDraftStore, subject, original, r
 
 // qqDraftCommand 匹配「提交 D12 …」「补充 D12 …」「看 D12」「忽略 D12」，分组是命令、编号和后面的内容（「看」「忽略」不用后面的内容）。也认「提交D12」、小写的 d、命令后的冒号（「补充：D1 Windows 11」）、编号前的「#」、d 和数字之间的空格（「补充 d 1 win11」），编号后面可以用句号、分号、顿号隔开内容：原来多一个冒号就认不出，补充的内容被当成提问交给模型。
 var qqDraftCommand = regexp.MustCompile(`^(提交|补充|看|忽略)\s*[:：]?\s*[#＃]?[Dd]\s*([0-9]{1,9})(?:[\s:：,，。.;；、]+([\s\S]*))?$`)
+
+// qqParseDraftCommand 解析草稿命令，保持 qqDraftCommand 的 ASCII 空白、编号和分隔符规则。
+func qqParseDraftCommand(text string) (command, id, extra string, ok bool) {
+	for _, candidate := range [...]string{"提交", "补充", "看", "忽略"} {
+		if !strings.HasPrefix(text, candidate) {
+			continue
+		}
+		command, text = candidate, text[len(candidate):]
+		for len(text) > 0 && qqRegexpSpace(text[0]) {
+			text = text[1:]
+		}
+		if strings.HasPrefix(text, ":") {
+			text = text[1:]
+		} else if strings.HasPrefix(text, "：") {
+			text = text[len("："):]
+			for len(text) > 0 && qqRegexpSpace(text[0]) {
+				text = text[1:]
+			}
+		}
+		if strings.HasPrefix(text, "#") {
+			text = text[1:]
+		} else if strings.HasPrefix(text, "＃") {
+			text = text[len("＃"):]
+		}
+		if len(text) == 0 || (text[0] != 'D' && text[0] != 'd') {
+			return "", "", "", false
+		}
+		text = text[1:]
+		for len(text) > 0 && qqRegexpSpace(text[0]) {
+			text = text[1:]
+		}
+		start := 0
+		for start < len(text) && text[start] >= '0' && text[start] <= '9' && start < 9 {
+			start++
+		}
+		if start == 0 || (start < len(text) && text[start] >= '0' && text[start] <= '9') {
+			return "", "", "", false
+		}
+		id = text[:start]
+		text = text[start:]
+		if text == "" {
+			return command, id, "", true
+		}
+		if !qqDraftCommandSeparator(text) {
+			return "", "", "", false
+		}
+		for len(text) > 0 {
+			size := qqDraftCommandSeparatorSize(text)
+			if size == 0 {
+				break
+			}
+			text = text[size:]
+		}
+		return command, id, text, true
+	}
+	return "", "", "", false
+}
+
+func qqDraftCommandSeparator(text string) bool {
+	return qqDraftCommandSeparatorSize(text) != 0
+}
+
+func qqDraftCommandSeparatorSize(text string) int {
+	if text == "" {
+		return 0
+	}
+	if qqRegexpSpace(text[0]) || strings.ContainsRune(":,.;", rune(text[0])) {
+		return 1
+	}
+	for _, separator := range [...]string{"：", "，", "。", "；", "、"} {
+		if strings.HasPrefix(text, separator) {
+			return len(separator)
+		}
+	}
+	return 0
+}
 
 func qqDraftCode(id int64) string { return "D" + strconv.FormatInt(id, 10) }
 
@@ -129,8 +204,7 @@ func (s *Server) qqDraftReport(ctx context.Context, subject, text string, histor
 	if err != nil {
 		slog.Warn("qq bot: draft not stored", "reason", err.Error())
 		// PostgreSQL 明确拒绝语句时可以确认没有新建草稿，才退回名额。连接中断、超时或取消时事务可能已经提交，保留名额避免重试再建一份草稿。
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
+		if account.DatabaseWriteDefinitelyRejected(err) {
 			releaseDraftSlot()
 		} else {
 			slog.Warn("qq bot: draft write outcome uncertain; keeping draft slot")
@@ -328,8 +402,8 @@ func qqNotesText(notes qqNotes) string {
 }
 
 // qqDraftCommands 处理「草稿」「看 D编号」「提交 D编号」「补充 D编号」「忽略 D编号」，返回处理结果的名字；不是这几个命令时返回空字符串。
-func (s *Server) qqDraftCommands(ctx context.Context, m qqGroupMessage, text string, admin bool, reply func(string)) string {
-	compact := qqCompact(text)
+// 参数解析使用原文 `text`，列表命令使用已规范化的 `compact`。
+func (s *Server) qqDraftCommands(ctx context.Context, m qqGroupMessage, text, compact string, admin bool, reply func(string)) string {
 	if compact == "草稿" || compact == "草稿列表" {
 		if !admin {
 			reply("只有管理员能看草稿列表。")
@@ -338,13 +412,13 @@ func (s *Server) qqDraftCommands(ctx context.Context, m qqGroupMessage, text str
 		s.qqListDrafts(ctx, reply)
 		return "cmd_drafts"
 	}
-	match := qqDraftCommand.FindStringSubmatch(strings.TrimSpace(text))
-	if match == nil {
+	command, idText, extra, ok := qqParseDraftCommand(strings.TrimSpace(text))
+	if !ok {
 		return ""
 	}
-	id, _ := strconv.ParseInt(match[2], 10, 64)
-	extra := strings.TrimSpace(match[3])
-	if match[1] == "忽略" && !admin {
+	id, _ := strconv.ParseInt(idText, 10, 64)
+	extra = strings.TrimSpace(extra)
+	if command == "忽略" && !admin {
 		reply("只有管理员能忽略草稿。")
 		return "cmd_draft_dismiss"
 	}
@@ -361,7 +435,7 @@ func (s *Server) qqDraftCommands(ctx context.Context, m qqGroupMessage, text str
 		slog.Warn("qq bot: draft unavailable", "reason", err.Error())
 		reply(qqReplyUnavailable)
 		return "cmd_draft"
-	case match[1] == "看":
+	case command == "看":
 		// 草稿里有群友的原话，和列表一样不给别的群友看；发起人可以看自己的。
 		if !admin && !account.QQDraftOwnedBy(draft, m.GroupOpenID+"/"+m.Author.MemberOpenID) {
 			reply("只有发起这份草稿的人和管理员能看。")
@@ -381,7 +455,7 @@ func (s *Server) qqDraftCommands(ctx context.Context, m qqGroupMessage, text str
 		return "cmd_draft"
 	}
 	// 认领超时还没记下 issue 的草稿当作提交被打断，和没提交的一样往下走。
-	if match[1] == "忽略" {
+	if command == "忽略" {
 		ok, err := s.qqDrafts.DismissQQDraft(ctx, id)
 		switch {
 		case err != nil:
@@ -394,7 +468,7 @@ func (s *Server) qqDraftCommands(ctx context.Context, m qqGroupMessage, text str
 		}
 		return "cmd_draft_dismiss"
 	}
-	if match[1] == "补充" {
+	if command == "补充" {
 		if !admin && !account.QQDraftOwnedBy(draft, m.GroupOpenID+"/"+m.Author.MemberOpenID) {
 			reply("只有发起这份草稿的人和管理员能补充。")
 			return "cmd_draft_supplement"
@@ -453,7 +527,7 @@ func (s *Server) qqSupplementDraft(ctx context.Context, draft account.QQDraft, e
 	return report, true
 }
 
-// qqSupplementedNote 是补充成功后的回复，asked 表示还在追问：还缺信息时接着问（qqDraftAsk，和起草稿的说明同一个写法），群友下一句直接回答也能补进草稿（qqDraftFollowUp）；信息齐了就说等管理员提交。
+// qqSupplementedNote 是补充成功后的回复，asked 表示还在追问：还缺信息时接着问（qqDraftAsk，和起草稿的说明同一个写法），群友下一句直接回答也能补进草稿（qqDraftFollowUpID）；信息齐了就说等管理员提交。
 func (s *Server) qqSupplementedNote(ctx context.Context, draft account.QQDraft, report qqReport, extra string) (note string, asked bool) {
 	code := qqDraftCode(draft.ID)
 	if missing := s.qqDraftMissing(ctx, report, draft.Original+"\n补充："+extra); missing != "" {
@@ -466,10 +540,6 @@ func (s *Server) qqSupplementedNote(ctx context.Context, draft account.QQDraft, 
 const qqDraftFollowUpRunes = 80
 
 var (
-	// qqDraftFollowUp 匹配机器人追问草稿缺的信息的回复，分组是草稿编号：说明开头的「已记下（D编号）」「已补充到 D编号」（旧文案是「编号 D编号」），后面跟着「还差」（旧文案是「还想知道」）。起草稿的说明（qqDraftReport）和补充后还缺信息的回复（qqSupplementedNote）都是这个写法，两者都会记进对话历史。
-	qqDraftFollowUp = regexp.MustCompile(`(?:编号 |已补充到 |已记下（)D([0-9]{1,9})[\s\S]*(?:还想知道|还差)`)
-	// qqDraftFollowUpLegacy 是改文案之前的写法：「还想知道：…」后面教群友发的「补充 D编号 …」。对话历史里已经存下的旧回复靠它接上。
-	qqDraftFollowUpLegacy = regexp.MustCompile(`还想知道[\s\S]*「补充 D([0-9]{1,9})`)
 	// qqDraftTurn 匹配已经起过草稿、补充过草稿或者在已有需求下记过票的一轮回复：这一轮之前群友说的话已经在那份草稿或那个需求里了。
 	qqDraftTurn = regexp.MustCompile(`编号 D[0-9]+|已补充到 D[0-9]+|已记下（D[0-9]+|这个需求已经有人提过`)
 	// qqDraftAck 匹配去掉 qqBadAnswerFiller 之后只剩客气话或应答的消息：「好的」「谢谢」「收到」「知道了」「OK」。追问之后群友回一句「谢谢」很常见，这不是补充。
@@ -479,32 +549,48 @@ var (
 // qqDraftText 是整理草稿用的原话：群友这次和之前几轮说的话，较早的在前，用换行拼起来。只拼群友说的，不拼机器人的回答，免得整理时把排查建议当成群友的描述。从最近一轮起过草稿、补充过草稿或记过票的回复之后拼起：那之前说的已经记在别处，再拼进来，新草稿会混进上一个问题。
 func qqDraftText(history []account.QQTurn, question string) string {
 	start := 0
-	for i, turn := range history {
-		if qqDraftTurn.MatchString(turn.Answer) {
+	for i := len(history) - 1; i >= 0; i-- {
+		if qqDraftTurn.MatchString(history[i].Answer) {
 			start = i + 1
+			break
 		}
 	}
-	parts := make([]string, 0, len(history)-start+1)
-	for _, turn := range history[start:] {
-		parts = append(parts, turn.Question)
+	history = history[start:]
+	if len(history) == 0 {
+		return question
 	}
-	return strings.Join(append(parts, question), "\n")
+	size := len(question)
+	const maxInt = int(^uint(0) >> 1)
+	for _, turn := range history {
+		if len(turn.Question) >= maxInt-size {
+			panic("strings: Join output length overflow")
+		}
+		size += len(turn.Question) + 1
+	}
+	var out strings.Builder
+	out.Grow(size)
+	for _, turn := range history {
+		out.WriteString(turn.Question)
+		out.WriteByte('\n')
+	}
+	out.WriteString(question)
+	return out.String()
 }
 
 // qqDraftNoContent 判断消息里有没有能补进草稿的内容：去掉语气字、标点和表情后什么都不剩，或者只剩客气话（qqDraftAck）、只剩一句否定（qqBadAnswerPattern，交给差评重答）时没有。
 func qqDraftNoContent(text string) bool {
-	stripped := qqBadAnswerFiller.ReplaceAllString(text, "")
+	stripped := qqStripBadAnswerFiller(text)
 	return stripped == "" || qqDraftAck.MatchString(stripped) || qqBadAnswerPattern.MatchString(stripped)
 }
 
-// qqSupplementFollowUp 处理机器人追问草稿缺的信息之后群友的直接回答，补进那份草稿，返回处理结果的名字；不算补充时返回空字符串，调用方照常答疑。原来只认「补充 D编号 内容」，群友多半直接回「Windows 11，0.9.5」，被当成新问题去答，模型的历史里也没有草稿编号，常常又判成报问题、再开一份草稿，原来那份一直缺信息。同时满足才算补充：上一轮回复是追问（qqDraftFollowUp，草稿编号从这里取，比扫待处理的草稿更不容易补错）；消息不超过 qqDraftFollowUpRunes 字，不是问句（qqCommandQuestion），也不是只有客气话或否定（qqDraftNoContent）；草稿还在、没提交，而且是这位群友发起的。补充成功时这一轮记进对话历史，还缺信息时下一句照样能接上；补充失败时 qqSupplementDraft 已经回复过，不记这一轮，上一轮的追问还在，群友再说一句仍能补上。
+// qqSupplementFollowUp 处理机器人追问草稿缺的信息之后群友的直接回答，补进那份草稿，返回处理结果的名字；不算补充时返回空字符串，调用方照常答疑。原来只认「补充 D编号 内容」，群友多半直接回「Windows 11，0.9.5」，被当成新问题去答，模型的历史里也没有草稿编号，常常又判成报问题、再开一份草稿，原来那份一直缺信息。同时满足才算补充：上一轮回复是追问（qqDraftFollowUpID，草稿编号从这里取，比扫待处理的草稿更不容易补错）；消息不超过 qqDraftFollowUpRunes 字，不是问句（qqContainsQuestion），也不是只有客气话或否定（qqDraftNoContent）；草稿还在、没提交，而且是这位群友发起的。补充成功时这一轮记进对话历史，还缺信息时下一句照样能接上；补充失败时 qqSupplementDraft 已经回复过，不记这一轮，上一轮的追问还在，群友再说一句仍能补上。
 func (s *Server) qqSupplementFollowUp(ctx context.Context, subject string, history []account.QQTurn, text string, reply func(string)) string {
 	if s.qqDrafts == nil || s.qqHistory == nil || len(history) == 0 {
 		return ""
 	}
 	id, ok := qqDraftFollowUpID(history[len(history)-1].Answer)
 	text = strings.TrimSpace(text)
-	if !ok || utf8.RuneCountInString(text) > qqDraftFollowUpRunes || qqCommandQuestion.MatchString(text) || qqDraftNoContent(text) {
+	if !ok || utf8.RuneCountInString(text) > qqDraftFollowUpRunes || qqContainsQuestion(text) || qqDraftNoContent(text) {
 		return ""
 	}
 	draft, err := s.qqDrafts.QQDraft(ctx, id)
@@ -527,17 +613,58 @@ func (s *Server) qqSupplementFollowUp(ctx context.Context, subject string, histo
 	return "cmd_draft_supplement_followup"
 }
 
-// qqDraftFollowUpID 从机器人上一轮的回复里取追问的草稿编号：先认现在的写法（qqDraftFollowUp），再认旧写法（qqDraftFollowUpLegacy）；不是追问时 ok 为 false。
+// qqDraftFollowUpID 从上一轮回复取追问的草稿编号，先认当前文案，再认旧文案。
+// 当前文案取追问之前最早的编号，旧文案的贪婪匹配则取追问之后最后一个有效的「补充 D编号」。
 func qqDraftFollowUpID(answer string) (int64, bool) {
-	match := qqDraftFollowUp.FindStringSubmatch(answer)
-	if match == nil {
-		match = qqDraftFollowUpLegacy.FindStringSubmatch(answer)
-	}
-	if match == nil {
+	first := strings.IndexByte(answer, 'D')
+	if first < 0 {
 		return 0, false
 	}
-	id, err := strconv.ParseInt(match[1], 10, 64)
-	return id, err == nil
+	lastAsk := max(strings.LastIndex(answer, "还差"), strings.LastIndex(answer, "还想知道"))
+	for search := first; search < lastAsk; {
+		i := strings.IndexByte(answer[search:lastAsk], 'D')
+		if i < 0 {
+			break
+		}
+		i += search
+		search = i + 1
+		prefix := answer[:i]
+		if !strings.HasSuffix(prefix, "编号 ") && !strings.HasSuffix(prefix, "已补充到 ") && !strings.HasSuffix(prefix, "已记下（") {
+			continue
+		}
+		if id, ok := qqDraftFollowUpNumber(answer[i+1 : lastAsk]); ok {
+			return id, true
+		}
+	}
+	firstAsk := strings.Index(answer, "还想知道")
+	if firstAsk < 0 {
+		return 0, false
+	}
+	legacy := answer[firstAsk+len("还想知道"):]
+	const marker = "「补充 D"
+	for end := len(legacy); end > 0; {
+		i := strings.LastIndex(legacy[:end], marker)
+		if i < 0 {
+			break
+		}
+		end = i
+		if id, ok := qqDraftFollowUpNumber(legacy[i+len(marker):]); ok {
+			return id, true
+		}
+	}
+	return 0, false
+}
+
+// qqDraftFollowUpNumber 直接读最多九位 ASCII 数字，保留前导零及十位编号只取前九位的规则。
+func qqDraftFollowUpNumber(number string) (int64, bool) {
+	if len(number) == 0 || number[0] < '0' || number[0] > '9' {
+		return 0, false
+	}
+	var id int64
+	for i := 0; i < min(len(number), 9) && number[i] >= '0' && number[i] <= '9'; i++ {
+		id = id*10 + int64(number[i]-'0')
+	}
+	return id, true
 }
 
 // qqQuestionEnd 给模型写的追问补上句末的问号，后面好直接接下一句；已经以标点结尾时原样返回。
@@ -721,8 +848,71 @@ func (s *Server) qqDraftDetail(ctx context.Context, draft account.QQDraft, admin
 	return b.String()
 }
 
-// qqOwnCodePattern 匹配问题里提到的草稿编号「D3」「d 12」：前后不能紧挨着字母和数字，免得把「3D」「AD3」「D3D11」当成编号。
-var qqOwnCodePattern = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])D\s?([0-9]{1,6})(?:[^A-Za-z0-9]|$)`)
+// qqOwnCodeIDs 按原正则的非重叠规则读取草稿编号，凑齐三个不同的正编号后停止，不收集全文匹配。
+func qqOwnCodeIDs(question string) []int64 {
+	var ids []int64
+	matchedEnd := 0
+	for offset := 0; offset < len(question); {
+		next := strings.IndexAny(question[offset:], "Dd")
+		if next < 0 {
+			break
+		}
+		start := offset + next
+		offset = start + 1
+		if start > 0 {
+			// 前一次匹配已消耗的分隔符不能作为下一个编号的前缀。
+			if start == matchedEnd {
+				continue
+			}
+			before, _ := utf8.DecodeLastRuneInString(question[:start])
+			if qqOwnCodeLetterOrDigit(before) {
+				continue
+			}
+		}
+		end := start + 1
+		if end < len(question) {
+			// 原正则的 \s? 只允许一个 ASCII 空白，不含垂直制表符。
+			switch question[end] {
+			case ' ', '\t', '\n', '\r', '\f':
+				end++
+			}
+		}
+		digits := end
+		var id int64
+		for end < len(question) && end-digits < 6 && question[end] >= '0' && question[end] <= '9' {
+			id = id*10 + int64(question[end]-'0')
+			end++
+		}
+		if end == digits {
+			continue
+		}
+		if end < len(question) {
+			after, size := utf8.DecodeRuneInString(question[end:])
+			if qqOwnCodeLetterOrDigit(after) {
+				continue
+			}
+			end += size
+		}
+		offset, matchedEnd = end, end
+		if id == 0 || slices.Contains(ids, id) {
+			continue
+		}
+		if ids == nil {
+			ids = make([]int64, 0, 3)
+		}
+		ids = append(ids, id)
+		if len(ids) == 3 {
+			break
+		}
+	}
+	return ids
+}
+
+// qqOwnCodeLetterOrDigit 沿用 (?i)[A-Za-z0-9]；长 s 和开尔文符号也属于 ASCII 字母的 Unicode 简单折叠集合。
+func qqOwnCodeLetterOrDigit(r rune) bool {
+	lower := r | 0x20
+	return r >= '0' && r <= '9' || lower >= 'a' && lower <= 'z' || r == 'ſ' || r == 'K'
+}
 
 // qqOwnCodes 是答疑资料里「机器人自己的编号」一节：问题里提到 D编号时，说明这是机器人给群友报的问题记下的编号，并写上报的是什么、现在的状态。群友收到「已记下（D3）」后来问「D3 是什么」「D3 怎么样了」，机器人曾经不认得自己的编号，去 GitHub 搜了一圈说「D3 不像水杉里的功能名」。只写模型整理的标题和状态，不写原话；最多 3 个；没有提到、没有草稿存储时返回空字符串。
 func (s *Server) qqOwnCodes(ctx context.Context, question string) string {
@@ -730,13 +920,7 @@ func (s *Server) qqOwnCodes(ctx context.Context, question string) string {
 		return ""
 	}
 	var b strings.Builder
-	var seen []int64
-	for _, match := range qqOwnCodePattern.FindAllStringSubmatch(question, -1) {
-		id, err := strconv.ParseInt(match[1], 10, 64)
-		if err != nil || id <= 0 || slices.Contains(seen, id) || len(seen) == 3 {
-			continue
-		}
-		seen = append(seen, id)
+	for _, id := range qqOwnCodeIDs(question) {
 		code := qqDraftCode(id)
 		draft, err := s.qqDrafts.QQDraft(ctx, id)
 		switch {

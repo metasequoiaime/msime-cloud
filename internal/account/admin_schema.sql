@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS admin_audit (
 );
 -- 审计列表按时间和 ID 倒序分页，避免每次选页都扫描并排序全部历史。
 CREATE INDEX IF NOT EXISTS admin_audit_time ON admin_audit(created_at DESC,id DESC);
+-- 反馈撤销按目标查最近一次操作，同值设置也通过审计更新版本。
+CREATE INDEX IF NOT EXISTS admin_audit_feedback_version ON admin_audit(target,id DESC) WHERE action IN ('resolve_feedback','reopen_feedback','undo_feedback_status');
 
 CREATE INDEX IF NOT EXISTS auth_users_created ON auth_users(created_at);
 
@@ -152,6 +154,20 @@ CREATE TABLE IF NOT EXISTS admin_crash_groups (
 );
 CREATE INDEX IF NOT EXISTS admin_crash_groups_seen ON admin_crash_groups(last_seen DESC);
 
+-- 状态版本独立于上报统计；默认值区分删除重建，触发器也覆盖滚动升级期间旧副本的写入。
+ALTER TABLE admin_crash_groups ADD COLUMN IF NOT EXISTS status_token text NOT NULL DEFAULT md5(random()::text||clock_timestamp()::text);
+CREATE OR REPLACE FUNCTION admin_crash_status_token() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ NEW.status_token := md5(random()::text||clock_timestamp()::text);
+ RETURN NEW;
+END $$;
+DO $$ BEGIN
+ IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid='admin_crash_groups'::regclass AND tgname='admin_crash_status_token') THEN
+  CREATE TRIGGER admin_crash_status_token BEFORE UPDATE OF status,issue_url ON admin_crash_groups FOR EACH ROW EXECUTE FUNCTION admin_crash_status_token();
+ END IF;
+END $$;
+ALTER TABLE admin_crash_groups ENABLE TRIGGER admin_crash_status_token;
+
 CREATE TABLE IF NOT EXISTS admin_notices (
  id bigserial PRIMARY KEY,
  title text NOT NULL DEFAULT '' CHECK(length(title)<=200),
@@ -198,6 +214,13 @@ CREATE TABLE IF NOT EXISTS admin_service_metrics (
  usage numeric NOT NULL DEFAULT 0,
  PRIMARY KEY(service,hour)
 );
+-- 冲刷批次与两类指标在同一事务中写入，确认丢失时重试不会重复累加；保留八天覆盖最长七天的待写入窗口。
+CREATE TABLE IF NOT EXISTS admin_service_metric_batches (
+ id text PRIMARY KEY,
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS admin_service_metric_batches_time ON admin_service_metric_batches(created_at);
+
 CREATE TABLE IF NOT EXISTS admin_service_daily (
  service text NOT NULL,
  day date NOT NULL,

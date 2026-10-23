@@ -19,13 +19,14 @@ import (
 
 	msimebackend "github.com/metasequoiaime/MSIME-Backend"
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
 )
 
 const usage = `usage: msime-cloud <command> [arguments]
 
-  tools                                  list the shared public query tools as JSON
-  tool NAME [json|-]                     run one read-only dictionary or public-data tool
-  mcp                                    serve the same tools over MCP stdio
+  tools [--admin]                        list public or admin tools as JSON
+  tool [--admin] NAME [json|-]           run one tool
+  mcp [--admin]                          serve public or admin tools over MCP stdio
   routes [filter]                        list the operations: method, path, auth, summary
   describe METHOD PATH                   print one operation: parameters, request body and responses
   call METHOD PATH [json|-] [-q name=value]... [-F name=value|name=@file]... [-o file]
@@ -73,6 +74,8 @@ func (e usageError) Error() string { return e.message }
 type statusError struct{ status string }
 
 func (e statusError) Error() string { return "the server answered " + e.status }
+
+var errSessionEnded = errors.New("the session has ended; sign in again with `msime-cloud login start`")
 
 type cli struct {
 	env    func(string) string
@@ -321,7 +324,12 @@ func (c cli) send(r request) (*http.Response, error) {
 	if token := c.env("MSIME_CLOUD_TOKEN"); token != "" {
 		return c.do(server, r, token)
 	}
-	return c.sendKeptSession(r)
+	response, err := c.sendKeptSession(r)
+	// 会话被服务端明确撤销后仍可公开浏览；其他刷新错误保留，避免悄悄丢失身份。
+	if auth == authOptionalUser && errors.Is(err, errSessionEnded) {
+		return c.do(server, r, "")
+	}
+	return response, err
 }
 
 // sendKeptSession 使用本地保存的用户会话，必要时刷新；退出不能改用环境令牌的身份。
@@ -428,7 +436,7 @@ func (c cli) refresh(server string, used session) (session, error) {
 		if err = sessions.putLocked(server, nil); err != nil {
 			return session{}, err
 		}
-		return session{}, errors.New("the session has ended; sign in again with `msime-cloud login start`")
+		return session{}, errSessionEnded
 	}
 	if response.StatusCode != http.StatusOK {
 		return session{}, fmt.Errorf("refreshing the session failed with %s: %s", response.Status, strings.TrimSpace(string(data)))
@@ -463,7 +471,18 @@ func (c cli) do(server string, r request, token string) (*http.Response, error) 
 	return c.doOnce(server, r, token)
 }
 
+func validateServerURL(base string) error {
+	u, err := url.Parse(base)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(base, "#") {
+		return errors.New("invalid_server_url")
+	}
+	return nil
+}
+
 func (c cli) doOnce(server string, r request, token string) (*http.Response, error) {
+	if err := validateServerURL(server); err != nil {
+		return nil, usageError{err.Error()}
+	}
 	target := strings.TrimRight(server, "/") + r.path
 	if len(r.query) > 0 {
 		separator := "?"
@@ -486,7 +505,7 @@ func (c cli) doOnce(server string, r request, token string) (*http.Response, err
 	}
 	// 不跟随重定向，避免将令牌、验证码或上传正文发送到其他地址。
 	isolated := *c.client
-	isolated.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	isolated.CheckRedirect = httpclient.StopRedirect
 	return isolated.Do(req)
 }
 

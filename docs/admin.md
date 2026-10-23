@@ -47,7 +47,7 @@
    ```
 
 4. Google 登录模式不需要 `MSIME_ADMIN_TOKEN`。保留它时，登录页额外提供「管理员密钥登录」作为兼容入口；不配置 Google 时仍需要至少 32 字节的独立随机管理员密钥。管理员密钥不能以 `msime_pat_` 开头，这个前缀留给个人访问令牌，配置校验会拒绝。不要把任何密钥放进前端源码、安装包或版本库。
-5. 运行账号有 DDL 权限时不需要单独迁移：启动时发现缺少后台表或列，会自动执行 `internal/account/admin_schema.sql` 和 `internal/account/admin_ops_schema.sql`，两者都是幂等的追加式迁移。运行账号按最小权限只有 DML 时，先用有 DDL 权限的账号执行 `./msime-server -config /config/config.json -migrate-users`，再给运行角色授予新表的 `SELECT, INSERT, UPDATE, DELETE` 以及 bigserial 序列的 `USAGE, SELECT`。新表包括 `admin_roles`、`admin_role_permissions`、`admin_tokens`、`admin_notifications`、`admin_notification_reads`、`admin_preferences`、`admin_notices`、`admin_crash_groups`、`admin_service_metrics`、`admin_service_daily`、`admin_email_delivery_daily`、`admin_service_minutes`、`admin_service_verdicts`、`admin_incidents`、`admin_sensitive_words`、`admin_sensitive_hits`、`release_asset_snapshots`、`community_reports`、`word_submissions` 和 `site_settings`；已有的 `admin_members`、`admin_sessions`、`admin_audit`、`admin_events` 和四张社区表新增了列。`admin_role_permissions` 的权限 CHECK 约束随服务日志权限 `view_logs` 一起更新（同时给维护者授予一次 `view_logs`），这同样需要 DDL 权限。后台启用而表、列或约束既不存在又补不上时，服务拒绝启动并在错误里说明原因。
+5. 运行账号有 DDL 权限时不需要单独迁移：启动时发现缺少后台表或列，会自动执行 `internal/account/admin_schema.sql` 和 `internal/account/admin_ops_schema.sql`，两者都是幂等的追加式迁移。运行账号按最小权限只有 DML 时，先用有 DDL 权限的账号执行 `./msime-server -config /config/config.json -migrate-users`，再给运行角色授予新表的 `SELECT, INSERT, UPDATE, DELETE` 以及 bigserial 序列的 `USAGE, SELECT`。新表包括 `admin_roles`、`admin_role_permissions`、`admin_tokens`、`admin_notifications`、`admin_notification_reads`、`admin_preferences`、`admin_notices`、`admin_crash_groups`、`admin_service_metrics`、`admin_service_metric_batches`、`admin_service_daily`、`admin_email_delivery_daily`、`admin_service_minutes`、`admin_service_verdicts`、`admin_incidents`、`admin_sensitive_words`、`admin_sensitive_hits`、`release_asset_snapshots`、`community_reports`、`word_submissions` 和 `site_settings`；已有的 `auth_users`、`admin_members`、`admin_sessions`、`admin_audit`、`admin_events`、`admin_crash_groups` 和四张社区表新增了列。崩溃分组的 `status_token` 默认值与状态触发器也由迁移补齐，只有 DML 权限时应先由 DDL 账号执行新版本 `-migrate-users`；无需新增表权限，旧副本的状态与链接写入同样触发版本更新。`admin_role_permissions` 的权限 CHECK 约束随服务日志权限 `view_logs` 一起更新（同时给维护者授予一次 `view_logs`），这同样需要 DDL 权限。后台启用而表、列或约束既不存在又补不上时，服务拒绝启动并在错误里说明原因。
 6. 正常启动镜像，容器中的 `listen` 应为 `0.0.0.0:8080`。把 `admin.msime.app` 的 DNS 指向入口，在入口终止 HTTPS，把该域名的请求转发到相同的 Go 端口，并保留原始 Host。Go 不信任 `X-Forwarded-Host`。
 
 示例 Nginx HTTPS 虚拟主机（证书路径、后端地址按部署调整）：
@@ -129,7 +129,7 @@ Google 登录时，后端校验 ID Token 的签名、issuer、audience、有效�
 | --- | --- |
 | `review_dict_pr` | 词库 PR 的精简、通过和驳回 |
 | `review_community` | 社区皮肤、候选皮肤和插件的新增、编辑，以及社区内容的通过、下架、恢复和删除；敏感词库的增删改 |
-| `triage_issues` | Issue 分诊与回复；崩溃分组状态和为崩溃分组建 Issue；旧崩溃列表的处理；故障事件的开启、更新和恢复 |
+| `triage_issues` | 管理 QQ 草稿与读取文档缺口；Issue 分诊与回复；崩溃分组状态和为崩溃分组建 Issue；旧崩溃列表的处理；故障事件的开启、更新和恢复 |
 | `ban_users` | 封禁、解封用户，吊销用户会话 |
 | `publish_notices` | 发布、归档公告；修改官网下载镜像链接（`POST /api/site-settings`） |
 | `trigger_release` | 触发发布流水线、编辑发布说明、撤回版本 |
@@ -153,7 +153,7 @@ Google 登录时，后端校验 ID Token 的签名、issuer、audience、有效�
 
 规则：
 
-- 除云端监控（`view_cloud_usage`）和服务日志（`view_logs`）外，所有 GET 请求对所有角色开放，「只读」角色就是靠这一点成立的。缺少权限的写操作返回 403 `permission_denied`，前端对应按钮置灰并提示所需权限；云端监控和服务日志在侧栏和搜索中对没有对应权限的角色隐藏。
+- 除云端监控（`view_cloud_usage`）、服务日志（`view_logs`）和 QQ 草稿与文档缺口（`triage_issues`）外，所有 GET 请求对所有角色开放，「只读」角色就是靠这一点成立的。缺少权限的写操作返回 403 `permission_denied`，前端对应按钮置灰并提示所需权限；云端监控和服务日志在侧栏和搜索中对没有对应权限的角色隐藏。
 - `view_logs` 默认只有维护者拥有（所有者恒为维护者，旧版管理员密钥拥有除 `manage_permissions` 外的全部权限），需要时可以在权限矩阵里授予其他角色。已有部署升级时，迁移只在替换旧约束的那一次给维护者授予 `view_logs`，之后在后台收回不会被重跑的迁移补回。
 - 维护者的 `manage_permissions` 不能收回（409 `protected`），迁移也会在它缺失时补回。权限矩阵通过 `POST /api/permissions {action: grant|revoke, role, permission}` 修改。
 - 所有者恒为维护者，不能在后台修改、停用或撤销（403 `protected_owner`），恢复入口始终在部署配置里。
@@ -174,12 +174,12 @@ Google 登录时，后端校验 ID Token 的签名、issuer、audience、有效�
 
 ## 外壳
 
-外壳由 `GET /api/shell` 一次性提供，每 60 秒刷新：版本号、环境标签（`admin.environment`）、本人邮箱、名字、角色和权限、侧栏待处理角标（词库 PR、社区待复核、待分诊 Issue）、未读通知数、后端状态（`ok`、`degraded`、`down`；前端也接受 `unknown` 并显示「状态未知」），以及部署配置启用的可选功能 `features`（目前只有 `logs`，即是否配置了 `admin.logs.loki_url`，未启用时侧栏不显示服务日志页）。
+外壳由 `GET /api/shell` 一次性提供，每 60 秒刷新：版本号、环境标签（`admin.environment`）、本人邮箱、名字、角色和权限、侧栏待处理角标（词库 PR、待分诊 Issue；社区各类型角标由 `GET /api/community/counts` 提供）、未读通知数、后端状态（`ok`、`degraded`、`down`；前端也接受 `unknown` 并显示「状态未知」），以及部署配置启用的可选功能 `features`（目前只有 `logs`，即是否配置了 `admin.logs.loki_url`，未启用时侧栏不显示服务日志页）。
 
 - 全局搜索（按 `/` 聚焦）：前端匹配页面名，`GET /api/search?q=` 最多返回 8 条，覆盖用户、社区内容、崩溃分组、敏感词、公告，以及内存缓存中的 GitHub PR、Issue 和 Release。结果通过 `?focus=<id>` 打开对应页面的详情。
 - 通知：`GET /api/notifications?limit=20`，`POST /api/notifications/read {ids}|{all:true,up_to_id?}`。「全部已读」带上列表中最新一条通知的 `up_to_id`，只把本次标记语句可见、创建时间不晚于它的通知标为已读；不带 `up_to_id` 时标记到服务端当前时间。操作按通知写入本人的已读记录，尚未提交的业务通知稍后提交时仍保持未读；旧版本留下的已读水位继续生效，无需迁移。通知列表每次打开都重新加载；角标在弹层关闭时跟随外壳的 60 秒轮询，在个人中心切换通知偏好后立即刷新。来源包括新举报（与举报同事务写入）、新词库 PR、崩溃分组 7 天环比上升超过 20%（每小时检查，同一分组 7 天内只提醒一次）、自动开启的故障事件、Release 状态变化和新 Issue。个人中心可以按类型关闭词库 PR、举报和崩溃提醒。新加入的管理员会看到全部历史通知为未读。新 Issue 通知的整批写入共用独立的 3 秒预算；请求取消不影响写入，数据库等待超时或写入失败则留待后续轮询重试。
 - 外观：浅色、深色或跟随系统；配色可选春、夏、秋、冬或「自动」。自动配色按本地月份切换（3–5 月春，6–8 月夏，9–11 月秋，12–2 月冬），页面一直开着跨过月份边界时也会自动切换。外观保存在浏览器本地。
-- 旧路径重定向：`/admins`、`/audit` → `/perm`，`/system` → `/status`，`/crashes` → `/crash`，`/skins`、`/dictionaries`、`/replies` → `/community?tab=skins|dictionaries|replies`，原有查询参数保留。
+- 旧路径重定向：`/admins`、`/audit` → `/perm`，`/system` → `/status`，`/crashes` → `/crash`，`/community?tab=<类型>` → 对应社区页面（默认 `/skins`，合法 `focus` 类型前缀优先），原有筛选、页码和定位参数保留。
 
 ## 页面
 
@@ -188,7 +188,12 @@ Google 登录时，后端校验 ID Token 的签名、issuer、audience、有效�
 | 数据概览 | `/` | `GET /api/overview` | — |
 | 词库管理 | `/dictionary` | `GET /api/dictionary`、`GET /api/dictionary/file`、`GET /api/dictionary/search`、`POST /api/dictionary/changes`（GitHub） | 读取需 GitHub App；提交变更需 `review_dict_pr` |
 | 词库审核 | `/dictpr` | `GET /api/dict-prs`、`/api/dict-prs/{n}`（GitHub） | `review_dict_pr` |
-| 社区管理 | `/community` | `GET /api/{skins,candidate-skins,plugins,dictionaries,replies,phrases}`、`/api/community/counts` | `review_community` |
+| 键盘皮肤 | `/skins` | `GET /api/skins`、`/api/community/counts` | `review_community` |
+| 候选窗皮肤 | `/candidate-skins` | `GET /api/candidate-skins`、`/api/community/counts` | `review_community` |
+| 插件 | `/plugins` | `GET /api/plugins`、`/api/community/counts` | `review_community` |
+| 社区词库 | `/dictionaries` | `GET /api/dictionaries`、`/api/community/counts` | `review_community` |
+| 回复模板 | `/replies` | `GET /api/replies`、`/api/community/counts` | `review_community` |
+| 短语包 | `/phrases` | `GET /api/phrases`、`/api/community/counts` | `review_community` |
 | 问题分诊 | `/issues` | `GET /api/issues`、`/api/issues/{owner}/{repo}/{n}`（GitHub） | `triage_issues` |
 | 用户反馈 | `/feedback` | `GET /api/feedback`、`/api/feedback/{id}/screenshots/{n}` | `triage_issues` |
 | 敏感词库 | `/words` | `GET /api/sensitive-words` | `review_community` |
@@ -212,19 +217,36 @@ Google 登录时，后端校验 ID Token 的签名、issuer、audience、有效�
 
   词条以电子表格交互：单击选择单元格，直接输入覆盖内容，双击或 F2 在原内容上编辑；Tab / Shift+Tab 横向移动，Enter / Shift+Enter 纵向移动，方向键导航，Esc 取消当前输入。切换单元格或失焦自动暂存，不需要逐行确认。支持 Shift 扩选、鼠标拖动选区、Ctrl / ⌘ A 全选、点击列标题选择整列、C / V 复制粘贴 Excel 多行多列、D 向下填充、Z 撤销、Shift+Z 或 Y 重做；内容栏可编辑当前单元格，点击「专注编辑」可收起目录和搜索结果，末尾空行支持连续录入和批量追加。一次粘贴作为一项撤销操作，选区含只读字段、非法字段或超过 100 项变更时整批拒绝；选中矩形时只接受能完整填充选区的粘贴数据，避免静默截断；覆盖粘贴不能跨过当前页尚未加载的词条。未填完整的行保留在草稿中，错误字段直接标红并可「定位问题」，不能提交。「保存变更」或 Ctrl / ⌘ S 统一创建 PR。自定义翻译直接编辑译文，保存时追加修正记录；自定义中文和英文的已有词条只读，可复制补词。上游词库支持键盘导航、选区复制和搜索。文件内搜索和翻页先暂存当前输入，校验失败时保留原视图供修正；切换后保留全部已暂存草稿，切换文件或离开页面时保护草稿。
 
-  `custom/{words,english,translations}.txt` 只允许追加；`packs/<name>/{quanpin,english,translations}.txt` 支持逐行增删改；`sources/` 及其他文件只读。`POST /api/dictionary/changes` 需要 `review_dict_pr`，请求例如 `{"path":"custom/words.txt","sha":"<原文件 blob SHA>","changes":[{"operation":"add","line":0,"columns":["水杉","shui'shan","1"]}]}`。`changes` 为 1–100 项，请求体最多 128 KiB；`replace` 和 `delete` 的 `line` 为原文件行号，`delete` 的 `columns` 必须为空数组。服务端核对默认分支上最新文件的 SHA、词条格式、重复项和权重范围，在随机的 `dictionary-admin/` 分支创建 PR，写入 `dictionary_change` 审计。成功返回 `{"number","url","branch"}`，维护者在 GitHub 中检查仓库 CI 和翻译覆盖后合入；这类 PR 不混入只审核官网投稿的 `/dictpr` 页面。每次请求使用独立分支，无跨副本的可变草稿或进程锁。文件已更新返回 409 `dictionary_changed`；写入结果不确定返回 `dictionary_uncertain`，前端停止再次提交，先检查仓库分支和 PR。PR 已创建但审计写入失败返回 503 `dictionary_not_recorded` 并附 `pull_url`，前端保留链接且停止再次提交。仓库的上游字节锁定和发布约束以 `msime-dictionary/AGENTS.md` 为准。
+  `custom/{words,english,translations}.txt` 只允许追加；`packs/<name>/{quanpin,english,translations}.txt` 支持逐行增删改；`sources/` 及其他文件只读。`POST /api/dictionary/changes` 需要 `review_dict_pr`，请求例如 `{"path":"custom/words.txt","sha":"<原文件 blob SHA>","changes":[{"operation":"add","line":0,"columns":["水杉","shui'shan","1"]}]}`。`changes` 为 1–100 项，请求体最多 128 KiB；`replace` 和 `delete` 的 `line` 为原文件行号，`delete` 的 `columns` 必须为空数组。服务端核对默认分支上最新文件的 SHA、词条格式、重复项和权重范围，在随机的 `dictionary-admin/` 分支创建 PR，写入 `dictionary_change` 审计。成功返回 `{"number","url","branch"}`，维护者在 GitHub 中检查仓库 CI 和翻译覆盖后合入；这类 PR 不混入只审核官网投稿的 `/dictpr` 页面。每次请求使用独立分支，无跨副本的可变草稿或进程锁。开始写入前仍响应请求取消；开始创建分支后，服务端在独立的 15 秒上下文内继续完成文件提交和 PR 创建，避免管理员断开连接后留下无 PR 的分支。文件已更新返回 409 `dictionary_changed`；写入结果不确定返回 `dictionary_uncertain`，前端停止再次提交，先检查仓库分支和 PR。PR 已创建但审计写入失败返回 503 `dictionary_not_recorded` 并附 `pull_url`，前端保留链接且停止再次提交。仓库的上游字节锁定和发布约束以 `msime-dictionary/AGENTS.md` 为准。
 - **词库审核**：只列词库仓库自身 `community-words/` 分支上的 PR（忽略 fork），读最近 100 个。搜索或通知指定的 `focus` 目标不在列表时，通过现有 `GET /api/dict-prs/{n}` 补读并展示；读取期间、失败、目标不存在或编号无效时，都不回退到其他 PR 的详情和审核入口，失败可重试。未指定定位目标时只展示当前状态筛选内的 PR，空筛选不显示其他状态的审核入口。详情比较 PR 基准提交与头部提交的 `custom/{words,english,translations}.txt`，逐条标记：`ad` 命中敏感词，`bad` 不符合官网校验规则，`dup` 已在基准文件或内置词库中、或在 PR 内重复，`new` 可收录。可以只保留勾选项（逐个文件以 blob SHA 做比较交换后重写分支，并改写 PR 标题），可以通过（先精简，再以头部 SHA 为条件 squash 合并；只有 GitHub 响应确认 `merged: true` 且带有合并提交 SHA 时才返回成功并记录通过审计；上游返回 2xx 但缺少有效确认时返回 `502 github_uncertain`，保留此前已完成的精简及其审计，需先检查 PR 实际状态），也可以驳回（先评论「审核未通过：原因」再关闭）。三种操作都带上审核时看到的头部 SHA，PR 此后有了新提交（例如官网又追加了投稿）就返回 409 `pr_changed`，不会对没人看过的词条生效；精简时每个新提交的父提交也必须是上一个头部，否则说明分支在精简途中被追加了投稿，立即停止，不再继续写入或合并。精简和通过前会读取 PR 的改动文件列表，只要改动了这三个文件之外的任何文件就返回 409 `unexpected_files`，以免审核只看到词条而合并带进别的改动。页面显示每次投稿的补充说明和时间，来自 `word_submissions` 表。PR 作者是提交用的 GitHub App 时显示为「官网机器人」。
-- **社区管理**：皮肤、候选皮肤、插件、词库、回复模板、短语包 6 个分类（短语包卡片显示条数和前三条正文，抽屉显示全部短语及分组），按待复核、已通过、已下架筛选。卡片显示自动检查标记和被举报次数；详情抽屉显示举报记录、实时敏感词检查、作者的其他作品和皮肤键盘预览，候选皮肤的预览图由 `GET /api/candidate-skins/{id}/preview` 提供。操作为 `approve_content`、`remove_content`（需要原因）、`restore_content`（恢复下架前的状态）和永久删除。候选皮肤另有图库分类：`GET /api/candidate-skins` 可用 `category=<分类>` 筛选，列表行和详情都带 `category`；详情抽屉的「分类」下拉框调用 `set_candidate_skin_category`（需要 `review_community`），请求体为 `{"action":"set_candidate_skin_category","id":"…"（或 "ids":[…] 最多 100 个）,"section":"candidate-skins"（可省略）,"value":{"category":"<分类>"}}`，分类取值见 [皮肤社区 · 分类](skin-community.md#分类)，未知分类 400 `invalid_category`，section 不是 `candidate-skins` 时 400 `invalid_section`，没有一个 id 存在时 404 `not_found`。修改不改变审核状态，也不更新 `updated_at`；使用 `edit_token` 固定审核版本时，分类变化也会使旧凭据失效；审计记录 `category`、`ids`、`count`，单项时还有 `name` 和原分类 `from`。键盘皮肤（`skins`）用同一组分类：`GET /api/skins` 可用 `category=<分类>` 筛选，列表行和详情都带 `category`，详情抽屉的「分类」下拉框调用 `set_skin_category`（需要 `review_community`），请求体为 `{"action":"set_skin_category","id":"…"（或 "ids":[…] 最多 100 个）,"section":"skins"（可省略）,"value":{"category":"<分类>"}}`，错误码、审计字段与 `set_candidate_skin_category` 相同，section 不是 `skins` 时 400 `invalid_section`；修改不改变审核状态。作者因封禁被下架的内容只能通过解封恢复（409 `owner_banned`）。审核规则见「社区事后审核」。
+
+  官网投稿与批准、驳回、精简三种审核操作共用 PostgreSQL 仓库锁，按不区分大小写的仓库名互斥，覆盖读取 PR 到完成 GitHub 写入的整个过程。另一操作持锁时，审核返回 `503 server_busy` 和 `Retry-After: 1`，本次尚未读取或修改 GitHub；数据库无法加锁时返回 `503 auth_unavailable`。释放锁连接后才写审计，批准前已经完成的精简在后续合并失败时仍保留审计。直接在 GitHub 上的修改不受此锁约束，现有 head SHA 和 blob SHA 冲突检查继续生效。
+- **社区内容**：键盘皮肤、候选窗皮肤、插件、社区词库、回复模板、短语包 6 个独立页面（短语包卡片显示条数和前三条正文，抽屉显示全部短语及分组），按待复核、已通过、已下架筛选。卡片显示自动检查标记和被举报次数；详情抽屉显示举报记录、实时敏感词检查、作者的其他作品和皮肤键盘预览，候选皮肤的预览图由 `GET /api/candidate-skins/{id}/preview` 提供。操作为 `approve_content`、`remove_content`（需要原因）、`restore_content`（恢复下架前的状态）和永久删除。候选皮肤另有图库分类：`GET /api/candidate-skins` 可用 `category=<分类>` 筛选，列表行和详情都带 `category`；详情抽屉的「分类」下拉框调用 `set_candidate_skin_category`（需要 `review_community`），请求体为 `{"action":"set_candidate_skin_category","id":"…"（或 "ids":[…] 最多 100 个）,"section":"candidate-skins"（可省略）,"value":{"category":"<分类>"}}`；直接修改分类时可在 `value` 中附带 `expected`，服务端只在当前分类仍与之相同时修改，否则返回 409 `conflict`。分类取值见 [皮肤社区 · 分类](skin-community.md#分类)，未知分类 400 `invalid_category`，section 不是 `candidate-skins` 时 400 `invalid_section`，没有一个 id 存在时 404 `not_found`。修改不改变审核状态，也不更新 `updated_at`；使用 `edit_token` 固定审核版本时，分类变化也会使旧凭据失效；审计记录 `category`、`ids`、`count`，单项时还有 `name` 和原分类 `from`。键盘皮肤（`skins`）用同一组分类：`GET /api/skins` 可用 `category=<分类>` 筛选，列表行和详情都带 `category`，详情抽屉的「分类」下拉框调用 `set_skin_category`（需要 `review_community`），请求体为 `{"action":"set_skin_category","id":"…"（或 "ids":[…] 最多 100 个）,"section":"skins"（可省略）,"value":{"category":"<分类>"}}`；直接修改分类时可在 `value` 中附带 `expected`，服务端只在当前分类仍与之相同时修改，否则返回 409 `conflict`。错误码、审计字段与 `set_candidate_skin_category` 相同，section 不是 `skins` 时 400 `invalid_section`；修改不改变审核状态。作者因封禁被下架的内容只能通过解封恢复（409 `owner_banned`）。审核规则见「社区事后审核」。
+
+  单项分类变更成功时返回真实 `from` 与 `undo:{"action":"set_skin_category|set_candidate_skin_category","section":"skins|candidate-skins","id":"…","value":{"category":"真实前态","token":"32 位版本"}}`；同值设置或使用 `ids` 的批量请求不返回单项撤销。前端原样提交 `undo`，服务端在作品行锁内校验身份和写入版本，后续操作（包括同值写入、分类改走再改回）、作者编辑或删除重建后返回 409 `conflict`，不写作品和成功审计。`token` 仅限单项请求，用于并发检查，不是授权凭据。`expected` 继续兼容直接调用。旧副本拒绝新增的 `token` 字段并返回 400 `invalid_category`，新页面缺少有效 `undo` 时隐藏按钮；全部副本升级后刷新旧页面。
+  后台分类下拉框修改时以页面所见分类作为 `expected`，撤销时以本次设置的分类作为 `expected`；页面打开后分类已被修改会提示冲突并刷新，不再提供这次操作的撤销入口。
 - **问题分诊**：遍历 `admin.github.issue_repos`，按平台 label 归类。状态映射：open 且无 `triaged` 标签为「新」，有 `triaged` 为「已分类」，closed 为「已关闭」，closed 且有 `duplicate` 标签为「重复」。可以分类（加 `triaged` 并指派给平台的 `assignee`）、标记重复、关闭、重新打开和回复。分类、标记重复和关闭完成后提示条提供「撤销」（分类的撤销即取消分类，平台的 `assignee` 在分类前已被指派的保留指派）；重新打开和回复没有撤销，需要时手动关闭或在 GitHub 上删除回复。多步骤操作后续写入明确被拒绝时会回滚前面的步骤；传输失败或上游 5xx 表示写入结果未确认，返回 `502 github_uncertain`，不自动重试或回滚，并记录带 `uncertain: true` 的审计。批量操作有成功项时通过 `failed[].code` 报告未知结果，全部失败时优先返回 `github_uncertain`；请先在 GitHub 上核对后再重试，避免重复回复或覆盖已生效的操作。每个仓库最多读 3 页共 300 个 open Issue，以及最近更新的 100 个 closed Issue。列表页还读最近 30 天的 Issue 评论（最多 3 页）计算首次响应时间；这三组读取对每个仓库并发进行。侧栏的待分诊角标只读 open Issue，不读评论和 closed Issue，在外壳给 GitHub 的 5 秒预算内完成。
-- **用户反馈**：App 内「反馈」提交的内容（`POST /v1/feedback`，见 [用户体系](user-auth.md#app-内反馈)），按状态（`new` 待处理、`resolved` 已处理）、类型（`bug`、`suggestion`、`dictionary`）和平台（`android`、`ios`、`macos`、`windows`、`linux`、`harmony`）筛选，其他筛选值返回 400 `invalid_filter`。每行带提交者昵称、是否匿名账号（只有设备匿名身份的账号）、截图张数和用户勾选附带的诊断信息（只含服务端白名单里的键）。截图经 `GET /api/feedback/{id}/screenshots/{0–2}` 读取，响应 `Cache-Control: no-store`、`Content-Security-Policy: sandbox; default-src 'none'`，页面转成 `data:` URL 显示；截图不进头像存储，也没有公开地址。操作 `resolve_feedback`、`reopen_feedback`（`{"id"}`，需要 `triage_issues`，写审计，互为撤销）。反馈保留 180 天，由 `Store.Prune` 连同截图一起删除，注销账号时级联删除。
+  `POST /api/issues/actions` 请求为 `{action,items:[{repo,n,keep_assignee?,keep_duplicate?,version?}],body?}`，需要 `triage_issues` 权限。`keep_assignee` 仅用于 `untriage`，`keep_duplicate` 仅用于 `reopen`。成功返回 `{ok:true,affected,failed:[{repo,n,code}],undo}`；`undo` 为 `null` 或 `{action,items}`，仅包含确认成功、可撤销的条目。撤销依据共享锁内读取的 GitHub 最新状态生成：分类前已分类或已关闭的条目不提供取消分类，关闭或标记重复前已关闭的条目不提供重新打开；保留分类前已有的平台负责人，以及关闭前已有的 `duplicate` 标签。前端直接提交服务端返回的撤销参数，不根据旧页面状态推断。每个可撤销条目带有 64 位十六进制 `version`，固定操作确认后的 Issue 身份、状态、标签、负责人、当前平台负责人配置和最新一页时间线事件序列；只看秒粒度 `updated_at` 无法识别同秒内状态改走又改回。撤销在同一个跨副本锁内绕过缓存读取并校验版本，后续 GitHub 变更、平台负责人配置变化或重复撤销返回 409 `conflict`，不写入 GitHub，也不记成功审计；批量部分失败使用 `failed[].code`。校验读取失败时不执行撤销；原操作已确认成功后的补读失败只省略撤销，仍记录并返回原操作成功，避免重试已生效的写入。`version` 只用于并发检查，不是授权凭据；未携带它的直接调用继续兼容。GitHub 网页等外部操作不受本服务锁约束，远端读取校验与写入之间仍可能发生并发变化，不能保证 GitHub 跨请求原子性。滚动升级时，新页面收到缺少有效版本的旧副本响应会隐藏撤销；带 `version` 的请求落到旧副本以 400 `invalid_json` 拒绝。全部副本升级后刷新旧页面以使用版本校验。无需新配置或数据库迁移。
+  同一仓库、同一 Issue 的后台操作通过 PostgreSQL 共享锁互斥，从读取最新状态一直覆盖到写入和回滚完成，避免不同副本的失败操作撤销另一请求的成功结果。锁被占用时该项返回 `503 server_busy`，仅因锁忙而全部失败的响应带 `Retry-After: 1`；批量操作有成功项时，忙碌项仍通过 `failed[].code` 返回，不会阻止其他 Issue 的操作。数据库无法加锁时返回 `503 auth_unavailable`，不会访问 GitHub。直接在 GitHub 上的修改不受此锁保护。
+- **用户反馈**：App 内「反馈」提交的内容（`POST /v1/feedback`，见 [用户体系](user-auth.md#app-内反馈)），按状态（`new` 待处理、`resolved` 已处理）、类型（`bug`、`suggestion`、`dictionary`）和平台（`android`、`ios`、`macos`、`windows`、`linux`、`harmony`）筛选，其他筛选值返回 400 `invalid_filter`。每行带提交者昵称、是否匿名账号（只有设备匿名身份的账号）、截图张数和用户勾选附带的诊断信息（只含服务端白名单里的键）。截图经 `GET /api/feedback/{id}/screenshots/{0–2}` 读取，响应 `Cache-Control: no-store`、`Content-Security-Policy: sandbox; default-src 'none'`，页面转成 `data:` URL 显示；截图不进头像存储，也没有公开地址。操作 `resolve_feedback`、`reopen_feedback`（`{"id"}`，需要 `triage_issues`，写审计，重复设置相同状态不重写反馈主行）。反馈保留 180 天，由 `Store.Prune` 连同截图一起删除，注销账号时级联删除。
+
+  实际改变反馈状态时，成功响应额外返回 `previous` 和 `undo:{"action":"undo_feedback_status","id":"…","value":{"status":"真实前态 new|resolved","token":"32 位版本"}}`；同值设置仅返回真实 `previous`，不提供反向撤销。`undo_feedback_status` 需要 `triage_issues`，仅接受单个 `id`，不接受 `ids`。版本同时固定反馈身份、主行版本与该反馈最新操作审计；后续同值操作即使不写主行，也会使旧撤销失效。撤销先取反馈行锁，再用新的语句快照读取审计版本，锁等待期间的操作也会被检查；版本冲突或重复撤销返回 409 `conflict`，不修改状态和成功审计。审计失败时状态一并回滚。直接 SQL 修改或删除重建同样使旧撤销失效。新索引 `admin_audit_feedback_version` 支持目标查找，无需新增表或 DML 权限；只有 DML 的部署先由 DDL 账号运行新版本 `-migrate-users`。旧副本写入的成功操作审计也参与版本检查，新撤销动作落到旧副本返回 400 `invalid_action`；新页面对缺少有效 `undo` 的响应隐藏按钮，全部副本升级后刷新旧页面。
 - **敏感词库**：规则是普通词或 RE2 正则（不超过 200 个字符，不能匹配空文本；`{n}`、`{n,m}` 这类计数重复展开后合计不超过 100 步，例如 `[\pL\pN]{101}` 会被拒绝，以免一条规则拖慢所有上传的检查），分类为广告导流、低俗、辱骂、违法、自定义，处理方式为「拦截」或「需复核」，并显示近 7 天命中次数。只在大小写、全半角或空白上不同的普通词视为重复（409 `exists`）。匹配器缓存在内存中，修改最多 30 秒后在所有副本生效；词库 PR 审核这类只读预览不计入命中次数；命中计数在内存中累积，每 30 秒批量写回一次，进程正常退出时写回剩余计数；进程被强制终止时可能丢失最近 30 秒的计数。规则作用于词库投稿和社区上传，见下文。
 - **用户账号**：搜索、按角色筛选（已验证邮箱是所有者或管理员成员时显示对应角色，所有者显示为维护者）、统计卡（总数、本周新增、开启设置同步的比例、已封禁数），详情抽屉显示脱敏的联系方式、登录设备（从 User-Agent 解析的平台，不显示地理位置）、作品和会话。`ban_user` 需要原因，在同一事务里封禁、吊销全部会话，并把该用户的社区内容以 `owner_banned` 下架；被封禁的账号登录、刷新令牌和会话鉴权都返回 403 `account_banned`，直接在数据库里写入的封禁也一样。`unban_user` 只恢复因 `owner_banned` 下架的内容。
+
+  单项 `ban_user`、`unban_user` 的成功响应保留原统计字段，并额外返回可原样提交到 `POST /api/actions` 的 `undo:{"action":"undo_user_ban","id":"…","value":{"token":"32 位版本","banned":false|true}}`。解封的撤销还带有数据库锁内读取的实际 `reason`，不使用旧页面保存的原因；历史封禁没有有效原因时不返回重新封禁请求。直接操作和撤销都需要 `ban_users` 权限。`undo_user_ban` 仅接受单个 `id`，不接受 `ids`；`value.banned` 必填，表示撤销后的目标封禁状态，重新封禁必须带非空 `reason`，解除封禁不接受 `reason`。撤销只在账号身份和封禁版本一致时执行，后续封禁、解封或封禁原因修改后返回 409 `conflict`；失败不修改账号、会话或作品，也不写成功审计，重复撤销同样拒绝。普通昵称或头像修改不使封禁撤销失效。`token` 只用于并发检查，不是额外授权凭据。
+
+  不带 `value` 的直接调用保持兼容。新页面收到旧副本缺少有效 `undo` 的响应时不显示撤销；独立撤销动作落到旧副本时返回 400 `invalid_action`。封禁版本触发器也覆盖旧副本或直接 SQL 写入封禁字段；全部副本升级后刷新旧页面，才能使用受版本保护的撤销。
+
 - **下载记录**：按平台、版本、安装包、渠道分组，显示今日和近 7 天下载量以及国内镜像占比，均按 UTC 自然日计。客户端和官网镜像的数据来自遥测下载事件；GitHub Release 渠道取每日资产下载量快照的差值，不依赖客户端上报，但每个资产的第一次快照计为 0，快照之前的下载不计入。页面底部的「官网下载镜像」维护官网下载页上 Windows 安装包的蓝奏云盘链接（旧路径 `/site-settings` 重定向到这里）：`GET /api/site-settings` 返回 `{"lanzou_url","updated_at","updated_by"}`，`POST /api/site-settings {"lanzou_url"}` 保存，空字符串表示清空。链接必须是带主机名的 `https://` 绝对地址，不含账号密码，最长 512 字节，否则返回 400 `invalid_lanzou_url`。修改与审计（`set_lanzou_url` / `clear_lanzou_url`）同事务写入，清空后仍保留最近修改时间和操作者。
 - **公告推送**：标题（不超过 200 字）、正文、投放平台（全部，或 windows、macos、linux、android、ios、harmony）和渠道（官网横幅 `site`、App 内通知 `app`、Telegram）。正文最多 20000 字，页面在发送前检查。`GET /api/notices` 按草稿、已发布和已归档分别取最近 200 条，避免大量草稿或归档使仍在展示的公告无法从列表归档；可选 `focus=<正整数 ID>` 额外补入指定历史公告，已在列表中的目标不重复，不存在的目标不改变最近列表，非法 ID 返回 400 `invalid_id`。全局搜索或通知的目标不在最近列表中时，页面补读该目标；读取失败可以重试，目标已删除时明确提示。草稿可以反复编辑，切换到另一条草稿前会提示放弃未保存的修改。发布时勾选了 Telegram 的，先调用 Bot API `sendMessage`，失败则整条公告不发布。归档没有撤销。「触达人数」需要客户端回执，显示「—」。
 - **发布管理**：每个平台一张卡片，显示最新版本、状态和检查清单。「CI 全部通过」取自 tag 所在提交的 check run；「签名与公证」只有 workflow 里存在名为 `sign` 的 check run 时才显示；「更新日志已填写」看 release 说明是否为空；需要商店 API 的平台，商店一项显示「需手动」。历史版本完整返回每个仓库最近 100 个 release 中按 `tag_prefix` 过滤后的结果（最多 100 条），与全局搜索索引覆盖相同范围：草稿为「待发布」，prerelease 为「公开测试」，正式版为「已发布」，带撤回标记的为「已撤回」。说明按 `### 新增 / 修复 / 改进 / 说明 / 待办` 分类显示。可以触发发布流水线、编辑说明和撤回版本；撤回会改为 prerelease、在说明开头加撤回标记，并把上一个正式版设为 latest。
   编辑说明与撤回版本从读取 GitHub 状态到完成写入，按仓库持有 PostgreSQL 共享锁；多个副本、指向同一仓库的多个平台共用这把锁。已有操作占用该仓库时返回 `503 server_busy` 和 `Retry-After: 1`，本次操作尚未读取或修改 GitHub 发布，稍后可重试；数据库无法加锁时返回 `503 auth_unavailable`。直接从 GitHub 或外部流水线修改发布不受此锁约束。
 - **云端监控**：每个上游服务近 24 小时（按整点滚动，不是 UTC 自然日）的调用数、P95、错误率和逐小时曲线，以及本月（UTC）用量与 `admin.services` 中额度的对比；金额按用量乘以 `unit_price` 估算。只记录服务、耗时和状态类别，不记录请求内容。
-- **崩溃上报**：按签名分组（平台、规范化后的错误信息和第一个非系统栈帧，取 SHA-256 的前 16 位）。同一问题出现在不同平台时分成各自的分组，分别在对应平台的仓库跟进；平台先归一（win 归 windows，mac、darwin 归 macos，ipados 归 ios，harmony、ohos 归 harmonyos，其余转小写），所以同一平台的不同写法仍在一组，分组的平台创建后不再变化。列表显示 7 天次数、与前 7 天的环比、新出现标记和影响设备数（按 `install_id` 去重）。状态为未处理、已知问题、已修复；只有未处理且没有 Issue 链接的分组可以在平台对应的仓库建 Issue。服务在联系 GitHub 前，先用持锁连接原子写入「已知问题」及 `crash_group_issue_attempt` 审计，创建确认后登记链接和 `crash_group_issue` 审计。GitHub 明确拒绝时恢复未处理并记录 `crash_group_issue_rejected`；传输失败、上游 5xx、响应读取或解析失败则返回 `502 github_uncertain`，保留已知状态和尝试审计，不自动重试，刷新页面、切换副本或服务重启后仍不会再次创建。请先在目标仓库按分组签名核对；只有确认尚未创建 Issue，才通过「重新打开」恢复未处理后再创建。已知或已修复分组直接请求创建会返回 `409 crash_group_not_open`。Issue 已在 GitHub 创建但链接写不回数据库时，服务返回 `503 issue_not_recorded` 并带上 `issue_url`，同样保留已知状态；页面在提示条显示链接，并在本次打开页面期间保留链接。刷新后链接可从服务日志中找回，不能直接重复创建。已修复的分组再次崩溃时不会自动重新打开。页面手动查看堆栈、搜索和通知共用 URL 的 `focus` 签名；浏览器前进、后退时，详情抽屉随目标切换。
+- **崩溃上报**：按签名分组（平台、规范化后的错误信息和第一个非系统栈帧，取 SHA-256 的前 16 位）。同一问题出现在不同平台时分成各自的分组，分别在对应平台的仓库跟进；平台先归一（win 归 windows，mac、darwin 归 macos，ipados 归 ios，harmony、ohos 归 harmonyos，其余转小写），所以同一平台的不同写法仍在一组，分组的平台创建后不再变化。列表显示 7 天次数、与前 7 天的环比、新出现标记和影响设备数（按 `install_id` 去重）。状态为未处理、已知问题、已修复；只有未处理且没有 Issue 链接的分组可以在平台对应的仓库建 Issue。服务在联系 GitHub 前，先用持锁连接原子写入「已知问题」及 `crash_group_issue_attempt` 审计，创建确认后登记链接和 `crash_group_issue` 审计。GitHub 明确拒绝且创建尝试后没有其他状态操作时恢复未处理并记录 `crash_group_issue_rejected`；等待 GitHub 期间已有人分诊时，拒绝回滚保留最新状态，成功登记只写入链接并在响应的 `status` 和审计中返回实际状态，不覆盖后续分诊。传输失败、上游 5xx、响应读取或解析失败则返回 `502 github_uncertain`，保留已知状态和尝试审计，不自动重试，刷新页面、切换副本或服务重启后仍不会再次创建。请先在目标仓库按分组签名核对；只有确认尚未创建 Issue，才通过「重新打开」恢复未处理后再创建。已知或已修复分组直接请求创建会返回 `409 crash_group_not_open`。Issue 已在 GitHub 创建但链接写不回数据库时，服务返回 `503 issue_not_recorded` 并带上 `issue_url`，同样保留已知状态；页面在提示条显示链接，并在本次打开页面期间保留链接。刷新后链接可从服务日志中找回，不能直接重复创建。已修复的分组再次崩溃时不会自动重新打开。页面手动查看堆栈、搜索和通知共用 URL 的 `focus` 签名；浏览器前进、后退时，详情抽屉随目标切换。
+
+  `POST /api/actions` 的 `crash_group_status` 需要 `triage_issues` 权限。直接设置保留字符串 `value:"open|known|fixed"`；成功返回 `previous` 与 `undo:{"action":"crash_group_status","id":"签名","value":{"status":"真实前态","token":"32 位版本"}}`。前端原样提交 `undo`，服务端在行锁内校验版本，后续状态操作（包括设置相同状态或改回原状态）、创建 Issue、登记链接及删除重建后返回 409 `conflict`，不修改状态、不写成功审计；重复撤销也拒绝。新的崩溃上报只更新统计，不使撤销失效。`token` 只用于并发检查，不是额外授权凭据；新页面收到缺少有效 `undo` 的旧副本响应时隐藏撤销，版本对象落到旧副本时返回 400 `invalid_value`。全部副本升级后刷新旧页面，才能使用受版本保护的撤销。
+
 - **系统状态**：每 60 秒探测数据库，并汇总最近 5 个完整分钟的上游指标，错误率或 P95 超过 `slow_ms` 判为降级；每日可用分钟数保留 60 天。连续 3 次判为降级或不可用时自动开启故障事件，之后连续 5 次正常时自动关闭；同一段异常里自动事件被管理员手动关闭后不会再自动开启。也可以通过 `open_incident`、`update_incident`、`resolve_incident` 手动管理。只展示数据库和已配置的上游服务。多副本部署时的分工见下方「系统状态的多副本行为」。
 - **服务日志**：后端各副本的实时日志，从集群的 Loki 读取（见「配置」中的 `admin.logs`）。顶部按钮按副本筛选（全部或某一个副本，每个副本一种颜色），级别筛选为全部、INFO 及以上、WARN 及以上和 ERROR，搜索框按包含的文字筛选（区分大小写，在 Loki 侧以 `|=` 过滤）。打开时先回填最近 15 分钟内最新的 500 行，之后每 2 秒追加新行；停在底部时自动滚动，向上滚动后停止自动滚动并显示「回到最新」。暂停时连接保持，新行先缓冲，继续时一并显示。页面最多保留最近 2000 行。每行显示时间（CRI 前缀里的时间）、副本、级别和去掉 CRI 前缀与 slog 时间级别后的内容。级别取自 slog 默认格式（`2026/10/01 14:47:01 INFO …`）；筛选 WARN 或 ERROR 时排除的是低于该级别的行，所以无法识别级别的行（panic、标准库 `log` 的输出）在这两个筛选下也会显示。读取日志不写审计（后台的读操作都不写审计）。
 
@@ -240,7 +262,7 @@ Google 登录时，后端校验 ID Token 的签名、issuer、audience、有效�
 
 ### 皮肤与插件管理
 
-`/community` 默认展示全部状态，保留「待审核」「已上架」「已下架」筛选；概览页的社区待办直接打开 `?status=pending`。皮肤、候选皮肤和插件分区提供新增入口及详情里的编辑、删除、上下架操作。新增和编辑需要 `review_community`，只读角色仍可查看列表与详情。新作品由管理员选择已有的未封禁用户作为作者，编辑不能转移作者；表单默认将新作品保存为下架，也可选择上架或待审核。
+侧栏「社区」分组提供键盘皮肤（`/skins`）、候选窗皮肤（`/candidate-skins`）、插件（`/plugins`）、社区词库（`/dictionaries`）、回复模板（`/replies`）和短语包（`/phrases`）六个独立入口，并分别显示待审核数。六页共用详情与审核能力，默认展示全部状态，保留「待审核」「已上架」「已下架」筛选；概览页的社区待办按类型打开对应页面的 `?status=pending`。旧 `/community?tab=…` 自动跳转并保留筛选、页码和定位参数；搜索和通知按 `focus=<section>/<id>` 直达对应页面及作品详情。皮肤、候选皮肤和插件分区提供新增入口及详情里的编辑、删除、上下架操作。新增和编辑需要 `review_community`，只读角色仍可查看列表与详情。新作品由管理员选择已有的未封禁用户作为作者，编辑不能转移作者；表单默认将新作品保存为下架，也可选择上架或待审核。
 
 `GET /api/skins/{id}?view=preview` 和 `GET /api/candidate-skins/{id}?view=preview` 供卡片预览使用，仅返回 `{"content":…}`：分别是完整键盘设计 JSON（含照片）和 `skin.toml` 文本。它们沿用详情接口的管理员鉴权，可读取私有、待审核和下架内容，但不加载举报、作者作品、互动统计或敏感词检查。打开详情仍请求不带 `view` 的原接口。未知的非空 `view`，或其他社区详情接口使用非空 `view`，返回 400 `invalid_request`；作品不存在返回 404 `not_found`。
 
@@ -252,11 +274,44 @@ Google 登录时，后端校验 ID Token 的签名、issuer、audience、有效�
 | `create_candidate_skin` / `update_candidate_skin` | `candidate-skins` | `manifest`：`skin.toml` 文本；`files`：包内相对路径到图片 base64 的对象；`category`；`visibility`：`public` / `private` |
 | `create_plugin` / `update_plugin` | `plugins` | `archive`：插件 ZIP 的标准 base64；类型、插件 ID、版本、许可从包内 `plugin.toml` 解析 |
 
-三类 `value` 都要求 `owner_id`、`name`（1–32 字）、`description`（可省略，最多 280 字）和 `moderation`（`pending` / `approved` / `removed`）。编辑还必须传入详情返回的 `edit_token`。作品的内容、分类、可见性或审核状态已变化时返回 409 `content_changed`，保留表单供复制，关闭并重新打开详情后再编辑。列表和详情同时返回 `edit_token`；`approve_content.value` 也可带它，过期审核返回 409 `conflict`。新增 ID 已存在时分别返回 409 `skin_id_conflict` / `candidate_skin_id_conflict` / `plugin_id_conflict`，不会覆盖旧作品。
+三类 `value` 都要求 `owner_id`、`name`（1–32 字）、`description`（可省略，最多 280 字）和 `moderation`（`pending` / `approved` / `removed`）。编辑还必须传入详情返回的 `edit_token`。作品的内容、分类、可见性或审核状态已变化时返回 409 `content_changed`，保留表单供复制，关闭并重新打开详情后再编辑。列表和详情同时返回 `edit_token`；`approve_content.value` 也可带它，过期审核返回 409 `conflict`。新增 ID 已存在时分别返回 409 `skin_id_conflict` / `candidate_skin_id_conflict` / `plugin_id_conflict`，不会覆盖旧作品。候选皮肤和插件的包内 ID 不能以点结尾或为 `nul`，以避免 Windows 安装目录失真；不合规的创建和编辑分别返回 400 `invalid_candidate_skin_package` / `invalid_plugin_manifest`，作品和成功审计都不改变。
 
 编辑插件时可省略 `archive` 以保留原 ZIP；编辑候选皮肤时可省略 `files` 以保留原图片，传入时替换全部图片。键盘设计、候选皮肤清单和图片、插件 ZIP 均沿用公共上传接口的格式、许可及大小校验。`create_skin` / `update_skin` 的 `value` 上限为 710000 字节，候选皮肤为 3200000 字节，插件为 11300000 字节，其他操作仍按各自原有限制。管理员维护不扣客户端的发布频率及数量配额；仍锁定作者行防止绕过并发封禁，封禁作者不能新增或编辑。管理员具有直接发布权限，保存时以指定的状态写入并记录审核人，不运行客户端上传的敏感词拦截；详情的实时检查仍会展示命中项。
 
-删除沿用 `delete_skin` / `delete_candidate_skin` / `delete_plugin`，永久删除作品以及关联的下载、评分、收藏和包文件；界面先确认，再提供 4 秒撤销窗口。新增、编辑和删除都与审计记录在同一事务内提交；审计只包含作品名称、分区及发布状态，不记录设计、清单、图片或 ZIP。
+删除沿用 `delete_skin` / `delete_candidate_skin` / `delete_plugin`，永久删除作品以及关联的下载、评分、收藏和包文件；界面先确认，再提供 4 秒撤销窗口。请求可带 `value: {"edit_token":"详情或列表返回的凭据"}`，服务端在删除语句内原子核对版本；作品已修改、已删除或删除后用同一 ID 重发时返回 409 `conflict`，不会删除新版本，也不记录成功审计。凭据须为 32 位十六进制字符串，无效的 `value` 返回 400 `invalid_value`。后台界面固定提交确认时的凭据，缺少凭据时提示刷新并阻止删除；旧命令行省略 `value` 或传 `null` 时仍按 ID 删除，不存在时返回 404 `not_found`。滚动升级期间应等所有副本更新后再依赖删除的版本保护，旧副本会忽略删除凭据。新增、编辑和删除都与审计记录在同一事务内提交；审计只包含作品名称、分区及发布状态，不记录设计、清单、图片或 ZIP。
+
+## QQ 草稿管理与文档缺口查询
+
+以下四个 GET 接口只在管理员主机提供，要求管理员身份和 `triage_issues` 权限（含原始反馈，普通只读角色无权查看），沿用管理员会话、Bearer 密钥或 PAT 鉴权、每身份限流及 `Cache-Control: no-store`。无需开启 QQ Bot 即可查看数据库中已有记录。不接受请求体，不修改草稿、候选或 GitHub。
+
+| 方法与路径 | 参数 | 返回 |
+| --- | --- | --- |
+| `GET /api/qq-bot/drafts` | `limit` 默认 20，1–100；`offset` 默认 0，0–1000000 | 待处理 D 草稿分页 |
+| `GET /api/qq-bot/drafts/{id}` | `id` 为 `D` 加正整数，例如 `D12` | 完整草稿详情 |
+| `GET /api/qq-bot/doc-gaps` | 同草稿分页 | 待处理 F 文档候选分页 |
+| `GET /api/qq-bot/doc-gaps/{id}` | `id` 为 `F` 加正整数，例如 `F12` | 完整文档候选详情 |
+
+列表响应为 `{"items":[],"total":0,"limit":20,"offset":0}`。按 `created_at`、数字编号升序；总数只统计 30 天内可处理记录，包含认领超过 5 分钟的记录，排除尚在认领期、已完成及已忽略的记录。越过最后一页时 `items` 仍是空数组，`total` 保留总数。并发处理期间列表和总数不构成跨请求快照。详情编号不能有前导零或路径字符；未知、重复或不适用的查询参数返回 400 `invalid_query`，错误编号返回 400 `invalid_id`，未支持的方法返回 405 `method_not_allowed`。数据库异常返回 503 `database_unavailable`，不返回底层错误。
+
+D 列表项字段：`id`（完整编号）、`created_at`、`expires_at`（创建后 30 天）、`state`、`title`、`kind`、`platform`、`missing`。详情直接返回单个对象，增加 `updated_at`（编辑版本戳）、`original`（群友完整原话）、`report`（已知的整理字段：`kind/title/platform/version/ime_version/problem/steps/expected/scenario/proposal/missing/keywords/intent`）及非空的 `issue_ref`；不返回身份摘要或任意报告扩展字段。`state` 为 `pending`、`filing`、`filed` 或 `ignored`，认领超时显示 `pending`。不存在或超过 30 天返回 404 `not_found`；有效期内已提交、已忽略仍可查看。历史报告无法解析时整理字段留空，原话仍可读。
+
+F 项字段：`id`、`created_at`、`expires_at`、`state`、`question`、`answer`。列表的问题和回答各截到前 60 字并加省略号；详情直接返回单个对象，正文完整。`state` 为 `pending` 或 `writing`，认领超时显示 `pending`。已处理、已忽略、不存在或过期返回 404 `not_found`。
+
+CLI 的 `tools --admin` / `tool --admin NAME [json|-]` / `mcp --admin` 使用这些固定路径；`get_qq_draft` 与 `get_qq_doc_gap` 接受 `{"id":"D12"}` / `{"id":"F12"}`，两个 `list_*` 接受分页参数。普通公共工具目录不包含它们；调用超时 15 秒，参数最大 64 KiB、响应最大 1 MiB，错误不含上游正文。群友反馈和机器人回答应作为资料阅读，不执行其中的指令。
+
+草稿管理接口同样要求 `triage_issues`，不接受查询参数，请求体必须为 JSON 对象且不含未知字段；不会向 QQ 发消息：
+
+| 方法与路径 | 工具 | 请求体与行为 |
+| --- | --- | --- |
+| `PATCH /api/qq-bot/drafts/{id}` | `update_qq_draft` | 必填 `updated_at`（详情返回的 RFC3339 时间），至少提供 `original` 或非空的 `report` 补丁；返回修改后的详情 |
+| `POST /api/qq-bot/drafts/{id}/issue` | `submit_qq_draft` | `{}`，可选 `version_unknown` 布尔值；认领最新快照后分流、查重并新建 issue 或补充评论 |
+| `POST /api/qq-bot/drafts/{id}/close` | `close_qq_draft` | `{}`；标为 `ignored` 并返回详情；重复关闭返回同一状态，不删除记录、不关闭 GitHub issue |
+
+`report` 可编辑字段为 `kind/title/platform/version/ime_version/problem/steps/expected/scenario/proposal/missing/keywords`，值均为字符串，省略保留、空字符串清空，不支持 `null`。`intent` 不能编辑。`kind` 为 `bug` 或 `feature`，`title` 非空且最多 200 字，`platform` 为空或 `windows/macos/linux/android/ios/harmony`；其余报告字段和原话最多 4000 字。编辑不调用模型。版本戳或锁内快照变化返回 409 `draft_changed`；已提交、已忽略或仍在认领的草稿不再允许编辑和关闭。编辑与关闭的审计分别为 `qq_draft_edit` / `qq_draft_close`，与数据库状态同事务提交，审计不存反馈正文。
+
+提交需要 QQ Bot 和 GitHub App 已配置，否则返回 503 `qq_submission_unavailable`。认领冲突或已处理返回 409 `draft_not_pending`；Windows 缺少分流信息返回 409 `draft_needs_info` 并附 `missing`，确认版本未知时可设 `version_unknown:true`。写入前记录 `qq_draft_submit_attempt`；成功记录 `qq_draft_submit`，响应为 `{"id":"D12","repo":"o/r","number":123,"issue_ref":"r #123","duplicate":false,"recorded":true,"audited":true}`。GitHub 已接收后登记失败仍返回成功结果，并将 `recorded` 或 `audited` 设为 false，调用方必须保留 issue 信息并核对，不能重试创建。
+
+提交服务端限时两分钟、工具限时 130 秒；明确拒绝或写入前失败释放认领，GitHub 写入结果不确定返回 502 `github_uncertain` 并保留认领。失败、取消或超时后先读详情、核对 GitHub，禁止自动重试；租约超过五分钟后沿用原有查重恢复规则，不保证跨 GitHub 和数据库恰好写入一次。写工具均标注可修改数据，只有关闭标注幂等。F 文档候选仅提供上述只读接口。
 
 ## 配置
 
@@ -272,7 +327,7 @@ Google 登录时，后端校验 ID Token 的签名、issuer、audience、有效�
 | --- | --- |
 | `app_id`、`installation_id` | GitHub App 及其安装的 ID |
 | `private_key_env` | 存放 App 私钥（PEM，PKCS#1 或 PKCS#8）的环境变量名 |
-| `api_url` | 可选，默认 `https://api.github.com`，必须是 HTTPS |
+| `api_url` | 可选，默认 `https://api.github.com`，必须是 HTTPS 基础地址；可带代理路径前缀和尾斜杠，不能带凭据、查询或片段，裸 `?`、`#` 也不允许 |
 | `dictionary_repo` | 词库审核的仓库。留空时跟随 `word_submissions.github.repository`，官网投稿未启用时默认 `metasequoiaime/msime-dictionary`。两者都启用时必须是同一个仓库（不区分大小写），否则服务拒绝启动：`word_submissions` 表只按 PR 编号记录投稿说明，换了仓库就会把说明挂到无关的 PR 上 |
 | `issue_repos` | 问题分诊的仓库，最多 20 个 |
 | `platforms[]` | 发布平台，最多 16 个，按显示顺序排列 |
@@ -313,7 +368,7 @@ on:
 
 触发请求提交后，若连接中断、响应体读取失败或 GitHub 返回 5xx，流水线可能已经启动，后台返回 502 `workflow_uncertain`，尝试写入带 `uncertain: true` 的 `release_trigger` 审计，不自动重试，也不发送触发成功通知。管理后台会关闭触发弹窗并提示先到该仓库的 GitHub Actions 核对，勿直接重复触发。获取令牌、读取默认分支等提交前的预检失败仍返回原有错误。
 
-GitHub 读请求在内存中缓存 60 秒，并使用 ETag 条件请求，以免耗尽每小时 5000 次的配额。几个平台共用一个仓库时，GitHub 的 latest 是整个仓库的：撤回某个平台的最新版后，该平台的上一个正式版会成为整个仓库的 latest，可能盖过另一个平台更新的版本。所以下载站应按 `tag_prefix` 自行挑选每个平台的版本并跳过 prerelease，不要直接读 `/releases/latest`。
+GitHub 读请求在内存中缓存 60 秒，并使用 ETag 条件请求，以免耗尽每小时 5000 次的配额。每份客户端缓存最多 1024 条，正文缓冲容量合计最多 64 MiB；任一预算不足时先清理过期条目，仍不足则清空后保存最新响应。替换响应、ETag 续期和路径失效均同步维护正文预算，限额按副本内的客户端实例计算，详见 README「多副本部署」。几个平台共用一个仓库时，GitHub 的 latest 是整个仓库的：撤回某个平台的最新版后，该平台的上一个正式版会成为整个仓库的 latest，可能盖过另一个平台更新的版本。所以下载站应按 `tag_prefix` 自行挑选每个平台的版本并跳过 prerelease，不要直接读 `/releases/latest`。
 
 发布检查清单按每页 100 条读取检查结果，最多 1000 条，汇总全部分页中的 CI 和 `sign` 状态。超过上限、任一页读取失败、分页期间总数变化或返回行数不完整时，CI 显示 `unknown`，不会把只读到的部分检查显示为全部通过。
 
@@ -364,7 +419,9 @@ GitHub 读请求在内存中缓存 60 秒，并使用 ETag 条件请求，以免
 
 - 新上传的皮肤、候选皮肤、插件、词库和回复模板立即公开，状态为「待复核」（`pending`），由审核员随后复核。只有「已下架」（`removed`）的内容对作者以外的所有人隐藏：公开列表、详情、下载和评分接口都会排除它。已有内容在迁移时一律设为「已通过」。
 - 上传时用敏感词库检查名称、描述等文本：命中「拦截」级规则返回 422 `blocked_content`，不保存；命中「需复核」级规则照常发布，并在待复核卡片上标出命中的词。与已发布内容完全相同的重试在检查之前直接返回成功，所以词库后来新增的规则不会让已上线内容的重试失败，也不会重复计入命中次数。
-- 下架需要原因，可以撤销，撤销会恢复下架前的状态。撤销对已下架内容的通过或恢复时，后台用 `remove_content` 的 `value: {"previous":"pending"|"approved"}` 一并带回它原来的恢复状态，之后再恢复仍回到原来的状态（例如被驳回的待复核内容回到待复核）。
+- 下架需要原因。单项 `approve_content`、`remove_content`、`restore_content`（使用 `id`，不带 `ids`）成功响应额外返回 `undo: {"action":"undo_moderation","id":"…","section":"…","value":{"token":"…","moderation":"pending|approved|removed","previous":null,"reason":null}}`。`previous` 也可为 `pending` / `approved`，`reason` 也可为字符串。服务端在同一事务内先锁作者、再锁作品，保存操作前真实审核状态、原恢复状态与原因；前端直接把 `undo` 提交到 `POST /api/actions`，需要 `review_community` 权限。批量审核不返回单项撤销。
+- `undo_moderation` 仅接受单个 `id`。`value.token` 固定操作完成后的主行版本和作者封禁状态，作品又被审核、作者或管理员编辑、修改分类、删除重发，或作者封禁状态变化时返回 409 `conflict`；失败不修改作品、不写成功审计。成功恢复原审核状态、原恢复状态与原因，待复核内容重新检查敏感词提示，并记录本次撤销管理员与时间；重复撤销也返回冲突。封禁作者的作品不能借此重新公开（409 `owner_banned`）。版本凭据用于并发检查，不是额外授权凭据。
+- 滚动升级时，旧副本缺少有效 `undo` 的响应不显示撤销；新撤销请求落到旧副本会以 400 `invalid_action` 拒绝。旧页面仍使用旧撤销方式，应在全部副本升级后刷新页面。原 `restore_content.value.to`、`remove_content.value.previous` 继续兼容直接调用，后台新版撤销统一使用 `undo_moderation`。
 - 后台的「通过并上架」带上审核员看到的状态和版本：`approve_content` 的 `value: {"from":"pending"|"removed","created_at":"…","updated_at":"…"}`，`created_at` 区分作者删除后用同一 id 重新发布的内容，`updated_at` 只用于作者可以修改的候选皮肤、词库和回复模板。内容已被其他审核员处理，或作者在此期间改过、删除重发过内容，接口返回 409 `conflict` 且不做改动，审核员需要查看最新内容后再操作。不带 `value` 的调用不做这项检查。
 - 封禁作者会以 `owner_banned` 下架其全部内容，只有解封能恢复。
 - 举报：登录用户通过 `POST /v1/community/reports` 举报，后台卡片显示被举报次数，详情列出举报原因，每条新举报生成一条通知。
@@ -401,6 +458,7 @@ GitHub 读请求在内存中缓存 60 秒，并使用 ETag 条件请求，以免
 - `kind` 为 `skins`、`candidate-skins`、`plugins`、`dictionaries`、`replies`、`phrases` 之一（`phrases` 是社区短语包，即资源 kind `phrase`）；`reason` 1–64 字；`detail` 最多 1000 字。客户端统一使用固定的原因列表：侵权/抄袭、色情低俗、违法违规、垃圾广告、恶意插件、其他。设备的匿名账号会话也可以举报。
 - 只能举报自己能看到的内容（未下架；候选皮肤必须是公开的），否则返回 404 `item_not_found`。
 - 同一用户重复举报同一内容只记一次：首次返回 201，重复返回 200，响应体都是 `{"reported":true}`。
+- 举报写入与作品删除、下架或候选皮肤转私有互斥，等待变更提交后重新判断可见性。永久删除作品（包括作者注销的级联删除）会同步删除对应举报，同 ID 重发不继承旧举报，用户可重新举报；下架和恢复保留原举报。迁移清理作品已不存在的历史举报，管理通知仍保留历史记录。
 - 每个账号每小时最多举报 30 次。
 
 ### `POST /v1/telemetry/events`
@@ -432,6 +490,8 @@ GitHub 读请求在内存中缓存 60 秒，并使用 ETag 条件请求，以免
 客户端在下次启动时补发上一次会话的 `session` 或 `session_crash`。客户端不发 `download`：GitHub Release 的下载量取自服务端的 Release 快照，应用安装数看 `active`。如果再为 GitHub Release 下载上报 `channel=github` 的事件，这次下载会被遥测和快照各计一次。
 
 非 `crash` 事件不能带非空的 `message` 或 `stack`。后台统计时会归一平台名（`win` → windows，`mac`、`darwin` → macos，`ipados` → ios，`harmony`、`harmonyos`、`ohos` → HarmonyOS），下载记录也按归一后的平台分组。服务端以接收时间入库，离线上报算在接收日；后台不额外存 IP 或用户身份（限流只存地址的 SHA-256）。数据保存在 PostgreSQL，多副本共享；`download` 和 `crash` 事件不自动清理，需要按规模设置归档或保留策略。
+
+崩溃分组的首次和最近时间分别取事件入库时间的最小值、最大值，版本跟随最近的事件；并发请求因数据库等待而乱序完成时，也不会倒退版本或漏掉首次时间。已有分组的处理状态、Issue 链接和标题保持不变。
 
 响应处理：202 已接收（重复 ID 也是 202）；400 表示事件本身不合法，丢弃，不要重试；429（遵守 `Retry-After`）、5xx 和网络错误保留事件，稍后用同一 ID 重试。离线队列最多保留 64 条。
 
@@ -465,7 +525,7 @@ GitHub 读请求在内存中缓存 60 秒，并使用 ETag 条件请求，以免
 
 ## 审计
 
-读取（包括服务日志）不写审计。所有写操作都写入 `admin_audit`，包括 `actor`、`action`、`target` 和 `detail`（原因、条数、新旧值等 JSON）。数据库变更与审计在同一事务里，失败不部分生效。公告的 Telegram 广播在公告与审计 SQL 都成功后、事务提交前执行：审计写入失败时不会发送，发送失败时公告与审计一起回滚。GitHub 操作通常在外部调用确认成功后再写审计，结果未知时的尝试记录以各接口说明为准。外部副作用无法与数据库原子提交，因此仍可能出现 Telegram 消息已发出、但后续提交失败导致公告未发布的情况；这种情况下应先核对频道，避免直接重复发布。标记通知已读只改本人的已读记录，不写审计。
+读取（包括服务日志）不写审计。所有写操作都写入 `admin_audit`，包括 `actor`、`action`、`target` 和 `detail`（原因、条数、新旧值等 JSON）。数据库变更与审计在同一事务里，失败不部分生效。公告的 Telegram 广播在公告与审计 SQL 都成功后、事务提交前执行：审计写入失败时不会发送，发送失败时公告与审计一起回滚。Telegram 明确确认发送成功后，公告和审计使用脱离请求取消、最多 5 秒的上下文提交，避免客户端断开后丢失已广播的发布记录。GitHub 操作通常在外部调用确认成功后再写审计，结果未知时的尝试记录以各接口说明为准。外部副作用无法与数据库原子提交，因此仍可能出现 Telegram 消息已发出、但后续提交失败导致公告未发布的情况；这种情况下应先核对频道，避免直接重复发布。标记通知已读只改本人的已读记录，不写审计。
 
 ## 本地开发与验证
 
@@ -491,7 +551,7 @@ PostgreSQL 集成测试需要设置 `MSIME_TEST_DATABASE_URL`，数据库名必�
 
 - 实时语音 `streaming` 按消息来源归因：上游读写失败、发送非二进制消息或超过消息及单方向会话数据上限时计为失败；客户端发送非法消息或超限、客户端断开、会话达到 `max_seconds` 或服务关闭不计上游失败。
 - 小牛文档、图片和语音的上传、状态、终止及删除调用，只有 JSON 顶层整数 `code` 为 `200` 才计为成功；业务拒绝或缺少有效成功码计为失败，即使上游 HTTP 状态为 200。文件下载仍按 HTTP 和流式传输结果计量。
-- 每个副本每分钟开始后约 2 秒探测一次数据库（记为 `database` 服务的一次调用），并把本副本的调用计数写入数据库：按小时写入 `admin_service_metrics`（云端监控和当日 P95 使用），按分钟写入 `admin_service_minutes`（调用数、失败数和固定分桶的耗时直方图，各副本累加到同一行）。进程正常退出时也会写回剩余计数。
+- 每个副本每分钟开始后约 2 秒探测一次数据库（记为 `database` 服务的一次调用），并把本副本的调用计数写入数据库：按小时写入 `admin_service_metrics`（云端监控和当日 P95 使用），按分钟写入 `admin_service_minutes`（调用数、失败数和固定分桶的耗时直方图，各副本累加到同一行）。进程正常退出时也会写回剩余计数。小时和分钟增量按一个随机标识的批次在同一事务内写入，并登记到 `admin_service_metric_batches`；提交确认丢失后沿用标识重试，只累计一次。失败批次不会混入新调用，确认成功后继续写入后续积压。数据库故障期间，小时增量最多保留七天、分钟增量最多保留一小时；重试可裁剪过期行，去重登记保留八天。
 - 只有持有状态探测主锁的副本（主副本）做判定：每分钟开始后约 20 秒，读取所有副本最近 5 个完整分钟的计数，判定每个服务的状态，写入 `admin_service_verdicts`（每个服务每分钟一行），同时把这一分钟计入 `admin_service_daily`，并开启或关闭自动故障事件。主锁是 PostgreSQL 会话级 advisory lock，持有在一条从连接池取出的专用连接上，键包含当前 schema，同一数据库里不同 schema 的部署各自选主。这条连接不归还连接池，主副本因此比其他副本多占用一条数据库连接。
 - 主副本退出时释放主锁；主副本所在节点失联时，PostgreSQL 依靠该连接上设置的 TCP keepalive（约 1 分钟）结束会话并释放主锁。其他副本每分钟都会尝试获取主锁，所以通常在 1–2 分钟内接手；接手期间状态可能停留在上一分钟，超过 3 分钟没有新判定时外壳显示「状态未知」。数据库连接必须直连 PostgreSQL 或经过会话级连接池，事务级连接池（如 PgBouncer transaction 模式）下会话锁无效。
 - 连续异常次数、连续正常次数和「本段异常是否已开过事件」存在每分钟的判定里，新主副本从数据库接着计数，不从内存重新开始；是否有未关闭的自动事件每次都从 `admin_incidents` 读取，所以一个副本不会因为自己内存里的旧状态关闭另一个副本开启的事件。`admin_service_verdicts` 以（分钟，服务）为主键，同一分钟只记一次，即使短时间内出现两个主副本，每日可用分钟数也不会重复累加。
@@ -505,7 +565,7 @@ PostgreSQL 集成测试需要设置 `MSIME_TEST_DATABASE_URL`，数据库名必�
 
 - 多副本部署：敏感词和 GitHub 缓存都在各副本的内存中，最多有 30–60 秒的不一致（词库 PR 和新 Issue 的通知按数据库去重，不会因重启或多副本重复；后台限流按数据库共享，见「限流与通用约定」）。系统状态由一个主副本汇总所有副本的指标后统一判定，见「系统状态的多副本行为」；主副本失联后最多约 2 分钟没有新的判定。
 - 数据库本身不可用时，宕机分钟数和自动故障事件无法写入，`/api/status` 返回 503，外壳状态显示 `down`。
-- 词库 PR 只读最近 100 个；条目比较以 PR 的 `base.sha` 为准，分支创建后主干上删除的行会显示为新增。驳回时如果评论成功而关闭失败，重试会再评论一次。
+- 词库 PR 只读最近 100 个；条目比较以 PR 的 `base.sha` 为准，分支创建后主干上删除的行会显示为新增。驳回前会分页检查最近的评论，评论已存在时重试不会重复发布；评论超过 2000 条或评论分页结果损坏时返回 `502 github_uncertain`，不会继续写入，需先到 GitHub 核对。
 - 发布历史每个仓库只读最近 100 个 release，共用仓库的平台多时，较早的版本会从历史和每日快照中消失。并发撤回或编辑同一个 release 以最后一次为准。
 - GitHub Release 的「今日」是当天快照与前一天快照的差值，快照任务在 UTC 清晨运行时主要反映前一天的下载；页面会显示「快照截至」日期。
 - 社区内容下架后恢复（或因解封恢复）到待复核时，自动检查标记按当前敏感词库重新计算，可能与上传时不同。

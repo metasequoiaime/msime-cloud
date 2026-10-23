@@ -6,13 +6,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"time"
 )
 
 // StreamFullDictionarySnapshot 从同一条 SQL 的快照读取数据记录，不包含来源账户或凭据。
 // 下载格式的校验尾记录由 streamFullDictionarySnapshotWithFooter 补齐。
 func (s *Store) StreamFullDictionarySnapshot(ctx context.Context, user string, emit func(json.RawMessage) error) error {
 	rows, err := s.pool.Query(ctx, `SELECT record FROM (
- SELECT 0 AS category,'' AS sort1,'' AS sort2,'' AS sort3,jsonb_build_object('type','header','format','msime-dictionary-snapshot','version',1,'revision',COALESCE((SELECT revision FROM user_dictionary_state WHERE user_id=$1),0)) AS record
+	 SELECT 0 AS category,'' AS sort1,'' AS sort2,'' AS sort3,jsonb_build_object('type','header','format','msime-dictionary-snapshot','version',1,'revision',COALESCE((SELECT revision FROM user_dictionary_state WHERE user_id=$1),0)) AS record FROM auth_users WHERE id=$1
  UNION ALL SELECT 1,kind,code,word,jsonb_build_object('type','entry','data',jsonb_build_object('id',id,'kind',kind,'code',code,'word',word,'weight',weight,'revision',revision,'updated_at',updated_at)) FROM user_dictionary_entries WHERE user_id=$1
  UNION ALL SELECT 2,kind,code,word,jsonb_build_object('type','overlay','deleted',deleted,'data',entry) FROM user_dictionary_overlay WHERE user_id=$1
  UNION ALL SELECT 3,context,code,word,jsonb_build_object('type','position','data',jsonb_build_object('context',context,'code',code,'word',word,'position',position)) FROM user_candidate_positions WHERE user_id=$1
@@ -22,7 +23,9 @@ func (s *Store) StreamFullDictionarySnapshot(ctx context.Context, user string, e
 		return err
 	}
 	defer rows.Close()
+	seen := false
 	for rows.Next() {
+		seen = true
 		var raw []byte
 		if err = rows.Scan(&raw); err != nil {
 			return err
@@ -31,7 +34,13 @@ func (s *Store) StreamFullDictionarySnapshot(ctx context.Context, user string, e
 			return err
 		}
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !seen {
+		return errMissingUser
+	}
+	return nil
 }
 
 // streamFullDictionarySnapshotWithFooter 为全部记录补上数量和校验和，统一独立下载与 ZIP 导出格式。
@@ -59,7 +68,10 @@ func (a *Service) dictionarySnapshot(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// 完整快照可能较大，连接写期限必须覆盖路由允许的整个传输时间。
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(dictionaryDownloadTimeout + 5*time.Second))
 	started := false
+	writeLine := ndjsonWriter(w)
 	err := a.store.streamFullDictionarySnapshotWithFooter(r.Context(), p.UserID, func(raw json.RawMessage) error {
 		if !started {
 			w.Header().Set("Content-Type", "application/x-ndjson")
@@ -67,9 +79,7 @@ func (a *Service) dictionarySnapshot(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Cache-Control", "no-store")
 			started = true
 		}
-		line := append(raw, '\n')
-		_, err := w.Write(line)
-		return err
+		return writeLine(raw)
 	})
 	if err != nil {
 		if started {

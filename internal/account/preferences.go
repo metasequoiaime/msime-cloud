@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -35,6 +36,15 @@ var preferenceFields = func() map[string]preferenceField {
 	return fields
 }()
 
+// preferenceSchemaJSON 是只读的预编码 schema；字段表固定在构建产物中，避免每次请求重复遍历和编码。
+var preferenceSchemaJSON = func() json.RawMessage {
+	raw, err := json.Marshal(map[string]any{"fields": preferenceFields, "maximum_bytes": maximumPreferencesBytes, "update_mode": "replace", "revision_required": true})
+	if err != nil {
+		panic(err)
+	}
+	return raw
+}()
+
 type Preferences struct {
 	Revision int64                      `json:"revision"`
 	Settings map[string]json.RawMessage `json:"settings"`
@@ -47,10 +57,10 @@ func validPreference(key string, raw json.RawMessage) bool {
 	}
 	switch field.Type {
 	case "boolean":
-		var v bool
-		return json.Unmarshal(raw, &v) == nil
+		// JSON 只允许这四种边界空白，其他 Unicode 空白仍须拒绝。
+		value := bytes.Trim(raw, " \t\r\n")
+		return bytes.Equal(value, []byte("true")) || bytes.Equal(value, []byte("false"))
 	case "integer":
-		var v int64
 		low, high := int64(0), int64(1000000)
 		if field.Minimum != nil {
 			low = *field.Minimum
@@ -58,11 +68,15 @@ func validPreference(key string, raw json.RawMessage) bool {
 		if field.Maximum != nil {
 			high = *field.Maximum
 		}
-		return json.Unmarshal(raw, &v) == nil && v >= low && v <= high
+		// 先保留 JSON 语法限制，避免整数转换接受前导加号或前导零。
+		if !json.Valid(raw) {
+			return false
+		}
+		v, err := strconv.ParseInt(string(bytes.Trim(raw, " \t\r\n")), 10, 64)
+		return err == nil && v >= low && v <= high
 	case "number":
 		return validPreferenceNumber(raw)
 	case "string":
-		var v string
 		max := 1024
 		if field.MaxLength > 0 {
 			max = field.MaxLength
@@ -70,7 +84,7 @@ func validPreference(key string, raw json.RawMessage) bool {
 		if strings.Contains(key, "prompt") {
 			max = 8192
 		}
-		return json.Unmarshal(raw, &v) == nil && len(v) <= max && !strings.ContainsRune(v, 0) && validPreferenceUnicode(raw)
+		return validPreferenceString(raw, max)
 	}
 	return false
 }
@@ -111,6 +125,15 @@ func (a *Service) preferences(w http.ResponseWriter, r *http.Request) {
 			a.error(w, e)
 			return
 		}
+		if out.Revision == 0 && len(out.Settings) == 0 {
+			if exists, err := a.store.userExists(r.Context(), p.UserID); err != nil {
+				a.error(w, err)
+				return
+			} else if !exists {
+				a.error(w, errMissingUser)
+				return
+			}
+		}
 		write(w, 200, out)
 		return
 	}
@@ -143,8 +166,18 @@ func (a *Service) preferences(w http.ResponseWriter, r *http.Request) {
 	write(w, 200, out)
 }
 func (a *Service) preferencesSchema(w http.ResponseWriter, r *http.Request) {
-	if _, ok := a.principal(w, r, false); !ok {
+	p, ok := a.principal(w, r, false)
+	if !ok {
 		return
 	}
-	write(w, 200, map[string]any{"fields": preferenceFields, "maximum_bytes": maximumPreferencesBytes, "update_mode": "replace", "revision_required": true})
+	exists, err := a.store.userExists(r.Context(), p.UserID)
+	if err != nil {
+		a.error(w, err)
+		return
+	}
+	if !exists {
+		a.error(w, errMissingUser)
+		return
+	}
+	write(w, 200, preferenceSchemaJSON)
 }

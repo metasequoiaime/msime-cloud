@@ -3,7 +3,6 @@ package server
 import (
 	"cmp"
 	"context"
-	"encoding/base64"
 	"errors"
 	"iter"
 	"log/slog"
@@ -19,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -56,38 +56,46 @@ type qqSection struct {
 
 // qqKnowledge 是本副本缓存的知识库。
 type qqKnowledge struct {
-	mu       sync.Mutex
-	sections []qqSection
-	docIDs   []string
-	snippets []string
-	toc      string
-	loaded   time.Time
+	mu            sync.Mutex
+	sections      []qqSection
+	docIDs        []string
+	snippets      []string
+	toc           string
+	contentHashes []string
+	loaded        time.Time
 }
 
 // qqKnowledgeSections 返回知识库的段落，过期时先刷新。刷新失败但有旧数据时继续用旧数据，一次都没加载成功时返回错误。
 func (s *Server) qqKnowledgeSections(ctx context.Context) ([]qqSection, error) {
-	sections, _, _, _, err := s.qqKnowledgeSnapshot(ctx)
+	sections, _, _, _, _, err := s.qqKnowledgeSnapshot(ctx)
 	return sections, err
 }
 
 // qqKnowledgeSnapshot 原子返回知识库段落及其派生缓存，避免刷新与答疑请求交错时使用不同版本的缓存。
-func (s *Server) qqKnowledgeSnapshot(ctx context.Context) ([]qqSection, []string, []string, string, error) {
+func (s *Server) qqKnowledgeSnapshot(ctx context.Context) ([]qqSection, []string, []string, string, []string, error) {
 	k := &s.qq.knowledge
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if k.sections != nil && s.qq.now().Sub(k.loaded) < qqKnowledgeTTL {
-		return k.sections, k.docIDs, k.snippets, k.toc, nil
+		return k.sections, k.docIDs, k.snippets, k.toc, k.contentHashes, nil
 	}
 	sections, err := s.loadQQKnowledge(ctx)
 	if err != nil {
 		if k.sections != nil {
-			return k.sections, k.docIDs, k.snippets, k.toc, nil
+			return k.sections, k.docIDs, k.snippets, k.toc, k.contentHashes, nil
 		}
-		return nil, nil, nil, "", err
+		return nil, nil, nil, "", nil, err
 	}
 	snippets := make([]string, len(sections))
 	for i, section := range sections {
 		snippets[i] = qqSnippet(section.Text)
+	}
+	var contentHashes []string
+	if s.qqVectors != nil && s.qqEmbeddingURL() != "" {
+		contentHashes = make([]string, len(sections))
+		for i, section := range sections {
+			contentHashes[i] = qqDocVectorContentHash(section)
+		}
 	}
 	docIDs := make([]string, len(sections))
 	for i, section := range sections {
@@ -98,8 +106,8 @@ func (s *Server) qqKnowledgeSnapshot(ctx context.Context) ([]qqSection, []string
 		}
 	}
 	toc := qqKnowledgeTOC(sections, snippets)
-	k.sections, k.docIDs, k.snippets, k.toc, k.loaded = sections, docIDs, snippets, toc, s.qq.now()
-	return sections, docIDs, snippets, toc, nil
+	k.sections, k.docIDs, k.snippets, k.toc, k.contentHashes, k.loaded = sections, docIDs, snippets, toc, contentHashes, s.qq.now()
+	return sections, docIDs, snippets, toc, contentHashes, nil
 }
 
 // warmQQKnowledge 在副本启动时加载一次知识库，不等第一条答疑才去拉：新副本第一次加载就碰上 GitHub 出错时，那条答疑只能带着空段落回答（见 qqKnowledgeMaterial）。失败只记日志，答疑时会再拉。
@@ -134,7 +142,7 @@ func (s *Server) loadQQKnowledge(ctx context.Context) ([]qqSection, error) {
 	// 先固定前 50 份文档和结果槽位，避免并发完成顺序改变段落编号。
 	files := 0
 	for _, entry := range entries {
-		if entry.Type != "file" || !strings.HasSuffix(strings.ToLower(entry.Name), ".md") {
+		if entry.Type != "file" || !qqMarkdownFileName(entry.Name) {
 			continue
 		}
 		entries[files] = entry
@@ -156,19 +164,12 @@ func (s *Server) loadQQKnowledge(ctx context.Context) ([]qqSection, error) {
 			if err != nil || !r.OK() {
 				return githubFailure("knowledge file", r, err)
 			}
-			var file struct {
-				Content  string `json:"content"`
-				Encoding string `json:"encoding"`
-			}
-			if r.Decode(&file) != nil || file.Encoding != "base64" {
-				return errors.New("knowledge file: invalid response")
-			}
-			raw, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(file.Content, "\n", ""))
-			if err != nil || !utf8.Valid(raw) {
-				return errors.New("knowledge file: invalid content")
+			text, err := qqRepositoryText(r, "knowledge file")
+			if err != nil {
+				return err
 			}
 			name := strings.TrimSuffix(entry.Name, ".md")
-			split := qqSplitMarkdown(name, string(raw))
+			split := qqSplitMarkdown(name, text)
 			if platform := qqDocPlatforms[name]; platform != "" {
 				for i := range split {
 					label := platform
@@ -197,7 +198,46 @@ func (s *Server) loadQQKnowledge(ctx context.Context) ([]qqSection, error) {
 	return sections, nil
 }
 
-var qqHeadingPattern = regexp.MustCompile(`^(#{1,6})\s+(.+?)\s*#*\s*$`)
+// qqMarkdownFileName 只比较文件名末尾的 ASCII 扩展名，避免为筛选文档复制整个文件名。
+func qqMarkdownFileName(name string) bool {
+	return len(name) >= len(".md") && textutil.EqualFoldASCII(name[len(name)-len(".md"):], ".md")
+}
+
+// qqMarkdownHeading 按标题正则的语义扫描一行，避免为每个标题建立捕获切片。
+func qqMarkdownHeading(line string) (level int, title string, ok bool) {
+	level = 0
+	for level < len(line) && level < 6 && line[level] == '#' {
+		level++
+	}
+	if level == 0 || (level < len(line) && line[level] == '#') {
+		return 0, "", false
+	}
+	start := level
+	for start < len(line) && qqRegexpSpace(line[start]) {
+		start++
+	}
+	if start == level {
+		return 0, "", false
+	}
+	if start == len(line) {
+		// 正则的 `.+?` 会从连续空白中留下最后一个字节作为标题；只有单个分隔空白时才不能成标题。
+		if start-level < 2 {
+			return 0, "", false
+		}
+		start--
+	}
+	end := len(line)
+	for end > start+1 && qqRegexpSpace(line[end-1]) {
+		end--
+	}
+	for end > start+1 && line[end-1] == '#' {
+		end--
+	}
+	for end > start+1 && qqRegexpSpace(line[end-1]) {
+		end--
+	}
+	return level, line[start:end], true
+}
 
 // qqDocPlatforms 按文件名标出每篇指南适用的平台，写在段落的文档名前面。windows.md 的一级标题是「水杉输入法文档」，不标的话 Windows 的操作路径会被当成通用答案交给 macOS、Linux 用户。
 var qqDocPlatforms = map[string]string{
@@ -216,10 +256,10 @@ var qqDocPlatforms = map[string]string{
 // qqFAQDefaultPlatform 是 FAQ 里没有标出平台的问题的标签：faq.md 开头写着「其余排查以 Windows 为主」，原来整篇标成「FAQ」，模型看不出哪一问只适用于 Windows，曾把 Windows 才有的「候选窗补充字体」答给 Linux 用户。
 const qqFAQDefaultPlatform = "FAQ · 以 Windows 正式版为主"
 
-// qqFAQAllPlatforms 是 FAQ 里适用于所有平台的问题（按标题里的字样认），qqFAQTitlePlatforms 是标题里出现的平台字样和对应的标签，按顺序取第一个匹配的。
+// qqFAQAllPlatforms 是 FAQ 里适用于所有平台的问题（按标题里的字样认），qqFAQTitlePlatforms 是标题里出现的小写平台字样和对应的标签，按顺序取第一个匹配的。
 var (
 	qqFAQAllPlatforms   = []string{"支持哪些系统，去哪里下载", "GitHub 下载太慢", "有鸿蒙"}
-	qqFAQTitlePlatforms = [][2]string{{"Windows", "Windows"}, {"macOS", "macOS"}, {"Linux", "Linux"}, {"iOS", "iOS"}, {"iPad", "iOS"}, {"鸿蒙", "鸿蒙"}, {"HarmonyOS", "鸿蒙"}}
+	qqFAQTitlePlatforms = [][2]string{{"windows", "Windows"}, {"macos", "macOS"}, {"linux", "Linux"}, {"ios", "iOS"}, {"ipad", "iOS"}, {"鸿蒙", "鸿蒙"}, {"harmonyos", "鸿蒙"}}
 )
 
 // qqFAQPlatform 按标题给 FAQ 的一问打平台标签：适用于所有平台的几问标「各平台」，标题里写了平台的标这个平台，其余标 qqFAQDefaultPlatform。标题是整条标题链（例如「安装与启动 > iOS 版为什么不在 App Store？」），平台字样不区分大小写。
@@ -229,13 +269,36 @@ func qqFAQPlatform(title string) string {
 			return "各平台"
 		}
 	}
-	lower := strings.ToLower(title)
+	upper := false
+	for _, r := range title {
+		if r >= 'A' && r <= 'Z' {
+			upper = true
+		}
+		if r >= utf8.RuneSelf && (r < 0x4E00 || r > 0x9FFF) && unicode.ToLower(r) != r {
+			// Unicode 小写转换也可能得到优先级更高的平台词，必须先转换再按固定顺序匹配。
+			title = strings.ToLower(title)
+			upper = false
+			break
+		}
+	}
 	for _, pair := range qqFAQTitlePlatforms {
-		if strings.Contains(lower, strings.ToLower(pair[0])) {
+		if strings.Contains(title, pair[0]) || upper && qqContainsASCIIFold(title, pair[0]) {
 			return pair[1]
 		}
 	}
 	return qqFAQDefaultPlatform
+}
+
+func qqContainsASCIIFold(text, word string) bool {
+	if word == "" || len(text) < len(word) {
+		return false
+	}
+	for start := 0; start+len(word) <= len(text); start++ {
+		if textutil.EqualFoldASCII(text[start:start+len(word)], word) {
+			return true
+		}
+	}
+	return false
 }
 
 // qqPlatformList 是回答时告诉模型的水杉版本清单，取 qqDocPlatforms 里的平台名，去掉 FAQ、通用、各平台这类不是平台的标签（FAQ 按问题细分的标签见 qqFAQPlatform，不在 qqDocPlatforms 里），按文件名排序后去重，用「、」连接。没说平台的问题只挑到 Windows 段落时，模型曾据此说「五笔只有 Windows 有」「水杉只有 Windows 版」，所以要让它知道还有哪些版本；新增平台指南时只要在 qqDocPlatforms 里加一行。
@@ -417,12 +480,21 @@ func qqKnowledgeTOC(sections []qqSection, snippets []string) string {
 		}
 		toc.Grow(outputBytes)
 	}
+	// 没有缓存摘要时，连续相同正文通常来自重复的模板段落，复用上一段摘要。
+	previousText := ""
+	previousSnippet := ""
+	previousSnippetValid := false
 	for i, section := range sections {
 		var snippet string
 		if i < len(snippets) {
 			snippet = snippets[i]
+		} else if previousSnippetValid && section.Text == previousText {
+			snippet = previousSnippet
 		} else {
 			snippet = qqSnippet(section.Text)
+			if i >= len(snippets) {
+				previousText, previousSnippet, previousSnippetValid = section.Text, snippet, true
+			}
 		}
 		var number [20]byte
 		n := strconv.AppendInt(number[:0], int64(i+1), 10)
@@ -477,6 +549,7 @@ lines:
 			remaining = ""
 		}
 		if line == previousLine {
+			remaining = qqSkipConsecutiveListLines(remaining, previousLine)
 			continue
 		}
 		previousLine = line
@@ -559,6 +632,17 @@ lines:
 	return labels
 }
 
+// qqSkipConsecutiveListLines 按原始字节和行尾跳过连续相同行，避免为比较复制长行或逐行解析重复候选。
+func qqSkipConsecutiveListLines(remaining, line string) string {
+	if line == "" {
+		return remaining
+	}
+	for len(remaining) > len(line) && remaining[len(line)] == '\n' && strings.HasPrefix(remaining, line) {
+		remaining = remaining[len(line)+1:]
+	}
+	return remaining
+}
+
 // qqListLabelCandidate 返回列表项中冒号前的 Markdown 标签；候选过短且只在少数重复变体中复用，结果可安全缓存。
 func qqListLabelCandidate(candidate string, scratch []byte) []byte {
 	runes := []rune(candidate)
@@ -603,6 +687,9 @@ const qqCommonASCIIPadding = " \t \t \t \t \t \t \t \t \t \t \t \t \t \t \t \t"
 // qqCommonASCIISpaces 是纯空格正文的固定块，避免通用裁剪逐字节遍历超长填充。
 const qqCommonASCIISpaces = "                                "
 
+// qqCommonIdeographicSpaces 是纯全角空白正文的固定块，避免逐个解码尾部空白。
+const qqCommonIdeographicSpaces = "　　　　　　　　　　　　　　　　"
+
 // qqTrimLeadingCommonASCIIPadding 按固定块跳过重复的 ASCII Markdown 空白，剩余部分交给标准裁剪。
 func qqTrimLeadingCommonASCIIPadding(line string) int {
 	start := 0
@@ -631,9 +718,28 @@ func qqMarkdownLeadingSpace(line string) string {
 	if first == ' ' || first == '\t' {
 		start = qqTrimLeadingCommonASCIIPadding(line)
 	}
-	trimmed := strings.TrimLeft(line[start:], " \t\n\f\r\v")
+asciiLoop:
+	for start < len(line) {
+		switch line[start] {
+		case ' ', '\t', '\n', '\f', '\r', '\v':
+			start++
+		default:
+			break asciiLoop
+		}
+	}
+	trimmed := line[start:]
 	if trimmed == "" || trimmed[0] < utf8.RuneSelf {
 		return trimmed
+	}
+	if strings.HasPrefix(trimmed, "\u3000") {
+		offset := 0
+		for len(trimmed)-offset >= len(qqCommonIdeographicSpaces) && trimmed[offset:offset+len(qqCommonIdeographicSpaces)] == qqCommonIdeographicSpaces {
+			offset += len(qqCommonIdeographicSpaces)
+		}
+		trimmed = trimmed[offset:]
+		if trimmed == "" {
+			return trimmed
+		}
 	}
 	const commonPadding = " \t\u3000 \t\u3000 \t\u3000 \t\u3000 \t\u3000 \t\u3000 \t\u3000 \t\u3000"
 	if strings.HasPrefix(trimmed, "\u3000 ") {
@@ -725,6 +831,9 @@ func qqTrimSpace(text string) string {
 	left := text[start:]
 	trimmed := strings.TrimLeft(left, " \t\n\f\r\v")
 	start += len(left) - len(trimmed)
+	for len(trimmed) >= len(qqCommonASCIISpaces) && trimmed[len(trimmed)-len(qqCommonASCIISpaces):] == qqCommonASCIISpaces {
+		trimmed = trimmed[:len(trimmed)-len(qqCommonASCIISpaces)]
+	}
 	trimmed = strings.TrimRight(trimmed, " \t\n\f\r\v")
 	end := start + len(trimmed)
 	if start < end && text[start] >= utf8.RuneSelf {
@@ -738,6 +847,9 @@ func qqTrimSpace(text string) string {
 		}
 	}
 	if start < end && text[end-1] >= utf8.RuneSelf {
+		for end-start >= len(qqCommonIdeographicSpaces) && text[end-len(qqCommonIdeographicSpaces):end] == qqCommonIdeographicSpaces {
+			end -= len(qqCommonIdeographicSpaces)
+		}
 		end = qqTrimTrailingCommonPadding(text, start, end)
 		for end > start {
 			if end-start >= 3 && text[end-3] == 0xe3 && text[end-2] == 0x80 && text[end-1] == 0x80 {
@@ -841,18 +953,18 @@ func qqSplitMarkdown(name, markdown string) []qqSection {
 		if strings.HasPrefix(leading, "```") {
 			fenced = !fenced
 		}
-		var m []string
+		level, headingText, headingOK := 0, "", false
 		if !fenced && strings.HasPrefix(line, "#") {
-			m = qqHeadingPattern.FindStringSubmatch(line)
+			level, headingText, headingOK = qqMarkdownHeading(line)
 		}
-		if m != nil {
+		if headingOK {
 			flush()
-			if len(m[1]) > 1 && qqTrimSpace(markdown[nextOffset:]) == "" {
+			// 只需判断后续是否全为空白；遇到正文即停，避免每个标题重扫同一段尾部空白。
+			if level > 1 && qqMarkdownLeadingSpace(markdown[nextOffset:]) == "" {
 				break
 			}
-			level := len(m[1])
 			// 标题随段落进入缓存，复制捕获结果以免引用整份 Markdown 的底层内存。
-			heading := strings.Clone(m[2])
+			heading := strings.Clone(headingText)
 			if level == 1 {
 				doc, titles, intro = heading, nil, true
 				offset = nextOffset
@@ -944,6 +1056,9 @@ func qqCompactLower(text string) string {
 	if compact, ok := qqCompactLowerASCII(text); ok {
 		return compact
 	}
+	if compact, ok := qqCompactLowerBasic(text); ok {
+		return compact
+	}
 	outputBytes := 0
 	for field := range qqTextFields(text) {
 		if len(field) == len(text) {
@@ -994,6 +1109,60 @@ func qqCompactLowerASCII(text string) (string, bool) {
 		}
 		out.WriteByte(b)
 	}
+	return out.String(), true
+}
+
+// qqCompactLowerBasic 合并仅含 ASCII 和基本汉字的正文，避免对无大小写的汉字逐字查表。
+func qqCompactLowerBasic(text string) (string, bool) {
+	// 尾部已有其他 Unicode 字符时直接回退，避免先扫描较长的汉字前缀。
+	last, _ := utf8.DecodeLastRuneInString(text)
+	if last >= utf8.RuneSelf && (last < 0x4E00 || last > 0x9FFF) {
+		return "", false
+	}
+	spaceBytes := 0
+	needsChange := false
+	for i := 0; i < len(text); {
+		b := text[i]
+		if b >= utf8.RuneSelf {
+			// U+4E00 到 U+9FFF 均占三个有效 UTF-8 字节，不含空白或大小写映射。
+			if b >= 0xE4 && b <= 0xE9 && len(text)-i >= 3 {
+				second, third := text[i+1], text[i+2]
+				if (b != 0xE4 || second >= 0xB8) && second&0xC0 == 0x80 && third&0xC0 == 0x80 {
+					i += 3
+					continue
+				}
+			}
+			return "", false
+		}
+		switch b {
+		case ' ', '\t', '\n', '\v', '\f', '\r':
+			spaceBytes++
+			needsChange = true
+		}
+		needsChange = needsChange || 'A' <= b && b <= 'Z'
+		i++
+	}
+	if !needsChange {
+		return text, true
+	}
+	var out strings.Builder
+	out.Grow(len(text) - spaceBytes)
+	start := 0
+	for i := range len(text) {
+		b := text[i]
+		switch b {
+		case ' ', '\t', '\n', '\v', '\f', '\r':
+			out.WriteString(text[start:i])
+			start = i + 1
+			continue
+		}
+		if 'A' <= b && b <= 'Z' {
+			out.WriteString(text[start:i])
+			out.WriteByte(b + 'a' - 'A')
+			start = i + 1
+		}
+	}
+	out.WriteString(text[start:])
 	return out.String(), true
 }
 
@@ -1073,13 +1242,88 @@ func qqRemoveLinks(text string) string {
 	initialized := false
 	start := 0
 	var pendingSpace byte
+	removed := 0
 	for search := 0; ; {
-		i := strings.Index(text[search:], "://")
-		if i < 0 {
+		begin, end, next, ok := qqNextRawLink(text, search)
+		if !ok {
 			break
 		}
+		removed += end - begin
+		search = next
+	}
+	for search := 0; ; {
+		begin, end, next, ok := qqNextRawLink(text, search)
+		if !ok {
+			break
+		}
+		if !initialized {
+			out.Grow(len(text) - removed)
+			initialized = true
+		}
+		writeQQCollapsedSegment(&out, text[start:begin], &pendingSpace)
+		start, search = end, next
+	}
+	if start == 0 {
+		return qqCollapseSpaceRuns(text)
+	}
+	writeQQCollapsedSegment(&out, text[start:], &pendingSpace)
+	if pendingSpace != 0 {
+		out.WriteByte(pendingSpace)
+	}
+	return out.String()
+}
+
+// qqRemoveRawLinks 按 qqLinkPattern 的规则删除链接，但保留链接前后的空白原样。
+func qqRemoveRawLinks(text string) string {
+	return qqRemoveMatchedRanges(text, qqNextRawLink)
+}
+
+// qqRemoveLinkNotes 删除全角括号包住的裸链接，并保留其他文字和空白原样。
+func qqRemoveLinkNotes(text string) string {
+	return qqRemoveMatchedRanges(text, qqNextLinkNote)
+}
+
+func qqNextLinkNote(text string, search int) (begin, end, next int, ok bool) {
+	const leftParen = "（"
+	const rightParen = "）"
+	for search < len(text) {
+		i := strings.Index(text[search:], leftParen)
+		if i < 0 {
+			return 0, 0, 0, false
+		}
+		begin = search + i
+		prefix := begin + len(leftParen)
+		if prefix >= len(text) || !qqURLSchemeLetter(text[prefix]) {
+			search = prefix
+			continue
+		}
+		i = prefix + 1
+		for i < len(text) && qqURLSchemeByte(text[i]) {
+			i++
+		}
+		if i+3 > len(text) || text[i:i+3] != "://" {
+			search = prefix
+			continue
+		}
+		close := strings.Index(text[i+3:], rightParen)
+		if close < 0 {
+			search = prefix
+			continue
+		}
+		end = i + 3 + close + len(rightParen)
+		return begin, end, end, true
+	}
+	return 0, 0, 0, false
+}
+
+func qqNextRawLink(text string, search int) (begin, end, next int, ok bool) {
+	for search < len(text) {
+		i := strings.Index(text[search:], "://")
+		if i < 0 {
+			return 0, 0, 0, false
+		}
 		i += search
-		begin := i
+		begin = i
 		for begin > 0 && qqURLSchemeByte(text[begin-1]) {
 			begin--
 		}
@@ -1090,25 +1334,13 @@ func qqRemoveLinks(text string) string {
 			search = i + 3
 			continue
 		}
-		if !initialized {
-			out.Grow(len(text))
-			initialized = true
-		}
-		writeQQCollapsedSegment(&out, text[start:begin], &pendingSpace)
-		end := i + 3
+		end = i + 3
 		for end < len(text) && text[end] >= '!' && text[end] <= '~' {
 			end++
 		}
-		start, search = end, end
+		return begin, end, end, true
 	}
-	if start == 0 {
-		return qqCollapseSpaceRuns(text)
-	}
-	writeQQCollapsedSegment(&out, text[start:], &pendingSpace)
-	if pendingSpace != 0 {
-		out.WriteByte(pendingSpace)
-	}
-	return out.String()
+	return 0, 0, 0, false
 }
 
 // writeQQCollapsedSegment 写入不含链接的一段正文，保留单个制表符，只把连续或跨链接的 ASCII 空白合并为一个空格。
@@ -1148,8 +1380,76 @@ func qqURLSchemeLetter(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
-// qqMarkdownLink 匹配 Markdown 链接和图片，第 1 组是链接文字。qqLinkPattern 的 [!-~]* 会连右括号一起吞掉，`[#730](https://…)，` 只用 qqStripLinks 会剩下「[#730](，」。
-var qqMarkdownLink = regexp.MustCompile(`!?\[([^\]]*)\]\([^)]*\)`)
+// qqMarkdownLinksToText 只保留 Markdown 链接和图片的文字，避免裸链接过滤留下半截括号。
+func qqMarkdownLinksToText(text string) string {
+	outputBytes, matches := len(text), 0
+	var first [8][4]int
+	qqScanMarkdownLinks(text, func(match [4]int) {
+		outputBytes -= match[1] - match[0] - (match[3] - match[2])
+		if matches < len(first) {
+			first[matches] = match
+		}
+		matches++
+	})
+	if matches == 0 {
+		return text
+	}
+	var out strings.Builder
+	out.Grow(outputBytes)
+	written := 0
+	write := func(match [4]int) {
+		out.WriteString(text[written:match[0]])
+		out.WriteString(text[match[2]:match[3]])
+		written = match[1]
+	}
+	// 少量链接复用栈上的下标，不再扫描它们之前的长正文。
+	for _, match := range first[:min(matches, len(first))] {
+		write(match)
+	}
+	if matches > len(first) {
+		resume := written
+		qqScanMarkdownLinks(text[resume:], func(match [4]int) {
+			for i := range match {
+				match[i] += resume
+			}
+			write(match)
+		})
+	}
+	out.WriteString(text[written:])
+	return out.String()
+}
+
+// qqScanMarkdownLinks 依次返回完整匹配和标签文字的四个下标，沿用旧正则的非重叠规则。
+func qqScanMarkdownLinks(text string, yield func([4]int)) {
+	for search := 0; search < len(text); {
+		open := strings.IndexByte(text[search:], '[')
+		if open < 0 {
+			return
+		}
+		open += search
+		close := strings.IndexByte(text[open+1:], ']')
+		if close < 0 {
+			return
+		}
+		close += open + 1
+		if close+1 >= len(text) || text[close+1] != '(' {
+			// 当前右方括号不接左圆括号时，前面的嵌套起点也不可能匹配。
+			search = close + 1
+			continue
+		}
+		end := strings.IndexByte(text[close+2:], ')')
+		if end < 0 {
+			return
+		}
+		end += close + 3
+		start := open
+		if start > search && text[start-1] == '!' {
+			start--
+		}
+		yield([4]int{start, end, open + 1, close})
+		search = end
+	}
+}
 
 // qqLineMarkerEnd 返回行首 Markdown 标记的字节长度；沿用原正则的 ASCII 数字及空白规则。
 func qqLineMarkerEnd(line string) int {
@@ -1222,53 +1522,47 @@ func qqPlainTextCanReuse(md string) bool {
 	if md == "" {
 		return true
 	}
-	// 这些字面量可能触发行内 Markdown、链接或裸链接转换；保守地交给完整转换器处理。
-	if strings.Contains(md, "](") || strings.Contains(md, "://") || strings.Contains(md, "**") || strings.Contains(md, "__") || strings.ContainsRune(md, '`') {
-		return false
-	}
 	if md[0] == '|' || qqLineMarkerEnd(md) != 0 {
 		return false
 	}
 	previousSpace := false
-	fast := true
-	for i := 0; i < len(md); i++ {
+	for i := 0; i < len(md); {
 		b := md[i]
-		if b >= utf8.RuneSelf {
-			switch b {
-			case 0xc2, 0xe1, 0xe2, 0xe3:
-				fast = false
+		switch b {
+		case ']', ':', '*', '_':
+			if i+1 < len(md) {
+				next := md[i+1]
+				if (b == ']' && next == '(') || ((b == '*' || b == '_') && next == b) || (b == ':' && next == '/' && i+2 < len(md) && md[i+2] == '/') {
+					return false
+				}
 			}
-			previousSpace = false
-			continue
-		}
-		if b == ' ' {
+		case '`':
+			return false
+		case ' ':
 			if previousSpace || i == 0 || i+1 == len(md) {
 				return false
 			}
 			previousSpace = true
+			i++
 			continue
-		}
-		if b == '\t' || b == '\n' || b == '\v' || b == '\f' || b == '\r' {
+		case '\t', '\n', '\v', '\f', '\r':
 			return false
 		}
-		previousSpace = false
-	}
-	if fast {
-		return true
-	}
-	previousSpace = false
-	for offset := 0; offset < len(md); {
-		r, size := utf8.DecodeRuneInString(md[offset:])
-		if unicode.IsSpace(r) {
-			// 输出只保留词间的单个 ASCII 空格。
-			if r != ' ' || previousSpace || offset == 0 || offset+size == len(md) {
-				return false
+		if b >= utf8.RuneSelf {
+			if b == 0xc2 || b == 0xe1 || b == 0xe2 || b == 0xe3 {
+				r, size := utf8.DecodeRuneInString(md[i:])
+				if unicode.IsSpace(r) {
+					return false
+				}
+				i += size
+			} else {
+				i++
 			}
-			previousSpace = true
-		} else {
 			previousSpace = false
+			continue
 		}
-		offset += size
+		previousSpace = false
+		i++
 	}
 	return true
 }
@@ -1347,11 +1641,11 @@ func qqPlainText(md string) string {
 	}
 	// 缺少规则所需的字面字符时直接跳过，避免无匹配的替换复制全文。
 	if strings.Contains(text, "](") {
-		text = qqMarkdownLink.ReplaceAllString(text, "$1")
+		text = qqMarkdownLinksToText(text)
 	}
 	// 这里仅删除裸链接；末尾的逐行裁剪和字段合并会统一处理空白，避免提前复制全文。
 	if strings.Contains(text, "://") {
-		text = qqLinkPattern.ReplaceAllString(text, "")
+		text = qqRemoveLinks(text)
 	}
 	if strings.Contains(text, "**") || strings.Contains(text, "__") || strings.ContainsRune(text, '`') {
 		text = qqPlainInlineText(text)
@@ -1582,15 +1876,66 @@ func qqCleanAnswer(answer string) string {
 var (
 	// qqAnswerReplacer 把弯引号换成群里统一用的直角引号，把制表符换成空格，删掉 Markdown 加粗。字面的 \t（两个字符）另外处理，见 qqWindowsPath。
 	qqAnswerReplacer = strings.NewReplacer("“", "「", "”", "」", "‘", "『", "’", "』", "\t", " ", "**", "", "__", "")
-	// qqApostrophe 匹配英文单词里当撇号用的弯单引号（don’t），先换成直撇号，免得被当成引号换成『』。
-	qqApostrophe = regexp.MustCompile(`([A-Za-z])’([A-Za-z])`)
 	// qqWindowsPath 匹配 Windows 路径（C:\、%APPDATA%\）：答案里有路径时，字面的 \t 多半是 \temp 这类路径的一部分，不换成空格。
 	qqWindowsPath = regexp.MustCompile(`[A-Za-z]:\\|%\\`)
-	// qqBlankLines 匹配三个及以上连续的换行。
-	qqBlankLines = regexp.MustCompile(`\n{3,}`)
-	// qqPromptLeak 匹配提示词禁止出现在答案里的说法（「资料」是模型内部看的材料），只记日志作为提示词回归的信号，不在代码里删词。
-	qqPromptLeak = regexp.MustCompile(`资料|文档里|截断`)
 )
+
+type qqPromptLeakMatcher struct{}
+
+// FindString 保留原提示词匹配器的测试接口，但直接查找固定词，避免正则执行器分配。
+func (qqPromptLeakMatcher) FindString(answer string) string {
+	return qqPromptLeakWord(answer)
+}
+
+var qqPromptLeak qqPromptLeakMatcher
+
+// qqPromptLeakWord 返回答案中最早出现的提示词泄漏标记，只记日志，不修改答案。
+func qqPromptLeakWord(answer string) string {
+	word, position := "", len(answer)
+	for _, candidate := range []string{"资料", "文档里", "截断"} {
+		if index := strings.Index(answer, candidate); index >= 0 && index < position {
+			word, position = candidate, index
+		}
+	}
+	return word
+}
+
+// qqNormalizeApostrophes 把英文单词中的弯撇号换成直撇号，保留原正则不共享两侧字母的匹配规则。
+func qqNormalizeApostrophes(answer string) string {
+	var out strings.Builder
+	copied := 0
+	for search := 0; search < len(answer); {
+		next := strings.Index(answer[search:], "’")
+		if next < 0 {
+			break
+		}
+		quote := search + next
+		if quote+3 >= len(answer) {
+			break
+		}
+		if quote > search {
+			before, after := answer[quote-1]|0x20, answer[quote+3]|0x20
+			if before >= 'a' && before <= 'z' && after >= 'a' && after <= 'z' {
+				if copied == 0 {
+					// 每次替换缩短两个字节；按首次替换后的上限一次分配，避免逐个捕获和扩容。
+					out.Grow(len(answer) - 2)
+				}
+				out.WriteString(answer[copied:quote])
+				out.WriteByte('\'')
+				copied = quote + 3
+				// 右侧字母已被本次匹配占用，下一处撇号不能再次使用它。
+				search = quote + 4
+				continue
+			}
+		}
+		search = quote + 3
+	}
+	if copied == 0 {
+		return answer
+	}
+	out.WriteString(answer[copied:])
+	return out.String()
+}
 
 // qqPromptLeakCandidate 判断答案是否含有提示词泄漏规则可能命中的字面字符；没有候选字符时跳过正则扫描。
 func qqPromptLeakCandidate(answer string) bool {
@@ -1759,16 +2104,54 @@ func qqStripAnswerHeadings(answer string) string {
 	return out.String()
 }
 
+// qqCollapseBlankLines 把三个及以上连续的换行压成两个，其他字节保持原样。
+func qqCollapseBlankLines(answer string) string {
+	first := strings.Index(answer, "\n\n\n")
+	if first < 0 {
+		return answer
+	}
+	runs := func(yield func(start, end int) bool) {
+		for start := first; ; {
+			end := start + 3
+			for end < len(answer) && answer[end] == '\n' {
+				end++
+			}
+			if !yield(start, end) {
+				return
+			}
+			next := strings.Index(answer[end:], "\n\n\n")
+			if next < 0 {
+				return
+			}
+			start = end + next
+		}
+	}
+	size := len(answer)
+	for start, end := range runs {
+		size -= end - start - 2
+	}
+	if size == 2 {
+		return "\n\n"
+	}
+	// 按保留内容分配，避免长换行串压缩后的短结果持有整段输入大小的缓冲。
+	var out strings.Builder
+	out.Grow(size)
+	copied := 0
+	for start, end := range runs {
+		out.WriteString(answer[copied : start+2])
+		copied = end
+	}
+	out.WriteString(answer[copied:])
+	return out.String()
+}
+
 // qqNormalizeAnswer 统一答案的格式：模型偶尔不照提示词写，同一个群里一会儿“”一会儿「」，或者冒出 **、## 和字面的 \t，读起来不像同一个助手说的。引号换成「」『』，字面的 \t 和制表符换成空格，删掉 **、__，去掉行首的 #（「#123」这种 issue 编号不动），行首的「- 」保留，三个以上的连续换行压成两个。
 func qqNormalizeAnswer(answer string) string {
-	// 无匹配时正则替换仍会复制正文，先确认有英文单词里的弯撇号。
-	if strings.ContainsRune(answer, '’') && qqApostrophe.MatchString(answer) {
-		answer = qqApostrophe.ReplaceAllString(answer, "$1'$2")
-	}
+	answer = qqNormalizeApostrophes(answer)
 	candidates := qqScanAnswerCandidates(answer)
 	promptLeak, replacement := candidates.promptLeak, candidates.replacement
 	if promptLeak {
-		if word := qqPromptLeak.FindString(answer); word != "" {
+		if word := qqPromptLeakWord(answer); word != "" {
 			slog.Info("qq bot: prompt leak", "word", word)
 		}
 	}
@@ -1782,20 +2165,8 @@ func qqNormalizeAnswer(answer string) string {
 	if candidates.headingCandidate {
 		answer = qqStripAnswerHeadings(answer)
 	}
-	if strings.Contains(answer, "\n\n\n") {
-		answer = qqBlankLines.ReplaceAllString(answer, "\n\n")
-	}
-	return answer
+	return qqCollapseBlankLines(answer)
 }
-
-// qqGroupNumberPattern 匹配 QQ 群号（「加群 12345678」「QQ群号：12345678」）。只认紧跟在「群」后面的数字，不按纯数字长度过滤：22631 这类 Windows 内部版本号、issue 号和日期也是五位以上的数字。
-var qqGroupNumberPattern = regexp.MustCompile(`(?i)(加|进)?\s*(QQ)?\s*群\s*号?\s*[:：]?\s*\d{5,}`)
-
-// qqWeChatPattern 匹配「微信 / vx / v信」后面跟的号码，第 1 组是分隔（「号」或冒号），第 2 组是号码。「微信 Windows 版」这类说法也会匹配上，所以只有带分隔或号码里有数字时才算（见 qqPromoSentence）。
-var qqWeChatPattern = regexp.MustCompile(`(?i)(?:微信|v信|vx)\s*((?:号码?|账号)?\s*[:：]?)\s*([A-Za-z0-9][-_A-Za-z0-9]{4,19})`)
-
-// qqDomainPattern 匹配不带协议名的裸域名，第 1 组是域名。顶级域只认常见的一批，不认 md、py、sh、rs、app 这类同时是文件扩展名的：群里常聊 README.md、default.custom.yaml、Squirrel.app。
-var qqDomainPattern = regexp.MustCompile(`(?i)((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:com|net|org|cn|xyz|top|io|cc|me|co|info|biz|vip|club|site|online|shop|store|live|pro|fun|icu|cyou|buzz|work|life|world|tech|space|website|link|ltd|ink|wang|xin|asia|hk|tw|tv|ru|us|uk|de|jp|kr|dev|win))(?:[^A-Za-z0-9-]|$)`)
 
 // qqAllowedDomains 是答案里可以出现的官方域名，子域名也算。
 var qqAllowedDomains = []string{"msime.app", "github.com"}
@@ -1817,28 +2188,112 @@ func qqPromoSentence(sentence string) string {
 	if !qqPromoSentenceCandidate(sentence) {
 		return ""
 	}
-	if qqGroupNumberPattern.MatchString(sentence) {
+	if qqGroupNumberPromo(sentence) {
 		return "group"
 	}
-	for _, m := range qqWeChatPattern.FindAllStringSubmatchIndex(sentence, -1) {
-		// vx 前面紧挨着英文字母时是别的词的一部分。
-		if start := m[0]; start > 0 {
+	if qqWeChatPromo(sentence) {
+		return "wechat"
+	}
+	if qqDomainPromo(sentence) {
+		return "domain"
+	}
+	return ""
+}
+
+// qqGroupNumberPromo 判断是否出现群号；原正则没有起点约束且「加 / 进 / QQ」均可省略，因此直接从「群」开始检查。
+func qqGroupNumberPromo(text string) bool {
+	for {
+		start := strings.Index(text, "群")
+		if start < 0 {
+			return false
+		}
+		text = text[start+len("群"):]
+		// 原正则的 \s 和 \d 只接受 ASCII 空白和数字。
+		rest := strings.TrimLeft(text, " \t\n\f\r")
+		rest = strings.TrimPrefix(rest, "号")
+		rest = strings.TrimLeft(rest, " \t\n\f\r")
+		if strings.HasPrefix(rest, ":") {
+			rest = rest[1:]
+		} else if strings.HasPrefix(rest, "：") {
+			rest = rest[len("："):]
+		}
+		rest = strings.TrimLeft(rest, " \t\n\f\r")
+		digits := 0
+		for digits < min(5, len(rest)) && rest[digits] >= '0' && rest[digits] <= '9' {
+			digits++
+		}
+		if digits == 5 {
+			return true
+		}
+	}
+}
+
+// qqWeChatPromo 扫描「微信 / vx / v信」后的 5 至 20 个号码字符，带分隔标记或 ASCII 数字时才算引流。
+func qqWeChatPromo(sentence string) bool {
+	for offset := 0; offset < len(sentence); {
+		start := offset
+		offset++
+		prefix := 0
+		switch sentence[start] {
+		case 'v', 'V':
+			if start+1 < len(sentence) && (sentence[start+1] == 'x' || sentence[start+1] == 'X') {
+				prefix = 2
+			} else if strings.HasPrefix(sentence[start+1:], "信") {
+				prefix = len("v信")
+			}
+		case 0xe5:
+			if strings.HasPrefix(sentence[start:], "微信") {
+				prefix = len("微信")
+			}
+		}
+		if prefix == 0 {
+			continue
+		}
+		// 原正则的 \s 只包含这五种 ASCII 空白，不包含垂直制表符和 Unicode 空白。
+		rest := strings.TrimLeft(sentence[start+prefix:], " \t\n\f\r")
+		separator := false
+		for _, label := range [...]string{"号码", "号", "账号"} {
+			if strings.HasPrefix(rest, label) {
+				separator = true
+				rest = strings.TrimLeft(rest[len(label):], " \t\n\f\r")
+				break
+			}
+		}
+		if strings.HasPrefix(rest, ":") {
+			separator = true
+			rest = rest[1:]
+		} else if strings.HasPrefix(rest, "：") {
+			separator = true
+			rest = rest[len("："):]
+		}
+		rest = strings.TrimLeft(rest, " \t\n\f\r")
+		count, end := 0, 0
+		digit := false
+		for end < len(rest) && count < 20 {
+			r, size := utf8.DecodeRuneInString(rest[end:])
+			// 复用 (?i)[A-Za-z0-9] 的折叠规则，保留长 s 和开尔文符号的兼容性。
+			if !qqOwnCodeLetterOrDigit(r) && (count == 0 || r != '-' && r != '_') {
+				break
+			}
+			digit = digit || r >= '0' && r <= '9'
+			end += size
+			count++
+		}
+		if count < 5 {
+			continue
+		}
+		// 即使匹配最终被忽略，也消耗完整片段，保持原正则的非重叠遍历规则。
+		offset = len(sentence) - len(rest) + end
+		if start > 0 {
 			if c := sentence[start-1] | 0x20; c >= 'a' && c <= 'z' {
 				continue
 			}
 		}
-		separator, id := strings.TrimSpace(sentence[m[2]:m[3]]), sentence[m[4]:m[5]]
-		if separator != "" || strings.ContainsAny(id, "0123456789") {
-			return "wechat"
+		if separator || digit {
+			return true
 		}
 	}
-	for _, m := range qqDomainPattern.FindAllStringSubmatchIndex(sentence, -1) {
-		host := strings.ToLower(sentence[m[2]:m[3]])
-		if !slices.ContainsFunc(qqAllowedDomains, func(d string) bool { return host == d || strings.HasSuffix(host, "."+d) }) {
-			return "domain"
-		}
-	}
-	return ""
+	return false
 }
 
 // qqPromoSentenceCandidate 判断句子是否含有引流规则可能命中的字面字符；普通句子跳过三组正则扫描。
@@ -2033,7 +2488,7 @@ func qqAppendKnowledgeSections(material *strings.Builder, sections []qqSection, 
 func (s *Server) qqKnowledgeMaterial(ctx context.Context, question string, ask *qqAsk) (string, string, error) {
 	github := ask.github
 	degraded := false
-	sections, docIDs, snippets, toc, err := s.qqKnowledgeSnapshot(ctx)
+	sections, docIDs, snippets, toc, _, err := s.qqKnowledgeSnapshot(ctx)
 	if err != nil {
 		if !github || ctx.Err() != nil {
 			return "", "", err
@@ -2159,7 +2614,8 @@ func (s *Server) qqKnowledgeMaterial(ctx context.Context, question string, ask *
 		// 每个平台的最新正式版都附上更新内容；附上后资料总长超过 qqAnswerContextRunes 时，只给用户提到的平台附。
 		list := qqReleasesMaterial(releases, nil)
 		if materialRunes+utf8.RuneCountInString(third.String())+utf8.RuneCountInString(list) > qqAnswerContextRunes {
-			list = qqReleasesMaterial(releases, func(p qqPlatformRelease) bool { return qqMentionsPlatform(question, p) })
+			questionLower := strings.ToLower(question)
+			list = qqReleasesMaterial(releases, func(p qqPlatformRelease) bool { return qqMentionsPlatformLower(questionLower, p) })
 		}
 		third.WriteString("### 各平台最新版本（GitHub Release）\n" + list + "\n")
 	}

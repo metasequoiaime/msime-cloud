@@ -46,6 +46,8 @@ ALTER DEFAULT PRIVILEGES FOR ROLE msime_migrator IN SCHEMA public GRANT USAGE, S
 - 头像：用户对象带 `avatar_url`，上传的自定义头像优先，其次是 Google 头像（只给出 `googleusercontent.com` 的 https 地址），都没有时省略、客户端显示昵称首字；`email` 是已绑定 Google 身份的已验证邮箱，只出现在登录、刷新和 `/v1/users/me` 的响应里。Google 登录时，若用户昵称为空或仍是生成的「水杉小鹿·XXXXXX」，用 Google 昵称替换；用户自己改过的昵称不会被覆盖。
 - 自定义头像存储：`avatars` 配置 Cloudflare R2 的 `bucket`、绑定自定义域名后的公开地址 `public_base_url`（须为 https 域名根地址，生产为 `https://media.msime.app`），以及账号 ID、Access Key ID、Secret Access Key 三个环境变量名（示例配置为 `MSIME_R2_ACCOUNT_ID`、`MSIME_R2_ACCESS_KEY_ID`、`MSIME_R2_SECRET_ACCESS_KEY`）。`bucket` 为空时上传关闭，`PUT /v1/users/me/avatar` 返回 503 `avatar_upload_disabled`。配置了 `bucket` 但三个环境变量有任何一个没有值时（例如密钥还没同步进 Secret），服务照常启动，只关闭上传并在启动日志中记录一条 ERROR（`avatar uploads disabled`，带缺失的变量名），不会因为这个可选功能整体起不来；`public_base_url` 格式不对或变量名为空则仍是配置错误，启动失败。服务端只写入和删除对象：上传的 PNG/JPEG（最多 1 MiB、边长不超过 4096、JPEG 最多 32 个扫描段）裁成居中正方形并重新编码为 256×256 JPEG，存为 `avatars/<随机值>.jpg`，`Cache-Control: public, max-age=31536000, immutable`；每次上传换新键，旧对象随即删除，注销账号时一并删除。头像登记和删除在用户行锁内重新检查封禁；封禁先提交时返回 403 `account_banned`，保留原头像登记和旧对象，已上传但未登记的新对象会清理。Access Key 只需该 bucket 的对象读写权限。
 
+`public_base_url` 可使用不带尾斜杠的根地址或以 `/` 结尾的根地址，不得包含查询或片段分隔符，即使 `?` 或 `#` 后面为空也不允许。否则拼出的头像及 QQ 附件链接会把对象路径当成查询或片段。升级前若配置末尾误带这些分隔符，先删除它们；新版本会在启动时拒绝此类配置。
+
 ## 登录与账号管理
 
 1. `POST /v1/auth/challenges`：`{"provider":"email","target":"user@example.com","purpose":"login"}`。返回 `challenge_id`，不会返回验证码。第三方登录省略 target。同一邮箱已有未过期验证码时，服务端为本次请求建立新的挑战但复用原验证码，不重复发送邮件；响应额外带 `reused:true`，首次发送为 `false` 或省略。验证码仍只在各自挑战上可用，5 分钟后失效。
@@ -55,6 +57,8 @@ ALTER DEFAULT PRIVILEGES FOR ROLE msime_migrator IN SCHEMA public GRANT USAGE, S
 5. `POST /v1/auth/logout`：`{"all":false}` 退出当前会话，true 退出此用户所有会话。
 6. `PATCH /v1/users/me`：`{"display_name":"昵称"}`，去除首尾空白后最长 64 字符，不能含 NUL，否则返回 400 `invalid_display_name`；空昵称重置为默认昵称。在用户行锁内重新检查封禁；封禁先提交时返回 403 `account_banned`，原昵称保持不变，包括重置昵称的请求。
 7. 绑定其他身份：创建挑战时使用 `purpose: link`，创建和验证均携带同一用户的访问令牌。绑定与 `DELETE /v1/users/me` 注销操作均要求最近 10 分钟内重新登录。注销删除用户、身份、会话及关联挑战。
+
+完成登录或绑定时，先串行化同一身份，再锁定已有用户，最后按锁后的实际时间消费挑战，避免与注销的级联删除形成反向锁等待。已定位到原账号的登录或绑定等待用户锁时，若注销先提交则返回 401 `invalid_credentials`；封禁账号仍消费有效挑战并返回 403 `account_banned`。此调整无需配置或迁移；多副本滚动升级期间旧副本仍可能使用原锁顺序，全部副本升级后才完整消除该竞态。
 
 ## 我的设备
 
@@ -82,9 +86,11 @@ ALTER DEFAULT PRIVILEGES FOR ROLE msime_migrator IN SCHEMA public GRANT USAGE, S
 
 ## 云端数据
 
-- `GET /v1/users/me/data` 返回 `{"bytes","sections":[{"id","bytes","items"}]}`，分区依次为 `preferences`、`dictionary`、`phrases`、`clipboard`、`community`、`voice`、`avatar`。大小由一条 SQL 用 `pg_column_size` / `octet_length` 汇总，是统计信息而不是磁盘占用；头像在对象存储里，只报告有没有。
+- `GET /v1/users/me/data` 返回 `{"bytes","sections":[{"id","bytes","items"}]}`，分区依次为 `preferences`、`dictionary`、`phrases`、`clipboard`、`community`、`voice`、`avatar`。大小由一条 SQL 用 `pg_column_size` / `octet_length` 汇总，是统计信息而不是磁盘占用；`community` 包含本人的四类作品记录和候选窗皮肤图片（公开和私有均计入），`items` 仍为作品数，不计图片张数；头像在对象存储里，只报告有没有。
 - `GET /v1/users/me/data/export` 流式返回 `msime-data-<日期>.zip`：`profile.json`（ID、昵称、创建时间、只含 provider 名的身份列表）、`preferences.json`、`dictionary.ndjson`（与词库快照同一格式）、`phrases.json`、`clipboard.json`（云剪贴板的密文和登记设备）、`community.json`（作品元数据）、`typing_statistics.json`（打字统计与 QQ 绑定）、`sessions.json`（设备信息与时间，不含令牌摘要）、`voice.ndjson`（语音贡献的元数据、转写文本和 base64 音频）。每个用户每天 3 次（`auth_rates` 键 `export:<uid 摘要>`），超出 429 带 `Retry-After`；路由时限 2 分钟，并同步延长本次响应连接的写期限，避免大导出包在慢网络上被全局超时提前截断。除词库和语音贡献外的 7 个 JSON 文件先一次批量读取，全部成功后才开始发送 ZIP，词库和语音贡献仍流式写入。开始传输后出错只能中断连接，客户端拿到的是不完整的 zip。导出内容不写日志。
 - `DELETE /v1/users/me/data {"sections":[…]}` 要求最近登录，分区取 `preferences`、`dictionary`、`phrases`、`clipboard`、`voice`，至少一个、不能重复，返回 204。一个事务内完成：偏好和常用语清空并推进 `revision`，从未同步过的分区也会创建 `revision=1` 的空文档，重复清空继续推进版本号；其他设备拿旧 `revision`（包括首次同步前的 `0`）写入会 409 并拉到空文档；词库删除条目、覆盖层、位置、选择次数和包含词条原文的历史变更，只保留本次新写入的 `reset` 变更并推进 `revision`，旧游标会直接读到它，开着同步的设备会整份重载，而不是把旧数据推回来；剪贴板删除条目、当前密钥、封装和全部设备登记（设备名、公钥、登记时间），保留同步开关和保留天数，开着同步的设备之后重新登记，由第一台设备重新生成密钥。账号、会话和社区作品不在其中，分别走注销账号、我的设备和作品管理。
+
+完整词库的 `GET /v1/users/me/dictionary/snapshot`（含校验尾记录的 NDJSON）和 `GET /v1/users/me/dictionaries/{kind}/export`（标准或 Windows TSV）下载同样使用 2 分钟路由时限，并把本次连接写期限延长到 2 分钟加 5 秒，避免慢速传输沿用普通接口的短时限而截断。普通词库查询、变更游标和编辑接口仍使用默认时限。
 
 ## 发送下载链接
 

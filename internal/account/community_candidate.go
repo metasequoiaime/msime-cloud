@@ -10,6 +10,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
+	"github.com/metasequoiaime/MSIME-Backend/internal/digest"
 	"github.com/metasequoiaime/MSIME-Backend/internal/skins"
 	"github.com/pelletier/go-toml/v2"
 )
@@ -116,8 +118,8 @@ func validCandidateSkinCategory(category string) bool {
 }
 
 // candidateIncludeCategory 读取 include=category；ok 为 false 表示 include 带了其他非空值。
-func candidateIncludeCategory(r *http.Request) (category bool, ok bool) {
-	switch r.URL.Query().Get("include") {
+func candidateIncludeCategory(query url.Values) (category bool, ok bool) {
+	switch query.Get("include") {
 	case "":
 		return false, true
 	case "category":
@@ -144,8 +146,8 @@ func candidateLegacy(v CommunityCandidateSkin) CommunityCandidateSkin {
 }
 
 // candidateFields 读取列表和详情的 `fields=` 开关：sync（同步字段和作者的私有作品）、moderation 与 saved，可单独使用，也可逗号组合，例如 `fields=sync,moderation`；出现其他名称时 ok 为 false。
-func candidateFields(r *http.Request) (fields map[string]bool, ok bool) {
-	return communityFields(r, "sync", "moderation", "saved")
+func candidateFields(query url.Values) (fields map[string]bool, ok bool) {
+	return communityFields(query, "sync", "moderation", "saved")
 }
 
 const candidateSkinSelectBase = `SELECT s.id,s.package_id,s.name,s.description,
@@ -191,13 +193,16 @@ func candidateExtension(path string) string {
 	if i < 0 {
 		return ""
 	}
-	switch ext := strings.ToLower(path[i+1:]); ext {
-	case "png", "apng":
+	ext := path[i+1:]
+	switch {
+	case strings.EqualFold(ext, "png"), strings.EqualFold(ext, "apng"):
 		return "png"
-	case "jpg", "jpeg":
+	case strings.EqualFold(ext, "jpg"), strings.EqualFold(ext, "jpeg"):
 		return "jpeg"
-	case "gif", "webp":
-		return ext
+	case strings.EqualFold(ext, "gif"):
+		return "gif"
+	case strings.EqualFold(ext, "webp"):
+		return "webp"
 	}
 	return ""
 }
@@ -226,11 +231,19 @@ func validCandidateResourceFiles(manifest string, files map[string][]byte, exten
 		paths = append(paths, path)
 	}
 	slices.Sort(paths)
-	lowered := map[string]bool{}
+	lowered := map[string]bool{"skin.toml": true}
 	total := 0
 	for _, path := range paths {
 		if !skins.SafeResource(path, 256) || path == "skin.toml" {
 			return "candidate_skin_file_path"
+		}
+		// 每段最多 255 个 ASCII 字节；尾点会导致 Windows 目录别名冲突或纯点目录安装失败。
+		for remaining := path; remaining != ""; {
+			part, rest, _ := strings.Cut(remaining, "/")
+			if len(part) > 255 || strings.HasSuffix(part, ".") {
+				return "candidate_skin_file_path"
+			}
+			remaining = rest
 		}
 		if candidateExtension(path) == "" || !extended && !candidateLegacyImage(path) {
 			return "candidate_skin_file_type"
@@ -244,6 +257,15 @@ func validCandidateResourceFiles(manifest string, files map[string][]byte, exten
 		total += size
 		if size < 1 || size > maxCandidateFileBytes || total > maxCandidatePackageBytes {
 			return "candidate_skin_too_large"
+		}
+	}
+	// 用完整文件集合检查每层父目录，包括固定清单，避免检查结果依赖遍历顺序。
+	for path := range lowered {
+		for parent := path; strings.Contains(parent, "/"); {
+			parent = parent[:strings.LastIndexByte(parent, '/')]
+			if lowered[parent] {
+				return "candidate_skin_file_path"
+			}
 		}
 	}
 	if len(manifest) > maxCandidateManifestBytes {
@@ -265,8 +287,7 @@ func candidateRequestDigest(name, description, manifest string, files map[string
 		h.Write([]byte{0})
 	}
 	for _, path := range paths {
-		sum := sha256.Sum256(files[path])
-		h.Write([]byte(path + "\x00" + hex.EncodeToString(sum[:]) + "\n"))
+		h.Write([]byte(path + "\x00" + digest.SHA256(files[path]) + "\n"))
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -281,8 +302,7 @@ func validCandidatePackage(manifest string, files map[string][]byte, requireLice
 	}
 	resources := make([]skins.StoredResource, 0, len(files))
 	for path, data := range files {
-		sum := sha256.Sum256(data)
-		resources = append(resources, skins.StoredResource{Path: path, Size: len(data), SHA256: hex.EncodeToString(sum[:])})
+		resources = append(resources, skins.StoredResource{Path: path, Size: len(data), SHA256: digest.SHA256(data)})
 	}
 	pkg, err := skins.ParseStored(skins.Stored{ID: head.ID, Manifest: []byte(manifest), Resources: resources})
 	if err != nil {
@@ -336,8 +356,22 @@ func candidatePackageLicense(pkg skins.Package) CandidateSkinLicense {
 	return CandidateSkinLicense{Code: pkg.License.Code, Assets: pkg.License.Assets, Source: pkg.License.Source}
 }
 
-// sanitizeCandidateImages 先对全部文件预检尺寸、帧数与整包像素预算，再完整解码。
-// PNG/JPEG/GIF 重新编码，APNG/WebP 按块清理并逐帧校验；动画按完整画布逐帧计费。
+// candidatePNGBufferPool 在一次图片清理中顺序复用一个编码工作区，引用随本次调用一起释放。
+type candidatePNGBufferPool struct {
+	buffer *png.EncoderBuffer
+}
+
+func (p *candidatePNGBufferPool) Get() *png.EncoderBuffer {
+	buffer := p.buffer
+	p.buffer = nil
+	return buffer
+}
+
+func (p *candidatePNGBufferPool) Put(buffer *png.EncoderBuffer) {
+	p.buffer = buffer
+}
+
+// sanitizeCandidateImages 先对全部文件预检尺寸、帧数与整包像素预算，再完整解码。PNG/JPEG/GIF 重新编码，APNG/WebP 按块清理并逐帧校验；动画按完整画布逐帧计费。
 func sanitizeCandidateImages(files map[string][]byte, preview string) (map[string][]byte, string) {
 	pixels := 0
 	animated := map[string]*candidateAPNG{}
@@ -388,6 +422,8 @@ func sanitizeCandidateImages(files map[string][]byte, preview string) (map[strin
 	}
 	clean := make(map[string][]byte, len(files))
 	total := 0
+	var pngBuffers candidatePNGBufferPool
+	pngEncoder := png.Encoder{CompressionLevel: png.BestCompression, BufferPool: &pngBuffers}
 	for path, data := range files {
 		var decoded image.Image
 		var err error
@@ -396,7 +432,12 @@ func sanitizeCandidateImages(files map[string][]byte, preview string) (map[strin
 			if !a.decode() {
 				return nil, "candidate_skin_image_invalid"
 			}
-			out.Write(a.clean)
+			// 解析结果已独立于上传字节；剥离大部分内容时仍压紧容量，避免保留过大的底层数组。
+			if cap(a.clean) > 2*len(a.clean) {
+				out.Write(a.clean)
+			} else {
+				out = *bytes.NewBuffer(a.clean)
+			}
 		} else if a := webps[path]; a != nil {
 			if !a.decode() {
 				return nil, "candidate_skin_image_invalid"
@@ -408,7 +449,7 @@ func sanitizeCandidateImages(files map[string][]byte, preview string) (map[strin
 			out.Write(clean)
 		} else if candidateExtension(path) == "png" {
 			if decoded, err = png.Decode(bytes.NewReader(data)); err == nil {
-				err = (&png.Encoder{CompressionLevel: png.BestCompression}).Encode(&out, decoded)
+				err = pngEncoder.Encode(&out, decoded)
 			}
 		} else {
 			if decoded, err = jpeg.Decode(bytes.NewReader(data)); err == nil {
@@ -432,23 +473,24 @@ func (a *Service) communityCandidateList(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	offset, search, code := communityListPage(r)
+	query := r.URL.Query()
+	offset, search, code := communityListPage(query)
 	if code != "" {
 		writeError(w, 400, code)
 		return
 	}
-	scope, validScope := communityListScope(r)
+	scope, validScope := communityListScope(query)
 	if !validScope {
 		writeError(w, 400, "invalid_scope")
 		return
 	}
-	fields, ok := candidateFields(r)
+	fields, ok := candidateFields(query)
 	if !ok {
 		writeError(w, 400, "invalid_fields")
 		return
 	}
 	sync := fields["sync"]
-	category, withCategory, code := communitySkinListCategory(r)
+	category, withCategory, code := communitySkinListCategory(query)
 	if code != "" {
 		writeError(w, 400, code)
 		return
@@ -460,10 +502,11 @@ func (a *Service) communityCandidateList(w http.ResponseWriter, r *http.Request)
 	}
 	// 私有作品只出现在作者自己、且声明了 fields=sync 的 mine 或 saved 列表里：已发布的客户端拒绝 license assets 为空的条目，而私有作品可以为空，一条就会让整页解析失败。
 	join, order := communitySavedScope(scope, "community_candidate_skin_saves", "skin_id", "s")
+	categoryCondition := communityTextFilter(category, "s.category", "$6") + communitySavedFilterValue(scope, category, "s.category", candidateSkinCategories)
 	// 先选本页皮肤，再计算文件与互动统计，避免处理 OFFSET 跳过的包。
 	rows, e := a.store.pool.Query(r.Context(), `WITH candidate_page AS MATERIALIZED (
  SELECT s.id FROM community_candidate_skins s JOIN auth_users u ON u.id=s.owner_id `+join+`
- WHERE strpos(lower(s.name),lower($2))>0 AND ($3<>'mine' OR s.owner_id=$1) AND (s.visibility='public' OR ($3<>'' AND $5 AND s.owner_id=$1)) AND (s.moderation<>'removed' OR s.owner_id=$1) AND ($6='' OR s.category=$6)`+candidateResourceFilter(extended)+`
+ WHERE strpos(lower(s.name),lower($2))>0 AND (`+communityMineCondition(scope, "s", "$3")+`) AND (s.visibility='public' OR ($3<>'' AND $5 AND s.owner_id=$1)) AND (s.moderation<>'removed' OR s.owner_id=$1) AND (`+categoryCondition+`)`+candidateResourceFilter(extended)+`
  ORDER BY `+order+` LIMIT 21 OFFSET $4
 ) `+candidateSkinSelectQuery(fields["saved"], true)+join+`ORDER BY `+order, viewer, search, scope, offset, sync, category)
 	if e != nil {
@@ -487,24 +530,32 @@ func (a *Service) communityCandidateList(w http.ResponseWriter, r *http.Request)
 		a.error(w, e)
 		return
 	}
-	more := len(items) > 20
-	if more {
-		items = items[:20]
+	if scope != "" && len(items) == 0 {
+		exists, err := a.store.userExists(r.Context(), viewer)
+		if err != nil {
+			a.error(w, err)
+			return
+		}
+		if !exists {
+			a.error(w, errMissingUser)
+			return
+		}
 	}
-	write(w, 200, map[string]any{"skins": items, "has_more": more})
+	writeCommunityPage(w, "skins", items)
 }
 func (a *Service) communityCandidateDetail(w http.ResponseWriter, r *http.Request) {
 	extended, ok := candidateResources(w, r, a.config.Community.CanvasResources)
 	if !ok {
 		return
 	}
-	fields, ok := candidateFields(r)
+	query := r.URL.Query()
+	fields, ok := candidateFields(query)
 	if !ok {
 		writeError(w, 400, "invalid_fields")
 		return
 	}
 	sync := fields["sync"]
-	withCategory, ok := candidateIncludeCategory(r)
+	withCategory, ok := candidateIncludeCategory(query)
 	if !ok {
 		writeError(w, 400, "invalid_include")
 		return
@@ -716,6 +767,22 @@ func (a *Service) candidatePublicLimit(userID string) int {
 	return maxCandidateSkinsPerUser
 }
 
+// collectCandidateFiles 读取路径和二进制内容，关闭结果集并保留扫描与迭代错误。
+// 空结果仍返回非 nil 映射，保持下载响应中 files 编码为对象。
+func collectCandidateFiles(rows pgx.Rows) (map[string][]byte, error) {
+	defer rows.Close()
+	files := map[string][]byte{}
+	for rows.Next() {
+		var path string
+		var data []byte
+		if err := rows.Scan(&path, &data); err != nil {
+			return nil, err
+		}
+		files[path] = data
+	}
+	return files, rows.Err()
+}
+
 // insertCandidateFiles stores the re-encoded images of one package in path order.
 func insertCandidateFiles(ctx context.Context, tx pgx.Tx, id string, clean map[string][]byte) error {
 	query, args := candidateFilesInsertQuery(id, clean)
@@ -766,22 +833,15 @@ func (a *Service) communityCandidateDownload(w http.ResponseWriter, r *http.Requ
 	defer tx.Rollback(r.Context())
 	var packageID string
 	var manifest []byte
-	files := map[string][]byte{}
+	var files map[string][]byte
 	batch := &pgx.Batch{}
 	batch.Queue(`SELECT package_id,manifest FROM community_candidate_skins s WHERE id=$1 AND ((visibility='public' AND moderation<>'removed') OR owner_id=$2)`+candidateResourceFilter(extended)+` FOR SHARE`, r.PathValue("id"), viewer).QueryRow(func(row pgx.Row) error {
 		return row.Scan(&packageID, &manifest)
 	})
 	batch.Queue(`SELECT path,bytes FROM community_candidate_skin_files WHERE skin_id=$1 ORDER BY path`, r.PathValue("id")).Query(func(rows pgx.Rows) error {
-		defer rows.Close()
-		for rows.Next() {
-			var path string
-			var data []byte
-			if e := rows.Scan(&path, &data); e != nil {
-				return e
-			}
-			files[path] = data
-		}
-		return rows.Err()
+		var err error
+		files, err = collectCandidateFiles(rows)
+		return err
 	})
 	// 下载人数仍按有效账号去重；匿名请求不创建账号或下载记录。
 	if viewer != "" {
@@ -814,15 +874,15 @@ func (a *Service) communityCandidateDownload(w http.ResponseWriter, r *http.Requ
 	write(w, 200, map[string]any{"id": r.PathValue("id"), "package_id": packageID, "manifest": string(manifest), "files": files})
 }
 func (a *Service) communityCandidateRate(w http.ResponseWriter, r *http.Request) {
-	a.rateCommunityItem(w, r, `WITH eligible AS MATERIALIZED (
- SELECT id FROM community_candidate_skins WHERE id=$1 AND visibility='public' AND moderation<>'removed' AND owner_id<>$2
+	a.rateCommunityItem(w, r, `WITH visible AS MATERIALIZED (
+ SELECT id,owner_id FROM community_candidate_skins WHERE id=$1 AND visibility='public' AND moderation<>'removed' FOR SHARE
 ), written AS (
  INSERT INTO community_candidate_skin_ratings(skin_id,user_id,stars)
- SELECT id,$2,$3 FROM eligible
+ SELECT id,$2,$3 FROM visible WHERE owner_id<>$2
  ON CONFLICT(skin_id,user_id) DO UPDATE SET stars=excluded.stars
  RETURNING skin_id
 )
-SELECT EXISTS(SELECT 1 FROM written),EXISTS(SELECT 1 FROM community_candidate_skins WHERE id=$1 AND visibility='public' AND moderation<>'removed')`, "skin_not_found", "download_before_rating_or_own_skin")
+SELECT EXISTS(SELECT 1 FROM written),EXISTS(SELECT 1 FROM visible WHERE owner_id=$2)`, "skin_not_found", "download_before_rating_or_own_skin")
 }
 func (a *Service) communityCandidateDelete(w http.ResponseWriter, r *http.Request) {
 	a.deleteCommunityItem(w, r, "community_candidate_skins", "skin_not_found")
@@ -863,6 +923,17 @@ func (a *Service) communityCandidateSync(w http.ResponseWriter, r *http.Request)
 	if e = rows.Err(); e != nil {
 		a.error(w, e)
 		return
+	}
+	if len(items) == 0 {
+		exists, err := a.store.userExists(r.Context(), p.UserID)
+		if err != nil {
+			a.error(w, err)
+			return
+		}
+		if !exists {
+			a.error(w, errMissingUser)
+			return
+		}
 	}
 	write(w, 200, map[string]any{"skins": items})
 }
@@ -965,7 +1036,7 @@ func (a *Service) communityCandidateVisibility(w http.ResponseWriter, r *http.Re
 		Visibility *string `json:"visibility"`
 		Category   *string `json:"category"`
 	}
-	withCategory, ok := candidateIncludeCategory(r)
+	withCategory, ok := candidateIncludeCategory(r.URL.Query())
 	if !ok {
 		writeError(w, 400, "invalid_include")
 		return

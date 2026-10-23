@@ -51,7 +51,7 @@ func TestPruneServiceMonitoringBatchesDeletes(t *testing.T) {
 	trace.mu.Lock()
 	batches, queries := trace.batches, trace.queries
 	trace.mu.Unlock()
-	if batches != 1 || queries != 4 {
-		t.Fatalf("监控数据清理使用了 %d 次批量请求、%d 条语句，期望 1、4", batches, queries)
+	if batches != 1 || queries != 5 {
+		t.Fatalf("监控数据清理使用了 %d 次批量请求、%d 条语句，期望 1、5", batches, queries)
 	}
 }

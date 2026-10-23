@@ -35,6 +35,7 @@ func TestPreferencesRejectInvalidJSONBeforeStorage(t *testing.T) {
 		name, key, raw string
 	}{
 		{"unpaired surrogate", "appearance.font", `"\ud800"`},
+		{"空字符转义", "appearance.font", `"\u0000"`},
 		{"numeric scale overflow", "general.floating_toolbar_scale", `1e-20000`},
 		{"negative underflow", "general.floating_toolbar_scale", `-1e-400`},
 		{"rounded over maximum", "general.floating_toolbar_scale", `1000000.00000000000001`},
@@ -144,6 +145,7 @@ func TestPreferencesValidJSONKeepsExactValues(t *testing.T) {
 	for i, tc := range []struct{ key, raw string }{
 		{"appearance.font", `"\ud83d\ude00"`},
 		{"appearance.font", `"\\ud800"`},
+		{"appearance.font", `"\u4e2d\/\n\ud83d\ude00"`},
 		{"general.floating_toolbar_scale", "0.12345678901234567890123456789"},
 		{"general.floating_toolbar_scale", "1e-400"},
 		{"general.floating_toolbar_scale", "1e-16383"},

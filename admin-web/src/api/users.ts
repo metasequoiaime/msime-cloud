@@ -1,4 +1,8 @@
 import { z } from "zod";
+import { actionUndoTokenSchema } from "./action-undo.ts";
+import { sections as workSections } from "./community.ts";
+
+export { workSections };
 
 // GET /api/users: one page of 50 accounts. contact is masked by the server; role is an admin role key when a verified email belongs to an enabled admin member, otherwise "user".
 export const userRowSchema = z.object({
@@ -37,7 +41,6 @@ const userSessionSchema = z.object({
 });
 export type UserSession = z.infer<typeof userSessionSchema>;
 
-export const workSections = ["skins", "candidate-skins", "plugins", "dictionaries", "replies", "phrases"] as const;
 const userWorkSchema = z.object({
   section: z.enum(workSections),
   id: z.string(),
@@ -85,3 +88,10 @@ export type UserDetail = z.infer<typeof userDetailSchema>;
 // ban_user answers how many sessions it revoked and how many community items it removed; unban_user how many it restored.
 export const banResultSchema = z.looseObject({ ok: z.literal(true), affected: z.number(), sessions: z.number(), removed: z.number() });
 export const unbanResultSchema = z.looseObject({ ok: z.literal(true), affected: z.number(), restored: z.number() });
+
+export const banUndoSchema = z.object({
+  action: z.literal("undo_user_ban"),
+  id: z.string(),
+  value: z.object({ token: actionUndoTokenSchema, banned: z.boolean() }),
+  reason: z.string().min(1).optional(),
+}).refine(v => v.value.banned ? !!v.reason?.trim() : v.reason === undefined);

@@ -69,7 +69,7 @@ func pendingCalls(m *serviceMetrics, service string) metricCounts {
 	return total
 }
 
-// Hourly and minute buckets are taken for flushing in a fixed order and restored when the flush fails, dropping stale ones.
+// 批次同时提取小时与分钟桶，顺序固定；重试裁剪过期行，新调用保留在下一批。
 func TestServiceMetricsBuckets(t *testing.T) {
 	var m serviceMetrics
 	now := time.Date(2026, 10, 1, 12, 30, 0, 0, time.UTC)
@@ -80,8 +80,10 @@ func TestServiceMetricsBuckets(t *testing.T) {
 	if w := pendingCalls(&m, "chat"); w.calls != 3 || w.errors != 1 {
 		t.Fatalf("pending chat minutes = %+v", w)
 	}
-	minutes := m.takeMinutes()
-	if len(minutes) != 4 || len(m.takeMinutes()) != 0 {
+	m.record("cloud", now.Add(-8*24*time.Hour), time.Second, false, 0)
+	batch := m.nextBatch(now)
+	minutes := batch.Minutes
+	if len(minutes) != 4 {
 		t.Fatalf("minutes = %+v", minutes)
 	}
 	for i, want := range []string{"chat 12:23", "chat 12:28", "chat 12:30", "translation 12:30"} {
@@ -92,19 +94,11 @@ func TestServiceMetricsBuckets(t *testing.T) {
 	if minutes[1].Errors != 1 || minutes[3].Calls != 1 {
 		t.Fatalf("minute counts = %+v", minutes)
 	}
-	// A failed flush puts the minutes back, except those too old for any window the probe will still judge.
-	m.restoreMinutes(append(minutes, account.ServiceMinute{Service: "cloud", Minute: now.Add(-2 * time.Hour), Calls: 5}), now)
-	if w := pendingCalls(&m, "chat"); w.calls != 3 || w.errors != 1 {
-		t.Fatalf("restored chat minutes = %+v", w)
-	}
-	if w := pendingCalls(&m, "cloud"); w.calls != 0 {
-		t.Fatalf("a stale minute was restored: %+v", w)
-	}
 	if pending := m.pending(); len(pending) != 2 {
 		t.Fatalf("pending = %+v", pending)
 	}
-	rows := m.take()
-	if len(rows) != 2 || len(m.take()) != 0 {
+	rows := batch.Hours
+	if len(rows) != 2 {
 		t.Fatalf("take = %+v", rows)
 	}
 	for _, row := range rows {
@@ -112,15 +106,19 @@ func TestServiceMetricsBuckets(t *testing.T) {
 			t.Fatalf("row = %+v", row)
 		}
 	}
-	stale := account.ServiceMetric{Service: "cloud", Hour: now.Add(-8 * 24 * time.Hour), Calls: 5}
-	m.restore(append(rows, stale), now)
 	m.record("chat", now, time.Second, false, 0)
 	restored := map[string]int64{}
-	for _, row := range m.take() {
+	for _, row := range m.pending() {
 		restored[row.Service] += row.Calls
 	}
 	if restored["chat"] != 4 || restored["translation"] != 1 || restored["cloud"] != 0 {
 		t.Fatalf("restored = %v", restored)
+	}
+	if retried := m.nextBatch(now.Add(2 * time.Hour)); retried.ID != batch.ID || len(retried.Minutes) != 0 || retried.Hours[0].Calls != 3 {
+		t.Fatalf("重试混入新调用或保留了过期分钟：%+v", retried)
+	}
+	if expired := m.nextBatch(now.Add(8 * 24 * time.Hour)); expired != nil || len(m.pending()) != 0 {
+		t.Fatalf("过期批次或积压桶没有清理：%+v", expired)
 	}
 }
 
@@ -340,6 +338,36 @@ func monitoringServer(t *testing.T, upstream http.HandlerFunc) *Server {
 	return monitoringReplica(t, upstream)
 }
 
+func manualMonitoringServer(t *testing.T, upstream http.HandlerFunc) *Server {
+	t.Helper()
+	admin, schema := disposableSchema(t)
+	s := monitoringReplica(t, upstream)
+	// 手动探针从空序列开始，避免回拨到当天时与启动探针占用同一分钟。
+	if _, err := admin.Exec(t.Context(), "TRUNCATE "+pgx.Identifier{schema, "admin_service_verdicts"}.Sanitize()+", "+pgx.Identifier{schema, "admin_service_daily"}.Sanitize()); err != nil {
+		t.Fatalf("清理启动探针状态：%v", err)
+	}
+	return s
+}
+
+func TestStatusProbeSequenceStartsInStartupMinute(t *testing.T) {
+	s := manualMonitoringServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"测试"}}]}`)
+	})
+	ctx := t.Context()
+	// 首个手动探针与真实启动探针使用同一分钟，覆盖午夜前回拨测试时间的情况。
+	now := time.Now().Truncate(time.Minute).Add(-time.Minute)
+	for range 4 {
+		s.metrics.record("chat", now, 4*time.Second, false, 0)
+	}
+	for i := 1; i <= incidentOpenAfter; i++ {
+		s.statusTick(ctx, now.Add(time.Duration(i)*time.Minute))
+	}
+	incidents, err := s.accounts.Incidents(ctx, 5)
+	if err != nil || len(incidents) != 1 || incidents[0].Service != "chat" || incidents[0].State != "open" || !incidents[0].Auto {
+		t.Fatalf("启动分钟打断了手动探针序列：%+v，错误：%v", incidents, err)
+	}
+}
+
 // monitoringReplica starts a server on the database schema of the running test, so a second call is another replica of the first.
 func monitoringReplica(t *testing.T, upstream http.HandlerFunc) *Server {
 	t.Helper()
@@ -428,7 +456,7 @@ func sameUTCDay(now time.Time, ticks int) time.Time {
 
 // End to end against PostgreSQL: slow upstream calls degrade the service, three bad probes open one automatic incident, the pages report the minute rollup and the month's quota, and five good probes resolve the incident.
 func TestStatusProbeAndPages(t *testing.T) {
-	s := monitoringServer(t, func(w http.ResponseWriter, r *http.Request) {
+	s := manualMonitoringServer(t, func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(10 * time.Millisecond)
 		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"测试"}}]}`)
 	})

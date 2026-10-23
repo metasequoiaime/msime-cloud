@@ -3,7 +3,6 @@ package account
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"io"
 	"os"
 
@@ -37,28 +36,7 @@ func (s *Store) RestoreDictionarySnapshot(ctx context.Context, user string, expe
 	}
 	defer os.Remove(file.Name())
 	defer file.Close()
-	entryCount := 0
-	err = decodeDictionarySnapshot(reader, func(record snapshotRecord) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if record.Type == "entry" {
-			entryCount++
-			if entryCount > 100000 {
-				return errDictionaryLimit
-			}
-			var e DictionaryEntry
-			if err := json.Unmarshal(record.Data, &e); err != nil {
-				return err
-			}
-			e.ID = randomToken()
-			record.Data, err = json.Marshal(e)
-			if err != nil {
-				return err
-			}
-		}
-		return json.NewEncoder(file).Encode(record)
-	})
+	err = stageDictionarySnapshot(ctx, reader, file)
 	if err != nil {
 		return 0, err
 	}
@@ -77,12 +55,9 @@ func (s *Store) RestoreDictionarySnapshot(ctx context.Context, user string, expe
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
-	var current int64
-	if err = tx.QueryRow(ctx, `SELECT COALESCE((SELECT revision FROM user_dictionary_state WHERE user_id=$1),0)`, user).Scan(&current); err != nil {
+	current, err := checkUserDataRevision(ctx, tx, user, expected)
+	if err != nil {
 		return 0, err
-	}
-	if current != expected {
-		return 0, errRevisionConflict
 	}
 	if _, err = tx.Exec(ctx, `CREATE TEMP TABLE msime_restore_stage(seq bigint PRIMARY KEY,data jsonb NOT NULL) ON COMMIT DROP`); err != nil {
 		return 0, err

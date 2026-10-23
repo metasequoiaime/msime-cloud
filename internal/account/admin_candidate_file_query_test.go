@@ -31,7 +31,8 @@ func TestAdminCandidateSkinFileStatsRunOnlyForPage(t *testing.T) {
 	t.Cleanup(pool.Close)
 	a := &Service{store: &Store{pool: pool}}
 	w := httptest.NewRecorder()
-	a.adminList(w, httptest.NewRequest("GET", "/api/candidate-skins", nil), candidateSkinsList, 1, "")
+	r := httptest.NewRequest("GET", "/api/candidate-skins", nil)
+	a.adminList(w, r, candidateSkinsList, 1, "", r.URL.Query())
 	var result struct {
 		Items []struct {
 			Size      int64 `json:"size"`

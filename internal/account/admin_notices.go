@@ -5,13 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -71,15 +72,13 @@ type noticeInput struct {
 	Channels []string `json:"channels"`
 }
 
-// parseNoticeInput decodes and validates an action value strictly. A draft may have no channel yet; a published notice needs at least one.
+// parseNoticeInput 严格解析并校验操作值；草稿可暂不指定渠道，发布时至少需要一个渠道。
 func parseNoticeInput(raw json.RawMessage, publish bool) (noticeInput, error) {
 	var in noticeInput
 	if len(raw) == 0 {
 		return in, actionFail(400, "invalid_value")
 	}
-	d := json.NewDecoder(bytes.NewReader(raw))
-	d.DisallowUnknownFields()
-	if d.Decode(&in) != nil || d.Decode(new(any)) != io.EOF {
+	if httpjson.DecodeValue(bytes.NewReader(raw), &in) != nil {
 		return in, actionFail(400, "invalid_value")
 	}
 	in.Channels = nonNilStrings(in.Channels)
@@ -262,12 +261,8 @@ ORDER BY published_at DESC,id DESC LIMIT $3`, platform, channel, noticePublicLim
 		a.error(w, err)
 		return
 	}
-	// The feed is the same for every caller, so clients and shared caches may keep it for 60s; publishing or archiving shows up within that window.
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Cache-Control", "public, max-age=60")
-	// The CORS middleware adds Access-Control-Allow-Origin only to requests that carry an Origin, so a cached copy must be keyed by it even when this request had none; otherwise an app's copy could be served to the website's cross-origin fetch.
-	w.Header().Set("Vary", "Origin")
-	w.Header().Set("Referrer-Policy", "no-referrer")
+	setPublicResponseHeaders(w)
 	w.WriteHeader(200)
 	w.Write(append(raw, '\n'))
 }
@@ -350,6 +345,7 @@ UPDATE admin_notices SET title=$2,body=$3,targets=$4,channels=$5,status='live',p
 		if a.broadcaster == nil {
 			return actionResult{}, actionFail(409, "telegram_disabled")
 		}
+		result.CommitOnCancel = true
 		// 先完成公告及审计 SQL，避免数据库已拒绝发布后仍向外部频道发送；发送失败仍回滚。
 		result.BeforeCommit = func(ctx context.Context) error {
 			if err := a.broadcaster.BroadcastNotice(ctx, n); err != nil {

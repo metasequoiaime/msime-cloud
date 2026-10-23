@@ -66,7 +66,7 @@ def check_community_management(browser, base):
     page.route("**/api/actions", action)
     try:
         page.goto(base + "/community")
-        expect(page.get_by_role("heading", name="社区管理", exact=True)).to_be_visible()
+        expect(page.get_by_role("heading", name="键盘皮肤", exact=True)).to_be_visible()
         expect(page.get_by_role("radio", name="全部", exact=True)).to_have_attribute("data-state", "on")
         page.get_by_role("button", name="新增键盘皮肤", exact=True).click()
         form = page.get_by_role("dialog", name="新增键盘皮肤", exact=True)
@@ -116,6 +116,31 @@ def check_community_management(browser, base):
         page.wait_for_timeout(4200)
         wait_pending()
         assert posts[-1]["action"] == "delete_skin"
+        assert posts[-1].get("value", {}).get("edit_token") == "current-token", "删除请求没有固定确认时的作品版本"
+        item_id = posts[-1]["id"]
+        items["skins"][0]["edit_token"] = "new-token"
+        details[("skins", item_id)]["edit_token"] = "new-token"
+        pending.pop().fulfill(status=409, json={"error": {"code": "conflict"}})
+        expect(page.get_by_text("操作失败：该内容刚被其他审核员处理或被作者修改，未做改动，请查看最新内容后重试。", exact=True)).to_be_visible()
+        expect(page.get_by_role("button", name="管理测试皮肤", exact=True)).to_be_visible()
+
+        # 缺少版本的旧响应不能让界面发出不受保护的删除。
+        del items["skins"][0]["edit_token"]
+        del details[("skins", item_id)]["edit_token"]
+        page.reload()
+        page.get_by_role("button", name="管理测试皮肤", exact=True).click()
+        drawer.get_by_role("button", name="删除", exact=True).click()
+        expect(page.get_by_text("作品版本信息尚未加载，请刷新页面后重试。", exact=True)).to_be_visible()
+        expect(confirmation).to_be_hidden()
+        assert not pending, "缺少版本时发送了删除请求"
+        items["skins"][0]["edit_token"] = "new-token"
+        details[("skins", item_id)]["edit_token"] = "new-token"
+        page.reload()
+        page.get_by_role("button", name="管理测试皮肤", exact=True).click()
+        drawer.get_by_role("button", name="删除", exact=True).click()
+        confirmation.get_by_role("button", name="删除", exact=True).click()
+        wait_pending()
+        assert posts[-1]["value"]["edit_token"] == "new-token"
         commit(pending.pop())
         expect(page.get_by_role("button", name="管理测试皮肤", exact=True)).to_be_hidden()
 

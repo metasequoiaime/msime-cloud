@@ -28,6 +28,8 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"github.com/metasequoiaime/MSIME-Backend/internal/engine"
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -174,7 +176,8 @@ func (c *WordSubmissionsConfig) validate(authEnabled bool, origins []string) err
 
 func plainHTTPSURL(raw string, allowEmptyPath bool) bool {
 	u, err := url.Parse(raw)
-	return err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil && u.RawQuery == "" && !u.ForceQuery && u.Fragment == "" && (allowEmptyPath || u.Path != "")
+	// 空片段解析后不留标记，但原始地址的 # 仍会吞掉后续拼接的接口路径。
+	return err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil && u.RawQuery == "" && !u.ForceQuery && !strings.Contains(raw, "#") && (allowEmptyPath || u.Path != "")
 }
 
 // GitHub hands out PKCS#1 keys; converted keys are PKCS#8. Secret stores that cannot hold newlines often store the PEM with literal \n sequences, so those are accepted too.
@@ -234,7 +237,7 @@ type wordSubmitter struct {
 
 func newWordSubmitter(c WordSubmissionsConfig, origins []string, limiter rateLimiter) *wordSubmitter {
 	ws := &wordSubmitter{config: c, origins: origins, limiter: limiter, now: time.Now, writes: semaphore.NewWeighted(1),
-		client: &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+		client: httpclient.New(20 * time.Second)}
 	for _, o := range origins {
 		if u, err := url.Parse(o); err == nil {
 			ws.hostnames = append(ws.hostnames, u.Hostname())
@@ -322,15 +325,13 @@ type submission struct {
 	flagged []string
 }
 
-// decodeEntries decodes the entries of one kind; an unknown field (for example a weight, or a field of another kind) is invalid JSON.
+// decodeEntries 按投稿类型解码词条，拒绝权重或其他类型的字段。
 func decodeEntries[T any](raw json.RawMessage) ([]T, error) {
 	var entries []T
 	if len(raw) == 0 {
 		return nil, nil
 	}
-	d := json.NewDecoder(bytes.NewReader(raw))
-	d.DisallowUnknownFields()
-	if err := d.Decode(&entries); err != nil {
+	if err := httpjson.DecodeValue(bytes.NewReader(raw), &entries); err != nil {
 		return nil, err
 	}
 	return entries, nil
@@ -359,27 +360,13 @@ func (s *Server) submitWords(w http.ResponseWriter, r *http.Request) {
 		wordsFail(w, 503, "rate_limit_unavailable", "词条提交暂时不可用，请稍后再试。")
 		return
 	}
-	mediaType, _, _ := strings.Cut(r.Header.Get("Content-Type"), ";")
-	mediaType = strings.Trim(mediaType, " \t")
-	// 先比较字节长度，避免 Unicode 大小写折叠将非 ASCII 类型名当作 JSON。
-	if len(mediaType) != len("application/json") || !strings.EqualFold(mediaType, "application/json") {
+	if !httpjson.IsJSONContentType(r.Header.Get("Content-Type")) {
 		wordsFail(w, 415, "json_required", "请求格式不正确。")
 		return
 	}
 	var input wordSubmissionRequest
-	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, wordSubmissionBodyBytes))
-	d.DisallowUnknownFields()
-	err := d.Decode(&input)
-	if err == nil {
-		err = d.Decode(new(any))
-		if err == io.EOF {
-			err = nil
-		} else if err == nil {
-			err = errors.New("trailing data")
-		}
-	}
-	var tooLarge *http.MaxBytesError
-	if errors.As(err, &tooLarge) {
+	err := httpjson.DecodeValue(http.MaxBytesReader(w, r.Body, wordSubmissionBodyBytes), &input)
+	if httpjson.IsBodyTooLarge(err) {
 		wordsFail(w, 413, "request_too_large", "内容过长。")
 		return
 	}
@@ -545,10 +532,24 @@ func (ws *wordSubmitter) clientAddress(r *http.Request) string {
 
 func wordCharacter(r rune) bool { return unicode.Is(unicode.Unified_Ideograph, r) || r == '〇' }
 
-// One rejection per entry (its first problem), in the same terms the website form uses, so the page can show each next to its row.
+// submissionEntrySeen 对至多 20 条的投稿直接比较已处理记录，避免拼接键和分配集合。
+// 调用前已完成字段校验和原地裁剪，等值的先前记录具有相同合法性。
+func submissionEntrySeen[T comparable](entries []T, index int, seen map[T]bool) bool {
+	entry := entries[index]
+	if len(entries) <= wordSubmissionMaxEntries {
+		return slices.Contains(entries[:index], entry)
+	}
+	if seen[entry] {
+		return true
+	}
+	seen[entry] = true
+	return false
+}
+
+// validateWordEntries 每条词语只返回首个问题，沿用官网表单的错误格式，方便逐行展示。
 func validateWordEntries(entries []wordSubmissionEntry) []wordRejection {
 	rejected := []wordRejection{}
-	seen := map[string]bool{}
+	seen := map[wordSubmissionEntry]bool{}
 	for i, e := range entries {
 		reject := func(code, reason string) { rejected = append(rejected, wordRejection{i, code, reason}) }
 		characters := utf8.RuneCountInString(e.Word)
@@ -567,27 +568,37 @@ func validateWordEntries(entries []wordSubmissionEntry) []wordRejection {
 			reject("pinyin_required", "请填写拼音")
 			continue
 		}
-		syllables := strings.Split(e.Pinyin, "'")
-		if len(e.Pinyin) > 200 || slices.ContainsFunc(syllables, func(s string) bool {
-			return s == "" || strings.IndexFunc(s, func(r rune) bool { return r < 'a' || r > 'z' }) >= 0
-		}) {
+		syllables, bad := 0, ""
+		invalid := len(e.Pinyin) > 200
+		if !invalid {
+			for syllable := range strings.SplitSeq(e.Pinyin, "'") {
+				if syllable == "" || strings.IndexFunc(syllable, func(r rune) bool { return r < 'a' || r > 'z' }) >= 0 {
+					invalid = true
+					break
+				}
+				syllables++
+				// 先记录无效音节，全文语法通过后再拒绝，保留语法错误优先的规则。
+				if bad == "" && !pinyinSyllables[syllable] {
+					bad = syllable
+				}
+			}
+		}
+		if invalid {
 			reject("invalid_pinyin", "拼音只能包含小写字母，音节之间用 ' 分隔，例如 wei'lai'ke'qi")
 			continue
 		}
-		if bad := slices.IndexFunc(syllables, func(s string) bool { return !pinyinSyllables[s] }); bad >= 0 {
-			reject("invalid_syllable", "“"+syllables[bad]+"”不是有效的全拼音节（ü 请写作 v，如 lv、nve）")
+		if bad != "" {
+			reject("invalid_syllable", "“"+bad+"”不是有效的全拼音节（ü 请写作 v，如 lv、nve）")
 			continue
 		}
-		if len(syllables) != characters {
-			reject("syllable_count_mismatch", "“"+e.Word+"”有 "+strconv.Itoa(characters)+" 个字，但拼音有 "+strconv.Itoa(len(syllables))+" 个音节")
+		if syllables != characters {
+			reject("syllable_count_mismatch", "“"+e.Word+"”有 "+strconv.Itoa(characters)+" 个字，但拼音有 "+strconv.Itoa(syllables)+" 个音节")
 			continue
 		}
-		key := e.Word + "\t" + e.Pinyin
-		if seen[key] {
+		if submissionEntrySeen(entries, i, seen) {
 			reject("duplicate_entry", "“"+e.Word+"”重复填写了")
 			continue
 		}
-		seen[key] = true
 	}
 	return rejected
 }
@@ -602,7 +613,7 @@ func plainText(s string) bool {
 // validateEnglishEntries checks English words and trims their display forms in place. The word is the english_words key the Engine completes typed prefixes against: lowercase ASCII letters only.
 func validateEnglishEntries(entries []englishSubmissionEntry) []wordRejection {
 	rejected := []wordRejection{}
-	seen := map[string]bool{}
+	seen := map[englishSubmissionEntry]bool{}
 	for i := range entries {
 		e := &entries[i]
 		reject := func(code, reason string) { rejected = append(rejected, wordRejection{i, code, reason}) }
@@ -620,10 +631,8 @@ func validateEnglishEntries(entries []englishSubmissionEntry) []wordRejection {
 			reject("invalid_display", "显示词形不能包含制表符、换行或其他控制字符")
 		case utf8.RuneCountInString(e.Display) > englishDisplayMaxChars:
 			reject("display_too_long", "显示词形最多 64 个字符")
-		case seen[e.Word+"\t"+e.Display]:
+		case submissionEntrySeen(entries, i, seen):
 			reject("duplicate_entry", "“"+e.Display+"”重复填写了")
-		default:
-			seen[e.Word+"\t"+e.Display] = true
 		}
 	}
 	return rejected
@@ -632,7 +641,7 @@ func validateEnglishEntries(entries []englishSubmissionEntry) []wordRejection {
 // validateTranslationEntries checks translation overrides and trims both sides in place, as the dictionary build strips them. A source may repeat one already in translations.txt (the later line wins, which is the point of an override); only an identical pair is a duplicate.
 func validateTranslationEntries(entries []translationSubmissionEntry) []wordRejection {
 	rejected := []wordRejection{}
-	seen := map[string]bool{}
+	seen := map[translationSubmissionEntry]bool{}
 	for i := range entries {
 		e := &entries[i]
 		reject := func(code, reason string) { rejected = append(rejected, wordRejection{i, code, reason}) }
@@ -652,10 +661,8 @@ func validateTranslationEntries(entries []translationSubmissionEntry) []wordReje
 			reject("invalid_gloss", "译文不能包含制表符、换行或其他控制字符")
 		case utf8.RuneCountInString(e.Gloss) > translationGlossChars:
 			reject("gloss_too_long", "译文最多 200 个字符")
-		case seen[e.Source+"\t"+e.Gloss]:
+		case submissionEntrySeen(entries, i, seen):
 			reject("duplicate_entry", "“"+e.Source+"”的这条翻译重复填写了")
-		default:
-			seen[e.Source+"\t"+e.Gloss] = true
 		}
 	}
 	return rejected
@@ -675,7 +682,7 @@ func sanitizeWordNote(note string) (string, bool) {
 		}
 		return r
 	}, note)
-	note = strings.Join(strings.Fields(note), " ")
+	note = qqNormalizeWhitespace(note)
 	return githubReferenceBreaker.Replace(note), true
 }
 

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { platformName } from "../utils/platform.ts";
 
 const count = z.number().int().nonnegative();
 
@@ -28,27 +29,11 @@ export const downloadsSummarySchema = z.object({
 });
 export type DownloadsSummary = z.infer<typeof downloadsSummarySchema>;
 
-// The platform chips of the design; reported platform names are matched case-insensitively and with common aliases.
-export const platformOptions = [
-  { key: "windows", label: "Windows" },
-  { key: "macos", label: "macOS" },
-  { key: "linux", label: "Linux" },
-  { key: "android", label: "Android" },
-  { key: "ios", label: "iOS" },
-  { key: "harmony", label: "HarmonyOS" },
-] as const;
-
-const platformAliases: Record<string, string> = { win: "windows", win32: "windows", win64: "windows", mac: "macos", osx: "macos", darwin: "macos", harmonyos: "harmony", ohos: "harmony", openharmony: "harmony", iphone: "ios", ipados: "ios" };
-
-// platformKey normalizes a reported platform to a chip key; an unknown platform keeps its lower-cased name and lands under 其他.
-export function platformKey(platform: string): string {
-  const key = platform.trim().toLowerCase();
-  return platformAliases[key] ?? key;
-}
+// 下载筛选沿用公共平台选项和规范化键，保留原有导出供页面使用。
+export { platformKey, platformOptions } from "../utils/platform.ts";
 
 export function platformLabel(platform: string): string {
-  const key = platformKey(platform);
-  return platformOptions.find(option => option.key === key)?.label ?? (platform || "未知平台");
+  return platformName(platform) || "未知平台";
 }
 
 const channelLabels: Record<string, string> = {

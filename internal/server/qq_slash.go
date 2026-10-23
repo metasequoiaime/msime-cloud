@@ -18,9 +18,6 @@ var qqSlashRepoAliases = map[string]string{
 	"docs": "msime-docs", "doc": "msime-docs", "msime-docs": "msime-docs",
 }
 
-// qqSlashNumber 匹配 D12、F3、#818、12 这样的编号，分组是数字。
-var qqSlashNumber = regexp.MustCompile(`^[#＃]?[DdFfBb]?([0-9]{1,9})$`)
-
 // qqSlashWord 是可以当成命令名的写法：只有字母，最多 12 个。
 var qqSlashWord = regexp.MustCompile(`^[a-z]{1,12}$`)
 
@@ -29,6 +26,13 @@ var qqSlashFree = []string{"help", "h", "ver", "version", "today", "stats", "bin
 
 // qqSlashParse 拆出斜杠命令：命令名（小写）和后面的参数；不是斜杠命令时 ok 为 false。只认「/」后面紧跟字母的写法，「/ 」「//」不算。
 func qqSlashParse(text string) (name, args string, ok bool) {
+	// 已有斜杠前缀时直接解析；其他消息先检查边界空白后的前缀，避免折叠普通正文。
+	if !strings.HasPrefix(text, "/") && !strings.HasPrefix(text, "／") {
+		text = strings.TrimSpace(text)
+		if !strings.HasPrefix(text, "/") && !strings.HasPrefix(text, "／") {
+			return "", "", false
+		}
+	}
 	text = strings.TrimSpace(qqFoldWidth(text))
 	rest, found := strings.CutPrefix(text, "/")
 	if !found || rest == "" || !(rest[0] >= 'a' && rest[0] <= 'z' || rest[0] >= 'A' && rest[0] <= 'Z') {
@@ -70,18 +74,14 @@ func (s *Server) qqSlashCommand(ctx context.Context, m qqGroupMessage, text stri
 		if first == "" {
 			return "", false
 		}
-		match := qqSlashNumber.FindStringSubmatch(first)
-		if match == nil {
-			return "", false
-		}
-		return match[1], true
+		return qqSlashParseNumber(first)
 	}
 	rest := func() string {
 		_, tail := qqSlashArgumentHead(args)
 		return qqNormalizeWhitespace(tail)
 	}
 	chineseWith := func(command string, reply func(string)) string {
-		return s.qqCommand(ctx, m, command, admin, reply, progress)
+		return s.qqCommand(ctx, m, command, qqCompact(command), admin, reply, progress)
 	}
 	chinese := func(command string) string { return chineseWith(command, reply) }
 	adminOnly := func() bool {
@@ -214,6 +214,30 @@ func (s *Server) qqSlashCommand(ctx context.Context, m qqGroupMessage, text stri
 	return "cmd_slash_unknown"
 }
 
+// qqSlashParseNumber 解析可选井号、草稿或文档标记与 1～9 位 ASCII 数字，保留前导零。
+func qqSlashParseNumber(text string) (string, bool) {
+	if strings.HasPrefix(text, "#") {
+		text = text[1:]
+	} else {
+		text = strings.TrimPrefix(text, "＃")
+	}
+	if len(text) > 0 {
+		switch text[0] {
+		case 'D', 'd', 'F', 'f', 'B', 'b':
+			text = text[1:]
+		}
+	}
+	if len(text) == 0 || len(text) > 9 {
+		return "", false
+	}
+	for i := 0; i < len(text); i++ {
+		if text[i] < '0' || text[i] > '9' {
+			return "", false
+		}
+	}
+	return text, true
+}
+
 // qqSlashArgumentHead 只读取第一个参数，剩余参数保持原文，避免为编号后面的长正文构造字段切片。
 func qqSlashArgumentHead(args string) (first, tail string) {
 	args = strings.TrimSpace(args)
@@ -259,8 +283,8 @@ func (s *Server) qqSlashIssues(ctx context.Context, args string, reply func(stri
 		}
 	}
 	if first != "" && tail == "" {
-		if match := qqSlashNumber.FindStringSubmatch(first); match != nil {
-			return chinese(strings.TrimSpace(repoName + " #" + match[1]))
+		if number, ok := qqSlashParseNumber(first); ok {
+			return chinese(strings.TrimSpace(repoName + " #" + number))
 		}
 	}
 	terms, sort := qqNormalizeWhitespace(args), ""

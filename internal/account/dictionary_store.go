@@ -49,6 +49,15 @@ func (s *Store) DictionaryEntries(ctx context.Context, user, kind, search string
 	if err = rows.Err(); err != nil {
 		return nil, false, err
 	}
+	if len(out) == 0 {
+		exists, err := s.userExists(ctx, user)
+		if err != nil {
+			return nil, false, err
+		}
+		if !exists {
+			return nil, false, errMissingUser
+		}
+	}
 	more := len(out) > limit
 	if more {
 		out = out[:limit]
@@ -232,6 +241,15 @@ func (s *Store) DictionaryChanges(ctx context.Context, user string, after int64,
 	if err = rows.Err(); err != nil {
 		return nil, false, err
 	}
+	if len(result) == 0 {
+		exists, err := s.userExists(ctx, user)
+		if err != nil {
+			return nil, false, err
+		}
+		if !exists {
+			return nil, false, errMissingUser
+		}
+	}
 	more := len(result) > limit
 	if more {
 		result = result[:limit]
@@ -241,12 +259,19 @@ func (s *Store) DictionaryChanges(ctx context.Context, user string, after int64,
 
 // StreamDictionary exports one database snapshot without retaining the user's entire dictionary in memory.
 func (s *Store) StreamDictionary(ctx context.Context, user, kind string, emit func(DictionaryEntry) error) error {
+	if exists, err := s.userExists(ctx, user); err != nil {
+		return err
+	} else if !exists {
+		return errMissingUser
+	}
 	rows, err := s.pool.Query(ctx, `SELECT id,kind,code,word,weight,revision,updated_at FROM user_dictionary_entries WHERE user_id=$1 AND kind=$2 ORDER BY code,word,id`, user, kind)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
+	emitted := false
 	for rows.Next() {
+		emitted = true
 		var e DictionaryEntry
 		if err = rows.Scan(&e.ID, &e.Kind, &e.Code, &e.Word, &e.Weight, &e.Revision, &e.UpdatedAt); err != nil {
 			return err
@@ -255,7 +280,19 @@ func (s *Store) StreamDictionary(ctx context.Context, user, kind string, emit fu
 			return err
 		}
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !emitted {
+		exists, err := s.userExists(ctx, user)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return errMissingUser
+		}
+	}
+	return nil
 }
 
 // StreamDictionarySnapshot 用一条 SQL 读取全量覆盖快照。
@@ -303,7 +340,7 @@ func streamDictionarySnapshotKind(ctx context.Context, q snapshotQuerier, user, 
 		args = append(args, kind)
 	}
 	rows, err := q.Query(ctx, `SELECT record FROM (
- SELECT 0 AS category,'' AS kind,'' AS code,'' AS word,jsonb_build_object('snapshot_revision',COALESCE((SELECT revision FROM user_dictionary_state WHERE user_id=$1),0)) AS record
+ SELECT 0 AS category,'' AS kind,'' AS code,'' AS word,jsonb_build_object('snapshot_revision',COALESCE((SELECT revision FROM user_dictionary_state WHERE user_id=$1),0)) AS record FROM auth_users WHERE id=$1
  UNION ALL
  SELECT 1,kind,code,word,jsonb_build_object('previous',CASE WHEN deleted THEN entry ELSE 'null'::jsonb END,'replacement',CASE WHEN deleted THEN 'null'::jsonb ELSE entry END) FROM user_dictionary_overlay WHERE user_id=$1`+filter+`
   UNION ALL SELECT 2,'' AS kind,context AS code,code||word AS word,jsonb_build_object('fixed',jsonb_build_object('context',context,'code',code,'word',word,'position',position)) FROM user_candidate_positions WHERE user_id=$1
@@ -313,7 +350,9 @@ func streamDictionarySnapshotKind(ctx context.Context, q snapshotQuerier, user, 
 		return err
 	}
 	defer rows.Close()
+	seen := false
 	for rows.Next() {
+		seen = true
 		var raw []byte
 		if err = rows.Scan(&raw); err != nil {
 			return err
@@ -322,18 +361,31 @@ func streamDictionarySnapshotKind(ctx context.Context, q snapshotQuerier, user, 
 			return err
 		}
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !seen {
+		return errMissingUser
+	}
+	return nil
 }
 
 // StreamWindowsDictionary matches the Windows manager export selection: pinyin
 // includes multi-character upserts, while other kinds export user insertions.
 func (s *Store) StreamWindowsDictionary(ctx context.Context, user, kind string, emit func(DictionaryEntry) error) error {
+	if exists, err := s.userExists(ctx, user); err != nil {
+		return err
+	} else if !exists {
+		return errMissingUser
+	}
 	rows, err := s.pool.Query(ctx, `SELECT entry FROM user_dictionary_overlay WHERE user_id=$1 AND kind=$2 AND NOT deleted AND (($2='pinyin' AND char_length(word)>1) OR ($2<>'pinyin' AND COALESCE(entry->>'user_inserted','true')='true')) ORDER BY code,word`, user, kind)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
+	emitted := false
 	for rows.Next() {
+		emitted = true
 		var raw []byte
 		var entry DictionaryEntry
 		if err = rows.Scan(&raw); err != nil {
@@ -346,5 +398,17 @@ func (s *Store) StreamWindowsDictionary(ctx context.Context, user, kind string, 
 			return err
 		}
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !emitted {
+		exists, err := s.userExists(ctx, user)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return errMissingUser
+		}
+	}
+	return nil
 }

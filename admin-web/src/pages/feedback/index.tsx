@@ -1,12 +1,14 @@
 import { parsePage } from "../../utils/pagination";
+import { createActionUndo } from "../../api/action-undo";
 import { useCallback, useMemo } from "react";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { errorMessage, useAPI } from "../../api/client";
 import { platformName } from "../../api/crash";
-import { feedbackListSchema, feedbackPlatforms, feedbackStatusLabels, feedbackStatusTones, feedbackStatuses, feedbackTypeLabels, feedbackTypes } from "../../api/feedback";
+import { feedbackListSchema, feedbackPlatforms, feedbackStatusLabels, feedbackStatusTones, feedbackStatuses, feedbackTypeLabels, feedbackTypes, feedbackUndoSchema } from "../../api/feedback";
 import type { FeedbackRow } from "../../api/feedback";
 import { keys } from "../../api/keys";
 import { relativeTime } from "../../utils/time";
+import { firstLine } from "../../utils/text";
 import { PageIntro } from "../../shell/page-intro";
 import { usePageSearch, useSetPageSearch } from "../../shell/page-search";
 import { noPermissionHint, usePermissions } from "../../shell/permissions";
@@ -20,9 +22,6 @@ import { useToast } from "../../ui/toast";
 import { FeedbackDrawer } from "./drawer";
 
 const ALL = "all";
-
-// 列表里只显示正文第一行，全文和诊断信息在抽屉里看。
-const firstLine = (text: string) => text.split("\n")[0].trim();
 
 export default function FeedbackPage() {
   const api = useAPI();
@@ -46,18 +45,19 @@ export default function FeedbackPage() {
     placeholderData: keepPreviousData,
   });
 
-  // 标记已处理和重新打开互为撤销。
+  // 撤销只提交服务端返回的真实前态与版本；同值操作和旧副本响应不提供撤销。
   const setStatus = useCallback(async (row: FeedbackRow, resolved: boolean) => {
-    const run = async (to: boolean) => {
+    const run = async (request: Parameters<typeof api.action>[0]) => {
       try {
-        await api.action({ action: to ? "resolve_feedback" : "reopen_feedback", id: row.id });
+        return await api.action(request);
       } finally {
         await client.invalidateQueries({ queryKey: keys.page("feedback") });
       }
     };
     try {
-      await run(resolved);
-      toast({ text: resolved ? "已标记为已处理" : "已重新打开", undo: () => run(!resolved) });
+      const result = await run({ action: resolved ? "resolve_feedback" : "reopen_feedback", id: row.id });
+      const undo = createActionUndo(feedbackUndoSchema, result.undo, value => value.id === row.id && value.value.status === (resolved ? "new" : "resolved"), run);
+      toast({ text: resolved ? "已标记为已处理" : "已重新打开", undo });
     } catch (error) {
       toast(`操作失败：${errorMessage(error)}`);
     }

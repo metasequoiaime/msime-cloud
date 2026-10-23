@@ -42,7 +42,7 @@ var qqTruncatedDescription = regexp.MustCompile(`"description"\s*:\s*"((?:[^"\\]
 // qqHasImages 判断消息里有没有图片附件。
 func qqHasImages(attachments []qqAttachment) bool {
 	for _, a := range attachments {
-		if strings.HasPrefix(strings.ToLower(a.ContentType), "image/") {
+		if qqImageContentType(a.ContentType) {
 			return true
 		}
 	}
@@ -56,7 +56,7 @@ func (s *Server) qqDescribeImages(ctx context.Context, attachments []qqAttachmen
 		if len(images) == qqVisionImages {
 			break
 		}
-		if strings.HasPrefix(strings.ToLower(a.ContentType), "image/") {
+		if qqImageContentType(a.ContentType) {
 			images = append(images, a)
 		}
 	}
@@ -105,15 +105,12 @@ func (s *Server) qqDescribeImage(ctx context.Context, a qqAttachment) (string, e
 	payload, _ := json.Marshal(map[string]any{"model": s.qq.config.Model, "max_tokens": 2000, "response_format": map[string]string{"type": "json_object"},
 		"messages": []map[string]any{{"role": "system", "content": qqVisionPrompt}, {"role": "user", "content": content}, {"role": "user", "content": jsonObjectInstruction}}})
 	e := s.config.Chat
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.URL, bytes.NewReader(payload))
+	req, err := e.newRequest(ctx, http.MethodPost, bytes.NewReader(payload))
 	if err != nil {
 		return "", errors.New("invalid chat endpoint")
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	if e.token != "" {
-		req.Header.Set("Authorization", "Bearer "+e.token)
-	}
 	b, err := s.doUpstream(req)
 	if err != nil {
 		return "", err

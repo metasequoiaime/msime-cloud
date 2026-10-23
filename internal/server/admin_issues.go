@@ -18,6 +18,7 @@ import (
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
 // Issue triage (unit U3): the issues of admin.github.issue_repos.
@@ -62,6 +63,7 @@ type issueLabel struct {
 
 // issueGitHub is the part of a GitHub REST issue the console needs.
 type issueGitHub struct {
+	ID          int64             `json:"id"`
 	Number      int               `json:"number"`
 	Title       string            `json:"title"`
 	Body        string            `json:"body"`
@@ -103,15 +105,25 @@ type issueRow struct {
 	ClosedAt  *time.Time `json:"closed_at"`
 }
 
-// issueRef names one issue in an action request.
+// issueRef 标识操作请求中的一个 Issue。
 type issueRef struct {
 	Repo string `json:"repo"`
 	N    int    `json:"n"`
-	// KeepAssignee, only for untriage, leaves the platform assignee assigned: undoing a triage sets it when the assignee was already assigned before the triage, so the undo does not drop that earlier assignment.
+	// KeepAssignee 仅用于 untriage，保留分类前已有的平台负责人。
 	KeepAssignee bool `json:"keep_assignee,omitempty"`
+	// KeepDuplicate 仅用于 reopen，保留关闭前已有的重复标签。
+	KeepDuplicate bool `json:"keep_duplicate,omitempty"`
+	// Version 固定撤销对应的 GitHub 状态和时间线，仅用于 reopen 或 untriage。
+	Version string `json:"version,omitempty"`
 }
 
 func (ref issueRef) key() string { return ref.Repo + "#" + strconv.Itoa(ref.N) }
+
+// issueMemoryKey 只保留仓库和编号，避免轮询时为内存去重拼接目标 ID。
+type issueMemoryKey struct {
+	repo   string
+	number int
+}
 
 // issueSnapshot is one read of every configured repository.
 type issueSnapshot struct {
@@ -129,7 +141,7 @@ type issueMemory struct {
 	items []issueRow
 	// baseline is when the first complete snapshot was taken; only issues created after it are announced, so a restart does not announce the backlog.
 	baseline time.Time
-	seen     map[string]bool
+	seen     map[issueMemoryKey]bool
 }
 
 // issueMemory returns the Server's issue triage memory; it lives in the Server, so it goes away with it.
@@ -148,6 +160,9 @@ func (e *issueError) Error() string { return e.code }
 func issueFail(w http.ResponseWriter, err error) {
 	var e *issueError
 	if errors.As(err, &e) {
+		if e.code == "server_busy" {
+			w.Header().Set("Retry-After", "1")
+		}
 		fail(w, e.status, e.code)
 		return
 	}
@@ -254,13 +269,50 @@ func issueHasLabel(labels []string, name string) bool {
 
 // issueKind reads the issue type from the conventional GitHub labels.
 func issueKind(labels []string) string {
-	for _, l := range labels {
-		switch strings.ToLower(l) {
+	for _, label := range labels {
+		switch label {
 		case "bug", "问题", "type: bug", "kind/bug":
 			return "bug"
 		case "enhancement", "feature", "feature request", "idea", "suggestion", "建议", "type: feature", "kind/feature":
 			return "idea"
 		case "documentation", "docs", "文档", "type: docs", "kind/docs":
+			return "docs"
+		}
+		upper, nonASCII := false, false
+		for i := range label {
+			if label[i] >= utf8.RuneSelf {
+				nonASCII = true
+				break
+			}
+			if label[i] >= 'A' && label[i] <= 'Z' {
+				upper = true
+			}
+		}
+		if nonASCII {
+			label = strings.ToLower(label)
+		} else if !upper {
+			continue
+		}
+		if kind := issueKindASCII(label); kind != "" {
+			return kind
+		}
+	}
+	return ""
+}
+
+func issueKindASCII(label string) string {
+	for _, candidate := range [...]string{"bug", "type: bug", "kind/bug"} {
+		if len(label) == len(candidate) && textutil.EqualFoldASCII(label, candidate) {
+			return "bug"
+		}
+	}
+	for _, candidate := range [...]string{"enhancement", "feature", "feature request", "idea", "suggestion", "type: feature", "kind/feature"} {
+		if len(label) == len(candidate) && textutil.EqualFoldASCII(label, candidate) {
+			return "idea"
+		}
+	}
+	for _, candidate := range [...]string{"documentation", "docs", "type: docs", "kind/docs"} {
+		if len(label) == len(candidate) && textutil.EqualFoldASCII(label, candidate) {
 			return "docs"
 		}
 	}
@@ -300,6 +352,26 @@ func (s *Server) issueRow(repo string, v issueGitHub) issueRow {
 		Labels: labels, Assignees: assignees, Comments: v.Comments,
 		CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt, ClosedAt: v.ClosedAt,
 	}
+}
+
+// issueRowsFromPage 过滤一页里的 Pull Request，并按实际 issue 数量预留结果容量。
+func issueRowsFromPage(s *Server, repo string, page []issueGitHub) []issueRow {
+	count := 0
+	for _, v := range page {
+		if !v.isPullRequest() {
+			count++
+		}
+	}
+	if count == 0 {
+		return nil
+	}
+	rows := make([]issueRow, 0, count)
+	for _, v := range page {
+		if !v.isPullRequest() {
+			rows = append(rows, s.issueRow(repo, v))
+		}
+	}
+	return rows
 }
 
 // issueComment is the part of a repository issue comment needed for response times.
@@ -377,13 +449,7 @@ func (s *Server) issuePage(ctx context.Context, gh *githubapp.Client, token, rep
 	if err := r.Decode(&page); err != nil {
 		return nil, 0, issueResponseError(ctx, repo, "list issues", r, err)
 	}
-	var rows []issueRow
-	for _, v := range page {
-		if !v.isPullRequest() {
-			rows = append(rows, s.issueRow(repo, v))
-		}
-	}
-	return rows, len(page), nil
+	return issueRowsFromPage(s, repo, page), len(page), nil
 }
 
 // issueWindowComments 读取仓库在响应窗口内最多 issueOpenPages 页评论。按时间从旧到新读，窗口内各 issue 的首次回复会排在之后的回复前面；评论多于读取上限时，丢掉的是最新 issue 的样本，而不会把后来的回复误算成首次回复。since 取整到天，让路径（也就是读缓存的键）一整天保持不变。
@@ -506,29 +572,53 @@ func (s *Server) rememberIssues(ctx context.Context, items []issueRow, openOnly,
 	m := s.issueMemory()
 	m.mu.Lock()
 	if openOnly {
-		fresh := make(map[string]bool, len(items))
-		for _, row := range items {
-			fresh[issueRef{Repo: row.Repo, N: row.Number}.key()] = true
-		}
-		merged := slices.Clone(items)
+		hasRetained := false
 		for _, row := range m.items {
-			if (row.State == "done" || row.State == "dup") && !fresh[issueRef{Repo: row.Repo, N: row.Number}.key()] {
-				merged = append(merged, row)
+			if row.State == "done" || row.State == "dup" {
+				hasRetained = true
+				break
 			}
 		}
-		slices.SortStableFunc(merged, issueNewestFirst)
-		items = merged
+		if hasRetained {
+			fresh := make(map[issueMemoryKey]struct{}, len(items))
+			for _, row := range items {
+				fresh[issueMemoryKey{repo: row.Repo, number: row.Number}] = struct{}{}
+			}
+			missing := false
+			for _, row := range m.items {
+				if row.State != "done" && row.State != "dup" {
+					continue
+				}
+				if _, ok := fresh[issueMemoryKey{repo: row.Repo, number: row.Number}]; !ok {
+					missing = true
+					break
+				}
+			}
+			if missing {
+				merged := slices.Clone(items)
+				for _, row := range m.items {
+					if row.State != "done" && row.State != "dup" {
+						continue
+					}
+					if _, ok := fresh[issueMemoryKey{repo: row.Repo, number: row.Number}]; !ok {
+						merged = append(merged, row)
+					}
+				}
+				slices.SortStableFunc(merged, issueNewestFirst)
+				items = merged
+			}
+		}
 	}
 	m.items = items
 	var announce []issueRow
 	if m.baseline.IsZero() {
 		if complete {
 			m.baseline = now
-			m.seen = map[string]bool{}
+			m.seen = map[issueMemoryKey]bool{}
 		}
 	} else {
 		for _, row := range items {
-			key := issueRef{Repo: row.Repo, N: row.Number}.key()
+			key := issueMemoryKey{repo: row.Repo, number: row.Number}
 			if row.State == "new" && row.CreatedAt.After(m.baseline) && !m.seen[key] {
 				m.seen[key] = true
 				announce = append(announce, row)
@@ -547,7 +637,7 @@ func (s *Server) rememberIssues(ctx context.Context, items []issueRow, openOnly,
 		key := issueRef{Repo: row.Repo, N: row.Number}.key()
 		if err := s.accounts.NotifyOnce(ctx, account.Notification{Kind: account.NotifyIssue, Title: title, TargetPage: "issues", TargetID: key}); err != nil {
 			m.mu.Lock()
-			delete(m.seen, key)
+			delete(m.seen, issueMemoryKey{repo: row.Repo, number: row.Number})
 			m.mu.Unlock()
 			slog.Error("issues: notification failed", "issue", key, "reason", err.Error())
 		}
@@ -668,7 +758,8 @@ func issueStateMatches(filter, state string) bool {
 
 // parseIssuePath parses "{owner}/{repo}/{n}" to a configured repository and a positive issue number; any other repository is not found.
 func (s *Server) parseIssuePath(rest string) (issueRef, error) {
-	parts := strings.Split(rest, "/")
+	// 三段之外只需保留一个额外分段即可拒绝路径，避免随斜杠数量分配。
+	parts := strings.SplitN(rest, "/", 4)
 	if len(parts) != 3 {
 		return issueRef{}, &issueError{404, "not_found"}
 	}
@@ -748,48 +839,10 @@ type issueSimilar struct {
 	URL    string `json:"url"`
 }
 
-// issueDetail serves GET /api/issues/{owner}/{repo}/{n}: the issue with its body, its timeline (comments, labels, assignments, closing and reopening), the assignee triage would pick and up to three listed issues with similar titles.
-func (s *Server) issueDetail(w http.ResponseWriter, r *http.Request, rest string) {
-	gh, ok := s.adminGitHubApp(w)
-	if !ok {
-		return
-	}
-	ref, err := s.parseIssuePath(rest)
-	if err != nil {
-		issueFail(w, err)
-		return
-	}
-	ctx := r.Context()
-	token, err := gh.Token(ctx, ref.Repo, issueTokenPerms)
-	if err != nil {
-		issueFail(w, issueTokenError(ctx, ref.Repo, err))
-		return
-	}
-	issue, err := issueFetch(ctx, gh, token, ref, true)
-	if err != nil {
-		issueFail(w, err)
-		return
-	}
-	timelinePath := fmt.Sprintf("/repos/%s/issues/%d/timeline?per_page=100", ref.Repo, ref.N)
-	resp, err := gh.Get(ctx, token, timelinePath)
-	// GitHub lists the timeline oldest first; a timeline of several pages shows its newest page, so recent replies (including those sent from the console) are never cut off.
-	truncated := false
-	if err == nil && resp.OK() {
-		if last := issueLastPage(resp.Header); last > 1 {
-			truncated = true
-			resp, err = gh.Get(ctx, token, timelinePath+"&page="+strconv.Itoa(last))
-		}
-	}
-	if err != nil || !resp.OK() {
-		issueFail(w, issueResponseError(ctx, ref.Repo, "timeline", resp, err))
-		return
-	}
-	var events []issueTimelineGitHub
-	if err := resp.Decode(&events); err != nil {
-		issueFail(w, issueResponseError(ctx, ref.Repo, "timeline", resp, err))
-		return
-	}
-	timeline := []issueEvent{{Kind: "created", Actor: issue.User.Login, At: issue.CreatedAt}}
+// issueTimelineEvents 把 GitHub 时间线转换成详情页事件，并按已解码事件数预留结果容量。
+func issueTimelineEvents(issue issueGitHub, events []issueTimelineGitHub) []issueEvent {
+	timeline := make([]issueEvent, 1, len(events)+1)
+	timeline[0] = issueEvent{Kind: "created", Actor: issue.User.Login, At: issue.CreatedAt}
 	for _, e := range events {
 		event := issueEvent{Kind: e.Event, Actor: e.actor(), At: e.CreatedAt}
 		switch e.Event {
@@ -818,6 +871,62 @@ func (s *Server) issueDetail(w http.ResponseWriter, r *http.Request, rest string
 		}
 		timeline = append(timeline, event)
 	}
+	return timeline
+}
+
+// issueDetail serves GET /api/issues/{owner}/{repo}/{n}: the issue with its body, its timeline (comments, labels, assignments, closing and reopening), the assignee triage would pick and up to three listed issues with similar titles.
+func (s *Server) issueDetail(w http.ResponseWriter, r *http.Request, rest string) {
+	gh, ok := s.adminGitHubApp(w)
+	if !ok {
+		return
+	}
+	ref, err := s.parseIssuePath(rest)
+	if err != nil {
+		issueFail(w, err)
+		return
+	}
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	token, err := gh.Token(ctx, ref.Repo, issueTokenPerms)
+	if err != nil {
+		issueFail(w, issueTokenError(ctx, ref.Repo, err))
+		return
+	}
+	timelinePath := fmt.Sprintf("/repos/%s/issues/%d/timeline?per_page=100", ref.Repo, ref.N)
+	var resp githubapp.Response
+	var timelineErr error
+	truncated := false
+	// 详情与时间线互不依赖，同时读取；详情失败时取消时间线等待，仍优先返回详情错误。
+	var reads sync.WaitGroup
+	reads.Go(func() {
+		resp, timelineErr = gh.Get(ctx, token, timelinePath)
+		// GitHub 的时间线从旧到新分页；多页时展示末页，保留最近的回复。
+		if timelineErr == nil && resp.OK() {
+			if last := issueLastPage(resp.Header); last > 1 {
+				truncated = true
+				resp, timelineErr = gh.Get(ctx, token, timelinePath+"&page="+strconv.Itoa(last))
+			}
+		}
+	})
+	issue, err := issueFetch(ctx, gh, token, ref, true)
+	if err != nil {
+		cancel()
+	}
+	reads.Wait()
+	if err != nil {
+		issueFail(w, err)
+		return
+	}
+	if timelineErr != nil || !resp.OK() {
+		issueFail(w, issueResponseError(ctx, ref.Repo, "timeline", resp, timelineErr))
+		return
+	}
+	var events []issueTimelineGitHub
+	if err := resp.Decode(&events); err != nil {
+		issueFail(w, issueResponseError(ctx, ref.Repo, "timeline", resp, err))
+		return
+	}
+	timeline := issueTimelineEvents(issue, events)
 	row := s.issueRow(ref.Repo, issue)
 	assignee := ""
 	if p := s.issuePlatform(ref.Repo, row.Labels); p != nil {
@@ -852,6 +961,7 @@ func similarIssueRows(items []issueRow, row issueRow) []issueSimilar {
 	// 空标题的相似度为零，初始缓存也适用于空标题。
 	var lastTitle string
 	var lastScore float64
+	var otherBigrams map[[2]rune]bool
 	type scored struct {
 		row   issueRow
 		score float64
@@ -868,7 +978,8 @@ func similarIssueRows(items []issueRow, row issueRow) []issueSimilar {
 		case other.Title == lastTitle:
 			score = lastScore
 		default:
-			score = bigramSimilarity(target, titleBigrams(other.Title))
+			otherBigrams = titleBigramsInto(other.Title, otherBigrams)
+			score = bigramSimilarity(target, otherBigrams)
 			lastTitle, lastScore = other.Title, score
 		}
 		if score < 0.3 {
@@ -900,12 +1011,32 @@ func similarIssueRows(items []issueRow, row issueRow) []issueSimilar {
 
 // titleBigrams 收集小写标题中相邻的字母或数字对；标点和空格分隔词语，不跨边界组合。
 func titleBigrams(title string) map[[2]rune]bool {
-	set := map[[2]rune]bool{}
+	return titleBigramsInto(title, nil)
+}
+
+// titleBigramsInto 清空后复用调用方的临时集合，每次只保留当前标题的二元组。
+func titleBigramsInto(title string, set map[[2]rune]bool) map[[2]rune]bool {
+	if set == nil {
+		set = map[[2]rune]bool{}
+	} else {
+		clear(set)
+	}
 	var prev rune
-	for _, c := range strings.ToLower(title) {
-		if !unicode.IsLetter(c) && !unicode.IsDigit(c) {
-			prev = 0
-			continue
+	for _, c := range title {
+		// ASCII 直接折叠大小写并分类；基本汉字均为无大小写的字母。
+		if c < utf8.RuneSelf {
+			if lower := c | 0x20; lower >= 'a' && lower <= 'z' {
+				c = lower
+			} else if c < '0' || c > '9' {
+				prev = 0
+				continue
+			}
+		} else if c < 0x4E00 || c > 0x9FFF {
+			if !unicode.IsLetter(c) && !unicode.IsDigit(c) {
+				prev = 0
+				continue
+			}
+			c = unicode.ToLower(c)
 		}
 		if prev != 0 {
 			set[[2]rune{prev, c}] = true
@@ -996,8 +1127,8 @@ func (s *Server) issueActionsHTTP(w http.ResponseWriter, r *http.Request) {
 	seen := map[string]bool{}
 	for i, item := range v.Items {
 		repo, ok := s.issueRepo(item.Repo)
-		ref := issueRef{Repo: repo, N: item.N, KeepAssignee: item.KeepAssignee}
-		if !ok || item.N < 1 || seen[ref.key()] || item.KeepAssignee && v.Action != "untriage" {
+		ref := issueRef{Repo: repo, N: item.N, KeepAssignee: item.KeepAssignee, KeepDuplicate: item.KeepDuplicate, Version: item.Version}
+		if !ok || item.N < 1 || seen[ref.key()] || item.KeepAssignee && v.Action != "untriage" || item.KeepDuplicate && v.Action != "reopen" || item.Version != "" && (!issueValidVersion(item.Version) || v.Action != "reopen" && v.Action != "untriage") {
 			fail(w, 400, "invalid_items")
 			return
 		}
@@ -1016,9 +1147,11 @@ func (s *Server) issueActionsHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	affected := 0
 	failures := []issueActionFailure{}
+	var undo *issueUndo
+	undoAction := map[string]string{"triage": "untriage", "close": "reopen", "mark_dup": "reopen"}[v.Action]
 	var firstErr error
 	for _, item := range v.Items {
-		detail, err := s.issueAction(ctx, gh, v.Action, item, v.Body)
+		detail, undoRef, err := s.issueAction(ctx, gh, v.Action, item, v.Body)
 		if detail != nil {
 			// GitHub 可能已写入；即使请求取消也要保留操作者并在有限时间内记录审计。
 			recordCtx, cancelRecord := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
@@ -1045,12 +1178,24 @@ func (s *Server) issueActionsHTTP(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		affected++
+		if undoRef != nil {
+			if undo == nil {
+				undo = &issueUndo{Action: undoAction}
+			}
+			undo.Items = append(undo.Items, *undoRef)
+		}
 	}
 	if affected == 0 {
 		issueFail(w, firstErr)
 		return
 	}
-	respond(w, 200, map[string]any{"ok": true, "affected": affected, "failed": failures})
+	respond(w, 200, map[string]any{"ok": true, "affected": affected, "failed": failures, "undo": undo})
+}
+
+// issueUndo 只包含已确认成功、且可依据操作前最新快照撤销的条目。
+type issueUndo struct {
+	Action string     `json:"action"`
+	Items  []issueRef `json:"items"`
 }
 
 // issueStep is one GitHub write of an action, with the write that reverses it when a later step of the same action fails; undo is nil for the last step and for a write that needs no reversal.
@@ -1062,17 +1207,36 @@ type issueStep struct {
 	undo         *issueStep
 }
 
-// issueAction 先读取最新 Issue，再执行操作并返回审计详情。后续步骤明确被拒绝时回滚已确认的步骤；写入结果未知时保留现场并标记 uncertain，回滚失败则标记 partial。
-func (s *Server) issueAction(ctx context.Context, gh *githubapp.Client, action string, ref issueRef, body string) (map[string]any, error) {
+// issueAction 在跨副本的 Issue 锁内读取最新状态、执行操作及必要的回滚，避免失败请求撤销另一请求的成功结果。
+// 后续步骤明确被拒绝时回滚已确认的步骤；写入结果未知时保留现场并标记 uncertain，回滚失败则标记 partial。
+func (s *Server) issueAction(ctx context.Context, gh *githubapp.Client, action string, ref issueRef, body string) (map[string]any, *issueRef, error) {
+	unlock, err := s.accounts.WaitLock(ctx, "admin-issues:"+strings.ToLower(ref.key()), 0)
+	if errors.Is(err, account.ErrLockBusy) {
+		return nil, nil, &issueError{503, "server_busy"}
+	}
+	if err != nil {
+		return nil, nil, &issueError{503, "auth_unavailable"}
+	}
+	defer unlock()
 	token, err := gh.Token(ctx, ref.Repo, issueTokenPerms)
 	if err != nil {
-		return nil, issueTokenError(ctx, ref.Repo, err)
+		return nil, nil, issueTokenError(ctx, ref.Repo, err)
 	}
 	issue, err := issueFetch(ctx, gh, token, ref, false)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	// Whatever part of the action reached GitHub, the cached listing and detail of this repository are stale now.
+	if ref.Version != "" {
+		version, err := s.issueVersion(ctx, gh, token, ref, issue)
+		if err != nil {
+			return nil, nil, err
+		}
+		if version != ref.Version {
+			gh.Invalidate("/repos/" + ref.Repo + "/issues")
+			return nil, nil, &issueError{409, "conflict"}
+		}
+	}
+	// 无论操作走到哪一步，仓库列表和详情缓存都可能已经过时。
 	defer gh.Invalidate("/repos/" + ref.Repo + "/issues")
 	row := s.issueRow(ref.Repo, issue)
 	detail := map[string]any{"repo": ref.Repo, "number": ref.N, "title": issue.Title, "from": row.State}
@@ -1095,8 +1259,12 @@ func (s *Server) issueAction(ctx context.Context, gh *githubapp.Client, action s
 	hasTriaged, hasDuplicate := issueHasLabel(row.Labels, issueTriagedLabel), issueHasLabel(row.Labels, issueDuplicateLabel)
 	platform := s.issuePlatform(ref.Repo, row.Labels)
 	var steps []*issueStep
+	var undo *issueRef
 	switch action {
 	case "triage":
+		if row.State == "new" {
+			undo = &issueRef{Repo: ref.Repo, N: ref.N, KeepAssignee: platform != nil && hasAssignee(platform.Assignee)}
+		}
 		step := addLabel(issueTriagedLabel)
 		if !hasTriaged {
 			step.undo = removeLabel(issueTriagedLabel)
@@ -1122,6 +1290,9 @@ func (s *Server) issueAction(ctx context.Context, gh *githubapp.Client, action s
 		}
 		detail["to"] = "new"
 	case "mark_dup":
+		if issue.State == "open" {
+			undo = &issueRef{Repo: ref.Repo, N: ref.N, KeepDuplicate: hasDuplicate}
+		}
 		step := addLabel(issueDuplicateLabel)
 		if !hasDuplicate {
 			step.undo = removeLabel(issueDuplicateLabel)
@@ -1129,11 +1300,14 @@ func (s *Server) issueAction(ctx context.Context, gh *githubapp.Client, action s
 		steps = append(steps, step, setState("closed", "not_planned"))
 		detail["to"] = "dup"
 	case "close":
+		if issue.State == "open" {
+			undo = &issueRef{Repo: ref.Repo, N: ref.N, KeepDuplicate: hasDuplicate}
+		}
 		steps = append(steps, setState("closed", "completed"))
 		detail["to"] = "done"
 	case "reopen":
-		// The duplicate label goes first so that a failed reopen can put it back and leave the issue closed as a duplicate.
-		if hasDuplicate {
+		// 先移除重复标签，重新打开失败时可恢复；撤销关闭时保留原有标签。
+		if hasDuplicate && !ref.KeepDuplicate {
 			step := removeLabel(issueDuplicateLabel)
 			step.undo = addLabel(issueDuplicateLabel)
 			steps = append(steps, step)
@@ -1168,7 +1342,7 @@ func (s *Server) issueAction(ctx context.Context, gh *githubapp.Client, action s
 				if i > 0 {
 					detail["partial"] = true
 				}
-				return detail, err
+				return detail, nil, err
 			}
 			partial := false
 			for j := i - 1; j >= 0; j-- {
@@ -1180,19 +1354,30 @@ func (s *Server) issueAction(ctx context.Context, gh *githubapp.Client, action s
 							detail["partial"] = true
 							detail["uncertain"] = true
 							detail["step"] = undo.what
-							return detail, undoErr
+							return detail, nil, undoErr
 						}
 					}
 				}
 			}
 			if partial {
 				detail["partial"] = true
-				return detail, err
+				return detail, nil, err
 			}
-			return nil, err
+			return nil, nil, err
 		}
 	}
-	return detail, nil
+	if undo != nil {
+		// 写入已确认成功；补读失败只隐藏撤销，不能把原操作报告为失败而诱发重试。
+		current, readErr := issueFetch(ctx, gh, token, ref, false)
+		if readErr != nil {
+			undo = nil
+		} else if version, versionErr := s.issueVersion(ctx, gh, token, ref, current); versionErr != nil {
+			undo = nil
+		} else {
+			undo.Version = version
+		}
+	}
+	return detail, undo, nil
 }
 
 // searchIssues matches q against the cached issues for the global search; it never calls GitHub.
@@ -1202,22 +1387,68 @@ func (s *Server) searchIssues(q string) []account.AdminSearchHit {
 		return nil
 	}
 	number := strings.TrimPrefix(q, "#")
+	// 编号不含 `#`，跨仓库键分隔符的查询只能以最后一个 `#` 对齐。
+	hashIndex := strings.LastIndexByte(q, '#')
+	queryHasHash := hashIndex >= 0
+	var repoSuffix, numberPrefix string
+	if queryHasHash {
+		repoSuffix, numberPrefix = q[:hashIndex], q[hashIndex+1:]
+	}
 	m := s.issueMemory()
 	m.mu.Lock()
 	items := m.items
 	m.mu.Unlock()
-	var hits []account.AdminSearchHit
+	var matched [8]account.AdminSearchHit
+	// 20 字节足以容纳有符号 64 位整数，结果字符串会复制格式化后的编号。
+	var numberBuffer [20]byte
+	count := 0
 	for _, row := range items {
-		n := strconv.Itoa(row.Number)
-		if number != n && !strings.Contains(strings.ToLower(row.Title), q) && !strings.Contains(strings.ToLower(row.Repo+"#"+n), q) {
-			continue
+		var n string
+		if 0 <= row.Number && row.Number < 100 {
+			// 小编号复用标准库的共享字符串。
+			n = strconv.Itoa(row.Number)
+		} else {
+			n = string(strconv.AppendInt(numberBuffer[:0], int64(row.Number), 10))
 		}
-		hits = append(hits, account.AdminSearchHit{Kind: "issue", ID: issueRef{Repo: row.Repo, N: row.Number}.key(), Title: "#" + n + " " + row.Title, Where: "问题分诊", Target: "issues"})
-		if len(hits) == 8 {
+		// 复用词条查询的栈上匹配，避免为标题和仓库键创建小写副本。
+		if number != n && !dictionaryLineContainsLower(row.Title, q) {
+			if queryHasHash {
+				if !(strings.HasPrefix(n, numberPrefix) && issueRepoHasLowerSuffix(row.Repo, repoSuffix)) &&
+					!(strings.ContainsRune(row.Repo, '#') && dictionaryLineContainsLower(row.Repo, q)) {
+					continue
+				}
+			} else if !strings.Contains(n, q) && !dictionaryLineContainsLower(row.Repo, q) {
+				continue
+			}
+		}
+		matched[count] = account.AdminSearchHit{Kind: "issue", ID: row.Repo + "#" + n, Title: "#" + n + " " + row.Title, Where: "问题分诊", Target: "issues"}
+		count++
+		if count == len(matched) {
 			break
 		}
 	}
-	return hits
+	if count == 0 {
+		return nil
+	}
+	return slices.Clone(matched[:count])
+}
+
+// issueRepoHasLowerSuffix 按 `strings.ToLower` 的规则比较仓库后缀；`suffix` 必须已转小写。
+func issueRepoHasLowerSuffix(repo, suffix string) bool {
+	for len(suffix) > 0 {
+		if len(repo) == 0 {
+			return false
+		}
+		r, size := utf8.DecodeLastRuneInString(repo)
+		want, suffixSize := utf8.DecodeLastRuneInString(suffix)
+		// 不使用 `EqualFold`，避免将末尾 sigma 等字符的折叠规则带入原有小写匹配。
+		if unicode.ToLower(r) != want {
+			return false
+		}
+		repo = repo[:len(repo)-size]
+		suffix = suffix[:len(suffix)-suffixSize]
+	}
+	return true
 }
 
 // pendingIssues 为外壳角标统计未关闭且未分诊的 issue。只读未关闭 issue 的分页（与 GET /api/issues 共用同一批缓存的读取），不读评论和已关闭 issue：评论只用于响应时间，而 msime-windows 30 天内的评论需要第二页，按顺序读完会超出 adminShellGitHubBudget。

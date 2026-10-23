@@ -3,7 +3,6 @@ package account
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
 	"errors"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/metasequoiaime/MSIME-Backend/internal/digest"
 )
 
 //go:embed schema.sql
@@ -87,6 +87,18 @@ var typingStatisticsSchema string
 var ErrInvalid = errors.New("invalid_credentials")
 var ErrLimited = errors.New("rate_limit_exceeded")
 var ErrConflict = errors.New("identity_already_linked")
+
+// errMissingUser 同时保留数据库层的无行语义和 HTTP 层的凭据失效语义。
+var errMissingUser = errors.Join(ErrInvalid, pgx.ErrNoRows)
+
+func (s *Store) userExists(ctx context.Context, uid string) (bool, error) {
+	var present int
+	err := s.pool.QueryRow(ctx, "SELECT 1 FROM auth_users WHERE id=$1", uid).Scan(&present)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
 
 // ErrRefreshSuperseded 表示提交的刷新令牌在 refreshSupersededGrace 之内刚被另一次刷新轮换掉：会话没有被撤销，调用方应改用并发请求已经拿到的新令牌。它不包装 ErrInvalid，HTTP 层单独映射为 409。
 var ErrRefreshSuperseded = errors.New("refresh_superseded")
@@ -160,7 +172,7 @@ func randomToken() string {
 	}
 	return hex.EncodeToString(b)
 }
-func hash(s string) string { v := sha256.Sum256([]byte(s)); return hex.EncodeToString(v[:]) }
+func hash(s string) string { return digest.SHA256([]byte(s)) }
 
 var errDatabaseEncoding = errors.New("用户数据库及客户端连接编码必须为 UTF8")
 
@@ -401,29 +413,39 @@ SELECT moderation,previous_moderation,moderation_reason,moderated_by,moderated_a
 SELECT moderation,previous_moderation,moderation_reason,moderated_by,moderated_at FROM community_candidate_skins WHERE false;
 SELECT moderation,previous_moderation,moderation_reason,moderated_by,moderated_at FROM community_plugins WHERE false;
 SELECT id,kind,item_id,reporter_id,reason,detail,created_at FROM community_reports WHERE false;
-SELECT banned_at,ban_reason,banned_by FROM auth_users WHERE false;
+SELECT banned_at,ban_reason,banned_by,ban_revision FROM auth_users WHERE false;
 SELECT user_agent FROM auth_sessions WHERE false;
 SELECT id,pr_number,kind,entries,note,created_at FROM word_submissions WHERE false;
 SELECT artifact,channel,install_id,signature FROM admin_events WHERE false;
-SELECT signature,platform,version,title,status,issue_url,first_seen,last_seen FROM admin_crash_groups WHERE false;
+SELECT signature,platform,version,title,status,issue_url,first_seen,last_seen,status_token FROM admin_crash_groups WHERE false;
 SELECT id,title,body,targets,channels,status,created_by,created_at,published_at,updated_at FROM admin_notices WHERE false;
 SELECT id,pattern,is_regex,category,level,created_by,created_at FROM admin_sensitive_words WHERE false;
 SELECT word_id,day,count FROM admin_sensitive_hits WHERE false`); e != nil {
 		return e
 	}
 	return s.checkReadinessMetadata(ctx, []readinessMetadataCheck{
+		// 永久删除必须清理举报；旧库缺少触发器时先迁移再接收请求。
+		{`SELECT count(*)=4 FROM pg_trigger WHERE tgrelid IN ('community_skins'::regclass,'community_candidate_skins'::regclass,'community_plugins'::regclass,'community_resources'::regclass) AND tgname='community_reports_cleanup' AND tgenabled IN ('O','A')`, "community report cleanup triggers missing or disabled"},
+		// 旧副本和直接 SQL 的封禁写入也必须更新撤销版本。
+		{`SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='auth_users'::regclass AND tgname='auth_user_ban_revision' AND tgenabled IN ('O','A'))`, "user ban revision trigger missing or disabled"},
+		// 状态写入必须更新版本，缺少或停用触发器时先迁移再接受管理操作。
+		{`SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='admin_crash_groups'::regclass AND tgname='admin_crash_status_token' AND tgenabled IN ('O','A'))`, "crash status token trigger missing or disabled"},
 		// 遥测种类由 CHECK 约束限定，普通列探测无法发现旧约束。
 		{`SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='admin_events'::regclass AND conname='admin_events_kind_check' AND pg_get_constraintdef(oid) LIKE '%session_crash%')`, "admin_events kind constraint predates the active and session kinds"},
 		// 权限键约束需要支持 view_logs。
 		{`SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='admin_role_permissions'::regclass AND conname='admin_role_permissions_permission_check' AND pg_get_constraintdef(oid) LIKE '%view_logs%')`, "admin_role_permissions permission constraint predates view_logs"},
 		// 插件种类约束需要支持 wordbook。
 		{`SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='community_plugins'::regclass AND conname='community_plugins_kind_known' AND pg_get_constraintdef(oid) LIKE '%wordbook%')`, "community_plugins kind constraint predates the helpcode, symbol_set, phrase_table and wordbook kinds"},
+		// 冲刷批次按创建时间清理，需要保留期索引。
+		{`SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass('admin_service_metric_batches') AND c.relname='admin_service_metric_batches_time')`, "service metric batch time index missing"},
 		// 下载快照需要日期索引。
 		{`SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass('release_asset_snapshots') AND c.relname='release_asset_snapshots_day')`, "release snapshot day index missing"},
 		// 通知查重和崩溃通知需要目标时间索引。
 		{`SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass('admin_notifications') AND c.relname='admin_notifications_target')`, "notification target index missing"},
 		// 审计列表需要时间和 ID 索引。
 		{`SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass('admin_audit') AND c.relname='admin_audit_time')`, "audit time index missing"},
+		// 同值反馈操作通过审计固定撤销版本，需要按目标读取最近一条审计。
+		{`SELECT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=to_regclass('admin_audit') AND c.relname='admin_audit_feedback_version')`, "feedback audit version index missing"},
 	})
 }
 
@@ -596,7 +618,11 @@ RETURNING c.id_hash,c.provider,c.subject,c.nonce,c.code_hash,COALESCE(c.link_use
 	}
 	return c, nil
 }
+
+// DropChallenge 清理认证未完成的挑战；不跟随请求取消或过期，但最多等待三秒，避免失败的投递被后续请求复用。
 func (s *Store) DropChallenge(ctx context.Context, idHash string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
 	s.pool.Exec(ctx, "DELETE FROM auth_challenges WHERE id_hash=$1", idHash)
 }
 func (s *Store) Complete(ctx context.Context, c Challenge, identity Identity) (Tokens, error) {
@@ -610,20 +636,6 @@ func (s *Store) completeWith(ctx context.Context, c Challenge, identity Identity
 		return Tokens{}, e
 	}
 	defer tx.Rollback(ctx)
-	var id string
-	// 先物化锁定的挑战，再按数据库实时时钟校验并消费；锁等待期间过期的挑战不会被删除。
-	e = tx.QueryRow(ctx, `WITH locked AS MATERIALIZED (
- SELECT id_hash,expires_at FROM auth_challenges WHERE id_hash=$1 FOR UPDATE
-)
-DELETE FROM auth_challenges c USING locked
-WHERE c.id_hash=locked.id_hash AND locked.expires_at>clock_timestamp()
-RETURNING c.id_hash`, c.IDHash).Scan(&id)
-	if errors.Is(e, pgx.ErrNoRows) {
-		return Tokens{}, ErrInvalid
-	}
-	if e != nil {
-		return Tokens{}, e
-	}
 	// 同一身份的首次注册与绑定串行化，避免创建重复用户。
 	if _, e = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1,0))", identity.Provider+":"+identity.Subject); e != nil {
 		return Tokens{}, e
@@ -640,19 +652,36 @@ RETURNING c.id_hash`, c.IDHash).Scan(&id)
 	if account == "" {
 		account = c.LinkUser
 	}
+	var banned bool
 	if account != "" {
-		// 封禁账号不能登录或绑定身份，但仍消费挑战，阻止已验证凭据被重放。
-		// 提前取得更新锁，避免不同已绑定身份并发登录后更新默认昵称时从共享锁升级造成死锁；也等待并发封禁提交并读取最终状态。
-		var banned bool
-		if e = tx.QueryRow(ctx, "SELECT banned_at IS NOT NULL FROM auth_users WHERE id=$1 FOR NO KEY UPDATE", account).Scan(&banned); e != nil && !errors.Is(e, pgx.ErrNoRows) {
+		// 先锁用户再消费挑战，与注销的用户锁及外键级联删除顺序一致。
+		// 直接取得更新锁，避免并发登录更新默认昵称时升级共享锁；锁后读取封禁或注销结果。
+		if e = tx.QueryRow(ctx, "SELECT banned_at IS NOT NULL FROM auth_users WHERE id=$1 FOR NO KEY UPDATE", account).Scan(&banned); errors.Is(e, pgx.ErrNoRows) {
+			return Tokens{}, ErrInvalid
+		} else if e != nil {
 			return Tokens{}, e
 		}
-		if banned {
-			if e = tx.Commit(ctx); e != nil {
-				return Tokens{}, e
-			}
-			return Tokens{}, ErrBanned
+	}
+	var id string
+	// 挑战在身份锁和用户锁之后按实时时钟校验并消费，等待期间过期的挑战不会被删除。
+	e = tx.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+ SELECT id_hash,expires_at FROM auth_challenges WHERE id_hash=$1 FOR UPDATE
+)
+DELETE FROM auth_challenges c USING locked
+WHERE c.id_hash=locked.id_hash AND locked.expires_at>clock_timestamp()
+RETURNING c.id_hash`, c.IDHash).Scan(&id)
+	if errors.Is(e, pgx.ErrNoRows) {
+		return Tokens{}, ErrInvalid
+	}
+	if e != nil {
+		return Tokens{}, e
+	}
+	if banned {
+		// 封禁账号不能登录或绑定身份，但仍消费挑战，阻止已验证凭据被重放。
+		if e = tx.Commit(ctx); e != nil {
+			return Tokens{}, e
 		}
+		return Tokens{}, ErrBanned
 	}
 	// 身份归属和封禁检查完成后，把后续写入按原顺序排入同一批次，再读取资料并创建会话。
 	batch := &pgx.Batch{}
@@ -799,21 +828,11 @@ func (s *Store) Me(ctx context.Context, uid string) (User, []Identity, error) {
 	var u User
 	ids := []Identity{}
 	batch := &pgx.Batch{}
-	batch.Queue(userQuery, uid).QueryRow(func(row pgx.Row) error {
-		return scanUser(row, &u)
-	})
-	batch.Queue("SELECT provider,subject FROM auth_identities WHERE user_id=$1 ORDER BY provider,subject", uid).Query(func(rows pgx.Rows) error {
-		var err error
-		ids, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (Identity, error) {
-			var i Identity
-			return i, row.Scan(&i.Provider, &i.Subject)
-		})
-		if ids == nil {
-			ids = []Identity{}
-		}
-		return err
-	})
+	queueUserProfileReads(batch, uid, &u, &ids)
 	if e := s.pool.SendBatch(ctx, batch).Close(); e != nil {
+		if errors.Is(e, pgx.ErrNoRows) {
+			return u, ids, errMissingUser
+		}
 		return u, ids, e
 	}
 	return u, ids, nil
@@ -890,20 +909,7 @@ func (s *Store) SetAvatarKeyAndMe(ctx context.Context, uid, key string) (string,
 	batch.Queue(setAvatarKeyQuery, uid, key).QueryRow(func(row pgx.Row) error {
 		return scanAvatarKeyChange(row, &previous)
 	})
-	batch.Queue(userQuery, uid).QueryRow(func(row pgx.Row) error {
-		return scanUser(row, &u)
-	})
-	batch.Queue("SELECT provider,subject FROM auth_identities WHERE user_id=$1 ORDER BY provider,subject", uid).Query(func(rows pgx.Rows) error {
-		var err error
-		ids, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (Identity, error) {
-			var i Identity
-			return i, row.Scan(&i.Provider, &i.Subject)
-		})
-		if ids == nil {
-			ids = []Identity{}
-		}
-		return err
-	})
+	queueUserProfileReads(batch, uid, &u, &ids)
 	if e = tx.SendBatch(ctx, batch).Close(); e != nil {
 		return "", User{}, nil, e
 	}

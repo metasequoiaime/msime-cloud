@@ -6,6 +6,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -181,6 +182,24 @@ func TestNiuTransMediaValidationFailures(t *testing.T) {
 	_ = mw.Close()
 	if w := callMultipart(s, http.MethodPost, "/v1/niutrans/documents", mw.FormDataContentType(), body.Bytes()); w.Code != http.StatusBadRequest {
 		t.Fatalf("missing file: %d", w.Code)
+	}
+}
+
+func TestNiuTransResourcesRejectDotPathActions(t *testing.T) {
+	var upstreamCalls int
+	s := fixture(t, func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls++
+		_, _ = io.WriteString(w, `{"code":200,"data":[]}`)
+	})
+	s.config.NiuTrans.Resource = NiuTransEndpoint{URL: s.config.Chat.URL + "/v2/resource", appID: "resource-app", apiKey: "key"}
+	for _, action := range []string{".", ".."} {
+		w := call(s, http.MethodGet, "/v1/niutrans/resources?action="+url.QueryEscape(action), "")
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "resource_action_required") {
+			t.Fatalf("action %q: status=%d body=%s", action, w.Code, w.Body.String())
+		}
+	}
+	if upstreamCalls != 0 {
+		t.Fatalf("invalid actions reached upstream: %d", upstreamCalls)
 	}
 }
 

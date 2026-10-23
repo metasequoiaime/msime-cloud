@@ -102,6 +102,26 @@ func BenchmarkQQReleaseNotesMedia(b *testing.B) {
 	}
 }
 
+func TestQQReleasesMaterialCachedAllocationBudget(t *testing.T) {
+	list := []qqPlatformRelease{{
+		ID: "windows", Name: "Windows", Repo: "o/win",
+		Stable: &qqRelease{
+			TagName: "v0.10.1", PublishedAt: "2026-10-11T00:00:00Z",
+			notes: "合成更新内容", notesReady: true,
+		},
+	}}
+	var got string
+	allocations := testing.AllocsPerRun(20, func() {
+		got = qqReleasesMaterial(list, nil)
+	})
+	if got == "" {
+		t.Fatal("版本资料为空")
+	}
+	if allocations > 1 {
+		t.Fatalf("缓存发布说明的版本资料分配 %.0f 次，超过结果字符串的 1 次预算", allocations)
+	}
+}
+
 func BenchmarkQQReleaseMaterialRepeated(b *testing.B) {
 	for _, cached := range []bool{false, true} {
 		b.Run(map[bool]string{false: "重新清洗", true: "复用缓存"}[cached], func(b *testing.B) {

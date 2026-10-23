@@ -7,10 +7,11 @@ import (
 	"net/http"
 	"strings"
 	"unicode"
-	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
 // 无编码常用语的整列表同步，与偏好同一套 revision CAS：PUT 整份替换，revision 不符返回 409 revision_conflict。
@@ -34,15 +35,6 @@ type Phrase struct {
 type Phrases struct {
 	Revision int64    `json:"revision"`
 	Phrases  []Phrase `json:"phrases"`
-}
-
-func utf16Length(s string) int {
-	length := 0
-	// range 和 []rune 都把无效 UTF-8 解码为 U+FFFD，计数与原先编码后取长度一致。
-	for _, r := range s {
-		length += utf16.RuneLen(r)
-	}
-	return length
 }
 
 // validPhraseID 只接受 1–64 个 ASCII 字母、数字、`-` 和 `_`。
@@ -69,10 +61,10 @@ func validPhrases(list []Phrase) bool {
 			return false
 		}
 		seen[p.ID] = true
-		if !utf8.ValidString(p.Text) || strings.ContainsRune(p.Text, 0) || p.Text == "" || utf16Length(p.Text) > maximumPhraseText {
+		if !utf8.ValidString(p.Text) || strings.ContainsRune(p.Text, 0) || p.Text == "" || textutil.UTF16Length(p.Text) > maximumPhraseText {
 			return false
 		}
-		if !utf8.ValidString(p.Group) || strings.ContainsFunc(p.Group, unicode.IsControl) || utf16Length(p.Group) > maximumPhraseGroup {
+		if !utf8.ValidString(p.Group) || strings.ContainsFunc(p.Group, unicode.IsControl) || textutil.UTF16Length(p.Group) > maximumPhraseGroup {
 			return false
 		}
 		if p.Position < 0 || p.Position > maximumPhraseOrder {
@@ -122,6 +114,15 @@ func (a *Service) phrases(w http.ResponseWriter, r *http.Request) {
 		if e != nil {
 			a.error(w, e)
 			return
+		}
+		if out.Revision == 0 && len(out.Phrases) == 0 {
+			if exists, err := a.store.userExists(r.Context(), p.UserID); err != nil {
+				a.error(w, err)
+				return
+			} else if !exists {
+				a.error(w, errMissingUser)
+				return
+			}
 		}
 		write(w, 200, out)
 		return

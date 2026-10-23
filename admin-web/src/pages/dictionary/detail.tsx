@@ -1,11 +1,13 @@
 import { formatNumber } from "../../utils/number";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lastPathSegment } from "../../utils/path";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useBlocker } from "@tanstack/react-router";
 import { ExternalLink, Maximize2, Minimize2, RefreshCw, Search, X } from "lucide-react";
 import { APIError, useAPI } from "../../api/client";
 import { columnLabels, dictionaryChangeSchema, dictionaryContentSchema } from "../../api/dictionary";
 import { keys } from "../../api/keys";
+import { useDebouncedEffect } from "../../hooks/use-debounced-effect";
 import { noPermissionHint, usePermissions } from "../../shell/permissions";
 import { Button, buttonVariants } from "../../ui/button";
 import { Banner, Card, CardHeader } from "../../ui/card";
@@ -34,7 +36,13 @@ export function FileDetail({ path, initialQuery = "", onDirty, focused, onToggle
   const sheet = useRef<DictionarySheetHandle>(null);
   const [saveError, setSaveError] = useState("");
   const [uncertain, setUncertain] = useState(false);
-  useEffect(() => { if (editing || search.trim() === query) return; const timer = window.setTimeout(() => { setQuery(search.trim()); setPage(1); }, 350); return () => window.clearTimeout(timer); }, [search, editing, query]);
+  const applySearch = useCallback(() => {
+    const next = search.trim();
+    if (next === query) return;
+    setQuery(next);
+    setPage(1);
+  }, [search, query]);
+  useDebouncedEffect(applySearch, 350, !editing && search.trim() !== query);
   const dirty = drafts.length > 0 || editing;
   useEffect(() => { onDirty(dirty); }, [dirty, onDirty]);
   const blocker = useBlocker({ shouldBlockFn: ({ current, next }) => dirty && current.pathname !== next.pathname, enableBeforeUnload: dirty, withResolver: true });
@@ -77,7 +85,7 @@ export function FileDetail({ path, initialQuery = "", onDirty, focused, onToggle
   const discard = () => { sheet.current?.discard(); setHistory(emptyHistory); setSHA(""); setUncertain(false); setSaveError(""); mutation.reset(); };
   const pullURL = mutation.data?.url ?? (mutation.error instanceof APIError && typeof mutation.error.details.pull_url === "string" ? mutation.error.details.pull_url : undefined);
   return <Card>
-    <CardHeader className="sticky top-0 z-30 -mx-2 bg-panel px-2 py-2" title={path.split("/").pop()} sub={<span className="break-all font-mono">{path}</span>} actions={<>
+    <CardHeader className="sticky top-0 z-30 -mx-2 bg-panel px-2 py-2" title={lastPathSegment(path)} sub={<span className="break-all font-mono">{path}</span>} actions={<>
       <Button size="sm" variant="outline" aria-pressed={focused} onClick={onToggleFocus}>{focused ? <Minimize2 size={14} aria-hidden="true" /> : <Maximize2 size={14} aria-hidden="true" />}{focused ? "退出专注" : "专注编辑"}</Button>
       <Button size="sm" variant="outline" disabled={mutation.isPending || content.isFetching || editing} onClick={() => void content.refetch()}><RefreshCw size={14} aria-hidden="true" />刷新</Button>
       {data?.url && <a href={data.url} target="_blank" rel="noreferrer" className={buttonVariants({ size: "sm", variant: "outline" })}><ExternalLink size={14} aria-hidden="true" />源文件</a>}

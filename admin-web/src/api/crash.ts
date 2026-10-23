@@ -1,7 +1,13 @@
 import { z } from "zod";
+import { actionUndoTokenSchema } from "./action-undo.ts";
 
 export const crashStatusSchema = z.enum(["open", "known", "fixed"]);
 export type CrashStatus = z.infer<typeof crashStatusSchema>;
+
+export const crashStatusUndoSchema = z.object({
+  action: z.literal("crash_group_status"), id: z.string(),
+  value: z.object({ status: crashStatusSchema, token: actionUndoTokenSchema }),
+});
 
 // GET /api/crash-groups row. devices_7d is null while clients do not report install ids.
 export const crashGroupSchema = z.object({
@@ -57,18 +63,15 @@ export const crashIssueTargetSchema = z.object({
 export type CrashIssueTarget = z.infer<typeof crashIssueTargetSchema>;
 
 // POST /api/crash-groups/{signature}/issue.
-export const crashIssueCreatedSchema = z.object({ ok: z.literal(true), status: z.literal("known"), issue_url: z.string(), number: z.number(), repo: z.string() });
+export const crashIssueCreatedSchema = z.object({ ok: z.literal(true), status: crashStatusSchema, issue_url: z.string(), number: z.number(), repo: z.string() });
 
 export const crashStatusLabel: Record<CrashStatus, string> = { open: "未处理", known: "已知问题", fixed: "已修复" };
 export const crashStatusTone = { open: "bad", known: "warn", fixed: "ok" } as const satisfies Record<CrashStatus, "bad" | "warn" | "ok">;
 
 // Telemetry reports lowercase platform ids; the console shows the product names.
-const platformNames: Record<string, string> = { windows: "Windows", macos: "macOS", linux: "Linux", android: "Android", ios: "iOS", harmonyos: "HarmonyOS", harmony: "HarmonyOS", ohos: "HarmonyOS" };
 const platformOrder = ["windows", "macos", "linux", "android", "ios", "harmonyos", "harmony", "ohos"];
 
-export function platformName(platform: string): string {
-  return platformNames[platform.toLowerCase()] ?? platform;
-}
+export { platformName } from "../utils/platform.ts";
 
 export function comparePlatforms(a: string, b: string): number {
   const rank = (p: string) => {

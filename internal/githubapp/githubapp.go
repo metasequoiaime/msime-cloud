@@ -5,8 +5,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rsa"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +18,7 @@ import (
 
 	jose "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
+	"github.com/metasequoiaime/MSIME-Backend/internal/digest"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -32,8 +31,9 @@ const ReadTTL = 60 * time.Second
 // MaxResponseBytes bounds every response body. Files come back base64-encoded inside JSON; 8 MiB leaves room for a file several times the size of the largest dictionary source file.
 const MaxResponseBytes = 8 << 20
 
-// maxCachedReads bounds the read cache; past it, expired entries are dropped first and the whole cache is cleared if that is not enough.
+// 读取缓存同时限制条目数和正文缓冲总量；先清理过期条目，仍不足时清空缓存。
 const maxCachedReads = 1024
+const maxCachedReadBodyBytes = 64 << 20
 
 var (
 	// ErrUnavailable means GitHub could not be reached or answered with a server error or an unreadable body; trying again later may succeed.
@@ -64,6 +64,8 @@ type Cache struct {
 	mu     sync.Mutex
 	tokens map[string]cachedToken
 	reads  map[string]cachedRead
+	// 按切片容量计入正文实际保留的缓冲，替换、淘汰和失效时同步扣除。
+	readBodyBytes int
 	// mints shares one in-flight token request per repository and permission set, so concurrent callers that all miss the cache (for example several word submissions arriving together) cause a single mint.
 	mints singleflight.Group
 	// 同一路径的并发读取共享一次请求；缓存失效递增代次，隔离失效前后的请求。
@@ -293,7 +295,7 @@ func (c Client) doFormat(ctx context.Context, token, method, path string, body a
 		return Response{}, requestError{cause: err}
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	raw, err := readResponseBody(resp.Body, limit, resp.ContentLength)
 	if err != nil {
 		return Response{Status: resp.StatusCode, Header: resp.Header}, requestError{cause: err}
 	}
@@ -301,6 +303,29 @@ func (c Client) doFormat(ctx context.Context, token, method, path string, body a
 		return Response{Status: resp.StatusCode, Header: resp.Header}, errors.New("GitHub response too large")
 	}
 	return Response{resp.StatusCode, raw, resp.Header}, nil
+}
+
+// readResponseBody 为合法的声明长度直接分配正文，未知长度沿用分块读取。
+// 实际读取仍受 limit+1 限制，少报长度时继续检查尾部，不把声明长度当成成功依据。
+func readResponseBody(reader io.Reader, limit, length int64) ([]byte, error) {
+	reader = io.LimitReader(reader, limit+1)
+	if length <= 0 || length > limit {
+		return io.ReadAll(reader)
+	}
+	body := make([]byte, int(length))
+	for read := 0; read < len(body); {
+		n, err := reader.Read(body[read:])
+		read += n
+		if err != nil {
+			if err == io.EOF {
+				err = nil
+			}
+			return body[:read], err
+		}
+	}
+	// 不用 ReadFull，避免丢弃与最后一段正文同时返回的非 EOF 错误。
+	tail, err := io.ReadAll(reader)
+	return append(body, tail...), err
 }
 
 // readRequestTimeout 限制共享读取的时间，每个调用者仍可以独立取消等待。
@@ -341,8 +366,7 @@ func (c Client) Get(ctx context.Context, token, path string) (Response, error) {
 }
 
 func tokenDigest(token string) string {
-	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:])
+	return digest.SHA256([]byte(token))
 }
 
 func (c Client) getRead(ctx context.Context, token, path, key string, generation uint64) (Response, error) {
@@ -383,18 +407,26 @@ func (c Client) store(key string, entry cachedRead, generation uint64) {
 	if c.Cache.reads == nil {
 		c.Cache.reads = map[string]cachedRead{}
 	}
-	if _, exists := c.Cache.reads[key]; !exists && len(c.Cache.reads) >= maxCachedReads {
+	if previous, exists := c.Cache.reads[key]; exists {
+		c.Cache.readBodyBytes -= cap(previous.response.Body)
+		delete(c.Cache.reads, key)
+	}
+	size := cap(entry.response.Body)
+	if len(c.Cache.reads) >= maxCachedReads || c.Cache.readBodyBytes+size > maxCachedReadBodyBytes {
 		now := c.now()
 		for k, v := range c.Cache.reads {
 			if now.Sub(v.fetched) >= ReadTTL {
+				c.Cache.readBodyBytes -= cap(v.response.Body)
 				delete(c.Cache.reads, k)
 			}
 		}
-		if len(c.Cache.reads) >= maxCachedReads {
+		if len(c.Cache.reads) >= maxCachedReads || c.Cache.readBodyBytes+size > maxCachedReadBodyBytes {
 			clear(c.Cache.reads)
+			c.Cache.readBodyBytes = 0
 		}
 	}
 	c.Cache.reads[key] = entry
+	c.Cache.readBodyBytes += size
 }
 
 // Invalidate 删除路径前缀匹配的缓存，并隔离在途读取；空前缀删除全部缓存。
@@ -408,6 +440,7 @@ func (c Client) Invalidate(prefix string) {
 	c.Cache.readGeneration++
 	for k := range c.Cache.reads {
 		if strings.HasPrefix(k, full) {
+			c.Cache.readBodyBytes -= cap(c.Cache.reads[k].response.Body)
 			delete(c.Cache.reads, k)
 		}
 	}

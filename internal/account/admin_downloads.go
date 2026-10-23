@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -78,6 +79,22 @@ func (a *Service) adminDownloadsSummary(w http.ResponseWriter, r *http.Request, 
 	write(w, 200, summary)
 }
 
+// downloadsTelemetryQuery 在初始化时构建平台归并和聚合语句，日期窗口、渠道和行数上限按请求绑定。
+var downloadsTelemetryQuery = `WITH grouped AS (
+ SELECT ` + canonicalPlatformSQL("platform") + ` AS p,version,artifact,channel,
+   count(*) FILTER (WHERE created_at>=$1) AS today,
+   count(*) AS week,
+   count(*) FILTER (WHERE channel=$4) AS mirror,
+   bool_or(channel IS NOT NULL) AS channel_reported
+ FROM admin_events WHERE kind='download' AND created_at>=$2 AND created_at<$3
+ GROUP BY p,version,artifact,channel
+)
+SELECT p,version,artifact,channel,today,week,
+ sum(today) OVER ()::bigint,sum(week) OVER ()::bigint,sum(mirror) OVER ()::bigint,
+ bool_or(channel_reported) OVER ()
+ FROM grouped
+	 ORDER BY week DESC,p,version,artifact NULLS LAST,channel NULLS LAST LIMIT $5`
+
 // downloadsSummary groups the download telemetry of the UTC week ending on now's day and adds the GitHub Release channel from the asset snapshots.
 func (a *Service) downloadsSummary(ctx context.Context, now time.Time) (downloadsSummary, error) {
 	now = now.UTC()
@@ -96,20 +113,7 @@ func (a *Service) downloadsSummary(ctx context.Context, now time.Time) (download
 	var telemetryChannelReported bool
 	var github []downloadsRow
 	batch := &pgx.Batch{}
-	batch.Queue(`WITH grouped AS (
- SELECT `+canonicalPlatformSQL("platform")+` AS p,version,artifact,channel,
-   count(*) FILTER (WHERE created_at>=$1) AS today,
-   count(*) AS week,
-   count(*) FILTER (WHERE channel=$4) AS mirror,
-   bool_or(channel IS NOT NULL) AS channel_reported
- FROM admin_events WHERE kind='download' AND created_at>=$2 AND created_at<$3
- GROUP BY p,version,artifact,channel
-)
-SELECT p,version,artifact,channel,today,week,
- sum(today) OVER ()::bigint,sum(week) OVER ()::bigint,sum(mirror) OVER ()::bigint,
- bool_or(channel_reported) OVER ()
- FROM grouped
-	 ORDER BY week DESC,p,version,artifact NULLS LAST,channel NULLS LAST LIMIT $5`, today, weekStart, today.AddDate(0, 0, 1), downloadsMirrorChannel, downloadsRowLimit+1).Query(func(rows pgx.Rows) error {
+	batch.Queue(downloadsTelemetryQuery, today, weekStart, today.AddDate(0, 0, 1), downloadsMirrorChannel, downloadsRowLimit+1).Query(func(rows pgx.Rows) error {
 		defer rows.Close()
 		for rows.Next() {
 			row := downloadsRow{Source: downloadsSourceTelemetry}
@@ -206,16 +210,20 @@ var releaseTag = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9]*)-(v?[0-9][0-9A-Za-z.
 // releaseTagPlatforms are the tag prefixes that name a platform; any other prefix (a product name such as msime-v1.2.3) is not a platform, so such tags fall back to the installer extension.
 var releaseTagPlatforms = map[string]string{"windows": "windows", "win": "windows", "macos": "macos", "mac": "macos", "osx": "macos", "linux": "linux", "android": "android", "ios": "ios", "harmony": "harmony", "harmonyos": "harmony", "ohos": "harmony"}
 
+var releaseAssetExtensions = map[string]bool{".exe": true, ".msi": true, ".msix": true, ".appx": true, ".dmg": true, ".pkg": true, ".deb": true, ".rpm": true, ".appimage": true, ".flatpak": true, ".snap": true, ".apk": true, ".aab": true, ".ipa": true, ".hap": true, ".app": true, ".sha256": true, ".sha512": true, ".sha256sum": true, ".sig": true, ".asc": true, ".minisig": true, ".txt": true, ".yml": true, ".yaml": true, ".json": true, ".blockmap": true, ".zsync": true}
+var releaseAssetExtensionNames = []string{".exe", ".msi", ".msix", ".appx", ".dmg", ".pkg", ".deb", ".rpm", ".appimage", ".flatpak", ".snap", ".apk", ".aab", ".ipa", ".hap", ".app", ".sha256", ".sha512", ".sha256sum", ".sig", ".asc", ".minisig", ".txt", ".yml", ".yaml", ".json", ".blockmap", ".zsync"}
+
 // releaseTagPlatform 优先按平台标签识别平台和版本，否则保留完整标签作为版本，并按安装包的最后一个扩展名识别平台；未知平台返回空字符串。
 func releaseTagPlatform(tag, asset string) (string, string) {
-	if m := releaseTag.FindStringSubmatch(tag); m != nil {
-		if platform, ok := releaseTagPlatforms[strings.ToLower(m[1])]; ok {
-			return platform, m[2]
+	if releaseTag.MatchString(tag) {
+		// 正则保证平台前缀不含横线，直接切原标签，省去捕获结果切片。
+		prefix, version, _ := strings.Cut(tag, "-")
+		if platform, ok := releaseTagPlatformPrefix(prefix); ok {
+			return platform, version
 		}
 	}
-	name := strings.ToLower(asset)
-	if dot := strings.LastIndexByte(name, '.'); dot >= 0 {
-		switch name[dot:] {
+	if extension := releaseAssetExtension(asset); extension != "" {
+		switch extension {
 		case ".exe", ".msi", ".msix", ".appx":
 			return "windows", tag
 		case ".dmg", ".pkg":
@@ -233,13 +241,56 @@ func releaseTagPlatform(tag, asset string) (string, string) {
 	return "", tag
 }
 
-// releaseMetadataAsset reports checksum, signature and updater manifest files, whose downloads are update checks or verification rather than installs.
-func releaseMetadataAsset(asset string) bool {
-	name := strings.ToLower(asset)
-	for _, suffix := range []string{".sha256", ".sha512", ".sha256sum", ".sig", ".asc", ".minisig", ".txt", ".yml", ".yaml", ".json", ".blockmap", ".zsync"} {
-		if strings.HasSuffix(name, suffix) {
-			return true
+func releaseTagPlatformPrefix(prefix string) (string, bool) {
+	if platform, ok := releaseTagPlatforms[prefix]; ok {
+		return platform, true
+	}
+	for i := range prefix {
+		if prefix[i] >= 'A' && prefix[i] <= 'Z' {
+			for known, platform := range releaseTagPlatforms {
+				if len(prefix) == len(known) && strings.EqualFold(prefix, known) {
+					return platform, true
+				}
+			}
+			break
 		}
+	}
+	return "", false
+}
+
+// releaseAssetExtension 只转换最后一个扩展名，避免为无关的文件名前缀分配小写副本。
+func releaseAssetExtension(asset string) string {
+	if dot := strings.LastIndexByte(asset, '.'); dot >= 0 {
+		extension := asset[dot:]
+		if releaseAssetExtensions[extension] {
+			return extension
+		}
+		if len(extension) > 32 {
+			return strings.ToLower(extension)
+		}
+		for i := range extension {
+			if extension[i] >= utf8.RuneSelf {
+				return strings.ToLower(extension)
+			}
+			if extension[i] >= 'A' && extension[i] <= 'Z' {
+				for _, known := range releaseAssetExtensionNames {
+					if len(extension) == len(known) && strings.EqualFold(extension, known) {
+						return known
+					}
+				}
+				return strings.ToLower(extension)
+			}
+		}
+		return extension
+	}
+	return ""
+}
+
+// releaseMetadataAsset 识别校验和、签名和更新清单；这些下载属于更新检查或校验，不计作安装。
+func releaseMetadataAsset(asset string) bool {
+	switch releaseAssetExtension(asset) {
+	case ".sha256", ".sha512", ".sha256sum", ".sig", ".asc", ".minisig", ".txt", ".yml", ".yaml", ".json", ".blockmap", ".zsync":
+		return true
 	}
 	return false
 }

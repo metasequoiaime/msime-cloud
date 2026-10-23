@@ -160,9 +160,12 @@ func TestQQListLabelsRepeatedVariantsKeepOrder(t *testing.T) {
 }
 
 func TestQQListLabelsAvoidsAllocatingForUnmatchedText(t *testing.T) {
+	long := strings.Repeat("水", 65536)
 	for _, tc := range []struct{ name, text string }{
-		{"长列表行", "- " + strings.Repeat("水", 65536)},
+		{"长列表行", "- " + long},
 		{"很多普通行", strings.Repeat("普通正文\n", 8192)},
+		{"连续长列表行", strings.Repeat("- "+long+"\n", 4)},
+		{"连续长普通行", strings.Repeat(long+"\n", 4)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var got []string
@@ -191,6 +194,8 @@ func BenchmarkQQListLabels(b *testing.B) {
 		{"normalized_duplicates", strings.Repeat("- 换肤：说明\n- `换肤`：说明\n- [换肤](x):说明\n- _换肤_：说明\n", 8192), 1},
 		{"alternating_labels", strings.Repeat("- 换肤：说明\n- 隐私：说明\n", 16384), 2},
 		{"alternating_long_descriptions", strings.Repeat("- 换肤："+long+"甲\n- 换肤："+long+"乙\n", 8), 1},
+		{"consecutive_long_descriptions", strings.Repeat("- 换肤："+long+"\n", 4) + "- 隐私：尾部", 2},
+		{"consecutive_long_no_colon", strings.Repeat("- "+long+"\n", 4), 0},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()

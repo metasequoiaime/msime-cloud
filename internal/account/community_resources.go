@@ -10,6 +10,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
 type SharedWord struct {
@@ -49,7 +51,7 @@ var resourceKinds = map[string]bool{"dictionary": true, "reply": true, "phrase":
 
 // validResourcePhrase 校验短语包里的一条：正文去掉首尾空白后不能为空，可以换行，不能含其他控制字符；分组不能含控制字符。
 func validResourcePhrase(p SharedPhrase) bool {
-	if !utf8.ValidString(p.Text) || strings.TrimSpace(p.Text) == "" || utf16Length(p.Text) > maximumResourcePhraseText {
+	if !utf8.ValidString(p.Text) || strings.TrimSpace(p.Text) == "" || textutil.UTF16Length(p.Text) > maximumResourcePhraseText {
 		return false
 	}
 	for _, c := range p.Text {
@@ -57,7 +59,7 @@ func validResourcePhrase(p SharedPhrase) bool {
 			return false
 		}
 	}
-	return utf8.ValidString(p.Group) && !strings.ContainsFunc(p.Group, unicode.IsControl) && utf16Length(p.Group) <= maximumResourcePhraseGroup
+	return utf8.ValidString(p.Group) && !strings.ContainsFunc(p.Group, unicode.IsControl) && textutil.UTF16Length(p.Group) <= maximumResourcePhraseGroup
 }
 
 type CommunityResource struct {
@@ -80,8 +82,19 @@ type CommunityResource struct {
 }
 
 func resourceText(s string, min, max int, multiline bool) bool {
-	if !utf8.ValidString(s) || utf8.RuneCountInString(strings.TrimSpace(s)) < min || utf8.RuneCountInString(s) > max {
+	// 每个合法标量最多占四字节；用除法判断明显超长，避免最大上限乘四时溢出。
+	if max < 0 || len(s) > 0 && (len(s)-1)/utf8.UTFMax >= max {
 		return false
+	}
+	// 字节数已在上限内时，字符数也不会超限，无需再计数。
+	if !utf8.ValidString(s) || len(s) > max && utf8.RuneCountInString(s) > max {
+		return false
+	}
+	if min > 0 {
+		trimmed := strings.TrimSpace(s)
+		if trimmed == "" || min > 1 && utf8.RuneCountInString(trimmed) < min {
+			return false
+		}
 	}
 	for _, c := range s {
 		if unicode.IsControl(c) && !(multiline && (c == '\n' || c == '\t')) {
@@ -177,7 +190,7 @@ func (a *Service) resourceList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_resource_query")
 		return
 	}
-	fields, ok := communityFields(r, "moderation")
+	fields, ok := communityFields(query, "moderation")
 	if !ok {
 		writeError(w, 400, "invalid_fields")
 		return
@@ -187,11 +200,15 @@ func (a *Service) resourceList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 401, "login_required")
 		return
 	}
+	scopeCondition := communityMineCondition(scope, "s", "$4")
+	if scope == "saved" {
+		scopeCondition += " AND EXISTS(SELECT 1 FROM community_resource_saves WHERE resource_id=s.id AND user_id=$1)"
+	}
 	// 先选本页资源，再计算逐条收藏和评分，避免为 OFFSET 跳过的条目重复查询互动表。
 	rows, err := a.store.pool.Query(r.Context(), `WITH resource_page AS MATERIALIZED (
  SELECT s.id FROM community_resources s JOIN auth_users u ON u.id=s.owner_id
  WHERE s.kind=$2 AND strpos(lower(s.name),lower($3))>0 AND (s.moderation<>'removed' OR s.owner_id=$1)
- AND ($4='' OR ($4='mine' AND s.owner_id=$1) OR ($4='saved' AND EXISTS(SELECT 1 FROM community_resource_saves WHERE resource_id=s.id AND user_id=$1)))
+ AND (`+scopeCondition+`)
  ORDER BY s.created_at DESC,s.id LIMIT 21 OFFSET $5
 ) `+resourcePageSelect+`ORDER BY s.created_at DESC,s.id`, viewer, kind, q, scope, offset)
 	if err != nil {
@@ -213,14 +230,21 @@ func (a *Service) resourceList(w http.ResponseWriter, r *http.Request) {
 		a.error(w, err)
 		return
 	}
-	more := len(items) > 20
-	if more {
-		items = items[:20]
+	if scope != "" && len(items) == 0 {
+		exists, err := a.store.userExists(r.Context(), viewer)
+		if err != nil {
+			a.error(w, err)
+			return
+		}
+		if !exists {
+			a.error(w, errMissingUser)
+			return
+		}
 	}
-	write(w, 200, map[string]any{"items": items, "has_more": more})
+	writeCommunityPage(w, "items", items)
 }
 func (a *Service) resourceDetail(w http.ResponseWriter, r *http.Request) {
-	fields, ok := communityFields(r, "moderation")
+	fields, ok := communityFields(r.URL.Query(), "moderation")
 	if !ok {
 		writeError(w, 400, "invalid_fields")
 		return
@@ -287,7 +311,7 @@ func (a *Service) resourcePublish(w http.ResponseWriter, r *http.Request) {
 		a.error(w, err)
 		return
 	}
-	flag, ok := a.screenUpload(w, r, input.Name, input.Description, resourceScreenText(content))
+	flag, ok := a.screenUpload(w, r, resourceScreenTextWithPrefix(content, []string{input.Name, input.Description}))
 	if !ok {
 		return
 	}
@@ -396,7 +420,7 @@ func (a *Service) resourceSave(w http.ResponseWriter, r *http.Request) {
 	if input.Saved {
 		var available bool
 		err = tx.QueryRow(r.Context(), `WITH eligible AS MATERIALIZED (
- SELECT id FROM community_resources WHERE id=$1 AND (moderation<>'removed' OR owner_id=$2)
+ SELECT id FROM community_resources WHERE id=$1 AND (moderation<>'removed' OR owner_id=$2) FOR SHARE
 ), inserted AS (
  INSERT INTO community_resource_saves(resource_id,user_id)
  SELECT id,$2 FROM eligible
@@ -425,13 +449,13 @@ SELECT EXISTS(SELECT 1 FROM eligible)`, r.PathValue("id"), p.UserID).Scan(&avail
 	write(w, 200, map[string]bool{"saved": input.Saved})
 }
 func (a *Service) resourceRate(w http.ResponseWriter, r *http.Request) {
-	a.rateCommunityItem(w, r, `WITH eligible AS MATERIALIZED (
- SELECT id FROM community_resources WHERE id=$1 AND owner_id<>$2 AND moderation<>'removed'
+	a.rateCommunityItem(w, r, `WITH visible AS MATERIALIZED (
+ SELECT id,owner_id FROM community_resources WHERE id=$1 AND moderation<>'removed' FOR SHARE
 ), written AS (
  INSERT INTO community_resource_ratings(resource_id,user_id,stars)
- SELECT id,$2,$3 FROM eligible
+ SELECT id,$2,$3 FROM visible WHERE owner_id<>$2
  ON CONFLICT(resource_id,user_id) DO UPDATE SET stars=excluded.stars
  RETURNING resource_id
 )
-SELECT EXISTS(SELECT 1 FROM written),EXISTS(SELECT 1 FROM community_resources WHERE id=$1 AND owner_id=$2 AND moderation<>'removed')`, "resource_not_found", "save_before_rating_or_own_resource")
+SELECT EXISTS(SELECT 1 FROM written),EXISTS(SELECT 1 FROM visible WHERE owner_id=$2)`, "resource_not_found", "save_before_rating_or_own_resource")
 }

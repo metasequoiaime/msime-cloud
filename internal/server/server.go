@@ -11,6 +11,7 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 	"github.com/metasequoiaime/MSIME-Backend/internal/skins"
 	"io"
@@ -86,6 +87,10 @@ type Server struct {
 	mu          sync.Mutex
 	buckets     map[string]bucket
 	handler     http.Handler
+	// inputTimezones 复用日期时间输入的时区元数据，容量按副本独立计算。
+	inputTimezones inputTimezoneCache
+	// bucketOldest 是桶更新时间的保守下界，零值表示尚未扫描；由 mu 保护。
+	bucketOldest time.Time
 	// loki 是服务日志页读取 Loki 用的客户端；logStreams 限制同时打开的日志流，logStreamsDone 在优雅关闭开始时关闭以结束它们；logPoll、logHeartbeat 和 logMaxDuration 是日志流的轮询间隔、心跳间隔和单个连接的最长时间，测试会调小。
 	loki           *http.Client
 	logStreams     logStreamLimiter
@@ -122,8 +127,8 @@ func New(c Config) (*Server, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
-	s := &Server{config: c, slots: make(chan struct{}, c.MaxConcurrent), buckets: map[string]bucket{}, client: &http.Client{Timeout: time.Duration(c.TimeoutSeconds) * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, skinHeartbeat: skinJobHeartbeat,
-		loki: &http.Client{Timeout: lokiTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, logStreamsDone: make(chan struct{}), logPoll: logStreamPoll, logHeartbeat: logStreamHeartbeat, logMaxDuration: logStreamMaxDuration}
+	s := &Server{config: c, slots: make(chan struct{}, c.MaxConcurrent), buckets: map[string]bucket{}, client: httpclient.New(time.Duration(c.TimeoutSeconds) * time.Second), skinHeartbeat: skinJobHeartbeat,
+		loki: httpclient.New(lokiTimeout), logStreamsDone: make(chan struct{}), logPoll: logStreamPoll, logHeartbeat: logStreamHeartbeat, logMaxDuration: logStreamMaxDuration}
 	s.lifetime, s.stop = context.WithCancel(context.Background())
 	// 30 秒:启动时可能要顺带补迁移,空库要建二十多张表。独立的 -migrate-users 入口本来就按这个额度
 	// 算,两边保持一致。
@@ -385,10 +390,16 @@ func (s *Server) allow(c Client, now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.buckets) > 10000 {
-		for id, b := range s.buckets {
-			if now.Sub(b.updated) > 10*time.Minute {
-				delete(s.buckets, id)
+		if s.bucketOldest.IsZero() || now.Sub(s.bucketOldest) > 10*time.Minute {
+			oldest := now
+			for id, b := range s.buckets {
+				if now.Sub(b.updated) > 10*time.Minute {
+					delete(s.buckets, id)
+				} else if b.updated.Before(oldest) {
+					oldest = b.updated
+				}
 			}
+			s.bucketOldest = oldest
 		}
 		if _, exists := s.buckets[c.ID]; !exists && len(s.buckets) > 10000 {
 			return false
@@ -405,6 +416,10 @@ func (s *Server) allow(c Client, now time.Time) bool {
 		b.tokens--
 	}
 	s.buckets[c.ID] = b
+	// 时间回退时也降低下界，确保随后仍能及时回收新写入的旧时间戳。
+	if !s.bucketOldest.IsZero() && now.Before(s.bucketOldest) {
+		s.bucketOldest = now
+	}
 	return allowed
 }
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
@@ -419,7 +434,7 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 	respond(w, 200, map[string]any{"api_version": contract.APIVersion, "cloud": s.config.Cloud.URL != "", "chat": s.config.Chat.URL != "", "translation": s.translationEnabled(), "transcription": s.config.Transcription.URL != "", "streaming_transcription": s.config.Streaming.URL != ""})
 }
 func (s *Server) upstream(r *http.Request, e Endpoint, method, contentType string, body io.Reader) ([]byte, error) {
-	req, err := http.NewRequestWithContext(r.Context(), method, e.URL, body)
+	req, err := e.newRequest(r.Context(), method, body)
 	if err != nil {
 		return nil, err
 	}
@@ -427,10 +442,20 @@ func (s *Server) upstream(r *http.Request, e Endpoint, method, contentType strin
 		req.Header.Set("Content-Type", contentType)
 	}
 	req.Header.Set("Accept", "application/json")
-	if e.token != "" {
-		req.Header.Set("Authorization", "Bearer "+e.token)
-	}
 	return s.doUpstream(req)
+}
+
+// upstreamJSON 直接从上游响应流解码 JSON；只在调用方需要原始字节时才使用 upstream。
+func (s *Server) upstreamJSON(r *http.Request, e Endpoint, method, contentType string, body io.Reader, dst any) (bool, error) {
+	req, err := e.newRequest(r.Context(), method, body)
+	if err != nil {
+		return false, err
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	req.Header.Set("Accept", "application/json")
+	return s.doUpstreamJSON(req, dst)
 }
 
 // doUpstream sends req and returns its validated JSON body. For a request whose context was tagged by metered, the exchange (latency, and whether it failed with a transport error, non-2xx status or invalid body) is captured for the console's service metrics; the tagging handler records it once it has validated the body.
@@ -439,6 +464,81 @@ func (s *Server) doUpstream(req *http.Request) ([]byte, error) {
 	b, err := s.sendUpstream(req)
 	captureMeter(req.Context(), started, err)
 	return b, err
+}
+
+var upstreamResponseBufferPool sync.Pool
+
+const upstreamPooledResponseInitialBytes = 32 << 10
+
+// doUpstreamJSON 校验响应大小和 JSON 后解码，复用批量翻译的响应缓冲。
+func (s *Server) doUpstreamJSON(req *http.Request, dst any) (bool, error) {
+	started := time.Now()
+	resp, err := s.client.Do(req)
+	if err != nil {
+		err = upstreamTransportError{cause: err}
+		captureMeter(req.Context(), started, err)
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		err = errors.New("upstream rejected request")
+		captureMeter(req.Context(), started, err)
+		return false, err
+	}
+
+	buffer := upstreamResponseBufferPool.Get()
+	var body []byte
+	if buffer != nil {
+		body = buffer.([]byte)
+	}
+	if cap(body) < upstreamPooledResponseInitialBytes {
+		body = make([]byte, 0, upstreamPooledResponseInitialBytes)
+	} else {
+		body = body[:0]
+	}
+	defer func() {
+		if cap(body) <= contract.UpstreamResponseBytes {
+			upstreamResponseBufferPool.Put(body[:0])
+		}
+	}()
+	for {
+		if len(body) == cap(body) {
+			if cap(body) >= contract.UpstreamResponseBytes+1 {
+				err = errors.New("invalid upstream response")
+				captureMeter(req.Context(), started, err)
+				return false, err
+			}
+			next := cap(body) * 2
+			if next > contract.UpstreamResponseBytes+1 {
+				next = contract.UpstreamResponseBytes + 1
+			}
+			grown := make([]byte, len(body), next)
+			copy(grown, body)
+			body = grown
+		}
+		n, readErr := resp.Body.Read(body[len(body):cap(body)])
+		body = body[:len(body)+n]
+		if len(body) > contract.UpstreamResponseBytes {
+			err = errors.New("invalid upstream response")
+			captureMeter(req.Context(), started, err)
+			return false, err
+		}
+		if readErr != nil {
+			if readErr != io.EOF {
+				err = upstreamTransportError{cause: readErr}
+				captureMeter(req.Context(), started, err)
+				return false, err
+			}
+			break
+		}
+	}
+	if !json.Valid(body) {
+		err = errors.New("invalid upstream response")
+		captureMeter(req.Context(), started, err)
+		return false, err
+	}
+	captureMeter(req.Context(), started, nil)
+	return json.Unmarshal(body, dst) == nil, nil
 }
 
 // upstreamTransportError 隐藏传输错误文本中的地址、凭据和用户参数，同时保留错误链供超时、取消和指标分类使用。
@@ -456,7 +556,16 @@ func (s *Server) sendUpstream(req *http.Request) ([]byte, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, errors.New("upstream rejected request")
 	}
-	b, err := io.ReadAll(io.LimitReader(resp.Body, contract.UpstreamResponseBytes+1))
+	reader := io.LimitReader(resp.Body, contract.UpstreamResponseBytes+1)
+	var b []byte
+	if resp.ContentLength >= bytes.MinRead && resp.ContentLength <= contract.UpstreamResponseBytes {
+		// 大响应按声明长度预留正文与 EOF 探测空间；小响应保留原缓冲，实际读取仍受上限约束。
+		buffer := bytes.NewBuffer(make([]byte, 0, int(resp.ContentLength)+bytes.MinRead))
+		_, err = buffer.ReadFrom(reader)
+		b = buffer.Bytes()
+	} else {
+		b, err = io.ReadAll(reader)
+	}
 	if err != nil {
 		return nil, upstreamTransportError{cause: err}
 	}

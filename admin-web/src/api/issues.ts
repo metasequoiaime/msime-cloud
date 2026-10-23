@@ -68,13 +68,17 @@ export const issueDetailSchema = z.object({
 export type IssueDetail = z.infer<typeof issueDetailSchema>;
 
 export type IssueAction = "triage" | "untriage" | "mark_dup" | "close" | "reopen" | "comment";
-// keep_assignee, only for untriage, leaves the platform assignee assigned (undoing a triage of an issue that already had that assignee).
-export type IssueRef = { repo: string; n: number; keep_assignee?: boolean };
+// 撤销原样提交服务端版本，并保留操作前已有的平台负责人或重复标签。
+const issueVersionSchema = z.string().regex(/^[0-9a-f]{64}$/);
+const issueRefSchema = z.object({ repo: z.string(), n: z.number().int().positive(), keep_assignee: z.boolean().optional(), keep_duplicate: z.boolean().optional(), version: issueVersionSchema.optional() });
+export type IssueRef = z.infer<typeof issueRefSchema>;
 
 export const issueActionResultSchema = z.object({
   ok: z.literal(true),
   affected: z.number().int().nonnegative(),
   failed: z.array(z.object({ repo: z.string(), n: z.number().int(), code: z.string() })),
+  // 旧服务端缺少版本或撤销参数无效时隐藏按钮，原操作仍按成功处理。
+  undo: z.object({ action: z.enum(["untriage", "reopen"]), items: z.array(issueRefSchema.extend({ version: issueVersionSchema })).min(1) }).nullish().catch(null),
 });
 export type IssueActionResult = z.infer<typeof issueActionResultSchema>;
 

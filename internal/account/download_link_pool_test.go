@@ -17,6 +17,21 @@ type downloadPoolMailer struct {
 	err error
 }
 
+// cancelDownloadMailer 在邮件供应商确认成功后取消请求，重现客户端断开连接的边界。
+type cancelDownloadMailer struct {
+	cancel context.CancelFunc
+	sent   int
+}
+
+func (m *cancelDownloadMailer) Mail(ctx context.Context, _, _, _ string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.sent++
+	m.cancel()
+	return nil
+}
+
 func (m *downloadPoolMailer) Mail(ctx context.Context, target, subject, body string) error {
 	_ = m.captureMailer.Mail(ctx, target, subject, body)
 	return m.err
@@ -93,5 +108,28 @@ func TestDownloadLinkUsesOnePoolConnection(t *testing.T) {
 				t.Fatalf("投递抑制=%v，期望=%v，错误=%v", suppressed, want, err)
 			}
 		})
+	}
+}
+
+func TestDownloadLinkSurvivesCancellationAfterMailAccepted(t *testing.T) {
+	db := testStore(t)
+	mailer := &cancelDownloadMailer{}
+	a := &Service{store: db, config: Config{Email: MailConfig{From: "noreply@example.test"}}, mailer: mailer}
+	mux := http.NewServeMux()
+	Mount(mux, a)
+	user := complete(t, db, Identity{"email", "download-cancel@example.test"})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	mailer.cancel = cancel
+	r := httptest.NewRequestWithContext(ctx, http.MethodPost, "/v1/users/me/download-link", strings.NewReader(`{"platform":"windows"}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Authorization", "Bearer "+user.AccessToken)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	if mailer.sent != 1 || ctx.Err() == nil {
+		t.Fatalf("未复现邮件确认后取消请求：sent=%d err=%v", mailer.sent, ctx.Err())
+	}
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("邮件已确认发送后不应因请求取消失败：状态=%d 响应=%s", w.Code, w.Body.String())
 	}
 }

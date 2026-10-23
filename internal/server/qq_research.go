@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/publictools"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -69,8 +70,8 @@ var (
 	qqResearchUserPath = regexp.MustCompile(`^/users/[A-Za-z0-9-]{1,39}$`)
 	// qqResearchScope 只匹配独立、正向的本组织限定，不能把引号中的文本当作授权范围。
 	qqResearchScope = regexp.MustCompile(`(?i)^(?:repo:` + qqResearchOrg + `/[A-Za-z0-9._-]+|org:` + qqResearchOrg + `)$`)
-	// qqResearchSearchTerm 支持关键词、引号短语和 label:"help wanted" 这类过滤条件；不支持括号或转义。
-	qqResearchSearchTerm = regexp.MustCompile(`(?:-?[A-Za-z][A-Za-z_-]*:)?(?:"[^"\\]*"|[^\s"()\\]+)`)
+	// qqResearchSearchTerm 从当前词项开头匹配关键词、引号短语和 label:"help wanted" 这类过滤条件；不支持括号或转义。
+	qqResearchSearchTerm = regexp.MustCompile(`^(?:-?[A-Za-z][A-Za-z_-]*:)?(?:"[^"\\]*"|[^\s"()\\]+)`)
 )
 
 // qqResearchToolCall 是模型返回的一次工具调用。
@@ -184,15 +185,12 @@ func (s *Server) qqResearchChat(ctx context.Context, messages []qqResearchMessag
 		request["tools"] = append(definitions, publictools.ChatDefinitions()...)
 	}
 	payload, _ := json.Marshal(request)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.URL, bytes.NewReader(payload))
+	req, err := e.newRequest(ctx, http.MethodPost, bytes.NewReader(payload))
 	if err != nil {
 		return qqResearchMessage{}, "", errors.New("invalid chat endpoint")
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	if e.token != "" {
-		req.Header.Set("Authorization", "Bearer "+e.token)
-	}
 	b, err := s.doUpstream(req)
 	if err != nil {
 		return qqResearchMessage{}, "", err
@@ -340,22 +338,25 @@ func qqResearchUserWhitelist(v any) any {
 
 // qqResearchTarget 检查模型给的路径，返回申请令牌用的仓库和规范化后的路径；不允许时 ok 为 false。
 func qqResearchTarget(raw, defaultRepo string) (repo, path string, ok bool) {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || u.Scheme != "" || u.Host != "" || len(raw) > 500 || strings.Contains(u.Path, "..") {
+	if len(raw) > 500 {
 		return "", "", false
 	}
-	switch {
-	case qqResearchRepoPath.MatchString(u.Path):
-		repo = qqResearchOrg + "/" + qqResearchRepoPath.FindStringSubmatch(u.Path)[1]
-	case qqResearchOrgPath.MatchString(u.Path), qqResearchUserPath.MatchString(u.Path):
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme != "" || u.Host != "" || strings.Contains(u.Path, "..") {
+		return "", "", false
+	}
+	if qqResearchRepoPath.MatchString(u.Path) {
+		name, _, _ := strings.Cut(u.Path[len("/repos/"+qqResearchOrg+"/"):], "/")
+		repo = qqResearchOrg + "/" + name
+	} else if qqResearchOrgPath.MatchString(u.Path) || qqResearchUserPath.MatchString(u.Path) {
 		repo = defaultRepo
-	case u.Path == "/search/issues" || u.Path == "/search/commits":
+	} else if u.Path == "/search/issues" || u.Path == "/search/commits" {
 		query, err := url.ParseQuery(u.RawQuery)
 		if err != nil || len(query["q"]) != 1 || !qqResearchScopedSearch(query.Get("q")) {
 			return "", "", false
 		}
 		repo = defaultRepo
-	default:
+	} else {
 		return "", "", false
 	}
 	path = u.Path
@@ -367,30 +368,45 @@ func qqResearchTarget(raw, defaultRepo string) (repo, path string, ok bool) {
 
 // qqResearchScopedSearch 只允许简单的组织内搜索：多次 repo/org 限定会取并集，所以每一个都必须属于本组织。布尔运算和括号可能产生不受限定的分支，遇到时拒绝，由模型拆成多次查询。
 func qqResearchScopedSearch(query string) bool {
+	asciiOnly := true
 	for _, r := range query {
 		if unicode.IsControl(r) || (unicode.IsSpace(r) && r != ' ') {
 			return false
 		}
+		if r >= utf8.RuneSelf {
+			asciiOnly = false
+		}
 	}
-	scoped, end := false, 0
-	for i, loc := range qqResearchSearchTerm.FindAllStringIndex(query, -1) {
-		// 词项必须用空格分开；未匹配的引号、括号或转义符也一并拒绝。
-		if (i > 0 && loc[0] == end) || strings.Trim(query[end:loc[0]], " ") != "" {
+	scoped := false
+	for query != "" {
+		query = strings.TrimLeft(query, " ")
+		if query == "" {
+			break
+		}
+		term := qqResearchSearchTerm.FindString(query)
+		if term == "" {
 			return false
 		}
-		term := strings.ToLower(query[loc[0]:loc[1]])
-		if term == "and" || term == "or" || term == "not" {
+		query = query[len(term):]
+		// 词项必须用空格分开，未匹配的引号、括号或转义符直接拒绝，不收集后续匹配位置。
+		if query != "" && query[0] != ' ' {
 			return false
 		}
-		if strings.Contains(term, "repo:") || strings.Contains(term, "org:") || strings.Contains(term, "user:") {
+		if !asciiOnly {
+			// 非 ASCII 查询沿用先转小写再校验范围的规则，例如 İ 会映射为 i。
+			term = strings.ToLower(term)
+		}
+		if textutil.EqualFoldASCII(term, "and") || textutil.EqualFoldASCII(term, "or") || textutil.EqualFoldASCII(term, "not") {
+			return false
+		}
+		if qqContainsASCIIFold(term, "repo:") || qqContainsASCIIFold(term, "org:") || qqContainsASCIIFold(term, "user:") {
 			if !qqResearchScope.MatchString(term) {
 				return false
 			}
 			scoped = true
 		}
-		end = loc[1]
 	}
-	return scoped && strings.Trim(query[end:], " ") == ""
+	return scoped
 }
 
 // qqResearchPeople 是返回里表示人的字段，只留登录名。
@@ -452,38 +468,81 @@ func (s *Server) qqWebSearch(ctx context.Context, query string) string {
 	payload, _ := json.Marshal(map[string]any{"model": s.qq.config.Model, "max_tokens": 1500,
 		"tools":    []map[string]any{{"type": "web_search_20250305", "name": "web_search", "max_uses": 1}},
 		"messages": []map[string]string{{"role": "user", "content": query}}})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(payload))
+	e := s.config.Chat.Endpoint
+	e.URL = u.String()
+	req, err := e.newRequest(ctx, http.MethodPost, bytes.NewReader(payload))
 	if err != nil {
 		return "联网搜索暂时用不了。"
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("anthropic-version", "2023-06-01")
-	if token := s.config.Chat.token; token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
 	b, err := s.doUpstream(req)
 	if err != nil {
 		slog.Warn("qq bot: web search failed", "reason", err.Error())
 		return "联网搜索失败。"
 	}
 	var result struct {
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
+		Content []qqWebSearchContent `json:"content"`
 	}
 	if json.Unmarshal(b, &result) != nil {
 		return "联网搜索返回的内容看不懂。"
 	}
-	var texts []string
-	for _, c := range result.Content {
-		if c.Type == "text" && strings.TrimSpace(c.Text) != "" {
-			texts = append(texts, strings.TrimSpace(c.Text))
+	if text := qqJoinWebSearchText(result.Content); text != "" {
+		return text
+	}
+	return "没有搜到结果。"
+}
+
+// qqWebSearchContent 是联网搜索服务返回的内容块。
+type qqWebSearchContent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// qqJoinWebSearchText 去掉空白内容并按原顺序合并文本块，避免为中间切片和 Join 结果重复分配。
+func qqJoinWebSearchText(content []qqWebSearchContent) string {
+	count := 0
+	total := 0
+	for _, c := range content {
+		if c.Type != "text" {
+			continue
+		}
+		text := strings.TrimSpace(c.Text)
+		if text == "" {
+			continue
+		}
+		count++
+		total += len(text)
+	}
+	if count == 0 {
+		return ""
+	}
+	if count == 1 {
+		for _, c := range content {
+			if c.Type == "text" {
+				if text := strings.TrimSpace(c.Text); text != "" {
+					return qqTruncate(text, qqResearchResultRunes)
+				}
+			}
 		}
 	}
-	if len(texts) == 0 {
-		return "没有搜到结果。"
+	var out strings.Builder
+	out.Grow(total + count - 1)
+	joined := 0
+	for _, c := range content {
+		if c.Type != "text" {
+			continue
+		}
+		text := strings.TrimSpace(c.Text)
+		if text == "" {
+			continue
+		}
+		if joined > 0 {
+			out.WriteByte('\n')
+		}
+		out.WriteString(text)
+		joined++
 	}
-	return qqTruncate(strings.Join(texts, "\n"), qqResearchResultRunes)
+	return qqTruncate(out.String(), qqResearchResultRunes)
 }

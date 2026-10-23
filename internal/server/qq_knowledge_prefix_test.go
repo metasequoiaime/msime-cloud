@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"math/rand"
 	"strings"
 	"testing"
@@ -226,6 +227,24 @@ func BenchmarkQQKnowledgeTOC(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+func TestQQKnowledgeTOCReusesConsecutiveSnippets(t *testing.T) {
+	sections := make([]qqSection, 32)
+	for i := range sections {
+		sections[i] = qqSection{Doc: "合成文档", Title: "正文", Text: strings.Repeat("普通正文", 1000)}
+	}
+	want := ""
+	for i, section := range sections {
+		want += fmt.Sprintf("%d. [%s] %s：%s\n", i+1, section.Doc, section.Title, qqSnippet(section.Text))
+	}
+	if got := qqKnowledgeTOC(sections, nil); got != want {
+		t.Fatalf("连续相同正文的目录摘要变化：结果=%q，预期=%q", got, want)
+	}
+	allocations := testing.AllocsPerRun(10, func() { _ = qqKnowledgeTOC(sections, nil) })
+	if allocations > 16 {
+		t.Fatalf("连续相同正文的目录摘要分配 %.0f 次，超过 16 次预算", allocations)
 	}
 }
 

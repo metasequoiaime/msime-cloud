@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/binary"
@@ -13,6 +14,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // 管理员提 issue 时附带的图片和视频。GitHub 的 issue 接口不能上传附件，所以服务端从 QQ 下载附件，按文件头核实类型后写进公开的 R2 bucket（auth.avatars 的 bucket，前缀 qq-feedback/，经它的 public_base_url 提供），再把链接写进 issue 正文或补充评论。公开域名是我们自己的，所以对象的 Content-Type 一律取服务端认出的类型，只放行常见的图片和视频格式：HTML、SVG 之类能在浏览器里执行脚本的内容不会被托管。
@@ -32,6 +34,35 @@ var qqMediaHosts = []string{".qq.com", ".qq.com.cn", ".qpic.cn", ".gtimg.cn"}
 type qqAttachment struct {
 	URL         string `json:"url"`
 	ContentType string `json:"content_type"`
+}
+
+// qqContentTypePrefix 按 HTTP 媒体类型的 ASCII 大小写规则检查前缀。
+func qqContentTypePrefix(contentType, prefix string) bool {
+	if len(contentType) < len(prefix) {
+		return false
+	}
+	for i := range prefix {
+		c := contentType[i]
+		if c >= utf8.RuneSelf {
+			return strings.HasPrefix(strings.ToLower(contentType), prefix)
+		}
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c != prefix[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// qqImageContentType 判断附件声明是否为图片，避免为每个附件创建小写副本。
+func qqImageContentType(contentType string) bool {
+	return qqContentTypePrefix(contentType, "image/")
+}
+
+func qqVideoContentType(contentType string) bool {
+	return qqContentTypePrefix(contentType, "video/")
 }
 
 // qqMedia 是一个已经存好的附件。
@@ -61,9 +92,12 @@ func qqMediaURL(raw string, hosts []string) (string, error) {
 }
 
 func qqMediaHostAllowed(host string, hosts []string) bool {
-	host = strings.ToLower(host)
 	for _, suffix := range hosts {
-		if host == strings.TrimPrefix(suffix, ".") || strings.HasSuffix(host, suffix) {
+		bare := strings.TrimPrefix(suffix, ".")
+		if len(host) == len(bare) && strings.EqualFold(host, bare) {
+			return true
+		}
+		if len(host) >= len(suffix) && strings.EqualFold(host[len(host)-len(suffix):], suffix) {
 			return true
 		}
 	}
@@ -127,7 +161,16 @@ func (b *qqBot) downloadMedia(ctx context.Context, raw string, limit int64) ([]b
 	if resp.ContentLength > limit {
 		return nil, errors.New("attachment too large")
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	reader := io.LimitReader(resp.Body, limit+1)
+	var body []byte
+	if resp.ContentLength >= bytes.MinRead {
+		// 大附件按已校验的声明长度预留正文与 EOF 探测空间；小附件沿用原读取缓冲。
+		buffer := bytes.NewBuffer(make([]byte, 0, int(resp.ContentLength)+bytes.MinRead))
+		_, err = buffer.ReadFrom(reader)
+		body = buffer.Bytes()
+	} else {
+		body, err = io.ReadAll(reader)
+	}
 	if err != nil {
 		return nil, errors.New("attachment download failed")
 	}
@@ -140,9 +183,8 @@ func (b *qqBot) downloadMedia(ctx context.Context, raw string, limit int64) ([]b
 // publishQQMedia 把消息里的图片和视频存进公开 bucket，返回存好的附件和没能保存的个数。语音等其他附件不算在内；没有配置 bucket 时图片和视频全部算作没能保存。只记录失败原因，不记录附件地址（里面带着 QQ 的访问签名）。
 func (s *Server) publishQQMedia(ctx context.Context, attachments []qqAttachment) (media []qqMedia, failed int) {
 	for _, a := range attachments {
-		declared := strings.ToLower(a.ContentType)
-		videoDeclared := strings.HasPrefix(declared, "video/")
-		if !videoDeclared && !strings.HasPrefix(declared, "image/") {
+		videoDeclared := qqVideoContentType(a.ContentType)
+		if !videoDeclared && !qqImageContentType(a.ContentType) {
 			continue
 		}
 		if s.media == nil || len(media)+failed >= qqMediaMaxFiles {

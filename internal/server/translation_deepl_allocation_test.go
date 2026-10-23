@@ -8,6 +8,22 @@ import (
 	"testing"
 )
 
+func TestDeepLTranslationBatchEscapeAllocationBudget(t *testing.T) {
+	v := translationRequest{Texts: make([]string, translationBatchLimit), Source: "zh", Target: "en"}
+	for i := range v.Texts {
+		v.Texts[i] = strings.Repeat("中", 650)
+	}
+	allocations := testing.AllocsPerRun(20, func() {
+		batches := deepLTranslationBatches(v)
+		if len(batches) == 0 {
+			t.Fatal("未生成请求")
+		}
+	})
+	if allocations > 45 {
+		t.Fatalf("长正文批量构造分配 %.0f 次，超过 45 次预算", allocations)
+	}
+}
+
 func previousDeepLTranslationBatches(v translationRequest) []deepLTranslationBatch {
 	form := url.Values{"target_lang": {strings.ToUpper(v.Target)}}
 	if !strings.EqualFold(v.Source, "auto") {
@@ -72,7 +88,7 @@ func TestDeepLTranslationBatchBuilderMatchesPrevious(t *testing.T) {
 	}
 	for _, source := range []string{"zh", "AUTO", "en-US"} {
 		for _, size := range []int{1, 9, translationBatchLimit} {
-			for _, text := range []string{"", "word", "词 😀 +%&=\n\x00", strings.Repeat("%", 8192), strings.Repeat("中", 2730)} {
+			for _, text := range []string{"", "word", " ", "word word", "词 😀 +%&=\n\x00", strings.Repeat("%", 8192), strings.Repeat("中", 2730)} {
 				v := translationRequest{Texts: make([]string, size), Source: source, Target: "zh-Hans"}
 				for i := range v.Texts {
 					v.Texts[i] = text

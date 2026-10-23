@@ -179,4 +179,17 @@ func TestVoiceContributions(t *testing.T) {
 	if n != 0 {
 		t.Fatal("contributions survived account deletion")
 	}
+	// 模拟鉴权后才注销账号的迟到上传，不能把凭据失效当成存储故障。
+	if _, err = admin.Exec(ctx, "DELETE FROM "+pgx.Identifier{schema}.Sanitize()+".auth_rates WHERE key LIKE 'voice-contribution:%'"); err != nil {
+		t.Fatal(err)
+	}
+	body, contentType := voiceForm(good, testWAV(), false)
+	r := httptest.NewRequest("POST", voiceContributionsPath, body)
+	r.Header.Set("Content-Type", contentType)
+	r = r.WithContext(context.WithValue(ctx, skinJobOwnerKey{}, "user:"+tokens.User.ID))
+	w = httptest.NewRecorder()
+	s.voiceContribution(w, r)
+	if w.Code != 401 || !strings.Contains(w.Body.String(), `"code":"invalid_credentials"`) {
+		t.Fatalf("账号注销后的迟到上传应返回401 invalid_credentials，实际%d %s", w.Code, w.Body.String())
+	}
 }

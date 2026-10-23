@@ -2,8 +2,7 @@ package account
 
 import (
 	"bytes"
-	"crypto/rand"
-	"encoding/hex"
+	"context"
 	"encoding/json"
 	"errors"
 	"image"
@@ -16,6 +15,10 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
+	"github.com/metasequoiaime/MSIME-Backend/internal/uuid"
 )
 
 // FeedbackPath 是 App 内反馈的提交接口。它不在 /v1/users/me 下，由 IsPath 放行全局 Bearer 检查，处理函数自己校验用户会话（匿名账号也可以提交）。
@@ -86,7 +89,7 @@ func (p *feedbackPayload) validate() string {
 	switch {
 	case !feedbackTypes[p.Type]:
 		return "invalid_feedback_type"
-	case !resourceText(p.Text, 1, maxFeedbackText, true) || utf16Length(p.Text) > maxFeedbackText:
+	case !resourceText(p.Text, 1, maxFeedbackText, true) || textutil.UTF16Length(p.Text) > maxFeedbackText:
 		return "invalid_feedback_text"
 	case !sessionPlatforms[p.Platform]:
 		return "invalid_platform"
@@ -105,8 +108,37 @@ func (p *feedbackPayload) validate() string {
 
 var errInvalidScreenshot = errors.New("invalid_screenshot")
 
-// normalizeScreenshot 在完整解码前校验尺寸和 JPEG 扫描数，再按原格式重新编码 PNG 或 JPEG，存下来的只有像素，不带 EXIF、文本块等元数据。
-func normalizeScreenshot(data []byte) (feedbackScreenshot, error) {
+// normalizeFeedbackScreenshots 在一个图片槽内清理整次提交的截图，避免编码器引用的上一张解码图片在等待下一槽时仍占用内存。
+func normalizeFeedbackScreenshots(ctx context.Context, uploads [][]byte) ([]feedbackScreenshot, error) {
+	screenshots := make([]feedbackScreenshot, 0, len(uploads))
+	if len(uploads) == 0 {
+		return screenshots, nil
+	}
+	var err error
+	if !withCandidateImageSlot(ctx, func() {
+		var buffers candidatePNGBufferPool
+		for _, data := range uploads {
+			if err = ctx.Err(); err != nil {
+				return
+			}
+			var shot feedbackScreenshot
+			shot, err = normalizeScreenshot(data, &buffers)
+			if err != nil {
+				return
+			}
+			screenshots = append(screenshots, shot)
+		}
+	}) {
+		return nil, ctx.Err()
+	}
+	if err != nil {
+		return nil, err
+	}
+	return screenshots, nil
+}
+
+// normalizeScreenshot 在完整解码前校验尺寸和 JPEG 扫描数，再按原格式重新编码 PNG 或 JPEG，去掉元数据；pool 允许同次提交的 PNG 共享压缩工作区，nil 表示独立分配。
+func normalizeScreenshot(data []byte, pool png.EncoderBufferPool) (feedbackScreenshot, error) {
 	config, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil || (format != "png" && format != "jpeg") || config.Width < 1 || config.Height < 1 || config.Width > maxFeedbackScreenshotSide || config.Height > maxFeedbackScreenshotSide || config.Width*config.Height > maxFeedbackScreenshotPixels {
 		return feedbackScreenshot{}, errInvalidScreenshot
@@ -120,7 +152,7 @@ func normalizeScreenshot(data []byte) (feedbackScreenshot, error) {
 	}
 	var out bytes.Buffer
 	if format == "png" {
-		err = (&png.Encoder{CompressionLevel: png.BestCompression}).Encode(&out, source)
+		err = (&png.Encoder{CompressionLevel: png.BestCompression, BufferPool: pool}).Encode(&out, source)
 		return feedbackScreenshot{"image/png", out.Bytes()}, err
 	}
 	err = jpeg.Encode(&out, source, &jpeg.Options{Quality: 90})
@@ -129,14 +161,11 @@ func normalizeScreenshot(data []byte) (feedbackScreenshot, error) {
 
 // newFeedbackID 返回随机的 UUID v4 字符串。
 func newFeedbackID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
+	id, err := uuid.NewV4()
+	if err != nil {
 		panic(err)
 	}
-	b[6] = b[6]&0x0f | 0x40
-	b[8] = b[8]&0x3f | 0x80
-	h := hex.EncodeToString(b)
-	return h[:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:]
+	return id
 }
 
 // readFeedbackForm 读取 multipart 请求：恰好一个 payload 部分和最多 3 个 screenshots 部分，其他部分一律拒绝。失败时已经写好错误响应并返回 false。
@@ -155,17 +184,13 @@ func readFeedbackForm(w http.ResponseWriter, r *http.Request) (feedbackPayload, 
 	}
 	var screenshots [][]byte
 	seenPayload := false
-	tooLarge := func(err error) bool {
-		var limit *http.MaxBytesError
-		return errors.As(err, &limit)
-	}
 	for {
 		part, err := reader.NextPart()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			if tooLarge(err) {
+			if httpjson.IsBodyTooLarge(err) {
 				writeError(w, 413, "feedback_too_large")
 			} else {
 				writeError(w, 400, "invalid_feedback")
@@ -180,7 +205,7 @@ func readFeedbackForm(w http.ResponseWriter, r *http.Request) (feedbackPayload, 
 			}
 			seenPayload = true
 			raw, err := io.ReadAll(io.LimitReader(part, maxFeedbackPayload+1))
-			if err != nil && tooLarge(err) {
+			if err != nil && httpjson.IsBodyTooLarge(err) {
 				writeError(w, 413, "feedback_too_large")
 				return payload, nil, false
 			}
@@ -188,9 +213,7 @@ func readFeedbackForm(w http.ResponseWriter, r *http.Request) (feedbackPayload, 
 				writeError(w, 400, "invalid_json")
 				return payload, nil, false
 			}
-			d := json.NewDecoder(bytes.NewReader(raw))
-			d.DisallowUnknownFields()
-			if d.Decode(&payload) != nil || d.Decode(new(any)) != io.EOF {
+			if httpjson.DecodeValue(bytes.NewReader(raw), &payload) != nil {
 				writeError(w, 400, "invalid_json")
 				return payload, nil, false
 			}
@@ -201,7 +224,7 @@ func readFeedbackForm(w http.ResponseWriter, r *http.Request) (feedbackPayload, 
 			}
 			data, err := io.ReadAll(io.LimitReader(part, maxFeedbackScreenshot+1))
 			if err != nil {
-				if tooLarge(err) {
+				if httpjson.IsBodyTooLarge(err) {
 					writeError(w, 413, "feedback_too_large")
 				} else {
 					writeError(w, 400, "invalid_feedback")
@@ -254,23 +277,18 @@ func (a *Service) feedback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	screenshots := make([]feedbackScreenshot, 0, len(uploads))
-	for _, data := range uploads {
-		var shot feedbackScreenshot
-		var err error
-		if !withCandidateImageSlot(ctx, func() { shot, err = normalizeScreenshot(data) }) {
-			writeError(w, 503, "server_busy")
-			return
-		}
-		if errors.Is(err, errInvalidScreenshot) {
-			writeError(w, 400, "invalid_screenshot")
-			return
-		}
-		if err != nil {
-			a.error(w, err)
-			return
-		}
-		screenshots = append(screenshots, shot)
+	screenshots, err := normalizeFeedbackScreenshots(ctx, uploads)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		writeError(w, 503, "server_busy")
+		return
+	}
+	if errors.Is(err, errInvalidScreenshot) {
+		writeError(w, 400, "invalid_screenshot")
+		return
+	}
+	if err != nil {
+		a.error(w, err)
+		return
 	}
 	diagnostics := payload.Diagnostics
 	if diagnostics == nil {

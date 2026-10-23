@@ -12,7 +12,7 @@ import (
 func monitoringService(t *testing.T) (*Service, *Store) {
 	t.Helper()
 	db := testStore(t)
-	if _, err := db.pool.Exec(context.Background(), `TRUNCATE admin_service_metrics, admin_service_daily, admin_service_minutes, admin_service_verdicts, admin_incidents, admin_audit`); err != nil {
+	if _, err := db.pool.Exec(context.Background(), `TRUNCATE admin_service_metrics, admin_service_daily, admin_service_minutes, admin_service_verdicts, admin_service_metric_batches, admin_incidents, admin_audit`); err != nil {
 		t.Fatal(err)
 	}
 	return &Service{store: db}, db
@@ -28,10 +28,10 @@ func TestServiceMetricsAccumulate(t *testing.T) {
 		{Service: "translation", Hour: hour.Add(-time.Hour), Calls: 2, Latency: map[string]int64{"50": 2}, Usage: 40},
 	}
 	second := []ServiceMetric{{Service: "chat", Hour: hour, Calls: 2, Errors: 0, Latency: map[string]int64{"100": 1, "3000": 1}}}
-	if err := a.RecordServiceMetrics(ctx, first); err != nil {
+	if err := a.RecordServiceMetricBatch(ctx, ServiceMetricBatch{ID: randomToken(), Hours: first}); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.RecordServiceMetrics(ctx, second); err != nil {
+	if err := a.RecordServiceMetricBatch(ctx, ServiceMetricBatch{ID: randomToken(), Hours: second}); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := a.ServiceMetrics(ctx, hour.Add(-2*time.Hour))
@@ -58,7 +58,7 @@ func TestServiceMetricsAccumulate(t *testing.T) {
 	if only, err := a.ServiceUsageSince(ctx, hour); err != nil || len(only) != 1 {
 		t.Fatalf("usage since this hour = %+v, %v", only, err)
 	}
-	if err := a.RecordServiceMetrics(ctx, []ServiceMetric{{Service: "Bad Key", Hour: hour, Calls: 1}}); err == nil {
+	if err := a.RecordServiceMetricBatch(ctx, ServiceMetricBatch{ID: randomToken(), Hours: []ServiceMetric{{Service: "Bad Key", Hour: hour, Calls: 1}}}); err == nil {
 		t.Fatal("an invalid service key was stored")
 	}
 }
@@ -315,7 +315,7 @@ func TestServiceMinutesAccumulate(t *testing.T) {
 	replicaA := []ServiceMinute{{Service: "chat", Minute: minute.Add(-2 * time.Minute), Calls: 2, Errors: 1, Latency: map[string]int64{"100": 1, "5000": 1}}, {Service: "chat", Minute: minute.Add(-time.Minute), Calls: 1, Latency: map[string]int64{"50": 1}}}
 	replicaB := []ServiceMinute{{Service: "chat", Minute: minute.Add(-2*time.Minute + 30*time.Second), Calls: 3, Latency: map[string]int64{"100": 2, "inf": 1}}, {Service: "chat", Minute: minute, Calls: 9}}
 	for _, rows := range [][]ServiceMinute{replicaA, replicaB} {
-		if err := a.RecordServiceMinutes(ctx, rows); err != nil {
+		if err := a.RecordServiceMetricBatch(ctx, ServiceMetricBatch{ID: randomToken(), Minutes: rows}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -329,16 +329,17 @@ func TestServiceMinutesAccumulate(t *testing.T) {
 	if l := rows[0].Latency; l["100"] != 3 || l["5000"] != 1 || l["inf"] != 1 || len(l) != 3 {
 		t.Fatalf("summed latency = %v", l)
 	}
-	if err := a.RecordServiceMinutes(ctx, []ServiceMinute{{Service: "Bad Key", Minute: minute, Calls: 1}}); err == nil {
+	if err := a.RecordServiceMetricBatch(ctx, ServiceMetricBatch{ID: randomToken(), Minutes: []ServiceMinute{{Service: "Bad Key", Minute: minute, Calls: 1}}}); err == nil {
 		t.Fatal("an invalid service key was stored")
 	}
 }
 
-// A minute's verdict is stored once: a second write of the same minute neither replaces it nor rolls the minute into the daily table again. The newest minute is the shared status, and the previous verdicts carry the streaks.
+// 每分钟的判定只写入一次，重复写入不覆盖结果或重复累计日汇总；最新分钟作为共享状态，历史判定保留连续次数。
 func TestServiceVerdictsCountEachMinuteOnce(t *testing.T) {
 	a, db := monitoringService(t)
 	ctx := context.Background()
-	minute := time.Now().UTC().Truncate(time.Minute)
+	// 固定在 UTC 中午，让三次采样始终落在同一天，避免执行时间改变日汇总预期。
+	minute := time.Date(2026, time.January, 2, 12, 0, 0, 0, time.UTC)
 	if latest, err := a.LatestServiceVerdicts(ctx); err != nil || len(latest) != 0 {
 		t.Fatalf("latest before any probe = %+v, %v", latest, err)
 	}

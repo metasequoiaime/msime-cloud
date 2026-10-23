@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -60,6 +59,14 @@ func qqFAQCategories(faq string) []string {
 		if index < 0 {
 			break
 		}
+		if categories == nil {
+			capacity := 1
+			next := qqNextFAQCategory(faq, index+3)
+			if next > index {
+				capacity = max(capacity, len(faq)/(next-index))
+			}
+			categories = make([]string, 0, capacity)
+		}
 		end := strings.IndexByte(faq[index:], '\n')
 		if end < 0 {
 			end = len(faq)
@@ -105,27 +112,18 @@ func qqInsertFAQ(faq string, index int, question, answer, footer string) (string
 	}
 	heading, body, _ := strings.Cut(faq[offset:], "\n")
 	insertAt := offset + len(heading)
-	offset = insertAt + 1
-	previousBodyLine := ""
-	previousBodyNonEmpty := false
-	for line := range strings.SplitSeq(body, "\n") {
-		if strings.HasPrefix(line, "## ") || strings.HasPrefix(line, footer) {
-			break
-		}
-		if line == previousBodyLine {
-			if previousBodyNonEmpty {
-				insertAt = offset + len(line)
+	if bodyEnd := qqFAQInsertBodyEnd(body, footer); bodyEnd > 0 {
+		body = body[:bodyEnd]
+		for end := len(body); end > 0; {
+			lineEnd := end
+			lineStart := strings.LastIndexByte(body[:lineEnd], '\n') + 1
+			// 只裁剪行首来判断是否为空行，原有行尾空白和后续空行都保留。
+			if qqMarkdownLeadingSpace(body[lineStart:lineEnd]) != "" {
+				insertAt = insertAt + 1 + lineEnd
+				break
 			}
-			offset += len(line) + 1
-			continue
+			end = lineStart - 1
 		}
-		previousBodyLine = line
-		// 只裁剪行首来判断是否为空行，原有行尾空白和后续空行都保留。
-		previousBodyNonEmpty = qqMarkdownLeadingSpace(line) != ""
-		if previousBodyNonEmpty {
-			insertAt = offset + len(line)
-		}
-		offset += len(line) + 1
 	}
 	answer = strings.TrimSpace(answer)
 	var out strings.Builder
@@ -146,6 +144,29 @@ func qqInsertFAQ(faq string, index int, question, answer, footer string) (string
 		out.WriteString(tail)
 	}
 	return out.String(), true
+}
+
+// qqFAQInsertBodyEnd 找到分类正文中应扫描到的边界；不能直接识别的页尾格式交给原有逐行规则处理。
+func qqFAQInsertBodyEnd(body, footer string) int {
+	if body == "" || footer == "" {
+		return 0
+	}
+	end := len(body)
+	if strings.HasPrefix(body, "## ") {
+		return 0
+	}
+	if marker := strings.Index(body, "\n## "); marker >= 0 && marker < end {
+		end = marker
+	}
+	if !strings.Contains(footer, "\n") {
+		if strings.HasPrefix(body, footer) {
+			return 0
+		}
+		if marker := strings.Index(body, "\n"+footer); marker >= 0 && marker < end {
+			end = marker
+		}
+	}
+	return end
 }
 
 // qqSyncFAQSources 在译文核对记录（zh-TW/sources.json）里 faq.md 的 sourceSha256 等于旧简体原文的哈希时，把它换成新原文的哈希，返回新的文件内容；不一致（译文本来就没同步）或格式不对时返回 false。只替换这一个哈希字符串，不重新序列化，文件的键顺序和缩进保持原样。
@@ -193,7 +214,7 @@ func (s *Server) qqSummariseFAQ(ctx context.Context, text string, categories []s
 	// 答案里不允许出现二级或一级标题，免得打乱 FAQ 的分类结构；也去掉链接。
 	for _, answer := range []*string{&entry.Answer, &entry.AnswerTW} {
 		if strings.Contains(*answer, "://") {
-			*answer = qqLinkPattern.ReplaceAllString(*answer, "")
+			*answer = qqRemoveRawLinks(*answer)
 		}
 		for line := range strings.SplitSeq(*answer, "\n") {
 			if strings.HasPrefix(line, "# ") || strings.HasPrefix(line, "## ") || strings.HasPrefix(line, "### ") {
@@ -250,18 +271,7 @@ func (s *Server) qqRepoFile(ctx context.Context, token, repo, path, ref string) 
 	if err != nil || !r.OK() {
 		return "", githubFailure("read "+path, r, err)
 	}
-	var file struct {
-		Content  string `json:"content"`
-		Encoding string `json:"encoding"`
-	}
-	if r.Decode(&file) != nil || file.Encoding != "base64" {
-		return "", errors.New("read " + path + ": invalid response")
-	}
-	raw, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(file.Content, "\n", ""))
-	if err != nil || !utf8.Valid(raw) {
-		return "", errors.New("read " + path + ": invalid content")
-	}
-	return string(raw), nil
+	return qqRepositoryText(r, "read "+path)
 }
 
 // recordQQAnswer 处理「记录答案」：整理成 FAQ 条目，在知识库仓库新分支上一次提交简体、繁体和核对哈希，开 PR。
@@ -385,7 +395,14 @@ func (s *Server) writeQQFAQ(ctx context.Context, text, drafted string, reply fun
 		}
 	}
 	// 一次提交：在父提交的树上改这几个文件，建新提交，再建分支、开 PR。
-	r, err = client.Do(ctx, token, "POST", "/repos/"+repo+"/git/trees", map[string]any{"base_tree": parent.Tree.SHA, "tree": files})
+	// 读改写阶段可以响应请求取消；开始创建 Git 对象前先确认请求仍有效，之后用独立的限时上下文完成整组写入，避免提交或分支已经成功后留下无 PR 的孤儿对象。
+	if err := ctx.Err(); err != nil {
+		fail("write", err)
+		return 0
+	}
+	writeCtx, cancelWrite := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancelWrite()
+	r, err = client.Do(writeCtx, token, "POST", "/repos/"+repo+"/git/trees", map[string]any{"base_tree": parent.Tree.SHA, "tree": files})
 	var tree struct {
 		SHA string `json:"sha"`
 	}
@@ -397,7 +414,7 @@ func (s *Server) writeQQFAQ(ctx context.Context, text, drafted string, reply fun
 	if drafted != "" {
 		message = "docs(faq): add " + entry.Question + "\n\nDrafted by the QQ bot from the docs and GitHub for a question it could not answer; not reviewed by a person."
 	}
-	r, err = client.Do(ctx, token, "POST", "/repos/"+repo+"/git/commits", map[string]any{"message": message, "tree": tree.SHA, "parents": []string{head}})
+	r, err = client.Do(writeCtx, token, "POST", "/repos/"+repo+"/git/commits", map[string]any{"message": message, "tree": tree.SHA, "parents": []string{head}})
 	var commit struct {
 		SHA string `json:"sha"`
 	}
@@ -406,7 +423,7 @@ func (s *Server) writeQQFAQ(ctx context.Context, text, drafted string, reply fun
 		return 0
 	}
 	branch := "qq-faq/" + s.qq.now().UTC().Format(qqFAQBranchStamp) + "-" + qqMediaName()[:8]
-	r, err = client.Do(ctx, token, "POST", "/repos/"+repo+"/git/refs", map[string]string{"ref": "refs/heads/" + branch, "sha": commit.SHA})
+	r, err = client.Do(writeCtx, token, "POST", "/repos/"+repo+"/git/refs", map[string]string{"ref": "refs/heads/" + branch, "sha": commit.SHA})
 	if err != nil || !r.OK() {
 		fail("branch", githubFailure("branch", r, err))
 		return 0
@@ -423,7 +440,7 @@ func (s *Server) writeQQFAQ(ctx context.Context, text, drafted string, reply fun
 	}
 	client.Invalidate("/repos/" + repo + "/pulls")
 	defer client.Invalidate("/repos/" + repo + "/pulls")
-	r, err = client.Do(ctx, token, "POST", "/repos/"+repo+"/pulls", map[string]any{"title": "docs(faq): add 「" + githubReferenceBreaker.Replace(entry.Question) + "」", "head": branch, "base": base, "body": body})
+	r, err = client.Do(writeCtx, token, "POST", "/repos/"+repo+"/pulls", map[string]any{"title": "docs(faq): add 「" + githubReferenceBreaker.Replace(entry.Question) + "」", "head": branch, "base": base, "body": body})
 	client.Invalidate("/repos/" + repo + "/pulls")
 	var pull struct {
 		Number int64 `json:"number"`

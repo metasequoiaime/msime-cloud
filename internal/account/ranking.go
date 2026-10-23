@@ -3,7 +3,6 @@ package account
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"time"
 
@@ -103,22 +102,11 @@ func (s *Store) mutateCandidate(ctx context.Context, user string, expected int64
 		return result, err
 	}
 	defer tx.Rollback(ctx)
-	var revision int64
-	if err = tx.QueryRow(ctx, `SELECT COALESCE((SELECT revision FROM user_dictionary_state WHERE user_id=$1),0)`, user).Scan(&revision); err != nil {
+	revision, err := checkUserDataRevision(ctx, tx, user, expected)
+	if err != nil {
 		return result, err
 	}
-	if revision != expected {
-		return result, errRevisionConflict
-	}
-	raw, err := cfg.QuerySnapshot(ctx, map[string]any{"operation": operation, "query": query, "action": action}, func(ctx context.Context, w io.Writer) error {
-		return streamDictionaryQuerySnapshot(ctx, tx, user, query, func(raw json.RawMessage) error {
-			if _, err := w.Write(raw); err != nil {
-				return err
-			}
-			_, err := w.Write([]byte{'\n'})
-			return err
-		})
-	})
+	raw, err := cfg.QuerySnapshot(ctx, map[string]any{"operation": operation, "query": query, "action": action}, dictionaryQuerySnapshot(tx, user, query))
 	if err != nil {
 		return result, err
 	}

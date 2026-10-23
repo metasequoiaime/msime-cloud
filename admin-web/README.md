@@ -14,14 +14,21 @@ pnpm dev
 ## 目录
 
 - `src/main.tsx`：入口。第一行导入 `src/zod-config.ts`，让 Zod 以 jitless 模式运行；`vite.config.ts` 把 zod 和这个文件放进同一个 chunk，保证任何共享 chunk 建 schema 之前 jitless 已生效。
-- `src/routes/router.tsx`：路由表。每个页面是 `src/pages/<page>/index.tsx` 的默认导出，懒加载为独立 chunk；旧路径（`/admins`、`/audit`、`/system`、`/crashes`、`/skins`、`/dictionaries`、`/replies`）在这里重定向。新增页面时同步修改 `src/nav.ts` 和 Go 侧 `embed.go` 的 `pagePaths`。
+- `src/routes/router.tsx`：路由表。每个页面是 `src/pages/<page>/index.tsx` 的默认导出，懒加载为独立 chunk；旧路径（`/admins`、`/audit`、`/system`、`/crashes`、`/community`、`/site-settings`）在这里重定向。新增页面时同步修改 `src/nav.ts` 和 Go 侧 `embed.go` 的 `pagePaths`。
+- 社区内容按六个独立路由展示：`/skins`、`/candidate-skins`、`/plugins`、`/dictionaries`、`/replies`、`/phrases`；页面包装组件复用 `src/pages/community/` 的列表、详情和审核能力。旧 `/community?tab=…` 按类型重定向并保留筛选、页码和定位参数；全局搜索与通知仍兼容后端的 `community` 目标。侧栏和概览共用 `use-community-counts.ts` 的分类待审核计数缓存。
 - `src/api/`：每个页面一个模块，放 Zod schema、类型和标签。`client.ts` 提供 `useAPI()`（绑定当前登录身份，401 时自动登出）、`requestAPI()`，以及所有服务端错误码的中文提示 `codeMessages`；新增错误码在这里加文案，页面只在语境需要不同措辞时局部覆盖。`keys.ts` 是 TanStack Query 的 key 工厂。
-- `src/utils/`：不依赖组件的公共工具。`time.ts` 提供本地时区固定格式日期与中文相对时间，无效日期保留原文；`formatLocaleDateTime` 共用中文本地时间（含秒）和旧页面的 `Invalid Date` 文案。个人资料、会话、公告、发布记录、审计与下载镜像设置复用这些方法，空值文案由页面决定；`bytes.ts` 统一字节到 B、KB、MB 的单位换算，页面自行决定精度和空值文案；`number.ts` 提供数字千分位格式化，默认使用 `zh-CN`，页面可指定 `en-US` 和小数位等 `Intl` 选项；`pagination.ts` 共用管理列表的 URL 页码解析，保留十进制整数前缀语义，缺省或无效时回到第一页；用户与反馈列表限制在 1 至 10000，社区列表沿用不设上限的旧行为。
-- `src/hooks/`：共享 React Hook。`use-debounced.ts` 延迟发布输入值，输入或延迟改变时重新计时，卸载时取消等待；`use-api-image.ts` 共用管理接口图片读取、五分钟缓存和 data URL 转换，支持 Cookie 与旧令牌，页面保留各自的缓存键和地址。
+- `src/utils/`：不依赖组件的公共工具。`time.ts` 提供本地时区固定格式日期与中文相对时间，无效日期保留原文；`formatLocaleDateTime` 共用中文本地时间（含秒）和旧页面的 `Invalid Date` 文案。个人资料、会话、公告、发布记录、审计与下载镜像设置复用这些方法，空值文案由页面决定；`bytes.ts` 统一字节到 B、KB、MB 的单位换算，页面自行决定精度和空值文案；`number.ts` 提供数字千分位格式化，默认使用 `zh-CN`，页面可指定 `en-US` 和小数位等 `Intl` 选项，并共用 `formatRate` 的比率百分比显示（默认两位小数，空值显示 `—`）；`path.ts` 提供斜杠分隔路径的末段提取，词库和发布页面共用；`text.ts` 提供取第一行并去掉首尾空白的摘要，反馈列表和短语预览共用；`pagination.ts` 共用管理列表的 URL 页码解析，保留十进制整数前缀语义，缺省或无效时回到第一页；用户与反馈列表限制在 1 至 10000，社区列表沿用不设上限的旧行为。`duration.ts` 共用处理时长的小时格式化，默认保持小时单位；Issue 页可选择不足一小时按分钟显示，保留至少一分钟的规则。
+- `src/hooks/`：共享 React Hook。`use-debounced-effect.ts` 共用防抖副作用的定时和清理，回调身份、延迟或启用状态改变时重新计时，禁用或卸载时取消等待；调用方用 `useCallback` 声明需要重置等待的依赖。`use-debounced.ts` 基于它延迟发布输入值，全局搜索、日志、社区作者选择与社区列表复用它，社区列表自行维护搜索词与 URL 页码的同步；词库详情直接复用副作用 Hook，保留 350 毫秒等待、编辑暂停和立即搜索。`use-api-image.ts` 共用管理接口图片读取、五分钟缓存和 data URL 转换，支持 Cookie 与旧令牌，页面保留各自的缓存键和地址。
 - `src/shell/`：外壳（侧栏、顶栏、全局搜索、通知、外观、权限钩子 `usePermissions`、页面级快捷键）。
 - `src/ui/`：共享组件。`section.tsx` 提供个人中心和权限日志共用的 `SectionCard`、`SectionRow`，`avatar.tsx` 提供两页共用的首字头像；页面之间不再交叉引用组件。`count-bar.tsx` 为下载、崩溃和敏感词表格共用计数占比条，复用 `ProgressBar` 的宽度与颜色计算，保留页面的数字语言、间距、圆角和文字样式；装饰条对读屏隐藏且不启用动画。`data-table.tsx`（选择、批量操作、本页筛选、分页）、`drawer.tsx`、`confirm.tsx`、`toast.tsx`（4 秒撤销与延迟提交）、`filter-chips.tsx`、`segmented.tsx`、`stat-tile.tsx`、`charts.tsx`、`states.tsx` 等。`modal.tsx` 为确认框和发布表单共用弹窗框架与标题说明，保留普通遮罩以适配 CSP。`overlay.ts` 记录打开的弹窗：页面快捷键在弹窗打开时失效，提示条把 Escape 交给最上层弹窗，弹窗不会因点击提示条的「撤销」而关闭。
 - `src/auth.tsx`：登录状态、Google 登录与管理员密钥登录页。
 - `tests/csp_smoke.py`、`tests/harness/`：CSP 冒烟测试与共享组件测试页。
+
+`src/utils/platform.ts` 共用平台规范键、别名、显示名称与标准显示顺序。下载筛选和公告目标保留各自的导出名称并引用同一份选项；未知平台保留原文，空值提示由页面决定。
+
+`src/utils/blob.ts` 共用 Blob 到 data URL 的读取，管理接口图片与候选窗本地预览复用它；清理函数先解绑回调，再取消仍在进行的读取。本地图片的大小限制由预览保留，接口图片继续沿用原有凭据、请求取消和缓存。
+
+`src/api/action-undo.ts` 共用后台撤销版本的格式校验，以及服务端撤销快照的解析和回调创建。审核、分类、账号封禁、崩溃与反馈复用它；各页面保留目标和前态检查、冲突文案及缓存刷新，校验不通过的旧响应不显示撤销。
 
 ## CSP
 
@@ -66,6 +73,8 @@ python3 tests/csp_smoke.py
 
 敏感词、管理员添加和 Issue 回复回归测试会在请求等待期间继续输入，确认成功回调只清理已提交且未继续编辑的草稿，失败时保留原文。Issue 回复还会关闭并重新打开同一条或另一条 Issue，确认即使新旧回复正文相同，旧请求也不会清空新草稿。
 
+Issue 撤销回归测试共 13 个场景：分类、标记重复和关闭直接提交服务端版本与前态，保留已有负责人或重复标签；409 和批量部分冲突后提示并刷新；缺少版本、版本无效、目标或动作不匹配时隐藏按钮，原操作仍显示成功。可单独运行 `python3 tests/issue_undo_smoke.py`，也由 CSP 冒烟测试调用。
+
 日期格式回归测试在英文浏览器语言下验证太平洋与洛杉矶时区的跨年日期，覆盖个人资料、会话、公告、发布记录、审计与下载镜像设置，并保留各自的空值和无效值显示。
 
 计数占比条回归测试覆盖零分母、半宽、满宽和超限截断、千分位、长数字、页面配色与样式，并确认装饰条不重复播报、原有进度组件仍保留语义与动画。三个实际列表也验证数据对应的条宽、数字和颜色。
@@ -86,10 +95,22 @@ python3 tests/csp_smoke.py
 
 本地运行 Go 测试或服务前先执行 `pnpm --dir admin-web build`。CI 会在 Go 检查前自动完成同样的构建。
 
-社区管理回归测试由 CSP 冒烟测试自动调用，也可运行 `python3 tests/community_management_smoke.py` 单独验证：覆盖默认全部状态、键盘皮肤新增及编辑、插件和候选皮肤文件上传、保存期间的关闭与重复提交保护、失败后保留草稿、删除撤销和只读权限。
+社区管理回归测试由 CSP 冒烟测试自动调用，也可运行 `python3 tests/community_management_smoke.py` 单独验证：覆盖默认全部状态、键盘皮肤新增及编辑、插件和候选皮肤文件上传、保存期间的关闭与重复提交保护、失败后保留草稿、删除撤销和只读权限。延迟删除固定确认时的作品凭据，冲突后提示并刷新，缺少凭据时阻止删除，重新打开详情后使用最新凭据。
 
 开发代理默认连接 `127.0.0.1:18089`，Go 本地配置需设 `admin.host: admin.localhost`。登录方式（Google OIDC、管理员密钥、个人访问令牌）、角色权限、配置项和接口说明见 [管理后台文档](../docs/admin.md)。
 
 卡片进入视口后，照片键盘皮肤与候选窗皮肤通过详情接口的 `?view=preview` 只读取设计或清单；无照片键盘皮肤直接使用列表内设计。打开详情抽屉时再请求完整审核信息。预览查询按作品版本缓存，编辑后会读取新设计及图片。
 
 皮肤预览回归测试可单独运行 `python3 tests/skin_preview_smoke.py`，也由 CSP 冒烟测试调用。键盘部分用截图像素检查键帽、材质、功能键透明度和照片连续裁切；候选窗部分检查真实清单配色、支持的布局与明暗、背景及装饰资源、编辑预览和版本刷新，上传截图仅作为对照。`src/candidate-palettes.json` 的基础配色来自 msime 的 `packages/ui/src/theme/theme-catalog.json` 与 `crates/client-services/src/skin/catalog/windows_looks.rs`；客户端修改这些基础配色时应同步更新。
+
+社区审核撤销回归覆盖通过、下架和恢复：前端直接提交服务端返回的真实快照，409 冲突显示提示并刷新；旧副本缺少撤销信息或返回其他作品的参数时不显示撤销。可单独运行 `python3 tests/community_undo_smoke.py`，也由完整 CSP 冒烟测试调用。
+
+崩溃分组撤销回归验证服务端版本与真实前态、冲突后刷新列表，以及缺少有效撤销参数时隐藏按钮。可单独运行 `python3 tests/crash_undo_smoke.py`，也由完整 CSP 冒烟测试调用。
+
+账号封禁撤销回归覆盖封禁和解封：直接使用服务端实际原因与版本，冲突后刷新账号状态，旧响应或其他账号的撤销参数不显示按钮。可单独运行 `python3 tests/ban_undo_smoke.py`，也由完整 CSP 冒烟测试调用。
+
+反馈撤销回归覆盖已处理和重新打开各 4 种结果：直接提交服务端前态与版本，冲突刷新，缺失或无效参数不显示撤销。可单独运行 `python3 tests/feedback_undo_smoke.py`，也由完整 CSP 冒烟测试调用。分类回归增加状态改走再改回、缺失和无效撤销参数，两种皮肤共 12 个场景。
+
+社区独立入口回归可运行 `python3 tests/community_section_smoke.py`，也由完整 CSP 冒烟调用：覆盖旧链接参数、搜索与通知直达、六类页面与移动导航、切页时挂起请求的审核目标隔离、分类待审核数刷新及同类翻页保留结果。搜索使用可控时钟验证 300 毫秒防抖、连续输入、空白处理、清空与切页；新搜索只请求第一页，同词翻页和仅改变首尾空白不会重置页码。
+
+搜索定时回归可运行 `python3 tests/search_debounce_smoke.py`，也由完整 CSP 冒烟调用：使用可控时钟验证共享副作用的连续输入、延迟调整、禁用恢复及卸载清理，并检查词库搜索从第二页回到第一页、手动搜索与清空立即生效、编辑期间取消待应用搜索、结束编辑后重新计时且保留草稿。

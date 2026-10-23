@@ -17,8 +17,22 @@ type AdminSearchHit struct {
 	Target string `json:"target"`
 }
 
+// appendAdminSearchHit 在首次命中时一次预留本次搜索的结果容量，没有命中时不分配结果缓冲。
+func appendAdminSearchHit(hits []AdminSearchHit, hit AdminSearchHit, limit int) []AdminSearchHit {
+	if len(hits) == 0 {
+		hits = make([]AdminSearchHit, 0, limit)
+	}
+	return append(hits, hit)
+}
+
 // MaxAdminSearchQuery is the longest query, in characters, that the console search accepts.
 const MaxAdminSearchQuery = 100
+
+// NormalizeAdminSearchQuery 统一管理后台搜索的空白裁剪和输入校验。
+func NormalizeAdminSearchQuery(q string) (string, bool) {
+	q = strings.TrimSpace(q)
+	return q, utf8.ValidString(q) && utf8.RuneCountInString(q) <= MaxAdminSearchQuery && !strings.ContainsRune(q, 0)
+}
 
 // adminSearchQuery is one UNION over every searchable table. $1 is the query, $2 the limit. Each branch yields kind, id, title, where, target, rank (0 exact, 1 prefix, 2 substring) and a time for the tie-break. Matching uses strpos on lowercased text, so the query needs no LIKE escaping; community ids are lowercase UUIDs, so they also match the lowercased query. Community ids are "<section>/<id>", the same form community report notifications use, so the community page can open the item.
 const adminSearchQuery = `WITH q AS (SELECT lower($1::text) AS q)
@@ -59,8 +73,8 @@ SELECT kind,id,title,where_,target FROM (
 
 // AdminSearch searches users, community content, crash groups, sensitive words and notices for q and returns at most limit hits, exact and prefix matches first. An empty query or a non-positive limit finds nothing; a query longer than MaxAdminSearchQuery characters is ErrInvalid.
 func (a *Service) AdminSearch(ctx context.Context, q string, limit int) ([]AdminSearchHit, error) {
-	q = strings.TrimSpace(q)
-	if !utf8.ValidString(q) || utf8.RuneCountInString(q) > MaxAdminSearchQuery || strings.ContainsRune(q, 0) {
+	var ok bool
+	if q, ok = NormalizeAdminSearchQuery(q); !ok {
 		return nil, ErrInvalid
 	}
 	hits := []AdminSearchHit{}
@@ -77,7 +91,7 @@ func (a *Service) AdminSearch(ctx context.Context, q string, limit int) ([]Admin
 		if err := rows.Scan(&hit.Kind, &hit.ID, &hit.Title, &hit.Where, &hit.Target); err != nil {
 			return nil, err
 		}
-		hits = append(hits, hit)
+		hits = appendAdminSearchHit(hits, hit, limit)
 	}
 	return hits, rows.Err()
 }

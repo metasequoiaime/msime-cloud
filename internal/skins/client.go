@@ -1,14 +1,13 @@
 package skins
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"math"
 	"slices"
 	"strings"
 	"unicode/utf8"
 
+	checksum "github.com/metasequoiaime/MSIME-Backend/internal/digest"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -210,7 +209,7 @@ func number(value any, present bool) float64 {
 }
 func numberIn(value any, max float64) (float64, bool) {
 	n := number(value, true)
-	return n, !math.IsNaN(n) && !math.IsInf(n, 0) && n >= 0 && n <= max
+	return n, bounded(n, max)
 }
 func enumArray(table map[string]any, key string, allowed []string) ([]string, bool) {
 	items, ok := table[key].([]any)
@@ -688,8 +687,7 @@ func checkColors(table map[string]any, keys []string) error {
 
 // storedResources applies the limits the filesystem sources use (4 MiB per file, 16 MiB and 512 entries per package) and lists skin.toml first, then the stored files by path.
 func storedResources(p *Package, s Stored) error {
-	sum := sha256.Sum256(s.Manifest)
-	p.Resources = []Resource{{"skin.toml", len(s.Manifest), hex.EncodeToString(sum[:]), mediaType("skin.toml"), "/v1/skins/" + s.ID + "/resources/skin.toml"}}
+	p.Resources = []Resource{{"skin.toml", len(s.Manifest), checksum.SHA256(s.Manifest), mediaType("skin.toml"), "/v1/skins/" + s.ID + "/resources/skin.toml"}}
 	total := len(s.Manifest)
 	if len(s.Resources) >= 512 {
 		return invalid("too many resources")

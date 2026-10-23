@@ -1,4 +1,5 @@
-import { formatNumber } from "../../utils/number";
+import { formatNumber, formatRate } from "../../utils/number";
+import { platformName } from "../../utils/platform";
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -6,6 +7,8 @@ import { useAPI } from "../../api/client";
 import { keys } from "../../api/keys";
 import { overviewSchema } from "../../api/overview";
 import type { Overview, OverviewService, ServiceState } from "../../api/overview";
+import { communityNavItems } from "../../nav";
+import { useCommunityCounts } from "../../hooks/use-community-counts";
 import { PageIntro } from "../../shell/page-intro";
 import { useShell } from "../../shell/shell-data";
 import { Card, CardHeader } from "../../ui/card";
@@ -24,10 +27,6 @@ const activeSeries = [
   { key: "ios", label: "iOS", color: "var(--chart-5)" },
   { key: "harmonyos", label: "HarmonyOS", color: "var(--chart-6)" },
 ] as const;
-
-const platformLabels: Record<string, string> = { windows: "Windows", macos: "macOS", linux: "Linux", android: "Android", ios: "iOS", harmonyos: "HarmonyOS" };
-
-const platformName = (platform: string) => platformLabels[platform] ?? platform;
 
 const stateTone: Record<ServiceState, Tone> = { ok: "ok", degraded: "warn", down: "bad", unknown: "mute" };
 const stateLabel: Record<ServiceState, string> = { ok: "运行正常", degraded: "性能降级", down: "服务中断", unknown: "暂无探测数据" };
@@ -62,7 +61,7 @@ function KPIs({ data }: { data: Overview }) {
       sub={downloads ? "近 30 天较前 30 天" : `近 30 天 ${formatNumber(data.downloads_30d)} 次`} />
     <StatTile size="kpi" label="7 日活跃设备" value={data.telemetry.active ? formatNumber(data.active_devices_7d) : "—"} delta={active?.text} deltaTone={active?.tone}
       sub={data.telemetry.active ? "全平台合计" : "客户端未上报"} />
-    <StatTile size="kpi" label="无崩溃会话率" value={data.crash_free_rate === null ? "—" : `${(data.crash_free_rate * 100).toFixed(2)}%`} delta={crashFree?.text} deltaTone={crashFree?.tone}
+    <StatTile size="kpi" label="无崩溃会话率" value={formatRate(data.crash_free_rate)} delta={crashFree?.text} deltaTone={crashFree?.tone}
       sub={data.crash_free_rate !== null ? (data.crash_top ? `${platformName(data.crash_top.platform)} ${data.crash_top.version} 拖累` : "近 7 天会话") : data.telemetry.sessions ? "近 7 天没有会话" : "客户端未上报"} />
     <StatTile size="kpi" label="待审核" value={pending ? formatNumber(pending.dict_prs + pending.community + pending.issues) : "—"}
       sub={pending ? `词库 PR ${pending.dict_prs} · 社区 ${pending.community} · Issue ${pending.issues}` : "正在加载…"} />
@@ -113,9 +112,9 @@ function EmailDelivery({ data }: { data: Overview }) {
   </Card>;
 }
 
-function TodoRow({ to, icon, title, sub, count }: { to: "/dictpr" | "/community" | "/issues" | "/crash"; icon: string; title: string; sub: ReactNode; count: number | undefined }) {
+function TodoRow({ to, icon, title, sub, count }: { to: "/dictpr" | "/issues" | "/crash"; icon: string; title: string; sub: ReactNode; count: number | undefined }) {
   return <li>
-    <Link to={to} search={to === "/community" ? { status: "pending" } : {}} className="flex items-center gap-3 rounded-xl px-2.5 py-3 text-body no-underline transition hover:bg-panel-2 hover:text-body">
+    <Link to={to} search={{}} className="flex items-center gap-3 rounded-xl px-2.5 py-3 text-body no-underline transition hover:bg-panel-2 hover:text-body">
       <span aria-hidden="true" className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-[10px] bg-accent-soft font-bold text-accent-ink">{icon}</span>
       <span className="min-w-0 flex-1">
         <span className="block truncate font-semibold text-ink">{title}</span>
@@ -128,11 +127,25 @@ function TodoRow({ to, icon, title, sub, count }: { to: "/dictpr" | "/community"
 
 function Todos({ data }: { data: Overview }) {
   const pending = useShell().data?.pending;
+  const community = useCommunityCounts();
   return <Card>
     <CardHeader title="待处理" />
     <ul className="-mx-2.5 -mb-2 m-0 list-none p-0">
       <TodoRow to="/dictpr" icon="词" title="词库 PR 待审核" sub="官网词库投稿生成的 GitHub PR" count={pending?.dict_prs} />
-      <TodoRow to="/community" icon="社" title="社区内容待审核" sub={data.pending.reports_7d > 0 ? `近 7 天收到 ${formatNumber(data.pending.reports_7d)} 次举报` : "先发后审，新内容已公开展示"} count={pending?.community ?? data.pending.community} />
+      <li className="px-2.5 py-3">
+        <div className="flex items-center justify-between gap-3">
+          <span className="font-semibold text-ink">社区内容待审核</span>
+          <span className="text-lg font-bold text-ink tabular-nums">{formatNumber(pending?.community ?? data.pending.community)}</span>
+        </div>
+        <p className="m-0 mb-2 text-[12.5px] text-muted">{data.pending.reports_7d > 0 ? `近 7 天收到 ${formatNumber(data.pending.reports_7d)} 次举报` : "先发后审，新内容已公开展示"}</p>
+        <nav className="grid grid-cols-2 gap-1" aria-label="社区待审核分类">
+          {communityNavItems.map(item => <Link key={item.key} to={item.path} search={{ status: "pending" }}
+            className="flex min-w-0 items-center justify-between gap-2 rounded-lg px-2 py-2 text-[12.5px] text-body no-underline hover:bg-panel-2">
+            <span className="truncate">{item.label}</span>
+            <span className="text-muted tabular-nums">{community.data && item.communityBadge ? formatNumber(community.data[item.communityBadge].pending) : "—"}</span>
+          </Link>)}
+        </nav>
+      </li>
       <TodoRow to="/issues" icon="议" title="Issue 待分诊" sub="尚未分类的 GitHub Issue" count={pending?.issues} />
       <TodoRow to="/crash" icon="崩" title="新增崩溃分组" sub={data.crash_group_latest ? `${platformName(data.crash_group_latest.platform)} · ${data.crash_group_latest.title}` : "近 7 天首次出现、尚未处理"} count={data.pending.crash_groups} />
     </ul>

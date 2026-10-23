@@ -5,11 +5,13 @@ package server
 // token so clients never receive an API key or an upstream URL.
 
 import (
+	"bytes"
 	"crypto/md5" // #nosec G501 -- required by the NiuTrans protocol.
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -18,6 +20,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	segmentjson "github.com/segmentio/encoding/json"
 )
 
 const (
@@ -263,15 +267,23 @@ func (s *Server) niuTransFileRequest(w http.ResponseWriter, r *http.Request, e N
 
 // niuTransMediaAccepted 只把明确返回成功业务码的 JSON 控制响应计为成功。
 func niuTransMediaAccepted(body []byte) bool {
-	var reply map[string]json.RawMessage
-	if json.Unmarshal(body, &reply) != nil {
+	// 保留标准库的语法和嵌套深度限制，不复制与成功判断无关的响应字段。
+	if !json.Valid(body) {
+		return false
+	}
+	var reply struct {
+		Code json.RawMessage `json:"code"`
+	}
+	// 原映射只识别小写 `code`；业务码仅在本次检查期间借用正文中的原始字节。
+	rest, err := segmentjson.Parse(body, &reply, segmentjson.DontCopyRawMessage|segmentjson.DontMatchCaseInsensitiveStructFields)
+	if err != nil || len(rest) != 0 {
 		return false
 	}
 	var code int
-	return json.Unmarshal(reply["code"], &code) == nil && code == http.StatusOK
+	return json.Unmarshal(reply.Code, &code) == nil && code == http.StatusOK
 }
 
-// niuTransDownload 以固定大小缓冲区转发文件，下载上限独立于 JSON 响应上限。
+// niuTransDownload 以固定大小缓冲区转发文件，JSON 控制响应先按独立上限校验。
 func (s *Server) niuTransDownload(w http.ResponseWriter, r *http.Request, target string, call *meterCall) {
 	started := time.Now()
 	var err error
@@ -303,13 +315,31 @@ func (s *Server) niuTransDownload(w http.ResponseWriter, r *http.Request, target
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
+	// 下载也可能返回 JSON 控制响应；确认业务成功后才能发送正文，避免泄露上游错误详情。
+	downloadBody := io.Reader(resp.Body)
+	mediaType, _, _ := mime.ParseMediaType(contentType)
+	if mediaType == "application/json" || strings.HasSuffix(mediaType, "+json") {
+		var body []byte
+		body, err = io.ReadAll(io.LimitReader(resp.Body, niuTransResponseBytes+1))
+		if err != nil {
+			err = upstreamTransportError{cause: err}
+			upstreamError(w, r, err)
+			return
+		}
+		if len(body) > niuTransResponseBytes || !niuTransMediaAccepted(body) {
+			err = errors.New("invalid upstream download response")
+			upstreamError(w, r, err)
+			return
+		}
+		downloadBody = bytes.NewReader(body)
+	}
 	w.Header().Set("Content-Type", contentType)
 	w.WriteHeader(http.StatusOK)
-	_, err = io.Copy(w, io.LimitReader(resp.Body, niuTransDownloadBytes))
+	_, err = io.Copy(w, io.LimitReader(downloadBody, niuTransDownloadBytes))
 	if err == nil {
 		// 再读一个字节区分恰好达到上限与超限，额外字节不发送给客户端。
 		var extra int64
-		extra, err = io.Copy(io.Discard, io.LimitReader(resp.Body, 1))
+		extra, err = io.Copy(io.Discard, io.LimitReader(downloadBody, 1))
 		if err == nil && extra != 0 {
 			err = errors.New("upstream response too large")
 		}
@@ -358,7 +388,7 @@ func (s *Server) niuTransResources(w http.ResponseWriter, r *http.Request) {
 	}
 	// 资源管理使用账号级签名；客户端只选择单段动作，成功响应保留业务字段，错误由 niuTransJSON 统一处理。
 	action := r.URL.Query().Get("action")
-	if action == "" || len(action) > 64 || strings.ContainsAny(action, "/\\\r\n") {
+	if action == "" || action == "." || action == ".." || len(action) > 64 || strings.ContainsAny(action, "/\\\r\n") {
 		fail(w, http.StatusBadRequest, "resource_action_required")
 		return
 	}
@@ -420,7 +450,10 @@ func (s *Server) sendNiuTrans(r *http.Request, target, method, contentType strin
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, niuTransResponseBytes+1))
-	if err != nil || len(data) > niuTransResponseBytes {
+	if err != nil {
+		return nil, "", upstreamTransportError{cause: err}
+	}
+	if len(data) > niuTransResponseBytes {
 		return nil, "", errors.New("upstream response too large")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

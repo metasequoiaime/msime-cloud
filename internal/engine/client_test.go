@@ -26,6 +26,8 @@ func main(){switch os.Args[1] {
 case "success":fmt.Print("{\"result\":\"ok\"}")
 case "snapshot":b,e:=os.ReadFile(filepath.Join(os.Args[2],"snapshot.jsonl"));if e!=nil||string(b)!="fixture"{os.Exit(2)};fmt.Print("{}")
 case "oversize":fmt.Print(strings.Repeat("x",1048577))
+case "json_limit":fmt.Print("{\"result\":\""+strings.Repeat("x",(1<<20)-len("{\"result\":\"\"}"))+"\"}")
+case "json_oversize":fmt.Print("{\"result\":\""+strings.Repeat("x",(1<<20)+1-len("{\"result\":\"\"}"))+"\"}")
 case "malformed":fmt.Print("not json")
 case "array":fmt.Print("[]")
 case "exit":fmt.Fprint(os.Stderr,"private provider detail");os.Exit(2)
@@ -41,7 +43,7 @@ default:fmt.Printf("{\"error\":%q}",os.Args[1])}}
 	for _, tc := range []struct {
 		mode string
 		want error
-	}{{"success", nil}, {"snapshot", nil}, {"resources_unavailable", ErrUnavailable}, {"invalid_request", ErrInvalid}, {"invalid_dictionary_entry", ErrInvalid}, {"unknown", ErrFailure}, {"oversize", ErrFailure}, {"malformed", ErrFailure}, {"array", ErrFailure}, {"exit", ErrFailure}} {
+	}{{"success", nil}, {"snapshot", nil}, {"resources_unavailable", ErrUnavailable}, {"invalid_request", ErrInvalid}, {"invalid_dictionary_entry", ErrInvalid}, {"unknown", ErrFailure}, {"oversize", ErrFailure}, {"json_limit", nil}, {"json_oversize", ErrFailure}, {"malformed", ErrFailure}, {"array", ErrFailure}, {"exit", ErrFailure}} {
 		t.Run(tc.mode, func(t *testing.T) {
 			cfg := Config{Binary: binary, Resources: tc.mode}
 			var snapshot func(context.Context, io.Writer) error
@@ -54,6 +56,12 @@ default:fmt.Printf("{\"error\":%q}",os.Args[1])}}
 			}
 			if err == nil && len(out) == 0 {
 				t.Fatal("missing response")
+			}
+			if tc.mode == "json_limit" && len(out) != 1<<20 {
+				t.Fatalf("边界 JSON 长度=%d，期望 1 MiB", len(out))
+			}
+			if err != nil && len(out) != 0 {
+				t.Fatal("失败时不应返回原生输出")
 			}
 		})
 	}
@@ -90,6 +98,31 @@ default:fmt.Printf("{\"error\":%q}",os.Args[1])}}
 	cancel()
 	if _, err := cfg.Query(ctx, nil); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
+	}
+}
+
+func TestBoundedOutputCopyPaths(t *testing.T) {
+	payload := strings.Repeat("x", (1<<20)+1)
+	for _, tc := range []struct {
+		name   string
+		source io.Reader
+	}{
+		{"reader_only", io.LimitReader(strings.NewReader(payload), int64(len(payload)))},
+		{"string_source", strings.NewReader(payload)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out boundedOutput
+			n, err := io.Copy(&out, tc.source)
+			if err != nil || n != int64(len(payload)) {
+				t.Fatalf("没有完整排空输出：n=%d err=%v", n, err)
+			}
+			if out.Len() != 1<<20 || !out.exceeded {
+				t.Fatalf("输出限额失效：bytes=%d exceeded=%v", out.Len(), out.exceeded)
+			}
+			if string(out.Bytes()) != payload[:1<<20] {
+				t.Fatal("限额内的输出前缀被修改")
+			}
+		})
 	}
 }
 

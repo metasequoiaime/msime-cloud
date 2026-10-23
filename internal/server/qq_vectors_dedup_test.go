@@ -82,6 +82,7 @@ func TestQQDocVectorsDuplicateUpdatesKeepPreviousSemantics(t *testing.T) {
 		{"新段落保留首次正文", nil, []qqSection{base, changed, other, later}, base, 2},
 		{"未变化段落后仍可更新", []qqSection{base}, []qqSection{base, changed, other, later}, changed, 2},
 		{"首次更新后忽略其余重复", []qqSection{base}, []qqSection{changed, base, later, other}, changed, 2},
+		{"已有全部 ID 时首次更新后忽略重复", []qqSection{base, other}, []qqSection{changed, later, other}, changed, 1},
 		{"全部未变化时不重算", []qqSection{base, other}, []qqSection{base, other, base}, base, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -128,6 +129,30 @@ func TestQQDocVectorsDistinctPlanningAllocationBudget(t *testing.T) {
 	})
 	if allocated := result.AllocedBytesPerOp(); allocated > 7<<19 {
 		t.Fatalf("不同段落准备分配 %d 字节，超过 3.5 MiB 预算", allocated)
+	}
+}
+
+func TestQQDocVectorsReuseCachedContentHashes(t *testing.T) {
+	sections := make([]qqSection, 8192)
+	ids := make([]string, len(sections))
+	hashes := make([]string, len(sections))
+	for i := range sections {
+		sections[i] = qqSection{Doc: "合成文档", Title: fmt.Sprintf("标题%d", i), Text: "合成正文"}
+		ids[i] = qqDocID(sections[i])
+		hashes[i] = qqContentHash("[" + sections[i].Doc + "] " + sections[i].Title + "\n" + qqTruncate(sections[i].Text, qqEmbedRunes))
+	}
+	s := qqVectorPlanningServer(sections)
+	s.qq.knowledge.docIDs = ids
+	s.qq.knowledge.contentHashes = hashes
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			if _, err := s.syncQQDocVectors(context.Background()); err == nil {
+				t.Fatal("合成 embedding 应失败")
+			}
+		}
+	})
+	if allocated := result.AllocedBytesPerOp(); allocated > 2600<<10 {
+		t.Fatalf("复用文档 ID 和正文哈希后仍分配 %d 字节，超过 2.6 MiB 预算", allocated)
 	}
 }
 

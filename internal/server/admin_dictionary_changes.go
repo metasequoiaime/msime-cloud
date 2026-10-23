@@ -5,10 +5,8 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -17,10 +15,12 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 )
 
 var dictionarySHAPattern = regexp.MustCompile(`^[a-f0-9]{40}$`)
@@ -47,13 +47,7 @@ func (s *Server) dictionaryChanges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input dictionaryChangeRequest
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128<<10))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&input); err != nil {
-		fail(w, 400, "invalid_request")
-		return
-	}
-	if decoder.Decode(new(any)) != io.EOF {
+	if httpjson.DecodeValue(http.MaxBytesReader(w, r.Body, 128<<10), &input) != nil {
 		fail(w, 400, "invalid_request")
 		return
 	}
@@ -76,7 +70,11 @@ func (s *Server) dictionaryChanges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.accounts != nil {
-		if err := s.accounts.Audit(r.Context(), "dictionary_change", input.Path, map[string]any{"repo": s.dictRepo(), "pull": result.Number, "count": len(input.Changes)}); err != nil {
+		// PR 已经创建，请求取消后仍保留操作者，并在有限时间内记录审计。
+		auditCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+		err := s.accounts.Audit(auditCtx, "dictionary_change", input.Path, map[string]any{"repo": s.dictRepo(), "pull": result.Number, "count": len(input.Changes)})
+		cancel()
+		if err != nil {
 			slog.Error("dictionary management: audit unavailable", "pull", result.Number)
 			respond(w, 503, map[string]any{"error": map[string]string{"code": "dictionary_not_recorded", "message": "PR 已创建，但审计暂未写入。"}, "pull_url": result.URL})
 			return
@@ -158,11 +156,17 @@ func (s *Server) createDictionaryPR(ctx context.Context, gh *githubapp.Client, i
 	if next == text {
 		return result, dictionaryChangeFail(400, "dictionary_no_changes")
 	}
+	// 写入前仍响应请求取消；开始创建分支后用独立的限时上下文完成文件提交和 PR，避免留下无 PR 的分支。
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	writeCtx, cancelWrite := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancelWrite()
 	branch := "dictionary-admin/" + adminRandom()
 	result.Branch = branch
 	// 每次请求创建随机分支，多副本无需共享进程锁；所有修改基于同一不可变提交。
 	write := func(method, p string, body, out any) error {
-		res, err := gh.Do(ctx, token, method, root+p, body)
+		res, err := gh.Do(writeCtx, token, method, root+p, body)
 		if err != nil || res.Status >= 500 {
 			return dictionaryChangeFail(502, "dictionary_uncertain")
 		}
@@ -286,6 +290,46 @@ func applyDictionaryChanges(name, text string, changes []dictionaryEdit) (string
 			updates[edit.Line] = &value
 		}
 	}
+	// 先按本次删改的原键和新键判断重复，避免为明显冲突构造整份词库结果。
+	removedKeys := make(map[string]int, len(updates))
+	addedKeys := make(map[string]int, len(updates)+len(additions))
+	for line, value := range updates {
+		if key := dictionaryEntryKey(originals[line].text); key != "" {
+			removedKeys[key]++
+		}
+		if value != nil {
+			if key := dictionaryEntryKey(*value); key != "" {
+				addedKeys[key]++
+			}
+		}
+	}
+	for _, value := range additions {
+		addedKeys[dictionaryEntryKey(value)]++
+	}
+	for key, count := range addedKeys {
+		if count <= removedKeys[key] {
+			delete(addedKeys, key)
+		}
+	}
+	if len(addedKeys) > 0 {
+		lineNumber := 0
+		for line := range strings.SplitSeq(text, "\n") {
+			lineNumber++
+			if _, edited := updates[lineNumber]; edited {
+				continue
+			}
+			if key := dictionaryEntryKey(line); key != "" {
+				if count, exists := addedKeys[key]; exists && count > removedKeys[key] {
+					return "", dictionaryChangeFail(409, "dictionary_duplicate")
+				}
+			}
+		}
+		for _, count := range addedKeys {
+			if count > 1 {
+				return "", dictionaryChangeFail(409, "dictionary_duplicate")
+			}
+		}
+	}
 	// 按删改后的字节数预留空间，追加前可能需要补一个换行。
 	outputBytes := len(text)
 	for line, value := range updates {
@@ -340,35 +384,7 @@ func applyDictionaryChanges(name, text string, changes []dictionaryEdit) (string
 			out.WriteString(newline)
 		}
 	}
-	result := out.String()
-	// 翻译允许覆盖同一源词，其他文件按前两列去重。
-	remainingCapacity := 0
-	if lineCount <= 10000 {
-		// 中等词库预留去重表空间，超大词库可能有大量重复键，避免按行数一次性占满内存。
-		remainingCapacity = lineCount
-	}
-	remaining := make(map[string]int, remainingCapacity)
-
-	for line := range strings.SplitSeq(text, "\n") {
-		if k := dictionaryEntryKey(line); k != "" {
-			remaining[k]++
-		}
-	}
-	for line := range strings.SplitSeq(result, "\n") {
-		k := dictionaryEntryKey(line)
-		if k == "" {
-			continue
-		}
-		if count, exists := remaining[k]; !exists {
-			// 新键只允许出现一次；保留零值以拒绝后续重复。
-			remaining[k] = 0
-		} else if count > 0 {
-			remaining[k] = count - 1
-		} else {
-			return "", dictionaryChangeFail(409, "dictionary_duplicate")
-		}
-	}
-	return result, nil
+	return out.String(), nil
 }
 
 // dictionaryEntryKey 从原行截取前两列作为去重键，避免拆分再拼接。

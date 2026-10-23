@@ -44,7 +44,7 @@ func TestCreateSkinJobUsesBoundedRoundTrips(t *testing.T) {
 			trace.seen, trace.statements = 0, nil
 			trace.mu.Unlock()
 			a := &Service{store: &Store{pool: pool}}
-			expires, _, err := a.CreateSkinJob(ctx, id, owner, 1, 1, 10, time.Minute)
+			reservation, _, err := a.CreateSkinJob(ctx, id, owner, 1, 1, 10, time.Minute)
 			if err != nil {
 				t.Fatal("清理过期任务后应能复用 ID 和容量", err)
 			}
@@ -59,7 +59,7 @@ func TestCreateSkinJobUsesBoundedRoundTrips(t *testing.T) {
 				t.Fatal("持锁连接缺少服务端保活设置", keepalives, err)
 			}
 			var stored time.Time
-			if err = db.pool.QueryRow(ctx, `SELECT expires_at FROM skin_jobs WHERE id=$1 AND owner=$2 AND state='running' AND NOT cancelled`, id, owner).Scan(&stored); err != nil || !stored.Equal(expires) || !expires.After(time.Now()) {
+			if err = db.pool.QueryRow(ctx, `SELECT expires_at FROM skin_jobs WHERE id=$1 AND owner=$2 AND state='running' AND NOT cancelled`, id, owner).Scan(&stored); err != nil || !stored.Equal(reservation.ExpiresAt) || !reservation.ExpiresAt.After(time.Now()) {
 				t.Fatal("新任务状态或到期时间不正确", err)
 			}
 		})

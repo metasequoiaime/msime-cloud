@@ -5,7 +5,7 @@ import { z } from "zod";
 import { ArrowRight } from "lucide-react";
 import { APICredentialsContext, APIError, errorMessage, requestAPI } from "./api/client";
 import logo from "./assets/msime.png";
-import { useFlushToast } from "./ui/toast";
+import { useFlushToast, useResetToast } from "./ui/toast";
 
 const sessionSchema = z.object({ version: z.string().optional(), authenticated: z.boolean(), email: z.string(), google_enabled: z.boolean(), token_enabled: z.boolean(), can_manage_admins: z.boolean().default(false) });
 export type Session = z.infer<typeof sessionSchema>;
@@ -38,6 +38,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, []);
+  const flushToast = useFlushToast();
+  const resetToast = useResetToast();
   const replaceToken = useCallback((value: string) => {
     // 同一密钥重新登录也属于新身份；立即更新引用，避免旧响应抢在重绘前清掉新登录。
     const next = { token: value };
@@ -51,13 +53,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [client, replaceToken]);
   const onUnauthorized = useCallback(() => {
     if (currentIdentity.current !== identity) return;
+    resetToast();
     clear();
     setError("登录已失效，请重新登录。");
-  }, [identity, clear]);
-  const flushToast = useFlushToast();
+  }, [identity, clear, resetToast]);
   const logout = useCallback(async () => {
     setError("");
     // 先用当前身份提交仍在 4 秒撤销窗口内的合并或驳回，否则退出后会因 401 丢失。
+    resetToast({ preservePending: true });
     await flushToast();
     if (currentIdentity.current !== identity) return;
     try {
@@ -66,16 +69,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       if (currentIdentity.current === identity) setError(errorMessage(err));
     }
-  }, [token, identity, clear, flushToast]);
+  }, [token, identity, clear, flushToast, resetToast]);
   // The legacy admin token is verified through /api/auth/session, which reports authenticated for a valid bearer token.
   const login = useCallback(async (value: string) => {
+    const loginIdentity = currentIdentity.current;
     const result = await requestAPI("auth/session", sessionSchema, { token: value });
     if (!result.authenticated) throw new APIError(401, "unauthorized");
+    // 切换身份不应阻塞登录；先清除旧提示并发出尚未提交的延迟操作。
+    resetToast({ preservePending: true });
+    void flushToast();
+    if (currentIdentity.current !== loginIdentity) return;
     client.clear();
     replaceToken(value);
     setError("");
     setSession(result);
-  }, [client, replaceToken]);
+  }, [client, flushToast, replaceToken, resetToast]);
   const credentials = useMemo(() => ({ token, onUnauthorized }), [token, onUnauthorized]);
   const value = useMemo<Auth>(() => ({ authenticated: session?.authenticated ?? false, loading, session, error, logout, login, reload: () => window.location.reload() }), [session, loading, error, logout, login]);
   return <AuthContext.Provider value={value}><APICredentialsContext.Provider value={credentials}>{children}</APICredentialsContext.Provider></AuthContext.Provider>;

@@ -16,6 +16,11 @@ import tomllib
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
+if __package__:
+    from .seed_sql import literal
+else:
+    from seed_sql import literal
+
 MAX_MANIFEST = 65536
 MAX_RESOURCE = 4 << 20
 MAX_PACKAGE = 16 << 20
@@ -52,7 +57,8 @@ def is_image(name):
 
 
 def safe_id(value):
-    return re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", value) is not None
+    # 与 Go 的 SafeID 一致，避免发布在 Windows 上无法按原名安装的目录。
+    return value != "nul" and not value.endswith(".") and re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", value) is not None
 
 
 def safe_resource(name, limit):
@@ -516,10 +522,6 @@ def provenance(checkout):
     if git("status", "--porcelain", "--untracked-files=all"):
         lines.append("-- WARNING: the checkout has uncommitted changes; this SQL reflects the files on disk, not the commit above.")
     return lines
-
-
-def literal(value):
-    return "'" + value.replace("'", "''") + "'"
 
 
 def sha256(raw):

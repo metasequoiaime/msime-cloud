@@ -2,6 +2,7 @@ import { z } from "zod";
 import { candidateCategoryLabel } from "./community";
 import type { Permission } from "./shell";
 import { roleLabel } from "./shell";
+export { initial } from "../utils/text";
 
 // Matrix row labels, in AllAdminPermissions order.
 export const permissionLabels: Record<Permission, string> = {
@@ -66,10 +67,6 @@ export function actorName(actor: string | undefined): string {
   return email.split("@")[0] || email;
 }
 
-export function initial(name: string): string {
-  return (Array.from(name.trim())[0] ?? "?").toUpperCase();
-}
-
 const prefLabels: Record<string, string> = {
   notify_dict_pr: "词库 PR 提醒",
   notify_report: "社区举报提醒",
@@ -104,6 +101,7 @@ export function describeAudit(entry: AuditEntry): string {
     case "approve_content": return `通过了${section}${item}`;
     case "remove_content": return `下架了${section}${item}${suffix}`;
     case "restore_content": return `恢复了${section}${item}`;
+    case "undo_moderation": return `撤销了${section}「${text(d.name) || target}」的审核操作`;
     case "set_skin_category": return `将键盘皮肤${text(d.name) ? `「${text(d.name)}」` : count ? ` ${count} 项` : ""}的分类改为「${candidateCategoryLabel(text(d.category))}」`;
     case "set_candidate_skin_category": return `将候选窗皮肤${text(d.name) ? `「${text(d.name)}」` : count ? ` ${count} 项` : ""}的分类改为「${candidateCategoryLabel(text(d.category))}」`;
     case "delete_skin": return `删除了键盘皮肤「${target}」${suffix}`;
@@ -113,6 +111,8 @@ export function describeAudit(entry: AuditEntry): string {
     case "delete_reply": return `删除了回复「${target}」${suffix}`;
     case "ban_user": return `封禁了账号 ${target}${suffix}`;
     case "unban_user": return `解封了账号 ${target}`;
+    case "undo_user_ban": return `撤销了账号 ${target} 的封禁状态操作${suffix}`;
+    case "undo_feedback_status": return "撤销了反馈的处理状态操作";
     case "revoke_session": case "revoke_sessions": return `撤销了账号 ${target} 的登录会话`;
     case "add_sensitive_word": return `添加了敏感词${text(d.pattern) ? `「${text(d.pattern)}」` : ""}`;
     case "set_sensitive_word_level": return "调整了敏感词处理方式";

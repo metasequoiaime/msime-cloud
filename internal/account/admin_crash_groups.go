@@ -1,6 +1,7 @@
 package account
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -14,6 +15,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -62,30 +65,52 @@ func ValidCrashSignature(s string) bool { return crashSignaturePattern.MatchStri
 // crashGroupStatuses are the states a crash group can be in.
 var crashGroupStatuses = map[string]bool{"open": true, "known": true, "fixed": true}
 
-// actionCrashGroupStatus 设置崩溃分组状态，在同一条语句内锁定并返回旧状态，供控制台撤销。
+type crashStatusChange struct {
+	Status string `json:"status"`
+	Token  string `json:"token"`
+}
+
+// actionCrashGroupStatus 在同一条语句内锁定、校验版本并修改状态；字符串值保留直接设置的兼容性。
 func actionCrashGroupStatus(a *Service, ctx context.Context, tx pgx.Tx, v actionRequest) (actionResult, error) {
 	if !ValidCrashSignature(v.ID) {
 		return actionResult{}, actionFail(400, "invalid_id")
 	}
-	var status string
-	if json.Unmarshal(v.Value, &status) != nil || !crashGroupStatuses[status] {
+	var change crashStatusChange
+	if json.Unmarshal(v.Value, &change.Status) != nil {
+		if httpjson.DecodeValue(bytes.NewReader(v.Value), &change) != nil || len(change.Token) != 32 {
+			return actionResult{}, actionFail(400, "invalid_value")
+		}
+		if _, err := hex.DecodeString(change.Token); err != nil {
+			return actionResult{}, actionFail(400, "invalid_value")
+		}
+	}
+	if !crashGroupStatuses[change.Status] {
 		return actionResult{}, actionFail(400, "invalid_value")
 	}
 	var previous string
-	err := tx.QueryRow(ctx, `UPDATE admin_crash_groups g SET status=$2
-FROM (SELECT signature,status FROM admin_crash_groups WHERE signature=$1 FOR UPDATE) locked
-WHERE g.signature=locked.signature RETURNING locked.status`, v.ID, status).Scan(&previous)
+	var token *string
+	err := tx.QueryRow(ctx, `WITH locked AS MATERIALIZED (
+ SELECT signature,status,status_token FROM admin_crash_groups WHERE signature=$1 FOR UPDATE
+), updated AS (
+ UPDATE admin_crash_groups g SET status=$2 FROM locked l
+ WHERE g.signature=l.signature AND ($3='' OR l.status_token=$3) RETURNING g.status_token
+)
+SELECT l.status,u.status_token FROM locked l LEFT JOIN updated u ON true`, v.ID, change.Status, change.Token).Scan(&previous, &token)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return actionResult{}, actionFail(404, "not_found")
 	}
 	if err != nil {
 		return actionResult{}, err
 	}
-	detail := map[string]any{"from": previous, "to": status}
+	if token == nil {
+		return actionResult{}, actionFail(409, "conflict")
+	}
+	detail := map[string]any{"from": previous, "to": change.Status}
 	if v.Reason != "" {
 		detail["reason"] = v.Reason
 	}
-	return actionResult{Affected: 1, Detail: detail, Extra: map[string]any{"previous": previous}}, nil
+	undo := map[string]any{"action": "crash_group_status", "id": v.ID, "value": crashStatusChange{Status: previous, Token: *token}}
+	return actionResult{Affected: 1, Detail: detail, Extra: map[string]any{"previous": previous, "undo": undo}}, nil
 }
 
 // crashGroupRow is one crash group with its counts, as the crash page shows it.
@@ -144,6 +169,15 @@ type crashPlatformCount struct {
 	Platform string `json:"platform"`
 	Count    int64  `json:"count"`
 }
+
+// crashSummaryQuery 在初始化时构建固定统计查询，规范化后的平台仍按请求绑定。
+var crashSummaryQuery = `SELECT
+ (SELECT count(*) FROM admin_crash_groups WHERE $1='' OR platform=$1),
+ count(*) FILTER (WHERE kind='crash'),
+ CASE WHEN count(install_id) FILTER (WHERE kind='crash')=0 THEN NULL ELSE count(DISTINCT install_id) FILTER (WHERE kind='crash') END,
+ CASE WHEN count(install_id)=0 THEN NULL ELSE count(DISTINCT install_id) FILTER (WHERE created_at>=date_trunc('day',now(),'UTC')) END,
+ round(count(*) FILTER (WHERE kind='session')::numeric/NULLIF(count(*) FILTER (WHERE kind IN ('session','session_crash')),0),4)::float8
+	FROM admin_events WHERE kind IN ('download','crash','active','session','session_crash') AND created_at>=now()-interval '7 days' AND ($1='' OR ` + overviewPlatform("platform") + `=$1)`
 
 // adminCrashGroups serves GET /api/crash-groups?platform=.
 func (a *Service) adminCrashGroups(w http.ResponseWriter, r *http.Request, _ string) {
@@ -207,13 +241,7 @@ ORDER BY COALESCE(c.c7,0) DESC,g.last_seen DESC,g.signature LIMIT $3`, "", platf
 		return err
 	})
 	var summary crashSummary
-	batch.Queue(`SELECT
- (SELECT count(*) FROM admin_crash_groups WHERE $1='' OR platform=$1),
- count(*) FILTER (WHERE kind='crash'),
- CASE WHEN count(install_id) FILTER (WHERE kind='crash')=0 THEN NULL ELSE count(DISTINCT install_id) FILTER (WHERE kind='crash') END,
- CASE WHEN count(install_id)=0 THEN NULL ELSE count(DISTINCT install_id) FILTER (WHERE created_at>=date_trunc('day',now(),'UTC')) END,
- round(count(*) FILTER (WHERE kind='session')::numeric/NULLIF(count(*) FILTER (WHERE kind IN ('session','session_crash')),0),4)::float8
-	FROM admin_events WHERE kind IN ('download','crash','active','session','session_crash') AND created_at>=now()-interval '7 days' AND ($1='' OR `+overviewPlatform("platform")+`=$1)`, platform).QueryRow(func(row pgx.Row) error {
+	batch.Queue(crashSummaryQuery, platform).QueryRow(func(row pgx.Row) error {
 		return row.Scan(&summary.Groups, &summary.Crashes7d, &summary.Devices7d, &summary.InstallsToday, &summary.CrashFreeRate)
 	})
 	if err = tx.SendBatch(ctx, batch).Close(); err != nil {
@@ -388,8 +416,9 @@ const crashIssueLockSpace int32 = 0x6d736369
 
 // CrashIssueLock 持有分组的会话锁和连接，供同一个请求顺序重读分组、登记 Issue，避免持锁时再向连接池申请连接。
 type CrashIssueLock struct {
-	conn      *pgxpool.Conn
-	signature string
+	conn       *pgxpool.Conn
+	signature  string
+	startToken string
 }
 
 // LockCrashGroupIssue 串行化同一崩溃分组在多个请求和副本上的 Issue 创建；其他请求持锁时返回 ErrCrashIssueBusy。调用方应在锁内重读分组，并在完成后调用 Release。
@@ -419,39 +448,48 @@ var ErrCrashIssueNotOpen = errors.New("crash group is not open")
 
 // Start 在联系 GitHub 前持久标记已知并审计创建尝试，响应丢失或进程退出后仍阻止重复创建。
 func (l *CrashIssueLock) Start(ctx context.Context, repo string) error {
-	changed, err := l.changeAttemptState(ctx, "open", "known", "crash_group_issue_attempt", repo)
-	if err == nil && !changed {
+	token, err := l.changeAttemptState(ctx, "open", "known", "crash_group_issue_attempt", repo, "")
+	if err == nil && token == "" {
 		return ErrCrashIssueNotOpen
 	}
+	if err == nil {
+		l.startToken = token
+	}
 	return err
 }
 
-// Reject 仅在 GitHub 明确拒绝创建时恢复未处理；保留等待期间其他管理员设置的状态和 Issue 链接。
+// Reject 仅回滚本次创建尝试；即便后续分诊又回到已知状态，也不能覆盖。
 func (l *CrashIssueLock) Reject(ctx context.Context, repo string) error {
-	_, err := l.changeAttemptState(ctx, "known", "open", "crash_group_issue_rejected", repo)
+	if l.startToken == "" {
+		return nil
+	}
+	_, err := l.changeAttemptState(ctx, "known", "open", "crash_group_issue_rejected", repo, l.startToken)
 	return err
 }
 
-func (l *CrashIssueLock) changeAttemptState(ctx context.Context, from, to, action, repo string) (bool, error) {
+func (l *CrashIssueLock) changeAttemptState(ctx context.Context, from, to, action, repo, expected string) (string, error) {
 	detail, err := auditDetail(map[string]any{"repo": repo, "from": from, "to": to})
 	if err != nil {
-		return false, err
+		return "", err
 	}
-	var changed bool
+	var token string
 	err = l.conn.QueryRow(ctx, `WITH updated AS (
  UPDATE admin_crash_groups SET status=$3
- WHERE signature=$1 AND status=$2 AND issue_url IS NULL RETURNING signature
+ WHERE signature=$1 AND status=$2 AND issue_url IS NULL AND ($7='' OR status_token=$7) RETURNING signature,status_token
 ), audited AS (
  INSERT INTO admin_audit(action,target,actor,detail)
  SELECT $4,signature,$5,$6::jsonb FROM updated RETURNING 1
 )
-SELECT EXISTS(SELECT 1 FROM audited)`, l.signature, from, to, action, adminActor(ctx), detail).Scan(&changed)
-	return changed, err
+SELECT status_token FROM updated`, l.signature, from, to, action, adminActor(ctx), detail, expected).Scan(&token)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return token, err
 }
 
-// Record 使用持锁连接原子写入 Issue 链接、状态和审计，避免 GitHub 创建成功后因等待池中另一连接而登记失败。
-func (l *CrashIssueLock) Record(ctx context.Context, repo string, number int64, url string) error {
-	return recordCrashGroupIssue(ctx, l.conn, l.signature, repo, number, url)
+// Record 使用持锁连接原子登记 Issue 与审计；等待期间已有后续分诊时只登记链接，保留最新状态。
+func (l *CrashIssueLock) Record(ctx context.Context, repo string, number int64, url string) (string, error) {
+	return recordCrashGroupIssue(ctx, l.conn, l.signature, repo, number, url, l.startToken)
 }
 
 // Release 在独立上下文中解锁；失败时关闭连接，防止把仍持锁的会话交还连接池。
@@ -466,31 +504,32 @@ func (l *CrashIssueLock) Release() {
 
 // SetCrashGroupIssue 用一条原子语句登记崩溃分组的 GitHub issue、将分组标记为 `known` 并记录审计。只在 issue 创建成功后调用。
 func (a *Service) SetCrashGroupIssue(ctx context.Context, signature, repo string, number int64, url string) error {
-	return recordCrashGroupIssue(ctx, a.store.pool, signature, repo, number, url)
+	_, err := recordCrashGroupIssue(ctx, a.store.pool, signature, repo, number, url, "")
+	return err
 }
 
-func recordCrashGroupIssue(ctx context.Context, q queryRower, signature, repo string, number int64, url string) error {
-	detail, err := auditDetail(map[string]any{"repo": repo, "number": number, "issue_url": url, "to": "known"})
+func recordCrashGroupIssue(ctx context.Context, q queryRower, signature, repo string, number int64, url, expected string) (string, error) {
+	detail, err := auditDetail(map[string]any{"repo": repo, "number": number, "issue_url": url})
 	if err != nil {
-		return err
+		return "", err
 	}
-	var previous string
+	var status string
 	err = q.QueryRow(ctx, `WITH locked AS MATERIALIZED (
- SELECT status FROM admin_crash_groups WHERE signature=$1 FOR UPDATE
+ SELECT status,status_token FROM admin_crash_groups WHERE signature=$1 FOR UPDATE
 ), updated AS (
- UPDATE admin_crash_groups g SET status='known',issue_url=$2
- FROM locked l WHERE g.signature=$1 RETURNING 1
+ UPDATE admin_crash_groups g SET status=CASE WHEN $5='' OR l.status_token=$5 THEN 'known' ELSE l.status END,issue_url=$2
+ FROM locked l WHERE g.signature=$1 RETURNING g.status
 ), audited AS (
  INSERT INTO admin_audit(action,target,actor,detail)
- SELECT 'crash_group_issue',$1,$3,jsonb_set($4::jsonb,'{from}',to_jsonb(l.status))
- FROM locked l CROSS JOIN updated
+ SELECT 'crash_group_issue',$1,$3,$4::jsonb||jsonb_build_object('from',l.status,'to',u.status)
+ FROM locked l CROSS JOIN updated u
  RETURNING 1
 )
-SELECT status FROM locked`, signature, url, adminActor(ctx), detail).Scan(&previous)
+SELECT status FROM updated`, signature, url, adminActor(ctx), detail, expected).Scan(&status)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrCrashGroupNotFound
+		return "", ErrCrashGroupNotFound
 	}
-	return err
+	return status, err
 }
 
 // Crash spikes: a new group (first seen within 7 days), or a group whose last 7 days exceed the 7 days before by more than 20% with at least crashSpikeMinimum crashes so a jump from one report to two does not alert anyone, notifies the console at most once per crashSpikeQuiet. This matches the console's 崩溃告警 preference: 新增崩溃分组或崩溃率上升超过 20%.
@@ -582,10 +621,26 @@ func (s crashSpike) notification() Notification {
 var crashPlatformNames = map[string]string{"windows": "Windows", "macos": "macOS", "linux": "Linux", "android": "Android", "ios": "iOS", "harmonyos": "HarmonyOS", "harmony": "HarmonyOS", "ohos": "HarmonyOS"}
 
 func crashPlatformName(platform string) string {
+	if name, ok := crashPlatformNames[platform]; ok {
+		return name
+	}
+	if crashPlatformASCIILower(platform) {
+		return platform
+	}
 	if name, ok := crashPlatformNames[strings.ToLower(platform)]; ok {
 		return name
 	}
 	return platform
+}
+
+// crashPlatformASCIILower 判断平台名是否只含非大写 ASCII 字节；非 ASCII 输入交给 Unicode 小写转换。
+func crashPlatformASCIILower(platform string) bool {
+	for i := 0; i < len(platform); i++ {
+		if platform[i] >= utf8.RuneSelf || platform[i] >= 'A' && platform[i] <= 'Z' {
+			return false
+		}
+	}
+	return true
 }
 
 // lockCrashSpikes 先取得跨副本事务锁，再用独立语句筛选待告警分组，排除已修复及静默期内已告警的分组。
@@ -620,6 +675,11 @@ var (
 	crashSpaces          = regexp.MustCompile(`\s+`)
 )
 
+// normalizeCrashWhitespace 折叠规范化文本中的空白并统一为小写。
+func normalizeCrashWhitespace(text string) string {
+	return strings.ToLower(strings.TrimSpace(crashSpaces.ReplaceAllString(text, " ")))
+}
+
 // crashSystemPrefixes mark frames of the operating system, language runtimes and standard libraries; the first frame whose fields match none of them identifies where the crash happened in our code.
 var crashSystemPrefixes = []string{
 	// Apple
@@ -636,11 +696,23 @@ var crashSystemPrefixes = []string{
 	"???", "<unknown>",
 }
 
+// 按首字节索引固定的系统前缀，避免每个字段都扫描其他首字节的候选。
+var crashSystemPrefixesByByte = func() [256][]string {
+	var prefixes [256][]string
+	for _, prefix := range crashSystemPrefixes {
+		prefixes[prefix[0]] = append(prefixes[prefix[0]], prefix)
+	}
+	return prefixes
+}()
+
 // crashSystemFrame 判断规范化的小写栈帧是否属于系统：模块或符号的任一字段以系统前缀开头即命中。
 func crashSystemFrame(frame string) bool {
 	for field := range strings.FieldsSeq(frame) {
 		field = strings.TrimLeft(field, "-+[(")
-		for _, prefix := range crashSystemPrefixes {
+		if field == "" {
+			continue
+		}
+		for _, prefix := range crashSystemPrefixesByByte[field[0]] {
 			if strings.HasPrefix(field, prefix) {
 				return true
 			}
@@ -663,7 +735,7 @@ func normalizeCrashFrame(line string) string {
 	line = crashAddressPattern.ReplaceAllString(line, "")
 	line = crashFrameOffset.ReplaceAllString(line, "")
 	line = crashFrameLineNumber.ReplaceAllString(line, "")
-	return strings.ToLower(strings.TrimSpace(crashSpaces.ReplaceAllString(line, " ")))
+	return normalizeCrashWhitespace(line)
 }
 
 // normalizeCrashMessage 保留消息首个非空行，掩去地址、标识符和数字，让同一故障在不同运行中归为一组。
@@ -676,7 +748,7 @@ func normalizeCrashMessage(message string) string {
 	line = crashUUIDPattern.ReplaceAllString(line, "?")
 	line = crashHexRunPattern.ReplaceAllString(line, "?")
 	line = crashDigitsPattern.ReplaceAllString(line, "#")
-	return strings.ToLower(strings.TrimSpace(crashSpaces.ReplaceAllString(line, " ")))
+	return normalizeCrashWhitespace(line)
 }
 
 // crashMessageMayChange 保守筛选可能被正则替换的行；数字和控制空白先用字节查找，八个连续十六进制字母也覆盖不含数字、嵌在单词中的 UUID，单个空格无需替换。
@@ -718,7 +790,21 @@ const crashStackLines = 256
 
 // crashPlatform maps a client-reported platform name to the canonical key that overviewPlatform computes in SQL: windows (also win), macos (also mac, darwin), linux, android, ios (also ipados), harmonyos (also harmony, ohos); any other name is kept lowercased.
 func crashPlatform(platform string) string {
-	switch platform = strings.ToLower(platform); platform {
+	switch platform {
+	case "win":
+		return "windows"
+	case "mac", "darwin":
+		return "macos"
+	case "ipados":
+		return "ios"
+	case "harmony", "ohos":
+		return "harmonyos"
+	}
+	if crashPlatformASCIILower(platform) {
+		return platform
+	}
+	platform = strings.ToLower(platform)
+	switch platform {
 	case "win":
 		return "windows"
 	case "mac", "darwin":
@@ -735,10 +821,19 @@ func crashPlatform(platform string) string {
 func crashSignature(platform, message, stack string) string {
 	normalized := normalizeCrashMessage(message)
 	frame := ""
+	previousLine, previousFrame := "", ""
+	previousFrameValid := false
 	lineCount := 0
 	for line := range strings.SplitSeq(stack, "\n") {
 		lineCount++
-		if candidate := normalizeCrashFrame(line); candidate != "" && !crashSystemFrame(candidate) {
+		candidate := ""
+		if previousFrameValid && line == previousLine {
+			candidate = previousFrame
+		} else {
+			candidate = normalizeCrashFrame(line)
+			previousLine, previousFrame, previousFrameValid = line, candidate, true
+		}
+		if candidate != "" && !crashSystemFrame(candidate) {
 			frame = candidate
 			break
 		}

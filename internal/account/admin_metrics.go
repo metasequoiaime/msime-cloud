@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
+
 	"github.com/jackc/pgx/v5"
 )
 
@@ -38,45 +40,9 @@ type ServiceMetric struct {
 	Usage float64
 }
 
-// RecordServiceMetrics adds the given hourly deltas to admin_service_metrics in one transaction, summing counts and latency buckets into existing rows.
-func (a *Service) RecordServiceMetrics(ctx context.Context, rows []ServiceMetric) error {
-	if len(rows) == 0 {
-		return nil
-	}
-	batch := &pgx.Batch{}
-	for _, row := range rows {
-		if !serviceKeyPattern.MatchString(row.Service) || row.Calls < 0 || row.Errors < 0 || row.Usage < 0 {
-			return errors.New("invalid service metric")
-		}
-		latency, err := latencyJSON(row.Latency)
-		if err != nil {
-			return err
-		}
-		batch.Queue(`INSERT INTO admin_service_metrics AS m(service,hour,calls,errors,latency_buckets,usage) VALUES($1,date_trunc('hour',$2::timestamptz,'UTC'),$3,$4,$5::jsonb,$6)
-ON CONFLICT(service,hour) DO UPDATE SET calls=m.calls+EXCLUDED.calls, errors=m.errors+EXCLUDED.errors, usage=m.usage+EXCLUDED.usage,
- latency_buckets=`+mergeLatencyBuckets,
-			row.Service, row.Hour.UTC(), row.Calls, row.Errors, latency, row.Usage)
-	}
-	return a.sendBatchTx(ctx, batch)
-}
-
 // mergeLatencyBuckets sums the latency histogram of an upsert's existing row m and its EXCLUDED row, bucket by bucket.
 const mergeLatencyBuckets = `(SELECT COALESCE(jsonb_object_agg(k,COALESCE((m.latency_buckets->>k)::bigint,0)+COALESCE((EXCLUDED.latency_buckets->>k)::bigint,0)),'{}'::jsonb)
   FROM (SELECT jsonb_object_keys(m.latency_buckets) UNION SELECT jsonb_object_keys(EXCLUDED.latency_buckets)) AS keys(k))`
-
-// sendBatchTx 用批次的隐式事务原子执行全部语句，关闭结果时返回执行或提交错误。
-func (a *Service) sendBatchTx(ctx context.Context, batch *pgx.Batch) error {
-	return a.store.pool.SendBatch(ctx, batch).Close()
-}
-
-// latencyJSON is the jsonb form of a latency histogram; nil is the empty object.
-func latencyJSON(buckets map[string]int64) (string, error) {
-	if buckets == nil {
-		return "{}", nil
-	}
-	b, err := json.Marshal(buckets)
-	return string(b), err
-}
 
 // ServiceMetrics returns the hourly rows from since onwards, oldest first.
 func (a *Service) ServiceMetrics(ctx context.Context, since time.Time) ([]ServiceMetric, error) {
@@ -166,27 +132,6 @@ type ServiceMinute struct {
 	Errors  int64
 	// Latency counts calls per latency bucket, in the form of ServiceMetric.Latency.
 	Latency map[string]int64
-}
-
-// RecordServiceMinutes adds the given per-minute deltas to admin_service_minutes in one transaction. Every replica flushes its own calls here, so the rows are sums over all replicas; callers pass the rows in (minute, service) order so that two replicas flushing the same minutes lock the rows in the same order and cannot deadlock.
-func (a *Service) RecordServiceMinutes(ctx context.Context, rows []ServiceMinute) error {
-	if len(rows) == 0 {
-		return nil
-	}
-	batch := &pgx.Batch{}
-	for _, row := range rows {
-		if !serviceKeyPattern.MatchString(row.Service) || row.Calls < 0 || row.Errors < 0 {
-			return errors.New("invalid service minute")
-		}
-		latency, err := latencyJSON(row.Latency)
-		if err != nil {
-			return err
-		}
-		batch.Queue(`INSERT INTO admin_service_minutes AS m(minute,service,calls,errors,latency_buckets) VALUES(date_trunc('minute',$1::timestamptz),$2,$3,$4,$5::jsonb)
-ON CONFLICT(minute,service) DO UPDATE SET calls=m.calls+EXCLUDED.calls, errors=m.errors+EXCLUDED.errors, latency_buckets=`+mergeLatencyBuckets,
-			row.Minute.UTC(), row.Service, row.Calls, row.Errors, latency)
-	}
-	return a.sendBatchTx(ctx, batch)
 }
 
 // ServiceMinutes returns the per-minute rows of the minutes in [from, to), oldest first.
@@ -453,7 +398,7 @@ FROM locked WHERE i.id=locked.id`, service)
 	return tag.RowsAffected() > 0, err
 }
 
-// PruneServiceMonitoring drops daily rollups older than the status page's 60 days, hourly metrics older than 90 days, and per-minute metrics and verdicts older than serviceDetailRetention.
+// PruneServiceMonitoring 清理超过六十天的每日汇总、九十天的小时指标、八天的批次标识，以及超过 serviceDetailRetention 的分钟指标与判定。
 func (a *Service) PruneServiceMonitoring(ctx context.Context) error {
 	detail := int(serviceDetailRetention / time.Second)
 	batch := &pgx.Batch{}
@@ -461,6 +406,7 @@ func (a *Service) PruneServiceMonitoring(ctx context.Context) error {
 	batch.Queue(`DELETE FROM admin_service_metrics WHERE hour<now()-make_interval(days=>$1::int)`, serviceMetricsRetentionDays)
 	batch.Queue(`DELETE FROM admin_service_minutes WHERE minute<now()-make_interval(secs=>$1::int)`, detail)
 	batch.Queue(`DELETE FROM admin_service_verdicts WHERE minute<now()-make_interval(secs=>$1::int)`, detail)
+	batch.Queue(`DELETE FROM admin_service_metric_batches WHERE created_at<now()-interval '8 days'`)
 	return a.store.pool.SendBatch(ctx, batch).Close()
 }
 
@@ -479,9 +425,7 @@ type incidentValue struct {
 
 func decodeIncidentValue(raw json.RawMessage) (incidentValue, error) {
 	var v incidentValue
-	d := json.NewDecoder(bytes.NewReader(raw))
-	d.DisallowUnknownFields()
-	if len(raw) == 0 || d.Decode(&v) != nil || d.More() {
+	if len(raw) == 0 || httpjson.DecodeValue(bytes.NewReader(raw), &v) != nil {
 		return v, actionFail(400, "invalid_value")
 	}
 	if v.Title != nil && !resourceText(*v.Title, 1, 200, false) {

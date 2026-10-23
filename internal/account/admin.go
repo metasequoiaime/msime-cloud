@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 	"unicode/utf8"
 )
 
@@ -33,6 +36,7 @@ SELECT hash,email,last4,created_at,expires_at FROM admin_tokens WHERE false;
 SELECT id,kind,title,target_page,target_id,created_at FROM admin_notifications WHERE false; SELECT email,notification_id FROM admin_notification_reads WHERE false; SELECT email,prefs,read_all_before FROM admin_preferences WHERE false;
 SELECT service,hour,calls,errors,latency_buckets,usage FROM admin_service_metrics WHERE false; SELECT service,day,ok_minutes,total_minutes,degraded,p95_ms FROM admin_service_daily WHERE false; SELECT id,service,title,description,state,started_at,resolved_at,auto FROM admin_incidents WHERE false;
 SELECT minute,service,calls,errors,latency_buckets FROM admin_service_minutes WHERE false; SELECT minute,service,state,calls,errors,p95_ms,bad_runs,good_runs,incident,checked_at FROM admin_service_verdicts WHERE false;
+SELECT id,created_at FROM admin_service_metric_batches WHERE false;
 SELECT repo,tag,asset,day,download_count FROM release_asset_snapshots WHERE false`); err != nil {
 		return err
 	}
@@ -66,8 +70,9 @@ func (a *Service) AdminHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 405, "method_not_allowed")
 		return
 	}
+	query := r.URL.Query()
 	page := 1
-	if raw := r.URL.Query().Get("page"); raw != "" {
+	if raw := query.Get("page"); raw != "" {
 		var err error
 		page, err = strconv.Atoi(raw)
 		if err != nil || page < 1 || page > 10000 {
@@ -75,7 +80,7 @@ func (a *Service) AdminHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	search := r.URL.Query().Get("q")
+	search := query.Get("q")
 	if len(search) > 200 || !utf8.ValidString(search) || strings.ContainsRune(search, 0) {
 		writeError(w, 400, "invalid_search")
 		return
@@ -85,7 +90,7 @@ func (a *Service) AdminHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "not_found")
 		return
 	}
-	a.adminList(w, r, list, page, search)
+	a.adminList(w, r, list, page, search, query)
 }
 
 // matchAdminPattern matches path against a route pattern (see adminRoute) and returns what "{}" matched.
@@ -100,8 +105,8 @@ func matchAdminPattern(pattern, path string) (string, bool) {
 	return path[len(prefix) : len(path)-len(suffix)], true
 }
 
-// adminListFilterParams is every filter parameter any list accepts; giving one to a list that does not accept it is an error rather than silently ignored.
-func adminListFilterParams() map[string]bool {
+// adminListFilterParams 从固定注册表缓存全部筛选参数，调用方只读；列表仍拒绝其他列表独有的非空参数。
+var adminListFilterParams = sync.OnceValue(func() map[string]bool {
 	params := map[string]bool{}
 	for _, list := range adminLists {
 		for _, f := range list.filters {
@@ -109,11 +114,10 @@ func adminListFilterParams() map[string]bool {
 		}
 	}
 	return params
-}
+})
 
-// adminList serves one list page of 50 rows, newest first. Count and page share one statement snapshot, including pages beyond the last row.
-func (a *Service) adminList(w http.ResponseWriter, r *http.Request, list adminList, page int, search string) {
-	query := r.URL.Query()
+// adminList 复用已解析的查询参数，按时间倒序返回每页 50 条；总数和分页共用语句快照，包括超出末尾的页。
+func (a *Service) adminList(w http.ResponseWriter, r *http.Request, list adminList, page int, search string, query url.Values) {
 	accepted := map[string]bool{}
 	args := []any{search, (page - 1) * 50, page}
 	if list.args != nil {
@@ -334,7 +338,13 @@ func (a *Service) adminAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err = tx.Commit(ctx); err != nil {
+	commitCtx := ctx
+	if result.CommitOnCancel {
+		var cancel context.CancelFunc
+		commitCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+	}
+	if err = tx.Commit(commitCtx); err != nil {
 		a.error(w, err)
 		return
 	}

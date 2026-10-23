@@ -472,6 +472,27 @@ func TestWordNoteSanitising(t *testing.T) {
 	}
 }
 
+func TestSanitizeWordNoteAllocationBudget(t *testing.T) {
+	input := strings.Repeat("普通投稿说明 ", 50)
+	allocations := testing.AllocsPerRun(100, func() {
+		if note, ok := sanitizeWordNote(input); !ok || note == "" {
+			t.Fatal("投稿说明未通过清理")
+		}
+	})
+	t.Logf("分配 %.1f 次", allocations)
+	if allocations > 4 {
+		t.Fatalf("投稿说明清理分配 %.1f 次，超过 4 次预算", allocations)
+	}
+}
+
+func BenchmarkSanitizeWordNote(b *testing.B) {
+	input := strings.Repeat("普通投稿说明 ", 50)
+	b.ReportAllocs()
+	for b.Loop() {
+		_, _ = sanitizeWordNote(input)
+	}
+}
+
 func TestSubmissionTitle(t *testing.T) {
 	for want, counts := range map[string]map[string]int{
 		"feat(custom): add 1 word":                                     {"words": 1},

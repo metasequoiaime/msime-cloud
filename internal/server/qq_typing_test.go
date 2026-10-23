@@ -153,10 +153,10 @@ func TestQQBotTypingCommands(t *testing.T) {
 	if got := send("m-stats-b", "我的数据？"); !strings.Contains(got, "【三号 · 今天】\n42 字") || typing.since.Format(time.DateOnly) != "2026-08-19" {
 		t.Fatal(got, typing.since)
 	}
-	if got := send("m-unbind-a", "/unbind"); !strings.HasPrefix(got, "已解绑") {
+	if got := send("m-unbind-a", "/unbind"); !strings.HasPrefix(got, "已解绑") || !strings.Contains(got, "绑定码已作废") {
 		t.Fatal(got)
 	}
-	if got := send("m-unbind-b", "解绑"); got != "你在这个群里没有绑定水杉账号。" {
+	if got := send("m-unbind-b", "解绑"); got != "你在这个群里没有绑定水杉账号，已有绑定码已作废。" {
 		t.Fatal(got)
 	}
 	typing.err = errors.New("db down")

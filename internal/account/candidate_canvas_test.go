@@ -37,6 +37,16 @@ func TestCandidateCanvasPackageReferences(t *testing.T) {
 	}
 }
 
+func TestCandidateCanvasWindowsResourcePaths(t *testing.T) {
+	for _, path := range []string{"assets./petals.GIF", "skin.toml/petals.WebP", strings.Repeat("a", 256) + "/petals.APNG"} {
+		t.Run(path, func(t *testing.T) {
+			if code := validCandidateResourceFiles("", map[string][]byte{path: {1}}, true); code != "candidate_skin_file_path" {
+				t.Fatal("扩展资源绕过了 Windows 路径限制", code)
+			}
+		})
+	}
+}
+
 func TestCandidateAPNGResourceConstraintUpgrade(t *testing.T) {
 	db := candidateSkinStore(t)
 	if _, err := db.pool.Exec(t.Context(), `ALTER TABLE candidate_skin_resources DROP CONSTRAINT candidate_skin_resources_path_check, ADD CONSTRAINT candidate_skin_resources_path_check CHECK(path ~ '\.(png|jpe?g|gif|webp)$')`); err != nil {

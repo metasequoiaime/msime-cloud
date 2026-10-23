@@ -1,12 +1,14 @@
 package account
 
 import (
+	"errors"
 	"net/http"
 	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/mileusna/useragent"
 )
 
@@ -39,19 +41,24 @@ var browserSystems = map[string]bool{useragent.MacOS: true, useragent.IOS: true,
 // describeSessionAgent 把登录时记录的 User-Agent 解析成平台、设备名和应用版本。不认识的格式三项都为空，客户端显示为「未知设备」。
 func describeSessionAgent(header string) (platform, name, version string) {
 	header = strings.TrimSpace(header)
-	if m := msimeAgent.FindStringSubmatch(header); m != nil && sessionPlatforms[m[1]] {
-		model := ""
-		if m[3] != "" {
-			model, _, _ = strings.Cut(m[3], ";")
-			model = strings.TrimSpace(model)
-			if strings.Contains(model, "=") || utf8.RuneCountInString(model) > 64 {
-				model = ""
+	if msimeAgent.MatchString(header) {
+		// 正则已验证完整格式，直接切原字符串，避免为每个设备分配捕获切片。
+		p, rest, _ := strings.Cut(header[len("msime-"):], "/")
+		if sessionPlatforms[p] {
+			v, detail, hasDetail := strings.Cut(rest, " (")
+			model := ""
+			if hasDetail {
+				model, _, _ = strings.Cut(detail[:len(detail)-1], ";")
+				model = strings.TrimSpace(model)
+				if strings.Contains(model, "=") || utf8.RuneCountInString(model) > 64 {
+					model = ""
+				}
 			}
+			return p, model, v
 		}
-		return m[1], model, m[2]
 	}
-	if m := legacyAgent.FindStringSubmatch(header); m != nil {
-		if p := strings.ToLower(m[1]); sessionPlatforms[p] {
+	if legacyAgent.MatchString(header) {
+		if p := legacySessionPlatform(header[len("MSIME/"):]); p != "" {
 			return p, "", ""
 		}
 		return "", "", ""
@@ -65,6 +72,34 @@ func describeSessionAgent(header string) (platform, name, version string) {
 		where = ua.Device
 	}
 	return "web", ua.Name + " · " + where, ""
+}
+
+func legacySessionPlatform(platform string) string {
+	if sessionPlatforms[platform] {
+		return platform
+	}
+	upper := false
+	for i := range platform {
+		if platform[i] >= utf8.RuneSelf {
+			platform = strings.ToLower(platform)
+			if sessionPlatforms[platform] {
+				return platform
+			}
+			return ""
+		}
+		if platform[i] >= 'A' && platform[i] <= 'Z' {
+			upper = true
+		}
+	}
+	if !upper {
+		return ""
+	}
+	for _, known := range [...]string{"android", "ios", "macos", "windows", "linux", "harmony"} {
+		if len(platform) == len(known) && strings.EqualFold(platform, known) {
+			return known
+		}
+	}
+	return ""
 }
 
 // sessions 处理 GET /v1/users/me/sessions：列出本人未撤销、未过期的会话，当前请求所用的会话标记 current。匿名账号是另一个用户，不会出现在真实账号的列表里。
@@ -96,6 +131,16 @@ func (a *Service) sessions(w http.ResponseWriter, r *http.Request) {
 	if err = rows.Err(); err != nil {
 		a.error(w, err)
 		return
+	}
+	if len(out) == 0 {
+		var present int
+		if err = a.store.pool.QueryRow(r.Context(), "SELECT 1 FROM auth_users WHERE id=$1", p.UserID).Scan(&present); errors.Is(err, pgx.ErrNoRows) {
+			a.error(w, errMissingUser)
+			return
+		} else if err != nil {
+			a.error(w, err)
+			return
+		}
 	}
 	write(w, 200, map[string]any{"sessions": out})
 }

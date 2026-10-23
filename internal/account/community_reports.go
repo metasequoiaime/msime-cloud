@@ -6,12 +6,11 @@ import (
 	"time"
 )
 
-// communityReportsPerHour bounds how many reports one account can file, so a single account cannot flood the moderators' notifications.
+// communityReportsPerHour 限制单个账号的举报频率，防止刷满管理通知。
 const communityReportsPerHour = 30
 
-// CommunityReport serves POST /v1/community/reports (unit U2): a signed-in user reports a community item. The route is registered in the server package with the same per-address limit and timeout as the other account routes.
-//
-// The body is {kind, item_id, reason, detail?}: kind is one of skins, candidate-skins, plugins, dictionaries, replies or phrases; the item must be one the reporter can see (not removed, and a candidate skin must be public). Reporting the same item again is accepted without a second record. A new report notifies the console in the same transaction.
+// CommunityReport 处理 POST /v1/community/reports：登录用户只能举报可见作品。
+// 同一用户对同一作品的重复举报不新增记录；新举报与管理通知在同一事务提交。
 func (a *Service) CommunityReport(w http.ResponseWriter, r *http.Request) {
 	if a == nil {
 		writeError(w, 503, "user_auth_disabled")
@@ -61,11 +60,11 @@ func (a *Service) CommunityReport(w http.ResponseWriter, r *http.Request) {
 	if input.Kind == "candidate-skins" {
 		visible += ` AND visibility='public'`
 	}
-	// 可见性检查和举报写入共用一条语句；通知标题仍由 Notify 统一规范化。
+	// 锁住可见作品直到举报和通知提交，避免删除、下架或转私有后留下新举报。
 	var name string
 	var created, available bool
 	err = tx.QueryRow(ctx, `WITH visible AS MATERIALIZED (
- SELECT name FROM `+section.table+section.where(`id=$1`)+visible+`
+ SELECT name FROM `+section.table+section.where(`id=$1`)+visible+` FOR SHARE
 ), inserted AS (
  INSERT INTO community_reports(kind,item_id,reporter_id,reason,detail)
  SELECT $2,$1,$3,$4,$5 FROM visible

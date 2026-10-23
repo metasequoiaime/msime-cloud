@@ -209,36 +209,108 @@ func pngChunkType(kind string) bool {
 
 // decode 用 image/png 完整解码默认图和每一帧，任何一张失败都返回 false。每帧拼成一张独立的 PNG：IHDR 换成帧的尺寸，带上 PLTE 和 tRNS，帧数据作为 IDAT。image/png 会拒绝解压后多出的像素数据，但不管 zlib 流结束之后还剩多少压缩字节（它的读取有缓冲，并且忽略多余的 IDAT 块），而这里入库的是原始压缩流，所以另外要求每帧的数据恰好是一个完整的 zlib 流，不能借此夹带任意字节。
 func (a *candidateAPNG) decode() bool {
+	var validator apngZlibValidator
+	var frameBuffer []byte
 	images := make([]apngFrame, 0, len(a.frames)+1)
 	if a.images > len(a.frames) {
 		images = append(images, apngFrame{width: uint32(a.width), height: uint32(a.height), data: a.idat})
 	}
 	images = append(images, a.frames...)
 	for _, frame := range images {
-		decoded, err := png.Decode(bytes.NewReader(a.framePNG(frame)))
-		if err != nil || decoded.Bounds().Dx() != int(frame.width) || decoded.Bounds().Dy() != int(frame.height) || !zlibStreamExact(frame.data) {
+		frameBuffer = a.framePNG(frame, frameBuffer)
+		decoded, err := png.Decode(bytes.NewReader(frameBuffer))
+		if err != nil || decoded.Bounds().Dx() != int(frame.width) || decoded.Bounds().Dy() != int(frame.height) || !validator.exact(frame.data) {
 			return false
 		}
 	}
 	return true
 }
 
-// zlibStreamExact 报告 parts 拼起来是否恰好是一个完整的 zlib 流，校验和正确且之后没有多余字节。只在 image/png 已经解码成功之后调用，所以解压量就是这一帧的像素数据，不会更多。bytes.Reader 实现了 io.ByteReader，flate 直接逐字节读它、不预读，流结束后 Len 就是剩下的字节数。
-func zlibStreamExact(parts [][]byte) bool {
-	r := bytes.NewReader(bytes.Join(parts, nil))
-	z, err := zlib.NewReader(r)
-	if err == nil {
-		_, err = io.Copy(io.Discard, z)
-	}
-	return err == nil && r.Len() == 0
+// apngDataReader 直接读取各个数据块，只移动自身的切片头，不修改调用方的数据段。
+// 同时实现 io.ByteReader，防止 flate 添加缓冲后预读流尾的多余字节。
+type apngDataReader struct {
+	parts  [][]byte
+	offset int
 }
 
-// framePNG 把一帧拼成独立的 PNG 文件。
-func (a *candidateAPNG) framePNG(frame apngFrame) []byte {
+func (r *apngDataReader) advance() {
+	for len(r.parts) > 0 && r.offset == len(r.parts[0]) {
+		r.parts = r.parts[1:]
+		r.offset = 0
+	}
+}
+
+func (r *apngDataReader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	r.advance()
+	if len(r.parts) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, r.parts[0][r.offset:])
+	r.offset += n
+	return n, nil
+}
+
+func (r *apngDataReader) ReadByte() (byte, error) {
+	r.advance()
+	if len(r.parts) == 0 {
+		return 0, io.EOF
+	}
+	b := r.parts[0][r.offset]
+	r.offset++
+	return b, nil
+}
+
+// apngZlibValidator 在同一张 APNG 的各帧之间复用解压工作区，不跨请求共享状态。
+type apngZlibValidator struct {
+	data   apngDataReader
+	stream io.ReadCloser
+}
+
+// exact 报告 parts 拼起来是否恰好是一个完整的 zlib 流，校验和正确且之后没有多余字节。只在 image/png 已经解码成功之后调用，所以解压量就是这一帧的像素数据，不会更多。
+func (v *apngZlibValidator) exact(parts [][]byte) bool {
+	v.data = apngDataReader{parts: parts}
+	var err error
+	if v.stream == nil {
+		v.stream, err = zlib.NewReader(&v.data)
+	} else {
+		// NewReader 保证实现 Resetter；重置窗口、校验和及输入位置，避免各帧互相影响。
+		err = v.stream.(zlib.Resetter).Reset(&v.data, nil)
+	}
+	if err != nil {
+		return false
+	}
+	_, err = io.Copy(io.Discard, v.stream)
+	v.stream.Close()
+	v.data.advance()
+	return err == nil && len(v.data.parts) == 0
+}
+
+// framePNG 把一帧拼成独立的 PNG 文件，复用 out 的容量并覆盖其内容；容量不足时按各块的完整长度一次分配。
+func (a *candidateAPNG) framePNG(frame apngFrame, out []byte) []byte {
 	ihdr := append([]byte{}, a.ihdr...)
 	binary.BigEndian.PutUint32(ihdr, frame.width)
 	binary.BigEndian.PutUint32(ihdr[4:], frame.height)
-	out := appendPNGChunk(append([]byte{}, pngSignature...), "IHDR", ihdr)
+	// 每个块另含长度、类型和 CRC 共 12 字节；固定块是 IHDR 和 IEND。
+	size := len(pngSignature) + len(ihdr) + 2*12
+	if a.plte != nil {
+		size += len(a.plte) + 12
+	}
+	if a.trns != nil {
+		size += len(a.trns) + 12
+	}
+	for _, data := range frame.data {
+		size += len(data) + 12
+	}
+	if cap(out) < size {
+		out = make([]byte, len(pngSignature), size)
+	} else {
+		out = out[:len(pngSignature)]
+	}
+	copy(out, pngSignature)
+	out = appendPNGChunk(out, "IHDR", ihdr)
 	if a.plte != nil {
 		out = appendPNGChunk(out, "PLTE", a.plte)
 	}

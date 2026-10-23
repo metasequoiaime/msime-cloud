@@ -1,4 +1,4 @@
-// Package publictools 定义 QQ Bot、MCP 和 CLI 共用的公共只读查询。
+// Package publictools 定义 QQ Bot、MCP 和 CLI 共用的公共查询，以及仅显式管理员入口使用的独立管理工具目录。
 package publictools
 
 import (
@@ -19,6 +19,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -74,7 +76,12 @@ func Definitions() []*mcp.Tool {
 }
 
 func tool(name, description string, properties map[string]any, required ...string) *mcp.Tool {
-	return &mcp.Tool{Name: name, Description: description, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true}, InputSchema: map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}}
+	schema := map[string]any{"type": "object", "properties": properties, "additionalProperties": false}
+	// 没有必填参数时省略 required；nil 切片编码成 null 会被 Claude Code 拒绝。
+	if len(required) > 0 {
+		schema["required"] = required
+	}
+	return &mcp.Tool{Name: name, Description: description, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true}, InputSchema: schema}
 }
 func field(kind, description string) map[string]any {
 	return map[string]any{"type": kind, "description": description}
@@ -184,9 +191,7 @@ func decode(arguments json.RawMessage, out any) error {
 	if len(arguments) > MaxArguments || len(bytes.TrimSpace(arguments)) == 0 || bytes.TrimSpace(arguments)[0] != '{' {
 		return errors.New("invalid_tool_arguments")
 	}
-	d := json.NewDecoder(bytes.NewReader(arguments))
-	d.DisallowUnknownFields()
-	if d.Decode(out) != nil || d.Decode(new(any)) != io.EOF {
+	if httpjson.DecodeValue(bytes.NewReader(arguments), out) != nil {
 		return errors.New("invalid_tool_arguments")
 	}
 	return nil
@@ -364,12 +369,17 @@ func NewServer(execute Execute, version string) *mcp.Server {
 
 // HTTP 使用管理员选定的服务地址；公共查询不附带任何会话，输入查询只使用显式令牌。
 func HTTP(client *http.Client, base, token string) (Execute, error) {
+	return httpTransport(client, base, token, "public")
+}
+
+func httpTransport(client *http.Client, base, token, scope string) (Execute, error) {
 	u, err := url.Parse(base)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return nil, errors.New("invalid_public_api_url")
+	// 空查询和空片段同样会吞掉后续拼接的工具路径，必须在发请求或启动 MCP 前拒绝。
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(base, "#") {
+		return nil, errors.New("invalid_" + scope + "_api_url")
 	}
 	isolated := *client
-	isolated.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	isolated.CheckRedirect = httpclient.StopRedirect
 	isolated.Jar = nil
 	return func(ctx context.Context, r Request) (json.RawMessage, error) {
 		req, err := http.NewRequestWithContext(ctx, r.Method, strings.TrimRight(base, "/")+r.Path, bytes.NewReader(r.Body))
@@ -385,15 +395,24 @@ func HTTP(client *http.Client, base, token string) (Execute, error) {
 		}
 		response, err := isolated.Do(req)
 		if err != nil {
-			return nil, errors.New("public_api_unavailable")
+			return nil, errors.New(scope + "_api_unavailable")
 		}
 		defer response.Body.Close()
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
-			return nil, fmt.Errorf("public_api_status_%d", response.StatusCode)
+			return nil, fmt.Errorf("%s_api_status_%d", scope, response.StatusCode)
 		}
-		data, err := io.ReadAll(io.LimitReader(response.Body, MaxResponse+1))
+		reader := io.LimitReader(response.Body, MaxResponse+1)
+		var data []byte
+		if response.ContentLength >= bytes.MinRead && response.ContentLength <= MaxResponse {
+			// 大响应按声明长度预留正文与 EOF 探测空间；实际读取仍受上限约束。
+			buffer := bytes.NewBuffer(make([]byte, 0, int(response.ContentLength)+bytes.MinRead))
+			_, err = buffer.ReadFrom(reader)
+			data = buffer.Bytes()
+		} else {
+			data, err = io.ReadAll(reader)
+		}
 		if err != nil || len(data) > MaxResponse {
-			return nil, errors.New("public_api_response_too_large_or_unreadable")
+			return nil, errors.New(scope + "_api_response_too_large_or_unreadable")
 		}
 		return data, nil
 	}, nil

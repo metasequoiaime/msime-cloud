@@ -2,9 +2,8 @@
 package skins
 
 import (
-	"crypto/sha256"
+	"bytes"
 	"embed"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -18,6 +17,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	checksum "github.com/metasequoiaime/MSIME-Backend/internal/digest"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -37,7 +37,10 @@ var builtinLoads = func() map[string]func() (Package, error) {
 	return loads
 }()
 
-func SafeID(id string) bool  { return idPattern.MatchString(id) }
+// SafeID 额外拒绝 Windows 无法按原名安装的尾点目录与 nul 设备目录。
+func SafeID(id string) bool {
+	return id != "nul" && !strings.HasSuffix(id, ".") && idPattern.MatchString(id)
+}
 func Builtin(id string) bool { return slices.Contains(builtinIDs, id) }
 
 type Colors struct {
@@ -201,7 +204,16 @@ func readFile(fsys fs.FS, name string) ([]byte, error) {
 	if err != nil || !info.Mode().IsRegular() || info.Size() > 4<<20 {
 		return nil, ErrInvalid
 	}
-	raw, err := io.ReadAll(io.LimitReader(f, (4<<20)+1))
+	reader := io.LimitReader(f, (4<<20)+1)
+	var raw []byte
+	if info.Size() >= bytes.MinRead {
+		// 大资源按已知大小预留正文与 EOF 探测空间；小资源沿用原读取缓冲。
+		buffer := bytes.NewBuffer(make([]byte, 0, int(info.Size())+bytes.MinRead))
+		_, err = buffer.ReadFrom(reader)
+		raw = buffer.Bytes()
+	} else {
+		raw, err = io.ReadAll(reader)
+	}
 	if err != nil || len(raw) > 4<<20 {
 		return nil, ErrInvalid
 	}
@@ -277,8 +289,7 @@ func loadPackage(root, id string) (Package, error) {
 		if total > 16<<20 {
 			return ErrInvalid
 		}
-		sum := sha256.Sum256(raw)
-		p.Resources = append(p.Resources, Resource{name, len(raw), hex.EncodeToString(sum[:]), mediaType(name), "/v1/skins/" + id + "/resources/" + name})
+		p.Resources = append(p.Resources, Resource{name, len(raw), checksum.SHA256(raw), mediaType(name), "/v1/skins/" + id + "/resources/" + name})
 		return nil
 	})
 	if err != nil {

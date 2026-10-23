@@ -4,15 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"iter"
 	"net/http"
 	"net/url"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/engine"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
+
+// dictionaryDownloadTimeout 为完整快照和 TSV 下载保留大词库传输时间，与整包数据导出一致。
+const dictionaryDownloadTimeout = 2 * time.Minute
 
 // dictionaryKinds 是个人词库词条的全部种类，顺序即社区词库分组校验的顺序：`wubi` 是 86 版五笔，`wubi98` 是 98 版。数据库里的同一份清单是 userdata_schema.sql 的 `user_dictionary_entries_kind_check`，两边要一起改。
 var dictionaryKinds = []string{"pinyin", "wubi", "wubi98", "english", "quick"}
@@ -60,7 +66,7 @@ func (a *Service) validateDictionary(ctx context.Context, kind string, entries [
 			if (!utf8.ValidString(e.Word) || !utf8.ValidString(e.Code)) && !utf8.ValidString(e.Word+e.Code) {
 				return nil, engine.ErrInvalid
 			}
-			if strings.ContainsAny(e.Word, "\x00\t\r\n") || strings.ContainsAny(e.Code, "\x00\t\r\n") || strings.TrimSpace(e.Word) == "" || (kind == "quick" && utf16Length(e.Word) > 199) {
+			if strings.ContainsAny(e.Word, "\x00\t\r\n") || strings.ContainsAny(e.Code, "\x00\t\r\n") || strings.TrimSpace(e.Word) == "" || (kind == "quick" && textutil.UTF16Length(e.Word) > 199) {
 				return nil, engine.ErrInvalid
 			}
 		}
@@ -180,6 +186,24 @@ func (a *Service) dictionary(w http.ResponseWriter, r *http.Request) {
 	}
 	write(w, status, change)
 }
+
+// dictionaryImportTextLines 按需去掉开头的 BOM 和换行前的一个 CR，保留单独 CR 与末尾空行，不复制全文。
+func dictionaryImportTextLines(text string) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		remaining := strings.TrimPrefix(text, "\ufeff")
+		for {
+			line, rest, newline := strings.Cut(remaining, "\n")
+			if newline {
+				line = strings.TrimSuffix(line, "\r")
+			}
+			if !yield(line) || !newline {
+				return
+			}
+			remaining = rest
+		}
+	}
+}
+
 func (a *Service) dictionaryImport(w http.ResponseWriter, r *http.Request) {
 	p, ok := a.principal(w, r, false)
 	if !ok {
@@ -202,7 +226,7 @@ func (a *Service) dictionaryImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	entries := []DictionaryEntry{}
-	for line := range strings.SplitSeq(strings.ReplaceAll(strings.TrimPrefix(input.Text, "\ufeff"), "\r\n", "\n"), "\n") {
+	for line := range dictionaryImportTextLines(input.Text) {
 		if line == "" {
 			continue
 		}
@@ -216,6 +240,10 @@ func (a *Service) dictionaryImport(w http.ResponseWriter, r *http.Request) {
 		if err != nil || weight < 0 {
 			writeError(w, 400, "invalid_dictionary_weight")
 			return
+		}
+		// 保留第 501 条作为超限标记，后续行继续按原顺序校验，但不再累积条目。
+		if len(entries) > 500 {
+			continue
 		}
 		if input.Format == "windows" && (kind == "english" || kind == "quick") {
 			word, code = code, word
@@ -248,11 +276,14 @@ func (a *Service) dictionaryExport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "not_found")
 		return
 	}
-	format := r.URL.Query().Get("format")
-	if (format != "" && format != "standard" && format != "windows") || len(r.URL.Query()["format"]) > 1 {
+	query := r.URL.Query()
+	format := query.Get("format")
+	if (format != "" && format != "standard" && format != "windows") || len(query["format"]) > 1 {
 		writeError(w, 400, "invalid_dictionary_format")
 		return
 	}
+	// 路由上下文和连接写期限需要同时延长，否则慢速下载仍会被全局连接超时截断。
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(dictionaryDownloadTimeout + 5*time.Second))
 	stream := a.store.StreamDictionary
 	if format == "windows" {
 		stream = a.store.StreamWindowsDictionary
@@ -336,7 +367,7 @@ func (a *Service) dictionaryImportHans(w http.ResponseWriter, r *http.Request) {
 		weight = *input.Weight
 	}
 	words := []string{}
-	for line := range strings.SplitSeq(strings.ReplaceAll(strings.TrimPrefix(input.Text, "\ufeff"), "\r\n", "\n"), "\n") {
+	for line := range dictionaryImportTextLines(input.Text) {
 		word := strings.TrimSpace(line)
 		if word == "" {
 			continue
@@ -350,6 +381,10 @@ func (a *Service) dictionaryImportHans(w http.ResponseWriter, r *http.Request) {
 				writeError(w, 400, "pure_han_required")
 				return
 			}
+		}
+		// 第 501 个词已标记超限；后续词仍需完成字符校验，以保留原错误优先级。
+		if len(words) > 500 {
+			continue
 		}
 		words = append(words, word)
 	}

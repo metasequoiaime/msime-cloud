@@ -32,12 +32,16 @@ var ErrUnavailable = errors.New("engine_unavailable")
 var ErrFailure = errors.New("engine_failure")
 var ErrInvalid = errors.New("invalid_engine_request")
 
-// Discard excess output while letting the child finish or reach its deadline.
-// exec.Cmd must not accumulate an unbounded native diagnostic in memory.
+// 丢弃超限输出，同时让子进程正常结束或到达超时期限。
+// 使用命名字段，避免提升 Buffer 的方法后绕过 Write 中的限额。
 type boundedOutput struct {
-	bytes.Buffer
+	buffer   bytes.Buffer
 	exceeded bool
 }
+
+func (b *boundedOutput) Len() int { return b.buffer.Len() }
+
+func (b *boundedOutput) Bytes() []byte { return b.buffer.Bytes() }
 
 func (b *boundedOutput) Write(p []byte) (int, error) {
 	n := len(p)
@@ -46,7 +50,7 @@ func (b *boundedOutput) Write(p []byte) (int, error) {
 		b.exceeded = true
 		p = p[:remaining]
 	}
-	_, _ = b.Buffer.Write(p)
+	_, _ = b.buffer.Write(p)
 	return n, nil
 }
 

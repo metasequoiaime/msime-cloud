@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -149,6 +150,56 @@ func (f *dictionaryMock) writes() []dictionaryMockRequest {
 	}
 	return out
 }
+
+func TestDictionaryChangesContinuesAfterWriteCancellation(t *testing.T) {
+	const root = "/repos/" + dictTestRepo
+	for _, tc := range []struct {
+		name, method, path string
+		started            bool
+	}{
+		{"before_write", "GET", root + "/contents/custom/words.txt", false},
+		{"after_branch", "POST", root + "/git/refs", true},
+		{"after_content", "PUT", root + "/contents/custom/words.txt", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &dictionaryMock{text: "甲\tjia\t1\n"}
+			client := dictionaryMockClient(t, f)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			base := client.HTTP.Transport
+			if base == nil {
+				base = http.DefaultTransport
+			}
+			client.HTTP.Transport = dictionaryCancelTransport{base: base, method: tc.method, path: tc.path, cancel: cancel}
+			s := &Server{config: Config{Admin: AdminConfig{GitHub: AdminGitHubConfig{DictionaryRepo: dictTestRepo}}}}
+			result, err := s.createDictionaryPR(ctx, client, dictionaryChangeRequest{
+				Path: "custom/words.txt", SHA: dictionaryBlobSHA([]byte(f.text)),
+				Changes: []dictionaryEdit{{Operation: "add", Columns: []string{"乙", "yi", "1"}}},
+			})
+			if ctx.Err() == nil {
+				t.Fatalf("未在指定响应后取消请求：result=%+v err=%v", result, err)
+			}
+			writes := f.writes()
+			if !tc.started {
+				if err == nil || len(writes) != 0 {
+					t.Fatalf("请求已取消时仍开始写入：result=%+v err=%v writes=%+v", result, err, writes)
+				}
+				return
+			}
+			if err != nil || result.Number != 42 || result.URL != "https://github.com/"+dictTestRepo+"/pull/42" {
+				t.Fatalf("写入开始后请求取消导致 PR 未完成：result=%+v err=%v writes=%+v", result, err, writes)
+			}
+			if len(writes) != 3 || writes[0].body["ref"] != "refs/heads/"+result.Branch || writes[1].body["branch"] != result.Branch || writes[2].body["head"] != result.Branch {
+				t.Fatalf("未在同一新分支完成三步写入：result=%+v writes=%+v", result, writes)
+			}
+			content, err := base64.StdEncoding.DecodeString(writes[1].body["content"].(string))
+			if err != nil || string(content) != f.text+"乙\tyi\t1\n" {
+				t.Fatalf("PR 中的词条变更错误：content=%q err=%v", content, err)
+			}
+		})
+	}
+}
+
 func dictionaryDirect(s *Server, method, path, body string, permitted bool) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(method, path, strings.NewReader(body))
 	permissions := []string{}

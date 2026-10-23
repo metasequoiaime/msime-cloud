@@ -38,10 +38,8 @@ export function formatLatency(ms: number | null | undefined): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10000 ? 0 : 1)}s` : `${Math.round(ms)}ms`;
 }
 
-// formatRate writes a 0..1 ratio as a percentage with two decimals, or — without data.
-export function formatRate(rate: number | null | undefined, digits = 2): string {
-  return rate == null ? "—" : `${(rate * 100).toFixed(digits)}%`;
-}
+// 保留云服务与系统状态页的既有导出，格式化逻辑由公共数字工具提供。
+export { formatRate } from "../utils/number";
 
 // stateTone maps a service state to the dot and pill tone: slow or failing is warn, down is bad, no probe yet is muted.
 export function stateTone(state: ServiceState): "ok" | "warn" | "bad" | "mute" {

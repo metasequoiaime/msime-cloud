@@ -2,15 +2,16 @@ package server
 
 import (
 	"context"
-	"crypto/rand"
-	"fmt"
+	"encoding/base64"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
+	"github.com/metasequoiaime/MSIME-Backend/internal/uuid"
 )
 
 // Close 取消并等待所有已升级的 WebSocket 处理协程，补足 http.Server.Shutdown 的管理范围。互斥锁防止 Wait 与新处理协程的 Add 发生竞争。
@@ -52,7 +53,7 @@ func (s *Server) streamTranscription(w http.ResponseWriter, r *http.Request) {
 		fail(w, 503, "feature_disabled")
 		return
 	}
-	if r.Header.Get("Upgrade") == "" {
+	if !validStreamingHandshake(r) {
 		fail(w, 400, "websocket_required")
 		return
 	}
@@ -86,14 +87,12 @@ func (s *Server) streamTranscription(w http.ResponseWriter, r *http.Request) {
 	if e.Provider != "everyapi" {
 		headers.Set("X-Api-Resource-Id", e.ResourceID)
 	}
-	id := make([]byte, 16)
-	if _, err := rand.Read(id); err != nil {
+	id, err := uuid.NewV4()
+	if err != nil {
 		upstreamError(w, r, err)
 		return
 	}
-	id[6] = id[6]&0x0f | 0x40
-	id[8] = id[8]&0x3f | 0x80
-	headers.Set("X-Api-Request-Id", fmt.Sprintf("%x-%x-%x-%x-%x", id[:4], id[4:6], id[6:8], id[8:10], id[10:]))
+	headers.Set("X-Api-Request-Id", id)
 	dialCtx, stopDial := context.WithCancel(r.Context())
 	stopShutdown := context.AfterFunc(ctx, stopDial)
 	dialStarted := time.Now()
@@ -170,4 +169,30 @@ func (s *Server) streamTranscription(w http.ResponseWriter, r *http.Request) {
 	cancel()
 	_ = upstream.CloseNow()
 	<-results
+}
+
+// validStreamingHandshake 按 RFC 6455 §4.2.1 在连接供应商前校验请求，与 websocket.Accept 的请求校验保持一致。
+func validStreamingHandshake(r *http.Request) bool {
+	if r.Method != http.MethodGet || !r.ProtoAtLeast(1, 1) || r.Header.Get("Sec-WebSocket-Version") != "13" {
+		return false
+	}
+	hasToken := func(name, token string) bool {
+		for _, value := range r.Header.Values(name) {
+			for part := range strings.SplitSeq(value, ",") {
+				if strings.EqualFold(strings.TrimSpace(part), token) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	if !hasToken("Connection", "Upgrade") || !hasToken("Upgrade", "websocket") {
+		return false
+	}
+	keys := r.Header.Values("Sec-WebSocket-Key")
+	if len(keys) != 1 {
+		return false
+	}
+	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(keys[0]))
+	return err == nil && len(key) == 16
 }

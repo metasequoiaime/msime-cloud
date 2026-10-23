@@ -2,13 +2,13 @@ package account
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"github.com/metasequoiaime/MSIME-Backend/internal/digest"
 	"github.com/metasequoiaime/MSIME-Backend/internal/engine"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 	"log/slog"
 	"net"
@@ -91,7 +91,7 @@ func New(ctx context.Context, c Config) (*Service, error) {
 		}
 	}
 	lifetime, cancel := context.WithCancel(context.Background())
-	a := &Service{store: db, config: c, client: &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, cancel: cancel, done: make(chan struct{})}
+	a := &Service{store: db, config: c, client: httpclient.New(10 * time.Second), cancel: cancel, done: make(chan struct{})}
 	a.verifiers = makeVerifiers(lifetime, c, a.client)
 	if c.Google.Desktop.ClientID != "" {
 		// Validate already proved the key decodes to 32 bytes.
@@ -237,14 +237,16 @@ func (a *Service) clientAddress(r *http.Request) string {
 }
 
 func IsPath(path string) bool {
-	return strings.HasPrefix(path, "/v1/community/") || path == siteDownloadMirrorsPath || path == TelemetryPath || path == FeedbackPath || strings.HasPrefix(path, "/v1/auth/") || path == "/v1/users/me" || strings.HasPrefix(path, "/v1/users/me/") || strings.HasPrefix(path, DiagnosticsMCPPrefix)
+	return strings.HasPrefix(path, "/v1/community/") || path == siteDownloadMirrorsPath || path == siteDownloadStatsPath || path == TelemetryPath || path == FeedbackPath || strings.HasPrefix(path, "/v1/auth/") || path == "/v1/users/me" || strings.HasPrefix(path, "/v1/users/me/") || strings.HasPrefix(path, DiagnosticsMCPPrefix)
 }
 
-// accountRouteTimeout 是每条挂载路由的上下文时限：默认 15 秒；请求体本身就可能传得更久的几条例外：词库快照恢复、候选窗皮肤发布或替换、插件包发布或下载，以及带截图的反馈。
+// accountRouteTimeout 是每条挂载路由的上下文时限：默认 15 秒；大文件传输单独延长，包括词库快照恢复和下载、TSV 下载、整包数据导出、候选窗皮肤发布或替换、插件包发布或下载，以及带截图的反馈。
 func accountRouteTimeout(pattern string) time.Duration {
 	switch pattern {
 	case "PUT /v1/users/me/dictionary/snapshot":
 		return snapshotRestoreTimeout
+	case "GET /v1/users/me/dictionary/snapshot", "GET /v1/users/me/dictionaries/{kind}/export":
+		return dictionaryDownloadTimeout
 	case "POST /v1/community/candidate-skins", "PUT /v1/community/candidate-skins/{id}":
 		return candidatePublishTimeout
 	case "POST /v1/community/plugins", "POST /v1/community/plugins/{id}/download":
@@ -261,7 +263,7 @@ func accountRouteTimeout(pattern string) time.Duration {
 // accountRouteRate 返回 pattern 对应的按地址额度及其每分钟上限。每个 App 和官网访客都会拉取的可缓存公开接口用一份更大的独立额度，匿名遥测用一份更小的独立额度，两者都不会挤占登录、刷新令牌和社区接口的额度。
 func accountRouteRate(pattern string) (string, int) {
 	switch pattern {
-	case "GET " + NoticesPath, "GET " + siteDownloadMirrorsPath:
+	case "GET " + NoticesPath, "GET " + siteDownloadMirrorsPath, "GET " + siteDownloadStatsPath:
 		return "feed-ip:", publicFeedRateLimit
 	case "POST " + TelemetryPath:
 		return "telemetry-ip:", telemetryRateLimit
@@ -280,6 +282,7 @@ func Mount(mux *http.ServeMux, a *Service) {
 		"PUT /v1/community/resources/{id}/rating":          (*Service).resourceRate,
 		"GET /v1/community/stats":                          (*Service).communityStats,
 		"GET /v1/site/download-mirrors":                    (*Service).siteDownloadMirrors,
+		"GET /v1/site/download-stats":                      (*Service).siteDownloadStats,
 		"GET /v1/community/candidate-skins":                (*Service).communityCandidateList,
 		"POST /v1/community/candidate-skins":               (*Service).communityCandidatePublish,
 		"GET /v1/community/candidate-skins/sync":           (*Service).communityCandidateSync,
@@ -400,6 +403,19 @@ func setPrivateResponseHeaders(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 }
+
+// setPublicResponseHeaders 允许公开数据缓存 60 秒；即使请求没有 Origin，也按它区分缓存，保留跨域响应的正确性。
+func setPublicResponseHeaders(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "public, max-age=60")
+	w.Header().Set("Vary", "Origin")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+}
+
+func writePublicJSON(w http.ResponseWriter, value any) {
+	setPublicResponseHeaders(w)
+	httpjson.Write(w, http.StatusOK, value)
+}
+
 func write(w http.ResponseWriter, status int, value any) {
 	setPrivateResponseHeaders(w)
 	httpjson.Write(w, status, value)
@@ -477,9 +493,8 @@ func (a *Service) providers(w http.ResponseWriter, r *http.Request) {
 	write(w, 200, map[string]any{"providers": m})
 }
 func (a *Service) codeHash(challenge, code string) string {
-	mac := hmac.New(sha256.New, []byte(os.Getenv(a.config.PepperEnv)))
-	mac.Write([]byte(challenge + ":" + code))
-	return hex.EncodeToString(mac.Sum(nil))
+	mac := digest.HMACSHA256([]byte(os.Getenv(a.config.PepperEnv)), []byte(challenge+":"+code))
+	return hex.EncodeToString(mac)
 }
 
 // refundDeliveryReservation 只在邮件尚未进入 DATA 阶段时退回全站额度；进入 DATA 后结果可能已经投递。
@@ -501,9 +516,8 @@ func (a *Service) suppressDeliveryTarget(parent context.Context, provider, targe
 
 // verificationCode 使用随机种子和服务端密钥生成六位验证码。相同目标复用有效挑战时，种子保持不变，因此不会再次发送邮件。
 func (a *Service) verificationCode(provider, target, seed string) string {
-	mac := hmac.New(sha256.New, []byte(os.Getenv(a.config.PepperEnv)))
-	mac.Write([]byte("verification-code-v1:" + provider + ":" + target + ":" + seed))
-	n := strconv.FormatUint(uint64(binary.BigEndian.Uint32(mac.Sum(nil)))%1000000, 10)
+	mac := digest.HMACSHA256([]byte(os.Getenv(a.config.PepperEnv)), []byte("verification-code-v1:"+provider+":"+target+":"+seed))
+	n := strconv.FormatUint(uint64(binary.BigEndian.Uint32(mac))%1000000, 10)
 	return strings.Repeat("0", 6-len(n)) + n
 }
 

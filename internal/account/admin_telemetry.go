@@ -8,18 +8,10 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
-
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // TelemetryPath 是服务端经 Route 挂载的匿名事件接口；IsPath 让它绕过 Bearer 中间件，accountRouteRate 按这个路由给它独立的额度，所以服务端必须原样挂载在这个路径上。
 const TelemetryPath = "/v1/telemetry/events"
-
-// telemetryWriteDefinitelyRejected 只把数据库明确返回的语句错误视为未写入。连接中断、超时等错误的结果可能未知，不能退款后让已写入的事件逃过额度。
-func telemetryWriteDefinitelyRejected(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr)
-}
 
 const (
 	// telemetryRateLimit 是遥测事件按地址每分钟的上限，单独一份额度，上报不会挤占登录和社区接口的每分钟 120 次。客户端每次启动只发几条事件，60 次足够补发离线队列。
@@ -91,7 +83,40 @@ func telemetryNull(s string) any {
 
 // telemetryLines 把 CRLF 和单独的 CR 换行统一为 LF，让 Windows 的堆栈或消息通过控制字符检查，并与以 LF 上报的同一崩溃归为一组。
 func telemetryLines(s string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\r", "\n")
+	first := strings.IndexByte(s, '\r')
+	if first < 0 {
+		return s
+	}
+	pairs := strings.Count(s[first:], "\r\n")
+	if pairs == 0 {
+		return strings.ReplaceAll(s, "\r", "\n")
+	}
+	carriages := strings.Count(s[first:], "\r")
+	var out strings.Builder
+	// 每对 CRLF 缩短一个字节，按最终长度分配，避免混合换行复制两次或密集 CRLF 保留多余空间。
+	out.Grow(len(s) - pairs)
+	start := 0
+	if carriages == pairs {
+		// 纯 CRLF 每次固定跳过两个字节，避免为密集换行逐个判断后继字符。
+		for range pairs {
+			end := start + strings.IndexByte(s[start:], '\r')
+			out.WriteString(s[start:end])
+			out.WriteByte('\n')
+			start = end + 2
+		}
+	} else {
+		for range carriages {
+			end := start + strings.IndexByte(s[start:], '\r')
+			out.WriteString(s[start:end])
+			out.WriteByte('\n')
+			start = end + 1
+			if start < len(s) && s[start] == '\n' {
+				start++
+			}
+		}
+	}
+	out.WriteString(s[start:])
+	return out.String()
 }
 
 // truncateStack 把超过 limit 个标量的堆栈截到能放下的最后一个完整行，超长堆栈仍被记录而不是被拒绝（否则用同一 ID 重试永远不会成功）。第一行就超过 limit 时在 limit 处截断。
@@ -175,12 +200,14 @@ func (a *Service) Telemetry(w http.ResponseWriter, r *http.Request) {
 	), grouped AS (
 	 INSERT INTO admin_crash_groups(signature,platform,version,title)
 SELECT signature,$11,version,$12 FROM inserted WHERE signature IS NOT NULL
-	ON CONFLICT(signature) DO UPDATE SET version=EXCLUDED.version,last_seen=GREATEST(admin_crash_groups.last_seen,EXCLUDED.last_seen)
+	ON CONFLICT(signature) DO UPDATE SET first_seen=LEAST(admin_crash_groups.first_seen,EXCLUDED.first_seen),
+	 last_seen=GREATEST(admin_crash_groups.last_seen,EXCLUDED.last_seen),
+	 version=CASE WHEN EXCLUDED.last_seen>admin_crash_groups.last_seen THEN EXCLUDED.version ELSE admin_crash_groups.version END
 	)
 	SELECT EXISTS(SELECT 1 FROM inserted)`,
 		v.ID, v.Kind, v.Platform, v.Version, v.Message, v.Stack, telemetryNull(v.Artifact), telemetryNull(v.Channel), telemetryNull(v.InstallID), telemetryNull(signature), crashPlatform(v.Platform), crashGroupTitle(v.Message)).Scan(&inserted)
 	if err != nil {
-		if releaseCrashRate != nil && telemetryWriteDefinitelyRejected(err) {
+		if releaseCrashRate != nil && DatabaseWriteDefinitelyRejected(err) {
 			_ = releaseCrashRate()
 		}
 		a.error(w, err)

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
@@ -49,8 +50,8 @@ var qqTypingSourceNames = map[string]string{
 var qqTypingSpeedKinds = []string{"han", "latin", "otherLetter"}
 
 // qqTypingCommands 处理 /stats、/bind、/unbind 和它们的中文说法，返回处理结果的名字；不是这几个命令时返回空字符串。
-func (s *Server) qqTypingCommands(ctx context.Context, m qqGroupMessage, text string, reply func(string)) string {
-	compact := qqCompact(text)
+// `compact` 已由命令分发规范化，直接用于别名匹配。
+func (s *Server) qqTypingCommands(ctx context.Context, m qqGroupMessage, compact string, reply func(string)) string {
 	var command string
 	switch {
 	case slices.Contains(qqTypingAliases, compact):
@@ -83,9 +84,9 @@ func (s *Server) qqTypingCommands(ctx context.Context, m qqGroupMessage, text st
 			slog.Warn("qq bot: unlink failed", "reason", err.Error())
 			reply(qqReplyUnavailable)
 		case removed:
-			reply("已解绑，/stats 不会再显示你的数据。云端的打字统计还在，要删的话在水杉输入法里关掉" + qqTypingUploadPath + "。")
+			reply("已解绑，已有绑定码已作废，/stats 不会再显示你的数据。云端的打字统计还在，要删的话在水杉输入法里关掉" + qqTypingUploadPath + "。")
 		default:
-			reply("你在这个群里没有绑定水杉账号。")
+			reply("你在这个群里没有绑定水杉账号，已有绑定码已作废。")
 		}
 	default:
 		today := qqTypingToday(s.qq.now())
@@ -125,14 +126,28 @@ func qqTypingCard(report account.QQTypingReport, today time.Time) string {
 	if !report.Linked {
 		return "还没绑定水杉账号。@我 发 /bind 拿绑定码，在水杉输入法里输入后就能查。"
 	}
+	// 昵称按单行纯文本显示，避免控制符插入段落或改变整张统计卡片的文字方向；保留 emoji 的零宽连接符。
+	displayName := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Zl, unicode.Zp, unicode.Bidi_Control) {
+			return ' '
+		}
+		return r
+	}, report.DisplayName)
 	if report.Devices == 0 {
-		return fmt.Sprintf("已绑定「%s」，但还没有上传过打字统计。\n在水杉输入法里打开%s，过几分钟再来。每台设备要各自打开；找不到这一项就先更新水杉输入法。", report.DisplayName, qqTypingUploadPath)
+		return fmt.Sprintf("已绑定「%s」，但还没有上传过打字统计。\n在水杉输入法里打开%s，过几分钟再来。每台设备要各自打开；找不到这一项就先更新水杉输入法。", displayName, qqTypingUploadPath)
 	}
-	days := map[string]account.TypingDay{}
-	for _, d := range report.Days {
-		days[d.Day] = d
+	days := make(map[string]int, len(report.Days))
+	for i, d := range report.Days {
+		days[d.Day] = i
 	}
-	day := func(n int) account.TypingDay { return days[today.AddDate(0, 0, -n).Format(time.DateOnly)] }
+	day := func(n int) account.TypingDay {
+		var buf [32]byte
+		key := today.AddDate(0, 0, -n).AppendFormat(buf[:0], time.DateOnly)
+		if i, ok := days[string(key)]; ok {
+			return report.Days[i]
+		}
+		return account.TypingDay{}
+	}
 	latest := -1
 	for n := range 7 {
 		if day(n).Characters > 0 {
@@ -141,13 +156,13 @@ func qqTypingCard(report account.QQTypingReport, today time.Time) string {
 		}
 	}
 	if latest < 0 {
-		return fmt.Sprintf("「%s」最近 7 天没有打字记录。", report.DisplayName)
+		return fmt.Sprintf("「%s」最近 7 天没有打字记录。", displayName)
 	}
 	d := day(latest)
 	date := today.AddDate(0, 0, -latest)
-	title := fmt.Sprintf("【%s · %d月%d日】", report.DisplayName, date.Month(), date.Day())
+	title := fmt.Sprintf("【%s · %d月%d日】", displayName, date.Month(), date.Day())
 	if latest == 0 {
-		title = fmt.Sprintf("【%s · 今天】", report.DisplayName)
+		title = fmt.Sprintf("【%s · 今天】", displayName)
 	}
 	lines := []string{title + "\n" + qqTypingVolume(d)}
 	if line := qqTypingHabits(d); line != "" {

@@ -3046,7 +3046,7 @@
         "tags": [
           "小牛媒体翻译"
         ],
-        "description": "使用本服务上传响应中的 data.fileNo 操作文档翻译任务；不需要请求体。 type 取 0..5，省略或为空时使用 1。最多流式转发 64 MiB，Content-Type 沿用上游，缺失时使用 application/octet-stream。已发送响应后遇到超限或读取失败会中断连接，不追加 JSON；调用方应将残缺下载视为失败。",
+        "description": "使用本服务上传响应中的 data.fileNo 操作文档翻译任务；不需要请求体。 type 取 0..5，省略或为空时使用 1。非 JSON 文件最多流式转发 64 MiB，Content-Type 沿用上游，缺失时使用 application/octet-stream。application/json 或 +json 控制响应最多 1 MiB，完整读取并确认顶层整数 code 为 200 后才返回；业务错误、无效 JSON 或读取失败不透传上游详情。已发送文件响应后遇到超限或读取失败会中断连接，不追加 JSON；调用方应将残缺下载视为失败。",
         "parameters": [
           {
             "name": "file_no",
@@ -3077,8 +3077,24 @@
         ],
         "responses": {
           "200": {
-            "description": "小牛返回的文件，最多 64 MiB。",
+            "description": "小牛返回的文件最多 64 MiB；JSON 控制响应最多 1 MiB，顶层整数 code 必须为 200。",
             "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "enum": [
+                        200
+                      ]
+                    }
+                  }
+                }
+              },
               "*/*": {
                 "schema": {
                   "type": "string",
@@ -3128,7 +3144,7 @@
             }
           },
           "502": {
-            "description": "上游不可用，或在发送文件前发现响应超过 64 MiB。",
+            "description": "upstream_failure：上游不可用、文件超过 64 MiB，或 JSON 控制响应的业务码、格式、大小及完整性不符合要求；不包含上游错误详情。",
             "content": {
               "application/json": {
                 "schema": {
@@ -3149,6 +3165,16 @@
           },
           "404": {
             "description": "niutrans_task_not_found：编号未加签、已被篡改、属于其他身份或媒体类型，或上游应用/密钥已更换。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "upstream_timeout：上游读取超时或请求截止时间已到。",
             "content": {
               "application/json": {
                 "schema": {
@@ -3549,7 +3575,7 @@
         "tags": [
           "小牛媒体翻译"
         ],
-        "description": "使用本服务上传响应中的 data.fileNo 操作图片翻译任务；不需要请求体。 type 取 0..5，省略或为空时使用 1。最多流式转发 64 MiB，Content-Type 沿用上游，缺失时使用 application/octet-stream。已发送响应后遇到超限或读取失败会中断连接，不追加 JSON；调用方应将残缺下载视为失败。",
+        "description": "使用本服务上传响应中的 data.fileNo 操作图片翻译任务；不需要请求体。 type 取 0..5，省略或为空时使用 1。非 JSON 文件最多流式转发 64 MiB，Content-Type 沿用上游，缺失时使用 application/octet-stream。application/json 或 +json 控制响应最多 1 MiB，完整读取并确认顶层整数 code 为 200 后才返回；业务错误、无效 JSON 或读取失败不透传上游详情。已发送文件响应后遇到超限或读取失败会中断连接，不追加 JSON；调用方应将残缺下载视为失败。",
         "parameters": [
           {
             "name": "file_no",
@@ -3580,8 +3606,24 @@
         ],
         "responses": {
           "200": {
-            "description": "小牛返回的文件，最多 64 MiB。",
+            "description": "小牛返回的文件最多 64 MiB；JSON 控制响应最多 1 MiB，顶层整数 code 必须为 200。",
             "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "enum": [
+                        200
+                      ]
+                    }
+                  }
+                }
+              },
               "*/*": {
                 "schema": {
                   "type": "string",
@@ -3631,7 +3673,7 @@
             }
           },
           "502": {
-            "description": "上游不可用，或在发送文件前发现响应超过 64 MiB。",
+            "description": "upstream_failure：上游不可用、文件超过 64 MiB，或 JSON 控制响应的业务码、格式、大小及完整性不符合要求；不包含上游错误详情。",
             "content": {
               "application/json": {
                 "schema": {
@@ -3652,6 +3694,16 @@
           },
           "404": {
             "description": "niutrans_task_not_found：编号未加签、已被篡改、属于其他身份或媒体类型，或上游应用/密钥已更换。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "upstream_timeout：上游读取超时或请求截止时间已到。",
             "content": {
               "application/json": {
                 "schema": {
@@ -4052,7 +4104,7 @@
         "tags": [
           "小牛媒体翻译"
         ],
-        "description": "使用本服务上传响应中的 data.fileNo 操作语音翻译任务；不需要请求体。 type 取 0..5，省略或为空时使用 1。最多流式转发 64 MiB，Content-Type 沿用上游，缺失时使用 application/octet-stream。已发送响应后遇到超限或读取失败会中断连接，不追加 JSON；调用方应将残缺下载视为失败。",
+        "description": "使用本服务上传响应中的 data.fileNo 操作语音翻译任务；不需要请求体。 type 取 0..5，省略或为空时使用 1。非 JSON 文件最多流式转发 64 MiB，Content-Type 沿用上游，缺失时使用 application/octet-stream。application/json 或 +json 控制响应最多 1 MiB，完整读取并确认顶层整数 code 为 200 后才返回；业务错误、无效 JSON 或读取失败不透传上游详情。已发送文件响应后遇到超限或读取失败会中断连接，不追加 JSON；调用方应将残缺下载视为失败。",
         "parameters": [
           {
             "name": "file_no",
@@ -4083,8 +4135,24 @@
         ],
         "responses": {
           "200": {
-            "description": "小牛返回的文件，最多 64 MiB。",
+            "description": "小牛返回的文件最多 64 MiB；JSON 控制响应最多 1 MiB，顶层整数 code 必须为 200。",
             "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "integer",
+                      "enum": [
+                        200
+                      ]
+                    }
+                  }
+                }
+              },
               "*/*": {
                 "schema": {
                   "type": "string",
@@ -4134,7 +4202,7 @@
             }
           },
           "502": {
-            "description": "上游不可用，或在发送文件前发现响应超过 64 MiB。",
+            "description": "upstream_failure：上游不可用、文件超过 64 MiB，或 JSON 控制响应的业务码、格式、大小及完整性不符合要求；不包含上游错误详情。",
             "content": {
               "application/json": {
                 "schema": {
@@ -4155,6 +4223,16 @@
           },
           "404": {
             "description": "niutrans_task_not_found：编号未加签、已被篡改、属于其他身份或媒体类型，或上游应用/密钥已更换。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "upstream_timeout：上游读取超时或请求截止时间已到。",
             "content": {
               "application/json": {
                 "schema": {
@@ -13136,7 +13214,12 @@
         "tags": [
           "皮肤社区"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "userSession": []
+          }
+        ],
         "parameters": [
           {
             "name": "q",
@@ -13703,7 +13786,12 @@
         "tags": [
           "皮肤社区"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "userSession": []
+          }
+        ],
         "parameters": [
           {
             "name": "id",
@@ -14678,7 +14766,12 @@
         "tags": [
           "皮肤社区"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "userSession": []
+          }
+        ],
         "parameters": [
           {
             "name": "q",
@@ -15325,7 +15418,7 @@
                   "manifest": {
                     "type": "string",
                     "maxLength": 65536,
-                    "description": "原样的 skin.toml 文本"
+                    "description": "原样的 skin.toml 文本；包内 id 不能以点结尾或为 nul，以避免 Windows 安装目录失真。"
                   },
                   "files": {
                     "type": "object",
@@ -15335,7 +15428,7 @@
                       "type": "string",
                       "format": "byte"
                     },
-                    "description": "键为包内相对路径，值为标准 base64。默认最多三张 PNG/JPEG；开启 auth.community.canvas_resources 且 resources=canvas-v1 时最多 37 张 PNG/JPEG/APNG/GIF/WebP，预览仍限 PNG/JPEG。"
+                    "description": "键为包内相对路径，完整路径最多 256 字节、每段最多 255 字节且不能以点结尾，值为标准 base64。忽略大小写后路径不能重复，图片文件或固定的 skin.toml 不能同时充当其他文件的父目录；非法路径或上传冲突返回 400 candidate_skin_file_path。默认最多三张 PNG/JPEG；开启 auth.community.canvas_resources 且 resources=canvas-v1 时最多 37 张 PNG/JPEG/APNG/GIF/WebP，预览仍限 PNG/JPEG。"
                   },
                   "visibility": {
                     "type": "string",
@@ -15496,7 +15589,12 @@
         "tags": [
           "皮肤社区"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "userSession": []
+          }
+        ],
         "parameters": [
           {
             "name": "id",
@@ -15968,7 +16066,7 @@
                   "manifest": {
                     "type": "string",
                     "maxLength": 65536,
-                    "description": "原样的 skin.toml 文本，id 须与原包相同"
+                    "description": "原样的 skin.toml 文本，id 须与原包相同，不能以点结尾或为 nul。"
                   },
                   "files": {
                     "type": "object",
@@ -15978,7 +16076,7 @@
                       "type": "string",
                       "format": "byte"
                     },
-                    "description": "键为包内相对路径，值为标准 base64。默认最多三张 PNG/JPEG；开启 auth.community.canvas_resources 且 resources=canvas-v1 时最多 37 张 PNG/JPEG/APNG/GIF/WebP，预览仍限 PNG/JPEG。"
+                    "description": "键为包内相对路径，完整路径最多 256 字节、每段最多 255 字节且不能以点结尾，值为标准 base64。忽略大小写后路径不能重复，图片文件或固定的 skin.toml 不能同时充当其他文件的父目录；非法路径或上传冲突返回 400 candidate_skin_file_path。默认最多三张 PNG/JPEG；开启 auth.community.canvas_resources 且 resources=canvas-v1 时最多 37 张 PNG/JPEG/APNG/GIF/WebP，预览仍限 PNG/JPEG。"
                   }
                 },
                 "required": [
@@ -16288,7 +16386,12 @@
         "tags": [
           "皮肤社区"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "userSession": []
+          }
+        ],
         "parameters": [
           {
             "name": "id",
@@ -16361,7 +16464,12 @@
         "tags": [
           "皮肤社区"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "userSession": []
+          }
+        ],
         "parameters": [
           {
             "name": "id",
@@ -16413,7 +16521,7 @@
                         "type": "string",
                         "format": "byte"
                       },
-                      "description": "键为包内相对路径，值为标准 base64。默认最多三张 PNG/JPEG；开启 auth.community.canvas_resources 且 resources=canvas-v1 时最多 37 张 PNG/JPEG/APNG/GIF/WebP，预览仍限 PNG/JPEG。"
+                      "description": "键为包内相对路径，完整路径最多 256 字节、每段最多 255 字节且不能以点结尾，值为标准 base64。忽略大小写后路径不能重复，图片文件或固定的 skin.toml 不能同时充当其他文件的父目录；非法路径或上传冲突返回 400 candidate_skin_file_path。默认最多三张 PNG/JPEG；开启 auth.community.canvas_resources 且 resources=canvas-v1 时最多 37 张 PNG/JPEG/APNG/GIF/WebP，预览仍限 PNG/JPEG。"
                     }
                   }
                 }
@@ -16644,7 +16752,12 @@
         "tags": [
           "插件社区"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "userSession": []
+          }
+        ],
         "parameters": [
           {
             "name": "q",
@@ -16865,7 +16978,7 @@
           }
         ],
         "parameters": [],
-        "description": "请求最多 11,300,000 字节。zip 包不超过 8 MiB、最多 64 个成员和 16 个文件，解压总量不超过 24 MiB 且不超过包体 100 倍加 1 MiB；拒绝绝对路径、..、反斜杠、符号链接、加密成员和嵌套压缩包。包内恰好一个 plugin.toml（schema_version = 1，严格解析，未知键拒绝），kind 与 plugin_id、version 须与请求一致，permissions 必须为空；引用的音频须存在且为 .wav/.ogg 并匹配文件头（sound 采样只能是 .wav），effect、phrase_table、symbol_set 只含清单里的参数或数据、不带任何音频；helpcode 点名一个不超过 1 MiB 的 .txt 辅助码表，wordbook 点名一个不超过 4 MiB 的 .tsv 单词表，内容按客户端的严格语法校验；其余文件只能是 .txt/.md 说明。id 为客户端 UUID，同一请求重试返回 200；每个账号最多 20 个插件、包体合计不超过 32 MiB，每小时最多发布 10 次；同一账号的发布逐个处理，同一进程最多同时接收 4 个发布，排队超时返回 503 plugin_busy。 详见 docs/plugin-community.md。",
+        "description": "请求最多 11,300,000 字节。zip 包不超过 8 MiB、最多 64 个成员和 16 个文件，解压总量不超过 24 MiB 且不超过包体 100 倍加 1 MiB；拒绝绝对路径、..、反斜杠、符号链接、加密成员和嵌套压缩包。包内恰好一个 plugin.toml（schema_version = 1，严格解析，未知键拒绝），kind 与 plugin_id、version 须与请求一致，包内 id 不能以点结尾或为 nul（Windows 无法按原名安装，返回 invalid_plugin_manifest），请求的 plugin_id 不合规返回 invalid_plugin_metadata；permissions 必须为空；引用的音频须存在且为 .wav/.ogg 并匹配文件头（sound 采样只能是 .wav），effect、phrase_table、symbol_set 只含清单里的参数或数据、不带任何音频；helpcode 点名一个不超过 1 MiB 的 .txt 辅助码表，wordbook 点名一个不超过 4 MiB 的 .tsv 单词表，内容按客户端的严格语法校验；其余文件只能是 .txt/.md 说明。id 为客户端 UUID，同一请求重试返回 200；每个账号最多 20 个插件、包体合计不超过 32 MiB，每小时最多发布 10 次；同一账号的发布逐个处理，同一进程最多同时接收 4 个发布，排队超时返回 503 plugin_busy。 详见 docs/plugin-community.md。",
         "responses": {
           "201": {
             "description": "成功",
@@ -17166,7 +17279,12 @@
         "tags": [
           "插件社区"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "userSession": []
+          }
+        ],
         "parameters": [
           {
             "name": "id",
@@ -17671,7 +17789,12 @@
         "tags": [
           "创作社区"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "userSession": []
+          }
+        ],
         "parameters": [
           {
             "name": "kind",
@@ -18125,7 +18248,12 @@
         "tags": [
           "创作社区"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "userSession": []
+          }
+        ],
         "parameters": [
           {
             "name": "id",
@@ -18778,6 +18906,58 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "用户体系未启用或数据库不可用"
+          }
+        }
+      }
+    },
+    "/v1/site/download-stats": {
+      "get": {
+        "summary": "官网累计镜像下载统计",
+        "tags": [
+          "官网"
+        ],
+        "security": [],
+        "description": "公开只读，汇总全部历史 kind=download 且 channel=cn-mirror 的已接受事件。total 等于 platforms 各项之和，未知平台归入 other；平台别名归一，windows-rust 归为 windowsRust。不返回事件明细或个人信息。官网将这份计数与已有 GitHub 安装包快照相加，显示统一累计下载。镜像按点击计数，不代表安装人数或完成下载人数。成功响应允许缓存 60 秒，与公告、镜像链接共用独立的每 IP 每分钟 1200 次额度；用户体系未启用时返回 503。",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "total": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "累计镜像下载次数"
+                    },
+                    "platforms": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "该平台累计镜像下载次数"
+                      }
+                    },
+                    "generated_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "total",
+                    "platforms",
+                    "generated_at"
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求过多"
           },
           "503": {
             "description": "用户体系未启用或数据库不可用"
@@ -19476,7 +19656,7 @@
             "userSession": []
           }
         ],
-        "description": "登录用户举报一项社区内容，由管理后台复核。kind 取 skins、candidate-skins、plugins、dictionaries、replies、phrases（短语包）；只能举报自己可见的内容（已下架内容与私有候选皮肤返回 404）。同一账号重复举报同一内容不会新增记录，返回 200；每个账号每小时最多 30 次。",
+        "description": "登录用户举报一项社区内容，由管理后台复核。kind 取 skins、candidate-skins、plugins、dictionaries、replies、phrases（短语包）；只能举报自己可见的内容（已下架内容与私有候选皮肤返回 404）。同一账号重复举报同一内容不会新增记录，返回 200；永久删除作品时清理对应举报，同 ID 重发可重新举报，下架和恢复保留举报。每个账号每小时最多 30 次。",
         "requestBody": {
           "required": true,
           "content": {

@@ -1,11 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"io"
 	"log/slog"
 	"net"
@@ -49,6 +49,8 @@ const (
 	maxLogMessageBytes = 4096
 	// maxLokiResponseBytes 限制读取的 Loki 响应体，maxLogLimit 行乘以单行上限仍在范围内。
 	maxLokiResponseBytes = 16 << 20
+	// maxLokiPooledResponseBytes 限制响应缓冲池的单个缓存，避免一次异常大响应长期占住 16 MiB。
+	maxLokiPooledResponseBytes = 1 << 20
 	// maxLogPods 是返回的副本列表上限。
 	maxLogPods  = 100
 	lokiTimeout = 10 * time.Second
@@ -82,9 +84,10 @@ const (
 )
 
 var (
-	logMatcher         = `\s*[A-Za-z_][A-Za-z0-9_]*\s*(?:=|!=|=~|!~)\s*"(?:[^"\\\x00-\x1f]|\\.)*"\s*`
-	logSelectorPattern = regexp.MustCompile(`^\{` + logMatcher + `(?:,` + logMatcher + `)*\}$`)
-	logPodPattern      = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?$`)
+	lokiResponseBufferPool sync.Pool
+	logMatcher             = `\s*[A-Za-z_][A-Za-z0-9_]*\s*(?:=|!=|=~|!~)\s*"(?:[^"\\\x00-\x1f]|\\.)*"\s*`
+	logSelectorPattern     = regexp.MustCompile(`^\{` + logMatcher + `(?:,` + logMatcher + `)*\}$`)
+	logPodPattern          = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?$`)
 	// logLevelPrefix 匹配一行开头的 CRI 前缀（可选）和 slog 默认格式的时间，后面接级别。级别筛选用它排除低于所选级别的行，所以无法识别级别的行（panic、标准库 log 的输出）在 WARN、ERROR 筛选下仍会显示。
 	logLevelPrefix = `^(?:\S+ (?:stdout|stderr) [FP] )?\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)? `
 	logLevelBelow  = map[string]string{"INFO": "DEBUG", "WARN": "DEBUG|INFO", "ERROR": "DEBUG|INFO|WARN"}
@@ -99,7 +102,7 @@ func (c *AdminLogsConfig) validate() error {
 	}
 	c.LokiURL = strings.TrimSuffix(c.LokiURL, "/")
 	u, err := url.Parse(c.LokiURL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(c.LokiURL, "#") {
 		return errors.New("admin logs loki_url must be an http(s) URL without credentials, query or fragment")
 	}
 	if c.Selector == "" {
@@ -118,6 +121,9 @@ type logFilter struct {
 
 // logQL 拼出 LogQL。用户输入只以 strconv.Quote 转义后的字符串字面量出现：Loki 的词法分析器用 strconv.Unquote 解析双引号字符串，两者互为逆运算，所以任何输入都只能是一个字符串值，不能改变查询结构。
 func (f logFilter) logQL(selector string) string {
+	if f.pod == "" && f.level == "" && f.q == "" {
+		return selector
+	}
 	var b strings.Builder
 	if f.pod != "" {
 		b.WriteString(selector[:len(selector)-1])
@@ -181,6 +187,22 @@ type lokiEntry struct {
 	ns   int64
 	pod  string
 	line string
+}
+
+// lokiValues 预留单个日志流的常见上限，避免 encoding/json 为每行结果反复扩容切片。
+type lokiValues [][2]string
+
+func (v *lokiValues) UnmarshalJSON(data []byte) error {
+	capacity := min(maxLogLimit, len(data)/32)
+	if capacity == 0 && len(data) > 2 {
+		capacity = 1
+	}
+	values := make([][2]string, 0, capacity)
+	if err := json.Unmarshal(data, &values); err != nil {
+		return err
+	}
+	*v = values
+	return nil
 }
 
 // logLineJSON 是返回给前端的一行。id 是按时间戳、副本及完整原文生成的稳定去重标识；ts 是 Loki 的纳秒时间戳（十进制字符串，也是续传游标）；time 和 stream 取自 CRI 前缀，没有前缀时 time 用 Loki 的时间戳、stream 为空；level 是从 slog 默认格式里解析出的级别，无法识别时为空；message 去掉了 CRI 前缀和 slog 的时间与级别。
@@ -279,7 +301,7 @@ type errLoki struct{ reason string }
 
 func (e errLoki) Error() string { return "loki " + e.reason }
 
-// lokiGet 请求 Loki 并把 JSON 响应解到 v。
+// lokiGet 请求 Loki 并把 JSON 响应解到 v；响应正文缓冲在常见大小内复用，避免每次查询都重新分配整份正文。
 func (s *Server) lokiGet(ctx context.Context, path string, params url.Values, v any) error {
 	ctx, cancel := context.WithTimeout(ctx, lokiTimeout)
 	defer cancel()
@@ -296,14 +318,27 @@ func (s *Server) lokiGet(ctx context.Context, path string, params url.Values, v 
 	if resp.StatusCode != http.StatusOK {
 		return errLoki{fmt.Sprintf("status %d", resp.StatusCode)}
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxLokiResponseBytes+1))
-	if err != nil {
+	buffer := lokiResponseBufferPool.Get()
+	var body *bytes.Buffer
+	if buffer == nil {
+		body = new(bytes.Buffer)
+	} else {
+		body = buffer.(*bytes.Buffer)
+		body.Reset()
+	}
+	defer func() {
+		if body.Cap() <= maxLokiPooledResponseBytes {
+			body.Reset()
+			lokiResponseBufferPool.Put(body)
+		}
+	}()
+	if _, err := body.ReadFrom(io.LimitReader(resp.Body, maxLokiResponseBytes+1)); err != nil {
 		return errLoki{"read failed"}
 	}
-	if len(body) > maxLokiResponseBytes {
+	if body.Len() > maxLokiResponseBytes {
 		return errLoki{"response too large"}
 	}
-	if err = json.Unmarshal(body, v); err != nil {
+	if err := json.Unmarshal(body.Bytes(), v); err != nil {
 		return errLoki{"invalid response"}
 	}
 	return nil
@@ -317,7 +352,7 @@ func (s *Server) lokiQueryRange(ctx context.Context, query string, start, end in
 			ResultType string `json:"resultType"`
 			Result     []struct {
 				Stream map[string]string `json:"stream"`
-				Values [][2]string       `json:"values"`
+				Values lokiValues        `json:"values"`
 			} `json:"result"`
 		} `json:"data"`
 	}
@@ -502,11 +537,22 @@ type logKey struct {
 }
 
 func (e lokiEntry) key() logKey {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(e.pod))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(e.line))
-	return logKey{e.ns, h.Sum64()}
+	const (
+		fnvOffset = uint64(14695981039346656037)
+		fnvPrime  = uint64(1099511628211)
+	)
+	hash := fnvOffset
+	for i := 0; i < len(e.pod); i++ {
+		hash ^= uint64(e.pod[i])
+		hash *= fnvPrime
+	}
+	// 分隔符仍需参与一次乘法，保持 pod 和 line 的边界语义。
+	hash *= fnvPrime
+	for i := 0; i < len(e.line); i++ {
+		hash ^= uint64(e.line[i])
+		hash *= fnvPrime
+	}
+	return logKey{e.ns, hash}
 }
 
 // logTail 是一个日志流的读取进度。

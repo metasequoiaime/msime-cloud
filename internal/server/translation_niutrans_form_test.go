@@ -26,7 +26,7 @@ func TestNiuTransFormRequestAllocationBudget(t *testing.T) {
 		var w *httptest.ResponseRecorder
 		allocations := testing.AllocsPerRun(100, func() {
 			w = httptest.NewRecorder()
-			s.translateNiuTransUpstream(w, r, v, e)
+			s.translateSingle(w, r, v, e)
 		})
 		if w.Code != http.StatusOK {
 			t.Fatal(w.Code, w.Body.String())
@@ -40,6 +40,7 @@ func TestNiuTransFormRequestAllocationBudget(t *testing.T) {
 func TestNiuTransTextFormMatchesPrevious(t *testing.T) {
 	cases := [][6]string{
 		{},
+		{" ", "synthetic-key", " ", " ", " ", "word word"},
 		{"synthetic-app", "synthetic-key", "zh", "en", "1700000000000", "word"},
 		{"应用 +%&=", "合成密钥", "auto", "en", "1700000000000", "水杉 😀\n +%&="},
 		{"\x00app", "key\x00", "from +&=", "to +&=", "time +&=", "\xff\xfe\x00"},
@@ -61,6 +62,18 @@ func TestNiuTransTextFormMatchesPrevious(t *testing.T) {
 		if got != want {
 			t.Fatalf("第 %d 组表单字段顺序或字节编码改变", index)
 		}
+	}
+}
+
+func TestNiuTransTextFormLongAllocationBudget(t *testing.T) {
+	text := strings.Repeat("中", 2730)
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			_ = niutransTextForm("synthetic-app", "synthetic-key", "zh", "en", "1700000000000", text)
+		}
+	})
+	if result.AllocedBytesPerOp() >= 32<<10 {
+		t.Fatalf("长文本表单分配 %d B，超过 32 KiB 预算", result.AllocedBytesPerOp())
 	}
 }
 

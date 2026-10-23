@@ -1,4 +1,5 @@
 import { formatNumber } from "../../utils/number";
+import { formatHours } from "../../utils/duration";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -82,12 +83,6 @@ function eventText(event: IssueEvent): string {
   }
 }
 
-function formatHours(value: number | null): string {
-  if (value === null) return "—";
-  if (value < 1) return `${Math.max(1, Math.round(value * 60))} 分钟`;
-  return `${value < 10 ? value.toFixed(1) : Math.round(value)} 小时`;
-}
-
 const isOpenRow = (row: IssueRow) => row.state === "new" || row.state === "triaged";
 
 type ActionInput = { action: IssueAction; items: IssueRef[]; body?: string };
@@ -152,7 +147,7 @@ export default function IssuesPage() {
   const runAction = mutation.mutateAsync;
 
   // apply 执行操作并提示结果；只对确认成功且允许撤销的条目提供反向操作。没有适用条目时返回 false，保留批量选择。
-  const apply = useCallback(async (action: IssueAction, rows: readonly IssueRow[], text: (count: number) => string, reverse?: { action: IssueAction; undoable: (row: IssueRow) => boolean; ref?: (row: IssueRow) => IssueRef }) => {
+  const apply = useCallback(async (action: IssueAction, rows: readonly IssueRow[], text: (count: number) => string) => {
     if (rows.length === 0) {
       toast("所选 Issue 都不适用这个操作");
       return false;
@@ -162,12 +157,15 @@ export default function IssuesPage() {
     const uncertain = result.failed.some(item => item.code === "github_uncertain");
     const message = (failed.size ? `${text(result.affected)}，${failed.size} 个失败` : text(result.affected))
       + (uncertain ? "；部分操作结果未确认，请先在 GitHub 核对后再重试" : "");
-    const undoRows = reverse ? rows.filter(row => !failed.has(issueKey(row)) && reverse.undoable(row)) : [];
-    if (reverse && undoRows.length) toast({
+    const targets = new Set(rows.map(row => `${row.repo}#${row.number}`));
+    const expectedUndo = action === "triage" ? "untriage" : action === "close" || action === "mark_dup" ? "reopen" : null;
+    const undo = result.undo?.action === expectedUndo && result.undo.items.every(item => targets.has(`${item.repo}#${item.n}`) && !failed.has(`${item.repo}#${item.n}`)) ? result.undo : null;
+    if (undo) toast({
       text: message,
       undo: async () => {
-        const undone = await runAction({ action: reverse.action, items: undoRows.map(reverse.ref ?? issueRef) });
+        const undone = await runAction({ action: undo.action, items: undo.items });
         if (undone.failed.some(item => item.code === "github_uncertain")) throw new Error("部分操作结果未确认，请先在 GitHub 核对后再重试");
+        if (undone.failed.some(item => item.code === "conflict")) throw new Error(`已撤销 ${undone.affected} 个，部分 Issue 已被修改，请核对最新状态`);
         if (undone.failed.length) throw new Error(`已撤销 ${undone.affected} 个，${undone.failed.length} 个失败，请核对后重试`);
       },
     });
@@ -185,27 +183,15 @@ export default function IssuesPage() {
     }
   }, [toast]);
 
-  const triage = useCallback((rows: readonly IssueRow[]) => guarded(() => apply("triage", rows, count => {
-    if (rows.length !== 1) return `已分类 ${count} 个 Issue`;
-    const assignee = platforms.find(p => p.id === rows[0].platform)?.assignee;
-    return assignee ? `#${rows[0].number} 已分类，指派给 @${assignee}` : `#${rows[0].number} 已分类`;
-  }, {
-    action: "untriage",
-    undoable: row => row.state === "new",
-    // An assignee the issue already had before the triage stays assigned after the undo.
-    ref: row => {
-      const assignee = platforms.find(p => p.id === row.platform)?.assignee?.toLowerCase();
-      return { ...issueRef(row), keep_assignee: Boolean(assignee && row.assignees.some(a => a.toLowerCase() === assignee)) || undefined };
-    },
-  })), [apply, guarded, platforms]);
+  const triage = useCallback((rows: readonly IssueRow[]) => guarded(() => apply("triage", rows,
+    count => rows.length === 1 ? `#${rows[0].number} 已分类` : `已分类 ${count} 个 Issue`)), [apply, guarded]);
   const markDup = useCallback((rows: readonly IssueRow[]) => guarded(() => apply("mark_dup", rows,
-    count => rows.length === 1 ? `#${rows[0].number} 已标记为重复` : `已将 ${count} 个 Issue 标记为重复`,
-    { action: "reopen", undoable: isOpenRow })), [apply, guarded]);
+    count => rows.length === 1 ? `#${rows[0].number} 已标记为重复` : `已将 ${count} 个 Issue 标记为重复`)), [apply, guarded]);
   const close = useCallback(async (rows: readonly IssueRow[]) => {
     if (rows.length === 0) return apply("close", rows, () => "");
     const ok = await confirm({ title: rows.length === 1 ? `关闭 #${rows[0].number}？` : `关闭 ${rows.length} 个 Issue？`, description: "提交者会收到关闭通知，之后可以重新打开。", okLabel: "关闭" });
     if (ok === null) return false;
-    return guarded(() => apply("close", rows, count => rows.length === 1 ? `#${rows[0].number} 已关闭` : `已关闭 ${count} 个 Issue`, { action: "reopen", undoable: isOpenRow }));
+    return guarded(() => apply("close", rows, count => rows.length === 1 ? `#${rows[0].number} 已关闭` : `已关闭 ${count} 个 Issue`));
   }, [apply, confirm, guarded]);
   const reopen = useCallback((rows: readonly IssueRow[]) => guarded(() => apply("reopen", rows,
     count => rows.length === 1 ? `#${rows[0].number} 已重新打开` : `已重新打开 ${count} 个 Issue`)), [apply, guarded]);
@@ -290,7 +276,7 @@ export default function IssuesPage() {
           <StatTile label="待分诊" value={formatNumber(stats.pending)} />
           <StatTile label="已分类待处理" value={formatNumber(stats.triaged)} />
           <StatTile label="本周新增" value={formatNumber(stats.new_this_week)} />
-          <StatTile label="平均首次响应" value={formatHours(stats.first_response_hours)} sub={stats.first_response_samples ? `近 30 天 · ${stats.first_response_samples} 个 Issue` : "近 30 天暂无维护者回复"} />
+          <StatTile label="平均首次响应" value={formatHours(stats.first_response_hours, "minutes")} sub={stats.first_response_samples ? `近 30 天 · ${stats.first_response_samples} 个 Issue` : "近 30 天暂无维护者回复"} />
         </> : ["a", "b", "c", "d"].map(key => <Skeleton key={key} className="h-[76px] rounded-2xl" />)}
       </StatGrid>
       <DataTable

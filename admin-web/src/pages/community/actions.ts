@@ -1,13 +1,14 @@
 import { useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { createActionUndo } from "../../api/action-undo";
 import { errorMessage, isAPIError, useAPI } from "../../api/client";
 import { keys } from "../../api/keys";
 import type { CandidateCategory, Moderation, Section } from "../../api/community";
-import { candidateCategoryLabels, removeReasons } from "../../api/community";
+import { candidateCategoryLabels, categoryUndoSchema, moderationUndoSchema, removeReasons } from "../../api/community";
 import { useConfirm } from "../../ui/confirm";
 import { useToast } from "../../ui/toast";
 
-// A moderation conflict means another reviewer changed the item's state or the author edited it since it was loaded, which reads better than the client's generic conflict copy.
+// 审核冲突提示同时适用于首次操作和撤销。
 function failure(error: unknown): string {
   return isAPIError(error, "conflict") ? "该内容刚被其他审核员处理或被作者修改，未做改动，请查看最新内容后重试。" : errorMessage(error);
 }
@@ -20,7 +21,7 @@ function approveValue(target: Target) {
   return { from: target.moderation, ...(target.created_at ? { created_at: target.created_at } : {}), ...(target.updated_at ? { updated_at: target.updated_at } : {}), ...(target.edit_token ? { edit_token: target.edit_token } : {}) };
 }
 
-// useModeration wraps approve_content, remove_content and restore_content with the confirm dialog, toasts and the 撤销 that calls the reverse action. setCategory 修改键盘皮肤或候选皮肤的图库分类，撤销即改回原分类。
+// useModeration 封装审核确认与提示；审核和分类撤销都使用服务端返回的真实前态及版本。
 export function useModeration() {
   const api = useAPI();
   const client = useQueryClient();
@@ -33,9 +34,9 @@ export function useModeration() {
   ]), [client]);
 
   const run = useCallback(async (body: Parameters<typeof api.action>[0]) => {
-    // Failures carry the moderation-specific text, which both the action toasts and the toast's 撤销 show.
+    // 首次操作和撤销共用审核专用错误提示。
     try {
-      await api.action(body);
+      return await api.action(body);
     } catch (error) {
       throw new Error(failure(error));
     } finally {
@@ -43,74 +44,73 @@ export function useModeration() {
     }
   }, [api, refresh]);
 
-  // undoTo puts one item back into the state it had before an action; a removed item gets its own restore state back, so a later restore does what it would have done before.
-  const undoTo = useCallback((target: Target) => {
-    const { section, id } = target;
-    if (target.moderation === "removed") {
-      const reason = target.moderation_reason || "恢复下架状态";
-      return target.previous_moderation && target.previous_moderation !== "removed"
-        ? run({ action: "remove_content", section, id, reason, value: { previous: target.previous_moderation } })
-        : run({ action: "remove_content", section, id, reason });
-    }
-    return run({ action: "restore_content", section, id, value: { to: target.moderation } });
+  // 缺少有效撤销信息的旧副本不显示按钮；不从旧页面猜测操作前状态。
+  const undoFrom = useCallback((result: Awaited<ReturnType<typeof run>>, target: Target) => {
+    return createActionUndo(moderationUndoSchema, result.undo, value => value.section === target.section && value.id === target.id, run);
   }, [run]);
 
   const approve = useCallback(async (target: Target) => {
     if (target.moderation === "approved") return;
     try {
-      await run({ action: "approve_content", section: target.section, id: target.id, value: approveValue(target) });
+      const result = await run({ action: "approve_content", section: target.section, id: target.id, value: approveValue(target) });
+      toast({ text: `「${target.name}」已上架`, undo: undoFrom(result, target) });
     } catch (error) {
       toast(`操作失败：${errorMessage(error)}`);
       return;
     }
-    toast({ text: `「${target.name}」已上架`, undo: () => undoTo(target) });
-  }, [run, toast, undoTo]);
+  }, [run, toast, undoFrom]);
 
   const remove = useCallback(async (target: Target) => {
     const verb = target.moderation === "approved" ? "下架" : "驳回";
     const reason = await confirm({ title: `${verb}「${target.name}」？`, description: "内容会从公开列表隐藏（作者本人仍可见），可随时恢复；原因记入审计日志。", okLabel: verb, reasons: removeReasons });
     if (reason === null) return;
     try {
-      await run({ action: "remove_content", section: target.section, id: target.id, reason });
+      const result = await run({ action: "remove_content", section: target.section, id: target.id, reason });
+      toast({ text: `「${target.name}」已${verb}：${reason}`, undo: undoFrom(result, target) });
     } catch (error) {
       toast(`操作失败：${errorMessage(error)}`);
       return;
     }
-    toast({ text: `「${target.name}」已${verb}：${reason}`, undo: () => target.moderation === "removed" ? run({ action: "remove_content", section: target.section, id: target.id, reason: target.moderation_reason || reason }) : run({ action: "restore_content", section: target.section, id: target.id }) });
-  }, [confirm, run, toast]);
+  }, [confirm, run, toast, undoFrom]);
 
   const restore = useCallback(async (target: Target) => {
     try {
-      await run({ action: "restore_content", section: target.section, id: target.id });
+      const result = await run({ action: "restore_content", section: target.section, id: target.id });
+      toast({ text: `「${target.name}」已恢复`, undo: undoFrom(result, target) });
     } catch (error) {
       toast(`操作失败：${errorMessage(error)}`);
       return;
     }
-    toast({ text: `「${target.name}」已恢复`, undo: () => undoTo(target) });
-  }, [run, toast, undoTo]);
+  }, [run, toast, undoFrom]);
 
   const setCategory = useCallback(async (target: Target, from: CandidateCategory, to: CandidateCategory) => {
     if (from === to) return;
     const action = target.section === "skins" ? "set_skin_category" : "set_candidate_skin_category";
-    const change = (category: CandidateCategory) => run({ action, section: target.section, id: target.id, value: { category } });
     try {
-      await change(to);
+      const result = await run({ action, section: target.section, id: target.id, value: { category: to, expected: from } });
+      const undo = createActionUndo(categoryUndoSchema, result.undo, value => value.action === action && value.section === target.section && value.id === target.id, run);
+      toast({ text: `「${target.name}」的分类已改为「${candidateCategoryLabels[to]}」`, undo });
     } catch (error) {
       toast(`操作失败：${errorMessage(error)}`);
       return;
     }
-    toast({ text: `「${target.name}」的分类已改为「${candidateCategoryLabels[to]}」`, undo: () => change(from) });
   }, [run, toast]);
 
   const deleteItem = useCallback(async (target: Target) => {
     const actions: Partial<Record<Section, string>> = { skins: "delete_skin", "candidate-skins": "delete_candidate_skin", plugins: "delete_plugin" };
     const action = actions[target.section];
     if (!action) return false;
+    if (!target.edit_token) {
+      toast("作品版本信息尚未加载，请刷新页面后重试。");
+      return false;
+    }
     const reason = await confirm({ title: `删除「${target.name}」？`, description: "作品及其下载、评分、收藏记录将永久删除。确认后有 4 秒可以撤销。", okLabel: "删除" });
     if (reason === null) return false;
     toast({ text: `即将删除「${target.name}」`, delayCommit: async ({ keepalive }) => {
       try {
-        await api.action({ action, section: target.section, id: target.id }, { keepalive });
+        await api.action({ action, section: target.section, id: target.id, value: { edit_token: target.edit_token } }, { keepalive });
+      } catch (error) {
+        throw new Error(failure(error));
       } finally {
         await refresh();
         await client.invalidateQueries({ queryKey: keys.page("users") });

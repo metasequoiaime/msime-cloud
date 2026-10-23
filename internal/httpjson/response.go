@@ -13,7 +13,17 @@ func Write(w http.ResponseWriter, status int, value any) {
 	_ = json.NewEncoder(w).Encode(value)
 }
 
-// WriteError 只写入调用方给定的固定错误码，不接收上游错误或用户输入。
+type errorResponse struct {
+	Error struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+// WriteError 只写入调用方给定的固定错误码，不接收上游错误或用户输入；固定结构避免逐次构造和排序 map。
 func WriteError(w http.ResponseWriter, status int, code string) {
-	Write(w, status, map[string]any{"error": map[string]string{"code": code, "message": code}})
+	var body errorResponse
+	body.Error.Code = code
+	body.Error.Message = code
+	Write(w, status, body)
 }

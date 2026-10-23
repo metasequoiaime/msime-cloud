@@ -133,6 +133,20 @@ func TestQQGapTopicContactScanStopsAtLimit(t *testing.T) {
 	}
 }
 
+func TestQQGapTopicContactScanSkipsLongUnmarkedToken(t *testing.T) {
+	text := strings.Repeat("普通正文", 1<<17)
+	result := testing.Benchmark(func(b *testing.B) {
+		for b.Loop() {
+			if qqGapTopicMayContainContact(text) {
+				t.Fatal("没有联系方式特征的长正文不应触发整段脱敏")
+			}
+		}
+	})
+	if result.NsPerOp() > 5_000_000 {
+		t.Fatalf("无联系方式的长正文扫描过慢：%s", result)
+	}
+}
+
 func TestQQGapTopicRateLimitSubject(t *testing.T) {
 	s, fake, limiter := qqServer(t)
 	s.qq.config.GapsRepo = "o/docs"

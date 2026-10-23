@@ -93,6 +93,19 @@ func TestCrashNormalizationAvoidsUnchangedCopies(t *testing.T) {
 	}
 }
 
+func TestCrashSignatureReusesConsecutiveFrames(t *testing.T) {
+	stack := strings.Repeat("at java.util.ArrayList.get(ArrayList.java:437)\n", 64) + "at msime.Main.run(Main.java:123)"
+	want := previousCrashSignatureCopies("android", "synthetic crash", stack)
+	var got string
+	allocations := testing.AllocsPerRun(20, func() { got = crashSignature("android", "synthetic crash", stack) })
+	if got != want {
+		t.Fatalf("重复栈帧的签名变化：结果=%q，预期=%q", got, want)
+	}
+	if allocations > 80 {
+		t.Fatalf("重复栈帧仍分配 %.0f 次，超过 80 次预算", allocations)
+	}
+}
+
 var crashNormalizationResult string
 
 func BenchmarkCrashNormalizationCopies(b *testing.B) {

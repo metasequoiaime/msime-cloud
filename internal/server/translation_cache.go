@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"slices"
 	"time"
 	"unicode/utf8"
 )
@@ -47,14 +48,21 @@ func (s *Server) cachedTranslations(ctx context.Context, source, target string, 
 	if s.accounts == nil {
 		return nil
 	}
+	first := 0
+	for first < len(texts) && !cacheableText(texts[first]) {
+		first++
+	}
+	if first == len(texts) {
+		return nil
+	}
+	// 跳过不可缓存的前缀，整批不适合缓存时无需分配缓冲区。
+	texts = texts[first:]
 	wanted := make([]string, 0, len(texts))
-	for _, text := range texts {
+	wanted = append(wanted, texts[0])
+	for _, text := range texts[1:] {
 		if cacheableText(text) {
 			wanted = append(wanted, text)
 		}
-	}
-	if len(wanted) == 0 {
-		return nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, translationCacheTimeout)
 	defer cancel()
@@ -70,15 +78,23 @@ func (s *Server) storeTranslations(ctx context.Context, source, target string, s
 	if s.accounts == nil {
 		return
 	}
+	first := 0
+	for first < len(sources) && !cacheablePair(sources[first], targets[first]) {
+		first++
+	}
+	if first == len(sources) {
+		return
+	}
+	// 原文和译文同步截去前缀，保留配对且不修改调用方的切片。
+	sources, targets = sources[first:], targets[first:]
 	keep, values := make([]string, 0, len(sources)), make([]string, 0, len(sources))
-	for i, text := range sources {
+	keep, values = append(keep, sources[0]), append(values, targets[0])
+	for i := 1; i < len(sources); i++ {
+		text := sources[i]
 		if cacheablePair(text, targets[i]) {
 			keep = append(keep, text)
 			values = append(values, targets[i])
 		}
-	}
-	if len(keep) == 0 {
-		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, translationCacheTimeout)
 	defer cancel()
@@ -114,8 +130,17 @@ func missingTexts(wanted []string, cached map[string]string) []string {
 	return missing
 }
 
-// 把命中的译文和上游刚返回的译文按请求原序拼回去。fresh 与 missing 一一对应,由上游返回长度校验保证。
+// 把命中的译文和上游刚返回的译文按请求原序拼回去。missing 由 missingTexts 去重，
+// fresh 与 missing 一一对应，由上游返回长度校验保证。
 func mergeTranslations(wanted []string, cached map[string]string, missing, fresh []string) []string {
+	if len(cached) == 0 && slices.Equal(wanted, missing) {
+		// 整批未命中且没有重复时，上游译文已经按请求排序；仍复制到独立切片。
+		out := make([]string, len(wanted))
+		for i := range out {
+			out[i] = fresh[i]
+		}
+		return out
+	}
 	translated := make(map[string]string, len(missing))
 	for i, text := range missing {
 		translated[text] = fresh[i]

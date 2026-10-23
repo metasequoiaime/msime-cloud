@@ -11,7 +11,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -42,13 +44,43 @@ func (s *Server) qqGitHubRepos() []string {
 func qqIssueState(state, reason string, labels []string) string {
 	if state != "open" {
 		for _, label := range labels {
-			switch strings.ToLower(label) {
+			switch label {
 			case "invalid":
 				return "已关闭（无效）"
 			case "duplicate":
 				return "已关闭（重复）"
 			case "wontfix":
 				return "已关闭（不修）"
+			}
+			upper, nonASCII := false, false
+			for i := range label {
+				if label[i] >= utf8.RuneSelf {
+					nonASCII = true
+					break
+				}
+				if label[i] >= 'A' && label[i] <= 'Z' {
+					upper = true
+				}
+			}
+			if nonASCII {
+				label = strings.ToLower(label)
+				switch label {
+				case "invalid":
+					return "已关闭（无效）"
+				case "duplicate":
+					return "已关闭（重复）"
+				case "wontfix":
+					return "已关闭（不修）"
+				}
+			} else if upper {
+				switch {
+				case textutil.EqualFoldASCII(label, "invalid"):
+					return "已关闭（无效）"
+				case textutil.EqualFoldASCII(label, "duplicate"):
+					return "已关闭（重复）"
+				case textutil.EqualFoldASCII(label, "wontfix"):
+					return "已关闭（不修）"
+				}
 			}
 		}
 	}
@@ -199,11 +231,46 @@ const qqMemberIssueResults = 5
 // qqIssueTitleTag 匹配 issue 标题开头的「[Bug]」「[Feature]:」这类模板前缀。
 var qqIssueTitleTag = regexp.MustCompile(`^\s*\[[^\]]{1,20}\]\s*:?\s*`)
 
+// qqTrimIssueTitleTag 删除 issue 标题开头的模板前缀，保持 qqIssueTitleTag 的 ASCII 空白和最多 20 个字符规则。
+func qqTrimIssueTitleTag(text string) string {
+	i := 0
+	for i < len(text) && qqRegexpSpace(text[i]) {
+		i++
+	}
+	if i >= len(text) || text[i] != '[' {
+		return text
+	}
+	i++
+	count := 0
+	for i < len(text) && text[i] != ']' {
+		_, size := utf8.DecodeRuneInString(text[i:])
+		i += size
+		count++
+		if count > 20 {
+			return text
+		}
+	}
+	if count == 0 || i >= len(text) || text[i] != ']' {
+		return text
+	}
+	i++
+	for i < len(text) && qqRegexpSpace(text[i]) {
+		i++
+	}
+	if i < len(text) && text[i] == ':' {
+		i++
+		for i < len(text) && qqRegexpSpace(text[i]) {
+			i++
+		}
+	}
+	return text[i:]
+}
+
 // qqIssueListForMembers 是「查」命令发到群里的短列表：最多 qqMemberIssueResults 条，每条一行「msime #7066 标题（还没解决）」，标题去掉模板前缀，不带标签、日期和维护者评论，最后一行告诉群友怎么看某条的进展。曾经直接发给模型看的资料，最多十行，带英文标签，外加三段几百字没清洗的维护者评论，在千人群里刷屏。
 func qqIssueListForMembers(hits []qqIssueHit) string {
 	var b strings.Builder
 	for _, hit := range hits[:min(len(hits), qqMemberIssueResults)] {
-		title := cmp.Or(strings.TrimSpace(qqIssueTitleTag.ReplaceAllString(hit.Title, "")), strings.TrimSpace(hit.Title))
+		title := cmp.Or(strings.TrimSpace(qqTrimIssueTitleTag(hit.Title)), strings.TrimSpace(hit.Title))
 		fmt.Fprintf(&b, "%s #%d %s（%s）\n", hit.Name, hit.Number, title, hit.State)
 	}
 	b.WriteString("以上是 GitHub 上搜到的相关 issue，想看某条的进展，@我 发「#编号」")
@@ -235,6 +302,30 @@ func (s *Server) qqLatestReleases(ctx context.Context) []qqPlatformRelease {
 	cache := map[string][]qqRelease{}
 	// failed 记下查询失败的仓库：查不到不等于没发布，这些仓库的平台不写进结果。
 	failed := map[string]bool{}
+	type releaseRead struct {
+		list []qqRelease
+		ok   bool
+	}
+	reads := map[string]*releaseRead{}
+	for _, p := range s.config.Admin.GitHub.Platforms {
+		if p.TagPrefix != "" && reads[p.Repo] == nil {
+			reads[p.Repo] = &releaseRead{}
+		}
+	}
+	// 多个独立平台仓库同时读取；只有一个时沿用下方按需读取，避免额外调度。
+	if len(reads) > 1 {
+		var pending errgroup.Group
+		for repo, result := range reads {
+			pending.Go(func() error {
+				result.list, result.ok = s.qqReleases(ctx, repo)
+				return nil
+			})
+		}
+		_ = pending.Wait()
+		for repo, result := range reads {
+			cache[repo], failed[repo] = result.list, !result.ok
+		}
+	}
 	releases := func(repo string) []qqRelease {
 		if list, ok := cache[repo]; ok {
 			return list
@@ -300,28 +391,47 @@ const qqReleaseNoteRunes = 300
 // qqReleaseNotes 把发布说明变成一行纯文本交给模型：去掉图片、HTML 标签和代码块，每行过 qqPlainText（链接只留文字，去掉 Markdown 符号），丢掉空行，条目之间用「；」隔开，小标题后面接「：」，再按句截到 qqReleaseNoteRunes 字。曾经资料里只有 tag 和日期，问「windows 最新版更新了啥」只能叫群友自己去 GitHub 看。
 func qqReleaseNotes(body string) string {
 	var b strings.Builder
+	// 末尾可能去掉一个标题冒号；额外保留两字，确保超长正文仍会添加省略号。
+	remaining := qqReleaseNoteRunes + 2
+	writePrefix := func(text string) {
+		end := len(text)
+		for offset := range text {
+			if remaining == 0 {
+				end = offset
+				break
+			}
+			remaining--
+		}
+		b.WriteString(text[:end])
+	}
 	heading := false
 	qqReleaseNotesVisibleSegments(body, func(segment string) {
+		if remaining == 0 {
+			return
+		}
 		for line := range strings.SplitSeq(qqStripImagesAndHTML(segment), "\n") {
+			if remaining == 0 {
+				return
+			}
 			trimmed := strings.TrimSpace(line)
 			text := strings.TrimRight(qqPlainText(trimmed), "。；;：: ")
 			if text == "" {
 				continue
 			}
 			if b.Len() > 0 && !heading {
-				b.WriteString("；")
+				writePrefix("；")
 			}
-			b.WriteString(text)
+			writePrefix(text)
 			heading = strings.HasPrefix(trimmed, "#")
 			if heading {
-				b.WriteString("：")
+				writePrefix("：")
 			}
 		}
 	})
 	return qqTruncateSentence(strings.TrimSuffix(b.String(), "："), qqReleaseNoteRunes)
 }
 
-// qqReleaseNotesVisibleSegments 按代码围栏切出需要处理的连续正文片段；围栏内内容不经过图片和 HTML 正则扫描，片段本身仍保留跨行 Markdown 结构。
+// qqReleaseNotesVisibleSegments 按代码围栏切出需要处理的连续正文片段；围栏内内容不经过图片和 HTML 过滤，片段本身仍保留跨行 Markdown 结构。
 func qqReleaseNotesVisibleSegments(body string, yield func(string)) {
 	fenced := false
 	segmentStart := 0
@@ -349,36 +459,84 @@ func qqReleaseNotesVisibleSegments(body string, yield func(string)) {
 	}
 }
 
+func qqReleaseMaterialDate(r *qqRelease) string {
+	d, _, _ := strings.Cut(r.PublishedAt, "T")
+	return d
+}
+
+func appendQQReleaseMaterialPart(b *strings.Builder, hasPart bool, prefix string, r *qqRelease) bool {
+	if hasPart {
+		b.WriteString("；")
+	}
+	b.WriteString(prefix)
+	b.WriteString(r.TagName)
+	b.WriteString("（")
+	b.WriteString(qqReleaseMaterialDate(r))
+	b.WriteString(" 发布）")
+	return true
+}
+
 // qqReleasesMaterial 是交给回答的模型的各平台最新版本，每个平台一行，写出仓库名和完整 tag，方便模型对照 issue；notes 为 nil 或对这个平台返回 true 时，在最新正式版下面加一行「更新内容：…」（见 qqReleaseNotes），预发布版和新版预览不附。
 func qqReleasesMaterial(list []qqPlatformRelease, notes func(qqPlatformRelease) bool) string {
-	date := func(r *qqRelease) string {
-		d, _, _ := strings.Cut(r.PublishedAt, "T")
-		return d
+	var capacity int
+	for _, p := range list {
+		capacity += len(p.Name) + len(p.Repo) + len(p.NextGenRepo) + 64
+		if p.Stable != nil {
+			capacity += len(p.Stable.TagName) + len(p.Stable.PublishedAt)
+			if p.Stable.notesReady {
+				capacity += len(p.Stable.notes)
+			} else {
+				capacity += qqReleaseNoteRunes * utf8.UTFMax
+			}
+		}
+		if p.Preview != nil {
+			capacity += len(p.Preview.TagName) + len(p.Preview.PublishedAt)
+		}
+		for i := range p.NextGen {
+			capacity += len(p.NextGen[i].TagName) + len(p.NextGen[i].PublishedAt)
+		}
 	}
 	var b strings.Builder
+	b.Grow(capacity)
 	for _, p := range list {
 		_, name, _ := strings.Cut(p.Repo, "/")
 		_, home, _ := strings.Cut(p.NextGenRepo, "/")
-		parts := []string{}
+		b.WriteString("- ")
+		b.WriteString(p.Name)
+		b.WriteString("（")
+		b.WriteString(name)
+		b.WriteString(" 仓库）：")
+		hasPart := false
 		if p.Stable != nil {
-			parts = append(parts, fmt.Sprintf("正式版 %s（%s 发布）", p.Stable.TagName, date(p.Stable)))
+			hasPart = appendQQReleaseMaterialPart(&b, hasPart, "正式版 ", p.Stable)
 		}
 		if p.Preview != nil {
-			parts = append(parts, fmt.Sprintf("预发布 %s（%s 发布）", p.Preview.TagName, date(p.Preview)))
+			hasPart = appendQQReleaseMaterialPart(&b, hasPart, "预发布 ", p.Preview)
 		}
-		for _, r := range p.NextGen {
-			parts = append(parts, fmt.Sprintf("%s 仓库的新版预览 %s（%s 发布）", home, r.TagName, date(&r)))
+		for i := range p.NextGen {
+			if hasPart {
+				b.WriteString("；")
+			}
+			b.WriteString(home)
+			b.WriteString(" 仓库的新版预览 ")
+			b.WriteString(p.NextGen[i].TagName)
+			b.WriteString("（")
+			b.WriteString(qqReleaseMaterialDate(&p.NextGen[i]))
+			b.WriteString(" 发布）")
+			hasPart = true
 		}
-		if len(parts) == 0 {
-			parts = append(parts, "还没有发布")
+		if !hasPart {
+			b.WriteString("还没有发布")
 		}
-		fmt.Fprintf(&b, "- %s（%s 仓库）：%s\n", p.Name, name, strings.Join(parts, "；"))
+		b.WriteByte('\n')
 		if p.Stable != nil && (notes == nil || notes(p)) {
 			if !p.Stable.notesReady {
 				p.Stable.notes, p.Stable.notesReady = qqReleaseNotes(p.Stable.Body), true
 			}
 			if text := p.Stable.notes; text != "" {
-				b.WriteString("  更新内容：" + text + "\n")
+				b.WriteString("  更新内容：")
+				b.WriteString(text)
+				b.WriteByte('\n')
 			}
 		}
 	}
@@ -390,9 +548,53 @@ var qqPlatformWords = map[string][]string{"windows": {"win", "微软"}, "macos":
 
 // qqMentionsPlatform 判断问题里有没有提到平台 p：不分大小写地找平台名、id 和 qqPlatformWords 里的说法。
 func qqMentionsPlatform(question string, p qqPlatformRelease) bool {
-	question = strings.ToLower(question)
-	for _, word := range append([]string{p.Name, p.ID}, qqPlatformWords[p.ID]...) {
-		if word != "" && strings.Contains(question, strings.ToLower(word)) {
+	return qqMentionsPlatformLower(strings.ToLower(question), p)
+}
+
+func qqMentionsPlatformLower(question string, p qqPlatformRelease) bool {
+	if p.Name != "" && qqContainsLowerPlatformWord(question, p.Name) {
+		return true
+	}
+	if p.ID != "" && qqContainsLowerPlatformWord(question, p.ID) {
+		return true
+	}
+	for _, word := range qqPlatformWords[p.ID] {
+		if strings.Contains(question, word) {
+			return true
+		}
+	}
+	return false
+}
+
+func qqContainsLowerPlatformWord(question, word string) bool {
+	if word == "" {
+		return false
+	}
+	upper := false
+	for i := range word {
+		if word[i] >= utf8.RuneSelf {
+			return strings.Contains(question, strings.ToLower(word))
+		}
+		if word[i] >= 'A' && word[i] <= 'Z' {
+			upper = true
+		}
+	}
+	if !upper {
+		return strings.Contains(question, word)
+	}
+	for start := 0; start+len(word) <= len(question); start++ {
+		match := true
+		for i := range word {
+			c := word[i]
+			if c >= 'A' && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			if question[start+i] != c {
+				match = false
+				break
+			}
+		}
+		if match {
 			return true
 		}
 	}
@@ -401,40 +603,77 @@ func qqMentionsPlatform(question string, p qqPlatformRelease) bool {
 
 // qqReleasesForMembers 是「版本」命令发到群里的各平台最新版本，每个平台一行「Windows：0.10.1（10-11）｜新版 Windows 预览 0.2.1（10-08，测试中）」：版本号去掉 tag 前缀，日期只写月和日，不写仓库名。曾经直接发交给模型的那份，每行都带「（msime 仓库）」和 macos-v0.52.0 这类原始 tag，Windows 新实现的版本号比正式版小，群友以为是旧版。
 func qqReleasesForMembers(list []qqPlatformRelease) string {
-	var b strings.Builder
+	// 按完整 tag 和带日期的格式预留上界，避免逐个标签和逐行拼接时产生临时字符串。
+	var capacity int
 	for _, p := range list {
-		parts := []string{}
+		capacity += len(p.Name) + len("：\n")
 		if p.Stable != nil {
-			parts = append(parts, qqReleaseLabel(p.Stable, p.Prefix, ""))
+			capacity += len(p.Stable.TagName) + len("（00-00）")
 		}
 		if p.Preview != nil {
-			parts = append(parts, "预览版 "+qqReleaseLabel(p.Preview, p.Prefix, ""))
+			capacity += len(p.Preview.TagName) + len("｜预览版 （00-00）")
 		}
-		for _, r := range p.NextGen {
-			parts = append(parts, "新版 "+p.Name+" 预览 "+qqReleaseLabel(&r, p.NextGenPrefix, "测试中"))
+		for i := range p.NextGen {
+			capacity += len(p.NextGen[i].TagName) + len(p.Name) + len("｜新版  预览 （00-00，测试中）")
 		}
-		if len(parts) == 0 {
-			parts = append(parts, "还没有发布")
+		if p.Stable == nil && p.Preview == nil && len(p.NextGen) == 0 {
+			capacity += len("还没有发布")
 		}
-		fmt.Fprintf(&b, "%s：%s\n", p.Name, strings.Join(parts, "｜"))
+	}
+	var b strings.Builder
+	b.Grow(capacity)
+	for _, p := range list {
+		b.WriteString(p.Name)
+		b.WriteString("：")
+		hasPart := false
+		if p.Stable != nil {
+			appendQQReleaseLabel(&b, p.Stable, p.Prefix, "")
+			hasPart = true
+		}
+		if p.Preview != nil {
+			if hasPart {
+				b.WriteString("｜")
+			}
+			b.WriteString("预览版 ")
+			appendQQReleaseLabel(&b, p.Preview, p.Prefix, "")
+			hasPart = true
+		}
+		for i := range p.NextGen {
+			if hasPart {
+				b.WriteString("｜")
+			}
+			b.WriteString("新版 ")
+			b.WriteString(p.Name)
+			b.WriteString(" 预览 ")
+			appendQQReleaseLabel(&b, &p.NextGen[i], p.NextGenPrefix, "测试中")
+			hasPart = true
+		}
+		if !hasPart {
+			b.WriteString("还没有发布")
+		}
+		b.WriteByte('\n')
 	}
 	return b.String()
 }
 
-// qqReleaseLabel 是群友看的一个版本「0.10.1（10-11）」：tag 去掉 prefix，括号里是发布的月和日（PublishedAt 的第 6 到 10 个字符），note 不为空时接在日期后面；没有发布时间时括号里只写 note，两样都没有就不加括号。
-func qqReleaseLabel(r *qqRelease, prefix, note string) string {
-	var inside []string
-	if len(r.PublishedAt) >= 10 {
-		inside = append(inside, r.PublishedAt[5:10])
+// appendQQReleaseLabel 直接追加群友看的版本「0.10.1（10-11）」：tag 去掉 prefix，日期只取月日，note 不为空时接在日期后面；没有日期时只写 note，两样都没有就不加括号。
+func appendQQReleaseLabel(b *strings.Builder, r *qqRelease, prefix, note string) {
+	b.WriteString(strings.TrimPrefix(r.TagName, prefix))
+	hasDate := len(r.PublishedAt) >= 10
+	if !hasDate && note == "" {
+		return
+	}
+	b.WriteString("（")
+	if hasDate {
+		b.WriteString(r.PublishedAt[5:10])
 	}
 	if note != "" {
-		inside = append(inside, note)
+		if hasDate {
+			b.WriteString("，")
+		}
+		b.WriteString(note)
 	}
-	label := strings.TrimPrefix(r.TagName, prefix)
-	if len(inside) > 0 {
-		label += "（" + strings.Join(inside, "，") + "）"
-	}
-	return label
+	b.WriteString("）")
 }
 
 // qqStatsTTL 是仓库统计在本副本的缓存时间：每次统计要打十几次搜索接口，而 GitHub 的搜索接口每分钟只给 30 次。qqStatsParallel 是统计时每个仓库同时发的搜索请求数，不再加大，免得撞上 GitHub 对并发请求的次级限流。

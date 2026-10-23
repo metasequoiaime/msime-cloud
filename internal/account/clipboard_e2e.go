@@ -163,12 +163,15 @@ FROM (SELECT COALESCE(bool_or(enabled),false) AS enabled,max(key_id) AS key_id F
 LEFT JOIN user_clipboard_wraps requested ON requested.user_id=$1 AND requested.device_id=$2 AND requested.key_id=s.key_id
 LEFT JOIN user_clipboard_devices d ON d.user_id=$1
 LEFT JOIN user_clipboard_wraps w ON w.user_id=d.user_id AND w.device_id=d.device_id AND w.key_id=s.key_id
+WHERE EXISTS (SELECT 1 FROM auth_users WHERE id=$1)
 ORDER BY d.created_at,d.device_id`, user, device)
 	if err != nil {
 		return v, err
 	}
 	defer rows.Close()
+	seen := false
 	for rows.Next() {
+		seen = true
 		var d ClipboardDevice
 		var id *string
 		var created *time.Time
@@ -180,7 +183,13 @@ ORDER BY d.created_at,d.device_id`, user, device)
 			v.Devices = append(v.Devices, d)
 		}
 	}
-	return v, rows.Err()
+	if err := rows.Err(); err != nil {
+		return v, err
+	}
+	if !seen {
+		return ClipboardKeys{}, errMissingUser
+	}
+	return v, nil
 }
 
 // PutClipboardDevice 登记一台设备；已登记时只更新名称。满 20 台时先淘汰最早登记、尚未批准的一台，都已批准时返回 errClipboardDeviceLimit。

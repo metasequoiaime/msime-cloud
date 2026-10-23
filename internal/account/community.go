@@ -8,6 +8,7 @@ import (
 	"image/jpeg"
 	"math"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -144,13 +145,13 @@ func communitySkinItem(v CommunitySkin, fields map[string]bool, category bool) C
 }
 
 // communityFields 读取社区列表和详情接口的 `fields=` 开关：逗号分隔、取自 allowed 的名称列表，出现其他名称时 ok 为 false。已发布的客户端解析社区条目时拒绝未知字段，所以额外字段只发给显式请求的客户端。
-func communityFields(r *http.Request, allowed ...string) (fields map[string]bool, ok bool) {
-	fields = map[string]bool{}
-	raw := r.URL.Query().Get("fields")
+func communityFields(query url.Values, allowed ...string) (fields map[string]bool, ok bool) {
+	raw := query.Get("fields")
 	if raw == "" {
-		return fields, true
+		return nil, true
 	}
-	for _, name := range strings.Split(raw, ",") {
+	fields = map[string]bool{}
+	for name := range strings.SplitSeq(raw, ",") {
 		if !slices.Contains(allowed, name) {
 			return nil, false
 		}
@@ -165,6 +166,35 @@ func communitySavedFields(fields map[string]bool, saved bool, saves int) (*bool,
 		return nil, nil
 	}
 	return &saved, &saves
+}
+
+// communityTextFilter 按是否指定筛选生成固定条件，让通用缓存计划使用分类索引；`column` 和 `parameter` 只接收固定 SQL 片段。
+func communityTextFilter(value, column, parameter string) string {
+	if value == "" {
+		return parameter + "::text=''"
+	}
+	return column + "=" + parameter
+}
+
+// communitySavedFilterValue 让收藏查询的缓存计划识别稀少分类；`allowed` 只接收代码中的固定白名单，`column` 只接收固定 SQL 片段。
+func communitySavedFilterValue(scope, value, column string, allowed []string) string {
+	if scope != "saved" || value == "" {
+		return ""
+	}
+	for _, known := range allowed {
+		if value == known {
+			return " AND " + column + "='" + strings.ReplaceAll(known, "'", "''") + "'"
+		}
+	}
+	return ""
+}
+
+// communityMineCondition 让通用缓存计划也能按作者索引筛选；`alias` 和 `parameter` 只接收调用处的固定 SQL 片段。
+func communityMineCondition(scope, alias, parameter string) string {
+	if scope == "mine" {
+		return alias + ".owner_id=$1 AND " + parameter + "::text='mine'"
+	}
+	return parameter + "::text<>'mine'"
 }
 
 // communitySavedScope 返回列表查询接在 FROM 之后的联接和 ORDER BY：`scope=saved` 时只留下当前用户（$1）收藏的条目，按收藏时间倒序；其他 scope 联接为空，仍按发布时间倒序。saves 是收藏表，column 是其中指向条目的列，alias 是条目表的别名。
@@ -201,7 +231,8 @@ func (a *Service) communitySave(w http.ResponseWriter, r *http.Request, t commun
 	defer tx.Rollback(r.Context())
 	batch := &pgx.Batch{}
 	if input.Saved {
-		batch.Queue(`INSERT INTO `+t.saves+`(`+t.column+`,user_id) SELECT s.id,$2 FROM `+t.items+` s WHERE s.id=$1 AND `+t.visible+` ON CONFLICT DO NOTHING`, id, p.UserID)
+		// 先锁定可见作品，等待删除或下架提交后重新检查，避免收藏插入触发外键错误。
+		batch.Queue(`INSERT INTO `+t.saves+`(`+t.column+`,user_id) SELECT s.id,$2 FROM `+t.items+` s WHERE s.id=$1 AND `+t.visible+` FOR SHARE OF s ON CONFLICT DO NOTHING`, id, p.UserID)
 	} else {
 		batch.Queue(`DELETE FROM `+t.saves+` WHERE `+t.column+`=$1 AND user_id=$2`, id, p.UserID)
 	}
@@ -286,22 +317,23 @@ func (a *Service) communityViewer(r *http.Request) string {
 	return p.UserID
 }
 func (a *Service) communityList(w http.ResponseWriter, r *http.Request) {
-	offset, search, code := communityListPage(r)
+	query := r.URL.Query()
+	offset, search, code := communityListPage(query)
 	if code != "" {
 		writeError(w, 400, code)
 		return
 	}
-	scope, validScope := communityListScope(r)
+	scope, validScope := communityListScope(query)
 	if !validScope {
 		writeError(w, 400, "invalid_scope")
 		return
 	}
-	fields, ok := communityFields(r, "moderation", "saved")
+	fields, ok := communityFields(query, "moderation", "saved")
 	if !ok {
 		writeError(w, 400, "invalid_fields")
 		return
 	}
-	category, withCategory, code := communitySkinListCategory(r)
+	category, withCategory, code := communitySkinListCategory(query)
 	if code != "" {
 		writeError(w, 400, code)
 		return
@@ -312,10 +344,11 @@ func (a *Service) communityList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	join, order := communitySavedScope(scope, "community_skin_saves", "skin_id", "s")
+	categoryCondition := communityTextFilter(category, "s.category", "$5") + communitySavedFilterValue(scope, category, "s.category", candidateSkinCategories)
 	// 先选本页皮肤，再读取互动统计；收藏范围在两层查询中都沿用收藏时间排序。
 	rows, e := a.store.pool.Query(r.Context(), `WITH skin_page AS MATERIALIZED (
  SELECT s.id FROM community_skins s JOIN auth_users u ON u.id=s.owner_id `+join+`
- WHERE strpos(lower(s.name),lower($2))>0 AND ($4<>'mine' OR s.owner_id=$1) AND (s.moderation<>'removed' OR s.owner_id=$1) AND ($5='' OR s.category=$5)
+ WHERE strpos(lower(s.name),lower($2))>0 AND (`+communityMineCondition(scope, "s", "$4")+`) AND (s.moderation<>'removed' OR s.owner_id=$1) AND (`+categoryCondition+`)
  ORDER BY `+order+` LIMIT 21 OFFSET $3
 ) `+communitySkinSelectQuery(fields["saved"], true)+join+`ORDER BY `+order, viewer, search, offset, scope, category)
 	if e != nil {
@@ -336,19 +369,27 @@ func (a *Service) communityList(w http.ResponseWriter, r *http.Request) {
 		a.error(w, e)
 		return
 	}
-	more := len(items) > 20
-	if more {
-		items = items[:20]
+	if scope != "" && len(items) == 0 {
+		exists, err := a.store.userExists(r.Context(), viewer)
+		if err != nil {
+			a.error(w, err)
+			return
+		}
+		if !exists {
+			a.error(w, errMissingUser)
+			return
+		}
 	}
-	write(w, 200, map[string]any{"skins": items, "has_more": more})
+	writeCommunityPage(w, "skins", items)
 }
 func (a *Service) communityDetail(w http.ResponseWriter, r *http.Request) {
-	fields, ok := communityFields(r, "moderation", "saved")
+	query := r.URL.Query()
+	fields, ok := communityFields(query, "moderation", "saved")
 	if !ok {
 		writeError(w, 400, "invalid_fields")
 		return
 	}
-	withCategory, ok := candidateIncludeCategory(r)
+	withCategory, ok := candidateIncludeCategory(query)
 	if !ok {
 		writeError(w, 400, "invalid_include")
 		return
@@ -568,12 +609,13 @@ func (a *Service) communityUpdate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	fields, ok := communityFields(r, "moderation")
+	query := r.URL.Query()
+	fields, ok := communityFields(query, "moderation")
 	if !ok {
 		writeError(w, 400, "invalid_fields")
 		return
 	}
-	withCategory, ok := candidateIncludeCategory(r)
+	withCategory, ok := candidateIncludeCategory(query)
 	if !ok {
 		writeError(w, 400, "invalid_include")
 		return
@@ -631,13 +673,13 @@ func (a *Service) communityDownload(w http.ResponseWriter, r *http.Request) {
 	write(w, 200, map[string]any{"design": design})
 }
 func (a *Service) communityRate(w http.ResponseWriter, r *http.Request) {
-	a.rateCommunityItem(w, r, `WITH eligible AS MATERIALIZED (
- SELECT id FROM community_skins WHERE id=$1 AND owner_id<>$2 AND moderation<>'removed'
+	a.rateCommunityItem(w, r, `WITH visible AS MATERIALIZED (
+ SELECT id,owner_id FROM community_skins WHERE id=$1 AND moderation<>'removed' FOR SHARE
 ), written AS (
  INSERT INTO community_skin_ratings(skin_id,user_id,stars)
- SELECT id,$2,$3 FROM eligible
+ SELECT id,$2,$3 FROM visible WHERE owner_id<>$2
  ON CONFLICT(skin_id,user_id) DO UPDATE SET stars=excluded.stars
  RETURNING skin_id
 )
-SELECT EXISTS(SELECT 1 FROM written),EXISTS(SELECT 1 FROM community_skins WHERE id=$1 AND owner_id=$2 AND moderation<>'removed')`, "skin_not_found", "download_before_rating_or_own_skin")
+SELECT EXISTS(SELECT 1 FROM written),EXISTS(SELECT 1 FROM visible WHERE owner_id=$2)`, "skin_not_found", "download_before_rating_or_own_skin")
 }

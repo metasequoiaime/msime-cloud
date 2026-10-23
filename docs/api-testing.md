@@ -10,6 +10,14 @@
 - 输入与 AI：各输入操作的成功结果和非法请求，目录搜索/分页，聊天/翻译/音频请求转换、供应商失败、超时、凭据隔离，WebSocket 音频中继/限流/会话过期，图片生成与异步任务的归属、取消、容量及失败状态。供应商协议测试使用本地 HTTP/TLS/WebSocket 服务，不消耗生产配额。
 - 社区、遥测与后台：发布/浏览/下载/评分/收藏/应用/删除，幂等性与关联记录清理；后台数据筛选/详情/操作审计、单会话撤销、管理员添加、启用、停用与会话撤销、Google 登录与 CSRF。遥测重复事件不覆盖原记录，非法记录不得落库，失败管理操作不得生成成功审计。
 
+`TestCommunityInteractionsWaitForChanges` 使用真实 PostgreSQL 行锁控制并发顺序，覆盖键盘皮肤、候选皮肤、插件和共享资源的首次及重复评分、收藏：删除、下架或候选皮肤转私有后，迟到写入返回对应的 404，不产生新记录或改写旧评分；删除回滚后仍可正常写入。评分的写入和拒绝原因使用同一次加锁读取，避免继续使用等待前的可见性快照。
+
+`TestCommunityReportsDoNotFollowReusedIDs` 覆盖六类作品经作者、后台或账号注销永久删除后由新作者同 ID 重发，后台不显示旧举报且原举报者可以重新举报。`TestCommunityReportsWaitForChanges` 观察真实 PostgreSQL 锁等待，验证删除、下架、转私有后的迟到举报返回 404、不写记录，删除回滚后正常举报；迁移测试检查触发器缺失或停用时拒绝就绪、重复迁移修复并清理孤立记录，DML 角色测试覆盖账号注销的举报清理。
+
+`TestCandidateAcceptedPathsCanBeInstalledOnWindows` 在真实 Windows 文件系统上逐个独占创建服务器接受的候选皮肤文件，检查写入字节和最终路径集合，覆盖目录尾点别名与纯点目录。`TestCandidateWindowsTrailingDotPathsRejected` 验证各平台都拒绝尾点路径段并保留合法相似名称；`TestCandidateWindowsTrailingDotPathsRejectedByWriteEndpoints` 使用真实 PostgreSQL 覆盖发布、替换、后台创建和编辑四个入口，检查返回 400、不保存无效包、不生成成功审计且失败编辑保留原作品。
+
+`TestCommunityPackageIDsKeepWindowsDirectoryNames` 在真实 Windows 上检查候选皮肤创建目录和插件重命名安装后，扫描读回的名称仍与已接受的清单 ID 相同。`TestCommunityPackageIDsRejectWindowsAliases`、`TestSafeIDPreservesWindowsDirectoryName` 和种子脚本测试在各平台拒绝尾点与 `nul` ID；`TestCommunityPackageWindowsAliasIDsRejectedByWriteEndpoints` 使用真实 PostgreSQL 覆盖七个写入口，检查拒绝、不落库、不新增成功审计以及失败编辑保留原作品。
+
 ## 完整运行
 
 必须使用独立的 PostgreSQL 数据库，名称包含 `msime_auth_test`；账号测试会清空测试表。不要复用本地开发或生产数据库，也不要并行运行多个使用同一测试数据库的 `go test` 进程。

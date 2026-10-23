@@ -1431,8 +1431,19 @@ func TestAdminCandidateSkinCategory(t *testing.T) {
 	if !updatedAt(first).Equal(before) {
 		t.Fatal("category change moved updated_at")
 	}
+	// 旧撤销必须绑定它看到的当前分类；其他管理员先改分类后，不能再覆盖这次新修改。
+	if w := call("POST", "/api/actions", `{"action":"set_candidate_skin_category","id":"`+first+`","value":{"category":"food"}}`); w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	if w := call("POST", "/api/actions", `{"action":"set_candidate_skin_category","id":"`+first+`","value":{"category":"other","expected":"cute"}}`); w.Code != 409 || !strings.Contains(w.Body.String(), `"conflict"`) {
+		t.Fatal("过期分类撤销没有冲突", w.Code, w.Body.String())
+	}
+	var category string
+	if err := db.pool.QueryRow(ctx, `SELECT category FROM community_candidate_skins WHERE id=$1`, first).Scan(&category); err != nil || category != "food" {
+		t.Fatal("过期分类撤销覆盖了新分类", category, err)
+	}
 	var action, target, detail string
-	if err := db.pool.QueryRow(ctx, `SELECT action,target,detail::text FROM admin_audit ORDER BY id DESC LIMIT 1`).Scan(&action, &target, &detail); err != nil {
+	if err := db.pool.QueryRow(ctx, `SELECT action,target,detail::text FROM admin_audit WHERE action='set_candidate_skin_category' AND detail->>'category'='cute' ORDER BY id DESC LIMIT 1`).Scan(&action, &target, &detail); err != nil {
 		t.Fatal(err)
 	}
 	var audited map[string]any

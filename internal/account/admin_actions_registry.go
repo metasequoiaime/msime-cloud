@@ -36,6 +36,8 @@ type actionResult struct {
 	Extra map[string]any
 	// BeforeCommit 在操作与审计 SQL 成功后、提交前执行；返回错误会回滚整个事务。
 	BeforeCommit func(context.Context) error
+	// CommitOnCancel 用于提交前步骤已确认外部写入的操作；步骤成功后继续限时提交，不因原请求取消丢失记录。
+	CommitOnCancel bool
 }
 
 // adminActionFunc runs one action inside tx. The dispatcher has already checked the spec's permission; the audit row is written by the dispatcher in the same transaction after the function returns without error.
@@ -61,6 +63,7 @@ var adminActions = map[string]adminActionSpec{
 	"revoke_sessions": {PermBanUsers, actionRevokeSessions},
 	"ban_user":        {PermBanUsers, actionBanUser},
 	"unban_user":      {PermBanUsers, actionUnbanUser},
+	"undo_user_ban":   {PermBanUsers, actionUndoUserBan},
 	// U2 community moderation: admin_moderation.go
 	"delete_skin":                 {PermReviewCommunity, actionDeleteSkin},
 	"delete_candidate_skin":       {PermReviewCommunity, actionDeleteCandidateSkin},
@@ -68,9 +71,10 @@ var adminActions = map[string]adminActionSpec{
 	"delete_dictionary":           {PermReviewCommunity, actionDeleteDictionary},
 	"delete_reply":                {PermReviewCommunity, actionDeleteReply},
 	"delete_phrase":               {PermReviewCommunity, actionDeletePhrase},
-	"approve_content":             {PermReviewCommunity, actionApproveContent},
-	"remove_content":              {PermReviewCommunity, actionRemoveContent},
-	"restore_content":             {PermReviewCommunity, actionRestoreContent},
+	"undo_moderation":             {PermReviewCommunity, actionUndoModeration},
+	"approve_content":             {PermReviewCommunity, moderationWithUndo(actionApproveContent)},
+	"remove_content":              {PermReviewCommunity, moderationWithUndo(actionRemoveContent)},
+	"restore_content":             {PermReviewCommunity, moderationWithUndo(actionRestoreContent)},
 	"set_skin_category":           {PermReviewCommunity, actionSetSkinCategory},
 	"set_candidate_skin_category": {PermReviewCommunity, actionSetCandidateSkinCategory},
 	// U4 sensitive words: sensitive_words.go
@@ -90,8 +94,9 @@ var adminActions = map[string]adminActionSpec{
 	"resolve_incident": {PermTriageIssues, actionResolveIncident},
 	"update_incident":  {PermTriageIssues, actionUpdateIncident},
 	// App 内反馈：admin_feedback.go。标记处理与问题分诊同一权限。
-	"resolve_feedback": {PermTriageIssues, actionResolveFeedback},
-	"reopen_feedback":  {PermTriageIssues, actionReopenFeedback},
+	"resolve_feedback":     {PermTriageIssues, actionResolveFeedback},
+	"reopen_feedback":      {PermTriageIssues, actionReopenFeedback},
+	"undo_feedback_status": {PermTriageIssues, actionUndoFeedbackStatus},
 }
 
 // adminRouteHandler serves one admin route; match is the part of the path the route pattern's "{}" matched, or "" for an exact pattern.

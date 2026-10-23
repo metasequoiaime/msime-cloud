@@ -26,9 +26,10 @@ const (
 	// dictPRCountedOpen bounds how many open pull requests the list enriches with entry counts; normally at most one rolling pull request is open.
 	dictPRCountedOpen = 5
 	// dictPREngineBatch keeps each Engine lookup well under its 64 KiB request limit.
-	dictPREngineBatch = 300
-	dictPRReasonChars = 500
-	dictPRMaxKeep     = 5000
+	dictPREngineBatch  = 300
+	dictPRReasonChars  = 500
+	dictPRMaxKeep      = 5000
+	dictPRCommentPages = 20
 )
 
 // Entry check results. A sensitive-word hit outranks an entry the website form would reject, which outranks a duplicate.
@@ -44,14 +45,15 @@ var dictPRPermissions = map[string]string{"contents": "write", "pull_requests": 
 
 var errDictPRConflict = errors.New("dictionary pull request changed concurrently")
 
-// dictPRState is the per-server memory of the review page: the last pull request list and the submitter notes last read for the global search, the pull requests this process already announced (a cache in front of NotifyOnce), and the lock that serialises review writes within this process.
+var errDictPRCommentsUncertain = errors.New("dictionary pull request comments could not be checked completely")
+
+// dictPRState 保存本副本审核页的列表、投稿说明搜索索引，以及 NotifyOnce 前的通知缓存。
 type dictPRState struct {
 	once     sync.Once
 	mu       sync.Mutex
 	index    []dictPRSummary
 	notes    map[int]string
 	notified map[int]bool
-	writes   sync.Mutex
 }
 
 // dictPRState returns the Server's review page state, creating its maps on first use; it lives in the Server, so it goes away with it.
@@ -187,7 +189,8 @@ func (s *Server) adminDictPRs(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	parts := strings.Split(rest, "/")
+	// 路由最多接受编号和操作两段，第三段只用于拒绝多余路径。
+	parts := strings.SplitN(rest, "/", 3)
 	number, err := strconv.Atoi(parts[0])
 	if err != nil || number <= 0 || number > 1<<30 || strconv.Itoa(number) != parts[0] {
 		fail(w, 400, "invalid_id")
@@ -806,8 +809,10 @@ func trimFailure(w http.ResponseWriter, err error) {
 	}
 }
 
-// auditDictPR records a review write after GitHub accepted it. The write cannot be taken back at this point, so an audit failure is logged rather than reported as a failed review that the reviewer would repeat.
+// auditDictPR 在 GitHub 已接受审核写入后保留操作者，并在请求取消后继续限时记录审计；审计失败只记日志，避免管理员重复执行已完成的审核。
 func (s *Server) auditDictPR(ctx context.Context, action string, number int, detail map[string]any) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
 	if err := s.accounts.Audit(ctx, action, strconv.Itoa(number), detail); err != nil {
 		slog.Error("dictionary pull requests: audit not recorded", "action", action, "pull", number, "reason", err.Error())
 	}
@@ -877,21 +882,29 @@ func (s *Server) prepareKeep(w http.ResponseWriter, ctx context.Context, gh *git
 	return token, p, files, keep, total, ok
 }
 
+// lockDictPRWrite 与官网投稿共用仓库锁，从读取 PR 起保护整个审核，避免多副本关闭仍在写入的投稿分支。
+func (s *Server) lockDictPRWrite(w http.ResponseWriter, ctx context.Context) (func(), bool) {
+	return s.lockAdminWrite(w, ctx, "word-submissions:"+strings.ToLower(s.dictRepo()))
+}
+
 func (s *Server) trimDictPR(w http.ResponseWriter, r *http.Request, gh *githubapp.Client, number int) {
 	var body dictKeepRequest
 	if !decode(w, r, &body) {
 		return
 	}
 	ctx := r.Context()
-	st := s.dictPRState()
-	st.writes.Lock()
-	defer st.writes.Unlock()
+	unlock, ok := s.lockDictPRWrite(w, ctx)
+	if !ok {
+		return
+	}
+	defer unlock()
 	token, p, files, keep, _, ok := s.prepareKeep(w, ctx, gh, number, body, true)
 	if !ok {
 		return
 	}
 	head, _, removed, err := s.trimFiles(ctx, gh, token, p, files, keep)
 	gh.Invalidate("/repos/" + s.dictRepo() + "/pulls")
+	unlock()
 	if removed > 0 {
 		s.auditDictPR(ctx, "dict_pr_trim", number, map[string]any{"count": len(keep), "removed": removed})
 	}
@@ -908,23 +921,30 @@ func (s *Server) approveDictPR(w http.ResponseWriter, r *http.Request, gh *githu
 		return
 	}
 	ctx := r.Context()
-	st := s.dictPRState()
-	st.writes.Lock()
-	defer st.writes.Unlock()
+	unlock, ok := s.lockDictPRWrite(w, ctx)
+	if !ok {
+		return
+	}
+	defer unlock()
 	token, p, files, keep, total, ok := s.prepareKeep(w, ctx, gh, number, body, false)
 	if !ok {
 		return
 	}
 	repo := "/repos/" + s.dictRepo()
 	head, title, removed := p.Head.SHA, p.Title, 0
-	if len(keep) < total {
-		var err error
-		head, title, removed, err = s.trimFiles(ctx, gh, token, p, files, keep)
+	// 合并结果确定或停止精简后先归还锁连接，再记录已完成的精简，避免审计等待同一连接池。
+	unlockAndAuditTrim := func() {
+		unlock()
 		if removed > 0 {
 			s.auditDictPR(ctx, "dict_pr_trim", number, map[string]any{"count": len(keep), "removed": removed})
 		}
+	}
+	if len(keep) < total {
+		var err error
+		head, title, removed, err = s.trimFiles(ctx, gh, token, p, files, keep)
 		if err != nil {
 			gh.Invalidate(repo + "/pulls")
+			unlockAndAuditTrim()
 			trimFailure(w, err)
 			return
 		}
@@ -932,6 +952,7 @@ func (s *Server) approveDictPR(w http.ResponseWriter, r *http.Request, gh *githu
 	// The head SHA makes the merge a compare-and-swap too: trimFiles refuses a branch that moved under its commits, and the merge refuses one that moved after them, so a submission that lands meanwhile is never merged unreviewed.
 	res, err := gh.Do(ctx, token, "PUT", repo+"/pulls/"+strconv.Itoa(number)+"/merge", map[string]string{"merge_method": "squash", "sha": head, "commit_title": title + " (#" + strconv.Itoa(number) + ")"})
 	gh.Invalidate(repo + "/pulls")
+	unlockAndAuditTrim()
 	switch {
 	case err != nil || res.Status >= 500:
 		slog.Error("dictionary pull requests: merge outcome unknown", "pull", number, "status", res.Status)
@@ -979,57 +1000,146 @@ func (s *Server) rejectDictPR(w http.ResponseWriter, r *http.Request, gh *github
 		return
 	}
 	ctx := r.Context()
-	st := s.dictPRState()
-	st.writes.Lock()
-	defer st.writes.Unlock()
+	unlock, ok := s.lockDictPRWrite(w, ctx)
+	if !ok {
+		return
+	}
+	defer unlock()
 	token, _, ok := s.openDictPull(w, ctx, gh, number, body.HeadSHA)
 	if !ok {
 		return
 	}
 	repo := "/repos/" + s.dictRepo()
-	res, err := gh.Do(ctx, token, "POST", repo+"/issues/"+strconv.Itoa(number)+"/comments", map[string]string{"body": "审核未通过：" + reason})
-	if err != nil || !res.OK() {
+	comment := "审核未通过：" + reason
+	// 关闭请求可能在评论写入后失败；重试前先确认评论是否已经存在，避免再次发布同一条拒绝理由。
+	commented, err := s.dictRejectionCommentExists(ctx, gh, token, number, comment)
+	if err != nil {
+		slog.Error("dictionary pull requests: rejection comment lookup failed", "pull", number, "reason", err.Error())
+		fail(w, 502, "github_uncertain")
+		return
+	}
+	var res githubapp.Response
+	if !commented {
+		res, err = gh.Do(ctx, token, "POST", repo+"/issues/"+strconv.Itoa(number)+"/comments", map[string]string{"body": comment})
+	}
+	if !commented && (err != nil || !res.OK()) {
 		slog.Error("dictionary pull requests: rejection comment failed", "pull", number, "status", res.Status)
 		fail(w, 502, "github_error")
 		return
 	}
-	res, err = gh.Do(ctx, token, "PATCH", repo+"/pulls/"+strconv.Itoa(number), map[string]string{"state": "closed"})
+	// 评论已经确认写入后，即使管理员断开连接也继续限时关闭拉取请求，避免重试产生重复评论并留下开放的拒绝请求。
+	closeCtx, cancelClose := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancelClose()
+	res, err = gh.Do(closeCtx, token, "PATCH", repo+"/pulls/"+strconv.Itoa(number), map[string]string{"state": "closed"})
 	gh.Invalidate(repo + "/pulls")
 	switch {
-	case err != nil || res.Status >= 500:
+	case err != nil || !res.OK():
 		slog.Error("dictionary pull requests: close outcome unknown", "pull", number, "status", res.Status)
+		unlock()
+		s.auditDictPR(closeCtx, "dict_pr_reject", number, map[string]any{"reason": reason, "partial": true, "uncertain": true})
 		fail(w, 502, "github_uncertain")
 		return
-	case !res.OK():
-		dictGitHubStatus(w, "close", res.Status)
-		return
+	default:
+		var closed dictPull
+		if res.Decode(&closed) != nil || closed.State != "closed" {
+			slog.Error("dictionary pull requests: close response was invalid", "pull", number, "status", res.Status)
+			unlock()
+			s.auditDictPR(closeCtx, "dict_pr_reject", number, map[string]any{"reason": reason, "partial": true, "uncertain": true})
+			fail(w, 502, "github_uncertain")
+			return
+		}
 	}
-	s.auditDictPR(ctx, "dict_pr_reject", number, map[string]any{"reason": reason})
+	unlock()
+	s.auditDictPR(closeCtx, "dict_pr_reject", number, map[string]any{"reason": reason})
 	respond(w, 200, map[string]any{"ok": true})
 }
 
-// searchDictPRs matches q against the cached dictionary pull requests (number, title and submitter note) for the global search; it never calls GitHub.
+// dictRejectionCommentExists 分页读取评论：之前的驳回可能早于最近 100 条；结果超过合理上限或分页损坏时拒绝继续发布评论。
+func (s *Server) dictRejectionCommentExists(ctx context.Context, gh *githubapp.Client, token string, number int, comment string) (bool, error) {
+	path := "/repos/" + s.dictRepo() + "/issues/" + strconv.Itoa(number) + "/comments?per_page=100&direction=desc&sort=created"
+	last := 1
+	for page := 1; page <= last; page++ {
+		requestPath := path
+		if page > 1 {
+			requestPath += "&page=" + strconv.Itoa(page)
+		}
+		res, err := gh.Do(ctx, token, "GET", requestPath, nil)
+		if err != nil || !res.OK() {
+			return false, errors.Join(errDictPRCommentsUncertain, err)
+		}
+		var comments []struct {
+			Body string `json:"body"`
+		}
+		if res.Decode(&comments) != nil || comments == nil {
+			return false, errDictPRCommentsUncertain
+		}
+		for _, existing := range comments {
+			if existing.Body == comment {
+				return true, nil
+			}
+		}
+		if page == 1 {
+			last = issueLastPage(res.Header)
+			if last == 0 {
+				if res.Header.Get("Link") != "" {
+					return false, errDictPRCommentsUncertain
+				}
+				last = 1
+			}
+			if last > dictPRCommentPages {
+				return false, errDictPRCommentsUncertain
+			}
+		}
+	}
+	return false, nil
+}
+
+// searchDictPRs 为全局搜索匹配缓存投稿的编号、标题和备注，不请求 GitHub。
 func (s *Server) searchDictPRs(q string) []account.AdminSearchHit {
 	q = strings.ToLower(strings.TrimSpace(q))
 	if q == "" {
 		return nil
 	}
+	queryNumber, queryTitle, queryHasSpace := strings.Cut(q, " ")
 	st := s.dictPRState()
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	var hits []account.AdminSearchHit
+	// `#` 加有符号 64 位整数最多占 21 字节，仅用于匹配，不保存在结果中。
+	var numberBuffer [21]byte
+	numberBuffer[0] = '#'
+	var hits [adminSearchLimit]account.AdminSearchHit
+	count := 0
 	for _, p := range st.index {
-		title := "#" + strconv.Itoa(p.Number) + " " + p.Title
-		if !strings.Contains(strings.ToLower(title), q) && !strings.Contains(strings.ToLower(p.Note), q) {
-			continue
+		if !dictionaryLineContainsLower(p.Title, q) && !dictionaryLineContainsLower(p.Note, q) {
+			prefix := string(strconv.AppendInt(numberBuffer[:1], int64(p.Number), 10))
+			matched := strings.Contains(prefix, q)
+			if queryHasSpace {
+				// 编号不含空格，跨分隔符的查询只能以第一个空格对齐。
+				matched = strings.HasSuffix(prefix, queryNumber) && qqCommandPrefixEqualFold(p.Title, queryTitle)
+			}
+			if !matched {
+				continue
+			}
 		}
-		// Website pull request titles only count entries, so the submitter's note names the pull request when there is one.
+		// 仅命中后构造显示标题；有备注时以投稿备注命名。
+		number := strconv.Itoa(p.Number)
+		var title string
 		if p.Note != "" {
-			title = "#" + strconv.Itoa(p.Number) + " 词库：" + p.Note
+			title = "#" + number + " 词库：" + p.Note
+		} else {
+			title = "#" + number + " " + p.Title
 		}
-		hits = append(hits, account.AdminSearchHit{Kind: "dict_pr", ID: strconv.Itoa(p.Number), Title: title, Where: "词库审核", Target: "dictpr"})
+		hits[count] = account.AdminSearchHit{Kind: "dict_pr", ID: number, Title: title, Where: "词库审核", Target: "dictpr"}
+		count++
+		// 全局搜索最多使用前 `adminSearchLimit` 条命中，及时停止构造其余结果。
+		if count == len(hits) {
+			break
+		}
 	}
-	return hits
+	if count == 0 {
+		return nil
+	}
+	return slices.Clone(hits[:count])
 }
 
 // pendingDictPRs counts open dictionary pull requests for the shell badge, through the same cached read as the list.

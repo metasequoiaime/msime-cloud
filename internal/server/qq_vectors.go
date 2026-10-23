@@ -45,6 +45,9 @@ const (
 	qqHistorySummaryRunes = 300
 )
 
+// qqPendingVectorHash 是同步本轮已选中更新的标记；内容哈希只由十六进制字符组成，不会与它冲突。
+const qqPendingVectorHash = "\x00qq-vector-pending"
+
 // qqHistoryPerms 是同步 issue 和 PR 时的令牌权限：只有 issues 读权限的令牌调 issues 接口时，GitHub 会把 PR 滤掉（曾经因此一条 PR 都没有入库），所以要加上 pull_requests 读权限。
 var qqHistoryPerms = map[string]string{"contents": "read", "issues": "read", "pull_requests": "read", "metadata": "read"}
 
@@ -79,15 +82,14 @@ func (s *Server) qqEmbed(ctx context.Context, texts []string) ([][]float32, erro
 		return nil, errors.New("embeddings disabled")
 	}
 	payload, _ := json.Marshal(map[string]any{"model": s.qq.config.EmbeddingModel, "input": texts})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	e := s.config.Chat.Endpoint
+	e.URL = endpoint
+	req, err := e.newRequest(ctx, http.MethodPost, bytes.NewReader(payload))
 	if err != nil {
 		return nil, errors.New("invalid embedding endpoint")
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	if token := s.config.Chat.token; token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
 	b, err := s.doUpstream(req)
 	if err != nil {
 		return nil, err
@@ -312,18 +314,23 @@ func (s *Server) syncQQVectors(ctx context.Context) {
 
 // syncQQDocVectors 同步文档段落，返回重算的段落数。
 func (s *Server) syncQQDocVectors(ctx context.Context) (int, error) {
-	sections, err := s.qqKnowledgeSections(ctx)
+	sections, cachedIDs, _, _, contentHashes, err := s.qqKnowledgeSnapshot(ctx)
 	if err != nil {
 		return 0, err
 	}
-	ids := make([]string, len(sections))
-	uniqueEstimate := 0
-	for i, section := range sections {
-		if i > 0 && section.Doc == sections[i-1].Doc && section.Title == sections[i-1].Title {
-			ids[i] = ids[i-1]
-		} else {
-			ids[i] = qqDocID(section)
+	ids := cachedIDs
+	if len(ids) != len(sections) {
+		ids = make([]string, len(sections))
+		for i, section := range sections {
+			if i > 0 && section.Doc == sections[i-1].Doc && section.Title == sections[i-1].Title {
+				ids[i] = ids[i-1]
+			} else {
+				ids[i] = qqDocID(section)
+			}
 		}
+	}
+	uniqueEstimate := 0
+	for i := range ids {
 		if i == 0 || ids[i] != ids[i-1] {
 			uniqueEstimate++
 		}
@@ -332,23 +339,48 @@ func (s *Server) syncQQDocVectors(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	items := make([]account.QQKnowledgeItem, 0, uniqueEstimate)
-	texts := make([]string, 0, uniqueEstimate)
+	var items []account.QQKnowledgeItem
+	var texts []string
+	// 数据库已有本轮全部段落时直接复用哈希表做去重标记，避免更新一段时再分配整张 pending 表；首次同步或部分命中仍使用独立表，避免把缺失 ID 逐个扩进数据库返回的 map。
+	useHashMarkers := len(hashes) == uniqueEstimate
 	var pending map[string]struct{}
 	for i, section := range sections {
 		// 只对本轮已经选中更新的 ID 去重，未变化的段落不能遮住后续同 ID 的更新。
-		if _, ok := pending[ids[i]]; ok {
+		if useHashMarkers {
+			if hashes[ids[i]] == qqPendingVectorHash {
+				continue
+			}
+		} else if _, ok := pending[ids[i]]; ok {
 			continue
 		}
-		text := "[" + section.Doc + "] " + section.Title + "\n" + qqTruncate(section.Text, qqEmbedRunes)
-		h := qqContentHash(text)
+		text := ""
+		h := ""
+		if len(contentHashes) == len(sections) {
+			h = contentHashes[i]
+		}
+		if h == "" {
+			text = qqDocVectorText(section)
+			h = qqContentHash(text)
+		}
 		if hashes[ids[i]] == h {
 			continue
 		}
-		if pending == nil {
-			pending = make(map[string]struct{}, uniqueEstimate)
+		if text == "" {
+			text = qqDocVectorText(section)
 		}
-		pending[ids[i]] = struct{}{}
+		if len(items) == 0 {
+			// 仅在确有更新时准备批处理缓冲，避免未变化的文档每轮都分配整份待更新数组。
+			items = make([]account.QQKnowledgeItem, 0, uniqueEstimate)
+			texts = make([]string, 0, uniqueEstimate)
+		}
+		if useHashMarkers {
+			hashes[ids[i]] = qqPendingVectorHash
+		} else {
+			if pending == nil {
+				pending = make(map[string]struct{}, uniqueEstimate)
+			}
+			pending[ids[i]] = struct{}{}
+		}
 		items = append(items, account.QQKnowledgeItem{ID: ids[i], Kind: "doc", Title: section.Doc + " · " + section.Title, Summary: qqTruncate(section.Text, qqHistorySummaryRunes), ContentHash: h, UpdatedAt: s.qq.now()})
 		texts = append(texts, text)
 	}
@@ -359,6 +391,14 @@ func (s *Server) syncQQDocVectors(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	return len(items), s.qqVectors.DeleteQQKnowledgeDocs(ctx, ids)
+}
+
+func qqDocVectorText(section qqSection) string {
+	return "[" + section.Doc + "] " + section.Title + "\n" + qqTruncate(section.Text, qqEmbedRunes)
+}
+
+func qqDocVectorContentHash(section qqSection) string {
+	return qqContentHash(qqDocVectorText(section))
 }
 
 // qqHistoryIssue 是同步时从 issues 接口读到的一条 issue 或 PR。
@@ -582,6 +622,9 @@ func qqHistoryMaterial(hits []account.QQKnowledgeHit) string {
 
 // qqMergeSections 把向量召回的段落接在模型挑出的段落后面（去重），返回最终交给回答模型的段落下标。
 func qqMergeSections(picked, recalled []int, limit int) []int {
+	if len(recalled) == 0 || len(picked) >= limit {
+		return picked
+	}
 	out := slices.Clone(picked)
 	for _, i := range recalled {
 		if len(out) >= limit {

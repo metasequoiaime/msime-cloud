@@ -22,6 +22,42 @@ func TestQQListLabelLineTrimMatchesUnicodeSpace(t *testing.T) {
 	}
 }
 
+func TestQQListLabelsSkipsConsecutiveDuplicateLines(t *testing.T) {
+	remaining := "- 换肤：说明\n- 换肤：说明\n- 隐私：说明"
+	if got, want := qqSkipConsecutiveListLines(remaining, "- 换肤：说明"), "- 隐私：说明"; got != want {
+		t.Fatalf("连续重复列表项未全部跳过：结果=%q，预期=%q", got, want)
+	}
+}
+
+func TestQQSkipDuplicateLinesKeepsBoundaries(t *testing.T) {
+	for _, tc := range []struct{ name, line, remaining, want string }{
+		{"空行参数", "", "\n末行", "\n末行"},
+		{"没有余文", "正文", "", ""},
+		{"无换行的相同末行", "正文", "正文", "正文"},
+		{"完整重复行", "正文", "正文\n正文\n末行", "末行"},
+		{"后续末行无换行", "正文", "正文\n正文", "正文"},
+		{"前缀相同的不同正文", "正文", "正文后缀\n末行", "正文后缀\n末行"},
+		{"重复后保留前缀相同行", "正文", "正文\n正文后缀\n", "正文后缀\n"},
+		{"CRLF 不等于 LF", "正文", "正文\r\n末行", "正文\r\n末行"},
+		{"带 CR 的原始行", "正文\r", "正文\r\n末行", "末行"},
+		{"保留后续空行", "正文", "正文\n\n末行", "\n末行"},
+		{"无效编码逐字节比较", "\xff正文", "\xff正文\n末行", "末行"},
+		{"不合并无效编码", "\xff正文", "�正文\n末行", "�正文\n末行"},
+		{"四字节字符", "😀正文", "😀正文\n😀正文\n末行", "末行"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := qqSkipConsecutiveListLines(tc.remaining, tc.line); got != tc.want {
+				t.Fatalf("重复行跳过结果=%q，期望 %q", got, tc.want)
+			}
+		})
+	}
+	long := strings.Repeat("水", 65536)
+	text := strings.Repeat("- 换肤："+long+"\n", 4) + "- 换肤：不同描述\n- 删除：尾部\n- 隐私：尾部"
+	if got, want := qqListLabels(text), []string{"换肤", "删除", "隐私"}; !slices.Equal(got, want) {
+		t.Fatalf("长重复行后的标签顺序=%q，期望 %q", got, want)
+	}
+}
+
 func qqPreviousListSnippet(text string) string {
 	var labels []string
 	for line := range strings.SplitSeq(text, "\n") {

@@ -2,14 +2,11 @@ package server
 
 import (
 	"context"
-	"crypto/subtle"
-	"encoding/json"
-	"io"
+	"errors"
 	"net/http"
-	"strings"
-	"time"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 	"golang.org/x/oauth2"
 )
 
@@ -30,9 +27,7 @@ func (s *Server) adminCLIAvailable(w http.ResponseWriter, r *http.Request) bool 
 }
 
 func readAdminJSON(w http.ResponseWriter, r *http.Request, v any) bool {
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
-	decoder.DisallowUnknownFields()
-	if decoder.Decode(v) != nil || decoder.Decode(new(any)) != io.EOF {
+	if httpjson.DecodeValue(http.MaxBytesReader(w, r.Body, 16<<10), v) != nil {
 		fail(w, 400, "invalid_request")
 		return false
 	}
@@ -108,36 +103,13 @@ func (s *Server) adminCLIFinish(w http.ResponseWriter, r *http.Request) {
 	respond(w, 200, map[string]any{"token": token, "token_type": "Bearer", "expires_in": 8 * 60 * 60, "email": identity.Email})
 }
 
-// adminCLIIdentity exchanges the code and checks the ID token exactly as the web callback does, against the desktop client: signature, issuer, audience, freshness, nonce, a verified email and the admin allowlist. Every refusal is ErrInvalid so the answer does not say which check failed.
+// adminCLIIdentity 使用桌面客户端和本次回调地址校验身份，认证拒绝统一映射为 ErrInvalid。
 func (s *Server) adminCLIIdentity(ctx context.Context, flow account.AdminLoginFlow, code, redirect string) (account.AdminIdentity, error) {
 	config := s.adminCLI.oauth
 	config.RedirectURL = redirect
-	tokens, err := config.Exchange(context.WithValue(ctx, oauth2.HTTPClient, s.client), code, oauth2.VerifierOption(flow.Verifier))
-	if err != nil {
+	identity, err := s.adminGoogleIdentity(ctx, config, s.adminCLI.verifier, flow, code)
+	if errors.Is(err, errAdminGoogleDenied) {
 		return account.AdminIdentity{}, account.ErrInvalid
 	}
-	raw, ok := tokens.Extra("id_token").(string)
-	if !ok || len(raw) > 16384 {
-		return account.AdminIdentity{}, account.ErrInvalid
-	}
-	token, err := s.adminCLI.verifier.Verify(ctx, raw)
-	if err != nil || token.Subject == "" || len(token.Subject) > 255 || token.IssuedAt.IsZero() || token.IssuedAt.After(time.Now().Add(30*time.Second)) || subtle.ConstantTimeCompare([]byte(token.Nonce), []byte(flow.Nonce)) != 1 {
-		return account.AdminIdentity{}, account.ErrInvalid
-	}
-	var claims struct {
-		Email    string `json:"email"`
-		Verified bool   `json:"email_verified"`
-		Name     string `json:"name"`
-	}
-	if token.Claims(&claims) != nil || !claims.Verified {
-		return account.AdminIdentity{}, account.ErrInvalid
-	}
-	allowed, err := s.adminEmailAllowed(ctx, claims.Email)
-	if err != nil {
-		return account.AdminIdentity{}, err
-	}
-	if !allowed {
-		return account.AdminIdentity{}, account.ErrInvalid
-	}
-	return account.AdminIdentity{Subject: token.Subject, Email: strings.ToLower(claims.Email), Name: claims.Name}, nil
+	return identity, err
 }

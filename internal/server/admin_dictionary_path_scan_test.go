@@ -76,6 +76,23 @@ func TestDictionaryPathScanCompatibility(t *testing.T) {
 	}
 }
 
+func TestDictionaryPathCaseMappingCompatibility(t *testing.T) {
+	files := []string{"LİCENSE.txt", "lıcense.txt", "licenſe.txt", "agentſ.txt", "word.tſv", "word.cſv", "word.dİct.yaml", "word.DICT.YAML", "İΣ.txt", "bad\xff.TXT"}
+	for _, size := range []int{31, 32, 33, 256, 257} {
+		for _, tail := range []string{".TXT", ".dict.yaml", "İ.TXT", "\xff.TXT"} {
+			files = append(files, strings.Repeat("A", size-len(tail))+tail)
+		}
+	}
+	for _, file := range files {
+		for _, source := range []string{"synthetic", "japanese"} {
+			name := "sources/" + source + "/" + file
+			if got, want := dictionaryTextPath(name), previousDictionaryTextPath(name); got != want {
+				t.Fatalf("路径 %q 的大小写筛选变化：结果=%v，期望=%v", name, got, want)
+			}
+		}
+	}
+}
+
 func dictionaryPathScanInputs(kind string, n int) ([]string, int, int) {
 	names := make([]string, n)
 	accepted, editable := 0, 0
@@ -115,7 +132,7 @@ func TestDictionaryPathScanAllocationBudget(t *testing.T) {
 		kind   string
 		budget float64
 	}{
-		{"sources", 100}, {"packs", 0}, {"mixed", 300}, {"uppercase", 1200},
+		{"sources", 0}, {"packs", 0}, {"mixed", 0}, {"uppercase", 0},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
 			names, wantAccepted, wantEditable := dictionaryPathScanInputs(tc.kind, 1000)
@@ -134,7 +151,7 @@ func TestDictionaryPathScanAllocationBudget(t *testing.T) {
 			if accepted != wantAccepted || editable != wantEditable {
 				t.Fatalf("筛选数量为 %d/%d，期望 %d/%d", accepted, editable, wantAccepted, wantEditable)
 			}
-			// 预算容纳必要的大小写转换，并检出逐路径切分和包名校验引入的分配。
+			// 这些短 ASCII 文件名应在栈上完成转换，不为大小写筛选分配临时字符串。
 			if allocations > tc.budget {
 				t.Fatalf("1000 个路径分配 %.0f 次，预算 %.0f 次", allocations, tc.budget)
 			}

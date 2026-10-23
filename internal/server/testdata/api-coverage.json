@@ -632,6 +632,9 @@
     "GET /v1/niutrans/resources": [
       "internal/server/niutrans_media_test.go::TestNiuTransAllMediaRoutes",
       "internal/server/niutrans_media_test.go::TestNiuTransMediaUpstreamAndRequestErrors"
+    ],
+    "GET /v1/site/download-stats": [
+      "internal/account/site_download_stats_test.go::TestSiteDownloadStatsCumulativeMirrors"
     ]
   },
   "admin_and_docs": {

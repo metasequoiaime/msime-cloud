@@ -108,16 +108,16 @@ func qqPlatformCount() int { return len(strings.Split(qqPlatformList, "、")) }
 
 // qqSelfTestBrief 检查回答不超过 runes 字、lines 行（不算空行），超了返回原因。
 func qqSelfTestBrief(answer string, runes, lines int) string {
+	if length := utf8.RuneCountInString(answer); length > runes {
+		return fmt.Sprintf("回答 %d 字，超过 %d 字", length, runes)
+	}
 	count := 0
-	for _, line := range strings.Split(answer, "\n") {
+	for line := range strings.SplitSeq(answer, "\n") {
 		if strings.TrimSpace(line) != "" {
 			count++
 		}
 	}
-	switch length := utf8.RuneCountInString(answer); {
-	case length > runes:
-		return fmt.Sprintf("回答 %d 字，超过 %d 字", length, runes)
-	case count > lines:
+	if count > lines {
 		return fmt.Sprintf("回答 %d 行，超过 %d 行", count, lines)
 	}
 	return ""

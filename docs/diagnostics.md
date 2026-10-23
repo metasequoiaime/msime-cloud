@@ -9,7 +9,7 @@
 - `POST /v1/users/me/diagnostics`：上传快照。JSON 最多 2 MiB：`{"platform","app_version","sections":{...},"ttl"}`，`ttl` 是 `one_hour`、`one_day` 或 `seven_days`。`sections` 里只出现用户勾选的分类，至少一个：
   - `crash_logs`：`[{"at","message","stack"}]`，`at` 是 RFC 3339 时间，`message` 最多 2 KiB，`stack` 最多 16 KiB，两者不能含 NUL，否则返回 400 `invalid_crash_logs`；最多 200 条。
   - `perf_trace`：`[{"t_ms","kind","duration_ms"}]`，三个字段都必须有。
-  - `input_events`：`[{"t_ms","kind","duration_ms"?}]`，`duration_ms` 可以省略。
+  - `input_events`：`[{"t_ms","kind","duration_ms"?}]`，`duration_ms` 可以省略。两类事件的 `t_ms` 都必填且不能为 `null`，允许为 `0`。
   - `config_snapshot`：设置快照对象，最多 8 层、2000 个条目，字符串最多 1 KiB。所有层级的键名不能含 NUL，非凭据键下的字符串值也不能含 NUL，否则返回 400 `invalid_config_snapshot`。键名匹配 `(?i)token|secret|password|api_key|key$` 的值必须是字符串 `"<redacted>"`，不符合时返回 400 `unredacted_config`。
 
   `perf_trace` 与 `input_events` 的 `kind` 只能是 `key_down`、`key_up`、`candidate_shown`、`candidate_selected`、`commit`、`backspace`、`panel_open`、`panel_close`、`ime_start`、`ime_finish`。事件对象只允许列出的字段，任何多出来的字段（文本、拼音、候选、按键字符）、未知的分类、超长字符串或未脱敏的凭据都让整份上传返回 400，不会只存一部分。错误码：`invalid_json`、`invalid_client`、`invalid_ttl`、`empty_snapshot`、`invalid_crash_logs`、`invalid_perf_trace`、`invalid_input_events`、`invalid_config_snapshot`、`unredacted_config`。
@@ -27,6 +27,7 @@
 - 限流：每份快照每分钟 60 次（`auth_rates`，所有副本共享），有效快照的令牌错误请求也计数，超出返回 429 并带 `Retry-After: 60`。不存在、已过期或所属账号被封禁的快照直接返回 401，不创建或更新限流记录。
 - 不要求 `Origin`；带了不在 `allowed_origins` 里的 `Origin`（浏览器跨站请求）照样返回 403。
 - 无状态模式：生产多副本、没有粘性会话，所以每个请求单独建一个只读 MCP server，不发 `Mcp-Session-Id`，响应是 `application/json`；`GET` 在无状态模式下返回 405，客户端不需要服务端推送。
+- 每个 `POST` 只接受一条 JSON-RPC 消息，请求体最多 64 KiB。任何版本（包括未提供版本头及旧版协议）都不接受顶层数组形式的批请求，返回 400 `invalid_mcp_request`，不执行其中的工具；超长请求体返回 413 `request_too_large`。鉴权与共享限流先于请求体检查，因此批请求仍计入每分钟请求额度，错误令牌和超额请求仍分别返回 401、429。正常的单条初始化、通知与工具调用继续由官方 SDK 处理。
 
 工具全部只读，按快照包含的分类出现，没有上传的分类没有对应工具：
 

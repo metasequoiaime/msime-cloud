@@ -3,15 +3,17 @@ package account
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -68,17 +70,45 @@ var (
 	}
 )
 
-// deleteContent hard-deletes one row by id; the foreign keys cascade to downloads, ratings and files.
-func deleteContent(query string) adminActionFunc {
+// deleteContent 永久删除作品及外键关联记录；支持编辑的分区可用凭据固定确认时的版本，旧调用仍可只传 ID。
+func deleteContent(query, editableSection string) adminActionFunc {
+	versionedQuery := query
+	if editableSection != "" {
+		// 分区和表名由动作固定，版本条件只构建一次，编辑凭据仍逐请求绑定。
+		versionedQuery += ` AND ` + contentEditToken(editableSection, moderationSections[editableSection].table) + `=$2`
+	}
 	return func(a *Service, ctx context.Context, tx pgx.Tx, v actionRequest) (actionResult, error) {
 		if err := requireActionID(v); err != nil {
 			return actionResult{}, err
 		}
-		tag, err := tx.Exec(ctx, query, v.ID)
+		var value struct {
+			EditToken *string `json:"edit_token"`
+		}
+		if editableSection != "" && len(v.Value) != 0 {
+			if httpjson.DecodeValue(bytes.NewReader(v.Value), &value) != nil {
+				return actionResult{}, actionFail(400, "invalid_value")
+			}
+			if value.EditToken != nil {
+				token, err := hex.DecodeString(*value.EditToken)
+				if err != nil || len(token) != 16 {
+					return actionResult{}, actionFail(400, "invalid_value")
+				}
+			}
+		}
+		deleteQuery, args := query, []any{v.ID}
+		if value.EditToken != nil {
+			// 在同一条 DELETE 中比较版本，等待并发更新后仍由 PostgreSQL 重新检查条件。
+			deleteQuery = versionedQuery
+			args = append(args, *value.EditToken)
+		}
+		tag, err := tx.Exec(ctx, deleteQuery, args...)
 		if err != nil {
 			return actionResult{}, err
 		}
 		if tag.RowsAffected() == 0 {
+			if value.EditToken != nil {
+				return actionResult{}, actionFail(409, "conflict")
+			}
 			return actionResult{}, actionFail(404, "not_found")
 		}
 		return actionResult{Affected: tag.RowsAffected()}, nil
@@ -86,12 +116,12 @@ func deleteContent(query string) adminActionFunc {
 }
 
 var (
-	actionDeleteSkin          = deleteContent(`DELETE FROM community_skins WHERE id=$1`)
-	actionDeleteCandidateSkin = deleteContent(`DELETE FROM community_candidate_skins WHERE id=$1`)
-	actionDeletePlugin        = deleteContent(`DELETE FROM community_plugins WHERE id=$1`)
-	actionDeleteDictionary    = deleteContent(`DELETE FROM community_resources WHERE id=$1 AND kind='dictionary'`)
-	actionDeleteReply         = deleteContent(`DELETE FROM community_resources WHERE id=$1 AND kind='reply'`)
-	actionDeletePhrase        = deleteContent(`DELETE FROM community_resources WHERE id=$1 AND kind='phrase'`)
+	actionDeleteSkin          = deleteContent(`DELETE FROM community_skins WHERE id=$1`, "skins")
+	actionDeleteCandidateSkin = deleteContent(`DELETE FROM community_candidate_skins WHERE id=$1`, "candidate-skins")
+	actionDeletePlugin        = deleteContent(`DELETE FROM community_plugins WHERE id=$1`, "plugins")
+	actionDeleteDictionary    = deleteContent(`DELETE FROM community_resources WHERE id=$1 AND kind='dictionary'`, "")
+	actionDeleteReply         = deleteContent(`DELETE FROM community_resources WHERE id=$1 AND kind='reply'`, "")
+	actionDeletePhrase        = deleteContent(`DELETE FROM community_resources WHERE id=$1 AND kind='phrase'`, "")
 )
 
 // candidateCategoryFilter 让键盘皮肤和候选皮肤列表按图库分类筛选，取值即 candidateSkinCategories。
@@ -105,8 +135,15 @@ func candidateCategoryFilter() listFilter {
 	return listFilter{param: "category", field: "category", max: longest, values: values}
 }
 
-// setSkinCategory 返回修改 section 中 ids（或 id）图库分类的操作，value 为 {"category":"<分类>"}。请求里的 section 可省略，给出时必须与之相同。分类只是发布元数据，所以不改 updated_at（审核时固定的版本不受影响），也不改变审核状态；设为当前值同样算作命中。审计记录分类、数量、ids，单项时还有名称和原分类 from。table 是 moderationSections 中的固定表名，不来自请求。
+// skinCategoryVersionSQL 固定作品身份和写入版本；别名是调用方的固定 SQL 标识符。
+func skinCategoryVersionSQL(alias string) string {
+	return `md5(jsonb_build_array(` + alias + `.tableoid::text,` + alias + `.id,` + alias + `.xmin::text,extract(epoch FROM ` + alias + `.created_at),` + alias + `.category)::text)`
+}
+
+// setSkinCategory 修改图库分类，单项变更返回真实前态和版本化撤销。expected 保持直接调用兼容，token 只允许单项撤销。分类不改 updated_at 和审核状态；同值仍算命中，但不提供反向撤销。table 是固定表名。
 func setSkinCategory(section, table string) adminActionFunc {
+	// 每个动作只构建一次固定语句，分类、前态和撤销版本仍按请求绑定。
+	query := `UPDATE ` + table + ` s SET category=$2 FROM (SELECT id,category,` + skinCategoryVersionSQL("locked_skin") + ` AS token FROM ` + table + ` locked_skin WHERE id=ANY($1) FOR UPDATE) o WHERE s.id=o.id AND ($3::text IS NULL OR o.category=$3) AND ($4::text IS NULL OR o.token=$4) RETURNING s.id,s.name,o.category,` + skinCategoryVersionSQL("s")
 	return func(a *Service, ctx context.Context, tx pgx.Tx, v actionRequest) (actionResult, error) {
 		if v.Section != "" && v.Section != section {
 			return actionResult{}, actionFail(400, "invalid_section")
@@ -117,22 +154,30 @@ func setSkinCategory(section, table string) adminActionFunc {
 			return actionResult{}, err
 		}
 		var value struct {
-			Category string `json:"category"`
+			Category string  `json:"category"`
+			Expected *string `json:"expected"`
+			Token    *string `json:"token"`
 		}
-		d := json.NewDecoder(bytes.NewReader(v.Value))
-		d.DisallowUnknownFields()
-		if len(v.Value) == 0 || d.Decode(&value) != nil || !validCandidateSkinCategory(value.Category) {
+		if len(v.Value) == 0 || httpjson.DecodeValue(bytes.NewReader(v.Value), &value) != nil || !validCandidateSkinCategory(value.Category) || (value.Expected != nil && !validCandidateSkinCategory(*value.Expected)) {
 			return actionResult{}, actionFail(400, "invalid_category")
 		}
-		rows, err := tx.Query(ctx, `UPDATE `+table+` s SET category=$2 FROM (SELECT id,category FROM `+table+` WHERE id=ANY($1) FOR UPDATE) o WHERE s.id=o.id RETURNING s.id,s.name,o.category`, ids, value.Category)
+		if value.Token != nil {
+			if len(v.IDs) != 0 || len(*value.Token) != 32 {
+				return actionResult{}, actionFail(400, "invalid_value")
+			}
+			if _, err := hex.DecodeString(*value.Token); err != nil {
+				return actionResult{}, actionFail(400, "invalid_value")
+			}
+		}
+		rows, err := tx.Query(ctx, query, ids, value.Category, value.Expected, value.Token)
 		if err != nil {
 			return actionResult{}, err
 		}
 		var changed []moderatedItem
-		var from string
+		var from, token string
 		for rows.Next() {
 			var item moderatedItem
-			if err = rows.Scan(&item.ID, &item.Name, &from); err != nil {
+			if err = rows.Scan(&item.ID, &item.Name, &from, &token); err != nil {
 				rows.Close()
 				return actionResult{}, err
 			}
@@ -142,6 +187,9 @@ func setSkinCategory(section, table string) adminActionFunc {
 		if err = rows.Err(); err != nil {
 			return actionResult{}, err
 		}
+		if (value.Expected != nil || value.Token != nil) && len(changed) != len(ids) {
+			return actionResult{}, actionFail(409, "conflict")
+		}
 		if len(changed) == 0 {
 			return actionResult{}, actionFail(404, "not_found")
 		}
@@ -149,7 +197,14 @@ func setSkinCategory(section, table string) adminActionFunc {
 		if len(changed) == 1 {
 			extra["from"] = from
 		}
-		return moderationResult(v, changed, extra), nil
+		result := moderationResult(v, changed, extra)
+		if v.ID != "" && len(v.IDs) == 0 && len(changed) == 1 {
+			result.Extra = map[string]any{"from": from}
+			if from != value.Category {
+				result.Extra["undo"] = map[string]any{"action": v.Action, "id": v.ID, "section": section, "value": map[string]string{"category": from, "token": token}}
+			}
+		}
+		return result, nil
 	}
 }
 
@@ -244,9 +299,18 @@ func moderationResult(v actionRequest, changed []moderatedItem, extra map[string
 	return actionResult{Affected: affected, Target: v.Section, Detail: detail}
 }
 
-// bannedOwnerGuard fails with 409 owner_banned when any row among ids belongs to a banned account: the ban removed it, and only unbanning the account brings it back, so a moderator cannot republish a banned author's work. The owners' rows are locked FOR SHARE, which conflicts with the FOR UPDATE that ban_user and unban_user take first: a ban running concurrently is waited for and its committed state read, and a ban that starts later waits until this approval or restore has committed, so its own UPDATE then removes the row again.
+// bannedOwnerGuardQueries 按固定分区预先构建查询，封禁状态仍在每次事务中读取并加锁。
+var bannedOwnerGuardQueries = func() map[moderationTable]string {
+	queries := make(map[moderationTable]string, len(moderationSections))
+	for _, section := range moderationSections {
+		queries[section] = `SELECT u.banned_at IS NOT NULL FROM auth_users u WHERE u.id IN (SELECT owner_id FROM ` + section.table + section.match() + `) ORDER BY u.id FOR SHARE OF u`
+	}
+	return queries
+}()
+
+// bannedOwnerGuard 对已封禁作者返回 409 owner_banned，阻止管理员重新发布其作品。作者行的 FOR SHARE 锁与封禁和解封操作先获取的 FOR UPDATE 锁冲突，等待后读取已提交状态，并让后续封禁等到当前审核或恢复事务提交后再下架作品。
 func bannedOwnerGuard(ctx context.Context, tx pgx.Tx, section moderationTable, ids []string) error {
-	rows, err := tx.Query(ctx, `SELECT u.banned_at IS NOT NULL FROM auth_users u WHERE u.id IN (SELECT owner_id FROM `+section.table+section.match()+`) ORDER BY u.id FOR SHARE OF u`, ids)
+	rows, err := tx.Query(ctx, bannedOwnerGuardQueries[section], ids)
 	if err != nil {
 		return err
 	}
@@ -259,6 +323,35 @@ func bannedOwnerGuard(ctx context.Context, tx pgx.Tx, section moderationTable, i
 	}
 	return nil
 }
+
+type approvalQueries struct {
+	update, tokenUpdate, exists string
+}
+
+// contentApprovalQueries 按固定分区预先构建审批语句，版本和状态仍逐请求绑定。
+var contentApprovalQueries = func() map[moderationTable]approvalQueries {
+	queries := make(map[moderationTable]approvalQueries, len(moderationSections))
+	for name, section := range moderationSections {
+		condition := ` AND ($3::text IS NULL OR moderation=$3) AND ($4::timestamptz IS NULL OR created_at=$4)`
+		if section.editable {
+			condition += ` AND ($5::timestamptz IS NULL OR updated_at=$5)`
+		}
+		update := `UPDATE ` + section.table + ` SET moderation='approved',previous_moderation=NULL,moderation_reason=CASE WHEN moderation='pending' THEN moderation_reason END,moderated_by=$2,moderated_at=now()` + section.match() + condition
+		query := approvalQueries{
+			update: update + ` RETURNING id,name`,
+			exists: `SELECT EXISTS(SELECT 1 FROM ` + section.table + section.match() + `)`,
+		}
+		if name == "skins" || name == "plugins" || name == "candidate-skins" {
+			parameter := "$5"
+			if section.editable {
+				parameter = "$6"
+			}
+			query.tokenUpdate = update + ` AND ` + contentEditToken(name, section.table) + `=` + parameter + ` RETURNING id,name`
+		}
+		queries[section] = query
+	}
+	return queries
+}()
 
 // 审核通过可固定原状态、创建时间、更新时间和编辑凭据；作品被重发、修改或审核后返回冲突，避免通过未看过的内容。
 // 待审核作品保留自动检查标记以支持撤销，下架作品则清除原下架原因。
@@ -275,24 +368,22 @@ func actionApproveContent(a *Service, ctx context.Context, tx pgx.Tx, v actionRe
 	}
 	pinned := len(v.Value) > 0 && string(v.Value) != "null"
 	if pinned {
-		d := json.NewDecoder(bytes.NewReader(v.Value))
-		d.DisallowUnknownFields()
-		if d.Decode(&expect) != nil || (expect.From != "pending" && expect.From != "removed") || (expect.UpdatedAt != nil && !section.editable) {
+		if httpjson.DecodeValue(bytes.NewReader(v.Value), &expect) != nil || (expect.From != "pending" && expect.From != "removed") || (expect.UpdatedAt != nil && !section.editable) {
 			return actionResult{}, actionFail(400, "invalid_value")
 		}
 	}
 	if err = bannedOwnerGuard(ctx, tx, section, ids); err != nil {
 		return actionResult{}, err
 	}
-	// $3, $4 and $5 are NULL without a pin, which leaves the conditions true.
+	// 未固定版本时，$3、$4 和 $5 为 NULL，对应条件始终为真。
 	var from *string
 	if pinned {
 		from = &expect.From
 	}
-	condition := ` AND ($3::text IS NULL OR moderation=$3) AND ($4::timestamptz IS NULL OR created_at=$4)`
+	queries := contentApprovalQueries[section]
+	query := queries.update
 	args := []any{ids, adminActor(ctx), from, expect.CreatedAt}
 	if section.editable {
-		condition += ` AND ($5::timestamptz IS NULL OR updated_at=$5)`
 		args = append(args, expect.UpdatedAt)
 	}
 	if expect.EditToken != "" {
@@ -300,15 +391,15 @@ func actionApproveContent(a *Service, ctx context.Context, tx pgx.Tx, v actionRe
 			return actionResult{}, actionFail(400, "invalid_value")
 		}
 		args = append(args, expect.EditToken)
-		condition += ` AND ` + contentEditToken(v.Section, section.table) + `=$` + strconv.Itoa(len(args))
+		query = queries.tokenUpdate
 	}
-	changed, err := moderationUpdate(ctx, tx, `UPDATE `+section.table+` SET moderation='approved',previous_moderation=NULL,moderation_reason=CASE WHEN moderation='pending' THEN moderation_reason END,moderated_by=$2,moderated_at=now()`+section.match()+condition+` RETURNING id,name`, args...)
+	changed, err := moderationUpdate(ctx, tx, query, args...)
 	if err != nil {
 		return actionResult{}, err
 	}
 	if len(changed) == 0 {
 		var exists bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM `+section.table+section.match()+`)`, ids).Scan(&exists); err != nil {
+		if err = tx.QueryRow(ctx, queries.exists, ids).Scan(&exists); err != nil {
 			return actionResult{}, err
 		}
 		if exists {
@@ -322,6 +413,24 @@ func actionApproveContent(a *Service, ctx context.Context, tx pgx.Tx, v actionRe
 	}
 	return moderationResult(v, changed, nil), nil
 }
+
+type moderationStateQueries struct {
+	remove, restore, undo, exists string
+}
+
+// contentModerationStateQueries 预先构建固定分区的下架和恢复语句，审核状态仍由事务读取和更新。
+var contentModerationStateQueries = func() map[moderationTable]moderationStateQueries {
+	queries := make(map[moderationTable]moderationStateQueries, len(moderationSections))
+	for _, section := range moderationSections {
+		queries[section] = moderationStateQueries{
+			remove:  `UPDATE ` + section.table + ` SET previous_moderation=CASE WHEN moderation='removed' THEN previous_moderation ELSE COALESCE($4,moderation) END,moderation='removed',moderation_reason=$3,moderated_by=$2,moderated_at=now()` + section.match() + ` RETURNING id,name`,
+			restore: `UPDATE ` + section.table + ` SET moderation=COALESCE(previous_moderation,'approved'),previous_moderation=NULL,moderation_reason=NULL,moderated_by=$2,moderated_at=now()` + section.match() + ` AND moderation='removed' RETURNING id,name`,
+			undo:    `UPDATE ` + section.table + ` SET moderation=$3,previous_moderation=NULL,moderated_by=$2,moderated_at=now()` + section.match() + ` AND moderation<>'removed' RETURNING id,name`,
+			exists:  `SELECT EXISTS(SELECT 1 FROM ` + section.table + section.match() + `)`,
+		}
+	}
+	return queries
+}()
 
 // actionRemoveContent hides the items ids (or id) of section from the public endpoints, recording reason and the state it replaced.
 //
@@ -340,15 +449,13 @@ func actionRemoveContent(a *Service, ctx context.Context, tx pgx.Tx, v actionReq
 		var value struct {
 			Previous string `json:"previous"`
 		}
-		d := json.NewDecoder(bytes.NewReader(v.Value))
-		d.DisallowUnknownFields()
-		if d.Decode(&value) != nil || (value.Previous != "pending" && value.Previous != "approved") {
+		if httpjson.DecodeValue(bytes.NewReader(v.Value), &value) != nil || (value.Previous != "pending" && value.Previous != "approved") {
 			return actionResult{}, actionFail(400, "invalid_value")
 		}
 		previous = &value.Previous
 	}
 	// Removing a removed row again only updates the reason, so previous_moderation keeps the state the first removal replaced.
-	changed, err := moderationUpdate(ctx, tx, `UPDATE `+section.table+` SET previous_moderation=CASE WHEN moderation='removed' THEN previous_moderation ELSE COALESCE($4,moderation) END,moderation='removed',moderation_reason=$3,moderated_by=$2,moderated_at=now()`+section.match()+` RETURNING id,name`, ids, adminActor(ctx), reason, previous)
+	changed, err := moderationUpdate(ctx, tx, contentModerationStateQueries[section].remove, ids, adminActor(ctx), reason, previous)
 	if err != nil {
 		return actionResult{}, err
 	}
@@ -369,9 +476,7 @@ func actionRestoreContent(a *Service, ctx context.Context, tx pgx.Tx, v actionRe
 		var value struct {
 			To string `json:"to"`
 		}
-		d := json.NewDecoder(bytes.NewReader(v.Value))
-		d.DisallowUnknownFields()
-		if d.Decode(&value) != nil || (value.To != "pending" && value.To != "approved") {
+		if httpjson.DecodeValue(bytes.NewReader(v.Value), &value) != nil || (value.To != "pending" && value.To != "approved") {
 			return actionResult{}, actionFail(400, "invalid_value")
 		}
 		to = value.To
@@ -381,7 +486,7 @@ func actionRestoreContent(a *Service, ctx context.Context, tx pgx.Tx, v actionRe
 		if err = bannedOwnerGuard(ctx, tx, section, ids); err != nil {
 			return actionResult{}, err
 		}
-		changed, err = moderationUpdate(ctx, tx, `UPDATE `+section.table+` SET moderation=COALESCE(previous_moderation,'approved'),previous_moderation=NULL,moderation_reason=NULL,moderated_by=$2,moderated_at=now()`+section.match()+` AND moderation='removed' RETURNING id,name`, ids, adminActor(ctx))
+		changed, err = moderationUpdate(ctx, tx, contentModerationStateQueries[section].restore, ids, adminActor(ctx))
 		if err == nil && len(changed) > 0 {
 			restored := make([]string, len(changed))
 			for i, item := range changed {
@@ -391,14 +496,14 @@ func actionRestoreContent(a *Service, ctx context.Context, tx pgx.Tx, v actionRe
 		}
 	} else {
 		// moderation_reason of a row that is not removed is the automatic flag, which stays.
-		changed, err = moderationUpdate(ctx, tx, `UPDATE `+section.table+` SET moderation=$3,previous_moderation=NULL,moderated_by=$2,moderated_at=now()`+section.match()+` AND moderation<>'removed' RETURNING id,name`, ids, adminActor(ctx), to)
+		changed, err = moderationUpdate(ctx, tx, contentModerationStateQueries[section].undo, ids, adminActor(ctx), to)
 	}
 	if err != nil {
 		return actionResult{}, err
 	}
 	if len(changed) == 0 {
 		var exists bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM `+section.table+section.match()+`)`, ids).Scan(&exists); err != nil {
+		if err = tx.QueryRow(ctx, contentModerationStateQueries[section].exists, ids).Scan(&exists); err != nil {
 			return actionResult{}, err
 		}
 		switch {
@@ -420,15 +525,18 @@ func actionRestoreContent(a *Service, ctx context.Context, tx pgx.Tx, v actionRe
 // moderationCounts is the number of items per section and moderation state. Private candidate skins are left out: they are visible only to their owner, so they never wait for review.
 type moderationCounts map[string]map[string]int
 
+// moderationCountsQuery 在初始化时构建固定审核统计语句，统计值仍逐请求从数据库读取。
+var moderationCountsQuery = `SELECT 'skins',moderation,count(*) FROM community_skins GROUP BY moderation
+UNION ALL SELECT 'candidate-skins',moderation,count(*) FROM community_candidate_skins WHERE visibility='public' GROUP BY moderation
+UNION ALL SELECT 'plugins',moderation,count(*) FROM community_plugins GROUP BY moderation
+UNION ALL SELECT ` + resourceSectionSQL("") + `,moderation,count(*) FROM community_resources GROUP BY kind,moderation`
+
 func (a *Service) moderationCounts(ctx context.Context) (moderationCounts, error) {
 	counts := moderationCounts{}
 	for section := range moderationSections {
 		counts[section] = map[string]int{"pending": 0, "approved": 0, "removed": 0}
 	}
-	rows, err := a.store.pool.Query(ctx, `SELECT 'skins',moderation,count(*) FROM community_skins GROUP BY moderation
-UNION ALL SELECT 'candidate-skins',moderation,count(*) FROM community_candidate_skins WHERE visibility='public' GROUP BY moderation
-UNION ALL SELECT 'plugins',moderation,count(*) FROM community_plugins GROUP BY moderation
-UNION ALL SELECT `+resourceSectionSQL("")+`,moderation,count(*) FROM community_resources GROUP BY kind,moderation`)
+	rows, err := a.store.pool.Query(ctx, moderationCountsQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -483,12 +591,7 @@ func (a *Service) adminCandidateSkinPicture(w http.ResponseWriter, r *http.Reque
 		writeError(w, 404, "not_found")
 		return
 	}
-	w.Header().Set("Content-Type", "image/"+extension)
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'")
-	w.WriteHeader(200)
-	_, _ = w.Write(data)
+	writeAdminImage(w, "image/"+extension, data)
 }
 
 // PendingCommunity 只统计待审核项供后台徽标使用，让已有的待审部分索引参与查询；私有候选皮肤不计入。
@@ -615,27 +718,44 @@ func contentScreenSQL(section string, table moderationTable) string {
 	return `SELECT json_build_object('name',name,'description',description,'content',` + screenContentColumn(section) + `) FROM ` + table.table + table.where(`id=$1`)
 }
 
-// rescreenRestored puts the automatic flag back on the items of section among ids that are pending review again after a restore or an unban. Removing an item overwrote its flag with the removal reason, so it is computed afresh from the item's text, with the preview matcher because a restore is not a new submission.
+type rescreenQueries struct {
+	selectPending, updateFlags string
+}
+
+// contentRescreenQueries 按固定分区预先构建重筛语句，待审核作品和敏感词标记仍逐事务计算。
+var contentRescreenQueries = func() map[string]rescreenQueries {
+	queries := make(map[string]rescreenQueries, len(moderationSections))
+	for name, table := range moderationSections {
+		where := `target.id=v.id`
+		if table.kind != "" {
+			where += ` AND target.kind='` + table.kind + `'`
+		}
+		queries[name] = rescreenQueries{
+			selectPending: `SELECT id,name,description,` + screenContentColumn(name) + ` FROM ` + table.table + table.where(`id=ANY($1) AND moderation='pending'`),
+			updateFlags: `UPDATE ` + table.table + ` AS target SET moderation_reason=v.reason
+FROM unnest($1::text[],$2::text[]) AS v(id,reason) WHERE ` + where,
+		}
+	}
+	return queries
+}()
+
+// rescreenRestored 对恢复或解封后重新待审的作品计算自动标记；使用预览匹配器，不增加投稿命中计数。
 func (a *Service) rescreenRestored(ctx context.Context, tx pgx.Tx, section string, ids []string) error {
-	table := moderationSections[section]
-	rows, err := tx.Query(ctx, `SELECT id,json_build_object('name',name,'description',description,'content',`+screenContentColumn(section)+`) FROM `+table.table+table.where(`id=ANY($1) AND moderation='pending'`), ids)
+	queries := contentRescreenQueries[section]
+	rows, err := tx.Query(ctx, queries.selectPending, ids)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	var flaggedIDs, flags []string
 	for rows.Next() {
-		var id string
-		var raw json.RawMessage
-		if err = rows.Scan(&id, &raw); err != nil {
+		var id, name, description string
+		var content []byte
+		if err = rows.Scan(&id, &name, &description, &content); err != nil {
 			rows.Close()
 			return err
 		}
-		var base map[string]json.RawMessage
-		if err = json.Unmarshal(raw, &base); err != nil {
-			return err
-		}
-		hits, err := a.SensitivePreview().Match(ctx, contentScreenText(section, base))
+		hits, err := a.SensitivePreview().Match(ctx, rescreenText(section, name, description, content))
 		if err != nil {
 			return err
 		}
@@ -665,13 +785,24 @@ func (a *Service) rescreenRestored(ctx context.Context, tx pgx.Tx, section strin
 	if len(flaggedIDs) == 0 {
 		return nil
 	}
-	where := `target.id=v.id`
-	if table.kind != "" {
-		where += ` AND target.kind='` + table.kind + `'`
-	}
-	_, err = tx.Exec(ctx, `UPDATE `+table.table+` AS target SET moderation_reason=v.reason
-FROM unnest($1::text[],$2::text[]) AS v(id,reason) WHERE `+where, flaggedIDs, flags)
+	_, err = tx.Exec(ctx, queries.updateFlags, flaggedIDs, flags)
 	return err
+}
+
+// rescreenText 直接组合数据库列；资源正文仍按类型解码，皮肤设计不参与文本审核。
+func rescreenText(section, name, description string, raw []byte) string {
+	parts := make([]string, 2, 3)
+	parts[0], parts[1] = name, description
+	switch section {
+	case "dictionaries", "replies", "phrases":
+		var content ResourceContent
+		if json.Unmarshal(raw, &content) == nil {
+			return resourceScreenTextWithPrefix(content, parts)
+		}
+	case "candidate-skins", "plugins":
+		parts = append(parts, string(raw))
+	}
+	return strings.Join(parts, "\n")
 }
 
 func screenContentColumn(section string) string {
@@ -706,9 +837,21 @@ func reviewAgain(flag string) string {
 	return `moderation=CASE WHEN moderation='removed' THEN 'removed' ELSE 'pending' END,previous_moderation=CASE WHEN moderation='removed' THEN 'pending' END,moderation_reason=CASE WHEN moderation='removed' THEN moderation_reason ELSE ` + flag + ` END`
 }
 
-// resourceScreenText is the user-visible text of a word pack or reply template: the words and the prompt.
+// resourceScreenText 提取词条、回复和短语的可见文本，预留每条短语的分组与正文位置。
 func resourceScreenText(content ResourceContent) string {
-	parts := make([]string, 0, len(content.Entries)+1)
+	return resourceScreenTextWithPrefix(content, nil)
+}
+
+// resourceScreenTextWithPrefix 将名称等前缀和资源正文一次拼接，避免先分配整份正文再复制。
+func resourceScreenTextWithPrefix(content ResourceContent, prefix []string) string {
+	capacity := len(prefix) + len(content.Entries) + 1 + 2*len(content.Phrases)
+	// 回复、单词条和空资源只需少量段，使用栈上缓冲避免新增切片分配。
+	var small [4]string
+	parts := small[:0]
+	if capacity > len(small) {
+		parts = make([]string, 0, capacity)
+	}
+	parts = append(parts, prefix...)
 	for _, entry := range content.Entries {
 		parts = append(parts, entry.Word)
 	}
@@ -717,6 +860,10 @@ func resourceScreenText(content ResourceContent) string {
 	}
 	for _, phrase := range content.Phrases {
 		parts = append(parts, phrase.Group, phrase.Text)
+	}
+	// 原流程即使正文为空也追加第三段，保留名称和描述之后的换行。
+	if len(prefix) > 0 && len(parts) == len(prefix) {
+		parts = append(parts, "")
 	}
 	return strings.Join(parts, "\n")
 }

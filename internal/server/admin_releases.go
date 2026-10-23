@@ -142,14 +142,16 @@ func (s *Server) adminReleases(w http.ResponseWriter, r *http.Request) {
 		s.listReleases(w, r, gh)
 		return
 	}
-	segments := strings.Split(strings.TrimPrefix(rest, "/"), "/")
-	platform, found := s.releasePlatform(segments[0])
+	platformID, tail, hasTail := strings.Cut(strings.TrimPrefix(rest, "/"), "/")
+	platform, found := s.releasePlatform(platformID)
 	if !found {
 		fail(w, 404, "not_found")
 		return
 	}
+	operationStart := strings.LastIndexByte(tail, '/')
+	operation := tail[operationStart+1:]
 	switch {
-	case len(segments) == 1:
+	case !hasTail:
 		if r.Method != http.MethodGet {
 			fail(w, 405, "method_not_allowed")
 			return
@@ -159,13 +161,13 @@ func (s *Server) adminReleases(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.releaseHistory(w, r, gh, platform)
-	case len(segments) == 2 && segments[1] == "trigger":
+	case tail == "trigger":
 		if gh, ok := s.releaseWrite(w, r); ok {
 			s.triggerRelease(w, r, gh, platform)
 		}
-	case len(segments) >= 3 && (segments[len(segments)-1] == "notes" || segments[len(segments)-1] == "withdraw"):
-		// Tags may contain "/", so everything between the platform and the operation is the tag.
-		tag := strings.Join(segments[1:len(segments)-1], "/")
+	case operationStart >= 0 && (operation == "notes" || operation == "withdraw"):
+		// 标签可以含斜杠，直接保留平台与末尾操作之间的原始子串。
+		tag := tail[:operationStart]
 		if !validReleaseTag(platform, tag) {
 			fail(w, 400, "invalid_tag")
 			return
@@ -174,7 +176,7 @@ func (s *Server) adminReleases(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		if segments[len(segments)-1] == "notes" {
+		if operation == "notes" {
 			s.editReleaseNotes(w, r, gh, platform, tag)
 		} else {
 			s.withdrawRelease(w, r, gh, platform, tag)
@@ -410,6 +412,8 @@ var (
 
 // parseReleaseNotes 从发布正文提取新增、修复、改进、说明和待办；其他标题下及首个标题前的说明不标注类别。
 func parseReleaseNotes(body string) []releaseNote {
+	// 与正则的 \s 一致，不包含垂直制表符或 Unicode 空白。
+	const regexSpace = " \t\r\n\f"
 	notes := []releaseNote{}
 	var noteText strings.Builder
 	kind := ""
@@ -434,17 +438,36 @@ func parseReleaseNotes(body string) []releaseNote {
 		if line == "" || line == "---" || strings.HasPrefix(line, "```") {
 			continue
 		}
-		if m := releaseHeading.FindStringSubmatch(line); m != nil {
-			kind = ""
-			for _, k := range releaseNoteKinds {
-				if strings.HasPrefix(m[1], k) {
-					kind = k
+		// 标题和列表只可能由这些 ASCII 字节开头，普通正文不必进入正则。
+		switch line[0] {
+		case '#':
+			if releaseHeading.MatchString(line) {
+				// 只检查分类前缀，无需复制捕获结果或移除标题末尾的井号。
+				heading := strings.TrimLeft(strings.TrimLeft(line, "#"), regexSpace)
+				kind = ""
+				for _, k := range releaseNoteKinds {
+					if strings.HasPrefix(heading, k) {
+						kind = k
+					}
 				}
+				continue
 			}
-			continue
-		}
-		if m := releaseBullet.FindStringSubmatch(line); m != nil {
-			line = strings.TrimSpace(m[1])
+		case '-', '*', '+', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+			if releaseBullet.MatchString(line) {
+				// 正则已验证标记和分隔空白，直接切原字符串，省去捕获切片。
+				if line[0] == '-' || line[0] == '*' || line[0] == '+' {
+					line = line[1:]
+				} else {
+					line = line[strings.IndexAny(line, ".)")+1:]
+				}
+				line = strings.TrimLeft(line, regexSpace)
+				if len(line) >= 3 && line[0] == '[' && line[2] == ']' && (line[1] == ' ' || line[1] == 'x' || line[1] == 'X') {
+					if text := strings.TrimLeft(line[3:], regexSpace); len(text) < len(line)-3 {
+						line = text
+					}
+				}
+				line = strings.TrimSpace(line)
+			}
 		}
 		if line == "" {
 			continue
@@ -618,9 +641,7 @@ func (s *Server) triggerRelease(w http.ResponseWriter, r *http.Request, gh *gith
 	case err != nil || resp.Status == 0 || resp.Status >= 500:
 		// 上游可能已触发流水线；请求取消后仍记录尝试，避免把未知结果当成可直接重试的失败。
 		detail["uncertain"] = true
-		auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer cancel()
-		s.releaseAudit(auditCtx, "release_trigger", p.ID, detail)
+		s.releaseAudit(ctx, "release_trigger", p.ID, detail)
 		fail(w, 502, "workflow_uncertain")
 		return
 	case resp.Status == 404:
@@ -728,6 +749,9 @@ func (s *Server) withdrawRelease(w http.ResponseWriter, r *http.Request, gh *git
 	if !s.patchRelease(w, ctx, gh, p, release.ID, map[string]any{"prerelease": true, "body": withdrawnBody(releaseUserBody(release.Body))}) {
 		return
 	}
+	// 撤回已经确认成功后，即使管理员断开连接也继续限时恢复 latest，避免下载页停留在已撤回版本。
+	postCtx, cancelPost := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancelPost()
 	var previous *ghRelease
 	for j := i + 1; j < len(releases); j++ {
 		if releaseStatus(releases[j]) == "released" {
@@ -743,7 +767,7 @@ func (s *Server) withdrawRelease(w http.ResponseWriter, r *http.Request, gh *git
 		detail["previous"], result["previous"] = previous.TagName, previous.TagName
 		if wasLatest {
 			// The withdrawal itself already succeeded, so a failure here is reported in the result rather than as an error.
-			resp, err := gh.Do(ctx, token, "PATCH", "/repos/"+p.Repo+"/releases/"+strconv.FormatInt(previous.ID, 10), map[string]any{"make_latest": "true"})
+			resp, err := gh.Do(postCtx, token, "PATCH", "/repos/"+p.Repo+"/releases/"+strconv.FormatInt(previous.ID, 10), map[string]any{"make_latest": "true"})
 			restored := err == nil && resp.OK()
 			if !restored {
 				slog.Warn("release withdraw: previous release not made latest", "repo", p.Repo, "tag", previous.TagName, "status", resp.Status)
@@ -753,24 +777,14 @@ func (s *Server) withdrawRelease(w http.ResponseWriter, r *http.Request, gh *git
 		}
 	}
 	unlock()
-	s.releaseAudit(ctx, "release_withdraw", tag, detail)
-	s.releaseNotify(ctx, p, p.Name+" "+releaseVersion(p, tag)+" 已撤回", p.ID)
+	s.releaseAudit(postCtx, "release_withdraw", tag, detail)
+	s.releaseNotify(postCtx, p, p.Name+" "+releaseVersion(p, tag)+" 已撤回", p.ID)
 	respond(w, 200, result)
 }
 
 // lockReleaseWrite 在读取发布状态之前锁定仓库，覆盖正文修改和 latest 恢复，避免多副本或共享仓库的平台互相覆盖。
 func (s *Server) lockReleaseWrite(w http.ResponseWriter, ctx context.Context, p AdminPlatformConfig) (func(), bool) {
-	unlock, err := s.accounts.WaitLock(ctx, "admin-releases:"+strings.ToLower(p.Repo), 0)
-	if errors.Is(err, account.ErrLockBusy) {
-		w.Header().Set("Retry-After", "1")
-		fail(w, 503, "server_busy")
-		return nil, false
-	}
-	if err != nil {
-		fail(w, 503, "auth_unavailable")
-		return nil, false
-	}
-	return sync.OnceFunc(unlock), true
+	return s.lockAdminWrite(w, ctx, "admin-releases:"+strings.ToLower(p.Repo))
 }
 
 func (s *Server) patchRelease(w http.ResponseWriter, ctx context.Context, gh *githubapp.Client, p AdminPlatformConfig, id int64, patch map[string]any) bool {
@@ -801,12 +815,18 @@ func (s *Server) patchRelease(w http.ResponseWriter, ctx context.Context, gh *gi
 
 // releaseAudit 记录 GitHub 已接受或无法确认结果的发布写入；审计失败不改变上游操作结果。
 func (s *Server) releaseAudit(ctx context.Context, action, target string, detail map[string]any) {
+	// 请求取消后仍保留操作者，并在有限时间内记录已经发生的写入。
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
 	if err := s.accounts.Audit(ctx, action, target, detail); err != nil {
 		slog.Error("admin audit failed after a GitHub release write", "action", action, "target", target, "reason", err.Error())
 	}
 }
 
 func (s *Server) releaseNotify(ctx context.Context, p AdminPlatformConfig, title, target string) {
+	// 发布已确认成功，通知不随管理员断开连接而取消。
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
 	if err := s.accounts.NotifyNow(ctx, account.Notification{Kind: account.NotifyRelease, Title: title, TargetPage: "release", TargetID: target}); err != nil {
 		slog.Warn("release notification not recorded", "platform", p.ID, "reason", err.Error())
 	}
@@ -815,18 +835,27 @@ func (s *Server) releaseNotify(ctx context.Context, p AdminPlatformConfig, title
 // releaseSearchIndex holds the releases a Server last read from GitHub, by platform, so the global search never calls GitHub.
 type releaseSearchIndex struct {
 	mu         sync.Mutex
-	byPlatform map[string][]account.AdminSearchHit
+	byPlatform map[string][]releaseSearchHit
+}
+
+// releaseSearchHit 保存搜索结果及其归一化文本，避免每次搜索都为缓存条目创建临时字符串。
+type releaseSearchHit struct {
+	account.AdminSearchHit
+	lowerTitle string
+	lowerTag   string
 }
 
 func (s *Server) indexReleases(p AdminPlatformConfig, releases []ghRelease) {
-	hits := make([]account.AdminSearchHit, 0, len(releases))
+	hits := make([]releaseSearchHit, 0, len(releases))
 	for _, r := range releases {
-		hits = append(hits, account.AdminSearchHit{Kind: "release", ID: p.ID + ":" + r.TagName, Title: p.Name + " " + releaseVersion(p, r.TagName), Where: "发布管理", Target: "release"})
+		hit := account.AdminSearchHit{Kind: "release", ID: p.ID + ":" + r.TagName, Title: p.Name + " " + releaseVersion(p, r.TagName), Where: "发布管理", Target: "release"}
+		_, tag, _ := strings.Cut(hit.ID, ":")
+		hits = append(hits, releaseSearchHit{AdminSearchHit: hit, lowerTitle: strings.ToLower(hit.Title), lowerTag: strings.ToLower(tag)})
 	}
 	s.releaseIndex.mu.Lock()
 	defer s.releaseIndex.mu.Unlock()
 	if s.releaseIndex.byPlatform == nil {
-		s.releaseIndex.byPlatform = map[string][]account.AdminSearchHit{}
+		s.releaseIndex.byPlatform = map[string][]releaseSearchHit{}
 	}
 	s.releaseIndex.byPlatform[p.ID] = hits
 }
@@ -839,20 +868,24 @@ func (s *Server) searchReleases(q string) []account.AdminSearchHit {
 	}
 	s.releaseIndex.mu.Lock()
 	defer s.releaseIndex.mu.Unlock()
-	var hits []account.AdminSearchHit
+	var matched [8]account.AdminSearchHit
+	count := 0
 	// Platforms in config order keep the result stable between calls.
 	for _, p := range s.config.Admin.GitHub.Platforms {
 		for _, hit := range s.releaseIndex.byPlatform[p.ID] {
-			_, tag, _ := strings.Cut(hit.ID, ":")
-			if strings.Contains(strings.ToLower(hit.Title), q) || strings.Contains(strings.ToLower(tag), q) {
-				hits = append(hits, hit)
-				if len(hits) == 8 {
-					return hits
+			if strings.Contains(hit.lowerTitle, q) || strings.Contains(hit.lowerTag, q) {
+				matched[count] = hit.AdminSearchHit
+				count++
+				if count == len(matched) {
+					return slices.Clone(matched[:])
 				}
 			}
 		}
 	}
-	return hits
+	if count == 0 {
+		return nil
+	}
+	return slices.Clone(matched[:count])
 }
 
 // releaseSnapshotJob records the release asset download counts once a day until ctx ends.
@@ -886,11 +919,29 @@ func (s *Server) releaseSnapshotJob(ctx context.Context) {
 func (s *Server) snapshotReleaseAssets(ctx context.Context, gh *githubapp.Client, now time.Time) error {
 	var snapshots []account.ReleaseAssetSnapshot
 	var errs []error
+	type repositoryRead struct {
+		releases []ghRelease
+		err      error
+	}
+	// 只在本轮快照内复用完整仓库列表；下一轮仍绕过缓存读取最新下载数。
+	reads := map[string]repositoryRead{}
 	for _, p := range s.config.Admin.GitHub.Platforms {
-		releases, err := fetchPlatformReleases(ctx, gh, p, true)
-		if err != nil {
-			errs = append(errs, errors.New(p.ID+": "+err.Error()))
+		read, ok := reads[p.Repo]
+		if !ok {
+			repository := p
+			repository.TagPrefix = ""
+			read.releases, read.err = fetchPlatformReleases(ctx, gh, repository, true)
+			reads[p.Repo] = read
+		}
+		if read.err != nil {
+			errs = append(errs, errors.New(p.ID+": "+read.err.Error()))
 			continue
+		}
+		releases := make([]ghRelease, 0, len(read.releases))
+		for _, release := range read.releases {
+			if strings.HasPrefix(release.TagName, p.TagPrefix) {
+				releases = append(releases, release)
+			}
 		}
 		s.indexReleases(p, releases)
 		for _, r := range releases {

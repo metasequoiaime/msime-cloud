@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/engine"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
 var inputCode = regexp.MustCompile(`^[a-zA-Z'; ]{1,256}$`)
@@ -42,7 +43,7 @@ func (s *Server) inputQuery(w http.ResponseWriter, r *http.Request) {
 	if v.Limit == 0 {
 		v.Limit = 20
 	}
-	if v.Limit < 1 || v.Limit > 200 || v.Text == "" || len(v.Text) > 8192 || !utf8.ValidString(v.Text) || strings.ContainsRune(v.Text, 0) {
+	if v.Limit < 1 || v.Limit > 200 || v.Text == "" || !textutil.ValidUTF8Text(v.Text, 8192) {
 		fail(w, 400, "invalid_input_request")
 		return
 	}
@@ -240,7 +241,7 @@ func (s *Server) inputCatalog(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	text, category := q.Get("q"), q.Get("category")
-	if limit < 1 || limit > 200 || offset < 0 || offset > 1000000 || len(text) > 1024 || len(category) > 256 || !utf8.ValidString(text+category) || strings.ContainsRune(text+category, 0) {
+	if limit < 1 || limit > 200 || offset < 0 || offset > 1000000 || len(text) > 1024 || len(category) > 256 || !textutil.ValidUTF8Text(text+category, 1024+256) {
 		fail(w, 400, "invalid_catalog_query")
 		return
 	}

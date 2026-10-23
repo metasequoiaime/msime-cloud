@@ -123,7 +123,7 @@ func (a *Service) dictionary(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query()
 		offset, limit, ok := dictionaryPage(query)
 		q := query.Get("q")
-		if !ok || len(q) > 1024 || !utf8.ValidString(q) || strings.ContainsRune(q, 0) {
+		if !ok || !textutil.ValidUTF8Text(q, 1024) {
 			writeError(w, 400, "invalid_dictionary_query")
 			return
 		}

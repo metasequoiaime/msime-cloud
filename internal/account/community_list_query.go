@@ -2,10 +2,9 @@ package account
 
 import (
 	"net/url"
-	"strings"
-	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpquery"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
 // communityListPage 共用社区列表的分页与搜索校验，保留空偏移和首个查询值的既有语义。
@@ -15,7 +14,7 @@ func communityListPage(query url.Values) (offset int, search string, code string
 		return 0, "", "invalid_offset"
 	}
 	search = query.Get("q")
-	if !utf8.ValidString(search) || len(search) > 128 || strings.ContainsRune(search, 0) {
+	if !textutil.ValidUTF8Text(search, 128) {
 		return 0, "", "invalid_search"
 	}
 	return offset, search, ""

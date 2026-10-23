@@ -18,6 +18,7 @@ import (
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
 // Release management (unit U7): admin.github.platforms and their GitHub releases.
@@ -684,7 +685,7 @@ func (s *Server) editReleaseNotes(w http.ResponseWriter, r *http.Request, gh *gi
 		return
 	}
 	text := strings.TrimSpace(normalizeNewlines(body.Body))
-	if len(text) > maxReleaseBodyBytes || strings.ContainsRune(text, 0) || !utf8.ValidString(text) || strings.Contains(text, releaseWithdrawnMarker) {
+	if !textutil.ValidUTF8Text(text, maxReleaseBodyBytes) || strings.Contains(text, releaseWithdrawnMarker) {
 		fail(w, 400, "invalid_body")
 		return
 	}

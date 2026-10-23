@@ -135,7 +135,7 @@ func validateDiagnosticUpload(v diagnosticUpload) string {
 			return "invalid_crash_logs"
 		}
 		for _, c := range *s.CrashLogs {
-			if _, err := time.Parse(time.RFC3339, c.At); err != nil || len(c.At) > 64 || len(c.Message) > diagnosticCrashMessageBytes || len(c.Stack) > diagnosticCrashStackBytes || !utf8.ValidString(c.Message) || !utf8.ValidString(c.Stack) || strings.ContainsRune(c.Message, 0) || strings.ContainsRune(c.Stack, 0) {
+			if _, err := time.Parse(time.RFC3339, c.At); err != nil || len(c.At) > 64 || !textutil.ValidUTF8Text(c.Message, diagnosticCrashMessageBytes) || !textutil.ValidUTF8Text(c.Stack, diagnosticCrashStackBytes) {
 				return "invalid_crash_logs"
 			}
 		}

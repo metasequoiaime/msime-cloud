@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/mail"
 	"net/textproto"
 	"net/url"
 	"strings"
@@ -180,10 +181,20 @@ func TestSMTPTLSDelivery(t *testing.T) {
 	}()
 	t.Setenv("SMTP_TEST_PASSWORD", "test-password")
 	d := delivery{config: Config{Email: MailConfig{Host: "example.com", Port: 465, Username: "test", PasswordEnv: "SMTP_TEST_PASSWORD", From: "login@example.test"}}, smtpTLS: &tls.Config{RootCAs: roots, ServerName: "example.com", MinVersion: tls.VersionTLS12}, smtpAddress: listener.Addr().String()}
+	started := time.Now().Truncate(time.Second)
 	if e = d.Send(context.Background(), "email", "user@example.test", "123456"); e != nil {
 		t.Fatal(e)
 	}
+	finished := time.Now()
 	message := <-done
+	parsed, err := mail.ReadMessage(strings.NewReader(message))
+	if err != nil {
+		t.Fatal(err)
+	}
+	date, err := parsed.Header.Date()
+	if err != nil || date.Before(started) || date.After(finished) {
+		t.Fatalf("邮件缺少有效的发送日期：Date=%q，错误=%v", parsed.Header.Get("Date"), err)
+	}
 	pieces := strings.SplitN(message, "\r\n\r\n", 2)
 	if len(pieces) != 2 || !strings.Contains(message, "To: user@example.test") {
 		t.Fatal("邮件头错误")

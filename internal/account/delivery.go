@@ -208,7 +208,7 @@ func (d delivery) smtpSend(client *smtp.Client, target, subject, body string) er
 		}
 		return &deliveryFailure{accepted: false}
 	}
-	message := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n%s\r\n", from, target, mime.QEncoding.Encode("UTF-8", subject), mailBodyBase64(body))
+	message := fmt.Sprintf("Date: %s\r\nFrom: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n%s\r\n", time.Now().UTC().Format(time.RFC1123Z), from, target, mime.QEncoding.Encode("UTF-8", subject), mailBodyBase64(body))
 	writer, e := client.Data()
 	if e != nil {
 		return &deliveryFailure{accepted: false}

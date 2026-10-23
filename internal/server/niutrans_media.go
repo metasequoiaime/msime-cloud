@@ -316,32 +316,35 @@ func (s *Server) niuTransDownload(w http.ResponseWriter, r *http.Request, target
 		contentType = "application/octet-stream"
 	}
 	// 下载也可能返回 JSON 控制响应；确认业务成功后才能发送正文，避免泄露上游错误详情。
-	downloadBody := io.Reader(resp.Body)
+	var controlBody []byte
 	mediaType, _, _ := mime.ParseMediaType(contentType)
 	if mediaType == "application/json" || strings.HasSuffix(mediaType, "+json") {
-		var body []byte
-		body, err = readNiuTransResponseBody(resp)
+		controlBody, err = readNiuTransResponseBody(resp)
 		if err != nil {
 			err = upstreamTransportError{cause: err}
 			upstreamError(w, r, err)
 			return
 		}
-		if len(body) > niuTransResponseBytes || !niuTransMediaAccepted(body) {
+		if len(controlBody) > niuTransResponseBytes || !niuTransMediaAccepted(controlBody) {
 			err = errors.New("invalid upstream download response")
 			upstreamError(w, r, err)
 			return
 		}
-		downloadBody = bytes.NewReader(body)
 	}
 	w.Header().Set("Content-Type", contentType)
 	w.WriteHeader(http.StatusOK)
-	_, err = io.Copy(w, io.LimitReader(downloadBody, niuTransDownloadBytes))
-	if err == nil {
-		// 再读一个字节区分恰好达到上限与超限，额外字节不发送给客户端。
-		var extra int64
-		extra, err = io.Copy(io.Discard, io.LimitReader(downloadBody, 1))
-		if err == nil && extra != 0 {
-			err = errors.New("upstream response too large")
+	if controlBody != nil {
+		// JSON 已在独立上限内完整校验，直接写出，避免再分配文件复制缓冲区。
+		_, err = io.Copy(w, bytes.NewReader(controlBody))
+	} else {
+		_, err = io.Copy(w, io.LimitReader(resp.Body, niuTransDownloadBytes))
+		if err == nil {
+			// 再读一个字节区分恰好达到上限与超限，额外字节不发送给客户端。
+			var extra int64
+			extra, err = io.Copy(io.Discard, io.LimitReader(resp.Body, 1))
+			if err == nil && extra != 0 {
+				err = errors.New("upstream response too large")
+			}
 		}
 	}
 	if err != nil {

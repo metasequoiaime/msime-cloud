@@ -1,14 +1,15 @@
 package server
 
 import (
+	"math"
 	"net/http"
 	"net/url"
 	"slices"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpquery"
 )
 
 type dictionarySearchFile struct {
@@ -27,13 +28,9 @@ func (s *Server) dictionarySearch(w http.ResponseWriter, r *http.Request, gh *gi
 		scope = "all"
 	}
 	revision := query.Get("revision")
-	cursor := 0
-	var err error
-	if value := query.Get("cursor"); value != "" {
-		cursor, err = strconv.Atoi(value)
-	}
+	cursor, validCursor := httpquery.Int(query, "cursor", 0, 0, math.MaxInt)
 	if q == "" || len(q) > 200 || !utf8.ValidString(q) || !plainText(query.Get("q")) ||
-		!slices.Contains([]string{"all", "custom", "packs", "sources"}, scope) || err != nil || cursor < 0 ||
+		!slices.Contains([]string{"all", "custom", "packs", "sources"}, scope) || !validCursor ||
 		(revision != "" && !dictionarySHAPattern.MatchString(revision)) || (cursor > 0 && revision == "") {
 		fail(w, 400, "invalid_query")
 		return

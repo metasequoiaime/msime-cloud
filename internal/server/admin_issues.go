@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"slices"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpquery"
 	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
@@ -667,14 +669,10 @@ func (s *Server) listIssues(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "invalid_state")
 		return
 	}
-	page := 1
-	if raw := query.Get("page"); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n < 1 || n > 1000 || strconv.Itoa(n) != raw {
-			fail(w, 400, "invalid_page")
-			return
-		}
-		page = n
+	page, validPage := httpquery.Int(query, "page", 1, 1, 1000)
+	if raw := query.Get("page"); !validPage || (raw != "" && strconv.Itoa(page) != raw) {
+		fail(w, 400, "invalid_page")
+		return
 	}
 	snap, err := s.issueSnapshot(r.Context(), gh, issueScopeFull)
 	if err != nil {
@@ -812,8 +810,8 @@ func issueLastPage(h http.Header) int {
 		if err != nil {
 			return 0
 		}
-		n, err := strconv.Atoi(u.Query().Get("page"))
-		if err != nil || n < 1 {
+		n, ok := httpquery.Int(u.Query(), "page", 0, 1, math.MaxInt)
+		if !ok || n < 1 {
 			return 0
 		}
 		return n

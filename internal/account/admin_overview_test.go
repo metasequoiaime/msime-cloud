@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -84,6 +85,35 @@ func getOverview(t *testing.T, a *Service, query string) overviewBody {
 		t.Fatalf("%d %s", w.Code, w.Body.String())
 	}
 	return body
+}
+
+func TestOverviewDaysQuery(t *testing.T) {
+	a := overviewTestService(t)
+	for _, tc := range []struct {
+		query string
+		days  int
+	}{
+		{"", 30}, {"?days=", 30}, {"?days=&days=bad", 30},
+		{"?days=7&days=bad", 7}, {"?days=%2B7", 7}, {"?days=030", 30},
+		{"?days=8", 0}, {"?days=29", 0}, {"?days=0", 0}, {"?days=-7", 0},
+		{"?days=%207", 0}, {"?days=7%20", 0}, {"?days=bad&days=7", 0},
+		{"?days=999999999999999999999999999999", 0},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			if tc.days != 0 {
+				body := getOverview(t, a, tc.query)
+				if body.RangeDays != tc.days || len(body.Daily) != tc.days {
+					t.Fatalf("range_days=%d daily=%d，期望 %d", body.RangeDays, len(body.Daily), tc.days)
+				}
+				return
+			}
+			w := httptest.NewRecorder()
+			a.AdminHTTP(w, adminJSONRequest("GET", "/api/overview"+tc.query, ""))
+			if w.Code != 400 || !strings.Contains(w.Body.String(), `"code":"invalid_days"`) {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+		})
+	}
 }
 
 func TestOverviewWithoutClientTelemetry(t *testing.T) {

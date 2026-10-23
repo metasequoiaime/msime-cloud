@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -503,6 +504,8 @@ func TestAdminIssuesList(t *testing.T) {
 	}{
 		{"?state=closed", []int{21, 22}}, {"?state=dup", []int{21}}, {"?state=done", []int{22}}, {"?state=all&platform=other", []int{22}},
 		{"?state=new&platform=windows", []int{10}}, {"?state=all&platform=linux", []int{21}}, {"?state=open&page=2", nil},
+		{"?page=", []int{10, 11, 20}}, {"?page=&page=bad", []int{10, 11, 20}},
+		{"?page=1&page=bad", []int{10, 11, 20}}, {"?page=1000", nil},
 	} {
 		status, v := issuesRequest(t, s, "GET", "/api/issues"+tc.query, "")
 		if status != 200 || !slices.Equal(issueNumbers(v), tc.want) {
@@ -511,6 +514,10 @@ func TestAdminIssuesList(t *testing.T) {
 	}
 	for _, tc := range []struct{ query, code string }{
 		{"?platform=windows-phone", "invalid_platform"}, {"?state=closedx", "invalid_state"}, {"?page=0", "invalid_page"}, {"?page=01", "invalid_page"}, {"?page=x", "invalid_page"},
+		{"?page=%2B1", "invalid_page"}, {"?page=-1", "invalid_page"}, {"?page=1001", "invalid_page"},
+		{"?page=%201", "invalid_page"}, {"?page=1%20", "invalid_page"}, {"?page=bad&page=1", "invalid_page"},
+		{"?page=999999999999999999999999999999", "invalid_page"},
+		{"?platform=bad&state=bad&page=bad", "invalid_platform"}, {"?state=bad&page=bad", "invalid_state"},
 	} {
 		if status, v := issuesRequest(t, s, "GET", "/api/issues"+tc.query, ""); status != 400 || issueErrorCode(v) != tc.code {
 			t.Error(tc.query, status, v)
@@ -531,6 +538,34 @@ func TestAdminIssuesList(t *testing.T) {
 	}
 	if hits := s.searchIssues("#21"); len(hits) != 1 || hits[0].ID != issuesCoreRepo+"#21" {
 		t.Fatal(hits)
+	}
+}
+
+func TestIssueLastPageQuery(t *testing.T) {
+	for _, tc := range []struct {
+		link string
+		page int
+	}{
+		{"", 0}, {`<https://api.github.com/issues?page=2>; rel="next"`, 0},
+		{`<https://api.github.com/issues>; rel="last"`, 0},
+		{`<https://api.github.com/issues?page=>; rel="last"`, 0},
+		{`<https://api.github.com/issues?page=&page=7>; rel="last"`, 0},
+		{`<https://api.github.com/issues?page=7&page=bad>; rel="last"`, 7},
+		{`<https://api.github.com/issues?page=%2B7>; rel="last"`, 7},
+		{`<https://api.github.com/issues?page=007>; rel="last"`, 7},
+		{`<https://api.github.com/issues?page=` + strconv.Itoa(math.MaxInt) + `>; rel="last"`, math.MaxInt},
+		{`<https://api.github.com/issues?page=0>; rel="last"`, 0},
+		{`<https://api.github.com/issues?page=-1>; rel="last"`, 0},
+		{`<https://api.github.com/issues?page=%207>; rel="last"`, 0},
+		{`<https://api.github.com/issues?page=7%20>; rel="last"`, 0},
+		{`<https://api.github.com/issues?page=999999999999999999999999999999>; rel="last"`, 0},
+		{`<https://api.github.com/issues?page=bad>; rel="last", <https://api.github.com/issues?page=7>; rel="last"`, 0},
+	} {
+		t.Run(tc.link, func(t *testing.T) {
+			if got := issueLastPage(http.Header{"Link": {tc.link}}); got != tc.page {
+				t.Fatalf("page=%d，期望 %d", got, tc.page)
+			}
+		})
 	}
 }
 

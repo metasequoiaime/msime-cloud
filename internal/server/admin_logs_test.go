@@ -326,21 +326,27 @@ func TestAdminLogsRecent(t *testing.T) {
 func TestAdminLogsRejectsBadParameters(t *testing.T) {
 	s, loki := adminLogsFixture(t)
 	for path, code := range map[string]string{
-		"/api/logs?since=30s":                       "invalid_since",
-		"/api/logs?since=25h":                       "invalid_since",
-		"/api/logs?since=abc":                       "invalid_since",
-		"/api/logs?limit=0":                         "invalid_limit",
-		"/api/logs?limit=2001":                      "invalid_limit",
-		"/api/logs?pod=Bad_Pod":                     "invalid_pod",
-		"/api/logs?pod=" + strings.Repeat("a", 254): "invalid_pod",
-		"/api/logs?level=DEBUG":                     "invalid_level",
-		"/api/logs?q=" + strings.Repeat("x", 201):   "invalid_query",
-		"/api/logs?q=a%0Ab":                         "invalid_query",
-		"/api/logs?q=%FF":                           "invalid_query",
-		"/api/logs/stream?backfill=1001":            "invalid_backfill",
-		"/api/logs/stream?backfill=-1":              "invalid_backfill",
-		"/api/logs/stream?since=1s":                 "invalid_since",
-		"/api/logs/stream?cursor=abc":               "invalid_cursor",
+		"/api/logs?since=30s":                                      "invalid_since",
+		"/api/logs?since=25h":                                      "invalid_since",
+		"/api/logs?since=abc":                                      "invalid_since",
+		"/api/logs?limit=0":                                        "invalid_limit",
+		"/api/logs?limit=2001":                                     "invalid_limit",
+		"/api/logs?pod=Bad_Pod":                                    "invalid_pod",
+		"/api/logs?pod=" + strings.Repeat("a", 254):                "invalid_pod",
+		"/api/logs?level=DEBUG":                                    "invalid_level",
+		"/api/logs?q=" + strings.Repeat("x", 201):                  "invalid_query",
+		"/api/logs?q=a%0Ab":                                        "invalid_query",
+		"/api/logs?q=%FF":                                          "invalid_query",
+		"/api/logs/stream?backfill=1001":                           "invalid_backfill",
+		"/api/logs/stream?backfill=-1":                             "invalid_backfill",
+		"/api/logs/stream?backfill=bad&backfill=1":                 "invalid_backfill",
+		"/api/logs/stream?backfill=%201":                           "invalid_backfill",
+		"/api/logs/stream?backfill=1%20":                           "invalid_backfill",
+		"/api/logs/stream?backfill=999999999999999999999999999999": "invalid_backfill",
+		"/api/logs/stream?since=1s&backfill=bad":                   "invalid_since",
+		"/api/logs/stream?backfill=bad&cursor=bad":                 "invalid_backfill",
+		"/api/logs/stream?since=1s":                                "invalid_since",
+		"/api/logs/stream?cursor=abc":                              "invalid_cursor",
 		"/api/logs/stream?cursor=" + strconv.FormatInt(time.Now().Add(time.Hour).UnixNano(), 10): "invalid_cursor",
 		"/api/logs/stream?level=TRACE": "invalid_level",
 	} {
@@ -722,6 +728,34 @@ func TestAdminLogsStream(t *testing.T) {
 		defer s.logStreams.mu.Unlock()
 		return s.logStreams.total == 0
 	})
+}
+
+func TestAdminLogsStreamBackfillQuery(t *testing.T) {
+	for _, tc := range []struct {
+		query string
+		limit int
+	}{
+		{"", defaultLogBackfill}, {"?backfill=", defaultLogBackfill},
+		{"?backfill=&backfill=bad", defaultLogBackfill},
+		{"?backfill=1&backfill=bad", 1}, {"?backfill=%2B1", 1}, {"?backfill=01", 1},
+		{"?backfill=" + strconv.Itoa(maxLogBackfill), maxLogBackfill},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			s, loki := adminLogsFixture(t)
+			loki.add(logEntryAt(time.Now().Add(-time.Minute), "app-msime-backend-a-1", "INFO", "history"))
+			resp, events, cancel := openLogStream(t, s, tc.query, nil)
+			defer cancel()
+			if resp.StatusCode != 200 {
+				t.Fatal(resp.StatusCode)
+			}
+			if lines := streamLines(t, nextEvent(t, events, "lines")); len(lines) != 1 || lines[0].Message != "history" {
+				t.Fatal(lines)
+			}
+			if query := loki.seen()[0]; query.Get("direction") != "backward" || query.Get("limit") != strconv.Itoa(tc.limit) {
+				t.Fatal(query)
+			}
+		})
+	}
 }
 
 func TestAdminLogsStreamZeroBackfillStartsAtConnection(t *testing.T) {

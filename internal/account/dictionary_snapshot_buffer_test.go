@@ -100,11 +100,7 @@ VALUES($1,$2,'zh-CN','doubao',1234,'合成语音','1.2.3','audio/wav',$3)`, fmt.
 		}
 	}
 	var voice bytes.Buffer
-	if err := a.store.streamVoiceContributions(t.Context(), user.User.ID, func(raw json.RawMessage) error {
-		voice.Write(raw)
-		voice.WriteByte('\n')
-		return nil
-	}); err != nil {
+	if err := a.store.streamVoiceContributions(t.Context(), user.User.ID, &voice); err != nil {
 		t.Fatal(err)
 	}
 	want := map[string][]byte{"voice.ndjson": voice.Bytes(), "dictionary.ndjson": dictionarySnapshotExpected(t, a, user.User.ID)}

@@ -1091,7 +1091,7 @@ func (s *Server) dictRejectionCommentExists(ctx context.Context, gh *githubapp.C
 
 // searchDictPRs 为全局搜索匹配缓存投稿的编号、标题和备注，不请求 GitHub。
 func (s *Server) searchDictPRs(q string) []account.AdminSearchHit {
-	q = strings.ToLower(strings.TrimSpace(q))
+	q = normalizeAdminSearchQuery(q)
 	if q == "" {
 		return nil
 	}

@@ -862,7 +862,7 @@ func (s *Server) indexReleases(p AdminPlatformConfig, releases []ghRelease) {
 
 // searchReleases matches q against the cached releases for the global search; it never calls GitHub.
 func (s *Server) searchReleases(q string) []account.AdminSearchHit {
-	q = strings.ToLower(strings.TrimSpace(q))
+	q = normalizeAdminSearchQuery(q)
 	if q == "" {
 		return nil
 	}

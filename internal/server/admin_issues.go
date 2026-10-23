@@ -1373,7 +1373,7 @@ func (s *Server) issueAction(ctx context.Context, gh *githubapp.Client, action s
 
 // searchIssues matches q against the cached issues for the global search; it never calls GitHub.
 func (s *Server) searchIssues(q string) []account.AdminSearchHit {
-	q = strings.ToLower(strings.TrimSpace(q))
+	q = normalizeAdminSearchQuery(q)
 	if q == "" {
 		return nil
 	}

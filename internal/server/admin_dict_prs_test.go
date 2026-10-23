@@ -414,6 +414,22 @@ func TestDictPRWritesRequirePermission(t *testing.T) {
 	}
 }
 
+func TestDictPRReadsRequirePermission(t *testing.T) {
+	s, _ := adminRBACFixture(t)
+	f := newFakeDictRepo(t)
+	f.pulls = nil
+	s.config.Admin.GitHub.DictionaryRepo = dictTestRepo
+	s.adminGitHub = dictGitHubClient(t, f)
+	for _, path := range []string{"/api/dict-prs", "/api/dict-prs/12"} {
+		r := adminRequest(s, http.MethodGet, path, "", account.AdminTokenPrefix+"readonly")
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "permission_denied") {
+			t.Fatalf("%s: 状态码 %d，响应 %s", path, w.Code, w.Body.String())
+		}
+	}
+}
+
 func TestDictPRRouting(t *testing.T) {
 	s, f, _, _ := dictPRServer(t, "")
 	for _, tc := range []struct {

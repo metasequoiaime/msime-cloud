@@ -183,7 +183,7 @@ func (s *Server) adminDictPRs(w http.ResponseWriter, r *http.Request) {
 			fail(w, 405, "method_not_allowed")
 			return
 		}
-		if gh, ok := s.adminGitHubApp(w); ok {
+		if gh, ok := s.adminGitHubApp(w); ok && requirePerm(w, r, account.PermReviewDictPR) {
 			s.listDictPRs(w, r, gh)
 		}
 		return
@@ -201,7 +201,7 @@ func (s *Server) adminDictPRs(w http.ResponseWriter, r *http.Request) {
 			fail(w, 405, "method_not_allowed")
 			return
 		}
-		if gh, ok := s.adminGitHubApp(w); ok {
+		if gh, ok := s.adminGitHubApp(w); ok && requirePerm(w, r, account.PermReviewDictPR) {
 			s.dictPRDetail(w, r, gh, number)
 		}
 	case len(parts) == 2 && slices.Contains([]string{"approve", "reject", "trim"}, parts[1]):

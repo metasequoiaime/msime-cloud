@@ -66,7 +66,7 @@ func parseCandidateAPNG(data []byte) (*candidateAPNG, string) {
 		return nil, invalid
 	}
 	a := &candidateAPNG{}
-	clean := append(make([]byte, 0, len(data)), pngSignature...)
+	cleanSize := len(pngSignature)
 	var (
 		declared                uint32
 		seenACTL, seenEnd       bool
@@ -183,7 +183,7 @@ func parseCandidateAPNG(data []byte) (*candidateAPNG, string) {
 			}
 		}
 		if candidateAPNGKeep[kind] {
-			clean = append(clean, raw...)
+			cleanSize += len(raw)
 		}
 	}
 	if len(a.frames) != int(declared) || current == nil || len(current.data) == 0 {
@@ -192,6 +192,16 @@ func parseCandidateAPNG(data []byte) (*candidateAPNG, string) {
 	a.images = int(declared)
 	if !defaultFrame {
 		a.images++
+	}
+	// 校验通过后按保留块的实际长度分配，避免为元数据和 IEND 后的内容预留缓冲。
+	clean := make([]byte, len(pngSignature), cleanSize)
+	copy(clean, pngSignature)
+	for start := len(pngSignature); start < pos; {
+		end := start + 12 + int(binary.BigEndian.Uint32(data[start:]))
+		if candidateAPNGKeep[string(data[start+4:start+8])] {
+			clean = append(clean, data[start:end]...)
+		}
+		start = end
 	}
 	a.clean = clean
 	return a, ""

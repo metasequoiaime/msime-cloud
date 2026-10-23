@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
 	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 	"io"
 	"log/slog"
@@ -586,7 +587,12 @@ func (s *Server) transcribe(w http.ResponseWriter, r *http.Request) {
 		seen[name] = true
 		switch name {
 		case "file":
-			audio, e = io.ReadAll(io.LimitReader(part, contract.AudioFileBytes+1))
+			// 小请求沿用标准读取；其余请求的总长度只作容量提示，音频仍按实际读取长度校验。
+			lengthHint := int64(-1)
+			if r.ContentLength >= 4<<10 && r.ContentLength <= contract.MultipartBodyBytes {
+				lengthHint = min(r.ContentLength, contract.AudioFileBytes)
+			}
+			audio, e = httpclient.ReadBody(part, lengthHint, contract.AudioFileBytes)
 			if e != nil || len(audio) == 0 || len(audio) > contract.AudioFileBytes {
 				fail(w, 413, "audio_too_large_or_empty")
 				return

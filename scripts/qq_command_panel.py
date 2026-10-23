@@ -21,6 +21,13 @@ CONFIG = Path(__file__).with_name("qq_command_panel.json")
 LIMITS = {"name": 14, "desc": 30}
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """固定 API 地址不跟随重定向，防止跨主机转发机器人令牌。"""
+
+    def redirect_request(self, request, response, code, message, headers, new_url):
+        return None
+
+
 def width(text):
     return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in text)
 
@@ -39,10 +46,13 @@ def call(method, url, body=None, token=None):
     if token:
         request.add_header("Authorization", "QQBot " + token)
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
+        opener = urllib.request.build_opener(_NoRedirect())
+        with opener.open(request, timeout=20) as response:
             return json.loads(response.read() or b"{}")
     except urllib.error.HTTPError as error:
-        sys.exit(f"{method} {url}: {error.code} {error.read().decode()[:300]}")
+        # 供应商错误正文可能含应用密钥或令牌，不能写入终端与 CI 日志。
+        error.close()
+        sys.exit(f"{method} {url}: HTTP {error.code}")
 
 
 def main():

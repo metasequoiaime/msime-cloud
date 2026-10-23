@@ -57,6 +57,7 @@ jobs:
       - run: python3 scripts/sync_contract.py --check
       - run: python3 scripts/generate_openapi.py --check
       - run: python3 -m unittest discover -s scripts/release -p "test_*.py"
+      - run: python3 -m unittest discover -s scripts -p "test_qq_command_panel.py"
       # 测试内的回归基准按 50 毫秒校准，减少每个断言默认 1 秒的开销；正式耗时基准单独运行。
       - run: go test -race -benchtime=50ms ./...
       - run: go vet ./...

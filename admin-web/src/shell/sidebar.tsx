@@ -8,6 +8,7 @@ import { NavIcon } from "./nav-icon";
 import { navAllowed, usePermissions } from "./permissions";
 import { useShell } from "./shell-data";
 import { useCommunityCounts } from "../hooks/use-community-counts";
+import { initial } from "../utils/text";
 
 const statusText = { ok: "后端运行正常", degraded: "部分服务降级", down: "后端服务异常", unknown: "状态未知" } as const;
 const statusDot = { ok: "bg-accent ring-accent-soft", degraded: "bg-warn ring-warn-soft", down: "bg-bad ring-bad-soft", unknown: "bg-muted ring-panel-2" } as const;
@@ -60,7 +61,7 @@ export function Sidebar({ expanded, mobile, mobileOpen, onToggle, onNavigate }: 
         {expanded && <span>收起侧栏</span>}
       </button>
       <Link to={meItem.path} onClick={onNavigate} title="个人中心" className="mt-1 flex items-center gap-2.5 rounded-[10px] px-1.5 py-1.5 no-underline transition hover:bg-panel-2 data-[status=active]:bg-accent-soft">
-        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-accent-soft text-[13px] font-bold text-accent-ink">{(name[0] ?? "?").toUpperCase()}</span>
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-accent-soft text-[13px] font-bold text-accent-ink">{initial(name)}</span>
         {expanded && <span className="min-w-0">
           <span className="block truncate text-[13px] font-semibold text-ink">{name}</span>
           <span className="block truncate text-xs text-muted">{role || email}</span>

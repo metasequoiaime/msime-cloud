@@ -92,7 +92,8 @@ jobs:
       - run: python3 -m unittest discover -s scripts -p 'test_*seed*.py'
       - run: python3 -m unittest discover -s scripts -p 'test_go_coverage.py'
       # 拉取请求上的覆盖率门禁在这里：它在每个拉取请求上跑，失败就合不进去。没有原生引擎，只量 internal/account 与 internal/server，下限见 check_go_coverage.py 的 DATABASE_MINIMUMS。`-count=1` 的理由见原生引擎任务；`-p 1` 让两个包不同时改同一个测试库。
-      - run: go test -race -benchtime=50ms -count=1 -p 1 -coverpkg=./internal/account,./internal/server -coverprofile=database.cover ./internal/account ./internal/server
+      # 与原生覆盖率任务保持相同的整包时限；默认 10 分钟已不足，超时导出覆盖率还会污染当时的分配计数。
+      - run: go test -race -benchtime=50ms -count=1 -p 1 -timeout=20m -coverpkg=./internal/account,./internal/server -coverprofile=database.cover ./internal/account ./internal/server
       - run: python3 scripts/check_go_coverage.py --database database.cover
 
   # 判断这次改动有没有碰到原生引擎：引擎子模块、internal/engine、公共工具及其 CLI/QQ 入口、在线查询与词条投稿及依赖引擎的测试、原生资源、镜像和引擎相关脚本。拉取请求比对目标分支，main 上的推送比对推送前的提交；推送前的提交不可用（新建分支、强推）时按碰到处理。

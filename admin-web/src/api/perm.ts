@@ -2,6 +2,7 @@ import { z } from "zod";
 import { candidateCategoryLabel } from "./community";
 import type { Permission } from "./shell";
 import { roleLabel } from "./shell";
+export { initial } from "../utils/text";
 
 // Matrix row labels, in AllAdminPermissions order.
 export const permissionLabels: Record<Permission, string> = {
@@ -64,10 +65,6 @@ export function actorName(actor: string | undefined): string {
   if (!actor || actor === "legacy-token") return "旧版令牌";
   const email = actor.startsWith("pat:") ? actor.slice(4) : actor.startsWith("google:") ? actor.slice(actor.lastIndexOf(":") + 1) : actor;
   return email.split("@")[0] || email;
-}
-
-export function initial(name: string): string {
-  return (Array.from(name.trim())[0] ?? "?").toUpperCase();
 }
 
 const prefLabels: Record<string, string> = {

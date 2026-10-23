@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"mime/multipart"
 	"net/http/httptest"
 	"os"
@@ -97,6 +98,31 @@ func TestVoiceContributions(t *testing.T) {
 	} {
 		if w := post(tokens.AccessToken, tc.payload, tc.audio, tc.extra); w.Code != tc.status {
 			t.Fatal(tc.payload, w.Code, w.Body.String())
+		}
+	}
+	// 逐字段校验短标识；使用非法音频让合法标识到达音频检查，不增加上传次数。
+	for _, field := range []string{"language", "provider", "app_version"} {
+		for _, tc := range []struct {
+			value string
+			valid bool
+		}{
+			{"Android_15", true}, {"1.4.0+build", true}, {"a._+-", true}, {strings.Repeat("A", 64), true},
+			{"", false}, {"+build", false}, {"a b", false}, {"a\n", false}, {"中文", false}, {strings.Repeat("A", 65), false},
+		} {
+			payload := map[string]any{"language": "zh-CN", "provider": "doubao", "duration_ms": 1200, "transcript": "合成测试文本", "app_version": "1.4.0"}
+			payload[field] = tc.value
+			encoded, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "invalid_payload"
+			if tc.valid {
+				want = "invalid_audio"
+			}
+			w := post(tokens.AccessToken, string(encoded), []byte("invalid audio"), false)
+			if w.Code != 400 || !strings.Contains(w.Body.String(), `"code":"`+want+`"`) {
+				t.Errorf("字段 %s=%q：状态=%d，响应=%s，期望=%q", field, tc.value, w.Code, w.Body.String(), want)
+			}
 		}
 	}
 	// 手工拼的请求覆盖 multipart 层面的拒绝：非 multipart、缺 boundary、没有分隔行、截断的部分、重复的部分、超长 payload、payload 后面跟着第二个 JSON 值，以及 payload 字段的边界。

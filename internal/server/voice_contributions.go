@@ -7,13 +7,13 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
+	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
 // voiceContributionsPath 是用户自愿上传语音样本的接口。需要用户会话（匿名账号也是用户），配置的客户端令牌不能上传。
@@ -31,9 +31,6 @@ const (
 	// voiceContributionsPerHour 是每个用户每小时能上传的次数（auth_rates，所有副本共享）。
 	voiceContributionsPerHour = 30
 )
-
-// voiceContributionField 是 language、provider、app_version 允许的形状：可见 ASCII 的短标识。
-var voiceContributionField = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$`)
 
 type voiceContributionPayload struct {
 	Language   string `json:"language"`
@@ -133,7 +130,7 @@ func (s *Server) voiceContribution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	transcript := strings.TrimSpace(payload.Transcript)
-	if !voiceContributionField.MatchString(payload.Language) || !voiceContributionField.MatchString(payload.Provider) || !voiceContributionField.MatchString(payload.AppVersion) ||
+	if !textutil.ValidClientLabel(payload.Language) || !textutil.ValidClientLabel(payload.Provider) || !textutil.ValidClientLabel(payload.AppVersion) ||
 		payload.DurationMS < 1 || payload.DurationMS > voiceContributionMaxMS ||
 		!utf8.ValidString(transcript) || utf8.RuneCountInString(transcript) > voiceContributionTranscriptRunes || strings.ContainsRune(transcript, 0) {
 		fail(w, 400, "invalid_payload")

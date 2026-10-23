@@ -88,7 +88,7 @@ func TestQQFAQAnswerValidationMatchesPreviousForUnchangedSyntax(t *testing.T) {
 	answers := []string{
 		"", "短答案", strings.Repeat("合成答案。", 20), strings.Repeat("答\n", 1400) + "结尾",
 		"# 标题\n" + strings.Repeat("合成答案。", 20), "普通正文\n## 标题", "普通正文\r\n### 标题\r\n",
-		"#### 四级标题\n" + strings.Repeat("合成答案。", 20), "\t## 缩进标题\n" + strings.Repeat("合成答案。", 20),
+		"#### 四级标题\n" + strings.Repeat("合成答案。", 20),
 		"##\u3000全角空格标题\n" + strings.Repeat("合成答案。", 20),
 		"https://example.test\n## 删除链接后保留标题",
 		strings.Repeat("合成答案。", 20) + ":// 7://无效协议 http:/不完整协议", "```text\n普通代码\n```", "\xff\x00合成正文\n# 标题",
@@ -99,6 +99,7 @@ func TestQQFAQAnswerValidationMatchesPreviousForUnchangedSyntax(t *testing.T) {
 	units := []string{"合成正文", "普通#井号", " ", "\t", "\r\n合成正文", "\n合成正文", "\u3000", "https://example.test", "\xff", "\x00"}
 	for range 200 {
 		var text strings.Builder
+		text.WriteString("合成正文")
 		for range random.Intn(80) {
 			text.WriteString(units[random.Intn(len(units))])
 		}

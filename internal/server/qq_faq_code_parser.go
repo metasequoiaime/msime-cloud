@@ -32,6 +32,7 @@ type qqFAQCodeSpan struct{ start, end int }
 type qqFAQCodeBlock struct {
 	kind   ast.NodeKind
 	source string
+	span   qqFAQCodeSpan
 }
 
 // qqFAQFenceParser 只记录原文边界；围栏语法和容器处理全部交给上游解析器。
@@ -59,6 +60,19 @@ func (p qqFAQFenceParser) Continue(node ast.Node, reader text.Reader, context pa
 	return state
 }
 
+// qqFAQInlineCodeParser 记录完整反引号范围，避免链接清理吞掉关闭符或命令参数。
+type qqFAQInlineCodeParser struct{ parser.InlineParser }
+
+func (p qqFAQInlineCodeParser) Parse(parent ast.Node, reader text.Reader, context parser.Context) ast.Node {
+	_, start := reader.Position()
+	node := p.InlineParser.Parse(parent, reader, context)
+	if node != nil && node.Kind() == ast.KindCodeSpan {
+		_, end := reader.Position()
+		node.SetAttributeString(qqFAQCodeSpanAttribute, &qqFAQCodeSpan{start.Start, end.Start})
+	}
+	return node
+}
+
 var qqFAQCodeParser = func() parser.Parser {
 	blocks := parser.DefaultBlockParsers()
 	for i := range blocks {
@@ -66,9 +80,15 @@ var qqFAQCodeParser = func() parser.Parser {
 			blocks[i].Value = qqFAQFenceParser{parser.NewFencedCodeBlockParser()}
 		}
 	}
+	inlines := parser.DefaultInlineParsers()
+	for i := range inlines {
+		if inlines[i].Value == parser.NewCodeSpanParser() {
+			inlines[i].Value = qqFAQInlineCodeParser{parser.NewCodeSpanParser()}
+		}
+	}
 	return parser.NewParser(
 		parser.WithBlockParsers(blocks...),
-		parser.WithInlineParsers(parser.DefaultInlineParsers()...),
+		parser.WithInlineParsers(inlines...),
 		parser.WithParagraphTransformers(parser.DefaultParagraphTransformers()...),
 	)
 }()
@@ -77,7 +97,7 @@ func qqFAQCodeLineStart(source []byte, offset int) int {
 	return bytes.LastIndexByte(source[:offset], '\n') + 1
 }
 
-func qqFAQParsedCode(source string) ([]qqFAQCodeBlock, bool) {
+func qqFAQParsedCode(source string, includeInline bool) ([]qqFAQCodeBlock, bool) {
 	data := []byte(source)
 	root := qqFAQCodeParser.Parse(text.NewReader(data))
 	var blocks []qqFAQCodeBlock
@@ -97,6 +117,13 @@ func qqFAQParsedCode(source string) ([]qqFAQCodeBlock, bool) {
 				return ast.WalkStop, nil
 			}
 			start, end = span.start, span.end
+		case ast.KindCodeSpan:
+			if !includeInline {
+				return ast.WalkSkipChildren, nil
+			}
+			value, _ := node.AttributeString(qqFAQCodeSpanAttribute)
+			span := value.(*qqFAQCodeSpan)
+			start, end = span.start, span.end
 		case ast.KindCodeBlock:
 			lines := node.Lines()
 			start = qqFAQCodeLineStart(data, lines.At(0).Start)
@@ -105,14 +132,14 @@ func qqFAQParsedCode(source string) ([]qqFAQCodeBlock, bool) {
 			return ast.WalkContinue, nil
 		}
 		// 末尾 LF 只分隔正文，CR 和其余空白仍参与原文比较。
-		blocks = append(blocks, qqFAQCodeBlock{node.Kind(), strings.TrimSuffix(source[start:end], "\n")})
-		return ast.WalkContinue, nil
+		blocks = append(blocks, qqFAQCodeBlock{node.Kind(), strings.TrimSuffix(source[start:end], "\n"), qqFAQCodeSpan{start, end}})
+		return ast.WalkSkipChildren, nil
 	})
 	return blocks, valid
 }
 
 func qqFAQSameParsedCode(first, second string) bool {
-	a, validA := qqFAQParsedCode(first)
-	b, validB := qqFAQParsedCode(second)
-	return validA && validB && slices.Equal(a, b)
+	a, validA := qqFAQParsedCode(first, false)
+	b, validB := qqFAQParsedCode(second, false)
+	return validA && validB && slices.EqualFunc(a, b, func(a, b qqFAQCodeBlock) bool { return a.kind == b.kind && a.source == b.source })
 }

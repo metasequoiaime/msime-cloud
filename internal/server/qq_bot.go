@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"crypto/ed25519"
@@ -414,12 +413,10 @@ func (b *qqBot) accessToken(ctx context.Context) (string, error) {
 	if b.token != "" && b.now().Before(b.expires.Add(-time.Minute)) {
 		return b.token, nil
 	}
-	body, _ := json.Marshal(map[string]string{"appId": b.config.AppID, "clientSecret": b.config.secret})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, b.config.APIURL+"/app/getAppAccessToken", bytes.NewReader(body))
+	req, err := httpclient.NewJSONPayloadRequest(ctx, http.MethodPost, b.config.APIURL+"/app/getAppAccessToken", map[string]string{"appId": b.config.AppID, "clientSecret": b.config.secret})
 	if err != nil {
 		return "", errors.New("qq bot: invalid token endpoint")
 	}
-	req.Header.Set("Content-Type", "application/json")
 	resp, err := b.client.Do(req)
 	if err != nil {
 		return "", errors.New("qq bot: token request failed")
@@ -447,12 +444,10 @@ func (b *qqBot) reply(ctx context.Context, group, msgID string, seq int, text st
 	if err != nil {
 		return err
 	}
-	body, _ := json.Marshal(map[string]any{"content": text, "msg_type": 0, "msg_id": msgID, "msg_seq": seq})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, b.config.APIURL+"/v2/groups/"+group+"/messages", bytes.NewReader(body))
+	req, err := httpclient.NewJSONPayloadRequest(ctx, http.MethodPost, b.config.APIURL+"/v2/groups/"+group+"/messages", map[string]any{"content": text, "msg_type": 0, "msg_id": msgID, "msg_seq": seq})
 	if err != nil {
 		return errors.New("qq bot: invalid message endpoint")
 	}
-	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "QQBot "+token)
 	resp, err := b.client.Do(req)
 	if err != nil {

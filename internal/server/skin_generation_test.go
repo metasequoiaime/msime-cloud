@@ -16,6 +16,9 @@ func TestSkinArtworkUsesFixedModelAndReturnsValidatedImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := fixture(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" || len(r.Header.Values("Accept")) != 0 || r.ContentLength <= 0 {
+			t.Error("图片请求的方法、正文类型、响应内容协商或精确长度变化")
+		}
 		var body map[string]any
 		if json.NewDecoder(r.Body).Decode(&body) != nil || body["model"] != "server-model" || body["n"] != float64(1) || r.Header.Get("Authorization") != "Bearer provider-secret" {
 			t.Error("invalid image upstream request")

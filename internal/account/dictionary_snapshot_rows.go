@@ -8,19 +8,12 @@ import (
 
 // emitDictionarySnapshotRows 按查询顺序输出快照并关闭结果流；空结果时保留用户不存在语义。
 func emitDictionarySnapshotRows(rows pgx.Rows, emit func(json.RawMessage) error) error {
-	defer rows.Close()
-	seen := false
-	for rows.Next() {
-		seen = true
+	seen, err := streamQueryRows(rows, func(row pgx.CollectableRow) (json.RawMessage, error) {
 		var raw []byte
-		if err := rows.Scan(&raw); err != nil {
-			return err
-		}
-		if err := emit(raw); err != nil {
-			return err
-		}
-	}
-	if err := rows.Err(); err != nil {
+		err := row.Scan(&raw)
+		return json.RawMessage(raw), err
+	}, emit)
+	if err != nil {
 		return err
 	}
 	if !seen {

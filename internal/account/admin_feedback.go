@@ -1,7 +1,6 @@
 package account
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -116,7 +115,7 @@ func actionUndoFeedbackStatus(a *Service, ctx context.Context, tx pgx.Tx, v acti
 		Status string `json:"status"`
 		Token  string `json:"token"`
 	}
-	if httpjson.DecodeValue(bytes.NewReader(v.Value), &value) != nil || (value.Status != "new" && value.Status != "resolved") || !textutil.ValidHex(value.Token, 16) {
+	if httpjson.DecodeBytes(v.Value, &value) != nil || (value.Status != "new" && value.Status != "resolved") || !textutil.ValidHex(value.Token, 16) {
 		return actionResult{}, actionFail(400, "invalid_value")
 	}
 	var previous string

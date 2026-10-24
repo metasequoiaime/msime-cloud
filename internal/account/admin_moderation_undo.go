@@ -1,7 +1,6 @@
 package account
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -108,7 +107,7 @@ func actionUndoModeration(a *Service, ctx context.Context, tx pgx.Tx, v actionRe
 		return actionResult{}, actionFail(400, "invalid_id")
 	}
 	var value moderationSnapshot
-	if httpjson.DecodeValue(bytes.NewReader(v.Value), &value) != nil || !validModerationSnapshot(value) {
+	if httpjson.DecodeBytes(v.Value, &value) != nil || !validModerationSnapshot(value) {
 		return actionResult{}, actionFail(400, "invalid_value")
 	}
 	banned, err := lockModerationItem(ctx, tx, section, v.ID)

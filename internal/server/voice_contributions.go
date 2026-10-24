@@ -103,7 +103,7 @@ func (s *Server) voiceContribution(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			var v voiceContributionPayload
-			if httpjson.DecodeValue(bytes.NewReader(raw), &v) != nil {
+			if httpjson.DecodeBytes(raw, &v) != nil {
 				fail(w, 400, "invalid_payload")
 				return
 			}

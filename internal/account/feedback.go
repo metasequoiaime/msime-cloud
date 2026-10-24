@@ -208,7 +208,7 @@ func readFeedbackForm(w http.ResponseWriter, r *http.Request) (feedbackPayload, 
 				writeError(w, 400, "invalid_json")
 				return payload, nil, false
 			}
-			if httpjson.DecodeValue(bytes.NewReader(raw), &payload) != nil {
+			if httpjson.DecodeBytes(raw, &payload) != nil {
 				writeError(w, 400, "invalid_json")
 				return payload, nil, false
 			}

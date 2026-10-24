@@ -141,7 +141,7 @@ func decode(arguments json.RawMessage, out any) error {
 	if len(arguments) > MaxArguments || len(bytes.TrimSpace(arguments)) == 0 || bytes.TrimSpace(arguments)[0] != '{' {
 		return errors.New("invalid_tool_arguments")
 	}
-	if httpjson.DecodeValue(bytes.NewReader(arguments), out) != nil {
+	if httpjson.DecodeBytes(arguments, out) != nil {
 		return errors.New("invalid_tool_arguments")
 	}
 	return nil

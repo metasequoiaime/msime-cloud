@@ -592,6 +592,11 @@ func (a *Service) communityCandidatePublish(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
+	releaseUpload, ok := acquireImageUploadSlot(w, r, candidatePublishTimeout, "candidate_skin_busy")
+	if !ok {
+		return
+	}
+	defer releaseUpload()
 	var input struct {
 		candidateUpload
 		ID string `json:"id"`
@@ -925,6 +930,11 @@ func (a *Service) communityCandidateReplace(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
+	releaseUpload, ok := acquireImageUploadSlot(w, r, candidatePublishTimeout, "candidate_skin_busy")
+	if !ok {
+		return
+	}
+	defer releaseUpload()
 	var input candidateUpload
 	withCategory, ok := readCandidateUpload(w, r, &input, a.config.Community.CanvasResources)
 	if !ok {

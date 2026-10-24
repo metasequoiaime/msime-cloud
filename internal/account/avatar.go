@@ -93,6 +93,11 @@ func (a *Service) putAvatar(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 415, "unsupported_media_type")
 		return
 	}
+	releaseUpload, ok := acquireImageUploadSlot(w, r, 0, "server_busy")
+	if !ok {
+		return
+	}
+	defer releaseUpload()
 	if e := a.store.Rate(r.Context(), "avatar:"+p.UserID, 20, time.Hour); e != nil {
 		a.error(w, e)
 		return

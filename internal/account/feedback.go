@@ -16,7 +16,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/boundedio"
-	"github.com/metasequoiaime/MSIME-Backend/internal/httpdeadline"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 	"github.com/metasequoiaime/MSIME-Backend/internal/uuid"
@@ -264,8 +263,11 @@ func (a *Service) feedback(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// 慢速截图上传使用反馈路由的连接期限，不能只延长上下文而仍被全局读写超时截断。
-	httpdeadline.Extend(w, feedbackTimeout, feedbackTimeout+5*time.Second)
+	releaseUpload, ok := acquireImageUploadSlot(w, r, feedbackTimeout, "server_busy")
+	if !ok {
+		return
+	}
+	defer releaseUpload()
 	payload, uploads, ok := readFeedbackForm(w, r)
 	if !ok {
 		return

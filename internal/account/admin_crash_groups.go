@@ -684,7 +684,6 @@ var (
 	crashUUIDPattern     = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
 	crashHexRunPattern   = regexp.MustCompile(`\b[0-9a-fA-F]{8,}\b`)
 	crashDigitsPattern   = regexp.MustCompile(`[0-9]+`)
-	crashFrameOffset     = regexp.MustCompile(`\s*\+\s*[0-9]+\s*$`)
 	crashFrameLineNumber = regexp.MustCompile(`(?::[0-9]+)+`)
 )
 
@@ -798,7 +797,7 @@ func normalizeCrashFrame(line string) string {
 		line = crashAddressPattern.ReplaceAllString(line, "")
 	}
 	if strings.ContainsRune(line, '+') {
-		line = crashFrameOffset.ReplaceAllString(line, "")
+		line = trimCrashFrameOffset(line)
 	}
 	if strings.ContainsRune(line, ':') {
 		line = crashFrameLineNumber.ReplaceAllString(line, "")
@@ -838,6 +837,33 @@ func trimCrashFrameIndex(line string) string {
 		start = end
 	}
 	return line[start:]
+}
+
+// trimCrashFrameOffset 从末尾匹配 ASCII 数字和空白，只裁掉完整的偏移后缀。
+func trimCrashFrameOffset(line string) string {
+	end := len(line)
+	for end > 0 && crashWhitespaceByte(line[end-1]) {
+		end--
+	}
+	digitsEnd := end
+	for end > 0 && line[end-1] >= '0' && line[end-1] <= '9' {
+		end--
+	}
+	if end == digitsEnd {
+		return line
+	}
+	for end > 0 && crashWhitespaceByte(line[end-1]) {
+		end--
+	}
+	if end == 0 || line[end-1] != '+' {
+		return line
+	}
+	end--
+	// 包含 `+` 前的 ASCII 空白，保持原正则的最左匹配起点。
+	for end > 0 && crashWhitespaceByte(line[end-1]) {
+		end--
+	}
+	return line[:end]
 }
 
 // normalizeCrashMessage 保留消息首个非空行，掩去地址、标识符和数字，让同一故障在不同运行中归为一组。

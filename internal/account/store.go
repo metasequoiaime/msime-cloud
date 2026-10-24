@@ -311,6 +311,8 @@ func (s *Store) Ready(ctx context.Context) error {
 	// 先取得迁移锁的共享模式，避免同批表锁与其他副本迁移的 DDL 锁反向等待。
 	if _, e := s.pool.Exec(ctx, `
 SELECT pg_advisory_xact_lock_shared(8372419);
+-- 资源删除后仍须保存版本，缺表时启动走迁移。
+SELECT id,revision FROM community_resource_revisions WHERE false;
 -- App 内反馈与它的截图；缺表时启动走迁移。
 SELECT id,user_id,type,text,platform,app_version,edition,diagnostics,status,created_at FROM feedback WHERE false;
 SELECT feedback_id,position,mime,bytes FROM feedback_screenshots WHERE false;
@@ -421,6 +423,8 @@ SELECT word_id,day,count FROM admin_sensitive_hits WHERE false`); e != nil {
 		return e
 	}
 	return s.checkReadinessMetadata(ctx, []readinessMetadataCheck{
+		// 删除、账号级联和旧副本的发布都必须维护资源版本。
+		{`SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='community_resources'::regclass AND tgname='community_resource_revision' AND tgenabled IN ('O','A'))`, "community resource revision trigger missing or disabled"},
 		// 永久删除必须清理举报；旧库缺少触发器时先迁移再接收请求。
 		{`SELECT count(*)=4 FROM pg_trigger WHERE tgrelid IN ('community_skins'::regclass,'community_candidate_skins'::regclass,'community_plugins'::regclass,'community_resources'::regclass) AND tgname='community_reports_cleanup' AND tgenabled IN ('O','A')`, "community report cleanup triggers missing or disabled"},
 		// 旧副本和直接 SQL 的封禁写入也必须更新撤销版本。

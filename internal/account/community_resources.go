@@ -296,7 +296,7 @@ func (a *Service) resourcePublish(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(r.Context())
 	// 事务内合并 ID 冲突、版本检查、额度检查和更新/首发写入，避免锁定用户后为这些步骤分别往返。
 	var exists, updated, withinCount, inserted bool
-	var updatedRevision int
+	var updatedRevision, insertedRevision int
 	err = tx.QueryRow(r.Context(), `WITH existing AS MATERIALIZED (
  SELECT owner_id,kind,revision,name=$3 AND description=$4 AND content=$5::jsonb AS same
  FROM community_resources WHERE id=$1 FOR UPDATE
@@ -313,12 +313,12 @@ func (a *Service) resourcePublish(w http.ResponseWriter, r *http.Request) {
  SELECT $1,$2,$6,$3,$4,$5,'pending',$8 FROM quota
  WHERE NOT EXISTS(SELECT 1 FROM existing) AND $7=0 AND available
  ON CONFLICT(id) DO NOTHING
- RETURNING id
+ RETURNING revision
 )
 SELECT COALESCE((SELECT owner_id FROM existing),''),COALESCE((SELECT kind FROM existing),''),
  COALESCE((SELECT revision FROM existing),0),COALESCE((SELECT same FROM existing),false),
- EXISTS(SELECT 1 FROM existing),COALESCE((SELECT revision FROM updated),0),EXISTS(SELECT 1 FROM updated),(SELECT available FROM quota),EXISTS(SELECT 1 FROM inserted)`,
-		input.ID, p.UserID, input.Name, input.Description, raw, input.Kind, input.Revision, flag).Scan(&owner, &kind, &revision, &same, &exists, &updatedRevision, &updated, &withinCount, &inserted)
+ EXISTS(SELECT 1 FROM existing),COALESCE((SELECT revision FROM updated),0),EXISTS(SELECT 1 FROM updated),(SELECT available FROM quota),EXISTS(SELECT 1 FROM inserted),COALESCE((SELECT revision FROM inserted),0)`,
+		input.ID, p.UserID, input.Name, input.Description, raw, input.Kind, input.Revision, flag).Scan(&owner, &kind, &revision, &same, &exists, &updatedRevision, &updated, &withinCount, &inserted, &insertedRevision)
 	if err != nil {
 		a.error(w, err)
 		return
@@ -355,7 +355,7 @@ SELECT COALESCE((SELECT owner_id FROM existing),''),COALESCE((SELECT kind FROM e
 			writeError(w, 409, "resource_id_conflict")
 			return
 		}
-		revision = 1
+		revision = insertedRevision
 	}
 	if err == nil {
 		err = tx.Commit(r.Context())

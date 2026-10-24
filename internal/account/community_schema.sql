@@ -74,6 +74,36 @@ CREATE TABLE IF NOT EXISTS community_resources (
 CREATE INDEX IF NOT EXISTS community_resources_catalog ON community_resources(kind,created_at DESC,id);
 -- 我的资源、发布上限和后台作者作品查询都按 owner_id 筛选。
 CREATE INDEX IF NOT EXISTS community_resources_owner ON community_resources(owner_id,created_at DESC);
+-- 只保留资源 ID 和版本高水位，不关联作者；删除作品或注销账号不能让旧预览版本重新有效。
+CREATE TABLE IF NOT EXISTS community_resource_revisions (
+ id text PRIMARY KEY,
+ revision integer NOT NULL CHECK(revision > 0)
+);
+-- 先锁住资源表再回填和安装触发器，避免迁移期间的删除遗漏最后版本。
+LOCK TABLE community_resources IN SHARE ROW EXCLUSIVE MODE;
+INSERT INTO community_resource_revisions AS history(id,revision)
+ SELECT id,revision FROM community_resources
+ ON CONFLICT(id) DO UPDATE SET revision=GREATEST(history.revision,EXCLUDED.revision);
+CREATE OR REPLACE FUNCTION community_resource_revision() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF TG_OP='DELETE' THEN
+  EXECUTE format('INSERT INTO %I.community_resource_revisions AS history(id,revision) VALUES($1,$2)
+   ON CONFLICT(id) DO UPDATE SET revision=GREATEST(history.revision,EXCLUDED.revision)',TG_TABLE_SCHEMA)
+   USING OLD.id,OLD.revision;
+  RETURN OLD;
+ END IF;
+ -- 首次发布沿用默认版本；重建时以同一条记录的行锁串行分配，不能只读历史后再插入。
+ EXECUTE format('INSERT INTO %I.community_resource_revisions AS history(id,revision) VALUES($1,$2)
+  ON CONFLICT(id) DO UPDATE SET revision=GREATEST(history.revision+1,EXCLUDED.revision)
+  RETURNING revision',TG_TABLE_SCHEMA) INTO NEW.revision USING NEW.id,NEW.revision;
+ RETURN NEW;
+END $$;
+DO $$ BEGIN
+ IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid='community_resources'::regclass AND tgname='community_resource_revision') THEN
+  CREATE TRIGGER community_resource_revision BEFORE INSERT OR DELETE ON community_resources FOR EACH ROW EXECUTE FUNCTION community_resource_revision();
+ END IF;
+END $$;
+ALTER TABLE community_resources ENABLE TRIGGER community_resource_revision;
 -- 早期建的表用的是自动命名的 kind 约束（不含 phrase）。命名约束还不含 phrase 时，按 pg_constraint 查出列着 kind 取值的旧约束逐个删掉，再加上命名约束；整段在迁移的 advisory lock 下执行，可以重复执行。以后再加类型时把这里探测的类型名换成新加的那个，并同步 store.go 的 Ready。
 DO $$
 DECLARE c record;

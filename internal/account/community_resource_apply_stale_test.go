@@ -35,10 +35,13 @@ func (t *resourceApplyMutationTrace) TraceQueryEnd(ctx context.Context, _ *pgx.C
 	if ctx.Value(resourceApplyMutationKey{}) != true {
 		return
 	}
-	// 模拟作者删除旧作品后用同一个客户端 ID 发布新内容；新行的 revision 从 1 重新开始。
+	// 模拟绕过正常版本分配的管理写入，保留对单次导入期间替换行的防御检查。
 	_, err := t.db.pool.Exec(context.Background(), `DELETE FROM community_resources WHERE id=$1`, t.id)
 	if err == nil {
 		_, err = t.db.pool.Exec(context.Background(), `INSERT INTO community_resources(id,owner_id,kind,name,description,content,revision) VALUES($1,$2,'dictionary','新词包','','{"entries":[{"kind":"quick","code":"new","word":"新内容","weight":1}]}',1)`, t.id, t.owner)
+	}
+	if err == nil {
+		_, err = t.db.pool.Exec(context.Background(), `UPDATE community_resources SET revision=1 WHERE id=$1`, t.id)
 	}
 	t.mu.Lock()
 	t.err = err

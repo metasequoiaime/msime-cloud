@@ -160,16 +160,23 @@ func readOnlyService(t *testing.T, db *Store) *Service {
 func TestUserSessionsStorageFailure(t *testing.T) {
 	db := testStore(t)
 	user := complete(t, db, Identity{"email", "sessions-failure@example.test"})
-	// 只读库：列表照常，撤销失败返回 503 且不生效。直接调处理函数，绕开 Route 里同样要写库的按地址限流。
+	// 先用正常连接取得会话 ID，再验证只读连接的失败分支。
 	readOnly := readOnlyService(t, db)
 	sessions := httptest.NewRecorder()
-	readOnly.sessions(sessions, jsonRequest("GET", "/v1/users/me/sessions", "", user.AccessToken))
+	(&Service{store: db}).sessions(sessions, jsonRequest("GET", "/v1/users/me/sessions", "", user.AccessToken))
 	var body struct {
 		Sessions []UserSession `json:"sessions"`
 	}
 	if err := json.Unmarshal(sessions.Body.Bytes(), &body); err != nil || sessions.Code != 200 || len(body.Sessions) != 1 {
 		t.Fatal(err, sessions.Body.String())
 	}
+	// 只读事务不能取得防止账号删除的共享行锁，列表应返回 503。
+	readOnlyList := httptest.NewRecorder()
+	readOnly.sessions(readOnlyList, jsonRequest("GET", "/v1/users/me/sessions", "", user.AccessToken))
+	if readOnlyList.Code != 503 || !strings.Contains(readOnlyList.Body.String(), "auth_unavailable") {
+		t.Fatal(readOnlyList.Code, readOnlyList.Body.String())
+	}
+	// 直接调处理函数，绕开 Route 里同样要写库的按地址限流；撤销失败且不生效。
 	w := httptest.NewRecorder()
 	r := jsonRequest("DELETE", "/v1/users/me/sessions/"+body.Sessions[0].ID, "", user.AccessToken)
 	r.SetPathValue("id", body.Sessions[0].ID)

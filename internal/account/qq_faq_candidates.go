@@ -67,24 +67,13 @@ func (a *Service) OpenQQFAQCandidatesPage(ctx context.Context, limit, offset int
 	if err != nil {
 		return nil, 0, err
 	}
-	defer rows.Close()
-	var out []QQFAQCandidate
-	total := 0
-	for rows.Next() {
+	return collectQQBacklogPage(rows, offset, func(row pgx.CollectableRow, total *int) (QQFAQCandidate, error) {
 		var c QQFAQCandidate
-		if err := rows.Scan(&c.ID, &c.Question, &c.Answer, &c.CreatedAt, &total); err != nil {
-			return nil, 0, err
-		}
-		out = append(out, c)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, 0, err
-	}
-	rows.Close()
-	if len(out) == 0 && offset > 0 {
-		err = a.store.pool.QueryRow(ctx, `SELECT count(*) FROM qq_faq_candidates WHERE `+qqFAQCandidateClaimable+` AND created_at>now()-$1::interval`, QQFAQCandidateWindow.String()).Scan(&total)
-	}
-	return out, total, err
+		err := row.Scan(&c.ID, &c.Question, &c.Answer, &c.CreatedAt, total)
+		return c, err
+	}, func(total *int) error {
+		return a.store.pool.QueryRow(ctx, `SELECT count(*) FROM qq_faq_candidates WHERE `+qqFAQCandidateClaimable+` AND created_at>now()-$1::interval`, QQFAQCandidateWindow.String()).Scan(total)
+	})
 }
 
 // ClaimQQFAQCandidate 认领一条还没处理的候选准备写进 FAQ（state 改成 writing），返回是否认领到：两个管理员同时发「写进FAQ F3」时只有一个能认领，不会开两个 PR。认领超过 QQFAQCandidateClaimTimeout 还在 writing 的可以重新认领。

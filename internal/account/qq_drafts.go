@@ -195,22 +195,11 @@ func (a *Service) OpenQQDraftsPage(ctx context.Context, limit, offset int) ([]QQ
 	if err != nil {
 		return nil, 0, err
 	}
-	defer rows.Close()
-	var drafts []QQDraft
-	total := 0
-	for rows.Next() {
+	return collectQQBacklogPage(rows, offset, func(row pgx.CollectableRow, total *int) (QQDraft, error) {
 		var d QQDraft
-		if err := rows.Scan(&d.ID, &d.Subject, &d.Original, &d.Report, &d.CreatedAt, &total); err != nil {
-			return nil, 0, err
-		}
-		drafts = append(drafts, d)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, 0, err
-	}
-	rows.Close()
-	if len(drafts) == 0 && offset > 0 {
-		err = a.store.pool.QueryRow(ctx, `SELECT count(*) FROM qq_drafts WHERE `+qqDraftUnclaimed+` AND created_at>now()-$1::interval`, QQDraftWindow.String()).Scan(&total)
-	}
-	return drafts, total, err
+		err := row.Scan(&d.ID, &d.Subject, &d.Original, &d.Report, &d.CreatedAt, total)
+		return d, err
+	}, func(total *int) error {
+		return a.store.pool.QueryRow(ctx, `SELECT count(*) FROM qq_drafts WHERE `+qqDraftUnclaimed+` AND created_at>now()-$1::interval`, QQDraftWindow.String()).Scan(total)
+	})
 }

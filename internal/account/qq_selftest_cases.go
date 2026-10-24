@@ -1,6 +1,10 @@
 package account
 
-import "context"
+import (
+	"context"
+
+	"github.com/jackc/pgx/v5"
+)
 
 // QQSelfTestCase 是一道从核对过的答案里学到的自测题。
 type QQSelfTestCase struct {
@@ -20,14 +24,9 @@ func (a *Service) QQSelfTestCases(ctx context.Context, limit int) ([]QQSelfTestC
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []QQSelfTestCase
-	for rows.Next() {
+	return collectQQRows(rows, func(row pgx.CollectableRow) (QQSelfTestCase, error) {
 		var c QQSelfTestCase
-		if err := rows.Scan(&c.Question, &c.Answer); err != nil {
-			return nil, err
-		}
-		out = append(out, c)
-	}
-	return out, rows.Err()
+		err := row.Scan(&c.Question, &c.Answer)
+		return c, err
+	})
 }

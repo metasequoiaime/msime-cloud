@@ -680,8 +680,6 @@ func lockCrashSpikes(ctx context.Context, tx pgx.Tx) ([]crashSpike, error) {
 	return spikes, err
 }
 
-var crashUUIDPattern = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
-
 // normalizeCrashWhitespace 折叠规范化文本中的空白并统一为小写。
 func normalizeCrashWhitespace(text string) string {
 	text = strings.TrimSpace(text)
@@ -969,12 +967,60 @@ func normalizeCrashMessage(message string) string {
 	if strings.Contains(line, "0x") || strings.Contains(line, "0X") {
 		line = replaceCrashAddresses(line, "0x?")
 	}
-	if len(line) >= 36 && strings.ContainsRune(line, '-') {
-		line = crashUUIDPattern.ReplaceAllString(line, "?")
-	}
+	line = maskCrashUUIDs(line)
 	line = maskCrashHexRuns(line)
 	line = maskCrashDigits(line)
 	return normalizeCrashWhitespace(line)
+}
+
+// maskCrashUUIDs 掩去原正则的完整 UUID 形状，不要求单词边界，也不限制版本或变体。
+func maskCrashUUIDs(line string) string {
+	first := nextCrashUUID(line, 0)
+	if first < 0 {
+		return line
+	}
+	size := len(line)
+	for start := first; start >= 0; start = nextCrashUUID(line, start+36) {
+		size -= 35
+	}
+	if size == 1 {
+		return "?"
+	}
+	var out strings.Builder
+	out.Grow(size)
+	previous := 0
+	for start := first; start >= 0; start = nextCrashUUID(line, start+36) {
+		out.WriteString(line[previous:start])
+		out.WriteByte('?')
+		previous = start + 36
+	}
+	out.WriteString(line[previous:])
+	return out.String()
+}
+
+// nextCrashUUID 按首个连字符定位候选，允许在更长十六进制段内部开始或结束。
+func nextCrashUUID(line string, from int) int {
+	if len(line)-from < 36 {
+		return -1
+	}
+	for search := from + 8; ; {
+		dash := strings.IndexByte(line[search:], '-')
+		if dash < 0 {
+			return -1
+		}
+		dash += search
+		if len(line)-dash < 28 {
+			return -1
+		}
+		start := dash - 8
+		if line[dash+5] == '-' && line[dash+10] == '-' && line[dash+15] == '-' &&
+			textutil.ValidHex(line[start:dash], 4) && textutil.ValidHex(line[dash+1:dash+5], 2) &&
+			textutil.ValidHex(line[dash+6:dash+10], 2) && textutil.ValidHex(line[dash+11:dash+15], 2) &&
+			textutil.ValidHex(line[dash+16:dash+28], 6) {
+			return start
+		}
+		search = dash + 1
+	}
 }
 
 // maskCrashDigits 将每段连续 ASCII 数字替换为单个井号，其余字节保持原样。

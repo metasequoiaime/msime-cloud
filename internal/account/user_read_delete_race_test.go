@@ -83,6 +83,7 @@ func TestPersonalReadsSerializeAccountDeletion(t *testing.T) {
 		{"/v1/users/me/data", userDataSummaryQuery},
 		{"/v1/users/me/diagnostics", "SELECT d.id,d.created_at,d.expires_at,d.bytes,d.sections,d.token_hint"},
 		{"/v1/users/me/qq-links", "SELECT id::text,created_at FROM qq_account_links"},
+		{"/v1/community/candidate-skins/sync", "SELECT id,package_id,request_sha256,visibility,updated_at FROM community_candidate_skins"},
 	} {
 		t.Run(tc.path, func(t *testing.T) { runPersonalReadDeletion(t, tc.path, tc.query) })
 	}
@@ -95,6 +96,9 @@ func runPersonalReadDeletion(t *testing.T, path, query string) {
 	user := complete(t, db, Identity{"email", "phrases-delete-race@example.test"})
 	if _, err := db.PutPhrases(ctx, user.User.ID, 0, []Phrase{{ID: "one", Text: "私密短语"}}); err != nil {
 		t.Fatal(err)
+	}
+	if path == "/v1/community/candidate-skins/sync" {
+		insertCandidateSkin(t, db, "ef334455-1234-4234-8234-000000000001", user.User.ID, "私有作品")
 	}
 	trace := &personalReadDeleteTrace{readQuery: query, done: make(chan struct{}), release: make(chan struct{}), deleteStarted: make(chan uint32, 1), deleteFinished: make(chan struct{})}
 	cfg := db.pool.Config()
@@ -163,7 +167,9 @@ func runPersonalReadDeletion(t *testing.T, path, query string) {
 	}
 	close(trace.release)
 	w := <-response
-	if w.Code != http.StatusOK || (path == "/v1/users/me/phrases" && !strings.Contains(w.Body.String(), "私密短语")) {
+	if w.Code != http.StatusOK ||
+		(path == "/v1/users/me/phrases" && !strings.Contains(w.Body.String(), "私密短语")) ||
+		(path == "/v1/community/candidate-skins/sync" && !strings.Contains(w.Body.String(), "ef334455-1234-4234-8234-000000000001")) {
 		t.Fatalf("个人数据响应不完整：%d %q", w.Code, w.Body.String())
 	}
 	if err := <-deleteErr; err != nil {

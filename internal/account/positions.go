@@ -57,28 +57,11 @@ func (s *Store) CandidatePositions(ctx context.Context, user, contextKey string,
 	if err != nil {
 		return nil, false, err
 	}
-	defer rows.Close()
-	out := []CandidatePosition{}
-	for rows.Next() {
+	return collectDictionaryPage(ctx, s, user, limit, rows, func(row pgx.CollectableRow) (CandidatePosition, error) {
 		var p CandidatePosition
-		if err = rows.Scan(&p.Context, &p.Code, &p.Word, &p.Position); err != nil {
-			return nil, false, err
-		}
-		out = append(out, p)
-	}
-	if err = rows.Err(); err != nil {
-		return nil, false, err
-	}
-	if len(out) == 0 {
-		if err := s.requireUserExists(ctx, user); err != nil {
-			return nil, false, err
-		}
-	}
-	more := len(out) > limit
-	if more {
-		out = out[:limit]
-	}
-	return out, more, nil
+		err := row.Scan(&p.Context, &p.Code, &p.Word, &p.Position)
+		return p, err
+	})
 }
 func validPositionText(s string, max int) bool {
 	return s != "" && len(s) <= max && utf8.ValidString(s) && !strings.ContainsAny(s, "\x00\r\n\t")

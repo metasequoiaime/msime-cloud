@@ -37,28 +37,11 @@ func (s *Store) DictionaryEntries(ctx context.Context, user, kind, search string
 	if err != nil {
 		return nil, false, err
 	}
-	defer rows.Close()
-	out := []DictionaryEntry{}
-	for rows.Next() {
+	return collectDictionaryPage(ctx, s, user, limit, rows, func(row pgx.CollectableRow) (DictionaryEntry, error) {
 		var e DictionaryEntry
-		if err = rows.Scan(&e.ID, &e.Kind, &e.Code, &e.Word, &e.Weight, &e.Revision, &e.UpdatedAt); err != nil {
-			return nil, false, err
-		}
-		out = append(out, e)
-	}
-	if err = rows.Err(); err != nil {
-		return nil, false, err
-	}
-	if len(out) == 0 {
-		if err := s.requireUserExists(ctx, user); err != nil {
-			return nil, false, err
-		}
-	}
-	more := len(out) > limit
-	if more {
-		out = out[:limit]
-	}
-	return out, more, nil
+		err := row.Scan(&e.ID, &e.Kind, &e.Code, &e.Word, &e.Weight, &e.Revision, &e.UpdatedAt)
+		return e, err
+	})
 }
 func (s *Store) dictionaryEdit(ctx context.Context, tx pgx.Tx, user, kind, id string, expected int64, next *DictionaryEntry) (DictionaryChange, error) {
 	entryID := id
@@ -221,32 +204,15 @@ func (s *Store) DictionaryChanges(ctx context.Context, user string, after int64,
 	if err != nil {
 		return nil, false, err
 	}
-	defer rows.Close()
-	result := []DictionaryChange{}
-	for rows.Next() {
+	return collectDictionaryPage(ctx, s, user, limit, rows, func(row pgx.CollectableRow) (DictionaryChange, error) {
 		var raw []byte
 		var c DictionaryChange
-		if err = rows.Scan(&raw); err != nil {
-			return nil, false, err
+		if err := row.Scan(&raw); err != nil {
+			return c, err
 		}
-		if err = json.Unmarshal(raw, &c); err != nil {
-			return nil, false, err
-		}
-		result = append(result, c)
-	}
-	if err = rows.Err(); err != nil {
-		return nil, false, err
-	}
-	if len(result) == 0 {
-		if err := s.requireUserExists(ctx, user); err != nil {
-			return nil, false, err
-		}
-	}
-	more := len(result) > limit
-	if more {
-		result = result[:limit]
-	}
-	return result, more, nil
+		err := json.Unmarshal(raw, &c)
+		return c, err
+	})
 }
 
 // StreamDictionary exports one database snapshot without retaining the user's entire dictionary in memory.

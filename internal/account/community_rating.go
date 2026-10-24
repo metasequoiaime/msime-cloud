@@ -2,6 +2,17 @@ package account
 
 import "net/http"
 
+// communityRatingStatsSQL 在初始化时共用评分聚合；表名、列名和作品 ID 表达式只接收调用处的固定 SQL。
+// personal 让社区接口在同一次扫描中读取 $1 对应用户的评分；后台只取人数和均分。
+func communityRatingStatsSQL(ratings, column, itemID string, personal bool) string {
+	selection := `CROSS JOIN LATERAL (SELECT count(*) AS count,COALESCE(avg(stars),0) AS average`
+	if personal {
+		selection += `,
+ COALESCE(max(stars) FILTER (WHERE user_id=$1),0) AS mine`
+	}
+	return selection + ` FROM ` + ratings + ` WHERE ` + column + `=` + itemID + `) rating_stats`
+}
+
 var (
 	communitySkinRatingQuery          = newCommunityRatingQuery("community_skins", "community_skin_ratings", "skin_id", "moderation<>'removed'")
 	communityCandidateSkinRatingQuery = newCommunityRatingQuery("community_candidate_skins", "community_candidate_skin_ratings", "skin_id", "visibility='public' AND moderation<>'removed'")

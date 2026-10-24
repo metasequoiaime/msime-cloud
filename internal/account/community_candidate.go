@@ -178,9 +178,7 @@ func buildCandidateSkinSelectQuery(saved, page bool) string {
 		skinID = "p.id"
 	}
 	from += `CROSS JOIN LATERAL (SELECT COALESCE(sum(size),0) AS size,count(*) AS files FROM community_candidate_skin_files WHERE skin_id=` + skinID + `) f `
-	// 人数、平均分和个人评分共用一次聚合；主键保证每个用户每款皮肤只有一条评分。
-	from += `CROSS JOIN LATERAL (SELECT count(*) AS count,COALESCE(avg(stars),0) AS average,
- COALESCE(max(stars) FILTER (WHERE user_id=$1),0) AS mine FROM community_candidate_skin_ratings WHERE skin_id=` + skinID + `) rating_stats `
+	from += communityRatingStatsSQL("community_candidate_skin_ratings", "skin_id", skinID, true) + ` `
 	if saved {
 		return candidateSkinSelectBase + `(SELECT count(*) FROM community_candidate_skin_saves WHERE skin_id=s.id),EXISTS(SELECT 1 FROM community_candidate_skin_saves WHERE skin_id=s.id AND user_id=$1)` + from
 	}

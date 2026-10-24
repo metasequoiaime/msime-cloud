@@ -140,6 +140,13 @@ func qqFAQParsedCode(source string, includeInline bool) ([]qqFAQCodeBlock, bool)
 
 func qqFAQSameParsedCode(first, second string) bool {
 	a, validA := qqFAQParsedCode(first, false)
+	if !validA {
+		return false
+	}
+	// 先确认围栏显式闭合，再复用相同原文的校验结果。
+	if first == second {
+		return true
+	}
 	b, validB := qqFAQParsedCode(second, false)
-	return validA && validB && slices.EqualFunc(a, b, func(a, b qqFAQCodeBlock) bool { return a.kind == b.kind && a.source == b.source })
+	return validB && slices.EqualFunc(a, b, func(a, b qqFAQCodeBlock) bool { return a.kind == b.kind && a.source == b.source })
 }

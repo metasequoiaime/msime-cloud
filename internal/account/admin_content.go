@@ -17,7 +17,7 @@ var adminSkinContentQuery = strings.Replace(`SELECT json_build_object('id',s.id,
  'downloads',(SELECT count(*) FROM community_skin_downloads WHERE skin_id=s.id),
  'rating_count',rating_stats.count,'rating_average',rating_stats.average)
  FROM community_skins s JOIN auth_users u ON u.id=s.owner_id
- CROSS JOIN LATERAL (SELECT count(*) AS count,COALESCE(avg(stars),0) AS average FROM community_skin_ratings WHERE skin_id=s.id) rating_stats
+ `+communityRatingStatsSQL("community_skin_ratings", "skin_id", "s.id", false)+`
  WHERE s.id=$1`, "json_build_object(", "json_build_object('edit_token',"+contentEditToken("skins", "s")+",", 1)
 
 // adminCandidateContentQuery 在初始化时注入编辑凭据表达式，凭据值仍由数据库逐请求计算。
@@ -28,7 +28,7 @@ var adminCandidateContentQuery = strings.Replace(`SELECT json_build_object('id',
  'downloads',(SELECT count(*) FROM community_candidate_skin_downloads WHERE skin_id=s.id),
  'rating_count',rating_stats.count,'rating_average',rating_stats.average)
  FROM community_candidate_skins s JOIN auth_users u ON u.id=s.owner_id
- CROSS JOIN LATERAL (SELECT count(*) AS count,COALESCE(avg(stars),0) AS average FROM community_candidate_skin_ratings WHERE skin_id=s.id) rating_stats
+ `+communityRatingStatsSQL("community_candidate_skin_ratings", "skin_id", "s.id", false)+`
  WHERE s.id=$1`, "json_build_object(", "json_build_object('edit_token',"+contentEditToken("candidate-skins", "s")+",", 1)
 
 // adminPluginContentQuery 在初始化时注入编辑凭据表达式，凭据值仍由数据库逐请求计算。
@@ -38,8 +38,17 @@ var adminPluginContentQuery = strings.Replace(`SELECT json_build_object('id',p.i
  'downloads',(SELECT count(*) FROM community_plugin_downloads WHERE pack_id=p.id),
  'rating_count',rating_stats.count,'rating_average',rating_stats.average)
  FROM community_plugins p JOIN auth_users u ON u.id=p.owner_id
- CROSS JOIN LATERAL (SELECT count(*) AS count,COALESCE(avg(stars),0) AS average FROM community_plugin_ratings WHERE pack_id=p.id) rating_stats
+ `+communityRatingStatsSQL("community_plugin_ratings", "pack_id", "p.id", false)+`
  WHERE p.id=$1`, "json_build_object(", "json_build_object('edit_token',"+contentEditToken("plugins", "p")+",", 1)
+
+// adminResourceContentQuery 复用资源详情 SQL，作品和资源类型仍逐请求通过参数绑定。
+var adminResourceContentQuery = `SELECT json_build_object('id',s.id,'name',s.name,'description',s.description,'owner_id',s.owner_id,'author',u.display_name,'created_at',s.created_at,'updated_at',s.updated_at,'revision',s.revision,'content',s.content,
+ 'moderation',s.moderation,'previous_moderation',s.previous_moderation,'moderation_reason',s.moderation_reason,'moderated_by',s.moderated_by,'moderated_at',s.moderated_at,'owner_banned',u.banned_at IS NOT NULL,
+ 'saves',(SELECT count(*) FROM community_resource_saves WHERE resource_id=s.id),
+ 'rating_count',rating_stats.count,'rating_average',rating_stats.average)
+ FROM community_resources s JOIN auth_users u ON u.id=s.owner_id
+ ` + communityRatingStatsSQL("community_resource_ratings", "resource_id", "s.id", false) + `
+ WHERE s.id=$1 AND s.kind=$2`
 
 // adminContent reads community content using fixed queries per kind; candidate skins include the private rows of accounts' synced libraries, marked by visibility, and plugin packs return their manifest but never the archive.
 func (a *Service) adminContent(w http.ResponseWriter, r *http.Request, section, id string) {
@@ -67,13 +76,7 @@ func (a *Service) adminContent(w http.ResponseWriter, r *http.Request, section, 
 		query = adminPluginContentQuery
 	} else {
 		args = append(args, moderationSections[section].kind)
-		query = `SELECT json_build_object('id',s.id,'name',s.name,'description',s.description,'owner_id',s.owner_id,'author',u.display_name,'created_at',s.created_at,'updated_at',s.updated_at,'revision',s.revision,'content',s.content,
- 'moderation',s.moderation,'previous_moderation',s.previous_moderation,'moderation_reason',s.moderation_reason,'moderated_by',s.moderated_by,'moderated_at',s.moderated_at,'owner_banned',u.banned_at IS NOT NULL,
- 'saves',(SELECT count(*) FROM community_resource_saves WHERE resource_id=s.id),
- 'rating_count',rating_stats.count,'rating_average',rating_stats.average)
- FROM community_resources s JOIN auth_users u ON u.id=s.owner_id
- CROSS JOIN LATERAL (SELECT count(*) AS count,COALESCE(avg(stars),0) AS average FROM community_resource_ratings WHERE resource_id=s.id) rating_stats
- WHERE s.id=$1 AND s.kind=$2`
+		query = adminResourceContentQuery
 	}
 	var result json.RawMessage
 	err := a.store.pool.QueryRow(r.Context(), query, args...).Scan(&result)

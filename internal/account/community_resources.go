@@ -168,14 +168,10 @@ const resourceSelectBase = `SELECT s.id,s.kind,s.name,s.description,
 
 const resourceFrom = `FROM community_resources s JOIN auth_users u ON u.id=s.owner_id `
 
-// 人数、平均分和个人评分共用一次聚合；每个用户每条资源只有一条评分，所以 max 可取出个人评分。
-const resourceRatingAggregate = `CROSS JOIN LATERAL (SELECT count(*) AS count,COALESCE(avg(stars),0) AS average,
- COALESCE(max(stars) FILTER (WHERE user_id=$1),0) AS mine FROM community_resource_ratings WHERE resource_id=`
-
-const resourceSelect = resourceSelectBase + resourceFrom + resourceRatingAggregate + `s.id) rating_stats `
+var resourceSelect = resourceSelectBase + resourceFrom + communityRatingStatsSQL("community_resource_ratings", "resource_id", "s.id", true) + ` `
 
 // 目录评分依赖本页 ID，避免优化器将聚合排到分页关联之前。
-const resourcePageSelect = resourceSelectBase + resourceFrom + `JOIN resource_page p ON p.id=s.id ` + resourceRatingAggregate + `p.id) rating_stats `
+var resourcePageSelect = resourceSelectBase + resourceFrom + `JOIN resource_page p ON p.id=s.id ` + communityRatingStatsSQL("community_resource_ratings", "resource_id", "p.id", true) + ` `
 
 func scanResource(row interface{ Scan(...any) error }) (CommunityResource, error) {
 	var v CommunityResource

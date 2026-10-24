@@ -133,9 +133,7 @@ func buildCommunityPluginSelectQuery(saved, page bool) string {
 		// 评分依赖本页 ID，避免优化器将聚合排到分页关联之前。
 		ratingID = "q.id"
 	}
-	// 人数、平均分和个人评分共用一次聚合；主键保证每个用户每个插件只有一条评分。
-	from += `CROSS JOIN LATERAL (SELECT count(*) AS count,COALESCE(avg(stars),0) AS average,
- COALESCE(max(stars) FILTER (WHERE user_id=$1),0) AS mine FROM community_plugin_ratings WHERE pack_id=` + ratingID + `) rating_stats `
+	from += communityRatingStatsSQL("community_plugin_ratings", "pack_id", ratingID, true) + ` `
 	if saved {
 		return pluginSelectBase + `(SELECT count(*) FROM community_plugin_saves WHERE pack_id=p.id),EXISTS(SELECT 1 FROM community_plugin_saves WHERE pack_id=p.id AND user_id=$1)` + from
 	}

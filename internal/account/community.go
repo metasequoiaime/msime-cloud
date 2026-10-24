@@ -353,9 +353,7 @@ func buildCommunitySkinSelectQuery(saved, page bool) string {
 		// 评分依赖本页 ID，避免优化器将聚合排到分页关联之前。
 		ratingID = "p.id"
 	}
-	// 人数、平均分和个人评分共用一次聚合；主键保证每个用户每款皮肤只有一条评分。
-	from += `CROSS JOIN LATERAL (SELECT count(*) AS count,COALESCE(avg(stars),0) AS average,
- COALESCE(max(stars) FILTER (WHERE user_id=$1),0) AS mine FROM community_skin_ratings WHERE skin_id=` + ratingID + `) rating_stats `
+	from += communityRatingStatsSQL("community_skin_ratings", "skin_id", ratingID, true) + ` `
 	selection := communitySkinSelectBase + design + communitySkinSelectStats
 	if saved {
 		return selection + `(SELECT count(*) FROM community_skin_saves WHERE skin_id=s.id),EXISTS(SELECT 1 FROM community_skin_saves WHERE skin_id=s.id AND user_id=$1)` + from

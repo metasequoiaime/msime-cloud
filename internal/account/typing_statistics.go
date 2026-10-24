@@ -43,7 +43,6 @@ const (
 
 var (
 	typingStatisticsDeviceID  = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
-	typingStatisticsKey       = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,31}$`)
 	typingStatisticsPlatforms = []string{"", "windows", "macos", "linux", "android", "ios", "harmony"}
 	qqLinkCodePattern         = regexp.MustCompile(`^[0-9]{8}$`)
 	qqLinkID                  = regexp.MustCompile(`^[1-9][0-9]{0,18}$`)
@@ -82,13 +81,30 @@ type typingUpload struct {
 // validTypingCount 判断一个计数在 0 到 typingStatisticsMaxCount 之间。
 func validTypingCount(n int64) bool { return n >= 0 && n <= typingStatisticsMaxCount }
 
+// validTypingStatisticsKey 校验统计键：1～32 个 ASCII 字符，首字符为字母，其余为字母、数字或下划线。
+func validTypingStatisticsKey(key string) bool {
+	if len(key) == 0 || len(key) > 32 {
+		return false
+	}
+	for i := range len(key) {
+		c := key[i]
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' {
+			continue
+		}
+		if i == 0 || !(c >= '0' && c <= '9' || c == '_') {
+			return false
+		}
+	}
+	return true
+}
+
 // validTypingCounts 校验字符类别或输入来源的计数表。
 func validTypingCounts(m map[string]int64) bool {
 	if len(m) > typingStatisticsMaxKeys {
 		return false
 	}
 	for k, n := range m {
-		if !typingStatisticsKey.MatchString(k) || !validTypingCount(n) {
+		if !validTypingStatisticsKey(k) || !validTypingCount(n) {
 			return false
 		}
 	}

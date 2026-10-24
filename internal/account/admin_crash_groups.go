@@ -1,7 +1,6 @@
 package account
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -79,7 +78,7 @@ func actionCrashGroupStatus(a *Service, ctx context.Context, tx pgx.Tx, v action
 	}
 	var change crashStatusChange
 	if json.Unmarshal(v.Value, &change.Status) != nil {
-		if httpjson.DecodeValue(bytes.NewReader(v.Value), &change) != nil || !textutil.ValidHex(change.Token, 16) {
+		if httpjson.DecodeBytes(v.Value, &change) != nil || !textutil.ValidHex(change.Token, 16) {
 			return actionResult{}, actionFail(400, "invalid_value")
 		}
 	}

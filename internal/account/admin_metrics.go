@@ -1,7 +1,6 @@
 package account
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -417,7 +416,7 @@ type incidentValue struct {
 
 func decodeIncidentValue(raw json.RawMessage) (incidentValue, error) {
 	var v incidentValue
-	if len(raw) == 0 || httpjson.DecodeValue(bytes.NewReader(raw), &v) != nil {
+	if len(raw) == 0 || httpjson.DecodeBytes(raw, &v) != nil {
 		return v, actionFail(400, "invalid_value")
 	}
 	if v.Title != nil && !resourceText(*v.Title, 1, 200, false) {

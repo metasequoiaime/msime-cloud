@@ -1,7 +1,6 @@
 package account
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -78,7 +77,7 @@ func parseNoticeInput(raw json.RawMessage, publish bool) (noticeInput, error) {
 	if len(raw) == 0 {
 		return in, actionFail(400, "invalid_value")
 	}
-	if httpjson.DecodeValue(bytes.NewReader(raw), &in) != nil {
+	if httpjson.DecodeBytes(raw, &in) != nil {
 		return in, actionFail(400, "invalid_value")
 	}
 	in.Channels = nonNilStrings(in.Channels)

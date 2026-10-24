@@ -322,7 +322,7 @@ func decodeEntries[T any](raw json.RawMessage) ([]T, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
-	if err := httpjson.DecodeValue(bytes.NewReader(raw), &entries); err != nil {
+	if err := httpjson.DecodeBytes(raw, &entries); err != nil {
 		return nil, err
 	}
 	return entries, nil

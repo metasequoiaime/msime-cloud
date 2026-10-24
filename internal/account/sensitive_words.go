@@ -1,7 +1,6 @@
 package account
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -480,7 +479,7 @@ type sensitiveWordInput struct {
 
 // decodeSensitiveValue 严格解析操作值，缺失值、未知字段和尾随数据均返回 400 invalid_value。
 func decodeSensitiveValue(raw json.RawMessage, out any) error {
-	if len(raw) == 0 || httpjson.DecodeValue(bytes.NewReader(raw), out) != nil {
+	if len(raw) == 0 || httpjson.DecodeBytes(raw, out) != nil {
 		return actionFail(400, "invalid_value")
 	}
 	return nil

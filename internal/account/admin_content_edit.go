@@ -1,7 +1,6 @@
 package account
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -54,7 +53,7 @@ func saveCommunityContent(section string, create bool) adminActionFunc {
 			return actionResult{}, actionFail(400, "invalid_value")
 		}
 		var input contentEdit
-		if httpjson.DecodeValue(bytes.NewReader(v.Value), &input) != nil {
+		if httpjson.DecodeBytes(v.Value, &input) != nil {
 			return actionResult{}, actionFail(400, "invalid_value")
 		}
 		input.Name, input.Description = strings.TrimSpace(input.Name), strings.TrimSpace(input.Description)

@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func TestQQRowCollection(t *testing.T) {
+func TestQueryRowCollection(t *testing.T) {
 	db := testStore(t)
 	cfg := db.pool.Config()
 	cfg.MaxConns = 1
@@ -45,7 +45,7 @@ func TestQQRowCollection(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer rows.Close()
-			got, err := collectQQRows(rows, func(row pgx.CollectableRow) (int, error) {
+			got, err := collectQueryRows(rows, func(row pgx.CollectableRow) (int, error) {
 				var value int
 				err := row.Scan(&value)
 				if err == nil && value == tc.rejectValue {

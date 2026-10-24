@@ -256,21 +256,17 @@ func moderationRequest(v actionRequest) (moderationTable, []string, error) {
 	return section, slices.Compact(ids), nil
 }
 
-// moderationUpdate runs one moderation UPDATE that ends in RETURNING id,name and collects the rows it changed.
-func moderationUpdate(ctx context.Context, tx pgx.Tx, query string, args ...any) (changed []moderatedItem, err error) {
+// moderationUpdate 执行以 RETURNING id,name 结尾的审核更新，并收集发生变更的记录。
+func moderationUpdate(ctx context.Context, tx pgx.Tx, query string, args ...any) ([]moderatedItem, error) {
 	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	for rows.Next() {
+	return collectQueryRows(rows, func(row pgx.CollectableRow) (moderatedItem, error) {
 		var item moderatedItem
-		if err = rows.Scan(&item.ID, &item.Name); err != nil {
-			return nil, err
-		}
-		changed = append(changed, item)
-	}
-	return changed, rows.Err()
+		err := row.Scan(&item.ID, &item.Name)
+		return item, err
+	})
 }
 
 // moderatedItem is one row a moderation action changed.

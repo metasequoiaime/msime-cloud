@@ -103,6 +103,12 @@ func TestTypingKeyUploadTimeBudget(t *testing.T) {
 	if !originalOK || !typingKeyValidationResult {
 		t.Fatal("有效上传未通过校验")
 	}
+	// Go 不给测试文件中的对照实现插桩，覆盖率模式下两边的计时条件不同。
+	// 仍执行真实函数和结果断言；原有耗时门槛由未启用覆盖率的竞态 CI 检查。
+	if mode := testing.CoverMode(); mode != "" {
+		t.Logf("覆盖率模式 %s 不比较插桩条件不同的耗时：原实现 %d ns/op，当前 %d ns/op", mode, original.NsPerOp(), current.NsPerOp())
+		return
+	}
 	if current.NsPerOp()*2 > original.NsPerOp() {
 		t.Fatalf("完整上传校验耗时 %d ns/op，原实现 %d ns/op，预算最多为原实现的一半", current.NsPerOp(), original.NsPerOp())
 	}

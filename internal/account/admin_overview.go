@@ -106,7 +106,10 @@ func canonicalPlatformSQL(column string) string {
 }
 
 // adminOverviewQuery 在初始化时构建固定总览查询；日期范围和服务配置按请求绑定。
-var adminOverviewQuery = `SELECT json_build_object(
+var adminOverviewQuery = `WITH session_versions AS (` + sessionVersionsSQL(`created_at>=now()-interval '7 days'`) + `),
+ session_versions_prev AS (` + sessionVersionsSQL(`created_at>=now()-interval '14 days' AND created_at<now()-interval '7 days'`) + `),
+ crash_device_platforms AS (` + crashDevicePlatformsSQL + `)
+SELECT json_build_object(
    'users',(SELECT count(*) FROM auth_users),
    'new_users_30d',(SELECT count(*) FROM auth_users WHERE created_at>=now()-interval '30 days'),
    'session_users',(SELECT count(DISTINCT user_id) FROM auth_sessions WHERE NOT revoked AND expires_at>now()),
@@ -176,11 +179,20 @@ var adminOverviewQuery = `SELECT json_build_object(
    'platform_active_7d',(SELECT COALESCE(json_object_agg(platform,devices ORDER BY devices DESC),'{}'::json) FROM (
      SELECT ` + overviewPlatform("platform") + ` AS platform,count(DISTINCT install_id) AS devices FROM admin_events WHERE kind='active' AND install_id IS NOT NULL AND created_at>=now()-interval '7 days' GROUP BY 1
    ) p),
-   'crash_free_rate',(SELECT round(count(*) FILTER (WHERE kind='session')::numeric/NULLIF(count(*),0),4) FROM admin_events WHERE kind IN ('session','session_crash') AND created_at>=now()-interval '7 days'),
-   'crash_free_rate_prev',(SELECT round(count(*) FILTER (WHERE kind='session')::numeric/NULLIF(count(*),0),4) FROM admin_events WHERE kind IN ('session','session_crash') AND created_at>=now()-interval '14 days' AND created_at<now()-interval '7 days'),
-   'crash_top',(SELECT json_build_object('platform',platform,'version',version,'crashes',crashes) FROM (
-     SELECT ` + overviewPlatform("platform") + ` AS platform,version,count(*) AS crashes FROM admin_events WHERE kind='session_crash' AND created_at>=now()-interval '7 days' GROUP BY 1,2 ORDER BY 3 DESC,1,2 LIMIT 1
-   ) c),
+   'crash_free_rate',(SELECT ` + crashFreeRateSQL + ` FROM session_versions),
+   'crash_free_rate_prev',(SELECT ` + crashFreeRateSQL + ` FROM session_versions_prev),
+   'crash_top',(SELECT json_build_object('platform',platform,'version',version,'crashes',crashed) FROM session_versions
+     WHERE crashed>0 AND NOT insufficient ORDER BY crashed DESC,platform,version LIMIT 1),
+   'crash_devices_7d',(SELECT COALESCE(sum(crashed),0) FROM crash_device_platforms),
+   'device_crash_rate',(SELECT round(sum(crashed)/NULLIF(sum(active),0),4)::float8 FROM crash_device_platforms),
+   'crash_platforms',(SELECT COALESCE(json_agg(json_build_object('platform',platform,'crash_free_rate',s.rate,
+       'sessions',COALESCE(s.sessions,0),'crashed_sessions',COALESCE(s.crashed,0),'versions',COALESCE(s.versions,0),'insufficient_versions',COALESCE(s.insufficient,0),
+       'active_devices_7d',COALESCE(d.active,0),'crash_devices_7d',COALESCE(d.crashed,0),'device_crash_rate',round(d.crashed::numeric/NULLIF(d.active,0),4)::float8) ORDER BY platform),'[]'::json)
+     FROM (SELECT platform,` + crashFreeRateSQL + ` AS rate,
+         sum(sessions) FILTER (WHERE NOT insufficient) AS sessions,sum(crashed) FILTER (WHERE NOT insufficient) AS crashed,
+         count(*) AS versions,count(*) FILTER (WHERE insufficient) AS insufficient
+       FROM session_versions WHERE sessions+crashed>0 GROUP BY platform) s
+     FULL JOIN crash_device_platforms d USING(platform)),
    'crash_group_latest',(SELECT json_build_object('signature',signature,'platform',` + overviewPlatform("platform") + `,'title',title) FROM admin_crash_groups WHERE status='open' AND first_seen>=now()-interval '7 days' ORDER BY first_seen DESC,signature LIMIT 1),
    'pending',json_build_object(
    'community',pending_community.total,
@@ -208,7 +220,7 @@ var adminOverviewQuery = `SELECT json_build_object(
 
 // adminOverview serves GET /api/overview?days=7|30 (default 30): totals plus a daily series ending today in UTC, and the console overview additions: active devices (from anonymous `active` telemetry), the crash-free session rate (from `session`/`session_crash` telemetry), pending work kept in the database, and the monitored services' state.
 //
-// Active devices count distinct install_id values of `active` events. A `session` event is one session that ended normally and a `session_crash` event one that ended in a crash, so the crash-free rate is session/(session+session_crash) over the last 7 days, null without sessions. crash_top is the platform and version with the most crashed sessions in those 7 days (null without any), the 拖累 line under the rate; crash_group_latest is the newest open crash group first seen in the last 7 days (null without any). The telemetry flags say whether any client reported those kinds in the last 60 days, so the console can show 客户端未上报 instead of zeros.
+// 活跃设备是 `active` 事件去重后的 install_id 数。一个 `session` 事件是一次正常结束的会话，一个 `session_crash` 事件是一次以崩溃结束的会话。crash_free_rate 是近 7 天 session/(session+session_crash)，按 admin_crash_free.go 的规则只合计会话数据充分的版本，没有这样的会话时为 null；crash_free_rate_prev 用同一规则计算再往前 7 天。crash_platforms 按平台给出同口径的无崩溃会话率、计入的会话数、有会话的版本数和其中数据不足的版本数，以及近 7 天活跃设备、崩溃设备和崩溃设备占比；crash_devices_7d、device_crash_rate 是全平台合计。crash_top 是会话数据充分的版本中近 7 天崩溃会话最多的平台和版本（没有时为 null），即比率下方的「拖累」；crash_group_latest 是近 7 天首次出现、仍未处理的最新崩溃分组（没有时为 null）。telemetry 两个标记表示近 60 天是否有客户端上报对应事件，后台据此显示「客户端未上报」而不是 0。
 //
 // The community counters leave out removed content, like GET /v1/community/stats. services lists admin.services; without them the upstreams the status probe derives from the deployment (DerivedServices), and without those the services the probe has recorded. services_configured says only whether admin.services is set.
 func (a *Service) adminOverview(w http.ResponseWriter, r *http.Request, _ string) {

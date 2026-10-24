@@ -884,15 +884,7 @@ func (a *Service) communityCandidateDownload(w http.ResponseWriter, r *http.Requ
 	write(w, 200, map[string]any{"id": r.PathValue("id"), "package_id": packageID, "manifest": string(manifest), "files": files})
 }
 func (a *Service) communityCandidateRate(w http.ResponseWriter, r *http.Request) {
-	a.rateCommunityItem(w, r, `WITH visible AS MATERIALIZED (
- SELECT id,owner_id FROM community_candidate_skins WHERE id=$1 AND visibility='public' AND moderation<>'removed' FOR SHARE
-), written AS (
- INSERT INTO community_candidate_skin_ratings(skin_id,user_id,stars)
- SELECT id,$2,$3 FROM visible WHERE owner_id<>$2
- ON CONFLICT(skin_id,user_id) DO UPDATE SET stars=excluded.stars
- RETURNING skin_id
-)
-SELECT EXISTS(SELECT 1 FROM written),EXISTS(SELECT 1 FROM visible WHERE owner_id=$2)`, "skin_not_found", "download_before_rating_or_own_skin")
+	a.rateCommunityItem(w, r, communityCandidateSkinRatingQuery, "skin_not_found", "download_before_rating_or_own_skin")
 }
 func (a *Service) communityCandidateDelete(w http.ResponseWriter, r *http.Request) {
 	a.deleteCommunityItem(w, r, "community_candidate_skins", "skin_not_found")

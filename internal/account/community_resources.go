@@ -444,13 +444,5 @@ SELECT EXISTS(SELECT 1 FROM eligible)`, r.PathValue("id"), p.UserID).Scan(&avail
 	write(w, 200, map[string]bool{"saved": input.Saved})
 }
 func (a *Service) resourceRate(w http.ResponseWriter, r *http.Request) {
-	a.rateCommunityItem(w, r, `WITH visible AS MATERIALIZED (
- SELECT id,owner_id FROM community_resources WHERE id=$1 AND moderation<>'removed' FOR SHARE
-), written AS (
- INSERT INTO community_resource_ratings(resource_id,user_id,stars)
- SELECT id,$2,$3 FROM visible WHERE owner_id<>$2
- ON CONFLICT(resource_id,user_id) DO UPDATE SET stars=excluded.stars
- RETURNING resource_id
-)
-SELECT EXISTS(SELECT 1 FROM written),EXISTS(SELECT 1 FROM visible WHERE owner_id=$2)`, "resource_not_found", "save_before_rating_or_own_resource")
+	a.rateCommunityItem(w, r, communityResourceRatingQuery, "resource_not_found", "save_before_rating_or_own_resource")
 }

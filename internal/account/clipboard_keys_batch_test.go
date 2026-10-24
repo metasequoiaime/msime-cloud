@@ -67,8 +67,8 @@ func TestClipboardKeysUsesOneSnapshotQuery(t *testing.T) {
 	trace.mu.Lock()
 	queries := trace.seen
 	trace.mu.Unlock()
-	if queries != 1 {
-		t.Fatalf("剪贴板密钥快照读取使用了 %d 次数据库调用，期望 1 次", queries)
+	if queries != 4 {
+		t.Fatalf("剪贴板密钥快照读取使用了 %d 次数据库调用，期望 4 次（开始事务、用户行锁、快照读取和提交）", queries)
 	}
 	if n := clipboardTestCount(t, db, `SELECT count(*) FROM user_clipboard_devices WHERE user_id=$1 AND device_id=$2 AND last_seen>'2020-01-01'`, user, device); n != 1 {
 		t.Fatal("读取密钥未刷新请求设备的访问时间", n)

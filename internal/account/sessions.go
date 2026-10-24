@@ -1,14 +1,12 @@
 package account
 
 import (
-	"errors"
 	"net/http"
 	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/mileusna/useragent"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
@@ -105,7 +103,13 @@ func (a *Service) sessions(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rows, err := a.store.pool.Query(r.Context(), `SELECT id,user_agent,created_at,greatest(created_at,access_expires-interval '15 minutes') AS last_active FROM auth_sessions
+	tx, err := a.store.userReadTransaction(r.Context(), p.UserID)
+	if err != nil {
+		a.error(w, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	rows, err := tx.Query(r.Context(), `SELECT id,user_agent,created_at,greatest(created_at,access_expires-interval '15 minutes') AS last_active FROM auth_sessions
  WHERE user_id=$1 AND NOT revoked AND expires_at>now() ORDER BY last_active DESC,id LIMIT $2`, p.UserID, maxListedSessions)
 	if err != nil {
 		a.error(w, err)
@@ -129,15 +133,9 @@ func (a *Service) sessions(w http.ResponseWriter, r *http.Request) {
 		a.error(w, err)
 		return
 	}
-	if len(out) == 0 {
-		var present int
-		if err = a.store.pool.QueryRow(r.Context(), "SELECT 1 FROM auth_users WHERE id=$1", p.UserID).Scan(&present); errors.Is(err, pgx.ErrNoRows) {
-			a.error(w, errMissingUser)
-			return
-		} else if err != nil {
-			a.error(w, err)
-			return
-		}
+	if err := tx.Commit(r.Context()); err != nil {
+		a.error(w, err)
+		return
 	}
 	write(w, 200, map[string]any{"sessions": out})
 }

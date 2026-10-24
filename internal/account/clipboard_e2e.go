@@ -154,8 +154,13 @@ func validClipboardKeyChange(c ClipboardKeyChange) bool {
 
 // ClipboardKeys 用一条语句返回同一快照中的当前密钥、给 device 的封装和全部设备，并刷新该设备的访问时间。
 func (s *Store) ClipboardKeys(ctx context.Context, user, device string) (ClipboardKeys, error) {
+	tx, err := s.userReadTransaction(ctx, user)
+	if err != nil {
+		return ClipboardKeys{}, err
+	}
+	defer tx.Rollback(ctx)
 	v := ClipboardKeys{Devices: []ClipboardDevice{}}
-	rows, err := s.pool.Query(ctx, `WITH seen AS (
+	rows, err := tx.Query(ctx, `WITH seen AS (
  UPDATE user_clipboard_devices SET last_seen=now() WHERE user_id=$1 AND device_id=$2
 )
 SELECT s.enabled,s.key_id,requested.wrap,d.device_id,COALESCE(d.public_key,''),COALESCE(d.name,''),d.created_at,w.device_id IS NOT NULL
@@ -188,6 +193,9 @@ ORDER BY d.created_at,d.device_id`, user, device)
 	}
 	if !seen {
 		return ClipboardKeys{}, errMissingUser
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return v, err
 	}
 	return v, nil
 }

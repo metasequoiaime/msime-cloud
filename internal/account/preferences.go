@@ -89,16 +89,23 @@ func validPreference(key string, raw json.RawMessage) bool {
 	return false
 }
 func (s *Store) Preferences(ctx context.Context, user string) (Preferences, error) {
+	tx, err := s.userReadTransaction(ctx, user)
+	if err != nil {
+		return Preferences{}, err
+	}
+	defer tx.Rollback(ctx)
 	out := Preferences{Settings: map[string]json.RawMessage{}}
 	var raw []byte
-	e := s.pool.QueryRow(ctx, `SELECT revision,settings FROM user_preferences WHERE user_id=$1`, user).Scan(&out.Revision, &raw)
-	if errors.Is(e, pgx.ErrNoRows) {
-		return out, nil
+	err = tx.QueryRow(ctx, `SELECT revision,settings FROM user_preferences WHERE user_id=$1`, user).Scan(&out.Revision, &raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = nil
+	} else if err == nil {
+		err = json.Unmarshal(raw, &out.Settings)
 	}
-	if e == nil {
-		e = json.Unmarshal(raw, &out.Settings)
+	if err != nil {
+		return out, err
 	}
-	return out, e
+	return out, tx.Commit(ctx)
 }
 func (s *Store) PutPreferences(ctx context.Context, user string, expected int64, settings map[string]json.RawMessage) (Preferences, error) {
 	tx, e := s.userDataTransaction(ctx, user)
@@ -124,12 +131,6 @@ func (a *Service) preferences(w http.ResponseWriter, r *http.Request) {
 		if e != nil {
 			a.error(w, e)
 			return
-		}
-		if out.Revision == 0 && len(out.Settings) == 0 {
-			if err := a.store.requireUserExists(r.Context(), p.UserID); err != nil {
-				a.error(w, err)
-				return
-			}
 		}
 		write(w, 200, out)
 		return

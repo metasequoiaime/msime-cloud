@@ -324,7 +324,13 @@ func (a *Service) diagnosticsGet(w http.ResponseWriter, r *http.Request) {
 		TokenHint string    `json:"token_hint"`
 	}
 	var rawAccesses []byte
-	err := a.store.pool.QueryRow(r.Context(), `SELECT d.id,d.created_at,d.expires_at,d.bytes,d.sections,d.token_hint,
+	tx, err := a.store.userReadTransaction(r.Context(), p.UserID)
+	if err != nil {
+		a.error(w, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	err = tx.QueryRow(r.Context(), `SELECT d.id,d.created_at,d.expires_at,d.bytes,d.sections,d.token_hint,
 COALESCE((SELECT jsonb_agg(jsonb_build_object(
 	'at',x.at,'tool',x.tool,'arguments',x.arguments,'result_count',x.result_count,'bytes',x.bytes
 ) ORDER BY x.at DESC,x.id DESC) FROM (
@@ -333,8 +339,8 @@ COALESCE((SELECT jsonb_agg(jsonb_build_object(
 ) x),'[]'::jsonb)
 FROM diagnostic_snapshots d WHERE d.user_id=$1 AND d.expires_at>now()`, p.UserID, diagnosticAccessListLimit).Scan(&snapshot.ID, &snapshot.CreatedAt, &snapshot.ExpiresAt, &snapshot.Bytes, &snapshot.Sections, &snapshot.TokenHint, &rawAccesses)
 	if errors.Is(err, pgx.ErrNoRows) {
-		if existsErr := a.store.requireUserExists(r.Context(), p.UserID); existsErr != nil {
-			a.error(w, existsErr)
+		if err := tx.Commit(r.Context()); err != nil {
+			a.error(w, err)
 			return
 		}
 		write(w, 200, map[string]any{"snapshot": nil, "accesses": []diagnosticAccess{}})
@@ -346,6 +352,10 @@ FROM diagnostic_snapshots d WHERE d.user_id=$1 AND d.expires_at>now()`, p.UserID
 	}
 	var accesses []diagnosticAccess
 	if err = json.Unmarshal(rawAccesses, &accesses); err != nil {
+		a.error(w, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
 		a.error(w, err)
 		return
 	}

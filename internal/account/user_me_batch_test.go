@@ -66,7 +66,7 @@ func TestMeBatchesUserAndIdentityReads(t *testing.T) {
 	trace.mu.Lock()
 	batches, batchQueries, queries := trace.batches, trace.batchQueries, trace.queries
 	trace.mu.Unlock()
-	if batches != 1 || batchQueries != 2 || queries != 0 {
-		t.Fatalf("资料读取应使用 1 次批量请求和 2 条批量语句，实际为批量 %d/%d、普通查询 %d", batches, batchQueries, queries)
+	if batches != 1 || batchQueries != 2 || queries != 3 {
+		t.Fatalf("资料读取应使用 1 次批量请求和 2 条批量语句，另有事务开始、用户行锁和提交 3 条语句，实际为批量 %d/%d、普通查询 %d", batches, batchQueries, queries)
 	}
 }

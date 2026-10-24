@@ -61,7 +61,7 @@ func TestDiagnosticsGetUsesOneDataQuery(t *testing.T) {
 	queries := trace.queries
 	sql := append([]string(nil), trace.sql...)
 	trace.mu.Unlock()
-	if queries != 3 {
-		t.Fatalf("诊断快照读取使用了 %d 条数据库语句，期望路由限流、鉴权和数据各 1 条：%v", queries, sql)
+	if queries != 6 {
+		t.Fatalf("诊断快照读取使用了 %d 条数据库语句，期望路由限流、鉴权、开始事务、用户行锁、数据读取和提交各 1 条：%v", queries, sql)
 	}
 }

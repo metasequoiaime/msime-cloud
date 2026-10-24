@@ -48,20 +48,32 @@ func (s *Store) SetCandidatePosition(ctx context.Context, user string, expected 
 	return revision, tx.Commit(ctx)
 }
 func (s *Store) CandidatePositions(ctx context.Context, user, contextKey string, offset, limit int) ([]CandidatePosition, bool, error) {
+	tx, err := s.userReadTransaction(ctx, user)
+	if err != nil {
+		return nil, false, err
+	}
+	defer tx.Rollback(ctx)
 	// 有无上下文使用各自固定条件，让通用计划也能按已有联合索引定位。
 	condition := "$2::text=''"
 	if contextKey != "" {
 		condition = "context=$2"
 	}
-	rows, err := s.pool.Query(ctx, `SELECT context,code,word,position FROM user_candidate_positions WHERE user_id=$1 AND `+condition+` ORDER BY context,position LIMIT $3 OFFSET $4`, user, contextKey, limit+1, offset)
+	rows, err := tx.Query(ctx, `SELECT context,code,word,position FROM user_candidate_positions WHERE user_id=$1 AND `+condition+` ORDER BY context,position LIMIT $3 OFFSET $4`, user, contextKey, limit+1, offset)
 	if err != nil {
 		return nil, false, err
 	}
-	return collectDictionaryPage(ctx, s, user, limit, rows, func(row pgx.CollectableRow) (CandidatePosition, error) {
+	items, more, err := collectDictionaryPage(ctx, tx, user, limit, rows, func(row pgx.CollectableRow) (CandidatePosition, error) {
 		var p CandidatePosition
 		err := row.Scan(&p.Context, &p.Code, &p.Word, &p.Position)
 		return p, err
 	})
+	if err != nil {
+		return nil, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, false, err
+	}
+	return items, more, nil
 }
 func validPositionText(s string, max int) bool {
 	return s != "" && len(s) <= max && utf8.ValidString(s) && !strings.ContainsAny(s, "\x00\r\n\t")

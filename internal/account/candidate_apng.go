@@ -72,7 +72,8 @@ func parseCandidateAPNG(data []byte) (*candidateAPNG, string) {
 		seenACTL, seenEnd       bool
 		defaultFrame            bool
 		sequence                uint32
-		current                 *apngFrame
+		partCounts              [maxCandidateAnimationFrames]int
+		idatCount, totalParts   int
 		idatStarted, idatClosed bool
 	)
 	pos := len(pngSignature)
@@ -136,7 +137,7 @@ func parseCandidateAPNG(data []byte) (*candidateAPNG, string) {
 				return nil, invalid
 			}
 			sequence++
-			if current != nil && len(current.data) == 0 || len(a.frames) == int(declared) {
+			if len(a.frames) > 0 && partCounts[len(a.frames)-1] == 0 || len(a.frames) == int(declared) {
 				// 上一帧没有数据，或帧数超过 acTL 的声明。
 				return nil, invalid
 			}
@@ -154,23 +155,24 @@ func parseCandidateAPNG(data []byte) (*candidateAPNG, string) {
 				defaultFrame = true
 			}
 			a.frames = append(a.frames, apngFrame{width: width, height: height})
-			current = &a.frames[len(a.frames)-1]
 		case "IDAT":
 			if !seenACTL || idatClosed {
 				// IDAT 必须连续；acTL 也必须在它之前，否则 candidateAnimatedPNG 不会把文件交到这里。
 				return nil, invalid
 			}
 			idatStarted = true
-			a.idat = append(a.idat, body)
+			idatCount++
+			totalParts++
 			if defaultFrame {
-				current.data = append(current.data, body)
+				partCounts[len(a.frames)-1]++
 			}
 		case "fdAT":
-			if !idatClosed || current == nil || defaultFrame && len(a.frames) == 1 || len(body) <= 4 || binary.BigEndian.Uint32(body) != sequence {
+			if !idatClosed || len(a.frames) == 0 || defaultFrame && len(a.frames) == 1 || len(body) <= 4 || binary.BigEndian.Uint32(body) != sequence {
 				return nil, invalid
 			}
 			sequence++
-			current.data = append(current.data, body[4:])
+			partCounts[len(a.frames)-1]++
+			totalParts++
 		case "IEND":
 			if len(body) != 0 || !idatStarted {
 				return nil, invalid
@@ -186,19 +188,46 @@ func parseCandidateAPNG(data []byte) (*candidateAPNG, string) {
 			cleanSize += len(raw)
 		}
 	}
-	if len(a.frames) != int(declared) || current == nil || len(current.data) == 0 {
+	if len(a.frames) != int(declared) || len(a.frames) == 0 || partCounts[len(a.frames)-1] == 0 {
 		return nil, invalid
 	}
 	a.images = int(declared)
 	if !defaultFrame {
 		a.images++
 	}
+	// 按唯一数据段的数量一次分配描述符；默认图属于动画时共用同一段，避免逐块扩容和重复保存。
+	parts := make([][]byte, totalParts)
+	a.idat = parts[:idatCount:idatCount]
+	offset := idatCount
+	for i := range a.frames {
+		if i == 0 && defaultFrame {
+			a.frames[i].data = a.idat
+			continue
+		}
+		end := offset + partCounts[i]
+		a.frames[i].data = parts[offset:end:end]
+		offset = end
+	}
 	// 校验通过后按保留块的实际长度分配，避免为元数据和 IEND 后的内容预留缓冲。
 	clean := make([]byte, len(pngSignature), cleanSize)
 	copy(clean, pngSignature)
+	frameIndex, partIndex, idatIndex := -1, 0, 0
 	for start := len(pngSignature); start < pos; {
 		end := start + 12 + int(binary.BigEndian.Uint32(data[start:]))
-		if candidateAPNGKeep[string(data[start+4:start+8])] {
+		kind := string(data[start+4 : start+8])
+		// 复用已有的清理遍历填充数据段，不增加第三次块扫描。
+		switch kind {
+		case "fcTL":
+			frameIndex++
+			partIndex = 0
+		case "IDAT":
+			a.idat[idatIndex] = data[start+8 : end-4]
+			idatIndex++
+		case "fdAT":
+			a.frames[frameIndex].data[partIndex] = data[start+12 : end-4]
+			partIndex++
+		}
+		if candidateAPNGKeep[kind] {
 			clean = append(clean, data[start:end]...)
 		}
 		start = end

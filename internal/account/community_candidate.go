@@ -861,7 +861,13 @@ func (a *Service) communityCandidateSync(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	rows, e := a.store.pool.Query(r.Context(), `SELECT id,package_id,request_sha256,visibility,updated_at FROM community_candidate_skins s WHERE owner_id=$1`+candidateResourceFilter(extended)+` ORDER BY updated_at DESC,id`, p.UserID)
+	tx, e := a.store.userReadTransaction(r.Context(), p.UserID)
+	if e != nil {
+		a.error(w, e)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	rows, e := tx.Query(r.Context(), `SELECT id,package_id,request_sha256,visibility,updated_at FROM community_candidate_skins s WHERE owner_id=$1`+candidateResourceFilter(extended)+` ORDER BY updated_at DESC,id`, p.UserID)
 	if e != nil {
 		a.error(w, e)
 		return
@@ -887,11 +893,9 @@ func (a *Service) communityCandidateSync(w http.ResponseWriter, r *http.Request)
 		a.error(w, e)
 		return
 	}
-	if len(items) == 0 {
-		if err := a.store.requireUserExists(r.Context(), p.UserID); err != nil {
-			a.error(w, err)
-			return
-		}
+	if e = tx.Commit(r.Context()); e != nil {
+		a.error(w, e)
+		return
 	}
 	write(w, 200, map[string]any{"skins": items})
 }

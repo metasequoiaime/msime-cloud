@@ -87,14 +87,14 @@ func (s *Server) translateTencentUpstream(w http.ResponseWriter, r *http.Request
 	signTencent(req, payload, e, time.Now())
 	// 只计入本次实际发送的缓存未命中分段，调用方验证后结算本组。
 	meterUsage(r, textChars(texts))
-	body, err := s.doUpstream(req)
 	var result struct {
 		Response struct {
 			TargetTextList []string
 			Error          json.RawMessage
 		}
 	}
-	if err != nil || json.Unmarshal(body, &result) != nil || (len(result.Response.Error) != 0 && string(result.Response.Error) != "null") || len(result.Response.TargetTextList) != len(texts) {
+	decoded, err := s.doUpstreamJSON(req, &result)
+	if err != nil || !decoded || (len(result.Response.Error) != 0 && string(result.Response.Error) != "null") || len(result.Response.TargetTextList) != len(texts) {
 		upstreamError(w, r, err)
 		return nil, false
 	}

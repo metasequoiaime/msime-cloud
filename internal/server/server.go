@@ -510,17 +510,18 @@ func (s *Server) doUpstreamJSON(req *http.Request, dst any) (bool, error) {
 		}
 		n, readErr := resp.Body.Read(body[len(body):cap(body)])
 		body = body[:len(body)+n]
+		// 读取错误优先于同次读取发现的超限，保留超时、取消及传输错误链。
+		if readErr != nil && readErr != io.EOF {
+			err = upstreamTransportError{cause: readErr}
+			captureMeter(req.Context(), started, err)
+			return false, err
+		}
 		if len(body) > contract.UpstreamResponseBytes {
 			err = errors.New("invalid upstream response")
 			captureMeter(req.Context(), started, err)
 			return false, err
 		}
-		if readErr != nil {
-			if readErr != io.EOF {
-				err = upstreamTransportError{cause: readErr}
-				captureMeter(req.Context(), started, err)
-				return false, err
-			}
+		if readErr == io.EOF {
 			break
 		}
 	}

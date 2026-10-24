@@ -16494,7 +16494,7 @@
             "description": "声明扩展图片支持；默认过滤不兼容包，详情和下载返回 404。先确认响应头 X-MSIME-Candidate-Resources: canvas-v1，旧部署可能忽略该参数。"
           }
         ],
-        "description": "公开作品无需登录，返回原样清单和重新编码后的图片；仅有效登录会话计入按账号去重的下载人数，匿名下载不计数。私有或已下架作品仅作者可下载。 详见 docs/skin-community.md。",
+        "description": "公开作品无需登录，返回原样清单和重新编码后的图片；仅有效登录会话计入按账号去重的下载人数，匿名下载不计数。私有或已下架作品仅作者可下载。每副本最多同时发送 8 个包，名额覆盖认证、读取和响应写入；排队超时返回 503 candidate_skin_busy，不加载包体或计入下载人数。 详见 docs/skin-community.md。",
         "responses": {
           "200": {
             "description": "成功",

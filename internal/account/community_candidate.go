@@ -111,26 +111,6 @@ type CommunityCandidateSkin struct {
 	saves int
 }
 
-// candidateSkinCategories 是图库分类的全部取值，候选窗皮肤与社区键盘皮肤共用，与 community_candidate_skin_schema.sql 的 community_candidate_skins_category_check、community_schema.sql 的 community_skins_category_check 一致。分类只是发布元数据，不属于 skin.toml 或键盘皮肤的 design；缺省为 other。
-var candidateSkinCategories = []string{"nature", "guofeng", "acg", "cute", "food", "tech", "minimal", "other"}
-
-const defaultCandidateSkinCategory = "other"
-
-func validCandidateSkinCategory(category string) bool {
-	return slices.Contains(candidateSkinCategories, category)
-}
-
-// candidateIncludeCategory 读取 include=category；ok 为 false 表示 include 带了其他非空值。
-func candidateIncludeCategory(query url.Values) (category bool, ok bool) {
-	switch query.Get("include") {
-	case "":
-		return false, true
-	case "category":
-		return true, true
-	}
-	return false, false
-}
-
 // candidateItem 按客户端的声明裁剪条目：没有 sync 时去掉同步字段，没有 include=category 时去掉分类，未声明的响应因此与加入这些字段之前逐字节相同。
 func candidateItem(v CommunityCandidateSkin, sync, category bool) CommunityCandidateSkin {
 	if !sync {
@@ -612,11 +592,8 @@ func (a *Service) communityCandidatePublish(w http.ResponseWriter, r *http.Reque
 		writeError(w, 400, "invalid_visibility")
 		return
 	}
-	category := defaultCandidateSkinCategory
-	if input.Category != nil {
-		category = *input.Category
-	}
-	if !validCandidateSkinCategory(category) {
+	category, ok := communityPublishSkinCategory(input.Category)
+	if !ok {
 		writeError(w, 400, "invalid_category")
 		return
 	}

@@ -2,6 +2,8 @@
 
 用户体系使用 PostgreSQL，支持 Apple、Google、微信网站扫码登录，以及阿里云短信、Lark SMTP 邮箱验证码登录。未配置的提供方保持关闭，`GET /v1/auth/providers` 返回实际状态。已有设备令牌可继续调用在线输入接口，但不能访问用户资料。
 
+账号接口的 `GET` 路由同时接受 `HEAD`：沿用对应 `GET` 的鉴权、限流、参数校验和读取分支，由 HTTP 服务省略响应正文；请求正文不会触发同一路径的写入、删除、换钥或绑定操作。
+
 ## 配置与迁移
 
 参考 `config.example.json` 的 `auth` 配置，设置 `enabled: true`，通过环境变量提供数据库 URL 和至少 32 字节随机 `MSIME_AUTH_PEPPER`。密钥应存于 Vault，不提交到源码。

@@ -141,15 +141,12 @@ FROM (SELECT count(DISTINCT target) FILTER (WHERE action LIKE 'dict\_pr\_%') AS 
 		return row.Scan(&stats.DictPRsMonth, &stats.CommunityMonth, &stats.IssuesMonth, &stats.AvgHandleHours)
 	})
 	batch.Queue(`SELECT id,action,target,detail,created_at FROM admin_audit WHERE `+adminActorClause("actor", access)+` ORDER BY created_at DESC,id DESC LIMIT 6`, arg).Query(func(rows pgx.Rows) error {
-		defer rows.Close()
-		for rows.Next() {
-			var e adminAuditEntry
-			if scanErr := rows.Scan(&e.ID, &e.Action, &e.Target, &e.Detail, &e.CreatedAt); scanErr != nil {
-				return scanErr
-			}
+		var e adminAuditEntry
+		_, err := pgx.ForEachRow(rows, []any{&e.ID, &e.Action, &e.Target, &e.Detail, &e.CreatedAt}, func() error {
 			recent = append(recent, e)
-		}
-		return rows.Err()
+			return nil
+		})
+		return err
 	})
 	if access.Email != "" {
 		if hashes := adminCurrentSessionHashes(r); len(hashes) > 0 {
@@ -171,18 +168,15 @@ ORDER BY c.ord LIMIT 1`, hashes, access.Email).QueryRow(func(row pgx.Row) error 
 			return err
 		})
 		batch.Queue(`SELECT id,created_at,last_seen_at,user_agent FROM admin_sessions WHERE email=$1 AND expires_at>now() ORDER BY last_seen_at DESC,id`, access.Email).Query(func(rows pgx.Rows) error {
-			defer rows.Close()
-			for rows.Next() {
-				var s adminMeSession
-				var agent string
-				if err := rows.Scan(&s.ID, &s.CreatedAt, &s.LastSeenAt, &agent); err != nil {
-					return err
-				}
-				s.Device = adminDevice(agent)
-				s.Current = s.ID == current
-				sessions = append(sessions, s)
-			}
-			return rows.Err()
+			var session adminMeSession
+			var agent string
+			_, err := pgx.ForEachRow(rows, []any{&session.ID, &session.CreatedAt, &session.LastSeenAt, &agent}, func() error {
+				session.Device = adminDevice(agent)
+				session.Current = session.ID == current
+				sessions = append(sessions, session)
+				return nil
+			})
+			return err
 		})
 		batch.Queue(`SELECT last4,created_at,expires_at FROM admin_tokens WHERE email=$1 AND expires_at>now() ORDER BY created_at DESC LIMIT 1`, access.Email).QueryRow(func(row pgx.Row) error {
 			var token adminTokenInfo

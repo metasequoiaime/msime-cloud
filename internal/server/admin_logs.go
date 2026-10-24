@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -21,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
+	"github.com/metasequoiaime/MSIME-Backend/internal/boundedio"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpquery"
 )
 
@@ -334,14 +334,6 @@ func (s *Server) lokiGet(ctx context.Context, path string, params url.Values, v 
 		body = new(bytes.Buffer)
 	} else {
 		body = buffer.(*bytes.Buffer)
-		body.Reset()
-	}
-	if resp.ContentLength >= bytes.MinRead && resp.ContentLength <= maxLokiResponseBytes {
-		// 声明长度只作分配提示；复用已有容量，并预留 EOF 探测空间。
-		capacity := int(resp.ContentLength) + bytes.MinRead
-		if body.Cap() < capacity {
-			body = bytes.NewBuffer(make([]byte, 0, capacity))
-		}
 	}
 	defer func() {
 		if body.Cap() <= maxLokiPooledResponseBytes {
@@ -349,7 +341,7 @@ func (s *Server) lokiGet(ctx context.Context, path string, params url.Values, v 
 			lokiResponseBufferPool.Put(body)
 		}
 	}()
-	if _, err := body.ReadFrom(io.LimitReader(resp.Body, maxLokiResponseBytes+1)); err != nil {
+	if err := boundedio.ReadBuffer(body, resp.Body, resp.ContentLength, maxLokiResponseBytes); err != nil {
 		return errLoki{"read failed"}
 	}
 	if body.Len() > maxLokiResponseBytes {

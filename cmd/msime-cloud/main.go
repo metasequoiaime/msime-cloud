@@ -534,16 +534,16 @@ func (c cli) doOnce(server string, r request, token string) (*http.Response, err
 		return nil, usageError{err.Error()}
 	}
 	target := strings.TrimRight(server, "/") + r.path
-	if len(r.query) > 0 {
-		separator := "?"
-		if strings.Contains(target, "?") {
-			separator = "&"
-		}
-		target += separator + r.query.Encode()
-	}
 	req, err := http.NewRequest(r.method, target, bytes.NewReader(r.body))
 	if err != nil {
 		return nil, usageError{err.Error()}
+	}
+	if len(r.query) > 0 {
+		// 在解析后的查询字段中追加参数，避免把 -q 拼到不会发送的片段中。
+		if req.URL.RawQuery != "" {
+			req.URL.RawQuery += "&"
+		}
+		req.URL.RawQuery += r.query.Encode()
 	}
 	if r.contentType != "" {
 		req.Header.Set("Content-Type", r.contentType)

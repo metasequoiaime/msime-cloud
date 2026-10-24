@@ -721,6 +721,31 @@ func TestEncodedSeparatorDoesNotSelectWebSocket(t *testing.T) {
 	}
 }
 
+func TestCallQueryPrecedesURLFragment(t *testing.T) {
+	for _, tc := range []struct{ path, wantURI string }{
+		{"/v1/notices#ignored", "/v1/notices?limit=2"},
+		{"/v1/notices?limit=1#ignored", "/v1/notices?limit=1&limit=2"},
+		{"/v1/notices#ignored?x=1", "/v1/notices?limit=2"},
+		{"/v1/items/has%23hash", "/v1/items/has%23hash?limit=2"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.RequestURI() != tc.wantURI {
+					t.Errorf("查询参数没有正确发送：uri=%s，期望 %s", r.URL.RequestURI(), tc.wantURI)
+				}
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			t.Cleanup(server.Close)
+			c := cli{client: server.Client()}
+			response, err := c.doOnce(server.URL, request{method: http.MethodGet, path: tc.path, query: url.Values{"limit": {"2"}}}, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			response.Body.Close()
+		})
+	}
+}
+
 func TestAdminRoutesComeFromTheAdminSiteTables(t *testing.T) {
 	h := newHarness(t)
 	_, out, _ := h.run("", "routes", "/api/")

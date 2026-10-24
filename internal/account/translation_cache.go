@@ -1,6 +1,10 @@
 package account
 
-import "context"
+import (
+	"context"
+
+	"github.com/jackc/pgx/v5"
+)
 
 // 共享译文缓存。这张表跟其它 user_* 表不是一个性质:它按内容寻址,不带 user_id,一个用户查过的词
 // 下一个用户查同一个词就直接命中。长度和字符集的闸在服务端(internal/server/translation_cache.go),
@@ -27,16 +31,11 @@ UPDATE translation_cache c SET hit_count=c.hit_count+1,used_at=now()
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := map[string]string{}
-	for rows.Next() {
+	return collectRowMap(rows, func(row pgx.CollectableRow) (string, string, error) {
 		var from, to string
-		if err = rows.Scan(&from, &to); err != nil {
-			return nil, err
-		}
-		out[from] = to
-	}
-	return out, rows.Err()
+		err := row.Scan(&from, &to)
+		return from, to, err
+	})
 }
 
 // TranslationCacheStore 写入刚从上游拿回来的译文。sources 和 targets 一一对应,由调用方保证等长。

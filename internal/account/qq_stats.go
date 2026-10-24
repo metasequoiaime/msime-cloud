@@ -3,6 +3,8 @@ package account
 import (
 	"context"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // IncrQQOutcome 给 day 这天的 outcome 计数加一。
@@ -17,15 +19,10 @@ func (a *Service) QQOutcomes(ctx context.Context, from, to time.Time) (map[strin
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := map[string]int{}
-	for rows.Next() {
+	return collectRowMap(rows, func(row pgx.CollectableRow) (string, int, error) {
 		var outcome string
 		var n int
-		if err := rows.Scan(&outcome, &n); err != nil {
-			return nil, err
-		}
-		out[outcome] = n
-	}
-	return out, rows.Err()
+		err := row.Scan(&outcome, &n)
+		return outcome, n, err
+	})
 }

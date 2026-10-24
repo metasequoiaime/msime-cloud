@@ -511,9 +511,8 @@ func (a *Service) communityCandidateList(w http.ResponseWriter, r *http.Request)
 		writeError(w, 400, code)
 		return
 	}
-	viewer := a.communityViewer(r)
-	if scope != "" && viewer == "" {
-		writeError(w, 401, "user_session_required")
+	viewer, ok := a.communityListViewer(w, r, scope, "user_session_required")
+	if !ok {
 		return
 	}
 	// 私有作品只出现在作者自己、且声明了 fields=sync 的 mine 或 saved 列表里：已发布的客户端拒绝 license assets 为空的条目，而私有作品可以为空，一条就会让整页解析失败。
@@ -546,11 +545,8 @@ func (a *Service) communityCandidateList(w http.ResponseWriter, r *http.Request)
 		a.error(w, e)
 		return
 	}
-	if scope != "" && len(items) == 0 {
-		if err := a.store.requireUserExists(r.Context(), viewer); err != nil {
-			a.error(w, err)
-			return
-		}
+	if !a.communityListUserExists(w, r, scope, viewer, len(items)) {
+		return
 	}
 	writeCommunityPage(w, "skins", items)
 }

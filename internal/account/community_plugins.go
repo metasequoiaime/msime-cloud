@@ -235,9 +235,8 @@ func (a *Service) communityPluginList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_fields")
 		return
 	}
-	viewer := a.communityViewer(r)
-	if scope != "" && viewer == "" {
-		writeError(w, 401, "user_session_required")
+	viewer, ok := a.communityListViewer(w, r, scope, "user_session_required")
+	if !ok {
 		return
 	}
 	join, order := communitySavedScope(scope, "community_plugin_saves", "pack_id", "p")
@@ -268,11 +267,8 @@ func (a *Service) communityPluginList(w http.ResponseWriter, r *http.Request) {
 		a.error(w, e)
 		return
 	}
-	if scope != "" && len(items) == 0 {
-		if err := a.store.requireUserExists(r.Context(), viewer); err != nil {
-			a.error(w, err)
-			return
-		}
+	if !a.communityListUserExists(w, r, scope, viewer, len(items)) {
+		return
 	}
 	writeCommunityPage(w, "plugins", items)
 }

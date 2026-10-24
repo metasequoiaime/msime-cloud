@@ -191,9 +191,8 @@ func (a *Service) resourceList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_fields")
 		return
 	}
-	viewer := a.communityViewer(r)
-	if scope != "" && viewer == "" {
-		writeError(w, 401, "login_required")
+	viewer, ok := a.communityListViewer(w, r, scope, "login_required")
+	if !ok {
 		return
 	}
 	scopeCondition := communityMineCondition(scope, "s", "$4")
@@ -226,11 +225,8 @@ func (a *Service) resourceList(w http.ResponseWriter, r *http.Request) {
 		a.error(w, err)
 		return
 	}
-	if scope != "" && len(items) == 0 {
-		if err := a.store.requireUserExists(r.Context(), viewer); err != nil {
-			a.error(w, err)
-			return
-		}
+	if !a.communityListUserExists(w, r, scope, viewer, len(items)) {
+		return
 	}
 	writeCommunityPage(w, "items", items)
 }

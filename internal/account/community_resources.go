@@ -210,25 +210,11 @@ func (a *Service) resourceList(w http.ResponseWriter, r *http.Request) {
 		a.error(w, err)
 		return
 	}
-	defer rows.Close()
-	items := []CommunityResource{}
-	for rows.Next() {
-		v, e := scanResource(rows)
-		if e != nil {
-			a.error(w, e)
-			return
-		}
+	writeCommunityRows(a, w, r, scope, viewer, "items", rows, func(row pgx.CollectableRow) (CommunityResource, error) {
+		v, err := scanResource(row)
 		v.Moderation = ownerModeration(fields, v.moderation)
-		items = append(items, v)
-	}
-	if err = rows.Err(); err != nil {
-		a.error(w, err)
-		return
-	}
-	if !a.communityListUserExists(w, r, scope, viewer, len(items)) {
-		return
-	}
-	writeCommunityPage(w, "items", items)
+		return v, err
+	})
 }
 func (a *Service) resourceDetail(w http.ResponseWriter, r *http.Request) {
 	fields, ok := communityFields(r.URL.Query(), "moderation")

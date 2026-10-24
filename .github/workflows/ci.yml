@@ -58,6 +58,7 @@ jobs:
       - run: python3 scripts/generate_openapi.py --check
       - run: python3 -m unittest discover -s scripts/release -p "test_*.py"
       - run: python3 -m unittest discover -s scripts -p "test_qq_command_panel.py"
+      - run: python3 -m unittest discover -s scripts -p "test_native_trigger.py"
       # 测试内的回归基准按 50 毫秒校准，减少每个断言默认 1 秒的开销；正式耗时基准单独运行。
       - run: go test -race -benchtime=50ms ./...
       - run: go vet ./...
@@ -97,7 +98,7 @@ jobs:
       - run: go test -race -benchtime=50ms -count=1 -p 1 -timeout=20m -coverpkg=./internal/account,./internal/server -coverprofile=database.cover ./internal/account ./internal/server
       - run: python3 scripts/check_go_coverage.py --database database.cover
 
-  # 判断这次改动有没有碰到原生引擎：引擎子模块、internal/engine、公共工具及其 CLI/QQ 入口、在线查询与词条投稿及依赖引擎的测试、原生资源、镜像和引擎相关脚本。拉取请求比对目标分支，main 上的推送比对推送前的提交；推送前的提交不可用（新建分支、强推）时按碰到处理。
+  # 判断这次改动有没有碰到原生引擎：引擎子模块、调用代码及其测试、原生资源、镜像和验证门禁。路径规则由 test_native_trigger.py 检查，新增依赖引擎环境变量的测试不能漏跑。拉取请求比对目标分支，main 上的推送比对推送前的提交；推送前的提交不可用（新建分支、强推）时按碰到处理。
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -110,7 +111,7 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null || git diff --name-only "$BASE" HEAD | grep -qE '^(Dockerfile|\.dockerignore|third_party/|native/|internal/engine/|internal/account/(candidate_actions|community_resource_apply|community_resources|dictionary|dictionary_catalog|dictionary_manage|dictionary_query|dictionary_query_snapshot|dictionary_windows_format|positions|ranking|snapshot_capacity|snapshot_http|snapshot_restore|transaction_failure)_test\.go|internal/publictools/|cmd/msime-cloud/tools[^/]*\.go|internal/server/(input|word_submissions|cloud_native_test|native_e2e_test|qq_public_tools[^/]*)\.go|scripts/(fetch_engine_resources|smoke_container|test_native)\.py)'; then
+          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null || git diff --name-only "$BASE" HEAD | grep -qE '^(Dockerfile|\.dockerignore|\.github/workflows/ci\.yml|third_party/|native/|internal/engine/|internal/account/(candidate_actions_test|community_resource_apply[^/]*|community_resources[^/]*|dictionary[^/]*|positions[^/]*|ranking[^/]*|snapshot[^/]*|transaction_failure_test)\.go|internal/publictools/|cmd/msime-cloud/tools[^/]*\.go|internal/server/(input[^/]*|handlers|qq_words|word_submissions[^/]*|cloud_native_test|native_e2e_test|qq_public_tools[^/]*|qq_shuangpin_keys_test)\.go|internal/server/testdata/api-coverage\.json|scripts/(fetch_engine_resources|smoke_container|test_native|test_native_trigger|check_api_test_results|test_api_test_results|check_go_coverage|test_go_coverage)\.py)'; then
             echo "native=true" >> "$GITHUB_OUTPUT"
           else
             echo "native=false" >> "$GITHUB_OUTPUT"

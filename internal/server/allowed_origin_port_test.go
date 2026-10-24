@@ -12,6 +12,24 @@ func TestAllowedOriginPorts(t *testing.T) {
 		name, configured, browser string
 	}{
 		{"无端口", "https://site.example.test", "https://site.example.test"},
+		{"IPv4 省略段", "https://192.0.513", "https://192.0.2.1"},
+		{"IPv4 标准写法", "https://192.0.2.1", "https://192.0.2.1"},
+		{"IPv4 两段写法", "https://192.513", "https://192.0.2.1"},
+		{"IPv4 零地址", "https://0", "https://0.0.0.0"},
+		{"IPv4 空十六进制", "https://0x", "https://0.0.0.0"},
+		{"IPv4 八进制零", "https://00000000000000000000000000000000000000000000", "https://0.0.0.0"},
+		{"IPv4 最大地址", "https://4294967295", "https://255.255.255.255"},
+		{"IPv4 双尾随句点对照", "https://192.0.2.1..", "https://192.0.2.1.."},
+
+		{"IPv4 单整数", "https://3221225985", "https://192.0.2.1"},
+		{"IPv4 八进制", "https://0300.0.2.1", "https://192.0.2.1"},
+		{"IPv4 混合进制", "https://0xC0.0.02.0x1", "https://192.0.2.1"},
+		{"IPv4 十六进制", "https://0xC0000201", "https://192.0.2.1"},
+		{"IPv4 尾随句点", "https://192.0.2.1.", "https://192.0.2.1"},
+		{"IPv4 Unicode 映射", "https://１９２.０.２.１", "https://192.0.2.1"},
+		{"IPv4 非默认端口", "https://192.0.513:08443", "https://192.0.2.1:8443"},
+		{"数字域名对照", "https://example.0xg", "https://example.0xg"},
+
 		{"默认端口", "https://site.example.test:443", "https://site.example.test"},
 		{"默认端口前导零", "https://site.example.test:00443", "https://site.example.test"},
 		{"主机大小写", "https://SITE.Example.Test:443", "https://site.example.test"},
@@ -79,6 +97,10 @@ func TestAllowedOriginRejectsNonOriginURLs(t *testing.T) {
 	t.Setenv("TEST_ALLOWED_ORIGIN_TOKEN", testToken)
 	for _, origin := range []string{
 		"https://site.example.test?", "https://site.example.test#",
+		"https://4294967296", "https://256.1.1.1", "https://192.0.65536",
+		"https://0x100000000", "https://192.0.2.09",
+		"https://1.2.3.256", "https://0x100.0.0.1", "https://1.2.16777216",
+		"https://1..2", "https://1.2.3.4.5", "https://example.42", "https://example.09", "https://example.0x",
 		"https://site.example.test:65536", "https://:443",
 		"https://site.example.test/path", "https://user@site.example.test",
 		"https://[not-ip]", "https://[127.0.0.1]", "https://[fe80::1%25en0]",

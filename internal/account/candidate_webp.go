@@ -200,7 +200,9 @@ func parseCandidateWebP(data []byte) (*candidateWebP, string) {
 	}
 	a := &candidateWebP{}
 	var header, anim []byte
-	var static []candidateWebPChunk
+	// 静态帧至多两个绘制块；多出的块只计数，保留后续控制块的校验顺序。
+	var static [2]candidateWebPChunk
+	staticCount := 0
 	animationSize := 0
 	for i := 0; chunks.next(); i++ {
 		body := chunks.body
@@ -245,11 +247,17 @@ func parseCandidateWebP(data []byte) (*candidateWebP, string) {
 			if header != nil && header[0]&2 != 0 {
 				return nil, invalid
 			}
-			static = append(static, candidateWebPChunk{string(chunks.kind), body})
+			if staticCount < len(static) {
+				static[staticCount] = candidateWebPChunk{string(chunks.kind), body}
+			}
+			staticCount++
 		}
 	}
 	if header == nil || header[0]&2 == 0 {
-		frame, ok := candidateWebPFrame(static, a.width, a.height)
+		if staticCount > len(static) {
+			return nil, invalid
+		}
+		frame, ok := candidateWebPFrame(static[:staticCount], a.width, a.height)
 		if !ok {
 			return nil, invalid
 		}

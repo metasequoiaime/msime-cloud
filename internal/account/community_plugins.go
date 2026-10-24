@@ -236,22 +236,40 @@ func (a *Service) communityPluginList(w http.ResponseWriter, r *http.Request) {
 	}
 	join, order := communitySavedScope(scope, "community_plugin_saves", "pack_id", "p")
 	kindCondition := communityTextFilter(kind, "p.kind", "$3") + communitySavedFilterValue(scope, kind, "p.kind", pluginKinds)
-	// 先选本页插件，再读取互动统计，避免为 OFFSET 跳过的插件执行逐条子查询。
-	rows, e := a.store.pool.Query(r.Context(), `WITH plugin_page AS MATERIALIZED (
- SELECT p.id FROM community_plugins p JOIN auth_users u ON u.id=p.owner_id `+join+`
- WHERE strpos(lower(p.name),lower($2))>0 AND (`+kindCondition+`) AND (`+communityMineCondition(scope, "p", "$5")+`) AND (p.moderation<>'removed' OR p.owner_id=$1) AND p.kind=ANY($6)
- ORDER BY `+order+` LIMIT 21 OFFSET $4
-) `+communityPluginSelectQuery(fields["saved"], true)+join+`ORDER BY `+order, viewer, search, kind, offset, scope, pluginVisibleKinds(query, kind))
-	if e != nil {
-		a.error(w, e)
-		return
-	}
-	writeCommunityRows(a, w, r, scope, viewer, "plugins", rows, func(row pgx.CollectableRow) (CommunityPlugin, error) {
+	scan := func(row pgx.CollectableRow) (CommunityPlugin, error) {
 		v, err := scanCommunityPlugin(row)
 		v.Moderation = ownerModeration(fields, v.moderation)
 		v.Saved, v.Saves = communitySavedFields(fields, v.saved, v.saves)
 		return v, err
-	})
+	}
+	listQuery := `WITH plugin_page AS MATERIALIZED (
+ SELECT p.id FROM community_plugins p JOIN auth_users u ON u.id=p.owner_id ` + join + `
+ WHERE strpos(lower(p.name),lower($2))>0 AND (` + kindCondition + `) AND (` + communityMineCondition(scope, "p", "$5") + `) AND (p.moderation<>'removed' OR p.owner_id=$1) AND p.kind=ANY($6)
+ ORDER BY ` + order + ` LIMIT 21 OFFSET $4
+) ` + communityPluginSelectQuery(fields["saved"], true) + join + ` ORDER BY ` + order
+	args := []any{viewer, search, kind, offset, scope, pluginVisibleKinds(query, kind)}
+	if scope != "" {
+		tx, err := a.store.userReadTransaction(r.Context(), viewer)
+		if err != nil {
+			a.error(w, err)
+			return
+		}
+		defer tx.Rollback(r.Context())
+		rows, err := tx.Query(r.Context(), listQuery, args...)
+		if err != nil {
+			a.error(w, err)
+			return
+		}
+		writeCommunityRowsInTransaction(a, w, r, tx, "plugins", rows, scan)
+		return
+	}
+	// 先选本页插件，再读取互动统计，避免为 OFFSET 跳过的插件执行逐条子查询。
+	rows, e := a.store.pool.Query(r.Context(), listQuery, args...)
+	if e != nil {
+		a.error(w, e)
+		return
+	}
+	writeCommunityRows(a, w, r, scope, viewer, "plugins", rows, scan)
 }
 
 func (a *Service) communityPluginDetail(w http.ResponseWriter, r *http.Request) {

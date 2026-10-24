@@ -3,6 +3,8 @@ package account
 import (
 	"context"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // QQImprovementEvent 是一条改进依据：答不上的问题或一次自测的结果。
@@ -25,16 +27,11 @@ func (a *Service) QQImprovementEvents(ctx context.Context, from, to time.Time) (
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []QQImprovementEvent
-	for rows.Next() {
+	return collectQQRows(rows, func(row pgx.CollectableRow) (QQImprovementEvent, error) {
 		var e QQImprovementEvent
-		if err := rows.Scan(&e.Kind, &e.Topic, &e.Detail, &e.CreatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, e)
-	}
-	return out, rows.Err()
+		err := row.Scan(&e.Kind, &e.Topic, &e.Detail, &e.CreatedAt)
+		return e, err
+	})
 }
 
 // QQBadAnswersBetween 列出 [from, to) 之间被说答错的回答，按时间从早到晚，周报用。

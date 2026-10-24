@@ -3,6 +3,8 @@ package account
 import (
 	"context"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // QQConversationWindow 是 QQ 群答疑接上追问的时间范围：更早的问答不再读取。
@@ -23,16 +25,11 @@ func (a *Service) QQConversation(ctx context.Context, subject string, limit int)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var turns []QQTurn
-	for rows.Next() {
+	return collectQQRows(rows, func(row pgx.CollectableRow) (QQTurn, error) {
 		var turn QQTurn
-		if err := rows.Scan(&turn.Question, &turn.Answer); err != nil {
-			return nil, err
-		}
-		turns = append(turns, turn)
-	}
-	return turns, rows.Err()
+		err := row.Scan(&turn.Question, &turn.Answer)
+		return turn, err
+	})
 }
 
 // RecordQQTurn 记下 subject 的一轮问答。

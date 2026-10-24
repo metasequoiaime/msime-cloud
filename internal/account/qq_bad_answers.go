@@ -50,16 +50,11 @@ func (a *Service) queryQQBadAnswers(ctx context.Context, query string, args ...a
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []QQBadAnswer
-	for rows.Next() {
+	return collectQQRows(rows, func(row pgx.CollectableRow) (QQBadAnswer, error) {
 		var b QQBadAnswer
-		if err := rows.Scan(&b.ID, &b.Question, &b.Answer, &b.Feedback, &b.Retry, &b.CreatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, b)
-	}
-	return out, rows.Err()
+		err := row.Scan(&b.ID, &b.Question, &b.Answer, &b.Feedback, &b.Retry, &b.CreatedAt)
+		return b, err
+	})
 }
 
 // OpenQQBadAnswers 列出 since 以来还没处理的差评，最新的在前，另外返回这样的差评一共有多少条。管理员的「差评」用它：写进 FAQ 或忽略过的不再列出。

@@ -116,16 +116,11 @@ func (a *Service) SearchQQKnowledge(ctx context.Context, embedding []float32, ki
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var hits []QQKnowledgeHit
-	for rows.Next() {
+	return collectQQRows(rows, func(row pgx.CollectableRow) (QQKnowledgeHit, error) {
 		var hit QQKnowledgeHit
-		if err := rows.Scan(&hit.ID, &hit.Kind, &hit.Repo, &hit.Number, &hit.Title, &hit.Summary, &hit.ContentHash, &hit.UpdatedAt, &hit.Similarity); err != nil {
-			return nil, err
-		}
-		hits = append(hits, hit)
-	}
-	return hits, rows.Err()
+		err := row.Scan(&hit.ID, &hit.Kind, &hit.Repo, &hit.Number, &hit.Title, &hit.Summary, &hit.ContentHash, &hit.UpdatedAt, &hit.Similarity)
+		return hit, err
+	})
 }
 
 // QQKnowledgeCursor 返回 repo 上一次同步到的更新时间；没同步过时为零值。

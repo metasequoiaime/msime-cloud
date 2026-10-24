@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
 	"github.com/metasequoiaime/MSIME-Backend/internal/digest"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
 )
 
 // signTencent 为管理员指定的 TMT 根地址生成 TC3 签名。
@@ -79,7 +79,7 @@ func (s *Server) translateTencentUpstream(w http.ResponseWriter, r *http.Request
 		ProjectId      int
 		SourceTextList []string
 	}{source, target, 0, texts})
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, e.URL, bytes.NewReader(payload))
+	req, err := httpclient.NewJSONBodyRequest(r.Context(), http.MethodPost, e.URL, payload)
 	if err != nil {
 		upstreamError(w, r, err)
 		return nil, false

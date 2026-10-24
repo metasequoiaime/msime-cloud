@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
 	"github.com/metasequoiaime/MSIME-Backend/internal/publictools"
 )
 
@@ -28,11 +29,10 @@ func qqPublicToolCapabilities() string {
 // 请求不带账号或管理令牌；社区处理器仍按匿名访问规则检查可见性并使用共享数据库限流。
 func (s *Server) qqPublicTool(ctx context.Context, name string, arguments json.RawMessage) string {
 	result, err := publictools.Call(ctx, func(ctx context.Context, query publictools.Request) (json.RawMessage, error) {
-		request, err := http.NewRequestWithContext(ctx, query.Method, query.Path, bytes.NewReader(query.Body))
+		request, err := httpclient.NewJSONBodyRequest(ctx, query.Method, query.Path, query.Body)
 		if err != nil {
 			return nil, errors.New("invalid_tool_request")
 		}
-		request.Header.Set("Content-Type", "application/json")
 		// 固定内部身份使公共社区请求共享同一个按地址限流桶，不使用群友的真实资料。
 		request.RemoteAddr = "127.0.0.1:0"
 		response := &qqPublicResponse{header: make(http.Header)}

@@ -1,7 +1,6 @@
 package httpclient
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -13,10 +12,5 @@ func NewJSONPayloadRequest(ctx context.Context, method, target string, value any
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(payload))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	return req, nil
+	return NewJSONBodyRequest(ctx, method, target, payload)
 }

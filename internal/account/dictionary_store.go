@@ -224,19 +224,12 @@ func (s *Store) StreamDictionary(ctx context.Context, user, kind string, emit fu
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	emitted := false
-	for rows.Next() {
-		emitted = true
+	emitted, err := streamQueryRows(rows, func(row pgx.CollectableRow) (DictionaryEntry, error) {
 		var e DictionaryEntry
-		if err = rows.Scan(&e.ID, &e.Kind, &e.Code, &e.Word, &e.Weight, &e.Revision, &e.UpdatedAt); err != nil {
-			return err
-		}
-		if err = emit(e); err != nil {
-			return err
-		}
-	}
-	if err := rows.Err(); err != nil {
+		err := row.Scan(&e.ID, &e.Kind, &e.Code, &e.Word, &e.Weight, &e.Revision, &e.UpdatedAt)
+		return e, err
+	}, emit)
+	if err != nil {
 		return err
 	}
 	if !emitted {
@@ -314,23 +307,16 @@ func (s *Store) StreamWindowsDictionary(ctx context.Context, user, kind string, 
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	emitted := false
-	for rows.Next() {
-		emitted = true
+	emitted, err := streamQueryRows(rows, func(row pgx.CollectableRow) (DictionaryEntry, error) {
 		var raw []byte
 		var entry DictionaryEntry
-		if err = rows.Scan(&raw); err != nil {
-			return err
+		if err := row.Scan(&raw); err != nil {
+			return entry, err
 		}
-		if err = json.Unmarshal(raw, &entry); err != nil {
-			return err
-		}
-		if err = emit(entry); err != nil {
-			return err
-		}
-	}
-	if err := rows.Err(); err != nil {
+		err := json.Unmarshal(raw, &entry)
+		return entry, err
+	}, emit)
+	if err != nil {
 		return err
 	}
 	if !emitted {

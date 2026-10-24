@@ -193,34 +193,26 @@ FROM voice_contributions WHERE user_id=$1 ORDER BY created_at,id`, user)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	encoder := json.NewEncoder(out)
-	for rows.Next() {
-		var (
-			id, language, provider, transcript, appVersion, audioMIME string
-			durationMS                                                int
-			audio                                                     []byte
-			createdAt                                                 time.Time
-		)
-		if err := rows.Scan(&id, &language, &provider, &durationMS, &transcript, &appVersion, &audioMIME, &audio, &createdAt); err != nil {
-			return err
-		}
-		record := struct {
-			ID         string    `json:"id"`
-			Language   string    `json:"language"`
-			Provider   string    `json:"provider"`
-			DurationMS int       `json:"duration_ms"`
-			Transcript string    `json:"transcript"`
-			AppVersion string    `json:"app_version"`
-			AudioMIME  string    `json:"audio_mime"`
-			Audio      []byte    `json:"audio_base64"`
-			CreatedAt  time.Time `json:"created_at"`
-		}{id, language, provider, durationMS, transcript, appVersion, audioMIME, audio, createdAt}
-		if err := encoder.Encode(record); err != nil {
-			return err
-		}
+	type voiceExportRecord struct {
+		ID         string    `json:"id"`
+		Language   string    `json:"language"`
+		Provider   string    `json:"provider"`
+		DurationMS int       `json:"duration_ms"`
+		Transcript string    `json:"transcript"`
+		AppVersion string    `json:"app_version"`
+		AudioMIME  string    `json:"audio_mime"`
+		Audio      []byte    `json:"audio_base64"`
+		CreatedAt  time.Time `json:"created_at"`
 	}
-	return rows.Err()
+	encoder := json.NewEncoder(out)
+	_, err = streamQueryRows(rows, func(row pgx.CollectableRow) (voiceExportRecord, error) {
+		var record voiceExportRecord
+		err := row.Scan(&record.ID, &record.Language, &record.Provider, &record.DurationMS, &record.Transcript, &record.AppVersion, &record.AudioMIME, &record.Audio, &record.CreatedAt)
+		return record, err
+	}, func(record voiceExportRecord) error {
+		return encoder.Encode(record)
+	})
+	return err
 }
 
 // userDataExport 处理 GET /v1/users/me/data/export：把本人的数据流式写成 zip（profile、preferences、phrases、clipboard、community、typing_statistics、sessions、voice.ndjson、dictionary.ndjson）。每用户每天 userDataExportsPerDay 次。开始写响应后出错只能中断连接，客户端会拿到不完整的 zip 而不是一个看似完整的包。内容不写日志。

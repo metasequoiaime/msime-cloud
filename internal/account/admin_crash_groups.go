@@ -680,10 +680,9 @@ func lockCrashSpikes(ctx context.Context, tx pgx.Tx) ([]crashSpike, error) {
 }
 
 var (
-	crashAddressPattern = regexp.MustCompile(`0[xX][0-9a-fA-F]+`)
-	crashUUIDPattern    = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
-	crashHexRunPattern  = regexp.MustCompile(`\b[0-9a-fA-F]{8,}\b`)
-	crashDigitsPattern  = regexp.MustCompile(`[0-9]+`)
+	crashUUIDPattern   = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
+	crashHexRunPattern = regexp.MustCompile(`\b[0-9a-fA-F]{8,}\b`)
+	crashDigitsPattern = regexp.MustCompile(`[0-9]+`)
 )
 
 // normalizeCrashWhitespace 折叠规范化文本中的空白并统一为小写。
@@ -784,16 +783,16 @@ func normalizeCrashFrame(line string) string {
 	if line == "" {
 		return ""
 	}
-	// 这些替换都要求 ASCII 数字或正则的 ASCII 空白；纯符号帧直接转小写，避免五次整行复制。
+	// 这些替换都要求 ASCII 数字或正则的 ASCII 空白；纯符号帧直接转小写，跳过后续标记扫描。
 	if !strings.ContainsAny(line, "0123456789 \t\n\f\r") {
 		return strings.ToLower(line)
 	}
 	if line[0] >= '0' && line[0] <= '9' || line[0] == '#' || strings.HasPrefix(line, "at") {
 		line = trimCrashFrameIndex(line)
 	}
-	// 只在存在必要标记时调用正则；未匹配的 ReplaceAllString 也会复制整行。
+	// 只在出现地址标记时扫描，未匹配时直接复用原字符串。
 	if strings.Contains(line, "0x") || strings.Contains(line, "0X") {
-		line = crashAddressPattern.ReplaceAllString(line, "")
+		line = replaceCrashAddresses(line, "")
 	}
 	if strings.ContainsRune(line, '+') {
 		line = trimCrashFrameOffset(line)
@@ -802,6 +801,61 @@ func normalizeCrashFrame(line string) string {
 		line = stripCrashFrameLineNumbers(line)
 	}
 	return normalizeCrashWhitespace(line)
+}
+
+// replaceCrashAddresses 替换完整的 ASCII 十六进制地址，不重复处理替换后形成的新标记。
+func replaceCrashAddresses(line, replacement string) string {
+	zero := strings.IndexByte(line, '0')
+	if zero < 0 {
+		return line
+	}
+	first, size := -1, len(line)
+	for i := zero; i+2 < len(line); i++ {
+		if line[i] != '0' || line[i+1] != 'x' && line[i+1] != 'X' {
+			continue
+		}
+		end := i + 2
+		for end < len(line) && crashHexByte(line[end]) {
+			end++
+		}
+		if end == i+2 {
+			continue
+		}
+		if first < 0 {
+			first = i
+		}
+		size += len(replacement) - (end - i)
+		i = end - 1
+	}
+	if first < 0 {
+		return line
+	}
+	// 按替换后的长度一次分配，长地址不会撑大输出缓冲。
+	var out strings.Builder
+	out.Grow(size)
+	start := 0
+	for i := first; i+2 < len(line); i++ {
+		if line[i] != '0' || line[i+1] != 'x' && line[i+1] != 'X' {
+			continue
+		}
+		end := i + 2
+		for end < len(line) && crashHexByte(line[end]) {
+			end++
+		}
+		if end == i+2 {
+			continue
+		}
+		out.WriteString(line[start:i])
+		out.WriteString(replacement)
+		start = end
+		i = end - 1
+	}
+	out.WriteString(line[start:])
+	return out.String()
+}
+
+func crashHexByte(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
 }
 
 // stripCrashFrameLineNumbers 去掉冒号后的连续 ASCII 数字，不改动其他冒号或字节。
@@ -916,7 +970,7 @@ func normalizeCrashMessage(message string) string {
 		return strings.ToLower(line)
 	}
 	if strings.Contains(line, "0x") || strings.Contains(line, "0X") {
-		line = crashAddressPattern.ReplaceAllString(line, "0x?")
+		line = replaceCrashAddresses(line, "0x?")
 	}
 	if len(line) >= 36 && strings.ContainsRune(line, '-') {
 		line = crashUUIDPattern.ReplaceAllString(line, "?")

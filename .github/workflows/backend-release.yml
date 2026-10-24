@@ -7,6 +7,7 @@ on:
       - 'cmd/**'
       - 'internal/**'
       - 'admin-web/**'
+      - 'docs/**'
       - '!**/*.md'
       - 'version.go'
       - 'go.mod'
@@ -14,8 +15,10 @@ on:
       - 'Dockerfile'
       - '.dockerignore'
       - '.gitmodules'
+      - 'THIRD_PARTY_NOTICES.txt'
       - 'native/**'
       - 'third_party/**'
+      - 'scripts/fetch_engine_resources.py'
       - 'scripts/release/**'
       - '.github/workflows/backend-release.yml'
   workflow_dispatch:

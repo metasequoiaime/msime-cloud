@@ -91,6 +91,42 @@ class RepositoryTests(unittest.TestCase):
         self.run_git(self.repo, 'push', 'origin', 'main')
         self.assertEqual(self.release()['version'], '0.2.0')
 
+    def test_build_input_only_change_releases_new_revision(self):
+        for name in ('scripts/fetch_engine_resources.py', 'THIRD_PARTY_NOTICES.txt', 'docs/docs.go'):
+            with self.subTest(path=name):
+                previous = self.release()
+                path = self.repo / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('合成构建输入\n')
+                self.commit('fix: 更新构建输入')
+                self.run_git(self.repo, 'push', 'origin', 'main')
+                source = self.run_git(self.repo, 'rev-parse', 'HEAD')
+                result = self.release()
+                major, minor, patch_version = map(int, previous['version'].split('.'))
+                self.assertEqual(result['version'], f'{major}.{minor}.{patch_version + 1}')
+                self.assertEqual(self.run_git(self.remote, 'merge-base', source, result['revision']), source)
+                self.assertEqual(self.run_git(self.remote, 'show', result['tag'] + ':' + name), '合成构建输入')
+                self.assertEqual(self.release(), result)
+
+    def test_build_input_changes_queue_a_new_release(self):
+        for name, expected in (
+            ('scripts/fetch_engine_resources.py', True),
+            ('THIRD_PARTY_NOTICES.txt', True),
+            ('docs/docs.go', True),
+            ('docs/admin.md', False),
+            ('docs/nested/README.md', False),
+            ('native/README.md', False),
+        ):
+            with self.subTest(path=name):
+                base = self.run_git(self.repo, 'rev-parse', 'HEAD')
+                path = self.repo / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('合成构建输入或文档\n')
+                self.commit('fix: 更新单个文件')
+                self.run_git(self.repo, 'push', 'origin', 'main')
+                with contextlib.chdir(self.repo):
+                    self.assertEqual(backend.superseded(base), expected)
+
     def test_version_source_only_change_releases_new_revision(self):
         first = self.release()
         (self.repo / 'version.go').write_text('package backend\n// 修复版本读取\n')
@@ -161,6 +197,8 @@ class WorkflowTests(unittest.TestCase):
         block = workflow.split('    paths:\n', 1)[1].split('\n  workflow_dispatch:', 1)[0]
         paths = [line.strip()[2:].strip().strip("'") for line in block.splitlines() if line.strip().startswith('- ')]
         self.assertEqual(backend.TRIGGER_PATHS, paths)
+        # GitHub 按顺序匹配；全局文档排除必须在最后，避免后续正向模式重新包含 Markdown。
+        self.assertEqual(paths[-1], '!**/*.md')
 
 
 if __name__ == '__main__':

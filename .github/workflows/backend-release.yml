@@ -7,17 +7,20 @@ on:
       - 'cmd/**'
       - 'internal/**'
       - 'admin-web/**'
-      - '!**/*.md'
+      - 'docs/**'
       - 'version.go'
       - 'go.mod'
       - 'go.sum'
       - 'Dockerfile'
       - '.dockerignore'
       - '.gitmodules'
+      - 'THIRD_PARTY_NOTICES.txt'
       - 'native/**'
       - 'third_party/**'
+      - 'scripts/fetch_engine_resources.py'
       - 'scripts/release/**'
       - '.github/workflows/backend-release.yml'
+      - '!**/*.md'
   workflow_dispatch:
 
 permissions: {}

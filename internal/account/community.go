@@ -398,20 +398,38 @@ func (a *Service) communityList(w http.ResponseWriter, r *http.Request) {
 	}
 	join, order := communitySavedScope(scope, "community_skin_saves", "skin_id", "s")
 	categoryCondition := communityTextFilter(category, "s.category", "$5") + communitySavedFilterValue(scope, category, "s.category", candidateSkinCategories)
+	scan := func(row pgx.CollectableRow) (CommunitySkin, error) {
+		v, err := scanSkin(row)
+		return communitySkinItem(v, fields, withCategory), err
+	}
+	listQuery := `WITH skin_page AS MATERIALIZED (
+ SELECT s.id FROM community_skins s JOIN auth_users u ON u.id=s.owner_id ` + join + `
+ WHERE strpos(lower(s.name),lower($2))>0 AND (` + communityMineCondition(scope, "s", "$4") + `) AND (s.moderation<>'removed' OR s.owner_id=$1) AND (` + categoryCondition + `)
+ ORDER BY ` + order + ` LIMIT 21 OFFSET $3
+) ` + communitySkinSelectQuery(fields["saved"], true) + join + ` ORDER BY ` + order
+	args := []any{viewer, search, offset, scope, category}
+	if scope != "" {
+		tx, err := a.store.userReadTransaction(r.Context(), viewer)
+		if err != nil {
+			a.error(w, err)
+			return
+		}
+		defer tx.Rollback(r.Context())
+		rows, err := tx.Query(r.Context(), listQuery, args...)
+		if err != nil {
+			a.error(w, err)
+			return
+		}
+		writeCommunityRowsInTransaction(a, w, r, tx, "skins", rows, scan)
+		return
+	}
 	// 先选本页皮肤，再读取互动统计；收藏范围在两层查询中都沿用收藏时间排序。
-	rows, e := a.store.pool.Query(r.Context(), `WITH skin_page AS MATERIALIZED (
- SELECT s.id FROM community_skins s JOIN auth_users u ON u.id=s.owner_id `+join+`
- WHERE strpos(lower(s.name),lower($2))>0 AND (`+communityMineCondition(scope, "s", "$4")+`) AND (s.moderation<>'removed' OR s.owner_id=$1) AND (`+categoryCondition+`)
- ORDER BY `+order+` LIMIT 21 OFFSET $3
-) `+communitySkinSelectQuery(fields["saved"], true)+join+`ORDER BY `+order, viewer, search, offset, scope, category)
+	rows, e := a.store.pool.Query(r.Context(), listQuery, args...)
 	if e != nil {
 		a.error(w, e)
 		return
 	}
-	writeCommunityRows(a, w, r, scope, viewer, "skins", rows, func(row pgx.CollectableRow) (CommunitySkin, error) {
-		v, err := scanSkin(row)
-		return communitySkinItem(v, fields, withCategory), err
-	})
+	writeCommunityRows(a, w, r, scope, viewer, "skins", rows, scan)
 }
 func (a *Service) communityDetail(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()

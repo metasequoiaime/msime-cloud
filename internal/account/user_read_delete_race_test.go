@@ -84,6 +84,10 @@ func TestPersonalReadsSerializeAccountDeletion(t *testing.T) {
 		{"/v1/users/me/diagnostics", "SELECT d.id,d.created_at,d.expires_at,d.bytes,d.sections,d.token_hint"},
 		{"/v1/users/me/qq-links", "SELECT id::text,created_at FROM qq_account_links"},
 		{"/v1/community/candidate-skins/sync", "SELECT id,package_id,request_sha256,visibility,updated_at FROM community_candidate_skins"},
+		{"/v1/community/skins?scope=mine", "FROM community_skins s JOIN auth_users u"},
+		{"/v1/community/candidate-skins?scope=mine", "FROM community_candidate_skins s JOIN auth_users u"},
+		{"/v1/community/plugins?scope=mine", "FROM community_plugins p JOIN auth_users u"},
+		{"/v1/community/resources?scope=mine&kind=reply", "FROM community_resources s JOIN auth_users u"},
 	} {
 		t.Run(tc.path, func(t *testing.T) { runPersonalReadDeletion(t, tc.path, tc.query) })
 	}
@@ -99,6 +103,24 @@ func runPersonalReadDeletion(t *testing.T, path, query string) {
 	}
 	if path == "/v1/community/candidate-skins/sync" {
 		insertCandidateSkin(t, db, "ef334455-1234-4234-8234-000000000001", user.User.ID, "私有作品")
+	}
+	if strings.HasPrefix(path, "/v1/community/skins?") {
+		if _, err := db.pool.Exec(ctx, `INSERT INTO community_skins(id,owner_id,name,design) VALUES('ef334455-1234-4234-8234-000000000002',$1,'私有皮肤','{}')`, user.User.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if path == "/v1/community/candidate-skins?scope=mine" {
+		insertCandidateSkin(t, db, "ef334455-1234-4234-8234-000000000005", user.User.ID, "私有目录皮肤")
+	}
+	if strings.HasPrefix(path, "/v1/community/plugins?") {
+		if _, err := db.pool.Exec(ctx, `INSERT INTO community_plugins(id,owner_id,kind,plugin_id,name,version,license,manifest,archive,request_sha256) VALUES('ef334455-1234-4234-8234-000000000003',$1,'sound','delete-race.sound','私有插件','1.0','MIT','{}','zip',repeat('a',64))`, user.User.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if strings.HasPrefix(path, "/v1/community/resources?") {
+		if _, err := db.pool.Exec(ctx, `INSERT INTO community_resources(id,owner_id,kind,name,content) VALUES('ef334455-1234-4234-8234-000000000004',$1,'reply','私有资源','{"prompt":"合成"}')`, user.User.ID); err != nil {
+			t.Fatal(err)
+		}
 	}
 	trace := &personalReadDeleteTrace{readQuery: query, done: make(chan struct{}), release: make(chan struct{}), deleteStarted: make(chan uint32, 1), deleteFinished: make(chan struct{})}
 	cfg := db.pool.Config()
@@ -169,7 +191,11 @@ func runPersonalReadDeletion(t *testing.T, path, query string) {
 	w := <-response
 	if w.Code != http.StatusOK ||
 		(path == "/v1/users/me/phrases" && !strings.Contains(w.Body.String(), "私密短语")) ||
-		(path == "/v1/community/candidate-skins/sync" && !strings.Contains(w.Body.String(), "ef334455-1234-4234-8234-000000000001")) {
+		(path == "/v1/community/candidate-skins/sync" && !strings.Contains(w.Body.String(), "ef334455-1234-4234-8234-000000000001")) ||
+		(path == "/v1/community/skins?scope=mine" && !strings.Contains(w.Body.String(), "ef334455-1234-4234-8234-000000000002")) ||
+		(path == "/v1/community/candidate-skins?scope=mine" && !strings.Contains(w.Body.String(), "ef334455-1234-4234-8234-000000000005")) ||
+		(path == "/v1/community/plugins?scope=mine" && !strings.Contains(w.Body.String(), "ef334455-1234-4234-8234-000000000003")) ||
+		(path == "/v1/community/resources?scope=mine&kind=reply" && !strings.Contains(w.Body.String(), "ef334455-1234-4234-8234-000000000004")) {
 		t.Fatalf("个人数据响应不完整：%d %q", w.Code, w.Body.String())
 	}
 	if err := <-deleteErr; err != nil {

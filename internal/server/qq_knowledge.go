@@ -1381,72 +1381,63 @@ func qqURLSchemeLetter(c byte) bool {
 
 // qqMarkdownLinksToText 只保留 Markdown 链接和图片的文字，避免裸链接过滤留下半截括号。
 func qqMarkdownLinksToText(text string) string {
-	outputBytes, matches := len(text), 0
-	var first [8][4]int
-	qqScanMarkdownLinks(text, func(match [4]int) {
-		outputBytes -= match[1] - match[0] - (match[3] - match[2])
-		if matches < len(first) {
-			first[matches] = match
+	scan := qqMarkdownLinkScanner{text: text}
+	return qqRewriteText(text, func() (qqTextReplacement, bool) {
+		match, ok := scan.next()
+		if !ok {
+			return qqTextReplacement{}, false
 		}
-		matches++
-	})
-	if matches == 0 {
-		return text
-	}
-	var out strings.Builder
-	out.Grow(outputBytes)
-	written := 0
-	write := func(match [4]int) {
-		out.WriteString(text[written:match[0]])
-		out.WriteString(text[match[2]:match[3]])
-		written = match[1]
-	}
-	// 少量链接复用栈上的下标，不再扫描它们之前的长正文。
-	for _, match := range first[:min(matches, len(first))] {
-		write(match)
-	}
-	if matches > len(first) {
-		resume := written
-		qqScanMarkdownLinks(text[resume:], func(match [4]int) {
-			for i := range match {
-				match[i] += resume
-			}
-			write(match)
-		})
-	}
-	out.WriteString(text[written:])
-	return out.String()
+		return qqTextReplacement{match[0], match[1], text[match[2]:match[3]]}, true
+	}, scan.reset)
 }
 
-// qqScanMarkdownLinks 依次返回完整匹配和标签文字的四个下标，沿用旧正则的非重叠规则。
-func qqScanMarkdownLinks(text string, yield func([4]int)) {
-	for search := 0; search < len(text); {
-		open := strings.IndexByte(text[search:], '[')
+type qqMarkdownLinkScanner struct {
+	text   string
+	search int
+}
+
+func (scan *qqMarkdownLinkScanner) reset(start int) {
+	scan.search = start
+}
+
+func (scan *qqMarkdownLinkScanner) next() ([4]int, bool) {
+	text := scan.text
+	for scan.search < len(text) {
+		open := strings.IndexByte(text[scan.search:], '[')
 		if open < 0 {
-			return
+			break
 		}
-		open += search
+		open += scan.search
 		close := strings.IndexByte(text[open+1:], ']')
 		if close < 0 {
-			return
+			break
 		}
 		close += open + 1
 		if close+1 >= len(text) || text[close+1] != '(' {
 			// 当前右方括号不接左圆括号时，前面的嵌套起点也不可能匹配。
-			search = close + 1
+			scan.search = close + 1
 			continue
 		}
 		end := strings.IndexByte(text[close+2:], ')')
 		if end < 0 {
-			return
+			break
 		}
 		end += close + 3
 		start := open
-		if start > search && text[start-1] == '!' {
+		if start > scan.search && text[start-1] == '!' {
 			start--
 		}
-		yield([4]int{start, end, open + 1, close})
-		search = end
+		scan.search = end
+		return [4]int{start, end, open + 1, close}, true
+	}
+	return [4]int{}, false
+}
+
+// qqScanMarkdownLinks 依次返回完整匹配和标签文字的四个下标，沿用旧正则的非重叠规则。
+func qqScanMarkdownLinks(text string, yield func([4]int)) {
+	scan := qqMarkdownLinkScanner{text: text}
+	for match, ok := scan.next(); ok; match, ok = scan.next() {
+		yield(match)
 	}
 }
 

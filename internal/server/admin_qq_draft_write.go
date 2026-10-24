@@ -32,13 +32,8 @@ func (s *Server) adminQQDraftWrite(w http.ResponseWriter, r *http.Request) {
 		fail(w, 503, "database_unavailable")
 		return
 	}
-	draft, err := s.accounts.QQDraft(r.Context(), id)
-	if errors.Is(err, account.ErrQQDraftNotFound) {
-		fail(w, 404, "not_found")
-		return
-	}
-	if err != nil {
-		fail(w, 503, "database_unavailable")
+	draft, ok := s.lookupAdminQQDraft(w, r, id)
+	if !ok {
 		return
 	}
 	switch action {

@@ -684,7 +684,6 @@ var (
 	crashUUIDPattern     = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
 	crashHexRunPattern   = regexp.MustCompile(`\b[0-9a-fA-F]{8,}\b`)
 	crashDigitsPattern   = regexp.MustCompile(`[0-9]+`)
-	crashFrameIndex      = regexp.MustCompile(`^(?:#?[0-9]+[:.]?\s+|at\s+)+`)
 	crashFrameOffset     = regexp.MustCompile(`\s*\+\s*[0-9]+\s*$`)
 	crashFrameLineNumber = regexp.MustCompile(`(?::[0-9]+)+`)
 )
@@ -791,10 +790,10 @@ func normalizeCrashFrame(line string) string {
 	if !strings.ContainsAny(line, "0123456789 \t\n\f\r") {
 		return strings.ToLower(line)
 	}
-	// 只在存在必要标记时调用正则；未匹配的 ReplaceAllString 也会复制整行。
 	if line[0] >= '0' && line[0] <= '9' || line[0] == '#' || strings.HasPrefix(line, "at") {
-		line = crashFrameIndex.ReplaceAllString(line, "")
+		line = trimCrashFrameIndex(line)
 	}
+	// 只在存在必要标记时调用正则；未匹配的 ReplaceAllString 也会复制整行。
 	if strings.Contains(line, "0x") || strings.Contains(line, "0X") {
 		line = crashAddressPattern.ReplaceAllString(line, "")
 	}
@@ -805,6 +804,40 @@ func normalizeCrashFrame(line string) string {
 		line = crashFrameLineNumber.ReplaceAllString(line, "")
 	}
 	return normalizeCrashWhitespace(line)
+}
+
+// trimCrashFrameIndex 去掉连续的序号或 at 前缀，只接受原正则的 ASCII 数字和空白。
+func trimCrashFrameIndex(line string) string {
+	start := 0
+	for start < len(line) {
+		end := start
+		if strings.HasPrefix(line[start:], "at") {
+			end += 2
+		} else {
+			if line[end] == '#' {
+				end++
+			}
+			digits := end
+			for end < len(line) && line[end] >= '0' && line[end] <= '9' {
+				end++
+			}
+			if end == digits {
+				break
+			}
+			if end < len(line) && (line[end] == ':' || line[end] == '.') {
+				end++
+			}
+		}
+		if end == len(line) || !crashWhitespaceByte(line[end]) {
+			break
+		}
+		for end < len(line) && crashWhitespaceByte(line[end]) {
+			end++
+		}
+		// 只推进完整匹配的前缀；后面不完整的序号或 at 保留在原位置。
+		start = end
+	}
+	return line[start:]
 }
 
 // normalizeCrashMessage 保留消息首个非空行，掩去地址、标识符和数字，让同一故障在不同运行中归为一组。

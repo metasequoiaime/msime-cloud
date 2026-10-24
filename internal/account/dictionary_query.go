@@ -2,14 +2,50 @@ package account
 
 import (
 	"net/http"
-	"regexp"
 	"strings"
 )
 
-var personalInputCode = regexp.MustCompile(`^[a-zA-Z';]{1,256}$`)
-var personalEnglishCode = regexp.MustCompile(`^[a-zA-Z]{1,64}$`)
-var personalEnglishPrefix = regexp.MustCompile(`^[a-zA-Z][a-zA-Z'-]{0,63}$`)
-var personalQuickCode = regexp.MustCompile(`^[a-zA-Z0-9]{1,32}$`)
+// validPersonalQueryCode 按查询种类校验 ASCII 编码，长度、分隔符和英语首字符规则与原正则一致。
+func validPersonalQueryCode(text, kind string) bool {
+	maximum := 0
+	switch kind {
+	case "pinyin", "jianpin":
+		maximum = 256
+	case "wubi", "wubi98":
+		maximum = 4
+	case "english":
+		maximum = 64
+	case "quick":
+		maximum = 32
+	default:
+		return false
+	}
+	if len(text) == 0 || len(text) > maximum {
+		return false
+	}
+	for i := range len(text) {
+		c := text[i]
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' {
+			continue
+		}
+		switch kind {
+		case "pinyin", "jianpin":
+			if c == '\'' || c == ';' {
+				continue
+			}
+		case "english":
+			if i > 0 && (c == '\'' || c == '-') {
+				continue
+			}
+		case "quick":
+			if c >= '0' && c <= '9' {
+				continue
+			}
+		}
+		return false
+	}
+	return true
+}
 
 func (a *Service) dictionaryQuery(w http.ResponseWriter, r *http.Request) {
 	p, ok := a.principal(w, r, false)
@@ -55,7 +91,7 @@ func preparePersonalQuery(w http.ResponseWriter, v PersonalQuery) (map[string]an
 	operation := "candidates"
 	switch v.Kind {
 	case "pinyin", "jianpin":
-		if !personalInputCode.MatchString(v.Text) || (v.Scheme != "pinyin" && v.Scheme != "shuangpin") {
+		if !validPersonalQueryCode(v.Text, v.Kind) || (v.Scheme != "pinyin" && v.Scheme != "shuangpin") {
 			writeError(w, 400, "invalid_input_code")
 			return nil, false
 		}
@@ -64,20 +100,20 @@ func preparePersonalQuery(w http.ResponseWriter, v PersonalQuery) (map[string]an
 		}
 	case "wubi", "wubi98":
 		// 两版五笔的编码规则相同；引擎的方案名与种类同名，`wubi98` 读 98 版码表。
-		if len(v.Text) > 4 || !personalEnglishCode.MatchString(v.Text) {
+		if !validPersonalQueryCode(v.Text, v.Kind) {
 			writeError(w, 400, "invalid_wubi_code")
 			return nil, false
 		}
 		v.Scheme = v.Kind
 	case "english":
-		if !personalEnglishPrefix.MatchString(v.Text) {
+		if !validPersonalQueryCode(v.Text, v.Kind) {
 			writeError(w, 400, "invalid_english_prefix")
 			return nil, false
 		}
 		operation = "english"
 		v.Text = strings.ToLower(v.Text)
 	case "quick":
-		if !personalQuickCode.MatchString(v.Text) {
+		if !validPersonalQueryCode(v.Text, v.Kind) {
 			writeError(w, 400, "invalid_quick_code")
 			return nil, false
 		}

@@ -9,8 +9,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-
-	"github.com/jackc/pgx/v5"
 )
 
 // 共享设置与平台专属设置的字段类型；不接受本机路径或凭据。
@@ -90,14 +88,7 @@ func validPreference(key string, raw json.RawMessage) bool {
 }
 func (s *Store) Preferences(ctx context.Context, user string) (Preferences, error) {
 	out := Preferences{Settings: map[string]json.RawMessage{}}
-	var raw []byte
-	e := s.pool.QueryRow(ctx, `SELECT revision,settings FROM user_preferences WHERE user_id=$1`, user).Scan(&out.Revision, &raw)
-	if errors.Is(e, pgx.ErrNoRows) {
-		return out, nil
-	}
-	if e == nil {
-		e = json.Unmarshal(raw, &out.Settings)
-	}
+	e := readRevisionJSON(s.pool.QueryRow(ctx, `SELECT revision,settings FROM user_preferences WHERE user_id=$1`, user), &out.Revision, &out.Settings)
 	return out, e
 }
 func (s *Store) PutPreferences(ctx context.Context, user string, expected int64, settings map[string]json.RawMessage) (Preferences, error) {

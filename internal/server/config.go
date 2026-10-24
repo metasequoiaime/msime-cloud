@@ -296,11 +296,15 @@ func (c *Config) Validate() error {
 		}
 
 	}
-	for _, o := range c.AllowedOrigins {
+	for i, o := range c.AllowedOrigins {
 		u, e := url.Parse(o)
-		if e != nil || u.Scheme != "https" || u.Host == "" || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+		if e != nil || u.Scheme != "https" || u.Hostname() == "" || u.Path != "" || u.RawQuery != "" || u.ForceQuery || strings.Contains(o, "#") || u.User != nil {
 			return errors.New("allowed_origins must contain HTTPS origins")
 		}
+		if normalizeOriginHost(u) != nil {
+			return errors.New("allowed_origins must contain HTTPS origins")
+		}
+		c.AllowedOrigins[i] = u.Scheme + "://" + u.Host
 	}
 	if err := c.resolveClientIPHeader(); err != nil {
 		return err

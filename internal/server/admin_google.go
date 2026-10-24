@@ -6,12 +6,10 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
-	"net"
 	"net/http"
 	"net/mail"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -227,19 +225,7 @@ func (s *Server) adminMutationOrigin(w http.ResponseWriter, r *http.Request) boo
 	origin := r.Header.Get("Origin")
 	expected, err := url.Parse(s.config.Admin.Google.RedirectURI)
 	if err == nil {
-		// 浏览器省略默认端口，并规范化主机大小写和端口数字；只处理配置地址，请求的 Origin 仍须严格匹配。
-		expected.Host = strings.ToLower(strings.TrimSuffix(expected.Host, ":"))
-		if text := expected.Port(); text != "" {
-			var port uint64
-			port, err = strconv.ParseUint(text, 10, 16)
-			if err == nil {
-				text = strconv.FormatUint(port, 10)
-				if expected.Scheme == "https" && port == 443 || expected.Scheme == "http" && port == 80 {
-					text = ""
-				}
-				expected.Host = strings.TrimSuffix(net.JoinHostPort(expected.Hostname(), text), ":")
-			}
-		}
+		err = normalizeOriginHost(expected)
 	}
 	if origin == "" || err != nil || expected.Host == "" || origin != expected.Scheme+"://"+expected.Host {
 		fail(w, 403, "origin_required")

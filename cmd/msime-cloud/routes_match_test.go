@@ -85,6 +85,31 @@ func TestRouteMatchBoundaryScores(t *testing.T) {
 	}
 }
 
+func TestRouteFindEscapedSegments(t *testing.T) {
+	operations := []operation{
+		{Method: "GET", Path: "/v1/items/source", Auth: authNone},
+		{Method: "GET", Path: "/v1/items/{id}", Auth: authUser},
+		{Method: "GET", Path: "/v1/items/has%23hash", Auth: authNone},
+		{Method: "GET", Path: "/v1/items/a%2Fb", Auth: authNone},
+	}
+	for _, tc := range []struct{ path, want string }{
+		{"/v1/items/s%6furce", "/v1/items/source"},
+		{"/v1/items/source#ignored?x=1", "/v1/items/source"},
+		{"/v1/items/has%23hash", "/v1/items/has%23hash"},
+		{"/v1/items/a%2fb", "/v1/items/a%2Fb"},
+		{"/v1/items/a/b", ""},
+		{"/v1/items/s%2Fource", "/v1/items/{id}"},
+		{"/v1/items/s%256furce", "/v1/items/{id}"},
+		{"/v1/items/source%23ignored", "/v1/items/{id}"},
+		{"/v1/items/source%3Fx=1", "/v1/items/{id}"},
+		{"/v1/items/source+", "/v1/items/{id}"},
+	} {
+		if got, ok := find(operations, "GET", tc.path); ok != (tc.want != "") || got.Path != tc.want {
+			t.Errorf("路径=%q：匹配=%q/%v，期望 %q", tc.path, got.Path, ok, tc.want)
+		}
+	}
+}
+
 func concreteRoutePath(template string) string {
 	parts := strings.Split(template, "/")
 	for i, part := range parts {

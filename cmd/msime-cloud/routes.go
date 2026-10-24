@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -102,8 +103,9 @@ func authOf(security json.RawMessage) string {
 	return authUser
 }
 
-// find returns the operation a request for method and path reaches, path being a template or a concrete path. A literal segment beats a parameter, the way the server's mux chooses /v1/skins/source over /v1/skins/{id}.
+// find 按方法和路径查找接口，先去掉不会参与服务端路由的片段与查询；字面量段优先于参数段。
 func find(operations []operation, method, path string) (operation, bool) {
+	path, _, _ = strings.Cut(path, "#")
 	path, _, _ = strings.Cut(path, "?")
 	best, bestScore := operation{}, -1
 	for _, candidate := range operations {
@@ -132,7 +134,16 @@ func match(template, path string) (int, bool) {
 		}
 		var actual string
 		actual, have, haveSegment = strings.Cut(have, "/")
-		if segment == actual {
+		// 与 ServeMux 一样先分段再解码，避免把 %2F 当成分隔符或重复解码 %25。
+		literal, err := url.PathUnescape(segment)
+		if err != nil {
+			return 0, false
+		}
+		actual, err = url.PathUnescape(actual)
+		if err != nil {
+			return 0, false
+		}
+		if literal == actual {
 			score++
 		} else if !strings.HasPrefix(segment, "{") || actual == "" {
 			return 0, false

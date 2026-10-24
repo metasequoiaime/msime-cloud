@@ -341,10 +341,17 @@ func (c cli) call(args []string) error {
 
 // send 按接口要求选择凭据；保存的会话过期或被服务端拒绝时最多刷新一次。
 func (c cli) send(r request) (*http.Response, error) {
-	if strings.HasPrefix(r.path, adminPrefix) {
+	rawPath, _, _ := strings.Cut(r.path, "#")
+	rawPath, _, _ = strings.Cut(rawPath, "?")
+	path, err := url.PathUnescape(rawPath)
+	if err != nil {
+		return nil, usageError{err.Error()}
+	}
+	// 后台按 URL.Path 分流；鉴权元数据仍使用原始路径逐段匹配，实际请求也保留原始 URL。
+	if strings.HasPrefix(path, adminPrefix) {
 		return c.sendAdmin(r)
 	}
-	if path, _, _ := strings.Cut(r.path, "?"); path == contract.StreamingTranscriptionPath {
+	if _, streaming := match(contract.StreamingTranscriptionPath, rawPath); streaming {
 		return nil, errors.New(path + " is a WebSocket for live audio; this command speaks HTTP only")
 	}
 	auth := authAny

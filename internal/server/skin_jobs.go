@@ -156,51 +156,40 @@ func validSkinJobID(id string) bool {
 	return true
 }
 
-func (s *Server) getSkinArtworkJob(w http.ResponseWriter, r *http.Request) {
-	if !validSkinJobID(r.PathValue("job")) {
+func (s *Server) skinArtworkJob(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("job")
+	if !validSkinJobID(id) {
 		fail(w, 404, "skin_job_not_found")
 		return
 	}
 	owner, _ := r.Context().Value(skinJobOwnerKey{}).(string)
+	deleting := r.Method == http.MethodDelete
 	if s.accounts != nil {
-		s.getSharedSkinJob(w, r, owner)
+		if deleting {
+			s.deleteSharedSkinJob(w, r, owner)
+		} else {
+			s.getSharedSkinJob(w, r, owner)
+		}
 		return
 	}
 	s.mu.Lock()
 	s.expireSkinJobs(time.Now())
-	job := s.skinJobs[r.PathValue("job")]
+	job := s.skinJobs[id]
 	if job == nil || owner == "" || job.owner != owner {
 		s.mu.Unlock()
 		fail(w, 404, "skin_job_not_found")
+		return
+	}
+	if deleting {
+		job.cancel()
+		delete(s.skinJobs, id)
+		s.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	state, artwork, reason := job.state, job.artwork, job.reason
 	s.mu.Unlock()
-	respondSkinJob(w, r.PathValue("job"), state, reason, artwork)
-}
-
-func (s *Server) deleteSkinArtworkJob(w http.ResponseWriter, r *http.Request) {
-	if !validSkinJobID(r.PathValue("job")) {
-		fail(w, 404, "skin_job_not_found")
-		return
-	}
-	owner, _ := r.Context().Value(skinJobOwnerKey{}).(string)
-	if s.accounts != nil {
-		s.deleteSharedSkinJob(w, r, owner)
-		return
-	}
-	s.mu.Lock()
-	s.expireSkinJobs(time.Now())
-	job := s.skinJobs[r.PathValue("job")]
-	if job == nil || owner == "" || job.owner != owner {
-		s.mu.Unlock()
-		fail(w, 404, "skin_job_not_found")
-		return
-	}
-	job.cancel()
-	delete(s.skinJobs, r.PathValue("job"))
-	s.mu.Unlock()
-	w.WriteHeader(http.StatusNoContent)
+	respondSkinJob(w, id, state, reason, artwork)
 }
 
 type skinJobResponse struct {

@@ -160,29 +160,23 @@ func (a *Service) contentModeration(ctx context.Context, section, id string, raw
 	items := []ownerItem{}
 	batch := &pgx.Batch{}
 	batch.Queue(`SELECT r.id,r.reason,r.detail,COALESCE(NULLIF(btrim(u.display_name),''),'水杉小鹿·'||upper(left(u.id,6))),r.created_at FROM community_reports r JOIN auth_users u ON u.id=r.reporter_id WHERE r.kind=$1 AND r.item_id=$2 ORDER BY r.created_at DESC,r.id DESC LIMIT 100`, section, id).Query(func(rows pgx.Rows) error {
-		defer rows.Close()
-		for rows.Next() {
-			var v contentReport
-			if err := rows.Scan(&v.ID, &v.Reason, &v.Detail, &v.Reporter, &v.CreatedAt); err != nil {
-				return err
-			}
+		var v contentReport
+		_, err := pgx.ForEachRow(rows, []any{&v.ID, &v.Reason, &v.Detail, &v.Reporter, &v.CreatedAt}, func() error {
 			reports = append(reports, v)
-		}
-		return rows.Err()
+			return nil
+		})
+		return err
 	})
 	batch.Queue(`SELECT count(*) FROM community_reports WHERE kind=$1 AND item_id=$2`, section, id).QueryRow(func(row pgx.Row) error {
 		return row.Scan(&reportCount)
 	})
 	batch.Queue(contentOwnerItemsQuery, owner, section, id).Query(func(rows pgx.Rows) error {
-		defer rows.Close()
-		for rows.Next() {
-			var v ownerItem
-			if err := rows.Scan(&v.Section, &v.ID, &v.Name, &v.Moderation, &v.CreatedAt); err != nil {
-				return err
-			}
+		var v ownerItem
+		_, err := pgx.ForEachRow(rows, []any{&v.Section, &v.ID, &v.Name, &v.Moderation, &v.CreatedAt}, func() error {
 			items = append(items, v)
-		}
-		return rows.Err()
+			return nil
+		})
+		return err
 	})
 	// 三条互不依赖的审核详情查询一起发送，减少打开内容详情时的数据库往返。
 	if err := a.store.pool.SendBatch(ctx, batch).Close(); err != nil {

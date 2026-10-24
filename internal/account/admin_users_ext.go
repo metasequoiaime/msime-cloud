@@ -346,16 +346,13 @@ func (a *Service) adminUserStats(w http.ResponseWriter, r *http.Request, _ strin
 		return row.Scan(&total, &new7d, &banned, &synced)
 	})
 	batch.Queue(userRoleCountsQuery, a.adminOwnersArg()).Query(func(rows pgx.Rows) error {
-		defer rows.Close()
-		for rows.Next() {
-			var role string
-			var count int64
-			if err := rows.Scan(&role, &count); err != nil {
-				return err
-			}
+		var role string
+		var count int64
+		_, err := pgx.ForEachRow(rows, []any{&role, &count}, func() error {
 			roles[role] = count
-		}
-		return rows.Err()
+			return nil
+		})
+		return err
 	})
 	if err := a.store.pool.SendBatch(r.Context(), batch).Close(); err != nil {
 		a.error(w, err)

@@ -50,15 +50,11 @@ func (s *Store) RestoreDictionarySnapshot(ctx context.Context, user string, expe
 	if err != nil {
 		return 0, err
 	}
-	tx, err := s.userDataTransaction(ctx, user)
+	tx, current, err := s.userDataRevisionTransaction(ctx, user, expected)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
-	current, err := checkUserDataRevision(ctx, tx, user, expected)
-	if err != nil {
-		return 0, err
-	}
 	if _, err = tx.Exec(ctx, `CREATE TEMP TABLE msime_restore_stage(seq bigint PRIMARY KEY,data jsonb NOT NULL) ON COMMIT DROP`); err != nil {
 		return 0, err
 	}

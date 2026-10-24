@@ -97,15 +97,11 @@ SELECT kind,code,word,id FROM updated`, user, raw, revision, updatedAt)
 
 func (s *Store) mutateCandidate(ctx context.Context, user string, expected int64, cfg engine.Config, query map[string]any, action RankingAction, operation string) (RankingResult, error) {
 	var result RankingResult
-	tx, err := s.userDataTransaction(ctx, user)
+	tx, revision, err := s.userDataRevisionTransaction(ctx, user, expected)
 	if err != nil {
 		return result, err
 	}
 	defer tx.Rollback(ctx)
-	revision, err := checkUserDataRevision(ctx, tx, user, expected)
-	if err != nil {
-		return result, err
-	}
 	raw, err := cfg.QuerySnapshot(ctx, map[string]any{"operation": operation, "query": query, "action": action}, dictionaryQuerySnapshot(tx, user, query))
 	if err != nil {
 		return result, err

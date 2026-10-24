@@ -13,15 +13,11 @@ import (
 
 func (s *Store) EditManagedDictionary(ctx context.Context, user string, expected int64, previous DictionaryEntry, next *DictionaryEntry, cfg engine.Config) (DictionaryChange, error) {
 	var change DictionaryChange
-	tx, err := s.userDataTransaction(ctx, user)
+	tx, current, err := s.userDataRevisionTransaction(ctx, user, expected)
 	if err != nil {
 		return change, err
 	}
 	defer tx.Rollback(ctx)
-	current, err := checkUserDataRevision(ctx, tx, user, expected)
-	if err != nil {
-		return change, err
-	}
 	lookup := func(e DictionaryEntry) (*DictionaryEntry, error) {
 		query := map[string]any{"operation": "dictionary", "kind": e.Kind, "text": e.Code, "word": e.Word, "exact": true, "limit": 1}
 		raw, err := cfg.QuerySnapshot(ctx, map[string]any{"operation": "personal_query", "query": query}, dictionaryQuerySnapshot(tx, user, query))

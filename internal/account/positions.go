@@ -18,15 +18,11 @@ type CandidatePosition struct {
 }
 
 func (s *Store) SetCandidatePosition(ctx context.Context, user string, expected int64, p CandidatePosition) (int64, error) {
-	tx, err := s.userDataTransaction(ctx, user)
+	tx, revision, err := s.userDataRevisionTransaction(ctx, user, expected)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
-	revision, err := checkUserDataRevision(ctx, tx, user, expected)
-	if err != nil {
-		return 0, err
-	}
 	batch := &pgx.Batch{}
 	if p.Position > 0 {
 		batch.Queue(`DELETE FROM user_candidate_positions WHERE user_id=$1 AND context=$2 AND position=$3`, user, p.Context, p.Position)

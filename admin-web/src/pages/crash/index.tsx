@@ -1,5 +1,5 @@
 import { formatNumber, formatRate } from "../../utils/number";
-import { deviceRateSub, excludedVersionsNote, INSUFFICIENT, sessionRateText } from "../../utils/crash-rate";
+import { deviceRateSub, excludedVersionsNote, FORCED_TERMINATION_NOTE, INSUFFICIENT, sessionRateText } from "../../utils/crash-rate";
 import { useCallback, useMemo } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { errorMessage, isGithubDisabled, useAPI } from "../../api/client";
@@ -155,7 +155,9 @@ export default function CrashPage() {
       <StatTile label="今日安装上报" value={summary?.installs_today == null ? "—" : formatNumber(summary.installs_today)} sub={summary?.installs_today === null ? UNREPORTED : "今天上报过的安装"} />
       <StatTile label="无崩溃会话" value={summary ? sessionRateText(summary.crash_free_rate, summary.versions.length, insufficientVersions) : "—"} sub={sessionSub} />
       <StatTile label="崩溃设备占比" value={formatRate(summary?.device_crash_rate)}
-        sub={!summary ? undefined : summary.active_devices_7d === null ? UNREPORTED : `近 7 天 ${deviceRateSub(summary.devices_7d ?? 0, summary.active_devices_7d)}`} />
+        sub={!summary ? undefined : summary.active_devices_7d === null ? UNREPORTED : `近 7 天 ${deviceRateSub(summary.crash_devices_7d, summary.active_devices_7d)}，不含系统强制终止`} />
+      <StatTile label={<span title={FORCED_TERMINATION_NOTE}>系统强制终止</span>} value={summary ? `${formatNumber(summary.forced_termination_devices_7d)} 台` : "—"}
+        sub={summary ? "近 7 天受影响设备；系统杀掉进程（挂起时持锁、看门狗），不是崩溃，仍需修复" : undefined} />
       <StatTile label="崩溃分组" value={summary ? formatNumber(summary.groups) : "—"} sub={summary ? `近 7 天崩溃 ${formatNumber(summary.crashes_7d)} 次` : undefined} />
       <StatTile label="影响设备" value={summary?.devices_7d == null ? "—" : formatNumber(summary.devices_7d)} sub={summary?.devices_7d === null ? UNREPORTED : "近 7 天"} />
     </StatGrid>

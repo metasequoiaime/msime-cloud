@@ -107,11 +107,11 @@ FIXTURES = {
         "platform_active_7d": {"windows": 80, "macos": 21, "ios": 18, "harmonyos": 12},
         "crash_free_rate": 0.9962, "crash_free_rate_prev": 0.997,
         "crash_top": {"platform": "ios", "version": "1.0.0", "crashes": 3},
-        "crash_devices_7d": 4, "device_crash_rate": 0.0305,
+        "crash_devices_7d": 4, "device_crash_rate": 0.0305, "forced_termination_devices_7d": 15,
         "crash_platforms": [
-            {"platform": "ios", "crash_free_rate": 0.9957, "sessions": 690, "crashed_sessions": 3, "versions": 2, "insufficient_versions": 0, "active_devices_7d": 18, "crash_devices_7d": 2, "device_crash_rate": 0.1111},
-            {"platform": "macos", "crash_free_rate": None, "sessions": 0, "crashed_sessions": 0, "versions": 1, "insufficient_versions": 1, "active_devices_7d": 21, "crash_devices_7d": 1, "device_crash_rate": 0.0476},
-            {"platform": "windows", "crash_free_rate": 1, "sessions": 100, "crashed_sessions": 0, "versions": 1, "insufficient_versions": 0, "active_devices_7d": 80, "crash_devices_7d": 1, "device_crash_rate": 0.0125},
+            {"platform": "ios", "crash_free_rate": 0.9957, "sessions": 690, "crashed_sessions": 3, "versions": 2, "insufficient_versions": 0, "active_devices_7d": 18, "crash_devices_7d": 2, "device_crash_rate": 0.1111, "forced_termination_devices_7d": 15, "forced_termination_rate": 0.8333},
+            {"platform": "macos", "crash_free_rate": None, "sessions": 0, "crashed_sessions": 0, "versions": 1, "insufficient_versions": 1, "active_devices_7d": 21, "crash_devices_7d": 1, "device_crash_rate": 0.0476, "forced_termination_devices_7d": 0, "forced_termination_rate": 0},
+            {"platform": "windows", "crash_free_rate": 1, "sessions": 100, "crashed_sessions": 0, "versions": 1, "insufficient_versions": 0, "active_devices_7d": 80, "crash_devices_7d": 1, "device_crash_rate": 0.0125, "forced_termination_devices_7d": 0, "forced_termination_rate": 0},
         ],
         "crash_group_latest": {"signature": "0123456789abcdef", "platform": "ios", "title": "内存超限"},
         "pending": {"community": 0, "reports_7d": 2, "crash_groups": 1},
@@ -175,7 +175,7 @@ FIXTURES.update({
 CRASH_GROUP = {"signature": "0123456789abcdef", "platform": "ios", "version": "1.0.0", "title": "EXC_BAD_ACCESS", "status": "known", "issue_url": "https://github.com/metasequoiaime/msime-ios/issues/7", "first_seen": "2026-09-20T00:00:00Z", "last_seen": "2026-10-01T00:00:00Z", "count_7d": 12, "count_prev_7d": 9, "devices_7d": 8, "new": False}
 FIXTURES.update({
     "/api/feedback": {"items": [{"id": "0b6f2c1e-5d3a-4c8e-9f10-2a7b8c9d0e1f", "type": "bug", "text": "候选栏偶尔不显示\n重启后恢复", "platform": "android", "app_version": "2.1.0", "edition": "pinyin", "diagnostics": {"device": "Pixel 8"}, "status": "new", "created_at": "2026-10-01T00:00:00Z", "user_id": "u1", "author": "smoke-user", "anonymous": False, "screenshots": 0}], "page": 1, "total": 1, "has_more": False},
-    "/api/crash-groups": {"items": [CRASH_GROUP, {**CRASH_GROUP, "signature": "fedcba9876543210", "platform": "windows", "title": "Server exited", "status": "open", "issue_url": None, "count_7d": 3, "count_prev_7d": 0, "devices_7d": None, "new": True}], "has_more": False, "platforms": [{"platform": "ios", "count": 1}, {"platform": "windows", "count": 1}], "summary": {"groups": 2, "crashes_7d": 15, "devices_7d": 8, "installs_today": None, "crash_free_rate": 0.9962, "active_devices_7d": 131, "device_crash_rate": 0.0611, "versions": [{"platform": "ios", "version": "1.0.0", "sessions": 500, "crashed_sessions": 1, "active_devices": 12, "crash_free_rate": 0.998, "insufficient": False}, {"platform": "ios", "version": "0.9.0", "sessions": 290, "crashed_sessions": 2, "active_devices": 6, "crash_free_rate": 0.9932, "insufficient": False}, {"platform": "macos", "version": "0.52.0", "sessions": 1, "crashed_sessions": 40, "active_devices": 21, "crash_free_rate": None, "insufficient": True}]}},
+    "/api/crash-groups": {"items": [CRASH_GROUP, {**CRASH_GROUP, "signature": "fedcba9876543210", "platform": "windows", "title": "Server exited", "status": "open", "issue_url": None, "count_7d": 3, "count_prev_7d": 0, "devices_7d": None, "new": True}], "has_more": False, "platforms": [{"platform": "ios", "count": 1}, {"platform": "windows", "count": 1}], "summary": {"groups": 2, "crashes_7d": 15, "devices_7d": 8, "installs_today": None, "crash_free_rate": 0.9962, "active_devices_7d": 131, "device_crash_rate": 0.0229, "crash_devices_7d": 3, "forced_termination_devices_7d": 6, "versions": [{"platform": "ios", "version": "1.0.0", "sessions": 500, "crashed_sessions": 1, "active_devices": 12, "crash_free_rate": 0.998, "insufficient": False}, {"platform": "ios", "version": "0.9.0", "sessions": 290, "crashed_sessions": 2, "active_devices": 6, "crash_free_rate": 0.9932, "insufficient": False}, {"platform": "macos", "version": "0.52.0", "sessions": 1, "crashed_sessions": 40, "active_devices": 21, "crash_free_rate": None, "insufficient": True}]}},
     "/api/crash-groups/0123456789abcdef": {"group": CRASH_GROUP, "samples": [{"id": "crash-1", "platform": "ios", "version": "1.0.0", "message": "EXC_BAD_ACCESS", "stack": "2 MSIME 0x1 KeyboardViewController.layoutCandidates() + 120", "resolved": False, "created_at": "2026-10-01T00:00:00Z"}]},
     "/api/crash-groups/0123456789abcdef/issue": {"target": {"platform": "ios", "name": "iOS", "repo": "metasequoiaime/msime-ios"}, "issue_url": CRASH_GROUP["issue_url"]},
     "/api/crash-groups/fedcba9876543210/issue": {"target": None, "issue_url": None},
@@ -1934,8 +1934,11 @@ def main() -> int:
                 page.goto(base + "/crash")
                 expect(page.get_by_text("99.62%")).to_be_visible()
                 # 崩溃设备占比与无崩溃会话率并排；各版本统计默认折叠，展开后数据不足的版本显示标记而不是比率。
-                expect(page.get_by_text("6.11%", exact=True)).to_be_visible()
-                expect(page.get_by_text("近 7 天 8 / 131 台", exact=True)).to_be_visible()
+                expect(page.get_by_text("2.29%", exact=True)).to_be_visible()
+                expect(page.get_by_text("近 7 天 3 / 131 台，不含系统强制终止", exact=True)).to_be_visible()
+                # 系统强制终止单独显示受影响设备，并说明不是崩溃但仍需修复。
+                expect(page.get_by_text("6 台", exact=True)).to_be_visible()
+                expect(page.get_by_text("近 7 天受影响设备；系统杀掉进程（挂起时持锁、看门狗），不是崩溃，仍需修复", exact=True)).to_be_visible()
                 expect(page.get_by_text("近 7 天，1 个版本会话数据不足，未计入", exact=True)).to_be_visible()
                 versions_table = page.get_by_role("table", name="各版本无崩溃会话率")
                 expect(versions_table).to_be_hidden()
@@ -2058,6 +2061,8 @@ def main() -> int:
                 expect(stability.get_by_text("会话数据不足", exact=True)).to_be_visible()
                 expect(stability.get_by_text("1 个版本会话数据不足，未计入", exact=True)).to_be_visible()
                 expect(stability.get_by_text("1 / 21 台", exact=True)).to_be_visible()
+                expect(stability.get_by_role("columnheader", name="系统强制终止")).to_be_visible()
+                expect(stability).to_contain_text("83.33% 15 / 18 台")
                 expect(main.get_by_text("iOS · 内存超限", exact=True)).to_be_visible()
                 expect(main.get_by_text("词库 PR 2 · 社区 0 · Issue 5", exact=True)).to_be_visible()
                 expect(main.get_by_text("近 7 天收到 2 次举报", exact=True)).to_be_visible()

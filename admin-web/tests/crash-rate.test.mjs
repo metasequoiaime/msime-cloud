@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { deviceRateSub, excludedVersionsNote, INSUFFICIENT, sessionRateText } from '../src/utils/crash-rate.ts';
+import { deviceRateSub, excludedVersionsNote, FORCED_TERMINATION_NOTE, INSUFFICIENT, sessionRateText } from '../src/utils/crash-rate.ts';
 
 test('有比率时显示百分比，即使部分版本数据不足', () => {
   assert.equal(sessionRateText(0.5, 3, 2), '50.00%');
@@ -26,4 +26,12 @@ test('排除说明只在有版本被排除时出现', () => {
 test('崩溃设备说明显示崩溃设备与活跃设备数', () => {
   assert.equal(deviceRateSub(72, 2050), '72 / 2,050 台');
   assert.equal(deviceRateSub(0, 0), '0 / 0 台');
+});
+
+test('系统强制终止的说明写明不是崩溃、原因和仍需修复', () => {
+  assert.match(FORCED_TERMINATION_NOTE, /^系统强制终止不是崩溃/);
+  assert.match(FORCED_TERMINATION_NOTE, /0xdead10cc/);
+  assert.match(FORCED_TERMINATION_NOTE, /看门狗/);
+  assert.match(FORCED_TERMINATION_NOTE, /不计入崩溃设备占比/);
+  assert.match(FORCED_TERMINATION_NOTE, /仍需修复/);
 });

@@ -53,12 +53,14 @@ type overviewBody struct {
 		Platform  string `json:"platform"`
 		Title     string `json:"title"`
 	} `json:"crash_group_latest"`
-	CrashDevices7d     int                     `json:"crash_devices_7d"`
-	DeviceCrashRate    *float64                `json:"device_crash_rate"`
-	CrashPlatforms     []overviewCrashPlatform `json:"crash_platforms"`
-	Pending            map[string]int          `json:"pending"`
-	ServicesConfigured bool                    `json:"services_configured"`
-	Services           []overviewService       `json:"services"`
+	CrashDevices7d  int                     `json:"crash_devices_7d"`
+	DeviceCrashRate *float64                `json:"device_crash_rate"`
+	CrashPlatforms  []overviewCrashPlatform `json:"crash_platforms"`
+
+	ForcedTerminationDevices7d int               `json:"forced_termination_devices_7d"`
+	Pending                    map[string]int    `json:"pending"`
+	ServicesConfigured         bool              `json:"services_configured"`
+	Services                   []overviewService `json:"services"`
 }
 
 type overviewService struct {
@@ -80,6 +82,9 @@ type overviewCrashPlatform struct {
 	ActiveDevices7d      int      `json:"active_devices_7d"`
 	CrashDevices7d       int      `json:"crash_devices_7d"`
 	DeviceCrashRate      *float64 `json:"device_crash_rate"`
+
+	ForcedTerminationDevices7d int      `json:"forced_termination_devices_7d"`
+	ForcedTerminationRate      *float64 `json:"forced_termination_rate"`
 }
 
 func overviewTestService(t *testing.T) *Service {

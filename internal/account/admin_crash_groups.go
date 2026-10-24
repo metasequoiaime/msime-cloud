@@ -154,7 +154,7 @@ func scanCrashGroup(row pgx.Row, extraDest ...any) (crashGroupRow, error) {
 // crashGroupsLimit caps the groups one page load returns; the busiest and most recent come first.
 const crashGroupsLimit = 500
 
-// crashSummary 是崩溃页顶部的统计。安装和会话来自可选的 active、session 遥测，客户端未上报时为 null 而不是 0。CrashFreeRate 是近 7 天的无崩溃会话率，与概览的 crash_free_rate 同一规则（见 admin_crash_free.go），只合计会话数据充分的版本；Versions 列出近 7 天有会话的各版本及是否数据不足。ActiveDevices7d 是近 7 天去重活跃设备，DeviceCrashRate 是 Devices7d 除以它的崩溃设备占比，没有活跃设备时为 null。统计查询列出所有事件类型，让查询计划使用 admin_events_kind_time 而不是扫描整张表。
+// crashSummary 是崩溃页顶部的统计。安装和会话来自可选的 active、session 遥测，客户端未上报时为 null 而不是 0。CrashFreeRate 是近 7 天的无崩溃会话率，与概览的 crash_free_rate 同一规则（见 admin_crash_free.go），只合计会话数据充分的版本；Versions 列出近 7 天有会话的各版本及是否数据不足。ActiveDevices7d 是近 7 天去重活跃设备；Devices7d 统计全部 `crash` 事件（与分组的影响设备一致），CrashDevices7d 只统计真正的崩溃，ForcedTerminationDevices7d 统计被系统强制终止的设备（见 crashForcedTerminationSQL）；DeviceCrashRate 是 CrashDevices7d 除以 ActiveDevices7d，没有活跃设备时为 null。统计查询列出所有事件类型，让查询计划使用 admin_events_kind_time 而不是扫描整张表。
 type crashSummary struct {
 	Groups          int64                `json:"groups"`
 	Crashes7d       int64                `json:"crashes_7d"`
@@ -164,6 +164,9 @@ type crashSummary struct {
 	ActiveDevices7d *int64               `json:"active_devices_7d"`
 	DeviceCrashRate *float64             `json:"device_crash_rate"`
 	Versions        []sessionVersionStat `json:"versions"`
+	// CrashDevices7d 和 ForcedTerminationDevices7d 把 Devices7d 拆成真正崩溃和系统强制终止两部分；一台设备两种都有时各算一次。
+	CrashDevices7d             int64 `json:"crash_devices_7d"`
+	ForcedTerminationDevices7d int64 `json:"forced_termination_devices_7d"`
 }
 
 type crashPlatformCount struct {
@@ -180,8 +183,10 @@ SELECT
  CASE WHEN count(install_id)=0 THEN NULL ELSE count(DISTINCT install_id) FILTER (WHERE created_at>=date_trunc('day',now(),'UTC')) END,
  (SELECT ` + crashFreeRateSQL + ` FROM session_versions),
  CASE WHEN count(install_id) FILTER (WHERE kind='active')=0 THEN NULL ELSE count(DISTINCT install_id) FILTER (WHERE kind='active') END,
- round(count(DISTINCT install_id) FILTER (WHERE kind='crash')::numeric/NULLIF(count(DISTINCT install_id) FILTER (WHERE kind='active'),0),4)::float8,
- (SELECT COALESCE(json_agg(` + sessionVersionJSON + ` ORDER BY platform,sessions+crashed DESC,version),'[]'::json) FROM session_versions WHERE sessions+crashed>0)
+ round(count(DISTINCT install_id) FILTER (WHERE kind='crash' AND NOT ` + crashForcedTerminationSQL("message") + `)::numeric/NULLIF(count(DISTINCT install_id) FILTER (WHERE kind='active'),0),4)::float8,
+ (SELECT COALESCE(json_agg(` + sessionVersionJSON + ` ORDER BY platform,sessions+crashed DESC,version),'[]'::json) FROM session_versions WHERE sessions+crashed>0),
+ count(DISTINCT install_id) FILTER (WHERE kind='crash' AND NOT ` + crashForcedTerminationSQL("message") + `),
+ count(DISTINCT install_id) FILTER (WHERE kind='crash' AND ` + crashForcedTerminationSQL("message") + `)
 	FROM admin_events WHERE kind IN ('download','crash','active','session','session_crash') AND created_at>=now()-interval '7 days' AND ($1='' OR ` + overviewPlatform("platform") + `=$1)`
 
 const (
@@ -277,7 +282,7 @@ func (a *Service) adminCrashGroups(w http.ResponseWriter, r *http.Request, _ str
 	})
 	var summary crashSummary
 	batch.Queue(crashSummaryQuery, platform).QueryRow(func(row pgx.Row) error {
-		return row.Scan(&summary.Groups, &summary.Crashes7d, &summary.Devices7d, &summary.InstallsToday, &summary.CrashFreeRate, &summary.ActiveDevices7d, &summary.DeviceCrashRate, &summary.Versions)
+		return row.Scan(&summary.Groups, &summary.Crashes7d, &summary.Devices7d, &summary.InstallsToday, &summary.CrashFreeRate, &summary.ActiveDevices7d, &summary.DeviceCrashRate, &summary.Versions, &summary.CrashDevices7d, &summary.ForcedTerminationDevices7d)
 	})
 	if err = tx.SendBatch(ctx, batch).Close(); err != nil {
 		a.error(w, err)

@@ -38,7 +38,7 @@ export const sessionVersionSchema = z.object({
 });
 export type SessionVersion = z.infer<typeof sessionVersionSchema>;
 
-// 顶部统计。installs_today、crash_free_rate、active_devices_7d 依赖可选的 active/session 遥测，客户端未上报时为 null；crash_free_rate 只合计会话数据充分的版本，device_crash_rate 是 devices_7d 除以 active_devices_7d。
+// 顶部统计。installs_today、crash_free_rate、active_devices_7d 依赖可选的 active/session 遥测，客户端未上报时为 null；crash_free_rate 只合计会话数据充分的版本。devices_7d 统计全部崩溃事件，其中真正崩溃的设备是 crash_devices_7d、被系统强制终止的设备是 forced_termination_devices_7d；device_crash_rate 是 crash_devices_7d 除以 active_devices_7d。
 export const crashSummarySchema = z.object({
   groups: z.number(),
   crashes_7d: z.number(),
@@ -48,6 +48,8 @@ export const crashSummarySchema = z.object({
   active_devices_7d: z.number().nullable(),
   device_crash_rate: z.number().nullable(),
   versions: z.array(sessionVersionSchema),
+  crash_devices_7d: z.number(),
+  forced_termination_devices_7d: z.number(),
 });
 
 export const crashGroupsSchema = z.object({

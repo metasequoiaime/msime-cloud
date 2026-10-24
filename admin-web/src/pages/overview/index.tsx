@@ -1,6 +1,6 @@
 import { formatNumber, formatRate } from "../../utils/number";
 import { platformName } from "../../utils/platform";
-import { deviceRateSub, excludedVersionsNote, INSUFFICIENT, sessionRateText } from "../../utils/crash-rate";
+import { deviceRateSub, excludedVersionsNote, FORCED_TERMINATION_NOTE, INSUFFICIENT, sessionRateText } from "../../utils/crash-rate";
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -102,20 +102,21 @@ function PlatformActive({ data }: { data: Overview }) {
   </Card>;
 }
 
-// CrashPlatforms 把各平台的无崩溃会话率和崩溃设备占比并排列出；会话率只合计会话数据充分的版本，被排除的版本数写在说明列。
+// CrashPlatforms 把各平台的无崩溃会话率、崩溃设备占比和系统强制终止并排列出；会话率只合计会话数据充分的版本，被排除的版本数写在说明列。
 function CrashPlatforms({ data }: { data: Overview }) {
   const rows = [...data.crash_platforms].sort((a, b) => comparePlatforms(a.platform, b.platform));
   return <Card>
-    <CardHeader title="各平台稳定性" sub="近 7 天。每台活跃设备平均正常会话不足 0.5 次的版本视为会话数据不足，不计入无崩溃会话率；崩溃设备占比 = 有崩溃的设备 ÷ 活跃设备" />
+    <CardHeader title="各平台稳定性" sub={<>近 7 天。每台活跃设备平均正常会话不足 0.5 次的版本视为会话数据不足，不计入无崩溃会话率；崩溃设备占比 = 有崩溃的设备 ÷ 活跃设备。<br />{FORCED_TERMINATION_NOTE}。</>} />
     {rows.length === 0
       ? <Empty title={data.telemetry.active || data.telemetry.sessions ? "近 7 天没有会话或活跃设备" : "客户端未上报"} className="py-8" />
       : <div className="overflow-x-auto">
         <table className="w-full border-collapse text-left text-[13px]" aria-label="各平台无崩溃会话率与崩溃设备占比">
-          <thead><tr className="border-b border-hair text-muted"><th className="py-2 pr-4 font-medium">平台</th><th className="py-2 pr-4 font-medium">无崩溃会话率</th><th className="py-2 pr-4 font-medium">崩溃设备占比</th><th className="py-2 font-medium">说明</th></tr></thead>
+          <thead><tr className="border-b border-hair text-muted"><th className="py-2 pr-4 font-medium">平台</th><th className="py-2 pr-4 font-medium">无崩溃会话率</th><th className="py-2 pr-4 font-medium">崩溃设备占比</th><th className="py-2 pr-4 font-medium" title={FORCED_TERMINATION_NOTE}>系统强制终止</th><th className="py-2 font-medium">说明</th></tr></thead>
           <tbody>{rows.map(row => <tr key={row.platform} className="border-b border-hair last:border-b-0">
             <td className="py-2 pr-4 text-ink">{platformName(row.platform)}</td>
             <td className="py-2 pr-4 tabular-nums text-ink">{sessionRateText(row.crash_free_rate, row.versions, row.insufficient_versions)}</td>
             <td className="py-2 pr-4 tabular-nums text-ink">{formatRate(row.device_crash_rate)} <span className="text-muted">{deviceRateSub(row.crash_devices_7d, row.active_devices_7d)}</span></td>
+            <td className="py-2 pr-4 tabular-nums text-ink">{formatRate(row.forced_termination_rate)} <span className="text-muted">{deviceRateSub(row.forced_termination_devices_7d, row.active_devices_7d)}</span></td>
             <td className="py-2 text-muted">{excludedVersionsNote(row.insufficient_versions)}</td>
           </tr>)}</tbody>
         </table>

@@ -15,6 +15,7 @@ import (
 //   - Android 0.4.0：4 台活跃设备 1 次正常会话，平台内唯一的版本数据不足，平台比率为 null。
 //   - Windows：只有活跃和崩溃，没有会话；一台未上报 active 的设备近 7 天崩溃，另一台的崩溃在 8 天前。
 //   - 前 7 天窗口：macOS 0.52.0 数据不足，Linux 0.10.0 有 3 次正常会话、1 次崩溃会话。
+//   - 系统强制终止：iOS 唯一的活跃设备只有三条 SIGKILL 类诊断（旧格式的 0xdead10cc、旧格式的裸 signal 9、新格式的 Killed 前缀），不算崩溃设备；macOS 那台崩溃循环的设备另有一条看门狗终止，崩溃和强制终止各算一次。
 func seedCrashFreeFixture(t *testing.T, a *Service) {
 	t.Helper()
 	if _, err := a.store.pool.Exec(context.Background(), `INSERT INTO admin_events(id,kind,platform,version,message,install_id,created_at)
@@ -33,6 +34,10 @@ func seedCrashFreeFixture(t *testing.T, a *Service) {
  UNION ALL SELECT 'cf-sc-lin101-'||n,'session_crash','linux','0.10.1','','cf-device-lin-0001',now()-n*interval '1 minute' FROM generate_series(1,12) n
  UNION ALL SELECT 'cf-crash-lin-'||n,'crash','linux','0.10.1','合成崩溃','cf-device-lin-0001',now()-n*interval '1 minute' FROM generate_series(1,12) n
  UNION ALL SELECT 'cf-act-ios-1','active','ios','0.9','','cf-device-ios-0001',now()-interval '1 hour'
+ UNION ALL SELECT 'cf-kill-ios-1','crash','ios','1.0','Crash exception 10 code 0 signal 9 Namespace RUNNINGBOARD, Code 0xdead10cc','cf-device-ios-0001',now()-interval '1 hour'
+ UNION ALL SELECT 'cf-kill-ios-2','crash','iPadOS','1.0','Crash exception 10 code 0 signal 9','cf-device-ios-0001',now()-interval '2 hours'
+ UNION ALL SELECT 'cf-kill-ios-3','crash','ios','1.0','Killed RUNNINGBOARD 0xdead10cc','cf-device-ios-0001',now()-interval '3 hours'
+ UNION ALL SELECT 'cf-kill-mac-1','crash','macos','0.52.0','Killed by watchdog','cf-device-mac-0001',now()-interval '1 hour'
  UNION ALL SELECT 'cf-ses-ios-'||n,'session',CASE WHEN n%2=0 THEN 'iPadOS' ELSE 'ios' END,'1.0','','cf-device-ios-0001',now()-interval '1 hour' FROM generate_series(1,6) n
  UNION ALL SELECT 'cf-act-and-'||n,'active','android','0.4.0','','cf-device-and-'||lpad(n::text,4,'0'),now()-interval '1 hour' FROM generate_series(1,4) n
  UNION ALL SELECT 'cf-ses-and-1','session','android','0.4.0','','cf-device-and-0001',now()-interval '1 hour'
@@ -67,17 +72,17 @@ func TestOverviewCrashFreeRateExcludesUnderReportedVersions(t *testing.T) {
 	if top := body.CrashTop; top == nil || top.Platform != "linux" || top.Version != "0.10.1" || top.Crashes != 12 {
 		t.Fatalf("crash_top %+v", body.CrashTop)
 	}
-	// 崩溃设备：macOS 1 台（崩溃 5 次只算一次）、Linux 1 台（崩溃循环 12 次只算一次）、Windows 1 台（8 天前的不算）；活跃设备 16+3+1+4+2=26。
-	if body.ActiveDevices7d != 26 || body.CrashDevices7d != 3 || !rateIs(body.DeviceCrashRate, 0.1154) {
-		t.Fatalf("devices active=%d crashed=%d rate=%v", body.ActiveDevices7d, body.CrashDevices7d, body.DeviceCrashRate)
+	// 崩溃设备：macOS 1 台（崩溃 5 次只算一次）、Linux 1 台（崩溃循环 12 次只算一次）、Windows 1 台（8 天前的不算），iOS 只有系统强制终止，不算；活跃设备 16+3+1+4+2=26。
+	if body.ActiveDevices7d != 26 || body.CrashDevices7d != 3 || !rateIs(body.DeviceCrashRate, 0.1154) || body.ForcedTerminationDevices7d != 2 {
+		t.Fatalf("devices active=%d crashed=%d rate=%v forced=%d", body.ActiveDevices7d, body.CrashDevices7d, body.DeviceCrashRate, body.ForcedTerminationDevices7d)
 	}
 	f := func(v float64) *float64 { return &v }
 	want := []overviewCrashPlatform{
-		{Platform: "android", CrashFreeRate: nil, Sessions: 0, CrashedSessions: 0, Versions: 1, InsufficientVersions: 1, ActiveDevices7d: 4, CrashDevices7d: 0, DeviceCrashRate: f(0)},
-		{Platform: "ios", CrashFreeRate: f(1), Sessions: 6, CrashedSessions: 0, Versions: 1, InsufficientVersions: 0, ActiveDevices7d: 1, CrashDevices7d: 0, DeviceCrashRate: f(0)},
-		{Platform: "linux", CrashFreeRate: f(0.1429), Sessions: 2, CrashedSessions: 12, Versions: 1, InsufficientVersions: 0, ActiveDevices7d: 3, CrashDevices7d: 1, DeviceCrashRate: f(0.3333)},
-		{Platform: "macos", CrashFreeRate: f(0.5), Sessions: 1, CrashedSessions: 1, Versions: 3, InsufficientVersions: 2, ActiveDevices7d: 16, CrashDevices7d: 1, DeviceCrashRate: f(0.0625)},
-		{Platform: "windows", CrashFreeRate: nil, Sessions: 0, CrashedSessions: 0, Versions: 0, InsufficientVersions: 0, ActiveDevices7d: 2, CrashDevices7d: 1, DeviceCrashRate: f(0.5)},
+		{Platform: "android", CrashFreeRate: nil, Sessions: 0, CrashedSessions: 0, Versions: 1, InsufficientVersions: 1, ActiveDevices7d: 4, CrashDevices7d: 0, DeviceCrashRate: f(0), ForcedTerminationRate: f(0)},
+		{Platform: "ios", CrashFreeRate: f(1), Sessions: 6, CrashedSessions: 0, Versions: 1, InsufficientVersions: 0, ActiveDevices7d: 1, CrashDevices7d: 0, DeviceCrashRate: f(0), ForcedTerminationDevices7d: 1, ForcedTerminationRate: f(1)},
+		{Platform: "linux", CrashFreeRate: f(0.1429), Sessions: 2, CrashedSessions: 12, Versions: 1, InsufficientVersions: 0, ActiveDevices7d: 3, CrashDevices7d: 1, DeviceCrashRate: f(0.3333), ForcedTerminationRate: f(0)},
+		{Platform: "macos", CrashFreeRate: f(0.5), Sessions: 1, CrashedSessions: 1, Versions: 3, InsufficientVersions: 2, ActiveDevices7d: 16, CrashDevices7d: 1, DeviceCrashRate: f(0.0625), ForcedTerminationDevices7d: 1, ForcedTerminationRate: f(0.0625)},
+		{Platform: "windows", CrashFreeRate: nil, Sessions: 0, CrashedSessions: 0, Versions: 0, InsufficientVersions: 0, ActiveDevices7d: 2, CrashDevices7d: 1, DeviceCrashRate: f(0.5), ForcedTerminationRate: f(0)},
 	}
 	if len(body.CrashPlatforms) != len(want) {
 		t.Fatalf("crash_platforms %+v", body.CrashPlatforms)
@@ -85,7 +90,7 @@ func TestOverviewCrashFreeRateExcludesUnderReportedVersions(t *testing.T) {
 	sameRate := func(a, b *float64) bool { return (a == nil) == (b == nil) && (a == nil || *a == *b) }
 	for i, w := range want {
 		g := body.CrashPlatforms[i]
-		if g.Platform != w.Platform || !sameRate(g.CrashFreeRate, w.CrashFreeRate) || g.Sessions != w.Sessions || g.CrashedSessions != w.CrashedSessions || g.Versions != w.Versions || g.InsufficientVersions != w.InsufficientVersions || g.ActiveDevices7d != w.ActiveDevices7d || g.CrashDevices7d != w.CrashDevices7d || !sameRate(g.DeviceCrashRate, w.DeviceCrashRate) {
+		if g.Platform != w.Platform || !sameRate(g.CrashFreeRate, w.CrashFreeRate) || g.Sessions != w.Sessions || g.CrashedSessions != w.CrashedSessions || g.Versions != w.Versions || g.InsufficientVersions != w.InsufficientVersions || g.ActiveDevices7d != w.ActiveDevices7d || g.CrashDevices7d != w.CrashDevices7d || !sameRate(g.DeviceCrashRate, w.DeviceCrashRate) || g.ForcedTerminationDevices7d != w.ForcedTerminationDevices7d || !sameRate(g.ForcedTerminationRate, w.ForcedTerminationRate) {
 			t.Fatalf("crash_platforms[%d] = %+v，期望 %+v", i, g, w)
 		}
 	}
@@ -97,12 +102,16 @@ func TestCrashSummarySessionRateByVersion(t *testing.T) {
 	seedCrashFreeFixture(t, a)
 
 	all := getCrashGroups(t, a, "", 200).Summary
-	if !rateIs(all.CrashFreeRate, 0.4091) || all.Devices7d == nil || *all.Devices7d != 3 || all.ActiveDevices7d == nil || *all.ActiveDevices7d != 26 || !rateIs(all.DeviceCrashRate, 0.1154) || len(all.Versions) != 6 {
+	// 影响设备统计全部 crash 事件（4 台），崩溃设备占比只算真正崩溃的 3 台；macOS 那台两种都有。
+	if all.CrashDevices7d != 3 || all.ForcedTerminationDevices7d != 2 {
+		t.Fatalf("全部平台崩溃与强制终止设备 %+v", all)
+	}
+	if !rateIs(all.CrashFreeRate, 0.4091) || all.Devices7d == nil || *all.Devices7d != 4 || all.ActiveDevices7d == nil || *all.ActiveDevices7d != 26 || !rateIs(all.DeviceCrashRate, 0.1154) || len(all.Versions) != 6 {
 		t.Fatalf("全部平台汇总 %+v", all)
 	}
 
 	mac := getCrashGroups(t, a, "?platform=Darwin", 200).Summary
-	if !rateIs(mac.CrashFreeRate, 0.5) || mac.Devices7d == nil || *mac.Devices7d != 1 || mac.ActiveDevices7d == nil || *mac.ActiveDevices7d != 16 || !rateIs(mac.DeviceCrashRate, 0.0625) {
+	if mac.CrashDevices7d != 1 || mac.ForcedTerminationDevices7d != 1 || !rateIs(mac.CrashFreeRate, 0.5) || mac.Devices7d == nil || *mac.Devices7d != 1 || mac.ActiveDevices7d == nil || *mac.ActiveDevices7d != 16 || !rateIs(mac.DeviceCrashRate, 0.0625) {
 		t.Fatalf("macOS 汇总 %+v", mac)
 	}
 	// 按会话总数从多到少：0.52.0（21）、0.54.0（5）、0.53.0（2）；数据不足的版本不给比率。
@@ -136,9 +145,74 @@ func TestCrashSummarySessionRateByVersion(t *testing.T) {
 	if windows.CrashFreeRate != nil || windows.Versions == nil || len(windows.Versions) != 0 || windows.Devices7d == nil || *windows.Devices7d != 1 || !rateIs(windows.DeviceCrashRate, 0.5) {
 		t.Fatalf("Windows 汇总 %+v", windows)
 	}
+	// iOS 只有系统强制终止：影响设备 1 台，崩溃设备占比为 0。
+	ios := getCrashGroups(t, a, "?platform=iPadOS", 200).Summary
+	if ios.Devices7d == nil || *ios.Devices7d != 1 || ios.CrashDevices7d != 0 || ios.ForcedTerminationDevices7d != 1 || !rateIs(ios.DeviceCrashRate, 0) {
+		t.Fatalf("iOS 汇总 %+v", ios)
+	}
 	// 没有任何活跃设备的平台没有崩溃设备占比。
 	harmony := getCrashGroups(t, a, "?platform=ohos", 200).Summary
 	if harmony.ActiveDevices7d != nil || harmony.DeviceCrashRate != nil || harmony.CrashFreeRate != nil || len(harmony.Versions) != 0 {
 		t.Fatalf("HarmonyOS 汇总 %+v", harmony)
+	}
+}
+
+// TestCrashForcedTerminationPatterns 固定系统强制终止的判定。用例取自 2026-10 生产 `crash` 事件的摘要形状（数字是实际出现的取值，不含任何用户数据）：iOS 旧版客户端把 MetricKit 诊断报成 `Crash exception <类型> code <代码> signal <信号> ...`，其中 signal 9 是 SIGKILL；其他平台常见的崩溃摘要都不应被当成强制终止。
+func TestCrashForcedTerminationPatterns(t *testing.T) {
+	db := testStore(t)
+	cases := []struct {
+		message string
+		forced  bool
+	}{
+		// iOS 旧格式：RunningBoard 因挂起时持有文件锁终止、没有命名空间的 SIGKILL、看门狗。
+		{"Crash exception 10 code 0 signal 9 Namespace RUNNINGBOARD, Code 0xdead10cc", true},
+		{"Crash exception 10 code 0 signal 9", true},
+		{"Crash exception 10 code 0 signal 9 <RBSTerminateContext| domain:10 code:0x8BADF00D explanation:scene-update watchdog>", true},
+		// metasequoiaime/msime#9611 起的新前缀，以及明确写出 SIGKILL、0xdead10cc、看门狗的摘要。
+		{"Killed RUNNINGBOARD 0xdead10cc", true},
+		{"Killed: watchdog timeout", true},
+		{"EXC_CRASH (SIGKILL)", true},
+		{"Termination Reason: RUNNINGBOARD 0xDEAD10CC", true},
+		{"Watchdog terminated the keyboard extension", true},
+		// iOS 真正的崩溃：SIGABRT（signal 6）、SIGTRAP（signal 5）、Objective-C 异常。
+		{"Crash exception 10 code 0 signal 6", false},
+		{"Crash exception 10 code 0 signal 6 Namespace SIGNAL, Code 0x6", false},
+		{"Crash exception 6 code 1 signal 5 Namespace SIGNAL, Code 0x5", false},
+		{"*** Terminating app due to uncaught exception 'NSInvalidArgumentException'", false},
+		// 其他平台生产中出现的崩溃摘要。
+		{"Fatal signal SIGTRAP", false},
+		{"Fatal signal SIGILL", false},
+		{"SIGABRT: aborted", false},
+		{"SIGSEGV: segmentation fault (code 1)", false},
+		{"std::terminate: nlohmann::json_abi_v3_11_3::detail::type_error 302", false},
+		{"EXCEPTION_ACCESS_VIOLATION (0xc0000005) in libcurl.dll+0x1a2b3", false},
+		{"java.lang.NullPointerException: Attempt to invoke virtual method 'void android.view.View.setVisibility(int)'", false},
+		// 只认完整的信号号和关键词。
+		{"Crash exception 10 code 0 signal 90", false},
+		{"deadline 0xdead10cce exceeded", false},
+		{"", false},
+	}
+	messages := make([]string, len(cases))
+	for i, c := range cases {
+		messages[i] = c.message
+	}
+	rows, err := db.pool.Query(t.Context(), `SELECT `+crashForcedTerminationSQL("m")+` FROM unnest($1::text[]) WITH ORDINALITY AS u(m,i) ORDER BY i`, messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	i := 0
+	for rows.Next() {
+		var forced bool
+		if err := rows.Scan(&forced); err != nil {
+			t.Fatal(err)
+		}
+		if forced != cases[i].forced {
+			t.Errorf("%q 判定为强制终止=%v，期望 %v", cases[i].message, forced, cases[i].forced)
+		}
+		i++
+	}
+	if rows.Err() != nil || i != len(cases) {
+		t.Fatalf("读取 %d/%d 行：%v", i, len(cases), rows.Err())
 	}
 }

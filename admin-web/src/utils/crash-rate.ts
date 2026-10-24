@@ -14,6 +14,9 @@ export function excludedVersionsNote(insufficientVersions: number): string {
   return insufficientVersions > 0 ? `${formatNumber(insufficientVersions)} 个版本会话数据不足，未计入` : "";
 }
 
+// FORCED_TERMINATION_NOTE 说明「系统强制终止」不是崩溃：判定规则在服务端 internal/account/admin_crash_free.go 的 crashForcedTerminationSQL。
+export const FORCED_TERMINATION_NOTE = "系统强制终止不是崩溃：是我们自己的问题让系统杀掉了进程（例如键盘挂起时仍持有 App Group 文件锁 0xdead10cc、看门狗超时），不计入崩溃设备占比，但仍需修复";
+
 // deviceRateSub 是崩溃设备占比下方的「崩溃设备 / 活跃设备」说明。
 export function deviceRateSub(crashDevices: number, activeDevices: number): string {
   return `${formatNumber(crashDevices)} / ${formatNumber(activeDevices)} 台`;

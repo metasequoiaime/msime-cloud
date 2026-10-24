@@ -22,7 +22,7 @@ export type ActiveDay = z.infer<typeof activeDaySchema>;
 export const emailDeliveryDaySchema = z.object({ day: z.string(), attempted: count, accepted: count, rejected: count, failed: count });
 export type EmailDeliveryDay = z.infer<typeof emailDeliveryDaySchema>;
 
-// 各平台近 7 天的稳定性：crash_free_rate 只合计会话数据充分的版本，versions 是有会话的版本数，insufficient_versions 是其中因会话数据不足未计入的版本数；device_crash_rate 是崩溃设备除以活跃设备。
+// 各平台近 7 天的稳定性：crash_free_rate 只合计会话数据充分的版本，versions 是有会话的版本数，insufficient_versions 是其中因会话数据不足未计入的版本数；device_crash_rate 是真正崩溃的设备除以活跃设备，被系统强制终止的设备单独计入 forced_termination_devices_7d 和 forced_termination_rate。
 export const crashPlatformSchema = z.object({
   platform: z.string(),
   crash_free_rate: z.number().nullable(),
@@ -33,6 +33,8 @@ export const crashPlatformSchema = z.object({
   active_devices_7d: count,
   crash_devices_7d: count,
   device_crash_rate: z.number().nullable(),
+  forced_termination_devices_7d: count,
+  forced_termination_rate: z.number().nullable(),
 });
 export type CrashPlatform = z.infer<typeof crashPlatformSchema>;
 
@@ -60,6 +62,7 @@ export const overviewSchema = z.object({
   // crash_devices_7d 是近 7 天有崩溃的去重设备数，device_crash_rate 是它除以近 7 天活跃设备的比率，没有活跃设备时为 null。
   crash_devices_7d: count,
   device_crash_rate: z.number().nullable(),
+  forced_termination_devices_7d: count,
   crash_platforms: z.array(crashPlatformSchema),
   crash_group_latest: z.object({ signature: z.string(), platform: z.string(), title: z.string() }).nullable(),
   pending: z.object({ community: count, reports_7d: count, crash_groups: count }),

@@ -185,9 +185,11 @@ SELECT json_build_object(
      WHERE crashed>0 AND NOT insufficient ORDER BY crashed DESC,platform,version LIMIT 1),
    'crash_devices_7d',(SELECT COALESCE(sum(crashed),0) FROM crash_device_platforms),
    'device_crash_rate',(SELECT round(sum(crashed)/NULLIF(sum(active),0),4)::float8 FROM crash_device_platforms),
+   'forced_termination_devices_7d',(SELECT COALESCE(sum(forced),0) FROM crash_device_platforms),
    'crash_platforms',(SELECT COALESCE(json_agg(json_build_object('platform',platform,'crash_free_rate',s.rate,
        'sessions',COALESCE(s.sessions,0),'crashed_sessions',COALESCE(s.crashed,0),'versions',COALESCE(s.versions,0),'insufficient_versions',COALESCE(s.insufficient,0),
-       'active_devices_7d',COALESCE(d.active,0),'crash_devices_7d',COALESCE(d.crashed,0),'device_crash_rate',round(d.crashed::numeric/NULLIF(d.active,0),4)::float8) ORDER BY platform),'[]'::json)
+       'active_devices_7d',COALESCE(d.active,0),'crash_devices_7d',COALESCE(d.crashed,0),'device_crash_rate',round(d.crashed::numeric/NULLIF(d.active,0),4)::float8,
+       'forced_termination_devices_7d',COALESCE(d.forced,0),'forced_termination_rate',round(d.forced::numeric/NULLIF(d.active,0),4)::float8) ORDER BY platform),'[]'::json)
      FROM (SELECT platform,` + crashFreeRateSQL + ` AS rate,
          sum(sessions) FILTER (WHERE NOT insufficient) AS sessions,sum(crashed) FILTER (WHERE NOT insufficient) AS crashed,
          count(*) AS versions,count(*) FILTER (WHERE insufficient) AS insufficient
@@ -220,7 +222,7 @@ SELECT json_build_object(
 
 // adminOverview serves GET /api/overview?days=7|30 (default 30): totals plus a daily series ending today in UTC, and the console overview additions: active devices (from anonymous `active` telemetry), the crash-free session rate (from `session`/`session_crash` telemetry), pending work kept in the database, and the monitored services' state.
 //
-// 活跃设备是 `active` 事件去重后的 install_id 数。一个 `session` 事件是一次正常结束的会话，一个 `session_crash` 事件是一次以崩溃结束的会话。crash_free_rate 是近 7 天 session/(session+session_crash)，按 admin_crash_free.go 的规则只合计会话数据充分的版本，没有这样的会话时为 null；crash_free_rate_prev 用同一规则计算再往前 7 天。crash_platforms 按平台给出同口径的无崩溃会话率、计入的会话数、有会话的版本数和其中数据不足的版本数，以及近 7 天活跃设备、崩溃设备和崩溃设备占比；crash_devices_7d、device_crash_rate 是全平台合计。crash_top 是会话数据充分的版本中近 7 天崩溃会话最多的平台和版本（没有时为 null），即比率下方的「拖累」；crash_group_latest 是近 7 天首次出现、仍未处理的最新崩溃分组（没有时为 null）。telemetry 两个标记表示近 60 天是否有客户端上报对应事件，后台据此显示「客户端未上报」而不是 0。
+// 活跃设备是 `active` 事件去重后的 install_id 数。一个 `session` 事件是一次正常结束的会话，一个 `session_crash` 事件是一次以崩溃结束的会话。crash_free_rate 是近 7 天 session/(session+session_crash)，按 admin_crash_free.go 的规则只合计会话数据充分的版本，没有这样的会话时为 null；crash_free_rate_prev 用同一规则计算再往前 7 天。crash_platforms 按平台给出同口径的无崩溃会话率、计入的会话数、有会话的版本数和其中数据不足的版本数，以及近 7 天活跃设备、真正崩溃的设备和崩溃设备占比、被系统强制终止的设备和占比；crash_devices_7d、device_crash_rate、forced_termination_devices_7d 是全平台合计，系统强制终止不计入崩溃设备。crash_top 是会话数据充分的版本中近 7 天崩溃会话最多的平台和版本（没有时为 null），即比率下方的「拖累」；crash_group_latest 是近 7 天首次出现、仍未处理的最新崩溃分组（没有时为 null）。telemetry 两个标记表示近 60 天是否有客户端上报对应事件，后台据此显示「客户端未上报」而不是 0。
 //
 // The community counters leave out removed content, like GET /v1/community/stats. services lists admin.services; without them the upstreams the status probe derives from the deployment (DerivedServices), and without those the services the probe has recorded. services_configured says only whether admin.services is set.
 func (a *Service) adminOverview(w http.ResponseWriter, r *http.Request, _ string) {

@@ -217,32 +217,57 @@ func (s *Store) DictionaryChanges(ctx context.Context, user string, after int64,
 
 // StreamDictionary exports one database snapshot without retaining the user's entire dictionary in memory.
 func (s *Store) StreamDictionary(ctx context.Context, user, kind string, emit func(DictionaryEntry) error) error {
-	if err := s.requireUserExists(ctx, user); err != nil {
-		return err
-	}
-	rows, err := s.pool.Query(ctx, `SELECT id,kind,code,word,weight,revision,updated_at FROM user_dictionary_entries WHERE user_id=$1 AND kind=$2 ORDER BY code,word,id`, user, kind)
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	emitted, err := streamQueryRows(rows, func(row pgx.CollectableRow) (DictionaryEntry, error) {
+	defer tx.Rollback(ctx)
+	if err := lockUserForRead(ctx, tx, user); err != nil {
+		return err
+	}
+	rows, err := tx.Query(ctx, `SELECT id,kind,code,word,weight,revision,updated_at FROM user_dictionary_entries WHERE user_id=$1 AND kind=$2 ORDER BY code,word,id`, user, kind)
+	if err != nil {
+		return err
+	}
+	if _, err := streamQueryRows(rows, func(row pgx.CollectableRow) (DictionaryEntry, error) {
 		var e DictionaryEntry
 		err := row.Scan(&e.ID, &e.Kind, &e.Code, &e.Word, &e.Weight, &e.Revision, &e.UpdatedAt)
 		return e, err
-	}, emit)
-	if err != nil {
+	}, emit); err != nil {
 		return err
 	}
-	if !emitted {
-		if err := s.requireUserExists(ctx, user); err != nil {
-			return err
-		}
-	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 // StreamDictionarySnapshot 用一条 SQL 读取全量覆盖快照。
 func (s *Store) StreamDictionarySnapshot(ctx context.Context, user string, emit func(json.RawMessage) error) error {
-	return streamDictionarySnapshot(ctx, s.pool, user, emit)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := lockUserForRead(ctx, tx, user); err != nil {
+		return err
+	}
+	if err := streamDictionarySnapshot(ctx, tx, user, emit); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+type userReadLocker interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+// lockUserForRead 在导出事务内锁住用户行，使账号删除与整次读取按先后顺序提交。
+func lockUserForRead(ctx context.Context, q userReadLocker, user string) error {
+	var present int
+	if err := q.QueryRow(ctx, `SELECT 1 FROM auth_users WHERE id=$1 FOR SHARE`, user).Scan(&present); errors.Is(err, pgx.ErrNoRows) {
+		return errMissingUser
+	} else if err != nil {
+		return err
+	}
+	return nil
 }
 
 type snapshotQuerier interface {
@@ -300,14 +325,19 @@ func streamDictionarySnapshotKind(ctx context.Context, q snapshotQuerier, user, 
 // StreamWindowsDictionary matches the Windows manager export selection: pinyin
 // includes multi-character upserts, while other kinds export user insertions.
 func (s *Store) StreamWindowsDictionary(ctx context.Context, user, kind string, emit func(DictionaryEntry) error) error {
-	if err := s.requireUserExists(ctx, user); err != nil {
-		return err
-	}
-	rows, err := s.pool.Query(ctx, `SELECT entry FROM user_dictionary_overlay WHERE user_id=$1 AND kind=$2 AND NOT deleted AND (($2='pinyin' AND char_length(word)>1) OR ($2<>'pinyin' AND COALESCE(entry->>'user_inserted','true')='true')) ORDER BY code,word`, user, kind)
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	emitted, err := streamQueryRows(rows, func(row pgx.CollectableRow) (DictionaryEntry, error) {
+	defer tx.Rollback(ctx)
+	if err := lockUserForRead(ctx, tx, user); err != nil {
+		return err
+	}
+	rows, err := tx.Query(ctx, `SELECT entry FROM user_dictionary_overlay WHERE user_id=$1 AND kind=$2 AND NOT deleted AND (($2='pinyin' AND char_length(word)>1) OR ($2<>'pinyin' AND COALESCE(entry->>'user_inserted','true')='true')) ORDER BY code,word`, user, kind)
+	if err != nil {
+		return err
+	}
+	if _, err := streamQueryRows(rows, func(row pgx.CollectableRow) (DictionaryEntry, error) {
 		var raw []byte
 		var entry DictionaryEntry
 		if err := row.Scan(&raw); err != nil {
@@ -315,14 +345,8 @@ func (s *Store) StreamWindowsDictionary(ctx context.Context, user, kind string, 
 		}
 		err := json.Unmarshal(raw, &entry)
 		return entry, err
-	}, emit)
-	if err != nil {
+	}, emit); err != nil {
 		return err
 	}
-	if !emitted {
-		if err := s.requireUserExists(ctx, user); err != nil {
-			return err
-		}
-	}
-	return nil
+	return tx.Commit(ctx)
 }

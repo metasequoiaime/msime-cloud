@@ -48,6 +48,8 @@ const (
 	maxLogQuery = 200
 	// maxLogMessageBytes 是单行返回给前端的上限，超出部分截断。
 	maxLogMessageBytes = 4096
+	// maxLogTimestampBytes 覆盖带时区偏移的纳秒时间，避免解析器接受的超长小数绕过正文截断。
+	maxLogTimestampBytes = len(time.RFC3339Nano)
 	// maxLokiResponseBytes 限制读取的 Loki 响应体，maxLogLimit 行乘以单行上限仍在范围内。
 	maxLokiResponseBytes = 16 << 20
 	// maxLokiPooledResponseBytes 限制响应缓冲池的单个缓存，避免一次异常大响应长期占住 16 MiB。
@@ -90,7 +92,7 @@ var (
 	logSelectorPattern     = regexp.MustCompile(`^\{` + logMatcher + `(?:,` + logMatcher + `)*\}$`)
 	logPodPattern          = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?$`)
 	// logLevelPrefix 匹配一行开头的 CRI 前缀（可选）和 slog 默认格式的时间，后面接级别。级别筛选用它排除低于所选级别的行，所以无法识别级别的行（panic、标准库 log 的输出）在 WARN、ERROR 筛选下仍会显示。
-	logLevelPrefix = `^(?:\S+ (?:stdout|stderr) [FP] )?\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)? `
+	logLevelPrefix = fmt.Sprintf(`^(?:\S{1,%d} (?:stdout|stderr) [FP] )?\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)? `, maxLogTimestampBytes)
 	logLevelBelow  = map[string]string{"INFO": "DEBUG", "WARN": "DEBUG|INFO", "ERROR": "DEBUG|INFO|WARN"}
 )
 
@@ -239,22 +241,25 @@ func (e lokiEntry) jsonWithHash(hash uint64) logLineJSON {
 
 // cutCRIPrefix 拆开 CRI 日志格式「<RFC3339Nano 时间> <stdout|stderr> <F|P> <内容>」。
 func cutCRIPrefix(line string) (ts, stream, rest string, ok bool) {
-	ts, rest, ok = strings.Cut(line, " ")
-	if !ok {
+	end := strings.IndexByte(line[:min(len(line), maxLogTimestampBytes+1)], ' ')
+	if end < 0 {
+		return "", "", "", false
+	}
+	ts, rest = line[:end], line[end+1:]
+	// 流名称与标签的长度固定，不能在异常正文中继续查找分隔符。
+	const streamBytes, suffixBytes = len("stderr"), len("stderr F ")
+	if len(rest) < suffixBytes {
+		return "", "", "", false
+	}
+	stream = rest[:streamBytes]
+	suffix := rest[streamBytes:suffixBytes]
+	if (stream != "stdout" && stream != "stderr") || (suffix != " F " && suffix != " P ") {
 		return "", "", "", false
 	}
 	if _, err := time.Parse(time.RFC3339Nano, ts); err != nil {
 		return "", "", "", false
 	}
-	stream, rest, ok = strings.Cut(rest, " ")
-	if !ok || (stream != "stdout" && stream != "stderr") {
-		return "", "", "", false
-	}
-	tag, rest, ok := strings.Cut(rest, " ")
-	if !ok || (tag != "F" && tag != "P") {
-		return "", "", "", false
-	}
-	return ts, stream, rest, true
+	return ts, stream, rest[suffixBytes:], true
 }
 
 // cutSlogPrefix 拆开 slog 默认处理器（经标准库 log 输出）的「2026/10/01 14:47:01 INFO 内容」，与 logLevelPrefix 的识别规则一致。

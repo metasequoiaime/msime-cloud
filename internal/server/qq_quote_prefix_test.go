@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"math/rand"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -126,17 +127,21 @@ func TestQQQuotePrefixAllocationBudget(t *testing.T) {
 		t.Fatal("分配回归样本必须留出事件信封空间，保持在回调请求上限以内")
 	}
 	var got qqQuote
-	result := testing.Benchmark(func(b *testing.B) {
-		for b.Loop() {
-			got = qqQuoteFromFields(fields, qqGroupMessage{})
-		}
-	})
+	const runs = 20
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for range runs {
+		got = qqQuoteFromFields(fields, qqGroupMessage{})
+	}
+	runtime.ReadMemStats(&after)
 	if want := previousQQQuoteFromFields(fields, qqGroupMessage{}); !reflect.DeepEqual(got, want) {
 		t.Fatal("长引用的截断或附件结果改变")
 	}
 	// JSON 解码仍随输入增长，但不应再为最终会丢弃的全文建立拼接副本。
-	if budget := int64(len(fields.MsgElements)) * 3 / 2; result.AllocedBytesPerOp() > budget {
-		t.Fatalf("引用文字截断前不应拼接完整正文：预算=%d，%s", budget, result.MemString())
+	allocated := (after.TotalAlloc - before.TotalAlloc) / runs
+	if budget := uint64(len(fields.MsgElements)) * 3 / 2; allocated > budget {
+		t.Fatalf("引用文字截断前不应拼接完整正文：分配=%d，预算=%d", allocated, budget)
 	}
 }
 

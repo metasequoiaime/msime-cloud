@@ -462,11 +462,8 @@ func (a *Service) communityPublish(w http.ResponseWriter, r *http.Request) {
 	if !readSized(w, r, &input, 710000) {
 		return
 	}
-	category := defaultCandidateSkinCategory
-	if input.Category != nil {
-		category = *input.Category
-	}
-	if !validCandidateSkinCategory(category) {
+	category, ok := communityPublishSkinCategory(input.Category)
+	if !ok {
 		writeError(w, 400, "invalid_category")
 		return
 	}

@@ -547,7 +547,18 @@ func (a *Service) communityCandidateDetail(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	// A private row is the owner's alone, and only an opted-in client can decode it; everyone else gets the same 404 as for a missing id.
-	v, e := scanCandidateSkin(a.store.pool.QueryRow(r.Context(), candidateSkinSelect(fields["saved"])+`WHERE s.id=$2 AND (s.visibility='public' OR ($3 AND s.owner_id=$1)) AND (s.moderation<>'removed' OR s.owner_id=$1)`+candidateResourceFilter(extended), a.communityViewer(r), r.PathValue("id"), sync))
+	viewer := a.communityViewer(r)
+	tx, e := a.store.communityItemReadTransaction(r.Context(), "community_candidate_skins", r.PathValue("id"))
+	if errors.Is(e, pgx.ErrNoRows) {
+		writeError(w, 404, "skin_not_found")
+		return
+	}
+	if e != nil {
+		a.error(w, e)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	v, e := scanCandidateSkin(tx.QueryRow(r.Context(), candidateSkinSelect(fields["saved"])+`WHERE s.id=$2 AND (s.visibility='public' OR ($3 AND s.owner_id=$1)) AND (s.moderation<>'removed' OR s.owner_id=$1)`+candidateResourceFilter(extended), viewer, r.PathValue("id"), sync))
 	if errors.Is(e, pgx.ErrNoRows) {
 		writeError(w, 404, "skin_not_found")
 		return
@@ -559,6 +570,10 @@ func (a *Service) communityCandidateDetail(w http.ResponseWriter, r *http.Reques
 	v = candidateItem(v, sync, withCategory)
 	v.Moderation = ownerModeration(fields, v.moderation)
 	v.Saved, v.Saves = communitySavedFields(fields, v.saved, v.saves)
+	if e := tx.Commit(r.Context()); e != nil {
+		a.error(w, e)
+		return
+	}
 	write(w, 200, v)
 }
 
@@ -569,12 +584,27 @@ func (a *Service) communityCandidateSave(w http.ResponseWriter, r *http.Request)
 func (a *Service) communityCandidatePreview(w http.ResponseWriter, r *http.Request) {
 	var path string
 	var data []byte
-	e := a.store.pool.QueryRow(r.Context(), `SELECT f.path,f.bytes FROM community_candidate_skins s JOIN community_candidate_skin_files f ON f.skin_id=s.id AND f.path=s.preview_path WHERE s.id=$1 AND ((s.visibility='public' AND s.moderation<>'removed') OR s.owner_id=$2)`, r.PathValue("id"), a.communityViewer(r)).Scan(&path, &data)
+	viewer := a.communityViewer(r)
+	tx, e := a.store.communityItemReadTransaction(r.Context(), "community_candidate_skins", r.PathValue("id"))
 	if errors.Is(e, pgx.ErrNoRows) {
 		writeError(w, 404, "skin_not_found")
 		return
 	}
 	if e != nil {
+		a.error(w, e)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	e = tx.QueryRow(r.Context(), `SELECT f.path,f.bytes FROM community_candidate_skins s JOIN community_candidate_skin_files f ON f.skin_id=s.id AND f.path=s.preview_path WHERE s.id=$1 AND ((s.visibility='public' AND s.moderation<>'removed') OR s.owner_id=$2)`, r.PathValue("id"), viewer).Scan(&path, &data)
+	if errors.Is(e, pgx.ErrNoRows) {
+		writeError(w, 404, "skin_not_found")
+		return
+	}
+	if e != nil {
+		a.error(w, e)
+		return
+	}
+	if e := tx.Commit(r.Context()); e != nil {
 		a.error(w, e)
 		return
 	}

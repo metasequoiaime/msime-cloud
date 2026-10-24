@@ -240,7 +240,18 @@ func (a *Service) resourceDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_fields")
 		return
 	}
-	v, err := scanResource(a.store.pool.QueryRow(r.Context(), resourceSelect+`WHERE s.id=$2 AND (s.moderation<>'removed' OR s.owner_id=$1)`, a.communityViewer(r), r.PathValue("id")))
+	viewer := a.communityViewer(r)
+	tx, err := a.store.communityItemReadTransaction(r.Context(), "community_resources", r.PathValue("id"))
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, 404, "resource_not_found")
+		return
+	}
+	if err != nil {
+		a.error(w, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	v, err := scanResource(tx.QueryRow(r.Context(), resourceSelect+`WHERE s.id=$2 AND (s.moderation<>'removed' OR s.owner_id=$1)`, viewer, r.PathValue("id")))
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, 404, "resource_not_found")
 		return
@@ -250,6 +261,10 @@ func (a *Service) resourceDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v.Moderation = ownerModeration(fields, v.moderation)
+	if err := tx.Commit(r.Context()); err != nil {
+		a.error(w, err)
+		return
+	}
 	write(w, 200, v)
 }
 func (a *Service) resourcePublish(w http.ResponseWriter, r *http.Request) {

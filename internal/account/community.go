@@ -448,12 +448,26 @@ func (a *Service) communityDetail(w http.ResponseWriter, r *http.Request) {
 
 // writeCommunitySkin 以详情接口的形状写出 viewer 看到的 {id} 作品（含完整 design），详情和作者修改分类的 PATCH 共用。
 func (a *Service) writeCommunitySkin(w http.ResponseWriter, r *http.Request, viewer string, fields map[string]bool, withCategory bool) {
-	v, e := scanSkin(a.store.pool.QueryRow(r.Context(), communitySkinSelect(fields["saved"])+`WHERE s.id=$2 AND (s.moderation<>'removed' OR s.owner_id=$1)`, viewer, r.PathValue("id")))
+	tx, e := a.store.communityItemReadTransaction(r.Context(), "community_skins", r.PathValue("id"))
 	if errors.Is(e, pgx.ErrNoRows) {
 		writeError(w, 404, "skin_not_found")
 		return
 	}
 	if e != nil {
+		a.error(w, e)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	v, e := scanSkin(tx.QueryRow(r.Context(), communitySkinSelect(fields["saved"])+`WHERE s.id=$2 AND (s.moderation<>'removed' OR s.owner_id=$1)`, viewer, r.PathValue("id")))
+	if errors.Is(e, pgx.ErrNoRows) {
+		writeError(w, 404, "skin_not_found")
+		return
+	}
+	if e != nil {
+		a.error(w, e)
+		return
+	}
+	if e := tx.Commit(r.Context()); e != nil {
 		a.error(w, e)
 		return
 	}

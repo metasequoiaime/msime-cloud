@@ -88,6 +88,11 @@ func TestPersonalReadsSerializeAccountDeletion(t *testing.T) {
 		{"/v1/community/candidate-skins?scope=mine", "FROM community_candidate_skins s JOIN auth_users u"},
 		{"/v1/community/plugins?scope=mine", "FROM community_plugins p JOIN auth_users u"},
 		{"/v1/community/resources?scope=mine&kind=reply", "FROM community_resources s JOIN auth_users u"},
+		{"/v1/community/skins/ef334455-1234-4234-8234-000000000006", "SELECT s.owner_id FROM community_skins s JOIN auth_users u"},
+		{"/v1/community/candidate-skins/ef334455-1234-4234-8234-000000000007?fields=sync", "SELECT s.owner_id FROM community_candidate_skins s JOIN auth_users u"},
+		{"/v1/community/candidate-skins/ef334455-1234-4234-8234-000000000007/preview", "SELECT s.owner_id FROM community_candidate_skins s JOIN auth_users u"},
+		{"/v1/community/plugins/ef334455-1234-4234-8234-000000000008", "SELECT s.owner_id FROM community_plugins s JOIN auth_users u"},
+		{"/v1/community/resources/ef334455-1234-4234-8234-000000000009", "SELECT s.owner_id FROM community_resources s JOIN auth_users u"},
 	} {
 		t.Run(tc.path, func(t *testing.T) { runPersonalReadDeletion(t, tc.path, tc.query) })
 	}
@@ -119,6 +124,27 @@ func runPersonalReadDeletion(t *testing.T, path, query string) {
 	}
 	if strings.HasPrefix(path, "/v1/community/resources?") {
 		if _, err := db.pool.Exec(ctx, `INSERT INTO community_resources(id,owner_id,kind,name,content) VALUES('ef334455-1234-4234-8234-000000000004',$1,'reply','私有资源','{"prompt":"合成"}')`, user.User.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if path == "/v1/community/skins/ef334455-1234-4234-8234-000000000006" {
+		if _, err := db.pool.Exec(ctx, `INSERT INTO community_skins(id,owner_id,name,design) VALUES($1,$2,'详情皮肤','{}')`, "ef334455-1234-4234-8234-000000000006", user.User.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if path == "/v1/community/candidate-skins/ef334455-1234-4234-8234-000000000007?fields=sync" || path == "/v1/community/candidate-skins/ef334455-1234-4234-8234-000000000007/preview" {
+		insertCandidateSkin(t, db, "ef334455-1234-4234-8234-000000000007", user.User.ID, "详情候选皮肤")
+		if _, err := db.pool.Exec(ctx, `UPDATE community_candidate_skins SET visibility='private' WHERE id=$1`, "ef334455-1234-4234-8234-000000000007"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if path == "/v1/community/plugins/ef334455-1234-4234-8234-000000000008" {
+		if _, err := db.pool.Exec(ctx, `INSERT INTO community_plugins(id,owner_id,kind,plugin_id,name,version,license,manifest,archive,request_sha256) VALUES($1,$2,'sound','detail-delete-race','详情插件','1.0','MIT','{}','zip',repeat('a',64))`, "ef334455-1234-4234-8234-000000000008", user.User.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if path == "/v1/community/resources/ef334455-1234-4234-8234-000000000009" {
+		if _, err := db.pool.Exec(ctx, `INSERT INTO community_resources(id,owner_id,kind,name,content) VALUES($1,$2,'reply','详情资源','{"prompt":"合成"}')`, "ef334455-1234-4234-8234-000000000009", user.User.ID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -195,7 +221,12 @@ func runPersonalReadDeletion(t *testing.T, path, query string) {
 		(path == "/v1/community/skins?scope=mine" && !strings.Contains(w.Body.String(), "ef334455-1234-4234-8234-000000000002")) ||
 		(path == "/v1/community/candidate-skins?scope=mine" && !strings.Contains(w.Body.String(), "ef334455-1234-4234-8234-000000000005")) ||
 		(path == "/v1/community/plugins?scope=mine" && !strings.Contains(w.Body.String(), "ef334455-1234-4234-8234-000000000003")) ||
-		(path == "/v1/community/resources?scope=mine&kind=reply" && !strings.Contains(w.Body.String(), "ef334455-1234-4234-8234-000000000004")) {
+		(path == "/v1/community/resources?scope=mine&kind=reply" && !strings.Contains(w.Body.String(), "ef334455-1234-4234-8234-000000000004")) ||
+		(path == "/v1/community/skins/ef334455-1234-4234-8234-000000000006" && !strings.Contains(w.Body.String(), "ef334455-1234-4234-8234-000000000006")) ||
+		(path == "/v1/community/candidate-skins/ef334455-1234-4234-8234-000000000007?fields=sync" && !strings.Contains(w.Body.String(), "ef334455-1234-4234-8234-000000000007")) ||
+		(path == "/v1/community/candidate-skins/ef334455-1234-4234-8234-000000000007/preview" && !strings.Contains(w.Body.String(), "preview.png")) ||
+		(path == "/v1/community/plugins/ef334455-1234-4234-8234-000000000008" && !strings.Contains(w.Body.String(), "ef334455-1234-4234-8234-000000000008")) ||
+		(path == "/v1/community/resources/ef334455-1234-4234-8234-000000000009" && !strings.Contains(w.Body.String(), "ef334455-1234-4234-8234-000000000009")) {
 		t.Fatalf("个人数据响应不完整：%d %q", w.Code, w.Body.String())
 	}
 	if err := <-deleteErr; err != nil {

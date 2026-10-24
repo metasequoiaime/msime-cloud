@@ -380,7 +380,7 @@ func Mount(mux *http.ServeMux, a *Service) {
 	}
 }
 
-// Route wraps an account handler with the nil check, per-address rate limit and timeout every Mount route gets. The server uses it for account handlers it registers itself.
+// Route 为账号处理器统一检查服务是否启用、按地址限流并设置期限；服务端单独挂载的账号接口也使用它。GET 路由接受的 HEAD 请求按读取语义分发。
 func Route(a *Service, pattern string, method func(*Service, http.ResponseWriter, *http.Request)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if a == nil {
@@ -395,6 +395,10 @@ func Route(a *Service, pattern string, method func(*Service, http.ResponseWriter
 		if e := a.store.Rate(ctx, scope+hash(a.clientAddress(r)), limit, time.Minute); e != nil {
 			a.error(w, e)
 			return
+		}
+		if r.Method == http.MethodHead && strings.HasPrefix(pattern, "GET ") {
+			// WithContext 已复制请求，只为内部处理器选择读取分支；HTTP 服务仍按原始 HEAD 请求省略响应正文。
+			r.Method = http.MethodGet
 		}
 		method(a, w, r)
 	}

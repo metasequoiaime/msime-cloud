@@ -680,11 +680,10 @@ func lockCrashSpikes(ctx context.Context, tx pgx.Tx) ([]crashSpike, error) {
 }
 
 var (
-	crashAddressPattern  = regexp.MustCompile(`0[xX][0-9a-fA-F]+`)
-	crashUUIDPattern     = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
-	crashHexRunPattern   = regexp.MustCompile(`\b[0-9a-fA-F]{8,}\b`)
-	crashDigitsPattern   = regexp.MustCompile(`[0-9]+`)
-	crashFrameLineNumber = regexp.MustCompile(`(?::[0-9]+)+`)
+	crashAddressPattern = regexp.MustCompile(`0[xX][0-9a-fA-F]+`)
+	crashUUIDPattern    = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
+	crashHexRunPattern  = regexp.MustCompile(`\b[0-9a-fA-F]{8,}\b`)
+	crashDigitsPattern  = regexp.MustCompile(`[0-9]+`)
 )
 
 // normalizeCrashWhitespace 折叠规范化文本中的空白并统一为小写。
@@ -800,9 +799,53 @@ func normalizeCrashFrame(line string) string {
 		line = trimCrashFrameOffset(line)
 	}
 	if strings.ContainsRune(line, ':') {
-		line = crashFrameLineNumber.ReplaceAllString(line, "")
+		line = stripCrashFrameLineNumbers(line)
 	}
 	return normalizeCrashWhitespace(line)
+}
+
+// stripCrashFrameLineNumbers 去掉冒号后的连续 ASCII 数字，不改动其他冒号或字节。
+func stripCrashFrameLineNumbers(line string) string {
+	colon := strings.IndexByte(line, ':')
+	if colon < 0 {
+		return line
+	}
+	first, size := -1, len(line)
+	for i := colon; i+1 < len(line); i++ {
+		if line[i] != ':' || line[i+1] < '0' || line[i+1] > '9' {
+			continue
+		}
+		end := i + 2
+		for end < len(line) && line[end] >= '0' && line[end] <= '9' {
+			end++
+		}
+		if first < 0 {
+			first = i
+		}
+		size -= end - i
+		i = end - 1
+	}
+	if first < 0 {
+		return line
+	}
+	// 按删除行号后的长度一次分配，长数字段不会撑大输出缓冲。
+	var out strings.Builder
+	out.Grow(size)
+	start := 0
+	for i := first; i+1 < len(line); i++ {
+		if line[i] != ':' || line[i+1] < '0' || line[i+1] > '9' {
+			continue
+		}
+		end := i + 2
+		for end < len(line) && line[end] >= '0' && line[end] <= '9' {
+			end++
+		}
+		out.WriteString(line[start:i])
+		start = end
+		i = end - 1
+	}
+	out.WriteString(line[start:])
+	return out.String()
 }
 
 // trimCrashFrameIndex 去掉连续的序号或 at 前缀，只接受原正则的 ASCII 数字和空白。

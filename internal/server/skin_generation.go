@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -36,13 +35,11 @@ func (s *Server) generateSkinArtwork(w http.ResponseWriter, r *http.Request) {
 	}
 	// 图片推理可能超过普通 JSON 接口的写入期限。
 	httpdeadline.Extend(w, 0, 185*time.Second)
-	body, _ := json.Marshal(map[string]any{"model": s.config.Images.Model, "n": 1, "size": "1024x1024", "prompt": "Design an original illustrated mobile keyboard wallpaper, not a screenshot. No text, letters, numbers, keyboard buttons, logos or watermark. Build an immersive scene with distinctive artwork and materials, keep the central typing area quieter and concentrate characters and decoration around the perimeter. User art direction: " + input.Prompt})
-	req, err := s.config.Images.newRequest(r.Context(), "POST", bytes.NewReader(body))
+	req, err := s.config.Images.newJSONBodyRequest(r.Context(), http.MethodPost, map[string]any{"model": s.config.Images.Model, "n": 1, "size": "1024x1024", "prompt": "Design an original illustrated mobile keyboard wallpaper, not a screenshot. No text, letters, numbers, keyboard buttons, logos or watermark. Build an immersive scene with distinctive artwork and materials, keep the central typing area quieter and concentrate characters and decoration around the perimeter. User art direction: " + input.Prompt})
 	if err != nil {
 		upstreamError(w, r, err)
 		return
 	}
-	req.Header.Set("Content-Type", "application/json")
 	client := *s.client
 	client.Timeout = 180 * time.Second
 	started := time.Now()

@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -78,15 +77,10 @@ func telegramText(n account.Notice) string {
 
 // BroadcastNotice 在 Bot API 确认投递后才成功；错误只记录状态和数字错误码，不含请求地址或上游描述。
 func (t *telegramNotices) BroadcastNotice(ctx context.Context, n account.Notice) error {
-	body, err := json.Marshal(map[string]any{"chat_id": t.chatID, "text": telegramText(n), "disable_web_page_preview": true})
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.endpoint, bytes.NewReader(body))
+	req, err := httpclient.NewJSONPayloadRequest(ctx, http.MethodPost, t.endpoint, map[string]any{"chat_id": t.chatID, "text": telegramText(n), "disable_web_page_preview": true})
 	if err != nil {
 		return errors.New("telegram: invalid endpoint")
 	}
-	req.Header.Set("Content-Type", "application/json")
 	resp, err := t.client.Do(req)
 	if err != nil {
 		return errors.New("telegram: request failed")

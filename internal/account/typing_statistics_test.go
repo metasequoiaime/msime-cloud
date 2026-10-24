@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -317,6 +319,47 @@ func TestQQLinks(t *testing.T) {
 	banned, _ := a.CreateQQLinkCode(ctx, "G/banned")
 	if _, err := db.RedeemQQLinkCode(ctx, one.User.ID, banned); err == nil {
 		t.Fatal("banned account redeemed a code")
+	}
+}
+
+func TestQQLinkDeleteWaitsForConcurrentBan(t *testing.T) {
+	db := testStore(t)
+	user := complete(t, db, Identity{"email", "qq-link-delete-ban-race@example.test"})
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	var linkID int64
+	if err := db.pool.QueryRow(ctx, `INSERT INTO qq_account_links(subject,user_id) VALUES($1,$2) RETURNING id`, hash("G/M-delete-ban"), user.User.ID).Scan(&linkID); err != nil {
+		t.Fatal(err)
+	}
+	blocker, err := db.userDataTransaction(ctx, user.User.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Rollback(context.Background())
+	if _, err := blocker.Exec(ctx, `UPDATE auth_users SET banned_at=now() WHERE id=$1`, user.User.ID); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	Mount(mux, &Service{store: db})
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		r := httptest.NewRequestWithContext(ctx, http.MethodDelete, "/v1/users/me/qq-links/"+strconv.FormatInt(linkID, 10), nil)
+		r.Header.Set("Authorization", "Bearer "+user.AccessToken)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		done <- w
+	}()
+	waitForAdminDatabaseLock(t, db, blocker.Conn().PgConn().PID())
+	if err := blocker.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	w := <-done
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), `"code":"account_banned"`) {
+		t.Fatalf("封禁后的解绑请求未被拒绝：状态=%d，响应=%s", w.Code, w.Body.String())
+	}
+	var remaining int
+	if err := db.pool.QueryRow(ctx, `SELECT count(*) FROM qq_account_links WHERE id=$1`, linkID).Scan(&remaining); err != nil || remaining != 1 {
+		t.Fatalf("封禁后的解绑删除了绑定：剩余=%d，错误=%v", remaining, err)
 	}
 }
 

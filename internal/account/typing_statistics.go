@@ -355,13 +355,23 @@ func (a *Service) qqLinkDelete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "qq_link_not_found")
 		return
 	}
-	tag, err := a.store.pool.Exec(r.Context(), `DELETE FROM qq_account_links WHERE id=$1::bigint AND user_id=$2`, linkID, p.UserID)
+	tx, err := a.store.userDataTransaction(r.Context(), p.UserID)
+	if err != nil {
+		a.error(w, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	tag, err := tx.Exec(r.Context(), `DELETE FROM qq_account_links WHERE id=$1::bigint AND user_id=$2`, linkID, p.UserID)
 	if err != nil {
 		a.error(w, err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
 		writeError(w, 404, "qq_link_not_found")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		a.error(w, err)
 		return
 	}
 	w.WriteHeader(204)

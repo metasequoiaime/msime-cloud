@@ -57,18 +57,34 @@ func qqFAQRemoveProseLinks(answer string) (string, bool) {
 		return qqRemoveRawLinks(answer), true
 	}
 	var out strings.Builder
-	out.Grow(len(answer))
-	offset := 0
-	for _, block := range blocks {
-		gap := qqRemoveRawLinks(answer[offset:block.span.start])
+	written, offset := 0, 0
+	changed := false
+	writeGap := func(end int, separate bool) {
+		gap := qqRemoveRawLinks(answer[offset:end])
 		// 删除相邻行内代码之间的链接时保留间隔，避免反引号合成新的分隔符。
-		if gap == "" && offset > 0 && answer[offset-1] == '`' && answer[block.span.start] == '`' {
-			out.WriteByte(' ')
+		if separate && gap == "" {
+			gap = " "
 		}
+		if gap == answer[offset:end] {
+			return
+		}
+		// 只有正文实际变化时才复制答案，代码中的 URL 不需要输出缓冲。
+		if !changed {
+			out.Grow(len(answer))
+			changed = true
+		}
+		out.WriteString(answer[written:offset])
 		out.WriteString(gap)
-		out.WriteString(answer[block.span.start:block.span.end])
+		written = end
+	}
+	for _, block := range blocks {
+		writeGap(block.span.start, offset > 0 && answer[offset-1] == '`' && answer[block.span.start] == '`')
 		offset = block.span.end
 	}
-	out.WriteString(qqRemoveRawLinks(answer[offset:]))
+	writeGap(len(answer), false)
+	if !changed {
+		return answer, true
+	}
+	out.WriteString(answer[written:])
 	return out.String(), true
 }

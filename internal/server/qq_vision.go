@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -102,10 +101,9 @@ func (s *Server) qqDescribeImage(ctx context.Context, a qqAttachment) (string, e
 		{"type": "text", "text": "请描述这张截图。"},
 		{"type": "image_url", "image_url": map[string]string{"url": qqVisionDataURL(contentType, body)}},
 	}
-	payload, _ := json.Marshal(map[string]any{"model": s.qq.config.Model, "max_tokens": 2000, "response_format": map[string]string{"type": "json_object"},
-		"messages": []map[string]any{{"role": "system", "content": qqVisionPrompt}, {"role": "user", "content": content}, {"role": "user", "content": jsonObjectInstruction}}})
 	e := s.config.Chat
-	req, err := e.newJSONRequest(ctx, http.MethodPost, "application/json", bytes.NewReader(payload))
+	req, err := e.newJSONPayloadRequest(ctx, http.MethodPost, map[string]any{"model": s.qq.config.Model, "max_tokens": 2000, "response_format": map[string]string{"type": "json_object"},
+		"messages": []map[string]any{{"role": "system", "content": qqVisionPrompt}, {"role": "user", "content": content}, {"role": "user", "content": jsonObjectInstruction}}})
 	if err != nil {
 		return "", errors.New("invalid chat endpoint")
 	}

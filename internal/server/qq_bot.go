@@ -1739,9 +1739,8 @@ func (s *Server) qqChatModel(ctx context.Context, model, system, user string, ou
 // qqChatWith 是用指定模型做的一次 qqChat。
 func (s *Server) qqChatWith(ctx context.Context, model, system, user string, out any) error {
 	e := s.config.Chat
-	payload, _ := json.Marshal(chatRequest{Model: model, MaxTokens: contract.ChatMaxTokens, ResponseFormat: &responseFormat{Type: "json_object"},
+	req, err := e.newJSONPayloadRequest(ctx, http.MethodPost, chatRequest{Model: model, MaxTokens: contract.ChatMaxTokens, ResponseFormat: &responseFormat{Type: "json_object"},
 		Messages: []message{{Role: "system", Content: system}, {Role: "user", Content: user}, {Role: "user", Content: jsonObjectInstruction}}})
-	req, err := e.newJSONRequest(ctx, http.MethodPost, "application/json", bytes.NewReader(payload))
 	if err != nil {
 		return errors.New("invalid chat endpoint")
 	}

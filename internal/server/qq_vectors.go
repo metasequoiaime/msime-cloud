@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -75,10 +74,9 @@ func (s *Server) qqEmbed(ctx context.Context, texts []string) ([][]float32, erro
 	if endpoint == "" {
 		return nil, errors.New("embeddings disabled")
 	}
-	payload, _ := json.Marshal(map[string]any{"model": s.qq.config.EmbeddingModel, "input": texts})
 	e := s.config.Chat.Endpoint
 	e.URL = endpoint
-	req, err := e.newJSONRequest(ctx, http.MethodPost, "application/json", bytes.NewReader(payload))
+	req, err := e.newJSONPayloadRequest(ctx, http.MethodPost, map[string]any{"model": s.qq.config.EmbeddingModel, "input": texts})
 	if err != nil {
 		return nil, errors.New("invalid embedding endpoint")
 	}

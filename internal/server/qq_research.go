@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -183,8 +182,7 @@ func (s *Server) qqResearchChat(ctx context.Context, messages []qqResearchMessag
 		_ = json.Unmarshal(qqResearchTool, &definitions)
 		request["tools"] = append(definitions, publictools.ChatDefinitions()...)
 	}
-	payload, _ := json.Marshal(request)
-	req, err := e.newJSONRequest(ctx, http.MethodPost, "application/json", bytes.NewReader(payload))
+	req, err := e.newJSONPayloadRequest(ctx, http.MethodPost, request)
 	if err != nil {
 		return qqResearchMessage{}, "", errors.New("invalid chat endpoint")
 	}
@@ -461,12 +459,11 @@ func (s *Server) qqWebSearch(ctx context.Context, query string) string {
 	if endpoint == "" {
 		return "联网搜索暂时用不了。"
 	}
-	payload, _ := json.Marshal(map[string]any{"model": s.qq.config.Model, "max_tokens": 1500,
-		"tools":    []map[string]any{{"type": "web_search_20250305", "name": "web_search", "max_uses": 1}},
-		"messages": []map[string]string{{"role": "user", "content": query}}})
 	e := s.config.Chat.Endpoint
 	e.URL = endpoint
-	req, err := e.newJSONRequest(ctx, http.MethodPost, "application/json", bytes.NewReader(payload))
+	req, err := e.newJSONPayloadRequest(ctx, http.MethodPost, map[string]any{"model": s.qq.config.Model, "max_tokens": 1500,
+		"tools":    []map[string]any{{"type": "web_search_20250305", "name": "web_search", "max_uses": 1}},
+		"messages": []map[string]string{{"role": "user", "content": query}}})
 	if err != nil {
 		return "联网搜索暂时用不了。"
 	}

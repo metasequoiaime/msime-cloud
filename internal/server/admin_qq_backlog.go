@@ -94,13 +94,8 @@ func (s *Server) adminQQBacklog(w http.ResponseWriter, r *http.Request) {
 	}
 	if detail {
 		if resource == "drafts" {
-			draft, err := s.accounts.QQDraft(r.Context(), id)
-			if errors.Is(err, account.ErrQQDraftNotFound) {
-				fail(w, 404, "not_found")
-				return
-			}
-			if err != nil {
-				fail(w, 503, "database_unavailable")
+			draft, ok := s.lookupAdminQQDraft(w, r, id)
+			if !ok {
 				return
 			}
 			respond(w, 200, adminDraftView(draft, true))

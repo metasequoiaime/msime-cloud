@@ -59,25 +59,41 @@ func BenchmarkDiagnosticEvents(b *testing.B) {
 
 func TestDiagnosticEventsAllocationBudget(t *testing.T) {
 	source := diagnosticEventFixture()
+	t.Cleanup(func() { diagnosticEventsBenchmarkSink = nil })
 	for _, tc := range []struct {
-		name   string
-		in     EventInput
-		want   int
-		budget int64
+		name        string
+		in          EventInput
+		want        int
+		budget      int64
+		allocations float64
 	}{
-		{"全部事件", EventInput{}, 8192, 300 * 1024},
-		{"限制10条", EventInput{Limit: 10}, 10, 512},
-		{"单条筛选", EventInput{Kind: "candidate_shown"}, 1, 64},
-		{"无匹配", EventInput{Kind: "candidate_selected"}, 0, 0},
+		{"全部事件", EventInput{}, 8192, 300 * 1024, 1},
+		{"限制10条", EventInput{Limit: 10}, 10, 512, 1},
+		{"单条筛选", EventInput{Kind: "candidate_shown"}, 1, 64, 1},
+		{"无匹配", EventInput{Kind: "candidate_selected"}, 0, 0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if out := events(source, tc.in); out == nil || len(out) != tc.want {
 				t.Fatal("诊断事件输出条数不正确")
 			}
-			result := testing.Benchmark(func(b *testing.B) {
-				benchmarkDiagnosticEvents(b, source, tc.in, tc.want)
+			// 固定次数测量另外约束重复扩容，避免短时基准被少量其他分配影响。
+			allocations := testing.AllocsPerRun(100, func() {
+				diagnosticEventsBenchmarkSink = events(source, tc.in)
 			})
-			if allocated := result.AllocedBytesPerOp(); allocated > tc.budget {
+			if allocations > tc.allocations {
+				t.Fatalf("诊断事件投影分配 %.0f 次，超过 %.0f 次预算", allocations, tc.allocations)
+			}
+			// 基准读取进程级分配总量；其他协程只会增加字节数，取三次采样的最小值降低这类干扰。
+			var allocated int64
+			for sample := range 3 {
+				result := testing.Benchmark(func(b *testing.B) {
+					benchmarkDiagnosticEvents(b, source, tc.in, tc.want)
+				})
+				if sample == 0 || result.AllocedBytesPerOp() < allocated {
+					allocated = result.AllocedBytesPerOp()
+				}
+			}
+			if allocated > tc.budget {
 				t.Fatalf("诊断事件投影分配 %d B，超过 %d B 预算", allocated, tc.budget)
 			}
 		})

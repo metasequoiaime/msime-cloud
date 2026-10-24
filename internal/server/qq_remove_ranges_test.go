@@ -3,6 +3,7 @@ package server
 import (
 	"math/rand"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -61,13 +62,19 @@ func TestQQRemoveMatchedRangesPreservesWhitespaceAndAllocationBudget(t *testing.
 				if got != tc.want || allocs > tc.maxAllocs {
 					t.Fatalf("结果=%q，预期=%q，分配=%.1f，预算=%.1f", got, tc.want, allocs, tc.maxAllocs)
 				}
-				result := testing.Benchmark(func(b *testing.B) {
-					for b.Loop() {
-						_ = operation.run(tc.input)
+				if tc.maxBytes > 0 {
+					const runs = 20
+					var before, after runtime.MemStats
+					runtime.GC()
+					runtime.ReadMemStats(&before)
+					for range runs {
+						got = operation.run(tc.input)
 					}
-				})
-				if result.AllocedBytesPerOp() > tc.maxBytes {
-					t.Fatalf("分配 %d 字节，超过 %d 字节预算", result.AllocedBytesPerOp(), tc.maxBytes)
+					runtime.ReadMemStats(&after)
+					allocated := (after.TotalAlloc - before.TotalAlloc) / runs
+					if int64(allocated) > tc.maxBytes {
+						t.Fatalf("分配 %d 字节，超过 %d 字节预算", allocated, tc.maxBytes)
+					}
 				}
 			})
 		}

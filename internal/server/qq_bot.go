@@ -1970,21 +1970,14 @@ var qqVersionPattern = regexp.MustCompile(`([0-9]+)\.([0-9]+)(?:\.([0-9]+))?`)
 
 // qqParseVersion 取 text 里第一个形如 0.9 或 0.9.5 的版本号。
 func qqParseVersion(text string) ([3]int, bool) {
-	const maximum = 1_000_000
 	for search := 0; search < len(text); {
 		if text[search] < '0' || text[search] > '9' {
 			search++
 			continue
 		}
 		first := search
-		value1, overflow1 := 0, false
-		for search < len(text) && text[search] >= '0' && text[search] <= '9' {
-			value1 = value1*10 + int(text[search]-'0')
-			if value1 > maximum {
-				overflow1 = true
-			}
-			search++
-		}
+		value1, end, overflow1 := qqVersionNumber(text, search)
+		search = end
 		if search >= len(text) || text[search] != '.' || search+1 >= len(text) || text[search+1] < '0' || text[search+1] > '9' {
 			if search == first {
 				search++
@@ -1992,25 +1985,13 @@ func qqParseVersion(text string) ([3]int, bool) {
 			continue
 		}
 		search++
-		value2, overflow2 := 0, false
-		for search < len(text) && text[search] >= '0' && text[search] <= '9' {
-			value2 = value2*10 + int(text[search]-'0')
-			if value2 > maximum {
-				overflow2 = true
-			}
-			search++
-		}
+		value2, end, overflow2 := qqVersionNumber(text, search)
+		search = end
 		value3 := 0
 		overflow3 := false
 		if search+1 < len(text) && text[search] == '.' && text[search+1] >= '0' && text[search+1] <= '9' {
 			search++
-			for search < len(text) && text[search] >= '0' && text[search] <= '9' {
-				value3 = value3*10 + int(text[search]-'0')
-				if value3 > maximum {
-					overflow3 = true
-				}
-				search++
-			}
+			value3, search, overflow3 = qqVersionNumber(text, search)
 		}
 		if overflow1 || overflow2 || overflow3 {
 			return [3]int{}, false
@@ -2018,6 +1999,19 @@ func qqParseVersion(text string) ([3]int, bool) {
 		return [3]int{value1, value2, value3}, true
 	}
 	return [3]int{}, false
+}
+
+// qqVersionNumber 消费从 start 开始的连续 ASCII 数字，并记录是否曾超过版本段上限；超限后仍消费整段。
+func qqVersionNumber(text string, start int) (value, next int, overflow bool) {
+	next = start
+	for next < len(text) && text[next] >= '0' && text[next] <= '9' {
+		value = value*10 + int(text[next]-'0')
+		if value > 1_000_000 {
+			overflow = true
+		}
+		next++
+	}
+	return value, next, overflow
 }
 
 func qqVersionAtLeast(v, floor [3]int) bool {

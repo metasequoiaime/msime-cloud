@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"net/http"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -47,9 +48,11 @@ func (c *AdminConfig) validate(authEnabled bool, clients []Client) error {
 	if !authEnabled {
 		return errors.New("admin requires auth.enabled and PostgreSQL")
 	}
-	if len(c.Host) > 253 || strings.ContainsAny(c.Host, "/:?#@ \\\r\n\t") || !strings.Contains(c.Host, ".") {
-		return errors.New("invalid admin host: use a hostname without port")
+	host, err := normalizeAdminHost(c.Host)
+	if err != nil {
+		return err
 	}
+	c.Host = host
 	if err := c.Google.validate(c.Host); err != nil {
 		return err
 	}
@@ -66,6 +69,18 @@ func (c *AdminConfig) validate(authEnabled bool, clients []Client) error {
 	}
 	c.tokenHash = sha256.Sum256([]byte(c.token))
 	return c.validateConsole()
+}
+
+// normalizeAdminHost 把配置域名转成浏览器使用的 ASCII 写法，仍禁止端口及 URL 的其他部分。
+func normalizeAdminHost(host string) (string, error) {
+	if len(host) > 253 || strings.ContainsAny(host, "/:?#@ \\\r\n\t") {
+		return "", errors.New("invalid admin host: use a hostname without port")
+	}
+	u := &url.URL{Scheme: "https", Host: host}
+	if err := normalizeOriginHost(u); err != nil || len(u.Host) > 253 || !strings.Contains(u.Host, ".") {
+		return "", errors.New("invalid admin host: use a hostname without port")
+	}
+	return u.Host, nil
 }
 
 var adminAssets = adminweb.Handler()

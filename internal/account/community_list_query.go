@@ -26,6 +26,24 @@ func communityListScope(query url.Values) (string, bool) {
 	return scope, scope == "" || scope == "mine" || scope == "saved"
 }
 
+// communityCatalogFields 共用键盘皮肤和插件列表、详情的字段声明。
+func communityCatalogFields(query url.Values) (map[string]bool, bool) {
+	return communityFields(query, "moderation", "saved")
+}
+
+// communityListOptions 先校验范围，再按目录规则读取字段，保持多个参数无效时的错误优先级。
+func communityListOptions(query url.Values, readFields func(url.Values) (map[string]bool, bool)) (string, map[string]bool, string) {
+	scope, ok := communityListScope(query)
+	if !ok {
+		return "", nil, "invalid_scope"
+	}
+	fields, ok := readFields(query)
+	if !ok {
+		return "", nil, "invalid_fields"
+	}
+	return scope, fields, ""
+}
+
 // communitySkinListCategory 共用两类皮肤列表的分类筛选与声明，先报分类错误，再报声明错误。
 func communitySkinListCategory(query url.Values) (category string, withCategory bool, code string) {
 	category = query.Get("category")

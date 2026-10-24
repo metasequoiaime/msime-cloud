@@ -32,6 +32,16 @@ func (m *cancelDownloadMailer) Mail(ctx context.Context, _, _, _ string) error {
 	return nil
 }
 
+type cancelAndFailDownloadMailer struct {
+	cancel context.CancelFunc
+	err    error
+}
+
+func (m *cancelAndFailDownloadMailer) Mail(ctx context.Context, _, _, _ string) error {
+	m.cancel()
+	return m.err
+}
+
 func (m *downloadPoolMailer) Mail(ctx context.Context, target, subject, body string) error {
 	_ = m.captureMailer.Mail(ctx, target, subject, body)
 	return m.err
@@ -131,5 +141,44 @@ func TestDownloadLinkSurvivesCancellationAfterMailAccepted(t *testing.T) {
 	}
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("邮件已确认发送后不应因请求取消失败：状态=%d 响应=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestDownloadLinkCancellationReleasesTransactionBeforeDeliveryBookkeeping(t *testing.T) {
+	db := testStore(t)
+	if _, err := db.pool.Exec(t.Context(), "TRUNCATE admin_email_delivery_daily,auth_delivery_suppressions"); err != nil {
+		t.Fatal(err)
+	}
+	user := complete(t, db, Identity{"email", "download-cancel-failure@example.test"})
+	cfg := db.pool.Config()
+	cfg.MaxConns = 1
+	pool, err := pgxpool.NewWithConfig(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	mailer := &cancelAndFailDownloadMailer{cancel: cancel, err: errors.New("smtp unavailable")}
+	a := &Service{store: &Store{pool: pool}, config: Config{Email: MailConfig{From: "noreply@example.test"}}, mailer: mailer}
+	mux := http.NewServeMux()
+	Mount(mux, a)
+	r := httptest.NewRequestWithContext(ctx, http.MethodPost, "/v1/users/me/download-link", strings.NewReader(`{"platform":"windows"}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Authorization", "Bearer "+user.AccessToken)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "delivery_failed") {
+		t.Fatalf("取消后的投递失败未完成记账：状态=%d 响应=%s 上下文错误=%v", w.Code, w.Body.String(), ctx.Err())
+	}
+	var attempted int
+	if err := db.pool.QueryRow(t.Context(), `SELECT COALESCE(SUM(attempted),0) FROM admin_email_delivery_daily`).Scan(&attempted); err != nil {
+		t.Fatal(err)
+	}
+	if attempted != 1 {
+		t.Fatalf("投递统计未写入：attempted=%d", attempted)
+	}
+	if got := pool.Stat().NewConnsCount(); got != 1 {
+		t.Fatalf("请求取消后回滚不应杀死连接并重建连接：新建连接数=%d 状态=%+v", got, pool.Stat())
 	}
 }

@@ -125,11 +125,17 @@ func (a *Service) downloadLink(w http.ResponseWriter, r *http.Request) {
 	var tx pgx.Tx
 	var deliveryErr error
 	attempted, refundGlobal := false, false
+	rollback := func() {
+		if tx == nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 3*time.Second)
+		defer cancel()
+		_ = tx.Rollback(ctx)
+	}
 	defer func() {
 		// 先释放用户事务的连接，再写统计、抑制记录或退款，确保单连接池也能完成请求。
-		if tx != nil {
-			_ = tx.Rollback(r.Context())
-		}
+		rollback()
 		if attempted {
 			a.recordEmailDelivery("email", deliveryErr)
 			if permanentDeliveryFailure(deliveryErr) {

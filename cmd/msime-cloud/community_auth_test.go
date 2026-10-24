@@ -122,6 +122,121 @@ func TestCommunityPublicOnlyCallsOmitIdentity(t *testing.T) {
 	}
 }
 
+func TestPublicHEADCallsOmitIdentity(t *testing.T) {
+	for _, source := range []string{"environment", "saved", "expired"} {
+		for _, path := range []string{"/v1/notices", "/v1/community/stats", "/v1/community/word-submissions?limit=1"} {
+			t.Run(source+path, func(t *testing.T) {
+				h := newHarness(t)
+				var calls, refreshes atomic.Int32
+				mux := http.NewServeMux()
+				plainPath, _, _ := strings.Cut(path, "?")
+				mux.HandleFunc("GET "+plainPath, func(w http.ResponseWriter, r *http.Request) {
+					calls.Add(1)
+					if r.Method != http.MethodHead || r.URL.RequestURI() != path || r.Header.Get("Authorization") != "" {
+						t.Errorf("匿名 HEAD 请求错误：method=%s path=%s auth=%q", r.Method, r.URL.RequestURI(), r.Header.Get("Authorization"))
+					}
+					w.Write([]byte("合成响应正文"))
+				})
+				mux.HandleFunc("POST /v1/auth/refresh", func(w http.ResponseWriter, r *http.Request) {
+					refreshes.Add(1)
+					w.WriteHeader(http.StatusUnauthorized)
+				})
+				server := httptest.NewServer(mux)
+				t.Cleanup(server.Close)
+				h.env["MSIME_CLOUD_URL"] = server.URL
+				current := session{AccessToken: "synthetic-access", RefreshToken: "synthetic-refresh", ExpiresAt: h.now.Add(time.Hour)}
+				if source == "expired" {
+					current.ExpiresAt = h.now.Add(-time.Minute)
+				}
+				if source == "environment" {
+					h.env["MSIME_CLOUD_TOKEN"] = current.AccessToken
+				} else if err := (store{dir: h.dir}).put(server.URL, &current); err != nil {
+					t.Fatal(err)
+				}
+				code, out, errText := h.run("", "call", "HEAD", path)
+				if code != 0 || out != "" || errText != "" {
+					t.Errorf("HEAD 调用：code=%d out=%q err=%s", code, out, errText)
+				}
+				if calls.Load() != 1 || refreshes.Load() != 0 {
+					t.Errorf("匿名接口调用次数=%d 刷新次数=%d", calls.Load(), refreshes.Load())
+				}
+				if source != "environment" {
+					saved, ok, err := (store{dir: h.dir}).get(server.URL)
+					if err != nil || !ok || saved.AccessToken != current.AccessToken || saved.RefreshToken != current.RefreshToken || !saved.ExpiresAt.Equal(current.ExpiresAt) {
+						t.Errorf("匿名 HEAD 改动了保存的会话：ok=%v err=%v", ok, err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestIdentityHEADCallsUseGETAuthentication(t *testing.T) {
+	for _, tc := range []struct {
+		name, path, source, wantAuth string
+		refreshStatus, wantCode      int
+		wantCalls, wantRefreshes     int32
+	}{
+		{"optional-environment", "/v1/community/skins/synthetic", "environment", "Bearer synthetic-access", 0, 0, 1, 0},
+		{"optional-saved", "/v1/community/skins", "saved", "Bearer synthetic-access", 0, 0, 1, 0},
+		{"optional-refreshed", "/v1/community/skins", "expired", "Bearer refreshed-access", 200, 0, 1, 1},
+		{"optional-revoked", "/v1/community/skins", "expired", "", 401, 0, 1, 1},
+		{"optional-unavailable", "/v1/community/skins", "expired", "", 503, 1, 0, 1},
+		{"required-environment", "/v1/users/me", "environment", "Bearer synthetic-access", 0, 0, 1, 0},
+		{"required-refreshed", "/v1/users/me", "expired", "Bearer refreshed-access", 200, 0, 1, 1},
+		{"required-revoked", "/v1/users/me", "expired", "", 401, 1, 0, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			var calls, refreshes atomic.Int32
+			mux := http.NewServeMux()
+			mux.HandleFunc("GET "+tc.path, func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				if r.Method != http.MethodHead || r.Header.Get("Authorization") != tc.wantAuth {
+					t.Errorf("身份 HEAD 请求错误：method=%s auth=%q，期望 %q", r.Method, r.Header.Get("Authorization"), tc.wantAuth)
+				}
+				w.Write([]byte("合成响应正文"))
+			})
+			mux.HandleFunc("POST /v1/auth/refresh", func(w http.ResponseWriter, r *http.Request) {
+				refreshes.Add(1)
+				w.WriteHeader(tc.refreshStatus)
+				if tc.refreshStatus == http.StatusOK {
+					json.NewEncoder(w).Encode(map[string]any{"access_token": "refreshed-access", "refresh_token": "refreshed-refresh", "token_type": "Bearer", "expires_in": 900})
+				}
+			})
+			server := httptest.NewServer(mux)
+			t.Cleanup(server.Close)
+			h.env["MSIME_CLOUD_URL"] = server.URL
+			current := session{AccessToken: "synthetic-access", RefreshToken: "synthetic-refresh", ExpiresAt: h.now.Add(time.Hour)}
+			if tc.source == "expired" {
+				current.ExpiresAt = h.now.Add(-time.Minute)
+			}
+			if tc.source == "environment" {
+				h.env["MSIME_CLOUD_TOKEN"] = current.AccessToken
+			} else if err := (store{dir: h.dir}).put(server.URL, &current); err != nil {
+				t.Fatal(err)
+			}
+			code, out, errText := h.run("", "call", "HEAD", tc.path)
+			if code != tc.wantCode || out != "" || strings.Contains(errText, "not in the API description") {
+				t.Errorf("HEAD 调用：code=%d，期望 %d out=%q err=%s", code, tc.wantCode, out, errText)
+			}
+			if calls.Load() != tc.wantCalls || refreshes.Load() != tc.wantRefreshes {
+				t.Errorf("身份接口调用次数=%d，期望 %d；刷新次数=%d，期望 %d", calls.Load(), tc.wantCalls, refreshes.Load(), tc.wantRefreshes)
+			}
+			if tc.refreshStatus == http.StatusUnauthorized {
+				if _, ok, err := (store{dir: h.dir}).get(server.URL); err != nil || ok {
+					t.Errorf("撤销后的会话仍被保留：ok=%v err=%v", ok, err)
+				}
+			}
+			if tc.refreshStatus == http.StatusServiceUnavailable {
+				if saved, ok, err := (store{dir: h.dir}).get(server.URL); err != nil || !ok || saved.AccessToken != current.AccessToken {
+					t.Errorf("临时刷新失败丢失会话：ok=%v err=%v", ok, err)
+				}
+			}
+		})
+	}
+}
+
 func TestCommunityRefreshFailurePreservesIdentity(t *testing.T) {
 	h := newHarness(t)
 	var communityCalled atomic.Bool

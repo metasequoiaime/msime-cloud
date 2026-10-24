@@ -339,7 +339,7 @@ func (c cli) call(args []string) error {
 	return c.print(response, r.output)
 }
 
-// send makes the request with the credentials its operation takes, refreshing a kept session that has expired or that the server no longer accepts, once.
+// send 按接口要求选择凭据；保存的会话过期或被服务端拒绝时最多刷新一次。
 func (c cli) send(r request) (*http.Response, error) {
 	if strings.HasPrefix(r.path, adminPrefix) {
 		return c.sendAdmin(r)
@@ -349,7 +349,12 @@ func (c cli) send(r request) (*http.Response, error) {
 	}
 	auth := authAny
 	if operations, err := catalog(); err == nil {
-		if op, ok := find(operations, r.method, r.path); ok {
+		method := r.method
+		// ServeMux 的 GET 路由也接受 HEAD；只沿用鉴权要求，实际请求仍发送 HEAD。
+		if method == http.MethodHead {
+			method = http.MethodGet
+		}
+		if op, ok := find(operations, method, r.path); ok {
 			auth = op.Auth
 		} else {
 			fmt.Fprintf(c.stderr, "msime-cloud: %s %s is not in the API description; sending it anyway\n", r.method, r.path)

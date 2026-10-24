@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
@@ -18,16 +17,8 @@ func (s *Server) generateSkinArtwork(w http.ResponseWriter, r *http.Request) {
 	if !enabled(w, s.config.Images) {
 		return
 	}
-	owner, _ := r.Context().Value(skinJobOwnerKey{}).(string)
-	if user, ok := strings.CutPrefix(owner, "user:"); ok {
-		err := s.accounts.EnsureUserActive(r.Context(), user)
-		if writeSkinAccountError(w, err) {
-			return
-		}
-		if err != nil {
-			fail(w, http.StatusServiceUnavailable, "auth_unavailable")
-			return
-		}
+	if !s.ensureUserOwnerActive(w, r) {
+		return
 	}
 	input, ok := readSkinArtworkInput(w, r)
 	if !ok {

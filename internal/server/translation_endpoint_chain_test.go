@@ -49,8 +49,8 @@ func TestTranslationEndpointChainAllocationBudget(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			measure := func(fallbacks int) testing.BenchmarkResult {
-				// 使用 DeepL 路径测量服务链，避免大响应缓冲池在竞态模式下随机丢弃缓存干扰分配预算。
-				s := translationChainFixture(fallbacks, tc.disabled, "deepl")
+				// 使用小牛路径测量服务链，避免大响应缓冲池在竞态模式下随机丢弃缓存干扰分配预算。
+				s := translationChainFixture(fallbacks, tc.disabled, "niutrans")
 				r := httptest.NewRequest(http.MethodPost, "/v1/translate", nil)
 				return testing.Benchmark(func(b *testing.B) {
 					for b.Loop() {

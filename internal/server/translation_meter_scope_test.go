@@ -18,6 +18,9 @@ func translationMeterServer(provider string) *Server {
 			if provider == "deepl" {
 				body = `{"translations":[{"text":"word"}]}`
 			}
+			if provider == "niutrans" {
+				body = `{"tgtText":"word"}`
+			}
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 		})},
 	}

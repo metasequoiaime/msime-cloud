@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/url"
 	"strings"
@@ -94,13 +93,13 @@ func (s *Server) translateDeepLBatch(w http.ResponseWriter, r *http.Request, bat
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "DeepL-Auth-Key "+e.token)
-	body, err := s.doUpstream(req)
 	var result struct {
 		Translations []struct {
 			Text string `json:"text"`
 		} `json:"translations"`
 	}
-	if err != nil || json.Unmarshal(body, &result) != nil || len(result.Translations) != len(batch.texts) {
+	decoded, err := s.doUpstreamJSON(req, &result)
+	if err != nil || !decoded || len(result.Translations) != len(batch.texts) {
 		upstreamError(w, r, err)
 		return nil, false
 	}

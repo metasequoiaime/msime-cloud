@@ -67,6 +67,8 @@ server {
 
 默认 `admin.enabled: false`，不会改变已有域名的路由。后台域名不承载 `/v1/*` 客户端 API。
 
+`admin.host` 只填写不带端口的主机名，启动校验会按浏览器规则转成 ASCII（例如 `bücher.example.test` 转成 `xn--bcher-kva.example.test`），并拒绝无法规范化的域名。Google 回调的主机按相同规则与后台域名比较；省略 `redirect_uri` 时使用规范化后的域名生成默认 HTTPS 回调。显式填写的 `redirect_uri` 会保留原文，必须与 Google Cloud 中登记的值精确一致，建议两处都填写 ASCII 域名。
+
 本地私密配置可放在 `config.admin.local.json` 和 `.env.admin.local`（均被 Git 忽略）。Go 不自动加载 `.env`，可由部署工具注入，或在本机先 `set -a; . ./.env.admin.local; set +a`。
 
 ### PostgreSQL 兼容性

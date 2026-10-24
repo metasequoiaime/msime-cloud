@@ -10,6 +10,7 @@ import (
 	"maps"
 	"net/http"
 	"regexp"
+	"regexp/syntax"
 	"slices"
 	"strconv"
 	"strings"
@@ -679,10 +680,7 @@ func lockCrashSpikes(ctx context.Context, tx pgx.Tx) ([]crashSpike, error) {
 	return spikes, err
 }
 
-var (
-	crashUUIDPattern   = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
-	crashHexRunPattern = regexp.MustCompile(`\b[0-9a-fA-F]{8,}\b`)
-)
+var crashUUIDPattern = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
 
 // normalizeCrashWhitespace 折叠规范化文本中的空白并统一为小写。
 func normalizeCrashWhitespace(text string) string {
@@ -974,9 +972,7 @@ func normalizeCrashMessage(message string) string {
 	if len(line) >= 36 && strings.ContainsRune(line, '-') {
 		line = crashUUIDPattern.ReplaceAllString(line, "?")
 	}
-	if crashHasHexRun(line) {
-		line = crashHexRunPattern.ReplaceAllString(line, "?")
-	}
+	line = maskCrashHexRuns(line)
 	line = maskCrashDigits(line)
 	return normalizeCrashWhitespace(line)
 }
@@ -1024,21 +1020,52 @@ func maskCrashDigits(line string) string {
 	return out.String()
 }
 
-// crashHasHexRun 只筛选至少八个连续 ASCII 十六进制字符，单词边界仍由原正则判断。
-func crashHasHexRun(line string) bool {
-	run := 0
-	for i := 0; i < len(line); i++ {
-		c := line[i]
-		if c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F' {
-			run++
-			if run == 8 {
-				return true
-			}
-		} else {
-			run = 0
-		}
+// maskCrashHexRuns 掩去有 ASCII 单词边界、至少八位的十六进制串，不改动其余字节。
+func maskCrashHexRuns(line string) string {
+	if len(line) < 8 {
+		return line
 	}
-	return false
+	first, end := nextCrashHexRun(line, 0)
+	if first < 0 {
+		return line
+	}
+	size := len(line)
+	for start, stop := first, end; start >= 0; start, stop = nextCrashHexRun(line, stop) {
+		size -= stop - start - 1
+	}
+	// 输出长度为一说明整行匹配，直接复用固定掩码。
+	if size == 1 {
+		return "?"
+	}
+	var out strings.Builder
+	out.Grow(size)
+	previous := 0
+	for start, stop := first, end; start >= 0; start, stop = nextCrashHexRun(line, stop) {
+		out.WriteString(line[previous:start])
+		out.WriteByte('?')
+		previous = stop
+	}
+	out.WriteString(line[previous:])
+	return out.String()
+}
+
+// nextCrashHexRun 查找原输入中的下一个完整匹配，边界沿用标准库的 ASCII 单词字符定义。
+func nextCrashHexRun(line string, from int) (int, int) {
+	start := from
+	for i := from; i < len(line); i++ {
+		if crashHexByte(line[i]) {
+			continue
+		}
+		// 非 ASCII 字节与原正则解码出的非 ASCII 字符一样，都不属于单词字符。
+		if i-start >= 8 && (start == 0 || !syntax.IsWordChar(rune(line[start-1]))) && !syntax.IsWordChar(rune(line[i])) {
+			return start, i
+		}
+		start = i + 1
+	}
+	if len(line)-start >= 8 && (start == 0 || !syntax.IsWordChar(rune(line[start-1]))) {
+		return start, len(line)
+	}
+	return -1, 0
 }
 
 // crashMessageMayChange 保守筛选可能被正则替换的行；数字和控制空白先用字节查找，八个连续十六进制字母也覆盖不含数字、嵌在单词中的 UUID，单个空格无需替换。

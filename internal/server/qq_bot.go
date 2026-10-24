@@ -33,6 +33,7 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
+	"golang.org/x/sync/singleflight"
 )
 
 // QQ 群反馈机器人。群友在 QQ 群里 @机器人 描述遇到的问题或想要的功能，QQ 开放平台把事件以 Webhook 推到 qqBotEventsPath；服务端校验 Ed25519 签名、按消息 id 在所有副本间去重后立即应答，再在后台处理：大多数消息按知识库答疑；管理员明确要求记录（「提issue」命令或「记一下」这类说法）的具体 bug 或需求，用 chat 端点整理成结构化反馈，先对照知识库确认不是已有功能或正常现象，再用管理后台的 GitHub App 新建 issue，或补充到已有的同一问题下，最后在群里被动回复 issue 编号。官方机器人只能收到 @它 的消息，收不到群里的其他聊天。群友的原话、昵称和 openid 不写进 issue，也不写进日志：issue 里只有模型转述后的内容，并且打断了 @ 提及、# 引用和链接。
@@ -56,6 +57,8 @@ const (
 	qqBotFreeDaily   = 60
 	// qqBotReplyTimeout 是每次被动回复的时限。回复不跟随处理消息的 ctx：处理超时或副本关停取消了 ctx 后，「暂时处理不了」这样的兜底回复仍要发出去，消息已经认领，开放平台不会重推。
 	qqBotReplyTimeout = 10 * time.Second
+	// qqBotTokenTimeout 限制同一副本共享的换证请求，不随某个调用者取消。
+	qqBotTokenTimeout = 15 * time.Second
 	// qqBotMaxReplies 是开放平台对同一条消息被动回复的次数上限（msg_seq 最大为 5）。
 	qqBotMaxReplies = 5
 	qqBotMaxRunes   = 2000
@@ -251,10 +254,12 @@ type qqBot struct {
 	key    ed25519.PrivateKey
 	client *http.Client
 	now    func() time.Time
-	// mu 保护 token 和 expires；刷新凭证时一直持有，同一副本的并发请求只换一次凭证。
+	// mu 保护凭证和其他缓存字段，只在读取或更新内存时持有。
 	mu      sync.Mutex
 	token   string
 	expires time.Time
+	// tokenRefresh 合并本副本的换证请求，等待者可按自己的上下文取消。
+	tokenRefresh singleflight.Group
 	// knowledge 是本副本缓存的答疑知识库，见 qq_knowledge.go。
 	knowledge qqKnowledge
 	// mediaClient 下载管理员消息里的图片和视频，只能访问 mediaHosts 里的主机，见 qq_media.go。
@@ -367,7 +372,7 @@ func qqEventFields(raw json.RawMessage) (keys, numbers, nested []string) {
 
 func newQQBot(c QQBotConfig) *qqBot {
 	b := &qqBot{config: c, key: qqBotKey(c.secret), now: time.Now, mediaHosts: qqMediaHosts,
-		client: httpclient.New(15 * time.Second)}
+		client: httpclient.New(qqBotTokenTimeout)}
 	b.mediaClient = newQQMediaClient(&b.mediaHosts)
 	return b
 }
@@ -408,11 +413,43 @@ func (b *qqBot) freshSignatureTimestamp(timestamp string) bool {
 
 // accessToken 返回接口调用凭证，过期前一分钟内重新换取。开放平台在旧凭证过期前 60 秒内换取时发新凭证，旧凭证在这 60 秒里仍然有效，所以各副本各自缓存不会互相顶掉。
 func (b *qqBot) accessToken(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if token := b.cachedAccessToken(); token != "" {
+		return token, nil
+	}
+	result := b.tokenRefresh.DoChan("token", func() (any, error) {
+		if token := b.cachedAccessToken(); token != "" {
+			return token, nil
+		}
+		refresh, cancel := context.WithTimeout(context.WithoutCancel(ctx), qqBotTokenTimeout)
+		defer cancel()
+		return b.refreshAccessToken(refresh)
+	})
+	select {
+	case result := <-result:
+		if result.Err != nil {
+			return "", result.Err
+		}
+		return result.Val.(string), nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+// cachedAccessToken 只在锁内检查凭证，慢速网络请求不能阻塞回调字段探测等缓存操作。
+func (b *qqBot) cachedAccessToken() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.token != "" && b.now().Before(b.expires.Add(-time.Minute)) {
-		return b.token, nil
+		return b.token
 	}
+	return ""
+}
+
+// refreshAccessToken 请求上游并发布新凭证；同一副本的并发调用由 tokenRefresh 合并。
+func (b *qqBot) refreshAccessToken(ctx context.Context) (string, error) {
 	req, err := httpclient.NewJSONPayloadRequest(ctx, http.MethodPost, b.config.APIURL+"/app/getAppAccessToken", map[string]string{"appId": b.config.AppID, "clientSecret": b.config.secret})
 	if err != nil {
 		return "", errors.New("qq bot: invalid token endpoint")
@@ -434,8 +471,10 @@ func (b *qqBot) accessToken(ctx context.Context) (string, error) {
 	if err != nil || seconds < 1 || seconds > 86400 || !validProviderCredential(result.AccessToken) {
 		return "", errors.New("qq bot: invalid token response")
 	}
+	b.mu.Lock()
 	b.token, b.expires = result.AccessToken, b.now().Add(time.Duration(seconds)*time.Second)
-	return b.token, nil
+	b.mu.Unlock()
+	return result.AccessToken, nil
 }
 
 // reply 在群里被动回复 msgID 那条消息。seq 是对同一条消息的第几次回复，开放平台按 msg_id 和 msg_seq 去重。

@@ -351,12 +351,11 @@ func (s *Server) translateSingleText(w http.ResponseWriter, r *http.Request, v t
 		return s.translateNiuTransUpstream(w, r, v, e)
 	default:
 		v.Source, v.Target = strings.ToUpper(v.Source), strings.ToUpper(v.Target)
-		payload, _ := json.Marshal(v)
 		var result struct {
 			Code int    `json:"code"`
 			Data string `json:"data"`
 		}
-		decoded, err := s.upstreamJSON(r, e.Endpoint, "POST", "application/json", bytes.NewReader(payload), &result)
+		decoded, err := s.upstreamJSONPayload(r, e.Endpoint, v, &result)
 		if err != nil || !decoded || (result.Code != 0 && result.Code != 200) || !bounded(result.Data, contract.OutputTextBytes) {
 			upstreamError(w, r, err)
 			return "", false

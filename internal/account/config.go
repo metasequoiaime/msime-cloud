@@ -166,7 +166,8 @@ func (c Config) Validate() error {
 	}
 	if c.Wechat.AppID != "" {
 		u, e := url.Parse(c.Wechat.RedirectURI)
-		if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Fragment != "" || os.Getenv(c.Wechat.SecretEnv) == "" {
+		// url.Parse 不保留空片段的标记，直接检查原始地址，避免把带 # 的回调传给微信。
+		if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || strings.Contains(c.Wechat.RedirectURI, "#") || os.Getenv(c.Wechat.SecretEnv) == "" {
 			return errors.New("微信登录配置无效")
 		}
 	}

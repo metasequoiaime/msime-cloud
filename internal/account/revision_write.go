@@ -10,6 +10,20 @@ import (
 
 var errRevisionConflict = errors.New("revision_conflict")
 
+// userDataRevisionTransaction 在用户行锁内校验词库版本；校验失败时主动回滚，避免调用方拿到未清理的事务。
+func (s *Store) userDataRevisionTransaction(ctx context.Context, user string, expected int64) (pgx.Tx, int64, error) {
+	tx, err := s.userDataTransaction(ctx, user)
+	if err != nil {
+		return nil, 0, err
+	}
+	revision, err := checkUserDataRevision(ctx, tx, user, expected)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		return nil, 0, err
+	}
+	return tx, revision, nil
+}
+
 // checkUserDataRevision 在已持有用户行锁的事务中读取词库版本，并校验调用方带来的版本。
 func checkUserDataRevision(ctx context.Context, tx pgx.Tx, user string, expected int64) (int64, error) {
 	var revision int64

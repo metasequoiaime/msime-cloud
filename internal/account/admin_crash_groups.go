@@ -791,10 +791,19 @@ func normalizeCrashFrame(line string) string {
 	if !strings.ContainsAny(line, "0123456789 \t\n\f\r") {
 		return strings.ToLower(line)
 	}
-	line = crashFrameIndex.ReplaceAllString(line, "")
-	line = crashAddressPattern.ReplaceAllString(line, "")
-	line = crashFrameOffset.ReplaceAllString(line, "")
-	line = crashFrameLineNumber.ReplaceAllString(line, "")
+	// 只在存在必要标记时调用正则；未匹配的 ReplaceAllString 也会复制整行。
+	if line[0] >= '0' && line[0] <= '9' || line[0] == '#' || strings.HasPrefix(line, "at") {
+		line = crashFrameIndex.ReplaceAllString(line, "")
+	}
+	if strings.Contains(line, "0x") || strings.Contains(line, "0X") {
+		line = crashAddressPattern.ReplaceAllString(line, "")
+	}
+	if strings.ContainsRune(line, '+') {
+		line = crashFrameOffset.ReplaceAllString(line, "")
+	}
+	if strings.ContainsRune(line, ':') {
+		line = crashFrameLineNumber.ReplaceAllString(line, "")
+	}
 	return normalizeCrashWhitespace(line)
 }
 
@@ -804,11 +813,36 @@ func normalizeCrashMessage(message string) string {
 	if !crashMessageMayChange(line) {
 		return strings.ToLower(line)
 	}
-	line = crashAddressPattern.ReplaceAllString(line, "0x?")
-	line = crashUUIDPattern.ReplaceAllString(line, "?")
-	line = crashHexRunPattern.ReplaceAllString(line, "?")
-	line = crashDigitsPattern.ReplaceAllString(line, "#")
+	if strings.Contains(line, "0x") || strings.Contains(line, "0X") {
+		line = crashAddressPattern.ReplaceAllString(line, "0x?")
+	}
+	if len(line) >= 36 && strings.ContainsRune(line, '-') {
+		line = crashUUIDPattern.ReplaceAllString(line, "?")
+	}
+	if crashHasHexRun(line) {
+		line = crashHexRunPattern.ReplaceAllString(line, "?")
+	}
+	if strings.ContainsAny(line, "0123456789") {
+		line = crashDigitsPattern.ReplaceAllString(line, "#")
+	}
 	return normalizeCrashWhitespace(line)
+}
+
+// crashHasHexRun 只筛选至少八个连续 ASCII 十六进制字符，单词边界仍由原正则判断。
+func crashHasHexRun(line string) bool {
+	run := 0
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		if c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F' {
+			run++
+			if run == 8 {
+				return true
+			}
+		} else {
+			run = 0
+		}
+	}
+	return false
 }
 
 // crashMessageMayChange 保守筛选可能被正则替换的行；数字和控制空白先用字节查找，八个连续十六进制字母也覆盖不含数字、嵌在单词中的 UUID，单个空格无需替换。

@@ -310,7 +310,12 @@ func (a *Service) adminAction(w http.ResponseWriter, r *http.Request) {
 		a.error(w, err)
 		return
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		// 提交前的外部步骤可能取消原请求；仍用独立期限回滚，避免把空闲事务连接带着已取消的上下文归还连接池。
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		_ = tx.Rollback(rollbackCtx)
+		cancel()
+	}()
 	result, err := spec.run(a, ctx, tx, v)
 	if err != nil {
 		a.writeActionError(w, err)

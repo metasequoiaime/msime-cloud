@@ -237,6 +237,115 @@ func TestIdentityHEADCallsUseGETAuthentication(t *testing.T) {
 	}
 }
 
+func TestEscapedPublicCallsOmitIdentity(t *testing.T) {
+	for _, path := range []string{"/v1/%6eotices", "/%76%31/notices", "/v1/notices#ignored", "/v1/notices?limit=1#ignored"} {
+		for _, source := range []string{"environment", "expired"} {
+			t.Run(source+path, func(t *testing.T) {
+				h := newHarness(t)
+				var calls, refreshes atomic.Int32
+				mux := http.NewServeMux()
+				mux.HandleFunc("GET /v1/notices", func(w http.ResponseWriter, r *http.Request) {
+					calls.Add(1)
+					wantURI, _, _ := strings.Cut(path, "#")
+					if r.Method != http.MethodGet || r.URL.RequestURI() != wantURI {
+						t.Errorf("请求地址被改写：method=%s uri=%s，期望 %s", r.Method, r.URL.RequestURI(), wantURI)
+					}
+					if r.Header.Get("Authorization") != "" {
+						t.Error("编码的匿名路径附带了凭据")
+					}
+					w.WriteHeader(http.StatusNoContent)
+				})
+				mux.HandleFunc("POST /v1/auth/refresh", func(w http.ResponseWriter, r *http.Request) {
+					refreshes.Add(1)
+					w.WriteHeader(http.StatusUnauthorized)
+				})
+				server := httptest.NewServer(mux)
+				t.Cleanup(server.Close)
+				h.env["MSIME_CLOUD_URL"] = server.URL
+				current := session{AccessToken: "synthetic-access", RefreshToken: "synthetic-refresh", ExpiresAt: h.now.Add(-time.Minute)}
+				if source == "environment" {
+					h.env["MSIME_CLOUD_TOKEN"] = current.AccessToken
+				} else if err := (store{dir: h.dir}).put(server.URL, &current); err != nil {
+					t.Fatal(err)
+				}
+				code, out, errText := h.run("", "call", "GET", path)
+				if code != 0 || out != "" || errText != "" {
+					t.Errorf("编码路径调用：code=%d out=%q err=%s", code, out, errText)
+				}
+				if calls.Load() != 1 || refreshes.Load() != 0 {
+					t.Errorf("匿名接口调用次数=%d 刷新次数=%d", calls.Load(), refreshes.Load())
+				}
+				if source == "expired" {
+					if saved, ok, err := (store{dir: h.dir}).get(server.URL); err != nil || !ok || saved.AccessToken != current.AccessToken {
+						t.Errorf("匿名调用改动了会话：ok=%v err=%v", ok, err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestEscapedCallsPreserveLiteralRoutePriority(t *testing.T) {
+	for _, tc := range []struct {
+		path      string
+		wantCalls int32
+		wantCode  int
+	}{
+		{"/v1/community/candidate-skins/s%79nc", 0, 1},
+		{"/v1/community/candidate-skins/s%2Fync", 1, 0},
+		{"/v1/community/candidate-skins/s%2579nc", 1, 0},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			h := newHarness(t)
+			var calls, refreshes atomic.Int32
+			mux := http.NewServeMux()
+			mux.HandleFunc("GET /v1/community/candidate-skins/sync", func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				w.WriteHeader(http.StatusUnauthorized)
+			})
+			mux.HandleFunc("GET /v1/community/candidate-skins/{id}", func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				w.WriteHeader(http.StatusNoContent)
+			})
+			mux.HandleFunc("POST /v1/auth/refresh", func(w http.ResponseWriter, r *http.Request) {
+				refreshes.Add(1)
+				w.WriteHeader(http.StatusUnauthorized)
+			})
+			server := httptest.NewServer(mux)
+			t.Cleanup(server.Close)
+			h.env["MSIME_CLOUD_URL"] = server.URL
+			current := session{AccessToken: "synthetic-access", RefreshToken: "synthetic-refresh", ExpiresAt: h.now.Add(-time.Minute)}
+			if err := (store{dir: h.dir}).put(server.URL, &current); err != nil {
+				t.Fatal(err)
+			}
+			code, _, errText := h.run("", "call", "GET", tc.path)
+			if code != tc.wantCode || strings.Contains(errText, "not in the API description") {
+				t.Errorf("编码路径调用：code=%d，期望 %d err=%s", code, tc.wantCode, errText)
+			}
+			if calls.Load() != tc.wantCalls || refreshes.Load() != 1 {
+				t.Errorf("接口调用次数=%d，期望 %d；刷新次数=%d", calls.Load(), tc.wantCalls, refreshes.Load())
+			}
+		})
+	}
+}
+
+func TestInvalidEscapedPathPreservesSession(t *testing.T) {
+	h := newHarness(t)
+	h.signIn()
+	h.now = h.now.Add(time.Hour)
+	h.cloud.mu.Lock()
+	before := len(h.cloud.seen)
+	h.cloud.mu.Unlock()
+	if code, _, errText := h.run("", "call", "GET", "/v1/%zz"); code != 2 || !strings.Contains(errText, "invalid URL escape") {
+		t.Errorf("无效路径调用：code=%d err=%s", code, errText)
+	}
+	h.cloud.mu.Lock()
+	defer h.cloud.mu.Unlock()
+	if len(h.cloud.seen) != before {
+		t.Error("无效路径触发了 HTTP 请求或会话刷新")
+	}
+}
+
 func TestCommunityRefreshFailurePreservesIdentity(t *testing.T) {
 	h := newHarness(t)
 	var communityCalled atomic.Bool

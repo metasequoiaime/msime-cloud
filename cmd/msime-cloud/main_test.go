@@ -335,6 +335,32 @@ func TestAdminPathsUseTheAdminKey(t *testing.T) {
 	}
 }
 
+func TestEscapedAdminPathsUseTheAdminSite(t *testing.T) {
+	for _, path := range []string{"/api/me", "/%61pi/me", "/api%2Fme"} {
+		t.Run(path, func(t *testing.T) {
+			h := newHarness(t)
+			admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/me" || r.Header.Get("Authorization") != "Bearer synthetic-admin" {
+					t.Errorf("后台请求错误：path=%s auth=%q", r.URL.Path, r.Header.Get("Authorization"))
+				}
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			t.Cleanup(admin.Close)
+			h.env["MSIME_ADMIN_URL"] = admin.URL
+			h.env["MSIME_CLOUD_TOKEN"] = "synthetic-user"
+			h.env["MSIME_ADMIN_TOKEN"] = "synthetic-admin"
+			if code, out, errText := h.run("", "call", "GET", path); code != 0 || out != "" || errText != "" {
+				t.Errorf("编码后台路径调用：code=%d out=%q err=%s", code, out, errText)
+			}
+			h.cloud.mu.Lock()
+			defer h.cloud.mu.Unlock()
+			if len(h.cloud.seen) != 0 {
+				t.Error("编码的后台路径被发往公共服务")
+			}
+		})
+	}
+}
+
 func TestRoutesAndDescribeCoverTheAPIAndTheAdminSite(t *testing.T) {
 	h := newHarness(t)
 	code, out, _ := h.run("", "routes")
@@ -676,8 +702,47 @@ func TestARateLimitIsWaitedOutOnce(t *testing.T) {
 func TestTheLiveAudioWebSocketIsRefused(t *testing.T) {
 	h := newHarness(t)
 	h.env["MSIME_CLOUD_TOKEN"] = "device-token"
-	if code, _, errText := h.run("", "call", "GET", "/v1/audio/stream?model=x"); code != 1 || !strings.Contains(errText, "WebSocket") {
-		t.Fatalf("stream: %d %s", code, errText)
+	for _, path := range []string{"/v1/audio/stream?model=x", "/v1/audio/%73tream", "/v1/audio/stream#ignored"} {
+		if code, _, errText := h.run("", "call", "GET", path); code != 1 || !strings.Contains(errText, "WebSocket") {
+			t.Errorf("实时语音路径=%s：code=%d err=%s", path, code, errText)
+		}
+	}
+}
+
+func TestEncodedSeparatorDoesNotSelectWebSocket(t *testing.T) {
+	h := newHarness(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+	h.env["MSIME_CLOUD_URL"] = server.URL
+	if code, _, errText := h.run("", "call", "GET", "/v1%2Faudio/stream"); code != 0 || strings.Contains(errText, "WebSocket") {
+		t.Errorf("编码斜杠被当成路径分隔符：code=%d err=%s", code, errText)
+	}
+}
+
+func TestCallQueryPrecedesURLFragment(t *testing.T) {
+	for _, tc := range []struct{ path, wantURI string }{
+		{"/v1/notices#ignored", "/v1/notices?limit=2"},
+		{"/v1/notices?limit=1#ignored", "/v1/notices?limit=1&limit=2"},
+		{"/v1/notices#ignored?x=1", "/v1/notices?limit=2"},
+		{"/v1/items/has%23hash", "/v1/items/has%23hash?limit=2"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.RequestURI() != tc.wantURI {
+					t.Errorf("查询参数没有正确发送：uri=%s，期望 %s", r.URL.RequestURI(), tc.wantURI)
+				}
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			t.Cleanup(server.Close)
+			c := cli{client: server.Client()}
+			response, err := c.doOnce(server.URL, request{method: http.MethodGet, path: tc.path, query: url.Values{"limit": {"2"}}}, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			response.Body.Close()
+		})
 	}
 }
 

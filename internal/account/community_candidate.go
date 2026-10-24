@@ -528,27 +528,13 @@ func (a *Service) communityCandidateList(w http.ResponseWriter, r *http.Request)
 		a.error(w, e)
 		return
 	}
-	defer rows.Close()
-	items := []CommunityCandidateSkin{}
-	for rows.Next() {
-		v, e := scanCandidateSkin(rows)
-		if e != nil {
-			a.error(w, e)
-			return
-		}
+	writeCommunityRows(a, w, r, scope, viewer, "skins", rows, func(row pgx.CollectableRow) (CommunityCandidateSkin, error) {
+		v, err := scanCandidateSkin(row)
 		v = candidateItem(v, sync, withCategory)
 		v.Moderation = ownerModeration(fields, v.moderation)
 		v.Saved, v.Saves = communitySavedFields(fields, v.saved, v.saves)
-		items = append(items, v)
-	}
-	if e = rows.Err(); e != nil {
-		a.error(w, e)
-		return
-	}
-	if !a.communityListUserExists(w, r, scope, viewer, len(items)) {
-		return
-	}
-	writeCommunityPage(w, "skins", items)
+		return v, err
+	})
 }
 func (a *Service) communityCandidateDetail(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()

@@ -251,26 +251,12 @@ func (a *Service) communityPluginList(w http.ResponseWriter, r *http.Request) {
 		a.error(w, e)
 		return
 	}
-	defer rows.Close()
-	items := []CommunityPlugin{}
-	for rows.Next() {
-		v, e := scanCommunityPlugin(rows)
-		if e != nil {
-			a.error(w, e)
-			return
-		}
+	writeCommunityRows(a, w, r, scope, viewer, "plugins", rows, func(row pgx.CollectableRow) (CommunityPlugin, error) {
+		v, err := scanCommunityPlugin(row)
 		v.Moderation = ownerModeration(fields, v.moderation)
 		v.Saved, v.Saves = communitySavedFields(fields, v.saved, v.saves)
-		items = append(items, v)
-	}
-	if e = rows.Err(); e != nil {
-		a.error(w, e)
-		return
-	}
-	if !a.communityListUserExists(w, r, scope, viewer, len(items)) {
-		return
-	}
-	writeCommunityPage(w, "plugins", items)
+		return v, err
+	})
 }
 
 func (a *Service) communityPluginDetail(w http.ResponseWriter, r *http.Request) {

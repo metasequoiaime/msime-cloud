@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
 )
 
 // deepLRequestBodyBytes 是 DeepL 文本翻译的请求体上限，按表单编码后的字节数计算。
@@ -85,12 +86,11 @@ func (s *Server) translateDeepL(w http.ResponseWriter, r *http.Request, v transl
 }
 
 func (s *Server) translateDeepLBatch(w http.ResponseWriter, r *http.Request, batch deepLTranslationBatch, e TranslationEndpoint) ([]string, bool) {
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, e.URL, strings.NewReader(batch.body))
+	req, err := httpclient.NewFormBodyRequest(r.Context(), http.MethodPost, e.URL, batch.body)
 	if err != nil {
 		upstreamError(w, r, err)
 		return nil, false
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "DeepL-Auth-Key "+e.token)
 	var result struct {

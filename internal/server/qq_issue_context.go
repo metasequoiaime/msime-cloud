@@ -20,38 +20,11 @@ const (
 
 // qqStripImagesAndHTML 将 Markdown 图片和 HTML 标签替换为空格，无匹配时复用正文。
 func qqStripImagesAndHTML(text string) string {
-	outputBytes, matches := len(text), 0
-	var first [8][2]int
-	qqScanImageAndHTML(text, func(start, end int) {
-		outputBytes -= end - start - 1
-		if matches < len(first) {
-			first[matches] = [2]int{start, end}
-		}
-		matches++
-	})
-	if matches == 0 {
-		return text
-	}
-	var out strings.Builder
-	out.Grow(outputBytes)
-	written := 0
-	write := func(start, end int) {
-		out.WriteString(text[written:start])
-		out.WriteByte(' ')
-		written = end
-	}
-	// 常见的少量图片或标签直接复用下标，避免再扫描长正文前缀。
-	for _, match := range first[:min(matches, len(first))] {
-		write(match[0], match[1])
-	}
-	if matches > len(first) {
-		resume := written
-		qqScanImageAndHTML(text[resume:], func(start, end int) {
-			write(resume+start, resume+end)
-		})
-	}
-	out.WriteString(text[written:])
-	return out.String()
+	scan := qqImageHTMLMatches{scanner: qqImageHTMLScanner{text: text}}
+	return qqRewriteText(text, func() (qqTextReplacement, bool) {
+		start, end, ok := scan.next()
+		return qqTextReplacement{start, end, " "}, ok
+	}, scan.reset)
 }
 
 // qqImageHTMLScanner 缓存闭合符位置，交错嵌套时不反复扫描同一段长正文。
@@ -116,23 +89,41 @@ func (scan *qqImageHTMLScanner) nextTag(search int) (int, int) {
 	return -1, -1
 }
 
-// qqScanImageAndHTML 合并两个按位置递增的匹配流，保留最左且不重叠的替换顺序。
+// qqImageHTMLMatches 合并两个按位置递增的匹配流，保留最左且不重叠的替换顺序。
+type qqImageHTMLMatches struct {
+	scanner                                qqImageHTMLScanner
+	imageStart, imageEnd, tagStart, tagEnd int
+}
+
+func (scan *qqImageHTMLMatches) reset(start int) {
+	scan.scanner.labelEnd, scan.scanner.imageEnd, scan.scanner.tagEnd = 0, 0, 0
+	scan.imageStart, scan.imageEnd = scan.scanner.nextImage(start)
+	scan.tagStart, scan.tagEnd = scan.scanner.nextTag(start)
+}
+
+func (scan *qqImageHTMLMatches) next() (int, int, bool) {
+	if scan.imageStart < 0 && scan.tagStart < 0 {
+		return 0, 0, false
+	}
+	start, end := scan.imageStart, scan.imageEnd
+	if scan.tagStart >= 0 && (scan.imageStart < 0 || scan.tagStart < scan.imageStart) {
+		start, end = scan.tagStart, scan.tagEnd
+	}
+	if scan.imageStart >= 0 && scan.imageStart < end {
+		scan.imageStart, scan.imageEnd = scan.scanner.nextImage(end)
+	}
+	if scan.tagStart >= 0 && scan.tagStart < end {
+		scan.tagStart, scan.tagEnd = scan.scanner.nextTag(end)
+	}
+	return start, end, true
+}
+
+// qqScanImageAndHTML 依次返回图片和标签的最左非重叠区间。
 func qqScanImageAndHTML(text string, yield func(start, end int)) {
-	scan := qqImageHTMLScanner{text: text}
-	imageStart, imageEnd := scan.nextImage(0)
-	tagStart, tagEnd := scan.nextTag(0)
-	for imageStart >= 0 || tagStart >= 0 {
-		start, end := imageStart, imageEnd
-		if tagStart >= 0 && (imageStart < 0 || tagStart < imageStart) {
-			start, end = tagStart, tagEnd
-		}
+	scan := qqImageHTMLMatches{scanner: qqImageHTMLScanner{text: text}}
+	scan.reset(0)
+	for start, end, ok := scan.next(); ok; start, end, ok = scan.next() {
 		yield(start, end)
-		if imageStart >= 0 && imageStart < end {
-			imageStart, imageEnd = scan.nextImage(end)
-		}
-		if tagStart >= 0 && tagStart < end {
-			tagStart, tagEnd = scan.nextTag(end)
-		}
 	}
 }
 

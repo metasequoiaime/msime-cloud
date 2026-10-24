@@ -53,16 +53,11 @@ func (a *Service) QQKnowledgeHashes(ctx context.Context, ids []string) (map[stri
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	hashes := map[string]string{}
-	for rows.Next() {
+	return collectRowMap(rows, func(row pgx.CollectableRow) (string, string, error) {
 		var id, h string
-		if err := rows.Scan(&id, &h); err != nil {
-			return nil, err
-		}
-		hashes[id] = h
-	}
-	return hashes, rows.Err()
+		err := row.Scan(&id, &h)
+		return id, h, err
+	})
 }
 
 // UpsertQQKnowledge 分批写入或更新索引里的行，同批失败时整批回滚，之前完成的批次保留。

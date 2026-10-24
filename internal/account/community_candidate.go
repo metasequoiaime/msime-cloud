@@ -763,17 +763,12 @@ func (a *Service) candidatePublicLimit(userID string) int {
 // collectCandidateFiles 读取路径和二进制内容，关闭结果集并保留扫描与迭代错误。
 // 空结果仍返回非 nil 映射，保持下载响应中 files 编码为对象。
 func collectCandidateFiles(rows pgx.Rows) (map[string][]byte, error) {
-	defer rows.Close()
-	files := map[string][]byte{}
-	for rows.Next() {
+	return collectRowMap(rows, func(row pgx.CollectableRow) (string, []byte, error) {
 		var path string
 		var data []byte
-		if err := rows.Scan(&path, &data); err != nil {
-			return nil, err
-		}
-		files[path] = data
-	}
-	return files, rows.Err()
+		err := row.Scan(&path, &data)
+		return path, data, err
+	})
 }
 
 // insertCandidateFiles stores the re-encoded images of one package in path order.

@@ -71,17 +71,12 @@ func (a *Service) ServiceUsageSince(ctx context.Context, since time.Time) (map[s
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	usage := map[string]ServiceUsage{}
-	for rows.Next() {
+	return collectRowMap(rows, func(row pgx.CollectableRow) (string, ServiceUsage, error) {
 		var service string
 		var u ServiceUsage
-		if err = rows.Scan(&service, &u.Calls, &u.Errors, &u.Usage); err != nil {
-			return nil, err
-		}
-		usage[service] = u
-	}
-	return usage, rows.Err()
+		err := row.Scan(&service, &u.Calls, &u.Errors, &u.Usage)
+		return service, u, err
+	})
 }
 
 // ServiceProbe is one service's state in one probe minute.

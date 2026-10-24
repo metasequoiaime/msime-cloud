@@ -441,9 +441,9 @@ func (s *Server) upstream(r *http.Request, e Endpoint, method, contentType strin
 	return s.doUpstream(req)
 }
 
-// upstreamJSON 直接从上游响应流解码 JSON；只在调用方需要原始字节时才使用 upstream。
-func (s *Server) upstreamJSON(r *http.Request, e Endpoint, method, contentType string, body io.Reader, dst any) (bool, error) {
-	req, err := e.newJSONRequest(r.Context(), method, contentType, body)
+// upstreamJSONPayload 共用 JSON 值编码与 POST 请求构造，再沿用响应大小、JSON 校验和交换计量。
+func (s *Server) upstreamJSONPayload(r *http.Request, e Endpoint, value, dst any) (bool, error) {
+	req, err := e.newJSONPayloadRequest(r.Context(), http.MethodPost, value)
 	if err != nil {
 		return false, err
 	}

@@ -27,7 +27,7 @@ func TestUpstreamJSONValidation(t *testing.T) {
 			var result struct {
 				Data string `json:"data"`
 			}
-			decoded, err := s.upstreamJSON(request, e.Endpoint, http.MethodPost, "application/json", strings.NewReader("{}"), &result)
+			decoded, err := s.upstreamJSONPayload(request, e.Endpoint, struct{}{}, &result)
 			if decoded != tc.decoded || (err != nil) != tc.hasError || tc.decoded && result.Data != "word" {
 				t.Fatalf("流式 JSON 校验结果错误：解码=%t，错误=%v，结果=%q", decoded, err, result.Data)
 			}

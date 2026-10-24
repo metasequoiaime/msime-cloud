@@ -115,6 +115,7 @@ class RepositoryTests(unittest.TestCase):
             ('docs/docs.go', True),
             ('docs/admin.md', False),
             ('docs/nested/README.md', False),
+            ('native/README.md', False),
         ):
             with self.subTest(path=name):
                 base = self.run_git(self.repo, 'rev-parse', 'HEAD')
@@ -196,6 +197,8 @@ class WorkflowTests(unittest.TestCase):
         block = workflow.split('    paths:\n', 1)[1].split('\n  workflow_dispatch:', 1)[0]
         paths = [line.strip()[2:].strip().strip("'") for line in block.splitlines() if line.strip().startswith('- ')]
         self.assertEqual(backend.TRIGGER_PATHS, paths)
+        # GitHub 按顺序匹配；全局文档排除必须在最后，避免后续正向模式重新包含 Markdown。
+        self.assertEqual(paths[-1], '!**/*.md')
 
 
 if __name__ == '__main__':

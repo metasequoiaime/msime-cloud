@@ -8,10 +8,10 @@ import subprocess
 from pathlib import Path
 
 # backend-release.yml 的 on.push.paths，逐字一致（test_trigger_paths_mirror_the_workflow 守着）。
-TRIGGER_PATHS = ['cmd/**', 'internal/**', 'admin-web/**', 'docs/**', '!**/*.md', 'version.go', 'go.mod', 'go.sum', 'Dockerfile',
+TRIGGER_PATHS = ['cmd/**', 'internal/**', 'admin-web/**', 'docs/**', 'version.go', 'go.mod', 'go.sum', 'Dockerfile',
                  '.dockerignore', '.gitmodules', 'THIRD_PARTY_NOTICES.txt', 'native/**', 'third_party/**',
                  'scripts/fetch_engine_resources.py', 'scripts/release/**',
-                 '.github/workflows/backend-release.yml']
+                 '.github/workflows/backend-release.yml', '!**/*.md']
 
 PATHS = ['cmd', 'internal', 'admin-web', 'docs', 'version.go', 'go.mod', 'go.sum', 'Dockerfile', '.dockerignore', '.gitmodules',
          'THIRD_PARTY_NOTICES.txt', 'native', 'third_party', 'scripts/fetch_engine_resources.py',

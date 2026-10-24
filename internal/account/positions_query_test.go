@@ -55,8 +55,8 @@ func TestCandidatePositionsPaginationUsesContextIndex(t *testing.T) {
 				}
 				select {
 				case <-trace.queries:
-				case <-t.Context().Done():
-					t.Fatal("没有记录到固定候选分页查询")
+					t.Fatal("不存在用户不应执行固定候选分页查询")
+				default:
 				}
 				return
 			}

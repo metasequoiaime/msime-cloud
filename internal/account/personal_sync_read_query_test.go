@@ -3,6 +3,7 @@ package account
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -60,6 +61,17 @@ func TestPreferencesReadsEachRowOnce(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := store.Preferences(ctx, tc.user)
+			if tc.user == "missing-preferences-user" {
+				if !errors.Is(err, errMissingUser) {
+					t.Fatalf("不存在用户应返回 errMissingUser，实际 %v", err)
+				}
+				select {
+				case <-trace.queries:
+					t.Fatal("不存在用户不应读取个人数据")
+				default:
+				}
+				return
+			}
 			if err != nil || !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("设置读取结果=%+v，期望=%+v，错误=%v", got, tc.want, err)
 			}
@@ -101,6 +113,17 @@ func TestPhrasesReadsEachRowOnce(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := store.Phrases(ctx, tc.user)
+			if tc.user == "missing-phrases-user" {
+				if !errors.Is(err, errMissingUser) {
+					t.Fatalf("不存在用户应返回 errMissingUser，实际 %v", err)
+				}
+				select {
+				case <-trace.queries:
+					t.Fatal("不存在用户不应读取个人数据")
+				default:
+				}
+				return
+			}
 			if err != nil || !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("常用语读取结果=%+v，期望=%+v，错误=%v", got, tc.want, err)
 			}

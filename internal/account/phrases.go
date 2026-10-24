@@ -2,14 +2,11 @@ package account
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
 	"unicode"
 	"unicode/utf8"
-
-	"github.com/jackc/pgx/v5"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
@@ -81,14 +78,7 @@ func (s *Store) Phrases(ctx context.Context, user string) (Phrases, error) {
 	}
 	defer tx.Rollback(ctx)
 	out := Phrases{Phrases: []Phrase{}}
-	var raw []byte
-	err = tx.QueryRow(ctx, `SELECT revision,phrases FROM user_phrases WHERE user_id=$1`, user).Scan(&out.Revision, &raw)
-	if errors.Is(err, pgx.ErrNoRows) {
-		err = nil
-	} else if err == nil {
-		err = json.Unmarshal(raw, &out.Phrases)
-	}
-	if err != nil {
+	if err := readRevisionJSON(tx.QueryRow(ctx, `SELECT revision,phrases FROM user_phrases WHERE user_id=$1`, user), &out.Revision, &out.Phrases); err != nil {
 		return out, err
 	}
 	return out, tx.Commit(ctx)

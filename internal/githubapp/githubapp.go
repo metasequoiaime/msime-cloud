@@ -2,13 +2,11 @@
 package githubapp
 
 import (
-	"bytes"
 	"context"
 	"crypto/rsa"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"slices"
 	"strconv"
@@ -20,6 +18,7 @@ import (
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/metasequoiaime/MSIME-Backend/internal/boundedio"
 	"github.com/metasequoiaime/MSIME-Backend/internal/digest"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -261,15 +260,17 @@ func (e requestError) Error() string { return "GitHub request failed" }
 func (e requestError) Unwrap() error { return e.cause }
 
 func (c Client) doFormat(ctx context.Context, token, method, path string, body any, etag, accept string, limit int64) (Response, error) {
-	var reader io.Reader
+	var req *http.Request
+	var err error
 	if body != nil {
-		raw, err := json.Marshal(body)
-		if err != nil {
-			return Response{}, err
+		raw, marshalErr := json.Marshal(body)
+		if marshalErr != nil {
+			return Response{}, marshalErr
 		}
-		reader = bytes.NewReader(raw)
+		req, err = httpclient.NewJSONBodyRequest(ctx, method, c.apiURL()+path, raw)
+	} else {
+		req, err = http.NewRequestWithContext(ctx, method, c.apiURL()+path, nil)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.apiURL()+path, reader)
 	if err != nil {
 		return Response{}, requestError{cause: err}
 	}
@@ -281,9 +282,6 @@ func (c Client) doFormat(ctx context.Context, token, method, path string, body a
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", agent)
 	req.Header.Set("Authorization", "Bearer "+token)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
 	if etag != "" {
 		req.Header.Set("If-None-Match", etag)
 	}

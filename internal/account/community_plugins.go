@@ -525,15 +525,7 @@ func writePluginDownload(w http.ResponseWriter, head pluginDownload, archive []b
 }
 
 func (a *Service) communityPluginRate(w http.ResponseWriter, r *http.Request) {
-	a.rateCommunityItem(w, r, `WITH visible AS MATERIALIZED (
- SELECT id,owner_id FROM community_plugins WHERE id=$1 AND moderation<>'removed' FOR SHARE
-), written AS (
- INSERT INTO community_plugin_ratings(pack_id,user_id,stars)
- SELECT id,$2,$3 FROM visible WHERE owner_id<>$2
- ON CONFLICT(pack_id,user_id) DO UPDATE SET stars=excluded.stars
- RETURNING pack_id
-)
-SELECT EXISTS(SELECT 1 FROM written),EXISTS(SELECT 1 FROM visible WHERE owner_id=$2)`, "plugin_not_found", "download_before_rating_or_own_plugin")
+	a.rateCommunityItem(w, r, communityPluginRatingQuery, "plugin_not_found", "download_before_rating_or_own_plugin")
 }
 
 func (a *Service) communityPluginDelete(w http.ResponseWriter, r *http.Request) {

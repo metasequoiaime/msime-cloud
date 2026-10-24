@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/contract"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
 	segmentjson "github.com/segmentio/encoding/json"
 )
 
@@ -124,7 +125,7 @@ func (s *Server) translateNiuTransUpstream(w http.ResponseWriter, r *http.Reques
 	source, target := niutransLanguage(v.Source), niutransLanguage(v.Target)
 	timestamp := strconv.FormatInt(time.Now().UnixMilli(), 10)
 	payload := niutransTextForm(e.appID, e.apiKey, source, target, timestamp, v.Text)
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, e.URL, strings.NewReader(payload))
+	req, err := httpclient.NewFormBodyRequest(r.Context(), http.MethodPost, e.URL, payload)
 	if err != nil {
 		upstreamError(w, r, err)
 		return "", false

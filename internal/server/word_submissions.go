@@ -681,11 +681,10 @@ var errTurnstileRejected = errors.New("turnstile rejected the token")
 
 func (ws *wordSubmitter) verifyTurnstile(ctx context.Context, token string) error {
 	form := url.Values{"secret": {ws.config.Turnstile.secret}, "response": {token}}
-	req, err := http.NewRequestWithContext(ctx, "POST", ws.config.Turnstile.SiteverifyURL, strings.NewReader(form.Encode()))
+	req, err := httpclient.NewFormBodyRequest(ctx, http.MethodPost, ws.config.Turnstile.SiteverifyURL, form.Encode())
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := ws.client.Do(req)
 	if err != nil {
 		return err

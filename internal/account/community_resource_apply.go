@@ -72,7 +72,7 @@ func (a *Service) resourceApply(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(r.Context())
 	// 锁定资源后同时读取个人词库版本，避免事务内为两个版本检查分别往返。
-	// 资源 ID 可以在删除后被客户端重用；因此仅比较 revision 不足以证明事务内仍是预览过的那一行。
+	// 正常发布的版本不会重用；仍防御管理写入重置版本后在本次请求内替换资源行。
 	// 同时核对 kind、created_at 和 JSONB 内容，防止旧快照被导入新作品。
 	var currentKind string
 	var currentCreatedAt time.Time

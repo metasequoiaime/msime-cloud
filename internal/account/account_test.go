@@ -39,7 +39,7 @@ func testStore(t testing.TB) *Store {
 		t.Fatal(e)
 	}
 	// 只允许指向一次性测试数据库，CI 使用专用 Postgres service。
-	if _, e = s.pool.Exec(context.Background(), "TRUNCATE auth_users,auth_challenges,auth_sessions,auth_identities,auth_used_refresh,auth_rates CASCADE"); e != nil {
+	if _, e = s.pool.Exec(context.Background(), "TRUNCATE auth_users,auth_challenges,auth_sessions,auth_identities,auth_used_refresh,auth_rates,community_resource_revisions CASCADE"); e != nil {
 		t.Fatal(e)
 	}
 	return s

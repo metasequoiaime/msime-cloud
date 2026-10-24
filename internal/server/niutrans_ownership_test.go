@@ -15,9 +15,113 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
+
+func TestNiuTransUploadRejectsBanRace(t *testing.T) {
+	admin, schema := disposableSchema(t)
+	observer, err := pgx.Connect(context.Background(), os.Getenv("MSIME_TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = observer.Close(context.Background()) })
+	t.Setenv("TEST_AUTH_PEPPER", strings.Repeat("p", 64))
+
+	db, err := account.Open(context.Background(), os.Getenv("MSIME_TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Close)
+	if err := db.Migrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	challengeID := "niutrans-upload-ban-race"
+	sum := sha256.Sum256([]byte(challengeID))
+	challenge := account.Challenge{IDHash: hex.EncodeToString(sum[:]), Provider: "email", Subject: challengeID + "@example.test"}
+	if err := db.PutChallenge(context.Background(), challenge); err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := db.Complete(context.Background(), challenge, account.Identity{Provider: "email", Subject: challenge.Subject})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.DeleteUser(context.Background(), tokens.User.ID) })
+
+	upstreamEntered := make(chan struct{}, 1)
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamEntered <- struct{}{}
+		_, _ = io.WriteString(w, `{"code":200,"data":{"fileNo":"synthetic-task"}}`)
+	}))
+	t.Cleanup(upstream.Close)
+	s, err := New(Config{Auth: account.Config{Enabled: true, DatabaseEnv: "MSIME_TEST_DATABASE_URL", PepperEnv: "TEST_AUTH_PEPPER"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close(); s.CloseAccounts() })
+	s.client = upstream.Client()
+	s.config.NiuTrans.Document = NiuTransEndpoint{URL: upstream.URL + "/upload", appID: "synthetic-app", apiKey: "synthetic-key"}
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	_ = mw.WriteField("from", "zh")
+	_ = mw.WriteField("to", "en")
+	file, _ := mw.CreateFormFile("file", "synthetic.txt")
+	_, _ = file.Write([]byte("synthetic media"))
+	_ = mw.Close()
+
+	ban, err := admin.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	quoted := pgx.Identifier{schema}.Sanitize()
+	if _, err := ban.Exec(context.Background(), "UPDATE "+quoted+".auth_users SET banned_at=now() WHERE id=$1", tokens.User.ID); err != nil {
+		t.Fatal(err)
+	}
+	response := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		r := httptest.NewRequest(http.MethodPost, "/v1/niutrans/documents", bytes.NewReader(body.Bytes()))
+		r.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
+		r.Header.Set("Content-Type", mw.FormDataContentType())
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		response <- w
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var waiting bool
+		if err := observer.QueryRow(context.Background(), `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE 'SELECT banned_at IS NOT NULL FROM auth_users WHERE id=$1 FOR UPDATE%')`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-upstreamEntered:
+			t.Fatal("封禁提交前 NiuTrans 上传仍调用了上游")
+		default:
+		}
+		if waiting {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("上传没有等待用户封禁行锁")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := ban.Commit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	w := <-response
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), `"account_banned"`) {
+		t.Fatalf("封禁后的 NiuTrans 上传请求: %d %s", w.Code, w.Body.String())
+	}
+	select {
+	case <-upstreamEntered:
+		t.Fatal("封禁后的 NiuTrans 上传仍调用了上游")
+	default:
+	}
+}
 
 func TestNiuTransMediaTasksStayWithUploader(t *testing.T) {
 	var requests atomic.Int64

@@ -82,6 +82,9 @@ func (s *Server) niuTransUpload(w http.ResponseWriter, r *http.Request, e NiuTra
 	if !s.niuTransEndpoint(w, e) {
 		return
 	}
+	if !s.ensureUserOwnerActive(w, r) {
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, niuTransFileBytes+1<<20)
 	reader, err := r.MultipartReader()
 	if err != nil {

@@ -14,6 +14,7 @@ import (
 	adminweb "github.com/metasequoiaime/MSIME-Backend/admin-web"
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpdeadline"
 )
 
 type AdminConfig struct {
@@ -139,15 +140,12 @@ func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) bool {
 		timeout := 15 * time.Second
 		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/qq-bot/drafts/") && strings.HasSuffix(r.URL.Path, "/issue") {
 			timeout = 2 * time.Minute
-			controller := http.NewResponseController(w)
-			_ = controller.SetWriteDeadline(time.Now().Add(timeout + 5*time.Second))
+			httpdeadline.Extend(w, 0, timeout+5*time.Second)
 		}
 		if r.Method == http.MethodPost && r.URL.Path == "/api/actions" {
 			// 社区编辑可携带完整插件包，为上传延长上下文与连接期限。
 			timeout = 90 * time.Second
-			controller := http.NewResponseController(w)
-			_ = controller.SetReadDeadline(time.Now().Add(timeout))
-			_ = controller.SetWriteDeadline(time.Now().Add(timeout + 5*time.Second))
+			httpdeadline.Extend(w, timeout, timeout+5*time.Second)
 		}
 		ctx, cancel := context.WithTimeout(base, timeout)
 		defer cancel()

@@ -29,6 +29,7 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/engine"
 	"github.com/metasequoiaime/MSIME-Backend/internal/githubapp"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpdeadline"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 	"golang.org/x/sync/semaphore"
 )
@@ -425,7 +426,7 @@ func (s *Server) submitWords(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), wordSubmissionTimeout)
 	defer cancel()
 	// 45 秒处理后还可能各用 5 秒释放共享锁和记录投稿，再留 5 秒写响应，避免全局连接写期限提前截断。
-	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(wordSubmissionTimeout + 15*time.Second))
+	httpdeadline.Extend(w, 0, wordSubmissionTimeout+15*time.Second)
 	if err = ws.verifyTurnstile(ctx, input.Token); err != nil {
 		if errors.Is(err, errTurnstileRejected) {
 			wordsFail(w, 403, "verification_failed", "验证已失效，请重新验证后提交。")

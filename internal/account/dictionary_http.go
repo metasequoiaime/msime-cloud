@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/engine"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpdeadline"
 	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
@@ -283,7 +284,7 @@ func (a *Service) dictionaryExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 路由上下文和连接写期限需要同时延长，否则慢速下载仍会被全局连接超时截断。
-	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(dictionaryDownloadTimeout + 5*time.Second))
+	httpdeadline.Extend(w, 0, dictionaryDownloadTimeout+5*time.Second)
 	stream := a.store.StreamDictionary
 	if format == "windows" {
 		stream = a.store.StreamWindowsDictionary

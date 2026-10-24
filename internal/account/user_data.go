@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpdeadline"
 )
 
 // userDataExportTimeout 是 GET /v1/users/me/data/export 的路由时限：导出要把整份词库流式编码进 zip，大词库在慢网络上可能超过默认的 15 秒。
@@ -228,7 +230,7 @@ func (a *Service) userDataExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 导出允许持续两分钟，响应写期限也要同步延长，避免全局连接超时截断 ZIP。
-	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(userDataExportTimeout + 5*time.Second))
+	httpdeadline.Extend(w, 0, userDataExportTimeout+5*time.Second)
 	if err := a.store.Rate(r.Context(), "export:"+hash(p.UserID), userDataExportsPerDay, 24*time.Hour); err != nil {
 		if errors.Is(err, ErrLimited) {
 			w.Header().Set("Retry-After", "3600")

@@ -11,6 +11,7 @@ import (
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpclient"
+	"github.com/metasequoiaime/MSIME-Backend/internal/httpdeadline"
 )
 
 // Skin artwork is returned inline: clients never download a model-supplied URL.
@@ -33,8 +34,8 @@ func (s *Server) generateSkinArtwork(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Image inference may outlast the normal JSON endpoint write deadline.
-	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(185 * time.Second))
+	// 图片推理可能超过普通 JSON 接口的写入期限。
+	httpdeadline.Extend(w, 0, 185*time.Second)
 	body, _ := json.Marshal(map[string]any{"model": s.config.Images.Model, "n": 1, "size": "1024x1024", "prompt": "Design an original illustrated mobile keyboard wallpaper, not a screenshot. No text, letters, numbers, keyboard buttons, logos or watermark. Build an immersive scene with distinctive artwork and materials, keep the central typing area quieter and concentrate characters and decoration around the perimeter. User art direction: " + input.Prompt})
 	req, err := s.config.Images.newRequest(r.Context(), "POST", bytes.NewReader(body))
 	if err != nil {

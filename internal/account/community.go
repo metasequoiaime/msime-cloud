@@ -569,14 +569,14 @@ func validCommunityID(v string) bool {
 	return true
 }
 
-// deleteOwnedCommunity 在用户行锁内删除作者自己的作品，封禁提交后到达的迟到请求不能绕过封禁恢复语义。
-func (a *Service) deleteOwnedCommunity(ctx context.Context, table, id, owner string) (int64, error) {
+// execOwnedCommunityMutation 在用户行锁内执行作者 mutation 并提交，封禁提交后到达的迟到请求不能绕过封禁恢复语义。
+func (a *Service) execOwnedCommunityMutation(ctx context.Context, owner, query string, args ...any) (int64, error) {
 	tx, err := a.store.userDataTransaction(ctx, owner)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
-	result, err := tx.Exec(ctx, `DELETE FROM `+table+` WHERE id=$1 AND owner_id=$2`, id, owner)
+	result, err := tx.Exec(ctx, query, args...)
 	if err != nil {
 		return 0, err
 	}
@@ -586,21 +586,14 @@ func (a *Service) deleteOwnedCommunity(ctx context.Context, table, id, owner str
 	return result.RowsAffected(), nil
 }
 
+// deleteOwnedCommunity 在用户行锁内删除作者自己的作品。
+func (a *Service) deleteOwnedCommunity(ctx context.Context, table, id, owner string) (int64, error) {
+	return a.execOwnedCommunityMutation(ctx, owner, `DELETE FROM `+table+` WHERE id=$1 AND owner_id=$2`, id, owner)
+}
+
 // updateOwnedCommunitySkinCategory 在用户行锁内修改作者作品的分类，避免封禁提交后迟到的请求改变已下架内容。
 func (a *Service) updateOwnedCommunitySkinCategory(ctx context.Context, id, owner, category string) (int64, error) {
-	tx, err := a.store.userDataTransaction(ctx, owner)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback(ctx)
-	result, err := tx.Exec(ctx, `UPDATE community_skins SET category=$3 WHERE id=$1 AND owner_id=$2`, id, owner, category)
-	if err != nil {
-		return 0, err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
+	return a.execOwnedCommunityMutation(ctx, owner, `UPDATE community_skins SET category=$3 WHERE id=$1 AND owner_id=$2`, id, owner, category)
 }
 
 // updateOwnedCommunitySkinCategoryAndRead 在同一个用户锁事务中合并分类写入和详情读取，避免 PATCH 为了返回详情再开启一次查询。

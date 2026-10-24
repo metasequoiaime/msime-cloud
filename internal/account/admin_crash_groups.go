@@ -1207,8 +1207,18 @@ func crashSignature(platform, message, stack string) string {
 	if normalized == "" && frame == "" {
 		return ""
 	}
-	sum := sha256.Sum256([]byte(crashPlatform(platform) + "\n" + normalized + "\n" + frame))
-	return hex.EncodeToString(sum[:8])
+	h := sha256.New()
+	// 固定缓冲分段写入，避免拼接或转换长字符串时分配整串副本。
+	var block [4 * sha256.BlockSize]byte
+	for _, part := range [...]string{crashPlatform(platform), "\n", normalized, "\n", frame} {
+		for len(part) > 0 {
+			n := copy(block[:], part)
+			h.Write(block[:n])
+			part = part[n:]
+		}
+	}
+	var sum [sha256.Size]byte
+	return hex.EncodeToString(h.Sum(sum[:0])[:8])
 }
 
 // crashGroupTitle 供遥测写入与历史回填共用，取消息中首个非空行，去除首尾空白，最多保留 200 个字符。

@@ -24,7 +24,7 @@ func (a *Service) QQSelfTestCases(ctx context.Context, limit int) ([]QQSelfTestC
 	if err != nil {
 		return nil, err
 	}
-	return collectQQRows(rows, func(row pgx.CollectableRow) (QQSelfTestCase, error) {
+	return collectQueryRows(rows, func(row pgx.CollectableRow) (QQSelfTestCase, error) {
 		var c QQSelfTestCase
 		err := row.Scan(&c.Question, &c.Answer)
 		return c, err

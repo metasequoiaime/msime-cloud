@@ -27,7 +27,7 @@ func (a *Service) QQImprovementEvents(ctx context.Context, from, to time.Time) (
 	if err != nil {
 		return nil, err
 	}
-	return collectQQRows(rows, func(row pgx.CollectableRow) (QQImprovementEvent, error) {
+	return collectQueryRows(rows, func(row pgx.CollectableRow) (QQImprovementEvent, error) {
 		var e QQImprovementEvent
 		err := row.Scan(&e.Kind, &e.Topic, &e.Detail, &e.CreatedAt)
 		return e, err

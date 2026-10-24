@@ -50,7 +50,7 @@ func (a *Service) queryQQBadAnswers(ctx context.Context, query string, args ...a
 	if err != nil {
 		return nil, err
 	}
-	return collectQQRows(rows, func(row pgx.CollectableRow) (QQBadAnswer, error) {
+	return collectQueryRows(rows, func(row pgx.CollectableRow) (QQBadAnswer, error) {
 		var b QQBadAnswer
 		err := row.Scan(&b.ID, &b.Question, &b.Answer, &b.Feedback, &b.Retry, &b.CreatedAt)
 		return b, err
@@ -63,17 +63,16 @@ func (a *Service) OpenQQBadAnswers(ctx context.Context, since time.Duration, lim
 	if err != nil {
 		return nil, 0, err
 	}
-	defer rows.Close()
-	var out []QQBadAnswer
 	total := 0
-	for rows.Next() {
+	out, err := collectQueryRows(rows, func(row pgx.CollectableRow) (QQBadAnswer, error) {
 		var b QQBadAnswer
-		if err := rows.Scan(&b.ID, &b.Question, &b.Answer, &b.Feedback, &b.Retry, &b.CreatedAt, &total); err != nil {
-			return nil, 0, err
+		err := row.Scan(&b.ID, &b.Question, &b.Answer, &b.Feedback, &b.Retry, &b.CreatedAt, &total)
+		if err != nil {
+			total = 0
 		}
-		out = append(out, b)
-	}
-	return out, total, rows.Err()
+		return b, err
+	})
+	return out, total, err
 }
 
 // QQBadAnswer 读一条还没处理的差评。

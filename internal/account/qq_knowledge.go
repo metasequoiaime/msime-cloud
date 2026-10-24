@@ -111,7 +111,7 @@ func (a *Service) SearchQQKnowledge(ctx context.Context, embedding []float32, ki
 	if err != nil {
 		return nil, err
 	}
-	return collectQQRows(rows, func(row pgx.CollectableRow) (QQKnowledgeHit, error) {
+	return collectQueryRows(rows, func(row pgx.CollectableRow) (QQKnowledgeHit, error) {
 		var hit QQKnowledgeHit
 		err := row.Scan(&hit.ID, &hit.Kind, &hit.Repo, &hit.Number, &hit.Title, &hit.Summary, &hit.ContentHash, &hit.UpdatedAt, &hit.Similarity)
 		return hit, err

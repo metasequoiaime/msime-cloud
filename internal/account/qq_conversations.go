@@ -25,7 +25,7 @@ func (a *Service) QQConversation(ctx context.Context, subject string, limit int)
 	if err != nil {
 		return nil, err
 	}
-	return collectQQRows(rows, func(row pgx.CollectableRow) (QQTurn, error) {
+	return collectQueryRows(rows, func(row pgx.CollectableRow) (QQTurn, error) {
 		var turn QQTurn
 		err := row.Scan(&turn.Question, &turn.Answer)
 		return turn, err

@@ -80,6 +80,22 @@ def check_log_stream_replay(browser, base):
         expect(page.get_by_role("status").filter(has_text="实时")).to_be_visible()
         expect(page.get_by_role("alert")).to_have_count(0)
         expect(log.get_by_text(first["message"], exact=True)).to_have_count(1)
+
+        # Loki 查询恢复但没有新行时，空 lines 事件也必须清除故障提示，保留已有日志。
+        page.evaluate("window.logStreams.at(-1).controller.enqueue(new TextEncoder().encode('event: error\\ndata: {\"code\":\"logs_unavailable\"}\\n\\n'))")
+        expect(page.get_by_role("status").filter(has_text="日志服务暂时不可用，正在重试")).to_be_visible()
+        page.evaluate("window.sendLogLines([])")
+        expect(page.get_by_role("status").filter(has_text="实时")).to_be_visible()
+        expect(log.get_by_text(first["message"], exact=True)).to_have_count(1)
+
+        # 同轮分页已有部分日志时，后续 error 事件仍应使界面保留故障状态。
+        page.evaluate("""() => {
+          window.sendLogLines([]);
+          window.logStreams.at(-1).controller.enqueue(new TextEncoder().encode('event: error\\ndata: {"code":"logs_unavailable"}\\n\\n'));
+        }""")
+        expect(page.get_by_role("status").filter(has_text="日志服务暂时不可用，正在重试")).to_be_visible()
+        page.evaluate("window.sendLogLines([])")
+        expect(page.get_by_role("status").filter(has_text="实时")).to_be_visible()
         assert not errors, errors
         assert not page.evaluate("window.cspViolations"), page.evaluate("window.cspViolations")
     finally:

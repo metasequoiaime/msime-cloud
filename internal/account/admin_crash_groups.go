@@ -687,12 +687,57 @@ var (
 	crashFrameIndex      = regexp.MustCompile(`^(?:#?[0-9]+[:.]?\s+|at\s+)+`)
 	crashFrameOffset     = regexp.MustCompile(`\s*\+\s*[0-9]+\s*$`)
 	crashFrameLineNumber = regexp.MustCompile(`(?::[0-9]+)+`)
-	crashSpaces          = regexp.MustCompile(`\s+`)
 )
 
 // normalizeCrashWhitespace 折叠规范化文本中的空白并统一为小写。
 func normalizeCrashWhitespace(text string) string {
-	return strings.ToLower(strings.TrimSpace(crashSpaces.ReplaceAllString(text, " ")))
+	text = strings.TrimSpace(text)
+	first, size := -1, len(text)
+	for i := 0; i < len(text); {
+		if !crashWhitespaceByte(text[i]) {
+			i++
+			continue
+		}
+		end := i + 1
+		for end < len(text) && crashWhitespaceByte(text[end]) {
+			end++
+		}
+		if text[i] != ' ' || end != i+1 {
+			if first < 0 {
+				first = i
+			}
+			size -= end - i - 1
+		}
+		i = end
+	}
+	if first >= 0 {
+		// 按折叠后的实际长度一次分配，避免为长空白段预留原始大小的缓冲。
+		var out strings.Builder
+		out.Grow(size)
+		start := 0
+		for i := first; i < len(text); {
+			if !crashWhitespaceByte(text[i]) {
+				i++
+				continue
+			}
+			end := i + 1
+			for end < len(text) && crashWhitespaceByte(text[end]) {
+				end++
+			}
+			out.WriteString(text[start:i])
+			out.WriteByte(' ')
+			start = end
+			i = end
+		}
+		out.WriteString(text[start:])
+		text = out.String()
+	}
+	return strings.ToLower(text)
+}
+
+// 与 Go 正则的 \s 一致，不折叠内部垂直制表符和 Unicode 空白。
+func crashWhitespaceByte(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r'
 }
 
 // crashSystemPrefixes mark frames of the operating system, language runtimes and standard libraries; the first frame whose fields match none of them identifies where the crash happened in our code.

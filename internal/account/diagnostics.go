@@ -167,6 +167,40 @@ func validDiagnosticEvents(events []DiagnosticEvent, durationRequired bool) bool
 	return true
 }
 
+// isDiagnosticCredentialKey 扫描常见 ASCII 凭据键；非 ASCII 键沿用原正则的 Unicode 大小写折叠规则。
+func isDiagnosticCredentialKey(key string) bool {
+	for i := range len(key) {
+		c := key[i]
+		if c >= utf8.RuneSelf {
+			return diagnosticCredentialKey.MatchString(key)
+		}
+		remaining := len(key) - i
+		switch c | 0x20 {
+		case 't':
+			if remaining >= 5 && textutil.EqualFoldASCII(key[i:i+5], "token") {
+				return true
+			}
+		case 's':
+			if remaining >= 6 && textutil.EqualFoldASCII(key[i:i+6], "secret") {
+				return true
+			}
+		case 'p':
+			if remaining >= 8 && textutil.EqualFoldASCII(key[i:i+8], "password") {
+				return true
+			}
+		case 'a':
+			if remaining >= 7 && textutil.EqualFoldASCII(key[i:i+7], "api_key") {
+				return true
+			}
+		case 'k':
+			if remaining == 3 && textutil.EqualFoldASCII(key[i:], "key") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // validateDiagnosticConfig 递归检查配置快照：键名匹配凭据模式的值必须是 "<redacted>"，字符串、键名、层数和总条目数都有上限。
 func validateDiagnosticConfig(value any, depth int, entries *int) string {
 	if depth > diagnosticConfigDepth {
@@ -179,7 +213,7 @@ func validateDiagnosticConfig(value any, depth int, entries *int) string {
 			if *entries > diagnosticConfigEntries || len(key) > diagnosticConfigKeyBytes || strings.ContainsRune(key, 0) {
 				return "invalid_config_snapshot"
 			}
-			if diagnosticCredentialKey.MatchString(key) {
+			if isDiagnosticCredentialKey(key) {
 				if child != DiagnosticRedacted {
 					return "unredacted_config"
 				}

@@ -382,14 +382,9 @@ func (a *Service) communityList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, code)
 		return
 	}
-	scope, validScope := communityListScope(query)
-	if !validScope {
-		writeError(w, 400, "invalid_scope")
-		return
-	}
-	fields, ok := communityFields(query, "moderation", "saved")
-	if !ok {
-		writeError(w, 400, "invalid_fields")
+	scope, fields, code := communityListOptions(query, communityCatalogFields)
+	if code != "" {
+		writeError(w, 400, code)
 		return
 	}
 	category, withCategory, code := communitySkinListCategory(query)
@@ -420,7 +415,7 @@ func (a *Service) communityList(w http.ResponseWriter, r *http.Request) {
 }
 func (a *Service) communityDetail(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
-	fields, ok := communityFields(query, "moderation", "saved")
+	fields, ok := communityCatalogFields(query)
 	if !ok {
 		writeError(w, 400, "invalid_fields")
 		return

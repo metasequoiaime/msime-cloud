@@ -26,14 +26,17 @@ const (
 
 const callbackPage = `<!doctype html><meta charset="utf-8"><title>水杉输入法</title><p>%s</p>`
 
-// postJSON sends body to path on server without credentials and decodes a 2xx answer into v (the API answers a new challenge with 201, the admin site's start with 200); any other answer is printed and returned as a statusError.
+// postJSON 不带凭据发送 JSON 并解码 2xx 响应；编码失败时不发送，其他状态输出正文并返回 statusError。
 func (c cli) postJSON(server, path string, body any, v any) error {
-	data, _ := json.Marshal(body)
-	response, err := c.do(server, request{method: "POST", path: path, body: data, contentType: "application/json"}, "")
+	req, err := newJSONPostRequest(path, body)
 	if err != nil {
 		return err
 	}
-	data, err = readCLIResponse(response)
+	response, err := c.do(server, req, "")
+	if err != nil {
+		return err
+	}
+	data, err := readCLIResponse(response)
 	response.Body.Close()
 	if err != nil {
 		return err

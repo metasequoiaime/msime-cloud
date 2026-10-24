@@ -472,8 +472,11 @@ func (c cli) refresh(server string, used session) (session, error) {
 	if latest.RefreshToken != used.RefreshToken {
 		return latest, nil
 	}
-	body, _ := json.Marshal(map[string]string{"refresh_token": latest.RefreshToken})
-	response, err := c.do(server, request{method: "POST", path: "/v1/auth/refresh", body: body, contentType: "application/json"}, "")
+	req, err := newJSONPostRequest("/v1/auth/refresh", map[string]string{"refresh_token": latest.RefreshToken})
+	if err != nil {
+		return session{}, err
+	}
+	response, err := c.do(server, req, "")
 	if err != nil {
 		return session{}, err
 	}
@@ -653,8 +656,11 @@ func (c cli) login(args []string) error {
 		if len(flags) != 1 || target == "" {
 			return usageError{"login start takes --email ADDRESS or --phone +8613800138000"}
 		}
-		body, _ := json.Marshal(map[string]string{"provider": provider, "target": target, "purpose": "login"})
-		response, err := c.do(server, request{method: "POST", path: "/v1/auth/challenges", body: body, contentType: "application/json"}, "")
+		req, err := newJSONPostRequest("/v1/auth/challenges", map[string]string{"provider": provider, "target": target, "purpose": "login"})
+		if err != nil {
+			return err
+		}
+		response, err := c.do(server, req, "")
 		if err != nil {
 			return err
 		}
@@ -687,8 +693,11 @@ func (c cli) login(args []string) error {
 
 // signIn completes a challenge with credential, keeps the session and prints the user.
 func (c cli) signIn(server, challenge, credential string) error {
-	body, _ := json.Marshal(map[string]string{"challenge_id": challenge, "credential": credential})
-	response, err := c.do(server, request{method: "POST", path: "/v1/auth/login", body: body, contentType: "application/json"}, "")
+	req, err := newJSONPostRequest("/v1/auth/login", map[string]string{"challenge_id": challenge, "credential": credential})
+	if err != nil {
+		return err
+	}
+	response, err := c.do(server, req, "")
 	if err != nil {
 		return err
 	}
@@ -735,8 +744,11 @@ func (c cli) logout(args []string) error {
 		}
 		return err
 	}
-	body, _ := json.Marshal(map[string]bool{"all": all})
-	response, err := c.sendSession(server, request{method: "POST", path: "/v1/auth/logout", body: body, contentType: "application/json"}, current)
+	req, err := newJSONPostRequest("/v1/auth/logout", map[string]bool{"all": all})
+	if err != nil {
+		return err
+	}
+	response, err := c.sendSession(server, req, current)
 	if err != nil {
 		return err
 	}

@@ -804,11 +804,15 @@ func (s *Server) adminLogsStream(w http.ResponseWriter, r *http.Request) {
 
 	t := &logTail{query: f.logQL(s.config.Admin.Logs.Selector), seen: map[logKey]struct{}{}}
 	failures := 0
+	unavailable := false
 	lokiFailed := func(err error) bool {
 		failures++
 		slog.Warn("admin logs stream: loki query failed", "reason", err.Error(), "failures", failures)
-		if failures == 1 && !send("error", "", map[string]string{"code": "logs_unavailable"}) {
-			return false
+		if !unavailable {
+			if !send("error", "", map[string]string{"code": "logs_unavailable"}) {
+				return false
+			}
+			unavailable = true
 		}
 		return failures < logStreamMaxFailures
 	}
@@ -852,6 +856,7 @@ func (s *Server) adminLogsStream(w http.ResponseWriter, r *http.Request) {
 		}
 		backfillPending = false
 		failures = 0
+		unavailable = false
 		return send("lines", strconv.FormatInt(t.cursor, 10), map[string]any{"lines": lines})
 	}
 	if !sendBackfill() {
@@ -896,15 +901,19 @@ func (s *Server) adminLogsStream(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
+			// 恢复时即使没有新行也要通知前端；分页失败先发送已读日志，再保留故障提示。
+			if len(entries) > 0 || (err == nil && unavailable) {
+				if !send("lines", strconv.FormatInt(t.cursor, 10), map[string]any{"lines": logLinesJSON(entries)}) {
+					return
+				}
+				unavailable = false
+			}
 			if err != nil {
 				if !lokiFailed(err) {
 					return
 				}
 			} else {
 				failures = 0
-			}
-			if len(entries) > 0 && !send("lines", strconv.FormatInt(t.cursor, 10), map[string]any{"lines": logLinesJSON(entries)}) {
-				return
 			}
 			if tick.Sub(podsAt) >= logStreamPodsEvery {
 				podsAt = tick

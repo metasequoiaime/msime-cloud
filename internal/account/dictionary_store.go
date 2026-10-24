@@ -33,15 +33,27 @@ var errDictionaryDuplicate = errors.New("dictionary_duplicate")
 var errDictionaryLimit = errors.New("dictionary_limit")
 
 func (s *Store) DictionaryEntries(ctx context.Context, user, kind, search string, offset, limit int) ([]DictionaryEntry, bool, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id,kind,code,word,weight,revision,updated_at FROM user_dictionary_entries WHERE user_id=$1 AND kind=$2 AND ($3='' OR strpos(lower(code),lower($3))>0 OR strpos(lower(word),lower($3))>0) ORDER BY code,word,id LIMIT $4 OFFSET $5`, user, kind, search, limit+1, offset)
+	tx, err := s.userReadTransaction(ctx, user)
 	if err != nil {
 		return nil, false, err
 	}
-	return collectDictionaryPage(ctx, s, user, limit, rows, func(row pgx.CollectableRow) (DictionaryEntry, error) {
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `SELECT id,kind,code,word,weight,revision,updated_at FROM user_dictionary_entries WHERE user_id=$1 AND kind=$2 AND ($3='' OR strpos(lower(code),lower($3))>0 OR strpos(lower(word),lower($3))>0) ORDER BY code,word,id LIMIT $4 OFFSET $5`, user, kind, search, limit+1, offset)
+	if err != nil {
+		return nil, false, err
+	}
+	items, more, err := collectDictionaryPage(ctx, tx, user, limit, rows, func(row pgx.CollectableRow) (DictionaryEntry, error) {
 		var e DictionaryEntry
 		err := row.Scan(&e.ID, &e.Kind, &e.Code, &e.Word, &e.Weight, &e.Revision, &e.UpdatedAt)
 		return e, err
 	})
+	if err != nil {
+		return nil, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, false, err
+	}
+	return items, more, nil
 }
 func (s *Store) dictionaryEdit(ctx context.Context, tx pgx.Tx, user, kind, id string, expected int64, next *DictionaryEntry) (DictionaryChange, error) {
 	entryID := id
@@ -200,11 +212,16 @@ func (s *Store) ImportDictionary(ctx context.Context, user, kind string, entries
 	return revision, tx.Commit(ctx)
 }
 func (s *Store) DictionaryChanges(ctx context.Context, user string, after int64, limit int) ([]DictionaryChange, bool, error) {
-	rows, err := s.pool.Query(ctx, `SELECT change FROM user_dictionary_changes WHERE user_id=$1 AND revision>$2 ORDER BY revision LIMIT $3`, user, after, limit+1)
+	tx, err := s.userReadTransaction(ctx, user)
 	if err != nil {
 		return nil, false, err
 	}
-	return collectDictionaryPage(ctx, s, user, limit, rows, func(row pgx.CollectableRow) (DictionaryChange, error) {
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `SELECT change FROM user_dictionary_changes WHERE user_id=$1 AND revision>$2 ORDER BY revision LIMIT $3`, user, after, limit+1)
+	if err != nil {
+		return nil, false, err
+	}
+	changes, more, err := collectDictionaryPage(ctx, tx, user, limit, rows, func(row pgx.CollectableRow) (DictionaryChange, error) {
 		var raw []byte
 		var c DictionaryChange
 		if err := row.Scan(&raw); err != nil {
@@ -213,18 +230,22 @@ func (s *Store) DictionaryChanges(ctx context.Context, user string, after int64,
 		err := json.Unmarshal(raw, &c)
 		return c, err
 	})
+	if err != nil {
+		return nil, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, false, err
+	}
+	return changes, more, nil
 }
 
 // StreamDictionary exports one database snapshot without retaining the user's entire dictionary in memory.
 func (s *Store) StreamDictionary(ctx context.Context, user, kind string, emit func(DictionaryEntry) error) error {
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.userReadTransaction(ctx, user)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if err := lockUserForRead(ctx, tx, user); err != nil {
-		return err
-	}
 	rows, err := tx.Query(ctx, `SELECT id,kind,code,word,weight,revision,updated_at FROM user_dictionary_entries WHERE user_id=$1 AND kind=$2 ORDER BY code,word,id`, user, kind)
 	if err != nil {
 		return err
@@ -241,33 +262,15 @@ func (s *Store) StreamDictionary(ctx context.Context, user, kind string, emit fu
 
 // StreamDictionarySnapshot 用一条 SQL 读取全量覆盖快照。
 func (s *Store) StreamDictionarySnapshot(ctx context.Context, user string, emit func(json.RawMessage) error) error {
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.userReadTransaction(ctx, user)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if err := lockUserForRead(ctx, tx, user); err != nil {
-		return err
-	}
 	if err := streamDictionarySnapshot(ctx, tx, user, emit); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
-}
-
-type userReadLocker interface {
-	QueryRow(context.Context, string, ...any) pgx.Row
-}
-
-// lockUserForRead 在导出事务内锁住用户行，使账号删除与整次读取按先后顺序提交。
-func lockUserForRead(ctx context.Context, q userReadLocker, user string) error {
-	var present int
-	if err := q.QueryRow(ctx, `SELECT 1 FROM auth_users WHERE id=$1 FOR SHARE`, user).Scan(&present); errors.Is(err, pgx.ErrNoRows) {
-		return errMissingUser
-	} else if err != nil {
-		return err
-	}
-	return nil
 }
 
 type snapshotQuerier interface {
@@ -325,14 +328,11 @@ func streamDictionarySnapshotKind(ctx context.Context, q snapshotQuerier, user, 
 // StreamWindowsDictionary matches the Windows manager export selection: pinyin
 // includes multi-character upserts, while other kinds export user insertions.
 func (s *Store) StreamWindowsDictionary(ctx context.Context, user, kind string, emit func(DictionaryEntry) error) error {
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.userReadTransaction(ctx, user)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if err := lockUserForRead(ctx, tx, user); err != nil {
-		return err
-	}
 	rows, err := tx.Query(ctx, `SELECT entry FROM user_dictionary_overlay WHERE user_id=$1 AND kind=$2 AND NOT deleted AND (($2='pinyin' AND char_length(word)>1) OR ($2<>'pinyin' AND COALESCE(entry->>'user_inserted','true')='true')) ORDER BY code,word`, user, kind)
 	if err != nil {
 		return err

@@ -58,8 +58,8 @@ VALUES('snapshot-plain',$1,'合成旧明文','plain','','',1000),('snapshot-stal
 			trace.mu.Lock()
 			queries := trace.seen
 			trace.mu.Unlock()
-			if queries != 2 {
-				t.Errorf("读取剪贴板用了 %d 次数据库调用，期望 2 次（含鉴权）", queries)
+			if queries != 5 {
+				t.Errorf("读取剪贴板用了 %d 次数据库调用，期望 5 次（鉴权、开始事务、用户行锁、快照读取和提交）", queries)
 			}
 			var got struct {
 				Enabled       bool            `json:"enabled"`

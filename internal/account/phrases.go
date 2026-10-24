@@ -72,9 +72,16 @@ func validPhrases(list []Phrase) bool {
 }
 
 func (s *Store) Phrases(ctx context.Context, user string) (Phrases, error) {
+	tx, err := s.userReadTransaction(ctx, user)
+	if err != nil {
+		return Phrases{}, err
+	}
+	defer tx.Rollback(ctx)
 	out := Phrases{Phrases: []Phrase{}}
-	e := readRevisionJSON(s.pool.QueryRow(ctx, `SELECT revision,phrases FROM user_phrases WHERE user_id=$1`, user), &out.Revision, &out.Phrases)
-	return out, e
+	if err := readRevisionJSON(tx.QueryRow(ctx, `SELECT revision,phrases FROM user_phrases WHERE user_id=$1`, user), &out.Revision, &out.Phrases); err != nil {
+		return out, err
+	}
+	return out, tx.Commit(ctx)
 }
 
 // PutPhrases 在 expected 等于当前 revision 时整份替换列表并把 revision 加一，否则返回 errRevisionConflict。行锁取自 userDataTransaction，被封禁的账号写不进来。
@@ -104,12 +111,6 @@ func (a *Service) phrases(w http.ResponseWriter, r *http.Request) {
 		if e != nil {
 			a.error(w, e)
 			return
-		}
-		if out.Revision == 0 && len(out.Phrases) == 0 {
-			if err := a.store.requireUserExists(r.Context(), p.UserID); err != nil {
-				a.error(w, err)
-				return
-			}
 		}
 		write(w, 200, out)
 		return

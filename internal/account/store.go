@@ -93,8 +93,12 @@ var errMissingUser = errors.Join(ErrInvalid, pgx.ErrNoRows)
 
 // requireUserExists 将不存在的用户映射为 errMissingUser，其他数据库错误原样返回；只检查存在性，不替代认证、封禁检查或用户行锁。
 func (s *Store) requireUserExists(ctx context.Context, uid string) error {
+	return requireUserExistsQuery(ctx, s.pool, uid)
+}
+
+func requireUserExistsQuery(ctx context.Context, q userReadQuerier, uid string) error {
 	var present int
-	err := s.pool.QueryRow(ctx, "SELECT 1 FROM auth_users WHERE id=$1", uid).Scan(&present)
+	err := q.QueryRow(ctx, "SELECT 1 FROM auth_users WHERE id=$1", uid).Scan(&present)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return errMissingUser
 	}
@@ -826,15 +830,23 @@ func (s *Store) Logout(ctx context.Context, p Principal, all bool) error {
 	return e
 }
 func (s *Store) Me(ctx context.Context, uid string) (User, []Identity, error) {
+	tx, err := s.userReadTransaction(ctx, uid)
+	if err != nil {
+		return User{}, nil, err
+	}
+	defer tx.Rollback(ctx)
 	var u User
 	ids := []Identity{}
 	batch := &pgx.Batch{}
 	queueUserProfileReads(batch, uid, &u, &ids)
-	if e := s.pool.SendBatch(ctx, batch).Close(); e != nil {
-		if errors.Is(e, pgx.ErrNoRows) {
+	if err := tx.SendBatch(ctx, batch).Close(); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return u, ids, errMissingUser
 		}
-		return u, ids, e
+		return u, ids, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return u, ids, err
 	}
 	return u, ids, nil
 }

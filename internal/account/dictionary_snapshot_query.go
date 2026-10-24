@@ -22,16 +22,12 @@ func dictionaryQuerySnapshot(q snapshotQuerier, user string, query map[string]an
 
 // queryPersonalDictionary 将当前用户的查询快照交给引擎，并沿用个人词库的响应和错误映射。
 func (a *Service) queryPersonalDictionary(w http.ResponseWriter, r *http.Request, userID string, query map[string]any) {
-	tx, err := a.store.pool.Begin(r.Context())
+	tx, err := a.store.userReadTransaction(r.Context(), userID)
 	if err != nil {
 		a.dictionaryError(w, err)
 		return
 	}
 	defer tx.Rollback(r.Context())
-	if err := lockUserForRead(r.Context(), tx, userID); err != nil {
-		a.dictionaryError(w, err)
-		return
-	}
 	out, err := a.engine.QuerySnapshot(r.Context(), map[string]any{"operation": "personal_query", "query": query}, dictionaryQuerySnapshot(tx, userID, query))
 	if err != nil {
 		a.dictionaryError(w, err)

@@ -215,7 +215,12 @@ func (s *Store) addClipboardTx(ctx context.Context, tx pgx.Tx, user, device stri
 
 // ListClipboard 返回用密钥 key 加密的条目，置顶的在前，最多 50 条。明文条目和其他密钥的条目不返回。
 func (s *Store) ListClipboard(ctx context.Context, user, key string) ([]ClipboardItem, error) {
-	rows, e := s.pool.Query(ctx, `SELECT c.id,c.ciphertext,c.key_id,c.updated_at,c.pinned,c.device FROM auth_users u
+	tx, e := s.userReadTransaction(ctx, user)
+	if e != nil {
+		return nil, e
+	}
+	defer tx.Rollback(ctx)
+	rows, e := tx.Query(ctx, `SELECT c.id,c.ciphertext,c.key_id,c.updated_at,c.pinned,c.device FROM auth_users u
 LEFT JOIN LATERAL (SELECT id,ciphertext,key_id,updated_at,pinned,device,sequence FROM user_clipboard
  WHERE user_id=u.id AND ciphertext<>'' AND key_id=$2 ORDER BY pinned DESC,sequence DESC LIMIT 50) c ON true
 WHERE u.id=$1 ORDER BY c.pinned DESC,c.sequence DESC`, user, key)
@@ -243,14 +248,22 @@ WHERE u.id=$1 ORDER BY c.pinned DESC,c.sequence DESC`, user, key)
 	if !seen {
 		return nil, errMissingUser
 	}
+	if e := tx.Commit(ctx); e != nil {
+		return nil, e
+	}
 	return items, nil
 }
 
 // ClipboardSnapshot 在同一数据库快照里读取设置、当前密钥和最多五十条条目，避免轮询时的两次往返。
 func (s *Store) ClipboardSnapshot(ctx context.Context, user string) (ClipboardSettings, []ClipboardItem, error) {
+	tx, err := s.userReadTransaction(ctx, user)
+	if err != nil {
+		return ClipboardSettings{}, nil, err
+	}
+	defer tx.Rollback(ctx)
 	var settings ClipboardSettings
 	items := []ClipboardItem{}
-	rows, err := s.pool.Query(ctx, `SELECT s.enabled,s.retention_days,s.key_id,c.id,
+	rows, err := tx.Query(ctx, `SELECT s.enabled,s.retention_days,s.key_id,c.id,
  COALESCE(c.ciphertext,''),COALESCE(c.key_id,''),c.updated_at,COALESCE(c.pinned,false),COALESCE(c.device,'')
 FROM (SELECT COALESCE(bool_or(enabled),false) AS enabled,COALESCE(max(retention_days),0) AS retention_days,max(key_id) AS key_id
  FROM user_clipboard_settings WHERE user_id=$1) s
@@ -284,6 +297,9 @@ ORDER BY c.pinned DESC,c.sequence DESC`, user)
 	}
 	if !seen {
 		return settings, nil, errMissingUser
+	}
+	if e := tx.Commit(ctx); e != nil {
+		return settings, nil, e
 	}
 	return settings, items, nil
 }

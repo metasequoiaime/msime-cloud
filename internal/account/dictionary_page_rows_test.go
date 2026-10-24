@@ -25,7 +25,6 @@ func TestDictionaryPageRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	store := &Store{pool: pool}
 	rejected := errors.New("synthetic rejected dictionary row")
 	for _, tc := range []struct {
 		name, query                                  string
@@ -68,7 +67,7 @@ func TestDictionaryPageRows(t *testing.T) {
 			if tc.missingUser {
 				user = "dictionary-page-missing"
 			}
-			got, more, err := collectDictionaryPage(queryCtx, store, user, tc.limit, rows, func(row pgx.CollectableRow) (int, error) {
+			got, more, err := collectDictionaryPage(queryCtx, pool, user, tc.limit, rows, func(row pgx.CollectableRow) (int, error) {
 				var value int
 				err := row.Scan(&value)
 				if err == nil && value == tc.rejectValue {

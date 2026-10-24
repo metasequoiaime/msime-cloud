@@ -290,7 +290,13 @@ func (a *Service) qqLinks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == "GET" {
-		rows, err := a.store.pool.Query(r.Context(), `SELECT id::text,created_at FROM qq_account_links WHERE user_id=$1 ORDER BY created_at DESC,id DESC`, p.UserID)
+		tx, err := a.store.userReadTransaction(r.Context(), p.UserID)
+		if err != nil {
+			a.error(w, err)
+			return
+		}
+		defer tx.Rollback(r.Context())
+		rows, err := tx.Query(r.Context(), `SELECT id::text,created_at FROM qq_account_links WHERE user_id=$1 ORDER BY created_at DESC,id DESC`, p.UserID)
 		if err != nil {
 			a.error(w, err)
 			return
@@ -303,11 +309,9 @@ func (a *Service) qqLinks(w http.ResponseWriter, r *http.Request) {
 			a.error(w, err)
 			return
 		}
-		if len(links) == 0 {
-			if err := a.store.requireUserExists(r.Context(), p.UserID); err != nil {
-				a.error(w, err)
-				return
-			}
+		if err := tx.Commit(r.Context()); err != nil {
+			a.error(w, err)
+			return
 		}
 		write(w, 200, map[string]any{"links": links})
 		return

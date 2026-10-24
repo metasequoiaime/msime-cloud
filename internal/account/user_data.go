@@ -52,7 +52,12 @@ const userDataSummaryQuery = `SELECT id,bytes,items FROM (
 
 // UserDataSummary 返回本人云端数据的分区汇总，分区顺序固定。
 func (s *Store) UserDataSummary(ctx context.Context, user string) ([]UserDataSection, int64, error) {
-	rows, err := s.pool.Query(ctx, userDataSummaryQuery, user)
+	tx, err := s.userReadTransaction(ctx, user)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, userDataSummaryQuery, user)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -60,14 +65,17 @@ func (s *Store) UserDataSummary(ctx context.Context, user string) ([]UserDataSec
 		var v UserDataSection
 		return v, row.Scan(&v.ID, &v.Bytes, &v.Items)
 	})
-	if err == nil && len(sections) == 0 {
-		return nil, 0, errMissingUser
+	if err != nil {
+		return nil, 0, err
 	}
 	var total int64
 	for _, v := range sections {
 		total += v.Bytes
 	}
-	return sections, total, err
+	if err := tx.Commit(ctx); err != nil {
+		return nil, 0, err
+	}
+	return sections, total, nil
 }
 
 // DeleteUserData 在一个事务里删除所选分区。偏好和常用语清空内容并推进 revision，其他设备的旧 revision 写入会 409 并拉到空文档；词库删除条目、覆盖层、位置、选择次数和历史变更后写一条 reset 变更并推进 revision，开着同步的设备拉取时会整份重载而不是把旧数据推回来；剪贴板删除条目、密钥、封装和设备登记，保留同步开关和保留天数。
@@ -188,7 +196,11 @@ var userDataExportFiles = []userDataExportFile{
 
 // streamVoiceContributions 流式导出本人的语音样本；音频用 JSON 的 base64 表示，避免把所有样本一次性读进内存。
 func (s *Store) streamVoiceContributions(ctx context.Context, user string, out io.Writer) error {
-	rows, err := s.pool.Query(ctx, `SELECT id,language,provider,duration_ms,transcript,app_version,audio_mime,audio,created_at
+	return streamVoiceContributionsQuery(ctx, s.pool, user, out)
+}
+
+func streamVoiceContributionsQuery(ctx context.Context, q snapshotQuerier, user string, out io.Writer) error {
+	rows, err := q.Query(ctx, `SELECT id,language,provider,duration_ms,transcript,app_version,audio_mime,audio,created_at
 FROM voice_contributions WHERE user_id=$1 ORDER BY created_at,id`, user)
 	if err != nil {
 		return err
@@ -232,13 +244,19 @@ func (a *Service) userDataExport(w http.ResponseWriter, r *http.Request) {
 		a.error(w, err)
 		return
 	}
-	// 小文件一次批量发送，读完并释放连接后再写响应；失败时仍可返回正常错误，词库最后流式写入。
+	// 小文件一次批量读取，失败时仍可返回正常错误；用户行锁持有到 ZIP 完整写出，避免注销在导出中途提交。
+	tx, err := a.store.userReadTransaction(r.Context(), p.UserID)
+	if err != nil {
+		a.error(w, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
 	docs := make([][]byte, len(userDataExportFiles))
 	batch := &pgx.Batch{}
 	for i, f := range userDataExportFiles {
 		batch.Queue(f.query, p.UserID).QueryRow(func(row pgx.Row) error { return row.Scan(&docs[i]) })
 	}
-	if err := a.store.pool.SendBatch(r.Context(), batch).Close(); err != nil {
+	if err := tx.SendBatch(r.Context(), batch).Close(); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			err = errMissingUser
 		}
@@ -266,19 +284,22 @@ func (a *Service) userDataExport(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := entry("voice.ndjson")
 	if err == nil {
-		err = a.store.streamVoiceContributions(r.Context(), p.UserID, out)
+		err = streamVoiceContributionsQuery(r.Context(), tx, p.UserID, out)
 	}
 	if err != nil {
 		panic(http.ErrAbortHandler)
 	}
 	out, err = entry("dictionary.ndjson")
 	if err == nil {
-		err = a.store.streamFullDictionarySnapshotWithFooter(r.Context(), p.UserID, ndjsonWriter(out))
+		err = streamFullDictionarySnapshotWithFooterQuery(r.Context(), tx, p.UserID, ndjsonWriter(out))
 	}
 	if err == nil {
 		err = archive.Close()
 	}
 	if err != nil {
+		panic(http.ErrAbortHandler)
+	}
+	if err := tx.Commit(r.Context()); err != nil {
 		panic(http.ErrAbortHandler)
 	}
 }

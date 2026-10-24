@@ -280,7 +280,18 @@ func (a *Service) communityPluginDetail(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	// 客户端没有声明能安装的类型按不存在处理，与列表看不到它一致。
-	v, e := scanCommunityPlugin(a.store.pool.QueryRow(r.Context(), communityPluginSelect(fields["saved"])+`WHERE p.id=$2 AND (p.moderation<>'removed' OR p.owner_id=$1) AND p.kind=ANY($3)`, a.communityViewer(r), r.PathValue("id"), pluginVisibleKinds(query, "")))
+	viewer := a.communityViewer(r)
+	tx, e := a.store.communityItemReadTransaction(r.Context(), "community_plugins", r.PathValue("id"))
+	if errors.Is(e, pgx.ErrNoRows) {
+		writeError(w, 404, "plugin_not_found")
+		return
+	}
+	if e != nil {
+		a.error(w, e)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	v, e := scanCommunityPlugin(tx.QueryRow(r.Context(), communityPluginSelect(fields["saved"])+`WHERE p.id=$2 AND (p.moderation<>'removed' OR p.owner_id=$1) AND p.kind=ANY($3)`, viewer, r.PathValue("id"), pluginVisibleKinds(query, "")))
 	if errors.Is(e, pgx.ErrNoRows) {
 		writeError(w, 404, "plugin_not_found")
 		return
@@ -291,6 +302,10 @@ func (a *Service) communityPluginDetail(w http.ResponseWriter, r *http.Request) 
 	}
 	v.Moderation = ownerModeration(fields, v.moderation)
 	v.Saved, v.Saves = communitySavedFields(fields, v.saved, v.saves)
+	if e := tx.Commit(r.Context()); e != nil {
+		a.error(w, e)
+		return
+	}
 	write(w, 200, v)
 }
 

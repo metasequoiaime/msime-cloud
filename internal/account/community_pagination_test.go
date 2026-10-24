@@ -41,6 +41,9 @@ func (*communityPaginationTrace) TraceBatchEnd(context.Context, *pgx.Conn, pgx.T
 func (*communityPaginationTrace) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
 func (trace *communityPaginationTrace) capture(sql string, args []any) {
+	if strings.HasPrefix(strings.TrimSpace(sql), "SELECT s.owner_id FROM ") {
+		return
+	}
 	if strings.Contains(sql, "FROM "+trace.table+" ") {
 		trace.queries <- communityPageQuery{sql, append([]any(nil), args...)}
 	}

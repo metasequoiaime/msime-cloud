@@ -20,6 +20,9 @@ type resourcePageQuery struct {
 type resourcePageTrace struct{ queries chan resourcePageQuery }
 
 func (trace *resourcePageTrace) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	if strings.HasPrefix(strings.TrimSpace(data.SQL), "SELECT s.owner_id FROM ") {
+		return ctx
+	}
 	if strings.Contains(data.SQL, "FROM community_resources") {
 		trace.queries <- resourcePageQuery{data.SQL, append([]any(nil), data.Args...)}
 	}

@@ -682,7 +682,6 @@ func lockCrashSpikes(ctx context.Context, tx pgx.Tx) ([]crashSpike, error) {
 var (
 	crashUUIDPattern   = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
 	crashHexRunPattern = regexp.MustCompile(`\b[0-9a-fA-F]{8,}\b`)
-	crashDigitsPattern = regexp.MustCompile(`[0-9]+`)
 )
 
 // normalizeCrashWhitespace 折叠规范化文本中的空白并统一为小写。
@@ -978,10 +977,51 @@ func normalizeCrashMessage(message string) string {
 	if crashHasHexRun(line) {
 		line = crashHexRunPattern.ReplaceAllString(line, "?")
 	}
-	if strings.ContainsAny(line, "0123456789") {
-		line = crashDigitsPattern.ReplaceAllString(line, "#")
-	}
+	line = maskCrashDigits(line)
 	return normalizeCrashWhitespace(line)
+}
+
+// maskCrashDigits 将每段连续 ASCII 数字替换为单个井号，其余字节保持原样。
+func maskCrashDigits(line string) string {
+	first := strings.IndexAny(line, "0123456789")
+	if first < 0 {
+		return line
+	}
+	size := len(line)
+	for i := first; i < len(line); i++ {
+		if line[i] < '0' || line[i] > '9' {
+			continue
+		}
+		end := i + 1
+		for end < len(line) && line[end] >= '0' && line[end] <= '9' {
+			end++
+		}
+		size -= end - i - 1
+		i = end - 1
+	}
+	// 输出长度为一说明整行都是数字，直接复用固定掩码。
+	if size == 1 {
+		return "#"
+	}
+	// 按实际输出长度一次分配，长数字段不会撑大输出缓冲。
+	var out strings.Builder
+	out.Grow(size)
+	start := 0
+	for i := first; i < len(line); i++ {
+		if line[i] < '0' || line[i] > '9' {
+			continue
+		}
+		end := i + 1
+		for end < len(line) && line[end] >= '0' && line[end] <= '9' {
+			end++
+		}
+		out.WriteString(line[start:i])
+		out.WriteByte('#')
+		start = end
+		i = end - 1
+	}
+	out.WriteString(line[start:])
+	return out.String()
 }
 
 // crashHasHexRun 只筛选至少八个连续 ASCII 十六进制字符，单词边界仍由原正则判断。

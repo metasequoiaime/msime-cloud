@@ -1,7 +1,9 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 )
@@ -29,4 +31,13 @@ func (e Endpoint) newJSONRequest(ctx context.Context, method, contentType string
 	}
 	req.Header.Set("Accept", "application/json")
 	return req, nil
+}
+
+// newJSONPayloadRequest 先编码 JSON 值，再沿用端点鉴权和内容协商；保留精确正文长度及重放能力，编码失败时不构造请求。
+func (e Endpoint) newJSONPayloadRequest(ctx context.Context, method string, value any) (*http.Request, error) {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	return e.newJSONRequest(ctx, method, "application/json", bytes.NewReader(payload))
 }

@@ -125,6 +125,8 @@ type telegramMessage struct {
 	Chat      telegramChat     `json:"chat"`
 	Text      string           `json:"text"`
 	ReplyTo   *telegramMessage `json:"reply_to_message"`
+	// SenderChat 是以群或频道身份发言时的那个 chat：开了「保持匿名」的管理员发言时，from 是 GroupAnonymousBot（is_bot 为 true），sender_chat 是群本身。
+	SenderChat *telegramChat `json:"sender_chat"`
 }
 
 type telegramUpdate struct {
@@ -204,8 +206,16 @@ func (s *Server) acceptTelegramUpdate(ctx context.Context, u telegramUpdate) boo
 
 // question 判断一条消息是不是在问机器人，是的话返回去掉 @ 之后的问题。只 @ 了机器人、没写话但回复了别人的消息时，把被回复的那句当成问题，和 QQ 引用消息的做法一致。
 func (b *telegramBot) question(m *telegramMessage) (telegramQuestion, bool) {
-	if m == nil || m.From == nil || m.From.IsBot || (m.Chat.Type != "group" && m.Chat.Type != "supergroup") {
+	if m == nil || m.From == nil || (m.Chat.Type != "group" && m.Chat.Type != "supergroup") {
 		return telegramQuestion{}, false
+	}
+	// 匿名管理员以群的身份发言，按发言的群（sender_chat）计作提问者，群里所有匿名管理员共用一份个人额度和对话历史；其他 Bot 和以别的频道身份发的消息不处理。曾经凡是 is_bot 都忽略，开着匿名的管理员 @ 机器人一直没有回应。
+	member := m.From.ID
+	if m.From.IsBot {
+		if m.SenderChat == nil || m.SenderChat.ID != m.Chat.ID {
+			return telegramQuestion{}, false
+		}
+		member = m.SenderChat.ID
 	}
 	if !slices.Contains(b.config.Chats, m.Chat.ID) {
 		// 记下被拦下的群 ID，方便把要接受的群填进 telegram_bot.chats；群 ID 不是个人信息。
@@ -221,7 +231,7 @@ func (b *telegramBot) question(m *telegramMessage) (telegramQuestion, bool) {
 	if text == "" && !repliedToBot && m.ReplyTo != nil {
 		text = strings.TrimSpace(m.ReplyTo.Text)
 	}
-	return telegramQuestion{chat: m.Chat.ID, member: m.From.ID, message: m.MessageID, text: text}, true
+	return telegramQuestion{chat: m.Chat.ID, member: member, message: m.MessageID, text: text}, true
 }
 
 // handleTelegramQuestion 在后台答一条已认领的提问，写法照 handleQQFeedback 的答疑部分：同一个群友的消息按到达顺序处理，先过个人和群的额度，8 秒还没答完先回一句「收到，我想一下～」，再交给 answerQQQuestion。额度和 QQ 分开计数，数目相同。不记录消息内容，日志里只有处理结果和失败原因。

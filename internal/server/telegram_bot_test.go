@@ -305,3 +305,34 @@ func TestTelegramBotReplyLength(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// 开着「保持匿名」的管理员以群的身份发言（from 是 GroupAnonymousBot，sender_chat 是群本身）时照常答疑，按群计作提问者；以别的频道身份发的消息和其他 Bot 的消息不处理。
+func TestTelegramBotAnswersAnonymousAdmins(t *testing.T) {
+	s, _, limiter, tg := telegramServer(t)
+	anonymous := func(update int64, senderChat any) string {
+		raw, _ := json.Marshal(map[string]any{"update_id": update, "message": map[string]any{
+			"message_id": update * 10, "from": map[string]any{"id": 1087968824, "is_bot": true},
+			"sender_chat": senderChat, "chat": map[string]any{"id": testTelegramGroup, "type": "supergroup"}, "text": "@msime_bot 五笔怎么切换",
+		}})
+		return string(raw)
+	}
+	for i, body := range []string{
+		anonymous(31, map[string]any{"id": -1005555, "type": "channel"}),
+		anonymous(32, nil),
+	} {
+		if w := telegramPost(s, testTelegramSecret, body); w.Code != 200 {
+			t.Fatal(i, w.Code)
+		}
+	}
+	s.qqWorkers.Wait()
+	if len(tg.messages) != 0 {
+		t.Fatal("以别的频道身份或 Bot 发的消息被回答了", tg.texts())
+	}
+	if w := telegramPost(s, testTelegramSecret, anonymous(33, map[string]any{"id": testTelegramGroup, "type": "supergroup"})); w.Code != 200 {
+		t.Fatal(w.Code)
+	}
+	s.qqWorkers.Wait()
+	if texts := tg.texts(); len(texts) != 1 || texts[0] != "在设置的「输入方案」里选五笔。" || limiter.counts["telegram-bot-member|tg:-1001234567890/tg:-1001234567890"] != 1 {
+		t.Fatal(texts, limiter.counts)
+	}
+}

@@ -1,5 +1,5 @@
 {
-  "remark": "msime QQ bot slash commands, see internal/server/qq_slash.go",
+  "remark": "msime QQ bot slash commands, see internal/server/bot_slash.go",
   "items": [
     {"type": "command", "name": "/help", "desc": "怎么用我"},
     {"type": "command", "name": "/ver", "desc": "各平台最新版本"},

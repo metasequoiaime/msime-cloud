@@ -129,7 +129,7 @@ func (s *Server) qqSearchIssueHitsIn(ctx context.Context, repos []string, keywor
 	return nil, false
 }
 
-// qqSearchIssuesFor 是用一组搜索词做的一轮 qqSearchIssueHits。各仓库同时搜，都搜完后（extras 为 true 时）同时给前 qqIssueContextResults 个 issue（按仓库顺序数，见 qq_issue_context.go）补上下文，最后按仓库顺序排好：结果和逐个仓库查时一样，只是不再一个仓库搜完、补完上下文再搜下一个。sort 不为空时附在搜索请求后面（例如 "&sort=created&order=desc"，列最新的 issue 时用），为空时按相关度。
+// qqSearchIssuesFor 是用一组搜索词做的一轮 qqSearchIssueHits。各仓库同时搜，都搜完后（extras 为 true 时）同时给前 qqIssueContextResults 个 issue（按仓库顺序数，见 bot_issue_context.go）补上下文，最后按仓库顺序排好：结果和逐个仓库查时一样，只是不再一个仓库搜完、补完上下文再搜下一个。sort 不为空时附在搜索请求后面（例如 "&sort=created&order=desc"，列最新的 issue 时用），为空时按相关度。
 func (s *Server) qqSearchIssuesFor(ctx context.Context, repos []string, terms, sort string, extras bool) ([]qqIssueHit, bool) {
 	client := s.adminGitHub
 	type hit struct {

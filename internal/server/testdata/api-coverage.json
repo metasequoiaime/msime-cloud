@@ -151,7 +151,7 @@
       "internal/server/input_listed_test.go::TestListedWordHTTPValidation",
       "internal/server/input_listed_test.go::TestQueryListedWord",
       "internal/server/input_listed_test.go::TestPublishedListedWord",
-      "internal/server/qq_public_tools_test.go::TestQQPublicToolDispatch"
+      "internal/server/bot_public_tools_test.go::TestQQPublicToolDispatch"
     ],
     "POST /v1/input/unicode": [
       "internal/server/input_test.go::TestRealNativeHTTP",

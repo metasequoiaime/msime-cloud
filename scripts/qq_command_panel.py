@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Sync the QQ bot's group command panel (the list shown after typing "@bot /") from qq_command_panel.json.
 
-The open platform console has no form for the panel; it is managed through the panel API. Run after changing the slash commands in internal/server/qq_slash.go:
+The open platform console has no form for the panel; it is managed through the panel API. Run after changing the slash commands in internal/server/bot_slash.go:
 
     QQ_BOT_SECRET=... scripts/qq_command_panel.py            # create or update
     QQ_BOT_SECRET=... scripts/qq_command_panel.py --dry-run  # show the current panel only

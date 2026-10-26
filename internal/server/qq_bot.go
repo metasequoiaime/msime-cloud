@@ -106,9 +106,9 @@ type QQBotConfig struct {
 	StrongModel string `json:"strong_model"`
 	// ChatModel 是问候和闲聊用的模型，经 chat 端点调用：挑段落的模型判断是闲聊时用它回答，闲聊用不上强模型，选便宜、语气自然的国产模型。为空时用 defaultQQChatModel，写 none 时用 model。
 	ChatModel string `json:"chat_model"`
-	// ImprovementRepo 是每周开「改进依据」汇总 issue 的仓库（见 qq_improvements.go），为空时用 defaultQQImprovementRepo，写 none 关闭。管理后台的 GitHub App 要有这个仓库的 Issues 写权限。
+	// ImprovementRepo 是每周开「改进依据」汇总 issue 的仓库（见 bot_improvements.go），为空时用 defaultQQImprovementRepo，写 none 关闭。管理后台的 GitHub App 要有这个仓库的 Issues 写权限。
 	ImprovementRepo string `json:"improvement_repo"`
-	// EmbeddingModel 是答疑向量检索用的 embedding 模型，经 chat 端点所在服务的 /embeddings 接口调用（密钥沿用 chat）；为空时用 defaultQQEmbeddingModel，写 none 关闭向量检索。见 qq_vectors.go。
+	// EmbeddingModel 是答疑向量检索用的 embedding 模型，经 chat 端点所在服务的 /embeddings 接口调用（密钥沿用 chat）；为空时用 defaultQQEmbeddingModel，写 none 关闭向量检索。见 bot_vectors.go。
 	EmbeddingModel string `json:"embedding_model"`
 	// APIURL 覆盖 https://api.bot.qq.com，供测试使用。
 	APIURL string `json:"api_url,omitempty"`
@@ -260,14 +260,14 @@ type qqBot struct {
 	expires time.Time
 	// tokenRefresh 合并本副本的换证请求，等待者可按自己的上下文取消。
 	tokenRefresh singleflight.Group
-	// knowledge 是本副本缓存的答疑知识库，见 qq_knowledge.go。
+	// knowledge 是本副本缓存的答疑知识库，见 bot_knowledge.go。
 	knowledge qqKnowledge
 	// mediaClient 下载管理员消息里的图片和视频，只能访问 mediaHosts 里的主机，见 qq_media.go。
 	mediaClient *http.Client
 	mediaHosts  []string
 	// roles 缓存群成员身份，见 qq_roles.go。
 	roles qqRoles
-	// gapsIssue 是答不上的问题汇总 issue 的编号和查到它的时间，见 qq_gaps.go；由 mu 保护。
+	// gapsIssue 是答不上的问题汇总 issue 的编号和查到它的时间，见 bot_gaps.go；由 mu 保护。
 	gapsIssue   int64
 	gapsIssueAt time.Time
 	// probeOnce 让 probeMemberRole 只记一次。
@@ -808,7 +808,7 @@ func (s *Server) handleBotMessage(ctx context.Context, m botMessage) {
 	}
 	var charged []qqCharge
 	defer func() {
-		// 机器人自己出错（failed、timeout、reply_failed，管理员的 admin_failed 也算，见 qqOutcomeKind）或者被副本关停打断时，退回这条消息计过的额度：回复会请群友再发一次，不退的话每重发一次就再扣一次个人和群的额度，上游一抖或赶上发布时群额度白白耗掉。超限（limited_*）的那一项没计上，不在 charged 里。这个 defer 最先登记、最后执行，outcome 已经按 reply_failed、timeout 改写过。ctx 这时可能已经取消，退额度用单独的时限，写法照 qq_words.go 退加词名额。
+		// 机器人自己出错（failed、timeout、reply_failed，管理员的 admin_failed 也算，见 qqOutcomeKind）或者被副本关停打断时，退回这条消息计过的额度：回复会请群友再发一次，不退的话每重发一次就再扣一次个人和群的额度，上游一抖或赶上发布时群额度白白耗掉。超限（limited_*）的那一项没计上，不在 charged 里。这个 defer 最先登记、最后执行，outcome 已经按 reply_failed、timeout 改写过。ctx 这时可能已经取消，退额度用单独的时限，写法照 bot_words.go 退加词名额。
 		if kind := qqOutcomeKind(outcome); kind == "failed" || kind == "reply_failed" || errors.Is(ctx.Err(), context.Canceled) {
 			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 			for _, limit := range charged {
@@ -926,7 +926,7 @@ func (s *Server) handleBotMessage(ctx context.Context, m botMessage) {
 		outcome = "cmd_whoami"
 		return
 	}
-	// 只发了截图时先过限额，再看图（见 qq_vision.go）。
+	// 只发了截图时先过限额，再看图（见 bot_vision.go）。
 	imageOnly := false
 	switch n := utf8.RuneCountInString(text); {
 	case n == 0 && qqHasImages(m.Attachments):
@@ -1324,7 +1324,7 @@ func (s *Server) fileAdminFeedback(ctx context.Context, m botMessage, text strin
 	return "filed"
 }
 
-// answerQQQuestion 用知识库回答一条消息；答不上的问题和群友报告的问题记进汇总 issue（qq_gaps.go），由管理员跟进。admin 表示提问的是管理员：他报问题时不起草稿、不记汇总 issue（那是给群友等管理员处理的），只在答案后提示用「提issue」。chat 在挑段落判成闲聊、马上要用聊天模型作答前调用（见 qqAsk.onChat），可以为 nil。
+// answerQQQuestion 用知识库回答一条消息；答不上的问题和群友报告的问题记进汇总 issue（bot_gaps.go），由管理员跟进。admin 表示提问的是管理员：他报问题时不起草稿、不记汇总 issue（那是给群友等管理员处理的），只在答案后提示用「提issue」。chat 在挑段落判成闲聊、马上要用聊天模型作答前调用（见 qqAsk.onChat），可以为 nil。
 func (s *Server) answerQQQuestion(ctx context.Context, group, member, question string, admin bool, reply, progress func(string), chat func()) string {
 	subject := group + "/" + member
 	var history []account.QQTurn
@@ -1341,7 +1341,7 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 	if outcome := s.qqSupplementFollowUp(ctx, subject, history, question, reply); outcome != "" {
 		return outcome
 	}
-	// 群友说上一个回答不对：记下来，强制现查、换思路把上一个问题重答一次（见 qq_bad_answers.go）。
+	// 群友说上一个回答不对：记下来，强制现查、换思路把上一个问题重答一次（见 bot_bad_answers.go）。
 	retrying, feedback := qqIsBadAnswerFeedback(history, question), question
 	var last account.QQTurn
 	if retrying {
@@ -1393,7 +1393,7 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 		if !answer.Releases {
 			s.recordQQFAQCandidate(ctx, cmp.Or(answer.Topic, question), "")
 		}
-		// 改进依据只记模型的概括，不记原话：现查过还答不上算机器人能力问题，没现查就答不上算文档没写（见 qq_improvements.go）。
+		// 改进依据只记模型的概括，不记原话：现查过还答不上算机器人能力问题，没现查就答不上算文档没写（见 bot_improvements.go）。
 		category := "docs"
 		if answer.Researched {
 			category = "capability"
@@ -1404,7 +1404,7 @@ func (s *Server) answerQQQuestion(ctx context.Context, group, member, question s
 		reply(answer.Answer + qqReplyAdminHint)
 	case answer.Type == "answered" && answer.Escalate:
 		outcome = "answered_escalate"
-		// 群友在报 bug 或提需求：整理成草稿等管理员一句话提交（见 qq_drafts.go）；整理不成时照旧记进汇总 issue。先把能先试的办法发出去，再整理草稿或记汇总，记下了什么单独回一句：整理草稿要再调一次模型、查重、建草稿，曾经等这些做完才连同答案一起发，群友要多等好几秒才看到排查办法。现在答案只等整理这一次模型调用：整理完才知道说明里会不会追问缺的信息，会追问时先去掉答案末尾同样的追问（qqStripTrailingAsk），版本号不会被问两遍；查重和建草稿仍在答案发出之后。一条消息最多被动回复 qqBotMaxReplies（5）次，这条路径最多用满：过渡语 1 + 答案 1 + 这句说明 1 + 带链接被拒收时去掉链接重发 1 + 被拒收时的补发 1，以后不能再在这里加回复。
+		// 群友在报 bug 或提需求：整理成草稿等管理员一句话提交（见 bot_drafts.go）；整理不成时照旧记进汇总 issue。先把能先试的办法发出去，再整理草稿或记汇总，记下了什么单独回一句：整理草稿要再调一次模型、查重、建草稿，曾经等这些做完才连同答案一起发，群友要多等好几秒才看到排查办法。现在答案只等整理这一次模型调用：整理完才知道说明里会不会追问缺的信息，会追问时先去掉答案末尾同样的追问（qqStripTrailingAsk），版本号不会被问两遍；查重和建草稿仍在答案发出之后。一条消息最多被动回复 qqBotMaxReplies（5）次，这条路径最多用满：过渡语 1 + 答案 1 + 这句说明 1 + 带链接被拒收时去掉链接重发 1 + 被拒收时的补发 1，以后不能再在这里加回复。
 		sent := false
 		sendAnswer := func(asked bool) {
 			if sent {

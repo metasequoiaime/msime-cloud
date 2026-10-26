@@ -1036,9 +1036,9 @@ type qqAnswer struct {
 	Escalate bool   `json:"escalate"`
 	// evidence 只在进程内供自测核对事实，保留最终回答实际使用的资料，不接受模型填写、不写日志或群回复。
 	evidence string
-	// Researched 表示这次是靠现查 GitHub 答的（见 qq_research.go），答上的话说明文档里缺这块，记成文档候选。
+	// Researched 表示这次是靠现查 GitHub 答的（见 bot_research.go），答上的话说明文档里缺这块，记成文档候选。
 	Researched bool `json:"-"`
-	// Topic 是答不上时模型对问题的一句话概括，群友报问题时「平台 + 现象」的概括，或者靠现查答上时用户想知道什么的概括（记成文档候选时代替原话：原话常常离开上一轮就看不懂，「安卓呢？」这种也去不了重），供汇总给维护者（见 qq_gaps.go、qq_faq_candidates.go）。
+	// Topic 是答不上时模型对问题的一句话概括，群友报问题时「平台 + 现象」的概括，或者靠现查答上时用户想知道什么的概括（记成文档候选时代替原话：原话常常离开上一轮就看不懂，「安卓呢？」这种也去不了重），供汇总给维护者（见 bot_gaps.go、bot_faq_candidates.go）。
 	Topic string `json:"topic"`
 	// Gap 是答上了、但水杉本身的事实有一部分资料里没有时，模型写的缺什么（格式同 Topic），记进汇总 issue：答得含糊的问题曾经哪里都不记，维护者只看得到完全答不上的。
 	Gap string `json:"gap"`
@@ -1800,7 +1800,7 @@ func (s *Server) qqAnswerQuestion(ctx context.Context, history []account.QQTurn,
 	if err != nil {
 		return qqAnswer{}, err
 	}
-	// 文档和预先查好的资料答不上时，让模型带着只读查询工具现查一次，查到了再重答（见 qq_research.go）。回答前已经现查过的不再查；剩下的时间不够现查（qqResearchMinRemaining）或重答（qqReanswerMinRemaining）时跳过，用第一次的答案按答不上处理，不把 4 分钟耗光后只回一句「暂时处理不了」。
+	// 文档和预先查好的资料答不上时，让模型带着只读查询工具现查一次，查到了再重答（见 bot_research.go）。回答前已经现查过的不再查；剩下的时间不够现查（qqResearchMinRemaining）或重答（qqReanswerMinRemaining）时跳过，用第一次的答案按答不上处理，不把 4 分钟耗光后只回一句「暂时处理不了」。
 	if answer.Type == "unknown" && !ask.researched {
 		if qqRemaining(ctx) < qqResearchMinRemaining {
 			slog.Warn("qq bot: budget exhausted", "stage", "research")
@@ -2499,7 +2499,7 @@ func (s *Server) qqKnowledgeMaterial(ctx context.Context, question string, ask *
 		Chat        bool   `json:"chat"`
 	}
 	var picked selection
-	// 向量召回和模型挑段落同时进行，不拖慢回答（见 qq_vectors.go）。
+	// 向量召回和模型挑段落同时进行，不拖慢回答（见 bot_vectors.go）。
 	recalled := make(chan qqVectorRecall, 1)
 	go func() { recalled <- s.qqRecallWithCachedIDs(ctx, question, sections, docIDs, github) }()
 	began := time.Now()
@@ -2581,7 +2581,7 @@ func (s *Server) qqKnowledgeMaterial(ctx context.Context, question string, ask *
 	if len(recall.history) > 0 {
 		third.WriteString("### 语义相近的历史 issue 和 PR\n" + qqHistoryMaterial(recall.history) + "\n")
 	}
-	// 要现查的问题回答前先查（见 qq_research.go），包括 GitHub、网络和水杉公共数据，不等到答不上：这类问题（「我是不是开发者」）常被回答的模型当成闲聊，走不到答不上那一步。剩下的时间不够现查时跳过，把时间留给回答的模型。
+	// 要现查的问题回答前先查（见 bot_research.go），包括 GitHub、网络和水杉公共数据，不等到答不上：这类问题（「我是不是开发者」）常被回答的模型当成闲聊，走不到答不上那一步。剩下的时间不够现查时跳过，把时间留给回答的模型。
 	if picked.Lookup || ask.force {
 		picked.Lookup = true
 		if qqRemaining(ctx) < qqResearchMinRemaining {
@@ -2615,7 +2615,7 @@ func (s *Server) qqKnowledgeMaterial(ctx context.Context, question string, ask *
 	return material.String(), s.qqAnswerModel(picked.Chat, picked.Strong || picked.Lookup), nil
 }
 
-// qqUnknownReply 是知识库答不上时的回复。QQ 群文本消息里的 <qqbot-at-user id="…" /> 实测会原样显示成文字（2026-10-11），所以不 @ 人；管理员靠答不上问题的汇总（qq_gaps.go）跟进，记进汇总就算「转给管理员」。「补进文档」对提问的人没用，改成告诉他着急时可以马上做什么。
+// qqUnknownReply 是知识库答不上时的回复。QQ 群文本消息里的 <qqbot-at-user id="…" /> 实测会原样显示成文字（2026-10-11），所以不 @ 人；管理员靠答不上问题的汇总（bot_gaps.go）跟进，记进汇总就算「转给管理员」。「补进文档」对提问的人没用，改成告诉他着急时可以马上做什么。
 const qqUnknownReply = "这个我还不确定，先不乱说～已经转给管理员了。着急的话可以直接在群里问问大家。"
 
 // qqUnknownUnrecordedReply 是答不上、又没能记进汇总 issue（汇总没配置、当天额度用完或 GitHub 出错）时的回复，不说已经记下，也不说管理员会回复，只给群友马上能做的事。

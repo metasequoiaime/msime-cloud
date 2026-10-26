@@ -30,6 +30,16 @@ const (
 /doc FAQ 没写鸿蒙版怎么下载　文档缺了什么或写错了
 /stats 我的打字数据，先发 /bind 绑定水杉账号
 觉得我答错了，@我 说「不对」，我会重新查。`
+	// telegramHelpText 是 Telegram 群里「帮助」的回复：命令和 QQ 一样，写在 @我 后面或写成 /ver@Bot用户名；没有打字数据（要绑定 QQ），回复 Bot 的消息不用再 @。
+	telegramHelpText = `直接 @我 提问就行，也可以回复我的消息接着问；回复别人的消息再 @我，我会看那条消息。
+@我 后面接命令：
+/ver 各平台最新版本　/docs 使用文档和下载地址
+/today 今天的农历、节气、假期和调休
+/mcp 查词库、注音、释义和公共数据的用法
+/issues 候选框 左上角　查有没有人报过（/issues 818 看进度）
+/add 扛把子 kang ba zi　某个词打不出来，投稿到词库
+/doc FAQ 没写鸿蒙版怎么下载　文档缺了什么或写错了
+觉得我答错了，@我 说「不对」，我会重新查。`
 	qqMCPHelpText = `群内可以查发布词库和公共数据，直接 @我 提问，例如：
 查 nihao 的候选词，最多 5 个
 给“水杉输入法”注音
@@ -480,9 +490,21 @@ func qqCommandPrefixEqualFold(prefix, word string) bool {
 	return wordOffset == len(word)
 }
 
+// qqHelpFor 是这条消息所在平台的帮助，管理员另外看到 qqAdminHelpText。
+func qqHelpFor(m botMessage, admin bool) string {
+	help := qqHelpText
+	if m.onTelegram() {
+		help = telegramHelpText
+	}
+	if admin {
+		help += qqAdminHelpText
+	}
+	return help
+}
+
 // qqCommand 处理群里的命令，返回处理结果的名字（写进每条消息的处理日志，见 handleQQFeedback），不是命令时返回空字符串。progress 发过渡语，同一条消息只发一句（见 handleQQFeedback）。
 // `compact` 是与原文 `text` 对应的规范化结果，由分类或斜杠命令改写时计算。
-func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text, compact string, admin bool, reply, progress func(string)) string {
+func (s *Server) qqCommand(ctx context.Context, m botMessage, text, compact string, admin bool, reply, progress func(string)) string {
 	if command := s.qqSlashCommand(ctx, m, text, admin, reply, progress); command != "" {
 		return command
 	}
@@ -514,11 +536,7 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text, compact 
 	}
 	switch {
 	case slices.Contains(qqHelpAliases, compact):
-		if admin {
-			reply(qqHelpText + qqAdminHelpText)
-		} else {
-			reply(qqHelpText)
-		}
+		reply(qqHelpFor(m, admin))
 		return "cmd_help"
 	case slices.Contains(qqTodayAliases, compact):
 		s.qqTodayCommand(ctx, reply)
@@ -555,7 +573,7 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text, compact 
 		return "cmd_issue"
 	}
 	if content, glued, ok := qqPoliteCommandArg(text, "加词", "添加词条", "加个词"); ok && !qqWordsQuestion(content, glued) {
-		s.qqAddWords(ctx, m.GroupOpenID+"/"+m.Author.MemberOpenID, content, reply)
+		s.qqAddWords(ctx, m.subject(), content, reply)
 		return "cmd_words"
 	}
 	if content, glued, ok := qqPoliteCommandArg(text, "提文档", "文档反馈"); ok && !qqCommandAsks(content, glued) {
@@ -563,7 +581,7 @@ func (s *Server) qqCommand(ctx context.Context, m qqGroupMessage, text, compact 
 			reply("请在「提文档」后面写文档缺了什么或哪里不对，例如「提文档 FAQ 没写鸿蒙版的发布状态」。")
 			return "cmd_docs"
 		}
-		s.fileQQDocs(ctx, m.GroupOpenID+"/"+m.Author.MemberOpenID, content, admin, reply)
+		s.fileQQDocs(ctx, m.subject(), content, admin, reply)
 		return "cmd_docs"
 	}
 	if content, ok := qqCommandArg(text, "提issue", "提 issue", "提交issue"); ok {

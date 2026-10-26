@@ -89,7 +89,7 @@ func TestQQSlashNumberCallers(t *testing.T) {
 	}
 	for _, command := range []string{"/undraft 12", "/undraft #D12", "/undraft ＃f12", "/undraft #Ｂ１２"} {
 		var reply string
-		got := s.qqSlashCommand(context.Background(), qqGroupMessage{}, command, false, func(text string) { reply = text }, func(string) {})
+		got := s.qqSlashCommand(context.Background(), botMessage{}, command, false, func(text string) { reply = text }, func(string) {})
 		if got != "cmd_draft_dismiss" || reply != "只有管理员能忽略草稿。" {
 			t.Fatalf("草稿编号命令或权限变化：输入=%q，结果=%q，回复=%q", command, got, reply)
 		}
@@ -117,7 +117,7 @@ func BenchmarkQQSlashNumberCommands(b *testing.B) {
 	b.Run("undraft", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
-			_ = s.qqSlashCommand(context.Background(), qqGroupMessage{}, "/undraft D12", false, func(string) {}, func(string) {})
+			_ = s.qqSlashCommand(context.Background(), botMessage{}, "/undraft D12", false, func(string) {}, func(string) {})
 		}
 	})
 	b.Run("issues", func(b *testing.B) {

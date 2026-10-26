@@ -14,9 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 	"github.com/metasequoiaime/MSIME-Backend/internal/boundedio"
@@ -24,7 +22,7 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 )
 
-// Telegram 群答疑。admin.telegram 的 Bot 在 telegram_bot.chats 列出的群里被 @ 或被回复时，用和 QQ 群机器人同一套知识库答疑（answerQQQuestion：挑段落、现查 GitHub、追问接上文、「不对」重答、答不上记文档缺口、报问题起草稿）。Telegram 以 Webhook 把消息推到 telegramBotEventsPath，服务端校验 secret_token、按 update_id 在所有副本间去重后立即应答，再在后台处理，回复引用原消息。只处理文字消息，不支持 QQ 机器人的命令、看截图和管理员提 issue。群友的原话、昵称和 Telegram ID 不写进日志。
+// Telegram 群答疑。admin.telegram 的 Bot 在 telegram_bot.chats 列出的群里被 @、被回复或收到「/命令@Bot用户名」时，把消息转成 botMessage，交给和 QQ 群机器人共用的 handleBotMessage：命令、额度、过渡语和知识库答疑都与 QQ 一致（见 group_bot.go）。Telegram 以 Webhook 把消息推到 telegramBotEventsPath，服务端校验 secret_token、按 update_id 在所有副本间去重后立即应答，再在后台处理，回复引用原消息。目前只处理文字消息，管理员还没有接入。群友的原话、昵称和 Telegram ID 不写进日志。
 
 const (
 	telegramBotEventsPath    = "/v1/community/telegram-bot/events"
@@ -32,8 +30,6 @@ const (
 	defaultTelegramSecretEnv = "MSIME_TELEGRAM_WEBHOOK_SECRET"
 	// telegramUpdateWindow 是 update_id 的去重期。Telegram 在没有收到 2xx 时会重推同一个 update，重推间隔远小于这个时长。
 	telegramUpdateWindow = 7 * 24 * time.Hour
-	// telegramReplyUsage 是只 @ 了机器人、没写问题时的回复。不提 QQ 机器人的「帮助」命令：Telegram 上没有命令。
-	telegramReplyUsage = "有水杉输入法的使用问题可以 @我 直接问，例如：五笔怎么切换？也可以回复我的消息接着问。"
 )
 
 var (
@@ -93,7 +89,9 @@ type telegramBot struct {
 	endpoint string
 	botID    int64
 	mention  *regexp.Regexp
-	client   *http.Client
+	// command 匹配开头的「/命令@Bot用户名」，第一个分组是「/命令」。
+	command *regexp.Regexp
+	client  *http.Client
 }
 
 func newTelegramBot(c TelegramBotConfig, t AdminTelegramConfig) *telegramBot {
@@ -104,6 +102,7 @@ func newTelegramBot(c TelegramBotConfig, t AdminTelegramConfig) *telegramBot {
 		botID:    id,
 		// 用户名不区分大小写；前后不能紧挨着用户名里允许的字符，免得 @msime_bot_fan 这样的别人被当成 @ 了机器人。
 		mention: regexp.MustCompile(`(?i)(^|[^A-Za-z0-9_])@` + regexp.QuoteMeta(c.Username) + `($|[^A-Za-z0-9_])`),
+		command: regexp.MustCompile(`(?i)^\s*(/[A-Za-z0-9_]+)@` + regexp.QuoteMeta(c.Username) + `($|[^A-Za-z0-9_])`),
 		client:  httpclient.New(qqBotReplyTimeout),
 	}
 }
@@ -134,11 +133,19 @@ type telegramUpdate struct {
 	Message  *telegramMessage `json:"message"`
 }
 
-// telegramQuestion 是认领后交给后台处理的一条提问。
-type telegramQuestion struct {
-	chat, member, message int64
-	text                  string
+// telegramChannel 是一条 Telegram 群消息的回复通道：sendMessage 引用原消息，次数不限，链接照常发。管理员还没有接入，一律按群友处理。
+type telegramChannel struct {
+	bot           *telegramBot
+	chat, message int64
 }
+
+func (c telegramChannel) reply(ctx context.Context, _ botMessage, _ int, text string) error {
+	return c.bot.reply(ctx, c.chat, c.message, text)
+}
+
+func (telegramChannel) maxReplies() int                          { return 0 }
+func (telegramChannel) rejectsLinks() bool                       { return false }
+func (telegramChannel) isAdmin(context.Context, botMessage) bool { return false }
 
 // telegramBotEvents 处理 POST /v1/community/telegram-bot/events：Telegram 的 Webhook 回调。secret_token 不对返回 401；其余情况尽快返回 200，Telegram 收到非 2xx 才会重推，只有数据库暂时不可用、认领不了 update 时返回 503 让它稍后重推。
 func (s *Server) telegramBotEvents(w http.ResponseWriter, r *http.Request) {
@@ -174,7 +181,7 @@ func (s *Server) telegramBotEvents(w http.ResponseWriter, r *http.Request) {
 
 // acceptTelegramUpdate 认领一条提问并交给后台处理，返回是否应答成功。只认名单里的群中 @ 了机器人或回复机器人消息的文字消息，其余 update（编辑、频道、私聊、别的群、普通聊天）直接应答成功，重推也不会变好。update_id 在 auth_rates 里只能认领一次；数据库不可用时返回 false，让 Telegram 稍后重推。
 func (s *Server) acceptTelegramUpdate(ctx context.Context, u telegramUpdate) bool {
-	q, ok := s.tg.question(u.Message)
+	m, ok := s.tg.message(u.Message)
 	if !ok {
 		return true
 	}
@@ -199,168 +206,47 @@ func (s *Server) acceptTelegramUpdate(ctx context.Context, u telegramUpdate) boo
 		defer s.qqWorkers.Done()
 		ctx, cancel := context.WithTimeout(s.lifetime, qqBotProcessTimeout)
 		defer cancel()
-		s.handleTelegramQuestion(ctx, q)
+		s.handleBotMessage(ctx, m)
 	}()
 	return true
 }
 
-// question 判断一条消息是不是在问机器人，是的话返回去掉 @ 之后的问题。只 @ 了机器人、没写话但回复了别人的消息时，把被回复的那句当成问题，和 QQ 引用消息的做法一致。
-func (b *telegramBot) question(m *telegramMessage) (telegramQuestion, bool) {
+// message 判断一条消息是不是在问机器人，是的话转成 botMessage：去掉 @，「/ver@Bot用户名」这样带用户名的命令写成「/ver」。回复别人的消息时，那条消息作为引用，和 QQ 的引用消息一样处理：只 @ 了机器人、没写话时把它当成问题，否则接在问题后面；被回复的消息没有文字（图片、贴纸）时注明看不到。回复机器人自己的消息不算引用，上一轮的问答已经在对话历史里。
+func (b *telegramBot) message(m *telegramMessage) (botMessage, bool) {
 	if m == nil || m.From == nil || (m.Chat.Type != "group" && m.Chat.Type != "supergroup") {
-		return telegramQuestion{}, false
+		return botMessage{}, false
 	}
 	// 匿名管理员以群的身份发言，按发言的群（sender_chat）计作提问者，群里所有匿名管理员共用一份个人额度和对话历史；其他 Bot 和以别的频道身份发的消息不处理。曾经凡是 is_bot 都忽略，开着匿名的管理员 @ 机器人一直没有回应。
 	member := m.From.ID
 	if m.From.IsBot {
 		if m.SenderChat == nil || m.SenderChat.ID != m.Chat.ID {
-			return telegramQuestion{}, false
+			return botMessage{}, false
 		}
 		member = m.SenderChat.ID
 	}
 	if !slices.Contains(b.config.Chats, m.Chat.ID) {
 		// 记下被拦下的群 ID，方便把要接受的群填进 telegram_bot.chats；群 ID 不是个人信息。
 		slog.Info("telegram bot: message from unlisted chat", "chat", m.Chat.ID)
-		return telegramQuestion{}, false
+		return botMessage{}, false
 	}
 	repliedToBot := m.ReplyTo != nil && m.ReplyTo.From != nil && m.ReplyTo.From.ID == b.botID
-	mentioned := b.mention.MatchString(m.Text)
-	if !mentioned && !repliedToBot {
-		return telegramQuestion{}, false
+	text, command := m.Text, false
+	if loc := b.command.FindStringSubmatchIndex(text); loc != nil {
+		text, command = text[:loc[3]]+text[loc[1]:], true
 	}
-	text := strings.TrimSpace(b.mention.ReplaceAllString(m.Text, "$1$2"))
-	if text == "" && !repliedToBot && m.ReplyTo != nil {
-		text = strings.TrimSpace(m.ReplyTo.Text)
+	if !command && !b.mention.MatchString(text) && !repliedToBot {
+		return botMessage{}, false
 	}
-	return telegramQuestion{chat: m.Chat.ID, member: member, message: m.MessageID, text: text}, true
-}
-
-// handleTelegramQuestion 在后台答一条已认领的提问，写法照 handleQQFeedback 的答疑部分：同一个群友的消息按到达顺序处理，先过个人和群的额度，8 秒还没答完先回一句「收到，我想一下～」，再交给 answerQQQuestion。额度和 QQ 分开计数，数目相同。不记录消息内容，日志里只有处理结果和失败原因。
-func (s *Server) handleTelegramQuestion(ctx context.Context, q telegramQuestion) {
-	started, outcome := time.Now(), "failed"
-	chat := "tg:" + strconv.FormatInt(q.chat, 10)
-	member := "tg:" + strconv.FormatInt(q.member, 10)
-	var refunds []func(context.Context) error
-	defer func() {
-		// 机器人自己出错或被副本关停打断时退回这条消息计过的额度，理由同 handleQQFeedback。
-		if kind := qqOutcomeKind(outcome); kind == "failed" || kind == "reply_failed" || errors.Is(ctx.Err(), context.Canceled) {
-			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-			for _, refund := range refunds {
-				if err := refund(rctx); err != nil {
-					slog.Warn("telegram bot: message slot not released", "reason", err.Error())
-				}
-			}
-			cancel()
-		}
-		slog.Info("telegram bot: handled", "outcome", outcome, "ms", time.Since(started).Milliseconds())
-		s.recordQQOutcome(ctx, outcome)
-	}()
-	defer s.qqLockSubject(ctx, chat+"/"+member)()
-	// 回复可能来自主流程和「我想一下」的计时器两个 goroutine，状态由 mu 保护，发送也在锁里做，群里看到的顺序和发送顺序一致。progressed 表示已经发过一句过渡语，一条消息最多一句。
-	var (
-		mu          sync.Mutex
-		sent        int
-		progressed  bool
-		thinking    *time.Timer
-		finished    bool
-		timedOut    bool
-		replyFailed bool
-		chatting    bool
-	)
-	send := func(text string, interim bool) {
-		if thinking != nil {
-			thinking.Stop()
-		}
-		sent++
-		switch {
-		case text == qqReplyUnavailable && errors.Is(ctx.Err(), context.Canceled):
-			text = qqReplyRestarting
-		case text == qqReplyUnavailable && qqOutOfTime(ctx):
-			text, timedOut = qqReplyTimedOut, true
-		}
-		sendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), qqBotReplyTimeout)
-		defer cancel()
-		if err := s.tg.reply(sendCtx, q.chat, q.message, text); err != nil {
-			slog.Warn("telegram bot: reply failed", "reason", err.Error())
-			if !interim {
-				replyFailed = true
-			}
-		}
+	text = strings.TrimSpace(b.mention.ReplaceAllString(text, "$1$2"))
+	chat := strconv.FormatInt(m.Chat.ID, 10)
+	out := botMessage{
+		ID: "tg:" + chat + ":" + strconv.FormatInt(m.MessageID, 10), Text: text, Group: "tg:" + chat, Member: "tg:" + strconv.FormatInt(member, 10),
+		Platform: botPlatformTelegram, channel: telegramChannel{bot: b, chat: m.Chat.ID, message: m.MessageID},
 	}
-	reply := func(text string) {
-		mu.Lock()
-		defer mu.Unlock()
-		send(text, false)
+	if m.ReplyTo != nil && !repliedToBot {
+		out.Quote = qqQuote{Text: qqTruncate(strings.TrimSpace(m.ReplyTo.Text), qqQuoteRunes), Referenced: true}
 	}
-	progress := func(text string) {
-		mu.Lock()
-		defer mu.Unlock()
-		if !progressed {
-			progressed = true
-			send(text, true)
-		}
-	}
-	defer func() {
-		mu.Lock()
-		defer mu.Unlock()
-		finished = true
-		if thinking != nil {
-			thinking.Stop()
-		}
-		switch {
-		case replyFailed:
-			outcome = "reply_failed"
-		case timedOut:
-			outcome = "timeout"
-		}
-	}()
-	switch n := utf8.RuneCountInString(q.text); {
-	case n == 0:
-		reply(telegramReplyUsage)
-		outcome = "empty"
-		return
-	case n > qqBotMaxRunes:
-		reply(qqReplyTooLong)
-		outcome = "too_long"
-		return
-	}
-	for _, limit := range []struct {
-		scope, subject string
-		daily          int
-		text           func(time.Duration) string
-	}{{"telegram-bot-member", chat + "/" + member, qqBotMemberDaily, qqLimitedReply}, {"telegram-bot-group", chat, qqBotGroupDaily, qqGroupLimitedReply}} {
-		refund, wait, err := s.reserveRateLimit(ctx, limit.scope, limit.subject, limit.daily, 24*time.Hour)
-		switch {
-		case errors.Is(err, account.ErrLimited):
-			reply(limit.text(wait))
-			outcome = "limited_" + strings.TrimPrefix(limit.scope, "telegram-bot-")
-			return
-		case err != nil:
-			slog.Error("telegram bot: rate limit unavailable", "reason", err.Error())
-			reply(qqReplyUnavailable)
-			return
-		}
-		refunds = append(refunds, refund)
-	}
-	mu.Lock()
-	thinking = time.AfterFunc(qqThinkingDelay, func() {
-		mu.Lock()
-		defer mu.Unlock()
-		if !finished && sent == 0 && !progressed && !chatting {
-			progressed = true
-			send(qqReplyThinking, true)
-		}
-	})
-	mu.Unlock()
-	// 判成闲聊时停掉「我想一下」的计时器，理由同 handleQQFeedback。
-	onChat := func() {
-		mu.Lock()
-		defer mu.Unlock()
-		chatting = true
-		if thinking != nil {
-			thinking.Stop()
-		}
-	}
-	outcome = s.answerQQQuestion(ctx, chat, member, q.text, false, reply, progress, onChat)
+	return out, true
 }
 
 // reply 用 sendMessage 回复群里的一条消息，纯文本、不展开链接预览；被回复的消息已经删掉时照常发出。成功的标准是 Bot API 回 ok，错误只带状态和数字错误码，不含令牌或上游描述。

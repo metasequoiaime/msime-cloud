@@ -164,11 +164,11 @@ func TestTelegramBotAnswersMentionsAndReplies(t *testing.T) {
 	if sent["chat_id"] != float64(testTelegramGroup) || params["message_id"] != float64(70) || params["allow_sending_without_reply"] != true || tg.paths[0] != "POST /bot"+testTelegramToken+"/sendMessage" {
 		t.Fatal(sent, tg.paths)
 	}
-	// 问题去掉了 @，额度按群友和群分别计数，和 QQ 的额度分开。
-	if limiter.counts["telegram-bot-member|tg:-1001234567890/tg:42"] != 1 || limiter.counts["telegram-bot-group|tg:-1001234567890"] != 1 || limiter.counts["qq-bot-member|tg:-1001234567890/tg:42"] != 0 {
+	// 问题去掉了 @；额度和 QQ 共用作用域，按 tg: 开头的群和成员标识分别计数。
+	if limiter.counts["qq-bot-member|tg:-1001234567890/tg:42"] != 1 || limiter.counts["qq-bot-group|tg:-1001234567890"] != 1 {
 		t.Fatal(limiter.counts)
 	}
-	if !strings.Contains(logs.String(), "telegram bot: handled") || !strings.Contains(logs.String(), `"outcome":"answered"`) || strings.Contains(logs.String(), "五笔") {
+	if !strings.Contains(logs.String(), `"msg":"qq bot: handled"`) || !strings.Contains(logs.String(), `"platform":"telegram","outcome":"answered"`) || strings.Contains(logs.String(), "五笔") {
 		t.Fatal(logs.String())
 	}
 	// Telegram 重推同一个 update 时不再回答。
@@ -205,7 +205,7 @@ func TestTelegramBotAnswersMentionsAndReplies(t *testing.T) {
 		t.Fatal(tg.texts())
 	}
 	telegramDeliver(t, s, 15, "  @msime_bot  ", nil)
-	if last := tg.texts()[len(tg.messages)-1]; last != telegramReplyUsage {
+	if last := tg.texts()[len(tg.messages)-1]; last != qqReplyUsage {
 		t.Fatal(last)
 	}
 	telegramDeliver(t, s, 16, "@msime_bot "+strings.Repeat("长", qqBotMaxRunes+1), nil)
@@ -213,14 +213,14 @@ func TestTelegramBotAnswersMentionsAndReplies(t *testing.T) {
 		t.Fatal(last)
 	}
 	// 个人额度用完时说清还要等多久，不再计入群的额度。
-	limiter.counts["telegram-bot-member|tg:-1001234567890/tg:42"] = qqBotMemberDaily
-	group := limiter.counts["telegram-bot-group|tg:-1001234567890"]
+	limiter.counts["qq-bot-member|tg:-1001234567890/tg:42"] = qqBotMemberDaily
+	group := limiter.counts["qq-bot-group|tg:-1001234567890"]
 	telegramDeliver(t, s, 17, "@msime_bot 五笔怎么切换", nil)
-	if last := tg.texts()[len(tg.messages)-1]; last != qqLimitedReply(24*time.Hour) || limiter.counts["telegram-bot-group|tg:-1001234567890"] != group {
+	if last := tg.texts()[len(tg.messages)-1]; last != qqLimitedReply(24*time.Hour) || limiter.counts["qq-bot-group|tg:-1001234567890"] != group {
 		t.Fatal(last, limiter.counts)
 	}
-	delete(limiter.counts, "telegram-bot-member|tg:-1001234567890/tg:42")
-	limiter.counts["telegram-bot-group|tg:-1001234567890"] = qqBotGroupDaily
+	delete(limiter.counts, "qq-bot-member|tg:-1001234567890/tg:42")
+	limiter.counts["qq-bot-group|tg:-1001234567890"] = qqBotGroupDaily
 	telegramDeliver(t, s, 18, "@msime_bot 五笔怎么切换", nil)
 	if last := tg.texts()[len(tg.messages)-1]; last != qqGroupLimitedReply(24*time.Hour) {
 		t.Fatal(last)
@@ -245,13 +245,13 @@ func TestTelegramBotThinkingAndFailures(t *testing.T) {
 	if texts := tg.texts(); len(texts) != 3 || texts[2] != "在的～" {
 		t.Fatal(texts)
 	}
-	member := "telegram-bot-member|tg:-1001234567890/tg:42"
+	member := "qq-bot-member|tg:-1001234567890/tg:42"
 	before := limiter.counts[member]
 	tg.mu.Lock()
 	tg.status, tg.ok = 500, false
 	tg.mu.Unlock()
 	telegramDeliver(t, s, 23, "@msime_bot 在吗", nil)
-	if limiter.counts[member] != before || !strings.Contains(logs.String(), "telegram bot: reply failed") || !strings.Contains(logs.String(), "answered 500") || !strings.Contains(logs.String(), `"outcome":"reply_failed"`) || strings.Contains(logs.String(), testTelegramToken) {
+	if limiter.counts[member] != before || !strings.Contains(logs.String(), "qq bot: reply failed") || !strings.Contains(logs.String(), "answered 500") || !strings.Contains(logs.String(), `"outcome":"reply_failed"`) || strings.Contains(logs.String(), testTelegramToken) {
 		t.Fatal(limiter.counts[member], before, logs.String())
 	}
 	tg.mu.Lock()
@@ -265,9 +265,9 @@ func TestTelegramBotThinkingAndFailures(t *testing.T) {
 	}
 	fake.chatStatus = 0
 	// 额度存储出错时也回「暂时处理不了」。
-	limiter.err = map[string]error{"telegram-bot-member": errors.New("synthetic database failure")}
+	limiter.err = map[string]error{"qq-bot-member": errors.New("synthetic database failure")}
 	telegramDeliver(t, s, 25, "@msime_bot 五笔怎么切换", nil)
-	if last := tg.texts()[len(tg.messages)-1]; last != qqReplyUnavailable || !strings.Contains(logs.String(), "telegram bot: rate limit unavailable") {
+	if last := tg.texts()[len(tg.messages)-1]; last != qqReplyUnavailable || !strings.Contains(logs.String(), "qq bot: rate limit unavailable") {
 		t.Fatal(last)
 	}
 	// 认领 update 的存储出错时返回 503，让 Telegram 稍后重推；关停中的副本同样不认领。
@@ -332,7 +332,33 @@ func TestTelegramBotAnswersAnonymousAdmins(t *testing.T) {
 		t.Fatal(w.Code)
 	}
 	s.qqWorkers.Wait()
-	if texts := tg.texts(); len(texts) != 1 || texts[0] != "在设置的「输入方案」里选五笔。" || limiter.counts["telegram-bot-member|tg:-1001234567890/tg:-1001234567890"] != 1 {
+	if texts := tg.texts(); len(texts) != 1 || texts[0] != "在设置的「输入方案」里选五笔。" || limiter.counts["qq-bot-member|tg:-1001234567890/tg:-1001234567890"] != 1 {
 		t.Fatal(texts, limiter.counts)
+	}
+}
+
+// Telegram 群里的命令和 QQ 共用一套：@ 之后接命令或写成「/命令@Bot用户名」都认，帮助换成 Telegram 的版本，打字数据提示去 QQ 绑定；回复别人的消息时那条消息接在问题后面，没有文字时注明看不到。
+func TestTelegramBotCommandsAndQuotes(t *testing.T) {
+	s, fake, _, tg := telegramServer(t)
+	telegramDeliver(t, s, 41, "@msime_bot 帮助", nil)
+	telegramDeliver(t, s, 42, "/help@msime_bot", nil)
+	telegramDeliver(t, s, 43, "@msime_bot 我的数据", nil)
+	telegramDeliver(t, s, 44, "@msime_bot 我的ID", nil)
+	// 发给别的 Bot 的命令不处理。
+	telegramDeliver(t, s, 45, "/help@other_bot", nil)
+	texts := tg.texts()
+	if len(texts) != 4 || texts[0] != telegramHelpText || texts[1] != telegramHelpText || texts[2] != qqTypingTelegramReply || texts[3] != "你的 ID 是 tg:42，机器人把你当作普通成员。" || len(fake.chatCalls) != 0 {
+		t.Fatal(texts, fake.chatCalls)
+	}
+	if strings.Contains(telegramHelpText, "/stats") || strings.Contains(telegramHelpText, "/bind") || !strings.Contains(qqHelpText, "/stats") {
+		t.Fatal("帮助没有按平台区分")
+	}
+	telegramDeliver(t, s, 46, "@msime_bot 这个怎么开", map[string]any{"message_id": 5, "from": map[string]any{"id": 99, "is_bot": false}, "text": "双拼"})
+	if !strings.Contains(fake.chatBodies[len(fake.chatBodies)-1], "（群友引用的消息：「双拼」）") {
+		t.Fatal(fake.chatBodies[len(fake.chatBodies)-1])
+	}
+	telegramDeliver(t, s, 47, "@msime_bot 这是什么", map[string]any{"message_id": 6, "from": map[string]any{"id": 99, "is_bot": false}})
+	if !strings.Contains(fake.chatBodies[len(fake.chatBodies)-1], "看不到引用的内容") {
+		t.Fatal(fake.chatBodies[len(fake.chatBodies)-1])
 	}
 }

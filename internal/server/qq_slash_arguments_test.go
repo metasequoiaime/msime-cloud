@@ -24,7 +24,7 @@ func TestQQSlashIgnoredArgumentsAllocationBudget(t *testing.T) {
 			result := testing.Benchmark(func(b *testing.B) {
 				for b.Loop() {
 					reply = ""
-					got = s.qqSlashCommand(context.Background(), qqGroupMessage{}, input, false, func(text string) { reply = text }, func(string) {})
+					got = s.qqSlashCommand(context.Background(), botMessage{}, input, false, func(text string) { reply = text }, func(string) {})
 				}
 			})
 			if got != tc.want || !strings.HasPrefix(reply, tc.reply) || tc.reply == "" && reply != "" {
@@ -44,7 +44,7 @@ func BenchmarkQQSlashArgumentHandling(b *testing.B) {
 			input := command + strings.Repeat("正文 ", 10000)
 			b.ReportAllocs()
 			for b.Loop() {
-				_ = s.qqSlashCommand(context.Background(), qqGroupMessage{}, input, false, func(string) {}, func(string) {})
+				_ = s.qqSlashCommand(context.Background(), botMessage{}, input, false, func(string) {}, func(string) {})
 			}
 		})
 	}

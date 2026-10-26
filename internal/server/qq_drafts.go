@@ -364,12 +364,12 @@ func (s *Server) qqMergeDraft(ctx context.Context, subject, text string, report 
 }
 
 // qqAdminDraft 在管理员提 issue 缺信息时把反馈存成草稿，返回给管理员的回复；没有草稿存储或存不进去时 ok 为 false，调用方照旧请他补充后重发。原来要把整段描述连同「提issue」重打一遍，现在补一句「提交 D编号 版本 0.9.5」就行。text 是去掉维护者标注后的反馈，标注不存进草稿，示例里带上，照着发不会丢；question 是缺的信息。截图和视频不存进草稿（和群友的草稿一样只留看图得到的文字），提交时不会附上，有附件时说一声。
-func (s *Server) qqAdminDraft(ctx context.Context, m qqGroupMessage, text string, report qqReport, notes qqNotes, question string) (string, bool) {
+func (s *Server) qqAdminDraft(ctx context.Context, m botMessage, text string, report qqReport, notes qqNotes, question string) (string, bool) {
 	if s.qqDrafts == nil {
 		return "", false
 	}
 	raw, _ := json.Marshal(report)
-	id, err := createQQDraft(ctx, s.qqDrafts, m.GroupOpenID+"/"+m.Author.MemberOpenID, qqTruncate(text, qqDraftOriginalRunes), string(raw))
+	id, err := createQQDraft(ctx, s.qqDrafts, m.subject(), qqTruncate(text, qqDraftOriginalRunes), string(raw))
 	if err != nil {
 		slog.Warn("qq bot: admin draft not stored", "reason", err.Error())
 		return "", false
@@ -403,7 +403,7 @@ func qqNotesText(notes qqNotes) string {
 
 // qqDraftCommands 处理「草稿」「看 D编号」「提交 D编号」「补充 D编号」「忽略 D编号」，返回处理结果的名字；不是这几个命令时返回空字符串。
 // 参数解析使用原文 `text`，列表命令使用已规范化的 `compact`。
-func (s *Server) qqDraftCommands(ctx context.Context, m qqGroupMessage, text, compact string, admin bool, reply func(string)) string {
+func (s *Server) qqDraftCommands(ctx context.Context, m botMessage, text, compact string, admin bool, reply func(string)) string {
 	if compact == "草稿" || compact == "草稿列表" {
 		if !admin {
 			reply("只有管理员能看草稿列表。")
@@ -437,7 +437,7 @@ func (s *Server) qqDraftCommands(ctx context.Context, m qqGroupMessage, text, co
 		return "cmd_draft"
 	case command == "看":
 		// 草稿里有群友的原话，和列表一样不给别的群友看；发起人可以看自己的。
-		if !admin && !account.QQDraftOwnedBy(draft, m.GroupOpenID+"/"+m.Author.MemberOpenID) {
+		if !admin && !account.QQDraftOwnedBy(draft, m.subject()) {
 			reply("只有发起这份草稿的人和管理员能看。")
 		} else {
 			reply(s.qqDraftDetail(ctx, draft, admin))
@@ -469,7 +469,7 @@ func (s *Server) qqDraftCommands(ctx context.Context, m qqGroupMessage, text, co
 		return "cmd_draft_dismiss"
 	}
 	if command == "补充" {
-		if !admin && !account.QQDraftOwnedBy(draft, m.GroupOpenID+"/"+m.Author.MemberOpenID) {
+		if !admin && !account.QQDraftOwnedBy(draft, m.subject()) {
 			reply("只有发起这份草稿的人和管理员能补充。")
 			return "cmd_draft_supplement"
 		}

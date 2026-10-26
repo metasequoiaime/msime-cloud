@@ -60,6 +60,10 @@ func (a *Service) CommunityReport(w http.ResponseWriter, r *http.Request) {
 	if input.Kind == "candidate-skins" {
 		visible += ` AND visibility='public'`
 	}
+	// 待审的脚本插件对作者以外的人不存在，举报也按不存在回答，不泄露它的存在。
+	if input.Kind == "plugins" {
+		visible += ` AND ` + pluginPublicCondition("")
+	}
 	// 锁住可见作品直到举报和通知提交，避免删除、下架或转私有后留下新举报。
 	var name string
 	var created, available bool

@@ -235,7 +235,7 @@ func newCommunitySaveTarget(items, saves, column, visible, notFound string) comm
 var (
 	communitySkinSaveTarget          = newCommunitySaveTarget("community_skins", "community_skin_saves", "skin_id", "(s.moderation<>'removed' OR s.owner_id=$2)", "skin_not_found")
 	communityCandidateSkinSaveTarget = newCommunitySaveTarget("community_candidate_skins", "community_candidate_skin_saves", "skin_id", "(s.visibility='public' OR s.owner_id=$2) AND (s.moderation<>'removed' OR s.owner_id=$2)", "skin_not_found")
-	communityPluginSaveTarget        = newCommunitySaveTarget("community_plugins", "community_plugin_saves", "pack_id", "(s.moderation<>'removed' OR s.owner_id=$2)", "plugin_not_found")
+	communityPluginSaveTarget        = newCommunitySaveTarget("community_plugins", "community_plugin_saves", "pack_id", pluginVisibleTo("s.", "$2"), "plugin_not_found")
 )
 
 // communitySave 处理 `PUT …/{id}/save`：请求体 `{"saved":bool}`，重复提交结果相同，返回收藏后的状态和收藏总数。条目不存在或对当前用户不可见时返回 404，取消收藏也一样，这时事务回滚，什么都不改。

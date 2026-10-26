@@ -2,7 +2,7 @@ import { formatNumber } from "../../utils/number";
 import { formatDateTime } from "../../utils/time";
 import { splitBytes } from "../../utils/bytes";
 import type { Item, Section } from "../../api/community";
-import { candidateCategoryLabel, pluginKindLabels } from "../../api/community";
+import { candidateCategoryLabel, pluginKindLabels, scriptCapabilityText } from "../../api/community";
 import { firstLine } from "../../utils/text";
 
 export function formatTime(value: string | null | undefined): string {
@@ -24,6 +24,9 @@ export function itemMeta(section: Section, item: Item): string {
   if (item.saves !== undefined) parts.push(`收藏 ${formatNumber(item.saves)}`);
   if ((section === "skins" || section === "candidate-skins") && item.category) parts.push(candidateCategoryLabel(item.category));
   if (section === "candidate-skins" && item.visibility === "private") parts.push("私有");
+  // 脚本插件先审后发：待审期间别人看不到，需要尽快处理。
+  if (section === "plugins" && item.pre_moderated && item.moderation === "pending") parts.push("待审期间不公开");
+  if (section === "plugins" && item.flagged_permissions && item.flagged_permissions.length > 0) parts.push("含需重点审查的能力");
   if (item.reports > 0) parts.push(`被举报 ${item.reports} 次`);
   return parts.join(" · ");
 }
@@ -41,7 +44,7 @@ export function previewLines(section: Section, item: Item): string[] {
     case "candidate-skins":
       return [item.package_id ?? "", `v${item.version ?? "?"} · ${item.file_count ?? 0} 个文件 · ${formatBytes(item.size ?? 0)}`, item.description ?? ""].filter(Boolean);
     case "plugins":
-      return [pluginKindLabels[item.kind ?? ""] ?? item.kind ?? "", item.plugin_id ?? "", `v${item.version ?? "?"} · ${formatBytes(item.size ?? 0)}`].filter(Boolean);
+      return [pluginKindLabels[item.kind ?? ""] ?? item.kind ?? "", item.plugin_id ?? "", `v${item.version ?? "?"} · ${formatBytes(item.size ?? 0)}`, item.kind === "script" ? `能力：${scriptCapabilityText(item.permissions)}` : ""].filter(Boolean);
     default:
       return [];
   }

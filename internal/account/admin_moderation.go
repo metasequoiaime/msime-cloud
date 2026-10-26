@@ -19,7 +19,7 @@ import (
 
 // Community moderation page (unit U2): the five content lists, deletion, approve/remove/restore and the pending counts.
 
-// Moderation is post-moderation: uploads are public at once with moderation='pending', and only 'removed' rows are hidden from everyone but their owner. For a pending row, moderation_reason holds the automatic sensitive-word flag; for a removed row it holds the moderator's reason.
+// 审核默认是先发后审：上传后立即公开，moderation 为 'pending'，只有 'removed' 的作品对作者以外的人隐藏。唯一的例外是脚本插件（community_plugins 里 kind='script' 的行）：它先审后发，审核通过（'approved'）之前只有作者和这里的管理后台看得到，见 pluginPublicCondition。待审作品的 moderation_reason 是敏感词自动检查的提示，已下架作品的 moderation_reason 是管理员填的下架原因。
 
 // moderationColumns are the moderation fields every list row carries; flag is the automatic check's warning, shown only while the row awaits review. alias and section are fixed identifiers, never request text.
 func moderationColumns(alias, section string) string {
@@ -48,9 +48,10 @@ var (
 		filters:    []listFilter{{param: "visibility", field: "visibility", max: 7, values: map[string]string{"public": "public", "private": "private"}}, candidateCategoryFilter(), statusFilter},
 		unsearched: []string{"edit_token"},
 	}
+	// 脚本插件另带申请的能力（permissions）、其中要重点看的能力（flagged_permissions：改写上屏和持久存储）和 pre_moderated：它先审后发，待审期间不公开。
 	pluginsList = adminList{
-		query:      `SELECT p.id,p.kind,p.plugin_id,p.name,p.description,p.version,` + authorColumn + `,p.owner_id,p.size,p.sha256,` + contentEditToken("plugins", "p") + ` AS edit_token,(SELECT count(*) FROM community_plugin_downloads WHERE pack_id=p.id) AS downloads,p.created_at,` + moderationColumns("p", "plugins") + ` FROM community_plugins p JOIN auth_users u ON u.id=p.owner_id`,
-		filters:    []listFilter{statusFilter},
+		query:      `SELECT p.id,p.kind,p.plugin_id,p.name,p.description,p.version,` + authorColumn + `,p.owner_id,p.size,p.sha256,` + contentEditToken("plugins", "p") + ` AS edit_token,(SELECT count(*) FROM community_plugin_downloads WHERE pack_id=p.id) AS downloads,p.created_at,p.permissions,ARRAY(SELECT c FROM unnest(p.permissions) c WHERE c IN ('` + strings.Join(scriptSensitiveCapabilities, "','") + `')) AS flagged_permissions,p.kind='script' AS pre_moderated,` + moderationColumns("p", "plugins") + ` FROM community_plugins p JOIN auth_users u ON u.id=p.owner_id`,
+		filters:    []listFilter{statusFilter, pluginKindFilter()},
 		unsearched: []string{"edit_token"},
 	}
 	// preview is the first three entries, for the card's content lines.
@@ -121,6 +122,17 @@ var (
 	actionDeleteReply         = deleteContent(`DELETE FROM community_resources WHERE id=$1 AND kind='reply'`, "")
 	actionDeletePhrase        = deleteContent(`DELETE FROM community_resources WHERE id=$1 AND kind='phrase'`, "")
 )
+
+// pluginKindFilter 让插件列表按类型筛选，取值即 pluginKinds。
+func pluginKindFilter() listFilter {
+	values := make(map[string]string, len(pluginKinds))
+	longest := 0
+	for _, kind := range pluginKinds {
+		values[kind] = kind
+		longest = max(longest, len(kind))
+	}
+	return listFilter{param: "kind", field: "kind", max: longest, values: values}
+}
 
 // candidateCategoryFilter 让键盘皮肤和候选皮肤列表按图库分类筛选，取值即 candidateSkinCategories。
 func candidateCategoryFilter() listFilter {

@@ -147,15 +147,15 @@ func saveAdminPlugin(ctx context.Context, tx pgx.Tx, id string, input contentEdi
 		return actionFail(400, code)
 	}
 	digest := pluginRequestDigest(input.Name, input.Description, pack.Kind, pack.ID, pack.Version, archive)
-	args := []any{id, input.OwnerID, pack.Kind, pack.ID, input.Name, input.Description, pack.Version, pack.License, pack.Manifest, archive, digest}
+	args := []any{id, input.OwnerID, pack.Kind, pack.ID, input.Name, input.Description, pack.Version, pack.License, pack.Manifest, archive, digest, pack.Permissions}
 	if create {
-		tag, err := tx.Exec(ctx, `INSERT INTO community_plugins(id,owner_id,kind,plugin_id,name,description,version,license,manifest,archive,request_sha256) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(id) DO NOTHING`, args...)
+		tag, err := tx.Exec(ctx, `INSERT INTO community_plugins(id,owner_id,kind,plugin_id,name,description,version,license,manifest,archive,request_sha256,permissions) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(id) DO NOTHING`, args...)
 		if err == nil && tag.RowsAffected() == 0 {
 			return actionFail(409, "plugin_id_conflict")
 		}
 		return err
 	}
-	_, err := tx.Exec(ctx, `UPDATE community_plugins SET kind=$3,plugin_id=$4,name=$5,description=$6,version=$7,license=$8,manifest=$9,archive=$10,request_sha256=$11 WHERE id=$1 AND owner_id=$2`, args...)
+	_, err := tx.Exec(ctx, `UPDATE community_plugins SET kind=$3,plugin_id=$4,name=$5,description=$6,version=$7,license=$8,manifest=$9,archive=$10,request_sha256=$11,permissions=$12 WHERE id=$1 AND owner_id=$2`, args...)
 	return err
 }
 

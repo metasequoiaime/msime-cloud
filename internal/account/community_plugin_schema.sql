@@ -2,7 +2,7 @@
 CREATE TABLE IF NOT EXISTS community_plugins (
  id text PRIMARY KEY CHECK(id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'),
  owner_id text NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
- kind text NOT NULL CONSTRAINT community_plugins_kind_known CHECK(kind IN ('sound','music','command_table','effect','helpcode','symbol_set','phrase_table','wordbook')),
+ kind text NOT NULL CONSTRAINT community_plugins_kind_known CHECK(kind IN ('sound','music','command_table','effect','helpcode','symbol_set','phrase_table','wordbook','script')),
  plugin_id text NOT NULL CHECK(plugin_id ~ '^[a-z0-9][a-z0-9._-]{0,63}$'),
  name text NOT NULL,
  description text NOT NULL DEFAULT '',
@@ -18,14 +18,16 @@ CREATE TABLE IF NOT EXISTS community_plugins (
 );
 -- 特效包之前建的表带列上自动命名的 kind 约束，不含 'effect'；先删掉它，再由下面换成命名约束。
 ALTER TABLE community_plugins DROP CONSTRAINT IF EXISTS community_plugins_kind_check;
--- 命名约束不含 'wordbook'（还没有辅助码表、符号集、短语表和单词本四种类型）时整体替换。约束一次列出客户端认识的全部类型，某个类型能否发布由服务端的 pluginKinds 决定；以后再加类型时把这里探测的类型名换成新加的那个，并同步 store.go 的 consoleReady。
+-- 命名约束不含 'script'（还没有脚本插件，或更早还没有辅助码表、符号集、短语表和单词本）时整体替换。约束一次列出客户端认识的全部类型，某个类型能否发布由服务端的 pluginKinds 决定；以后再加类型时把这里探测的类型名换成新加的那个，并同步 store.go 的 consoleReady。
 DO $$
 BEGIN
- IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='community_plugins'::regclass AND conname='community_plugins_kind_known' AND pg_get_constraintdef(oid) LIKE '%wordbook%') THEN
+ IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='community_plugins'::regclass AND conname='community_plugins_kind_known' AND pg_get_constraintdef(oid) LIKE '%''script''%') THEN
   ALTER TABLE community_plugins DROP CONSTRAINT IF EXISTS community_plugins_kind_known;
-  ALTER TABLE community_plugins ADD CONSTRAINT community_plugins_kind_known CHECK(kind IN ('sound','music','command_table','effect','helpcode','symbol_set','phrase_table','wordbook'));
+  ALTER TABLE community_plugins ADD CONSTRAINT community_plugins_kind_known CHECK(kind IN ('sound','music','command_table','effect','helpcode','symbol_set','phrase_table','wordbook','script'));
  END IF;
 END $$;
+-- 脚本插件申请的能力名（清单 permissions，按清单顺序），给管理后台的审核列表看；数据类插件为空数组。旧版本副本插入时不写它，取默认值。
+ALTER TABLE community_plugins ADD COLUMN IF NOT EXISTS permissions text[] NOT NULL DEFAULT '{}';
 CREATE INDEX IF NOT EXISTS community_plugins_newest ON community_plugins(created_at DESC,id);
 CREATE INDEX IF NOT EXISTS community_plugins_kind_newest ON community_plugins(kind,created_at DESC,id);
 CREATE INDEX IF NOT EXISTS community_plugins_owner ON community_plugins(owner_id,created_at DESC);

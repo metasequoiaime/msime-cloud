@@ -13470,7 +13470,7 @@
                               "pending",
                               "removed"
                             ],
-                            "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因。"
+                            "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因；唯一的例外是 kind 为 script 的插件，它先审后发，pending 表示还在审核、只有作者看得到。"
                           },
                           "category": {
                             "type": "string",
@@ -13996,7 +13996,7 @@
                         "pending",
                         "removed"
                       ],
-                      "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因。"
+                      "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因；唯一的例外是 kind 为 script 的插件，它先审后发，pending 表示还在审核、只有作者看得到。"
                     },
                     "category": {
                       "type": "string",
@@ -14260,7 +14260,7 @@
                         "pending",
                         "removed"
                       ],
-                      "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因。"
+                      "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因；唯一的例外是 kind 为 script 的插件，它先审后发，pending 表示还在审核、只有作者看得到。"
                     },
                     "category": {
                       "type": "string",
@@ -14989,7 +14989,7 @@
                               "pending",
                               "removed"
                             ],
-                            "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因。"
+                            "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因；唯一的例外是 kind 为 script 的插件，它先审后发，pending 表示还在审核、只有作者看得到。"
                           },
                           "saved": {
                             "type": "boolean",
@@ -15199,7 +15199,7 @@
                         "pending",
                         "removed"
                       ],
-                      "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因。"
+                      "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因；唯一的例外是 kind 为 script 的插件，它先审后发，pending 表示还在审核、只有作者看得到。"
                     },
                     "saved": {
                       "type": "boolean",
@@ -15369,7 +15369,7 @@
                         "pending",
                         "removed"
                       ],
-                      "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因。"
+                      "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因；唯一的例外是 kind 为 script 的插件，它先审后发，pending 表示还在审核、只有作者看得到。"
                     },
                     "saved": {
                       "type": "boolean",
@@ -15765,7 +15765,7 @@
                         "pending",
                         "removed"
                       ],
-                      "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因。"
+                      "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因；唯一的例外是 kind 为 script 的插件，它先审后发，pending 表示还在审核、只有作者看得到。"
                     },
                     "saved": {
                       "type": "boolean",
@@ -15978,7 +15978,7 @@
                         "pending",
                         "removed"
                       ],
-                      "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因。"
+                      "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因；唯一的例外是 kind 为 script 的插件，它先审后发，pending 表示还在审核、只有作者看得到。"
                     },
                     "saved": {
                       "type": "boolean",
@@ -16239,7 +16239,7 @@
                         "pending",
                         "removed"
                       ],
-                      "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因。"
+                      "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因；唯一的例外是 kind 为 script 的插件，它先审后发，pending 表示还在审核、只有作者看得到。"
                     },
                     "saved": {
                       "type": "boolean",
@@ -16781,7 +16781,8 @@
                 "helpcode",
                 "symbol_set",
                 "phrase_table",
-                "wordbook"
+                "wordbook",
+                "script"
               ],
               "default": ""
             }
@@ -16863,7 +16864,8 @@
                               "helpcode",
                               "symbol_set",
                               "phrase_table",
-                              "wordbook"
+                              "wordbook",
+                              "script"
                             ]
                           },
                           "plugin_id": {
@@ -16920,7 +16922,14 @@
                               "pending",
                               "removed"
                             ],
-                            "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因。"
+                            "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因；唯一的例外是 kind 为 script 的插件，它先审后发，pending 表示还在审核、只有作者看得到。"
+                          },
+                          "permissions": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "description": "仅 kind 为 script 时出现：清单申请的能力名，按清单顺序。"
                           },
                           "saved": {
                             "type": "boolean",
@@ -16978,7 +16987,7 @@
           }
         ],
         "parameters": [],
-        "description": "请求最多 11,300,000 字节。zip 包不超过 8 MiB、最多 64 个成员和 16 个文件，解压总量不超过 24 MiB 且不超过包体 100 倍加 1 MiB；拒绝绝对路径、..、反斜杠、符号链接、加密成员和嵌套压缩包。包内恰好一个 plugin.toml（schema_version = 1，严格解析，未知键拒绝），kind 与 plugin_id、version 须与请求一致，包内 id 不能以点结尾或为 nul（Windows 无法按原名安装，返回 invalid_plugin_manifest），请求的 plugin_id 不合规返回 invalid_plugin_metadata；permissions 必须为空；引用的音频须存在且为 .wav/.ogg 并匹配文件头（sound 采样只能是 .wav），effect、phrase_table、symbol_set 只含清单里的参数或数据、不带任何音频；helpcode 点名一个不超过 1 MiB 的 .txt 辅助码表，wordbook 点名一个不超过 4 MiB 的 .tsv 单词表，内容按客户端的严格语法校验；其余文件只能是 .txt/.md 说明。id 为客户端 UUID，同一请求重试返回 200；每个账号最多 20 个插件、包体合计不超过 32 MiB，每小时最多发布 10 次；同一账号的发布逐个处理，同一进程最多同时接收 4 个发布，排队超时返回 503 plugin_busy。 详见 docs/plugin-community.md。",
+        "description": "请求最多 11,300,000 字节。zip 包不超过 8 MiB、最多 64 个成员和 16 个文件，解压总量不超过 24 MiB 且不超过包体 100 倍加 1 MiB；拒绝绝对路径、..、反斜杠、符号链接、加密成员和嵌套压缩包。包内恰好一个 plugin.toml（script 写 schema_version = 2，其余类型写 1，严格解析，未知键拒绝），kind 与 plugin_id、version 须与请求一致，包内 id 不能以点结尾或为 nul（Windows 无法按原名安装，返回 invalid_plugin_manifest），请求的 plugin_id 不合规返回 invalid_plugin_metadata；只有 script 能写 permissions（客户端能力名白名单，不重复，满足依赖与互斥规则），其余类型 permissions 必须为空；引用的音频须存在且为 .wav/.ogg 并匹配文件头（sound 采样只能是 .wav），effect、phrase_table、symbol_set 只含清单里的参数或数据、不带任何音频；helpcode 点名一个不超过 1 MiB 的 .txt 辅助码表，wordbook 点名一个不超过 4 MiB 的 .tsv 单词表，内容按客户端的严格语法校验；script 点名一个以 wasm 文件头开头、不超过 256 KiB 的 .wasm 模块和至多 4 个数据文件（单个不超过 4 MiB、合计不超过 8 MiB），服务端不执行也不校验模块内容，由客户端安装时用 wasm 校验器检查；其余文件只能是 .txt/.md 说明。script 先审后发：审核通过前只有作者看得到，其他人列表、搜索、详情、下载、评分、收藏和举报都按不存在处理。id 为客户端 UUID，同一请求重试返回 200；每个账号最多 20 个插件、包体合计不超过 32 MiB，每小时最多发布 10 次；同一账号的发布逐个处理，同一进程最多同时接收 4 个发布，排队超时返回 503 plugin_busy。 详见 docs/plugin-community.md。",
         "responses": {
           "201": {
             "description": "成功",
@@ -17001,7 +17010,8 @@
                         "helpcode",
                         "symbol_set",
                         "phrase_table",
-                        "wordbook"
+                        "wordbook",
+                        "script"
                       ]
                     },
                     "plugin_id": {
@@ -17058,7 +17068,14 @@
                         "pending",
                         "removed"
                       ],
-                      "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因。"
+                      "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因；唯一的例外是 kind 为 script 的插件，它先审后发，pending 表示还在审核、只有作者看得到。"
+                    },
+                    "permissions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "仅 kind 为 script 时出现：清单申请的能力名，按清单顺序。"
                     },
                     "saved": {
                       "type": "boolean",
@@ -17126,7 +17143,8 @@
                         "helpcode",
                         "symbol_set",
                         "phrase_table",
-                        "wordbook"
+                        "wordbook",
+                        "script"
                       ]
                     },
                     "plugin_id": {
@@ -17183,7 +17201,14 @@
                         "pending",
                         "removed"
                       ],
-                      "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因。"
+                      "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因；唯一的例外是 kind 为 script 的插件，它先审后发，pending 表示还在审核、只有作者看得到。"
+                    },
+                    "permissions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "仅 kind 为 script 时出现：清单申请的能力名，按清单顺序。"
                     },
                     "saved": {
                       "type": "boolean",
@@ -17239,7 +17264,8 @@
                       "helpcode",
                       "symbol_set",
                       "phrase_table",
-                      "wordbook"
+                      "wordbook",
+                      "script"
                     ]
                   },
                   "plugin_id": {
@@ -17342,7 +17368,8 @@
                         "helpcode",
                         "symbol_set",
                         "phrase_table",
-                        "wordbook"
+                        "wordbook",
+                        "script"
                       ]
                     },
                     "plugin_id": {
@@ -17399,7 +17426,14 @@
                         "pending",
                         "removed"
                       ],
-                      "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因。"
+                      "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因；唯一的例外是 kind 为 script 的插件，它先审后发，pending 表示还在审核、只有作者看得到。"
+                    },
+                    "permissions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "仅 kind 为 script 时出现：清单申请的能力名，按清单顺序。"
                     },
                     "saved": {
                       "type": "boolean",
@@ -17550,7 +17584,8 @@
                         "helpcode",
                         "symbol_set",
                         "phrase_table",
-                        "wordbook"
+                        "wordbook",
+                        "script"
                       ]
                     },
                     "plugin_id": {
@@ -17992,7 +18027,7 @@
                               "pending",
                               "removed"
                             ],
-                            "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因。"
+                            "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因；唯一的例外是 kind 为 script 的插件，它先审后发，pending 表示还在审核、只有作者看得到。"
                           }
                         }
                       }
@@ -18413,7 +18448,7 @@
                         "pending",
                         "removed"
                       ],
-                      "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因。"
+                      "description": "审核状态：仅在请求带 fields=moderation 时出现，且只出现在当前用户自己的作品上；他人的作品和匿名访问永远不带。事后审核模式下 pending 的作品已经公开，客户端只需对 removed 显示「已下架」，不显示下架原因；唯一的例外是 kind 为 script 的插件，它先审后发，pending 表示还在审核、只有作者看得到。"
                     }
                   }
                 }

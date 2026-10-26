@@ -2,7 +2,7 @@
 
 目录的 `q` 必须是有效 UTF-8 且不能含 NUL，否则返回 400 `invalid_search`。
 
-社区插件接口位于 `/v1/community/plugins`，分发客户端插件包：音效包（`sound`）、音乐包（`music`）、指令表（`command_table`）、特效包（`effect`）、辅助码表（`helpcode`）、符号集（`symbol_set`）、短语表（`phrase_table`）和单词本（`wordbook`），与客户端的 `PluginKind` 一致。插件包是一个 zip，内含 `plugin.toml`、被引用的音频或数据文件和可选的说明文本（`effect`、`phrase_table`、`symbol_set` 只有清单）。新增的四种类型都是纯数据，不能带可执行内容。服务器只校验、存储和原样分发字节，从不解码音频、执行脚本或加载包内任何内容；客户端安装前仍按自己的规则再校验一次。
+社区插件接口位于 `/v1/community/plugins`，分发客户端插件包：音效包（`sound`）、音乐包（`music`）、指令表（`command_table`）、特效包（`effect`）、辅助码表（`helpcode`）、符号集（`symbol_set`）、短语表（`phrase_table`）、单词本（`wordbook`）和桌面脚本插件（`script`），与客户端的 `PluginKind` 一致。插件包是一个 zip，内含 `plugin.toml`、被引用的音频、数据文件或脚本模块和可选的说明文本（`effect`、`phrase_table`、`symbol_set` 只有清单）。除 `script` 外都是纯数据，不能带可执行内容；`script` 带一个在客户端沙箱里按用户逐项授权运行的 core wasm 模块，见下文「脚本插件」。服务器只校验、存储和原样分发字节，从不解码音频、执行脚本或加载包内任何内容；客户端安装前仍按自己的规则再校验一次。
 
 ## 接口
 
@@ -18,7 +18,7 @@
 
 类型声明：已发布的客户端按严格模式解析列表，遇到不认识的 `kind` 会整页失败，所以列表和详情默认只返回它们认识的 `sound`、`music`、`command_table`、`effect`（服务端冻结的 `legacyPluginKinds`，以后新增类型也不改）。客户端用 `kinds` 声明自己能安装的其他类型，逗号分隔，例如 `kinds=helpcode,symbol_set,phrase_table,wordbook`；可见类型是这四种旧类型、声明的类型和 `kind` 指定的类型的并集。不认识的名字直接忽略、不报错，这样声明了未来类型的客户端在服务端认识该类型之前也能正常浏览。不带 `kinds` 或为空时，响应与引入这个参数之前逐字节相同。`scope=mine` 同样按可见类型过滤；下载、评分、删除和发布的回显不受影响。
 
-作者查看自己作品的审核状态：列表和详情带 `fields=moderation` 时，当前用户自己的作品多一个 `moderation` 字段（`approved`、`pending` 或 `removed`）；他人的作品和匿名访问永远不带，也不返回下架原因。不带这个参数时响应与以前逐字节相同，因为已发布的客户端按拒绝未知字段的方式解析。社区是事后审核，`pending` 的作品已经公开，客户端只需对 `removed` 显示「已下架」徽标。其他 `fields` 值返回 400 `invalid_fields`。`name`/`description` 是社区列表展示用的标题和说明；`plugin_id`、`version`、`license` 来自包内清单。发布后不允许原地替换包以继承旧版评分，新版本需以新 UUID 发布。
+作者查看自己作品的审核状态：列表和详情带 `fields=moderation` 时，当前用户自己的作品多一个 `moderation` 字段（`approved`、`pending` 或 `removed`）；他人的作品和匿名访问永远不带，也不返回下架原因。不带这个参数时响应与以前逐字节相同，因为已发布的客户端按拒绝未知字段的方式解析。社区是事后审核，`pending` 的作品已经公开，客户端只需对 `removed` 显示「已下架」徽标；唯一的例外是脚本插件，它先审后发，`pending` 表示还在审核、只有作者看得到（见「脚本插件」）。其他 `fields` 值返回 400 `invalid_fields`。`name`/`description` 是社区列表展示用的标题和说明；`plugin_id`、`version`、`license` 来自包内清单。发布后不允许原地替换包以继承旧版评分，新版本需以新 UUID 发布。
 
 ## 发布限制
 
@@ -39,7 +39,7 @@
 
 清单最大 256 KiB，必须是 UTF-8，用 go-toml 严格解析：重复键、类型不符（例如浮点写进整数）均拒绝；键名逐字比较，`Kind` 这类大小写不同的键视为未知键。
 
-- 公共键：`schema_version`（必须为 1）、`kind`、`id`、`name`（≤ 80 字节）、`version`（≤ 32）、`license`（≤ 64，只含 SPDX 表达式字符）、可选 `author`（≤ 120）、`description`（≤ 500）、`permissions`（必须为空数组或省略）。必填文本不能为空白，任何文本不能含控制字符。
+- 公共键：`schema_version`（`script` 必须为 2，其余类型必须为 1）、`kind`、`id`、`name`（≤ 80 字节）、`version`（≤ 32）、`license`（≤ 64，只含 SPDX 表达式字符）、可选 `author`（≤ 120）、`description`（≤ 500）、`permissions`（只有 `script` 能写，其余类型必须为空数组或省略）。必填文本不能为空白，任何文本不能含控制字符。
 - `kind` 必须与请求的 `kind` 一致（否则 400 `plugin_kind_mismatch`），`id` 和 `version` 必须与请求的 `plugin_id`、`version` 一致（否则 400 `plugin_manifest_mismatch`）。`id` 为 1 到 64 个小写 ASCII 字母、数字、点、横线或下划线，以字母或数字开头；不能以点结尾、不能是 `nul`，也不能占用客户端内置的同类插件 id。尾点和 `nul` 会导致 Windows 无法按清单 ID 安装目录；发布请求的 `plugin_id` 不合规时返回 400 `invalid_plugin_metadata`，包内 ID 不合规时返回 400 `invalid_plugin_manifest`，种子生成同样拒绝。
 - `sound`：`mode = "keys"`（默认）需要 `[sounds]` 且含 `default`，其余可选键为 `space`、`enter`、`backspace`、`commit`、`achievement`；`mode = "sequence"` 需要 `[sequence]`，`sample` 加 1 到 128 个 -24..24 的 `semitones`，可选 `advance = "key" | "commit"`。最多 8 个不同样本，单个不超过 512 KiB，合计不超过 4 MiB。
 - `music`：`[music]` 的 `tracks` 为 1 到 8 个不重复文件，单个不超过 16 MiB。
@@ -50,9 +50,36 @@
 - `wordbook`：`[wordbook]` 只有一个键 `file`，点名一个 `.tsv` 数据文件，1 字节到 4 MiB。文件为 UTF-8（可带 BOM），行尾 LF 或 CRLF；跳过空行和 `#` 开头的行，其余每行是 `单词<TAB>释义` 或 `单词<TAB>音标<TAB>释义`，不支持引号、不裁剪空白。单词 1 到 64 个字符、音标至多 64 个字符（可为空）、释义 1 到 256 个字符，都不能含控制字符；1 到 20000 条，单词不能重复，任何一行不合规整个包拒绝。插件 `id` 还只能由小写字母、数字和 `-` 组成、首尾不是 `-`、不超过 59 个字符（客户端把书 id 记为 `pack-<id>`，最长 64），`name` 不超过 64 个字符。
 - `symbol_set`：1 到 32 个 `[[groups]]`，每组 `tab`（`"symbols"` 或 `"kaomoji"`）、`title`（非空白、≤ 48 字节）、可选 `keywords`（出现时非空白、≤ 256 字节，用于搜索）和 `items`（只能是字符串，每组 1 到 512 个，每个非空白、1 到 64 个 UTF-16 单元、不含控制字符，组内不重复）；同一 `tab` 下各组的 `title` 不得重复，不同 `tab` 可以同名。所有组合计至多 2048 项。没有数据文件。
 - 引用的音频必须存在、至少 12 字节、扩展名为 `.wav` 或 `.ogg` 且文件头分别为 `RIFF....WAVE` 或 `OggS`；与客户端一致，两种格式都先读满 12 字节才检查签名。`sound` 的采样只能是 `.wav`（各端播放前整段解码，只有 WAV 能事先核实时长，鸿蒙端会静音 Ogg 采样），`.ogg` 只用于 `music`。清单点名的数据文件必须存在、非空、不超过该类型的上限，不按说明文件计。其余文件只能是 `plugin.toml` 或不超过 64 KiB 的 `.txt`/`.md` 说明。
+- `script`：见下文「脚本插件」。
 - 新类型的语法与客户端解析器逐条一致，两边用同一批 fixture 包测试（本仓库在 `internal/account/testdata/plugin-packs/`，`valid/` 下的包必须接受，`invalid/` 下的包必须拒绝）。
 
 zip 层面的错误返回 400 `invalid_plugin_archive`，清单与文件规则不符返回 400 `invalid_plugin_manifest`，任何大小上限返回 400 `plugin_too_large`。
+
+## 脚本插件
+
+`kind = "script"` 是桌面客户端（macOS、Windows、Linux）的脚本插件：一个 core wasm 模块，由输入法进程里的沙箱解释器按用户逐项授予的能力运行。安装不授予任何能力，用户要在客户端「设置 → 插件 → 脚本插件（实验）」里启用并勾选能力，插件才会运行。规则镜像客户端的 `plugins/script_pack.rs` 与 `msime_script_runtime` 的能力表，代码在 `internal/account/community_plugin_script.go`。
+
+清单校验：
+
+- `schema_version = 2`；顶层只有公共键和 `[script]`。`id` 不能是官方脚本包的 `uuid`。
+- `permissions` 每项是能力名白名单里的一个：`read_composition`、`read_commit`、`read_candidates`、`rewrite_commit`、`rerank_candidates`、`annotate_candidates`、`filter_candidates`、`provide_commands`，以及第二批能力提案里的 `insert_candidates`、`persist_data`；不能重复。依赖必须一起申请：`rewrite_commit` 要 `read_commit`，`rerank_candidates`、`annotate_candidates`、`filter_candidates`、`insert_candidates` 要 `read_candidates`。互斥：`rewrite_commit` 不能和 `read_composition`、`persist_data` 同时申请。
+- `[script]` 的键限 `abi`（必须为 1）、`module`（点名一个 `.wasm` 文件）、`hooks`（非空、不重复的钩子名：`focus_in`、`focus_out`、`input`、`selection_retracted`、`candidate_selected`、`before_commit`、`commit`、`composition_end`、`composition_start`、`composition_update`、`candidates_shown`、`candidates_hidden`、`candidates`、`command`）、`memory_pages`（可选，1 到 64）、`commands`、`data` 和 `settings`。
+- `[[script.commands]]` 1 到 4 条，键限 `trigger`、`title` 和可选的 `arguments`（`"letters"` 或 `"extended"`）。触发词 2 到 16 个小写字母，不与内置指令的触发词、也不与同清单的其他触发词相等或互为前缀；标题 1 到 8 个字符，首尾不是空白，不含控制字符，不等于内置指令的标题。声明了指令就必须申请 `provide_commands` 并声明 `command` 钩子，三者同在或同不在。
+- `[script].data` 至多 4 个数据文件，文件名合法、不重复、不是模块或 `plugin.toml`，单个 1 字节到 4 MiB、合计不超过 8 MiB。
+- `[[script.settings]]` 至多 16 项，键限 `key`、`title`、`description`、`type`、`default`、`options`、`min`、`max`、`max_length`。`key` 是 1 到 32 个小写字母、数字或 `_`，不重复；`title` 1 到 24 个字符；`description` 至多 120 个字符。`type = "bool"` 的 `default` 是布尔；`"choice"` 有 2 到 16 个 `{value, title}` 选项，`value` 不重复，`default` 是其中一个；`"number"` 的 `min`、`max` 在 32 位整数范围内，`min <= default <= max`；`"text"` 的 `max_length` 为 1 到 256，`default` 不超过它（按 UTF-16 码元计）且不含控制字符。
+- 模块必须存在、1 字节到 256 KiB，并以 wasm 文件头 `\0asm` 加版本 1 开头。
+
+服务端与客户端的分工：服务端不能运行 wasm 校验器，模块的导入表、导出和「申请的能力与模块用到的一一对应」只有客户端能判断。客户端在发布前（打包时）和每次安装时都用同一份校验器重新检查，所以服务端的规则只做到「不执行代码就能检查」的程度，而且只会比客户端宽，不会比它严：例如插件文本里客户端禁止的那批格式和不可见字符，服务端只检查控制字符。服务端拒绝一个客户端能装的包，用户就没有任何办法发布它；放进来一个客户端装不了的包，代价只是安装时失败。第二批能力和清单键（`insert_candidates`、`persist_data`、`settings`、`data`、`arguments`）按提案提前接受，客户端实现它们时不需要再等一次服务端发版；提案的细节在客户端落地时如有改动，以客户端为准同步这里。数据文件和其他成员一样经过嵌套压缩包检查，以 zip、gzip、zstd 等文件头开头的数据文件会被拒绝。
+
+单个归档仍不超过 8 MiB：数据文件合计的 8 MiB 是客户端的上限，压缩不了的数据加上模块会超过归档上限，这样的包要等提高归档上限后才能发布。现在没有客户端会写数据文件，所以这次不改归档上限。
+
+先审后发：脚本插件插入时 `moderation` 为 `pending`，审核通过（`approved`）之前，作者以外的人在列表、搜索、详情、下载、评分、收藏和举报里都把它当作不存在（404 `plugin_not_found`，举报为 404 `item_not_found`）；作者本人照常看得到，带 `fields=moderation` 时看到 `pending`。管理后台的撤销审核（`restore_content` 带 `{"to":"pending"}`）会让它重新隐藏，下架照旧。数据类插件不受影响，仍然发布即公开。客户端只有在 `kinds` 里声明了 `script` 才会在列表和详情里看到脚本插件，所以旧客户端和不运行脚本的移动端、鸿蒙端永远收不到它。
+
+新版本：发布后不能原地替换包，新版本以新的发布 UUID 发布成新的一行，所以新版本待审期间，旧的已通过版本照常可见、可下载，审核通过后由作者自己删除旧版本。
+
+审核列表：`GET /api/plugins` 的每行带 `permissions`（申请的能力名，数据类插件为空数组）、`flagged_permissions`（其中的 `rewrite_commit` 和 `persist_data`：能改掉用户上屏的文字，或能把读到的文字长期留在本机）和 `pre_moderated`（是否先审后发），可以用 `kind` 筛选；详情也带 `permissions` 和 `pre_moderated`。
+
+社区接口的列表和详情里，脚本插件多一个 `permissions` 字段（申请的能力名，按清单顺序），客户端据此在安装前用白话列出插件要的能力；没有申请能力的脚本插件和所有数据类插件都不带这个字段。
 
 ## 错误码
 
@@ -89,7 +116,11 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON community_plugins, community_plugin_down
 
 先迁移再滚动更新，旧二进制不读这些表。加入收藏的版本只新增 `community_plugin_saves`，启动探测会检查它，缺表时自动执行迁移；已有部署只需额外授予这一张表。
 
-`kind` 的 CHECK 约束 `community_plugins_kind_known` 一次列出客户端认识的全部类型，某个类型能否发布由服务端的 `pluginKinds` 决定。迁移在约束定义不含 `wordbook` 时删除并重建它（需要表的属主权限，最小权限部署同样要用迁移账号执行 `-migrate-users` 或配置 `migration_role`）；启动探测发现旧约束也会触发迁移，所以已有数据库升级时不需要手工操作。重建约束会短暂持有表锁并扫描现有行，旧二进制只写四种旧类型，滚动更新期间不受影响。
+`kind` 的 CHECK 约束 `community_plugins_kind_known` 一次列出客户端认识的全部类型，某个类型能否发布由服务端的 `pluginKinds` 决定。迁移在约束定义不含 `'script'` 时删除并重建它（需要表的属主权限，最小权限部署同样要用迁移账号执行 `-migrate-users` 或配置 `migration_role`）；启动探测发现旧约束也会触发迁移，所以已有数据库升级时不需要手工操作。重建约束会短暂持有表锁并扫描现有行，旧二进制不写 `script`，滚动更新期间不受影响。
+
+`community_plugins.permissions`（`text[]`，默认空数组）存脚本插件申请的能力名，给审核列表用；`ADD COLUMN IF NOT EXISTS` 带常量默认值，不重写现有行，旧版本副本插入时不写它、取默认值。启动探测检查这一列和约束，缺了就在 advisory lock 下迁移；按最小权限部署时先用迁移账号执行新版本的 `-migrate-users`，没有新表，不需要额外授权。
+
+脚本插件的上线顺序：先部署本服务端，再发布会发布脚本插件、在 `kinds` 里声明 `script` 的客户端。新客户端碰到旧服务端时，发布脚本插件会收到 400 `invalid_kind`，客户端把它说成「服务端还不接受脚本插件」。滚动更新期间，旧版本副本的列表和详情不认识 `script`、不会返回它，但旧版本的下载、评分和收藏只看是否下架，知道发布 UUID 的人在这段时间里能经旧副本下载待审的脚本包；UUID 不可猜，全部副本升级后这条路径就关闭了。回退到旧版本前先删除或下架所有脚本插件，否则旧版本的下载会对待审的包放行。
 
 上线顺序：客户端先发出容忍未知类型的版本，再部署本服务端（类型声明、迁移和四种新类型的校验器），最后发布会发布这些类型、带 `kinds` 声明的客户端。服务端某个类型的校验器必须先于发布该类型的客户端上线。回退到旧版本时，旧版本不认识 `kinds` 参数，会把已发布的新类型返回给所有客户端，所以回退前要确认已发布的客户端都能容忍未知类型，或先下架新类型的作品。单个插件最多 8 MiB、每账号最多 32 MiB，数据库容量和备份需按预期发布量规划。
 
@@ -112,4 +143,4 @@ SQL 在单个事务中切换到运行角色 `msime_backend`（`-plugin-seed-role
 
 ## 管理后台
 
-`GET /api/plugins` 列出插件（id、kind、plugin_id、名称、版本、发布者、owner_id、大小、SHA-256、下载人数、发布时间），支持关键词搜索和分页。`GET /api/plugins/{id}` 返回元数据、清单文本、大小、SHA-256、下载与评分统计，不返回 zip 字节。`POST /api/actions` 的 `delete_plugin` 永久删除插件及其下载和评分并写入审计。总览新增 `plugins` 和 `plugin_downloads` 两项计数。管理后台网页暂未提供对应页面，需直接调用 API。
+`GET /api/plugins` 列出插件（id、kind、plugin_id、名称、版本、发布者、owner_id、大小、SHA-256、下载人数、发布时间、申请的能力和要重点看的能力、是否先审后发），支持关键词搜索、按 `status` 和 `kind` 筛选及分页。`GET /api/plugins/{id}` 返回元数据、清单文本、申请的能力、大小、SHA-256、下载与评分统计，不返回 zip 字节。`POST /api/actions` 的 `delete_plugin` 永久删除插件及其下载和评分并写入审计。总览新增 `plugins` 和 `plugin_downloads` 两项计数。管理后台网页暂未提供对应页面，需直接调用 API。

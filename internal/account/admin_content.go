@@ -33,7 +33,7 @@ var adminCandidateContentQuery = strings.Replace(`SELECT json_build_object('id',
 
 // adminPluginContentQuery 在初始化时注入编辑凭据表达式，凭据值仍由数据库逐请求计算。
 var adminPluginContentQuery = strings.Replace(`SELECT json_build_object('id',p.id,'kind',p.kind,'plugin_id',p.plugin_id,'name',p.name,'description',p.description,'owner_id',p.owner_id,'author',u.display_name,'created_at',p.created_at,'version',p.version,'license',p.license,
- 'size',p.size,'sha256',p.sha256,'content',convert_from(p.manifest,'UTF8'),
+ 'size',p.size,'sha256',p.sha256,'content',convert_from(p.manifest,'UTF8'),'permissions',p.permissions,'pre_moderated',p.kind='script',
  'moderation',p.moderation,'previous_moderation',p.previous_moderation,'moderation_reason',p.moderation_reason,'moderated_by',p.moderated_by,'moderated_at',p.moderated_at,'owner_banned',u.banned_at IS NOT NULL,
  'downloads',(SELECT count(*) FROM community_plugin_downloads WHERE pack_id=p.id),
  'rating_count',rating_stats.count,'rating_average',rating_stats.average)

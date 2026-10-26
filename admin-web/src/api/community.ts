@@ -77,6 +77,10 @@ export const itemSchema = z.object({
   category: z.string().optional(),
   kind: z.string().optional(),
   plugin_id: z.string().optional(),
+  // 脚本插件申请的能力、其中要重点看的能力，以及它是否先审后发（待审期间不公开）。
+  permissions: z.array(z.string()).optional(),
+  flagged_permissions: z.array(z.string()).optional(),
+  pre_moderated: z.boolean().optional(),
   entries: z.number().nullish(),
   preview: z.array(entrySchema).nullish(),
   prompt: z.string().nullish(),
@@ -122,6 +126,8 @@ export const detailSchema = z.object({
   package_id: z.string().optional(),
   plugin_id: z.string().optional(),
   kind: z.string().optional(),
+  permissions: z.array(z.string()).optional(),
+  pre_moderated: z.boolean().optional(),
   size: z.number().optional(),
   sha256: z.string().optional(),
   license: z.union([z.string(), z.object({ code: z.string().nullish(), assets: z.string().nullish(), source: z.string().nullish() })]).optional(),
@@ -139,7 +145,26 @@ export const resourceContentSchema = z.object({ entries: z.array(entrySchema).op
 export const sensitiveLevelLabels: Record<string, string> = { block: "拦截", review: "需复核" };
 export const sensitiveCategoryLabels: Record<string, string> = { ad: "广告导流", vulgar: "低俗", abuse: "辱骂", illegal: "违法", custom: "自定义" };
 // 插件类型的统一显示名，与客户端、官网和 msime-plugins 一致。
-export const pluginKindLabels: Record<string, string> = { sound: "音效包", music: "音乐包", command_table: "指令表", effect: "特效包", helpcode: "辅助码表", symbol_set: "符号集", phrase_table: "短语表", wordbook: "单词本" };
+export const pluginKindLabels: Record<string, string> = { sound: "音效包", music: "音乐包", command_table: "指令表", effect: "特效包", helpcode: "辅助码表", symbol_set: "符号集", phrase_table: "短语表", wordbook: "单词本", script: "脚本插件" };
+// 脚本插件能力的白话名，与客户端授权页的标题一致；不认识的能力名原样显示。
+export const scriptCapabilityLabels: Record<string, string> = {
+  read_composition: "读取正在输入的内容",
+  read_commit: "读取输入的文字",
+  read_candidates: "读取候选词",
+  rewrite_commit: "修改输入的文字",
+  rerank_candidates: "调整候选顺序",
+  annotate_candidates: "给候选加注释",
+  filter_candidates: "隐藏候选",
+  provide_commands: "提供 / 指令",
+  insert_candidates: "往候选里加词",
+  persist_data: "长期保存数据",
+};
+// 审核时要重点看的能力：能改掉用户上屏的文字，或能把读到的文字长期留在本机。服务端在 flagged_permissions 里标出同样两项。
+export const flaggedScriptCapabilities = ["rewrite_commit", "persist_data"];
+export function scriptCapabilityText(names: readonly string[] | undefined): string {
+  if (!names || names.length === 0) return "不申请任何能力";
+  return names.map(name => (scriptCapabilityLabels[name] ?? name) + (flaggedScriptCapabilities.includes(name) ? "（重点审查）" : "")).join("、");
+}
 
 // Reason presets of the 驳回 / 下架 confirm dialog.
 export const removeReasons = ["侵犯版权或商标", "含导流或广告", "内容低俗", "质量不达标"] as const;

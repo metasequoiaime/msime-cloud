@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useAPI } from "../../api/client";
 import { keys } from "../../api/keys";
 import type { CandidateCategory, Detail, Section } from "../../api/community";
-import { candidateCategories, candidateCategoryLabels, detailSchema, isCandidateCategory, moderationLabels, moderationTones, pluginKindLabels, resourceContentSchema, sectionLabels, sensitiveCategoryLabels, sensitiveLevelLabels } from "../../api/community";
+import { candidateCategories, candidateCategoryLabels, detailSchema, isCandidateCategory, moderationLabels, moderationTones, pluginKindLabels, resourceContentSchema, scriptCapabilityText, sectionLabels, sensitiveCategoryLabels, sensitiveLevelLabels } from "../../api/community";
 import { relativeTime } from "../../utils/time";
 import { usePermissions } from "../../shell/permissions";
 import { DetailDrawer } from "../../ui/drawer";
@@ -47,6 +47,7 @@ function sectionFields(section: Section, detail: Detail): DrawerField[] {
       return [
         { label: "类型", value: pluginKindLabels[detail.kind ?? ""] ?? detail.kind ?? "—" },
         { label: "插件 ID", value: detail.plugin_id ?? "—", mono: true },
+        ...(detail.kind === "script" ? [{ label: "申请的能力", value: scriptCapabilityText(detail.permissions) }, { label: "审核方式", value: detail.pre_moderated ? "先审后发：通过前只有作者看得到" : "先发后审" }] : []),
         { label: "授权", value: licenseText(detail.license) },
         { label: "大小", value: formatBytes(detail.size ?? 0) },
         { label: "SHA-256", value: detail.sha256 ?? "—", mono: true },

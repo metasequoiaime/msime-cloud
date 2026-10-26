@@ -197,6 +197,7 @@ func (s *Server) qqDraftReport(ctx context.Context, subject, text string, histor
 		return qqDraftResult{Note: note, Asked: asked}
 	}
 	// 整理、记票、并入都做完了，最后这一步写库不跟随处理消息的 ctx（写法照 recordQQTurn）：答案可能已经按「说明里会追问」去掉了末尾的追问发出去，这时滚动发布取消了 ctx、草稿没建成，追问就落空了。
+	report.Origin = botSubjectOrigin(subject)
 	raw, _ := json.Marshal(report)
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 	id, err := createQQDraft(sctx, s.qqDrafts, subject, qqTruncate(text, qqDraftOriginalRunes), string(raw))
@@ -368,6 +369,7 @@ func (s *Server) qqAdminDraft(ctx context.Context, m botMessage, text string, re
 	if s.qqDrafts == nil {
 		return "", false
 	}
+	report.Origin = botSubjectOrigin(m.subject())
 	raw, _ := json.Marshal(report)
 	id, err := createQQDraft(ctx, s.qqDrafts, m.subject(), qqTruncate(text, qqDraftOriginalRunes), string(raw))
 	if err != nil {

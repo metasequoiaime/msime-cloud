@@ -320,6 +320,7 @@ func (s *Server) qqSlashDraft(ctx context.Context, m botMessage, content string,
 		reply("这条看不出是 bug 还是需求，没建草稿。可以在 /draft 后面补一句现象或想要什么。")
 		return "not_report"
 	}
+	report.Origin = botSubjectOrigin(m.subject())
 	raw, _ := json.Marshal(report)
 	id, err := createQQDraft(ctx, s.qqDrafts, m.subject(), qqTruncate(content, qqDraftOriginalRunes), string(raw))
 	if err != nil {

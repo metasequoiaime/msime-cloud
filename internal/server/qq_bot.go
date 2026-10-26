@@ -1300,6 +1300,7 @@ func (s *Server) fileAdminFeedback(ctx context.Context, m botMessage, text strin
 	// 已经回过「收到」或其他过渡语时不再多说一句。
 	progress(qqReplyWorking)
 	media, failed := s.publishQQMedia(ctx, m.Attachments)
+	report.Origin = botSubjectOrigin(m.subject())
 	number, duplicate, err := s.fileQQReport(ctx, repo, label, report, media, failed, notes)
 	if err != nil {
 		slog.Warn("qq bot: file issue failed", "repo", repo, "reason", err.Error())
@@ -1637,6 +1638,8 @@ type qqReport struct {
 	Keywords   string `json:"keywords"`
 	// Intent 是模型判断的「消息明确要求记成 issue」；没有命令时它和 qqIssueIntent 任一成立才提交。
 	Intent bool `json:"intent"`
+	// Origin 是反馈来自哪个平台（botSubjectOrigin），不由模型给出：建草稿和提交前按发消息的人写上，随草稿保存，issue 页脚和补充评论按它写「QQ 群」或「Telegram 群」。
+	Origin string `json:"origin,omitempty"`
 }
 
 // qqPlatformNames 是模型可以返回的平台及其在 issue 里的写法。
@@ -2232,12 +2235,13 @@ const qqIssueFooter = "\n\n---\n\n来自 QQ 群反馈，由机器人转述整理
 // qqIssueFooterMedia 是附上了截图或视频时的页脚：附件是原图，可能带着昵称、QQ 号，只有机器人转述的文字部分才不含身份。
 const qqIssueFooterMedia = "\n\n---\n\n来自 QQ 群反馈，由机器人转述整理，文字部分不包含反馈者的原话和身份。"
 
-// qqFooter 按有没有附上截图或视频选页脚。
-func qqFooter(published bool) string {
+// qqFooter 按有没有附上截图或视频选页脚，来源写成 origin 所在的群（见 botOriginGroup）。
+func qqFooter(origin string, published bool) string {
+	footer := qqIssueFooter
 	if published {
-		return qqIssueFooterMedia
+		footer = qqIssueFooterMedia
 	}
-	return qqIssueFooter
+	return strings.Replace(footer, "QQ 群", botOriginGroup(origin), 1)
 }
 
 // qqIssueBody 按 msime 的 issue 模板栏目写正文，mediaSection（qqMediaSection 的结果，可能为空）放在页脚之前；published 表示附上了截图或视频，页脚改成只说文字部分不含身份。
@@ -2260,7 +2264,7 @@ func qqIssueBody(report qqReport, mediaSection string, published bool) string {
 		section("希望怎样改进", report.Proposal)
 		section("输入法版本", qqEnvironment(report))
 	}
-	return b.String() + mediaSection + qqFooter(published)
+	return b.String() + mediaSection + qqFooter(report.Origin, published)
 }
 
 // qqCommentBody 是补充到已有 issue 的评论，mediaSection 放在页脚之前，published 的意思同 qqIssueBody。
@@ -2269,9 +2273,9 @@ func qqCommentBody(report qqReport, mediaSection string, published bool) string 
 	if report.Kind == "feature" && report.Proposal != "" {
 		text = report.Proposal
 	}
-	body := "QQ 群里又有用户反馈了同样的情况，机器人转述如下：\n\n" + qqPublic(text)
+	body := botOriginGroup(report.Origin) + "里又有用户反馈了同样的情况，机器人转述如下：\n\n" + qqPublic(text)
 	if environment := qqEnvironment(report); environment != "" {
 		body += "\n\n环境：" + qqPublic(environment)
 	}
-	return body + mediaSection + qqFooter(published)
+	return body + mediaSection + qqFooter(report.Origin, published)
 }

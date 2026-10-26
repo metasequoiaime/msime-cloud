@@ -64,15 +64,15 @@ func (s *Server) qqSummariseDocs(ctx context.Context, text string) (qqDocsReques
 	return request, nil
 }
 
-// qqDocsIssueBody 是文档 issue 的正文。
-func qqDocsIssueBody(request qqDocsRequest) string {
+// qqDocsIssueBody 是文档 issue 的正文，origin 是反馈来自哪个平台（botSubjectOrigin）。
+func qqDocsIssueBody(request qqDocsRequest, origin string) string {
 	page := request.Page
 	if page == "" {
 		page = "不确定"
 	}
 	return "### 要" + request.Kind + "的内容\n\n" + qqPublic(request.Problem) +
 		"\n\n### 建议怎么写\n\n" + qqPublic(request.Suggestion) +
-		"\n\n### 涉及的文档\n\n" + qqPublic(page) + qqIssueFooter
+		"\n\n### 涉及的文档\n\n" + qqPublic(page) + qqFooter(origin, false)
 }
 
 // qqDocsMemberDaily 是一位群友每天能用「提文档」记进汇总 issue 的条数：群友的反馈不经管理员就公开，汇总 issue 每天只有 qqGapsDaily 条额度，没有按人的上限时一个人就能占满，之后真正答不上的问题都记不下。
@@ -140,13 +140,13 @@ func (s *Server) fileQQDocs(ctx context.Context, subject, text string, admin boo
 		return
 	}
 	if duplicate > 0 {
-		body := "QQ 群里又有人反馈了这处文档，机器人转述如下：\n\n" + qqPublic(request.Problem)
+		body := botOriginGroup(botSubjectOrigin(subject)) + "里又有人反馈了这处文档，机器人转述如下：\n\n" + qqPublic(request.Problem)
 		if request.Suggestion != "" {
 			body += "\n\n建议：" + qqPublic(request.Suggestion)
 		}
 		// 写入结果可能在响应返回前丢失；先失效缓存，避免不确定时继续读到旧 issue。
 		defer client.Invalidate("/repos/" + repo + "/issues")
-		r, err := qqWriteIssue(ctx, client, token, repo, "POST", "/repos/"+repo+"/issues/"+strconv.FormatInt(duplicate, 10)+"/comments", map[string]string{"body": body + qqIssueFooter})
+		r, err := qqWriteIssue(ctx, client, token, repo, "POST", "/repos/"+repo+"/issues/"+strconv.FormatInt(duplicate, 10)+"/comments", map[string]string{"body": body + qqFooter(botSubjectOrigin(subject), false)})
 		if err != nil || !r.OK() {
 			slog.Warn("qq bot: docs issue failed", "reason", githubFailure("docs comment", r, err).Error())
 			reply(qqReplyUnavailable)
@@ -164,7 +164,7 @@ func (s *Server) fileQQDocs(ctx context.Context, subject, text string, admin boo
 		}
 	}
 	defer client.Invalidate("/repos/" + repo + "/issues")
-	r, err := qqWriteIssue(ctx, client, token, repo, "POST", "/repos/"+repo+"/issues", map[string]any{"title": "[文档]: " + githubReferenceBreaker.Replace(request.Title), "body": qqDocsIssueBody(request), "labels": labels})
+	r, err := qqWriteIssue(ctx, client, token, repo, "POST", "/repos/"+repo+"/issues", map[string]any{"title": "[文档]: " + githubReferenceBreaker.Replace(request.Title), "body": qqDocsIssueBody(request, botSubjectOrigin(subject)), "labels": labels})
 	var created struct {
 		Number int64 `json:"number"`
 	}

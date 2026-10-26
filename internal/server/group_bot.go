@@ -1,6 +1,9 @@
 package server
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // 群答疑机器人的平台无关部分。QQ 群的 @ 消息和 Telegram 群消息都先转成 botMessage，交给同一个 handleBotMessage 处理：命令、额度、过渡语、看截图、管理员提 issue 和知识库答疑都只写一份。平台之间的差别收在 botChannel 里：怎么回复（QQ 要带 msg_seq、最多 5 次、拒收未报备的链接，Telegram 引用原消息即可）和谁算管理员。
 
@@ -42,6 +45,25 @@ type botMessage struct {
 func (m botMessage) subject() string { return m.Group + "/" + m.Member }
 
 func (m botMessage) onTelegram() bool { return m.Platform == botPlatformTelegram }
+
+// botOriginTelegram 是 qqReport.Origin 里表示反馈来自 Telegram 群的值；为空时来自 QQ 群，包括加这个字段之前存下的草稿。
+const botOriginTelegram = "telegram"
+
+// botSubjectOrigin 按 subject（「Group/Member」）判断反馈来自哪个平台，返回 qqReport.Origin 的值。
+func botSubjectOrigin(subject string) string {
+	if strings.HasPrefix(subject, "tg:") {
+		return botOriginTelegram
+	}
+	return ""
+}
+
+// botOriginGroup 是来源在公开文字（issue 页脚、补充评论、词条投稿备注）里的写法：「QQ 群」或「Telegram 群」。
+func botOriginGroup(origin string) string {
+	if origin == botOriginTelegram {
+		return "Telegram 群"
+	}
+	return "QQ 群"
+}
 
 // qqChannel 是 QQ 开放平台：被动回复要带递增的 msg_seq，同一条消息最多回复 qqBotMaxReplies 次，回复里只允许报备过的域名；管理员见 qqIsAdmin。
 type qqChannel struct{ s *Server }

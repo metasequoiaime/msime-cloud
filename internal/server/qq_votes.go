@@ -103,7 +103,12 @@ func (s *Server) qqVoteFeature(ctx context.Context, subject string, report qqRep
 		}
 		return "这个需求已经有人提过：" + ref + "，开发者会在那里跟进。" + s.qqProgressHint(repo, number)
 	}
-	return fmt.Sprintf("这个需求已经有人提过：%s，我帮你在那里记了一票，现在 QQ 群里一共 %d 人需要。%s", ref, count, s.qqProgressHint(repo, number))
+	// 票数是 QQ 群和 Telegram 群合计的；QQ 群友看到的说法照旧。
+	where := "QQ 群里"
+	if botSubjectOrigin(subject) == botOriginTelegram {
+		where = "QQ 群和 Telegram 群里"
+	}
+	return fmt.Sprintf("这个需求已经有人提过：%s，我帮你在那里记了一票，现在 %s一共 %d 人需要。%s", ref, where, count, s.qqProgressHint(repo, number))
 }
 
 // qqAddVote 把 issue 下机器人自己发的计数评论加一（没有就新建），返回新的人数。外人留的带计数标记的评论直接跳过（见 qqWrittenByApp）；分不清带标记的评论是谁发的（bot 账号没取到）时返回错误，不新建，免得同一个 issue 下出现两条计数。

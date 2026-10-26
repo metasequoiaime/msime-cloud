@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -360,5 +361,123 @@ func TestTelegramBotCommandsAndQuotes(t *testing.T) {
 	telegramDeliver(t, s, 47, "@msime_bot 这是什么", map[string]any{"message_id": 6, "from": map[string]any{"id": 99, "is_bot": false}})
 	if !strings.Contains(fake.chatBodies[len(fake.chatBodies)-1], "看不到引用的内容") {
 		t.Fatal(fake.chatBodies[len(fake.chatBodies)-1])
+	}
+}
+
+// fakeTelegramFiles 在 fakeTelegram 之外再扮演 getFile 和文件下载：files 按 file_id 给出 file_path 和 file_size，contents 按 file_path 给出文件内容。
+type fakeTelegramFiles struct {
+	*fakeTelegram
+	files    map[string]map[string]any
+	contents map[string][]byte
+	getFiles []string
+}
+
+func (f *fakeTelegramFiles) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	switch {
+	case r.URL.Path == "/bot"+testTelegramToken+"/getFile":
+		var body struct {
+			FileID string `json:"file_id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.mu.Lock()
+		f.getFiles = append(f.getFiles, body.FileID)
+		file, ok := f.files[body.FileID]
+		f.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if !ok {
+			w.WriteHeader(400)
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error_code": 400, "description": "Bad Request: invalid file_id " + testTelegramToken})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": file})
+	case strings.HasPrefix(r.URL.Path, "/file/bot"+testTelegramToken+"/"):
+		content, ok := f.contents[strings.TrimPrefix(r.URL.Path, "/file/bot"+testTelegramToken+"/")]
+		if !ok {
+			w.WriteHeader(404)
+			return
+		}
+		_, _ = w.Write(content)
+	default:
+		f.fakeTelegram.ServeHTTP(w, r)
+	}
+}
+
+// 照片和当作文件发的图片经 getFile 下载后交给看图模型：说明文字里 @ 机器人、只发图片回复机器人、回复别人的图片再 @ 都会看图；取不到的图片在问题后面注明没看清。日志里没有令牌。
+func TestTelegramBotImages(t *testing.T) {
+	s, fake, _ := qqServer(t)
+	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 32)...)
+	tg := &fakeTelegramFiles{fakeTelegram: &fakeTelegram{status: 200, ok: true},
+		files: map[string]map[string]any{
+			"photo-large": {"file_path": "photos/file_1.png", "file_size": len(png)},
+			"doc-png":     {"file_path": "documents/file_2.png", "file_size": len(png)},
+			"too-large":   {"file_path": "photos/file_3.png", "file_size": qqVisionBytes + 1},
+			"escape":      {"file_path": "../secrets", "file_size": 10},
+		},
+		contents: map[string][]byte{"photos/file_1.png": png, "documents/file_2.png": png},
+	}
+	srv := httptest.NewServer(tg)
+	defer srv.Close()
+	s.tg = newTelegramBot(TelegramBotConfig{Chats: []int64{testTelegramGroup}, Username: "msime_bot", secret: testTelegramSecret}, AdminTelegramConfig{APIURL: srv.URL, botToken: testTelegramToken})
+	logs := captureLogs(t)
+	photo := func(update int64, caption string, photos []string, reply map[string]any) string {
+		sizes := []map[string]any{}
+		for _, id := range photos {
+			sizes = append(sizes, map[string]any{"file_id": id})
+		}
+		message := map[string]any{"message_id": update * 10, "from": map[string]any{"id": 42, "is_bot": false}, "chat": map[string]any{"id": testTelegramGroup, "type": "supergroup"}, "caption": caption, "photo": sizes}
+		if reply != nil {
+			message["reply_to_message"] = reply
+		}
+		raw, _ := json.Marshal(map[string]any{"update_id": update, "message": message})
+		return string(raw)
+	}
+	deliver := func(body string) {
+		t.Helper()
+		if w := telegramPost(s, testTelegramSecret, body); w.Code != 200 {
+			t.Fatal(w.Code, w.Body.String())
+		}
+		s.qqWorkers.Wait()
+	}
+	// 说明文字里 @ 机器人：取最大的尺寸看图，描述接在问题后面。
+	deliver(photo(51, "@msime_bot 这是什么报错", []string{"photo-small", "photo-large"}, nil))
+	if len(tg.getFiles) != 1 || tg.getFiles[0] != "photo-large" || len(fake.visionCalls) != 1 || !strings.Contains(fake.chatBodies[len(fake.chatBodies)-1], "这是什么报错") || !strings.Contains(fake.chatBodies[len(fake.chatBodies)-1], qqShotMarker) {
+		t.Fatal(tg.getFiles, fake.visionCalls, fake.chatBodies)
+	}
+	// 没有 @ 也没回复机器人的图片不处理。
+	deliver(photo(52, "看看这个", []string{"photo-large"}, nil))
+	if len(tg.getFiles) != 1 {
+		t.Fatal(tg.getFiles)
+	}
+	// 只发图片回复机器人：按只发了截图处理。
+	botMessage := map[string]any{"message_id": 1, "from": map[string]any{"id": testTelegramBotID, "is_bot": true}, "text": "能发个截图吗"}
+	deliver(photo(53, "", []string{"photo-large"}, botMessage))
+	if len(fake.visionCalls) != 2 || !strings.HasPrefix(fake.chatBodies[len(fake.chatBodies)-1], "（群友只发了截图，没写文字）") {
+		t.Fatal(fake.visionCalls, fake.chatBodies[len(fake.chatBodies)-1])
+	}
+	// 回复别人当作文件发的图片再 @ 机器人：看被回复的那张。PDF 这类文件不算图片。
+	other := map[string]any{"message_id": 2, "from": map[string]any{"id": 99, "is_bot": false}, "document": map[string]any{"file_id": "doc-png", "mime_type": "image/png"}}
+	telegramDeliver(t, s, 54, "@msime_bot 这个设置在哪", other)
+	if len(fake.visionCalls) != 3 || tg.getFiles[len(tg.getFiles)-1] != "doc-png" {
+		t.Fatal(fake.visionCalls, tg.getFiles)
+	}
+	pdf := map[string]any{"message_id": 3, "from": map[string]any{"id": 99, "is_bot": false}, "document": map[string]any{"file_id": "doc-pdf", "mime_type": "application/pdf"}}
+	telegramDeliver(t, s, 55, "@msime_bot 这是什么", pdf)
+	if len(fake.visionCalls) != 3 || tg.getFiles[len(tg.getFiles)-1] != "doc-png" || !strings.Contains(fake.chatBodies[len(fake.chatBodies)-1], "看不到引用的内容") {
+		t.Fatal(tg.getFiles, fake.chatBodies[len(fake.chatBodies)-1])
+	}
+	// getFile 失败、文件超过上限、file_path 不合规时不下载，问题后面注明截图没看清。
+	for i, id := range []string{"missing", "too-large", "escape"} {
+		deliver(photo(int64(56+i), "@msime_bot 这是什么", []string{id}, nil))
+		if len(fake.visionCalls) != 3 || !strings.Contains(fake.chatBodies[len(fake.chatBodies)-1], qqShotMissedNote) {
+			t.Fatal(id, fake.visionCalls, fake.chatBodies[len(fake.chatBodies)-1])
+		}
+	}
+	if !strings.Contains(logs.String(), "screenshot not described") || strings.Contains(logs.String(), testTelegramToken) || strings.Contains(logs.String(), "file_1.png") {
+		t.Fatal(logs.String())
+	}
+	// 没有启用 Telegram 时 Telegram 附件下载不了。
+	s.tg = nil
+	if _, err := s.downloadAttachment(t.Context(), qqAttachment{ContentType: "image/png", telegramFile: "photo-large"}, qqVisionBytes); err == nil {
+		t.Fatal("Telegram 关闭时下载了附件")
 	}
 }

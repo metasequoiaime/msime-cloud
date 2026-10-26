@@ -22,7 +22,7 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 )
 
-// Telegram 群答疑。admin.telegram 的 Bot 在 telegram_bot.chats 列出的群里被 @、被回复或收到「/命令@Bot用户名」时，把消息转成 botMessage，交给和 QQ 群机器人共用的 handleBotMessage：命令、额度、过渡语和知识库答疑都与 QQ 一致（见 group_bot.go）。Telegram 以 Webhook 把消息推到 telegramBotEventsPath，服务端校验 secret_token、按 update_id 在所有副本间去重后立即应答，再在后台处理，回复引用原消息。目前只处理文字消息，管理员还没有接入。群友的原话、昵称和 Telegram ID 不写进日志。
+// Telegram 群答疑。admin.telegram 的 Bot 在 telegram_bot.chats 列出的群里被 @、被回复或收到「/命令@Bot用户名」时，把消息转成 botMessage，交给和 QQ 群机器人共用的 handleBotMessage：命令、额度、过渡语和知识库答疑都与 QQ 一致（见 group_bot.go）。Telegram 以 Webhook 把消息推到 telegramBotEventsPath，服务端校验 secret_token、按 update_id 在所有副本间去重后立即应答，再在后台处理，回复引用原消息。图片（照片、当作文件发的图片和被回复消息里的图片）用 getFile 下载后交给看图模型；管理员还没有接入。群友的原话、昵称和 Telegram ID 不写进日志。
 
 const (
 	telegramBotEventsPath    = "/v1/community/telegram-bot/events"
@@ -87,8 +87,12 @@ func (c *TelegramBotConfig) validate(cfg *Config) error {
 type telegramBot struct {
 	config   TelegramBotConfig
 	endpoint string
-	botID    int64
-	mention  *regexp.Regexp
+	// getFile 是 Bot API 的 getFile 地址，files 是下载文件的地址前缀（后面接 getFile 返回的 file_path）。两者都带着令牌，不写进日志和错误。
+	getFile, files string
+	// fileClient 下载图片，时限比发消息长。
+	fileClient *http.Client
+	botID      int64
+	mention    *regexp.Regexp
 	// command 匹配开头的「/命令@Bot用户名」，第一个分组是「/命令」。
 	command *regexp.Regexp
 	client  *http.Client
@@ -96,10 +100,14 @@ type telegramBot struct {
 
 func newTelegramBot(c TelegramBotConfig, t AdminTelegramConfig) *telegramBot {
 	id, _ := strconv.ParseInt(strings.SplitN(t.botToken, ":", 2)[0], 10, 64)
+	base := strings.TrimRight(t.APIURL, "/")
 	return &telegramBot{
-		config:   c,
-		endpoint: strings.TrimRight(t.APIURL, "/") + "/bot" + t.botToken + "/sendMessage",
-		botID:    id,
+		config:     c,
+		endpoint:   base + "/bot" + t.botToken + "/sendMessage",
+		getFile:    base + "/bot" + t.botToken + "/getFile",
+		files:      base + "/file/bot" + t.botToken + "/",
+		fileClient: httpclient.New(qqVisionTimeout),
+		botID:      id,
 		// 用户名不区分大小写；前后不能紧挨着用户名里允许的字符，免得 @msime_bot_fan 这样的别人被当成 @ 了机器人。
 		mention: regexp.MustCompile(`(?i)(^|[^A-Za-z0-9_])@` + regexp.QuoteMeta(c.Username) + `($|[^A-Za-z0-9_])`),
 		command: regexp.MustCompile(`(?i)^\s*(/[A-Za-z0-9_]+)@` + regexp.QuoteMeta(c.Username) + `($|[^A-Za-z0-9_])`),
@@ -124,8 +132,21 @@ type telegramMessage struct {
 	Chat      telegramChat     `json:"chat"`
 	Text      string           `json:"text"`
 	ReplyTo   *telegramMessage `json:"reply_to_message"`
+	// Caption 是图片和文件的说明文字，群友在里面 @ 机器人；Photo 是同一张图片的几种尺寸，从小到大；Document 是当作文件发的附件，只看图片。
+	Caption  string              `json:"caption"`
+	Photo    []telegramPhotoSize `json:"photo"`
+	Document *telegramDocument   `json:"document"`
 	// SenderChat 是以群或频道身份发言时的那个 chat：开了「保持匿名」的管理员发言时，from 是 GroupAnonymousBot（is_bot 为 true），sender_chat 是群本身。
 	SenderChat *telegramChat `json:"sender_chat"`
+}
+
+type telegramPhotoSize struct {
+	FileID string `json:"file_id"`
+}
+
+type telegramDocument struct {
+	FileID   string `json:"file_id"`
+	MimeType string `json:"mime_type"`
 }
 
 type telegramUpdate struct {
@@ -230,7 +251,7 @@ func (b *telegramBot) message(m *telegramMessage) (botMessage, bool) {
 		return botMessage{}, false
 	}
 	repliedToBot := m.ReplyTo != nil && m.ReplyTo.From != nil && m.ReplyTo.From.ID == b.botID
-	text, command := m.Text, false
+	text, command := m.messageText(), false
 	if loc := b.command.FindStringSubmatchIndex(text); loc != nil {
 		text, command = text[:loc[3]]+text[loc[1]:], true
 	}
@@ -241,12 +262,89 @@ func (b *telegramBot) message(m *telegramMessage) (botMessage, bool) {
 	chat := strconv.FormatInt(m.Chat.ID, 10)
 	out := botMessage{
 		ID: "tg:" + chat + ":" + strconv.FormatInt(m.MessageID, 10), Text: text, Group: "tg:" + chat, Member: "tg:" + strconv.FormatInt(member, 10),
-		Platform: botPlatformTelegram, channel: telegramChannel{bot: b, chat: m.Chat.ID, message: m.MessageID},
+		Attachments: b.attachments(m), Platform: botPlatformTelegram, channel: telegramChannel{bot: b, chat: m.Chat.ID, message: m.MessageID},
 	}
 	if m.ReplyTo != nil && !repliedToBot {
-		out.Quote = qqQuote{Text: qqTruncate(strings.TrimSpace(m.ReplyTo.Text), qqQuoteRunes), Referenced: true}
+		out.Quote = qqQuote{Text: qqTruncate(strings.TrimSpace(m.ReplyTo.messageText()), qqQuoteRunes), Images: b.attachments(m.ReplyTo), Referenced: true}
 	}
 	return out, true
+}
+
+// messageText 是消息的文字：文字消息的正文，或者图片、文件的说明文字。
+func (m *telegramMessage) messageText() string {
+	if m.Text != "" {
+		return m.Text
+	}
+	return m.Caption
+}
+
+// attachments 是消息里的图片：照片取最大的那个尺寸（Telegram 压缩过的 JPEG），当作文件发的只收 image/* 类型。附件只记 file_id，下载见 fetchFile。
+func (b *telegramBot) attachments(m *telegramMessage) []qqAttachment {
+	var out []qqAttachment
+	if n := len(m.Photo); n > 0 && m.Photo[n-1].FileID != "" {
+		out = append(out, qqAttachment{ContentType: "image/jpeg", telegramFile: m.Photo[n-1].FileID})
+	}
+	if d := m.Document; d != nil && d.FileID != "" && qqImageContentType(d.MimeType) {
+		out = append(out, qqAttachment{ContentType: d.MimeType, telegramFile: d.FileID})
+	}
+	return out
+}
+
+// telegramFilePath 是 getFile 返回的 file_path 允许的形状，拼进下载地址前先检查，免得被拼出别的路径。
+var telegramFilePath = regexp.MustCompile(`^[A-Za-z0-9_-]+(?:/[A-Za-z0-9_.-]+)*$`)
+
+// fetchFile 下载一个 Telegram 文件：先用 getFile 换 file_path，再从文件地址下载，不超过 limit 字节。Bot API 只能下载 20 MB 以内的文件。错误只带状态和数字错误码，不含令牌、地址或上游描述。
+func (b *telegramBot) fetchFile(ctx context.Context, fileID string, limit int64) ([]byte, error) {
+	req, err := httpclient.NewJSONPayloadRequest(ctx, http.MethodPost, b.getFile, map[string]string{"file_id": fileID})
+	if err != nil {
+		return nil, errors.New("telegram: invalid endpoint")
+	}
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return nil, errors.New("telegram: getFile failed")
+	}
+	var answer struct {
+		OK        bool `json:"ok"`
+		ErrorCode int  `json:"error_code"`
+		Result    struct {
+			FilePath string `json:"file_path"`
+			FileSize int64  `json:"file_size"`
+		} `json:"result"`
+	}
+	decoded := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&answer)
+	resp.Body.Close()
+	if decoded != nil || resp.StatusCode != http.StatusOK || !answer.OK {
+		return nil, fmt.Errorf("telegram: getFile answered %d (code %d)", resp.StatusCode, answer.ErrorCode)
+	}
+	if answer.Result.FileSize > limit {
+		return nil, errors.New("attachment too large")
+	}
+	if !telegramFilePath.MatchString(answer.Result.FilePath) || strings.Contains(answer.Result.FilePath, "..") {
+		return nil, errors.New("telegram: invalid file path")
+	}
+	req, err = http.NewRequestWithContext(ctx, http.MethodGet, b.files+answer.Result.FilePath, nil)
+	if err != nil {
+		return nil, errors.New("telegram: invalid endpoint")
+	}
+	resp, err = b.fileClient.Do(req)
+	if err != nil {
+		return nil, errors.New("attachment download failed")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("attachment download answered %d", resp.StatusCode)
+	}
+	if resp.ContentLength > limit {
+		return nil, errors.New("attachment too large")
+	}
+	body, err := httpclient.ReadResponseBody(resp, limit)
+	if err != nil {
+		return nil, errors.New("attachment download failed")
+	}
+	if int64(len(body)) > limit {
+		return nil, errors.New("attachment too large")
+	}
+	return body, nil
 }
 
 // reply 用 sendMessage 回复群里的一条消息，纯文本、不展开链接预览；被回复的消息已经删掉时照常发出。成功的标准是 Bot API 回 ok，错误只带状态和数字错误码，不含令牌或上游描述。

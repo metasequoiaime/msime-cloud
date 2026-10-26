@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -159,9 +160,10 @@ type telegramMessage struct {
 	Chat      telegramChat     `json:"chat"`
 	Text      string           `json:"text"`
 	ReplyTo   *telegramMessage `json:"reply_to_message"`
-	// Caption 是图片和文件的说明文字，群友在里面 @ 机器人；Photo 是同一张图片的几种尺寸，从小到大；Document 是当作文件发的附件，只看图片。
+	// Caption 是图片、视频和文件的说明文字，群友在里面 @ 机器人；Photo 是同一张图片的几种尺寸，从小到大；Video 是视频；Document 是当作文件发的附件，只收图片和视频。
 	Caption  string              `json:"caption"`
 	Photo    []telegramPhotoSize `json:"photo"`
+	Video    *telegramDocument   `json:"video"`
 	Document *telegramDocument   `json:"document"`
 	// SenderChat 是以群或频道身份发言时的那个 chat：开了「保持匿名」的管理员发言时，from 是 GroupAnonymousBot（is_bot 为 true），sender_chat 是群本身。
 	SenderChat *telegramChat `json:"sender_chat"`
@@ -310,13 +312,16 @@ func (m *telegramMessage) messageText() string {
 	return m.Caption
 }
 
-// attachments 是消息里的图片：照片取最大的那个尺寸（Telegram 压缩过的 JPEG），当作文件发的只收 image/* 类型。附件只记 file_id，下载见 fetchFile。
+// attachments 是消息里的图片和视频：照片取最大的那个尺寸（Telegram 压缩过的 JPEG），视频没给类型时按 MP4；当作文件发的只收 image/* 和 video/*。和 QQ 一样，看截图只看图片，管理员提 issue 时图片和视频都存进公开 bucket（Bot API 只能下载 20 MB 以内的文件）。附件只记 file_id，下载见 fetchFile。
 func (b *telegramBot) attachments(m *telegramMessage) []qqAttachment {
 	var out []qqAttachment
 	if n := len(m.Photo); n > 0 && m.Photo[n-1].FileID != "" {
 		out = append(out, qqAttachment{ContentType: "image/jpeg", telegramFile: m.Photo[n-1].FileID})
 	}
-	if d := m.Document; d != nil && d.FileID != "" && qqImageContentType(d.MimeType) {
+	if v := m.Video; v != nil && v.FileID != "" {
+		out = append(out, qqAttachment{ContentType: cmp.Or(v.MimeType, "video/mp4"), telegramFile: v.FileID})
+	}
+	if d := m.Document; d != nil && d.FileID != "" && (qqImageContentType(d.MimeType) || qqVideoContentType(d.MimeType)) {
 		out = append(out, qqAttachment{ContentType: d.MimeType, telegramFile: d.FileID})
 	}
 	return out
@@ -339,6 +344,7 @@ var telegramMenuCommands = []map[string]string{
 	{"command": "add", "description": "投稿词条，例如 /add 扛把子 kang ba zi"},
 	{"command": "doc", "description": "文档缺了什么或写错了"},
 	{"command": "mcp", "description": "查词库、注音、释义和公共数据的用法"},
+	{"command": "stats", "description": "我的打字数据，先发 /bind 绑定水杉账号"},
 }
 
 // registerCommands 把 telegramMenuCommands 注册成所有群聊的命令菜单。启动时调一次，多个副本重复注册结果相同；失败只记日志。

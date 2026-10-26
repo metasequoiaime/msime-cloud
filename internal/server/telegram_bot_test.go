@@ -349,7 +349,7 @@ func TestTelegramBotAnswersAnonymousAdmins(t *testing.T) {
 	}
 }
 
-// Telegram 群里的命令和 QQ 共用一套：@ 之后接命令或写成「/命令@Bot用户名」都认，帮助换成 Telegram 的版本，打字数据提示去 QQ 绑定；回复别人的消息时那条消息接在问题后面，没有文字时注明看不到。
+// Telegram 群里的命令和 QQ 共用一套：@ 之后接命令或写成「/命令@Bot用户名」都认，帮助换成 Telegram 的版本，打字数据和 QQ 走同一条路；回复别人的消息时那条消息接在问题后面，没有文字时注明看不到。
 func TestTelegramBotCommandsAndQuotes(t *testing.T) {
 	s, fake, _, tg := telegramServer(t)
 	telegramDeliver(t, s, 41, "@msime_bot 帮助", nil)
@@ -359,11 +359,11 @@ func TestTelegramBotCommandsAndQuotes(t *testing.T) {
 	// 发给别的 Bot 的命令不处理。
 	telegramDeliver(t, s, 45, "/help@other_bot", nil)
 	texts := tg.texts()
-	if len(texts) != 4 || texts[0] != telegramHelpText || texts[1] != telegramHelpText || texts[2] != qqTypingTelegramReply || texts[3] != "你的 ID 是 tg:42，机器人把你当作普通成员。" || len(fake.chatCalls) != 0 {
+	if len(texts) != 4 || texts[0] != telegramHelpText || texts[1] != telegramHelpText || texts[2] != "打字数据暂时用不了。" || texts[3] != "你的 ID 是 tg:42，机器人把你当作普通成员。" || len(fake.chatCalls) != 0 {
 		t.Fatal(texts, fake.chatCalls)
 	}
-	if strings.Contains(telegramHelpText, "/stats") || strings.Contains(telegramHelpText, "/bind") || !strings.Contains(qqHelpText, "/stats") {
-		t.Fatal("帮助没有按平台区分")
+	if !strings.Contains(telegramHelpText, "/stats") || strings.Contains(telegramHelpText, "@我 再打「/」") {
+		t.Fatal("Telegram 的帮助不对")
 	}
 	telegramDeliver(t, s, 46, "@msime_bot 这个怎么开", map[string]any{"message_id": 5, "from": map[string]any{"id": 99, "is_bot": false}, "text": "双拼"})
 	if !strings.Contains(fake.chatBodies[len(fake.chatBodies)-1], "（群友引用的消息：「双拼」）") {
@@ -581,5 +581,35 @@ func TestTelegramBotAdmins(t *testing.T) {
 	s.tg.registerCommands(ctx)
 	if !strings.Contains(logs.String(), "telegram bot: commands not registered") || strings.Contains(logs.String(), testTelegramToken) {
 		t.Fatal(logs.String())
+	}
+}
+
+// 视频和当作文件发的视频也是附件（没给类型时按 MP4），PDF 这类不是；看截图只看图片，管理员提 issue 时视频和图片一样去存进公开 bucket。
+func TestTelegramBotVideos(t *testing.T) {
+	s, fake, _, api := telegramAPIServer(t)
+	got := s.tg.attachments(&telegramMessage{
+		Photo:    []telegramPhotoSize{{FileID: "small"}, {FileID: "large"}},
+		Video:    &telegramDocument{FileID: "clip"},
+		Document: &telegramDocument{FileID: "screen", MimeType: "video/quicktime"},
+	})
+	want := []qqAttachment{{ContentType: "image/jpeg", telegramFile: "large"}, {ContentType: "video/mp4", telegramFile: "clip"}, {ContentType: "video/quicktime", telegramFile: "screen"}}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatal(got)
+	}
+	if len(s.tg.attachments(&telegramMessage{Document: &telegramDocument{FileID: "manual", MimeType: "application/pdf"}})) != 0 {
+		t.Fatal("PDF 被当成附件")
+	}
+	// 管理员带视频提 issue：没有公开 bucket 时视频算作没能附上，并如实告诉管理员；视频不交给看图模型。
+	api.roles = map[int64]string{7: "administrator"}
+	raw, _ := json.Marshal(map[string]any{"update_id": 71, "message": map[string]any{
+		"message_id": 710, "from": map[string]any{"id": 7, "is_bot": false}, "chat": map[string]any{"id": testTelegramGroup, "type": "supergroup"},
+		"caption": "@msime_bot 提issue Windows 11 上水杉 0.9.5 候选框一直闪", "video": map[string]any{"file_id": "clip", "mime_type": "video/mp4"},
+	}})
+	if w := telegramPost(s, testTelegramSecret, string(raw)); w.Code != 200 {
+		t.Fatal(w.Code)
+	}
+	s.qqWorkers.Wait()
+	if len(fake.created) != 1 || len(fake.visionCalls) != 0 || !strings.Contains(api.texts()[len(api.messages)-1], "有 1 个截图或视频没能附上") {
+		t.Fatal(fake.created, fake.visionCalls, api.texts())
 	}
 }

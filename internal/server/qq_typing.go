@@ -49,9 +49,12 @@ var qqTypingSourceNames = map[string]string{
 // qqTypingSpeedKinds 是算速度时计入的字符类别，和客户端统计页的「每分钟」一致：汉字、拉丁字母和其他文字，不含数字、标点和符号。
 var qqTypingSpeedKinds = []string{"han", "latin", "otherLetter"}
 
+// qqTypingTelegramReply 是在 Telegram 群里发「我的数据」「绑定」「解绑」时的回复。
+const qqTypingTelegramReply = "打字数据要先在 QQ 群里 @水杉助手 发 /bind 绑定水杉账号，Telegram 上暂时查不了。"
+
 // qqTypingCommands 处理 /stats、/bind、/unbind 和它们的中文说法，返回处理结果的名字；不是这几个命令时返回空字符串。
 // `compact` 已由命令分发规范化，直接用于别名匹配。
-func (s *Server) qqTypingCommands(ctx context.Context, m qqGroupMessage, compact string, reply func(string)) string {
+func (s *Server) qqTypingCommands(ctx context.Context, m botMessage, compact string, reply func(string)) string {
 	var command string
 	switch {
 	case slices.Contains(qqTypingAliases, compact):
@@ -63,11 +66,16 @@ func (s *Server) qqTypingCommands(ctx context.Context, m qqGroupMessage, compact
 	default:
 		return ""
 	}
+	// 打字数据靠「绑定」把 QQ 成员和水杉账号关联起来，Telegram 上没有这一步。
+	if m.onTelegram() {
+		reply(qqTypingTelegramReply)
+		return command
+	}
 	if s.qqTyping == nil {
 		reply("打字数据暂时用不了。")
 		return command
 	}
-	subject := m.GroupOpenID + "/" + m.Author.MemberOpenID
+	subject := m.subject()
 	switch command {
 	case "cmd_bind":
 		code, err := s.qqTyping.CreateQQLinkCode(ctx, subject)

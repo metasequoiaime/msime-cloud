@@ -459,7 +459,8 @@
       "internal/server/telegram_bot_test.go::TestTelegramBotWebhookProtocol",
       "internal/server/telegram_bot_test.go::TestTelegramBotAnswersMentionsAndReplies",
       "internal/server/telegram_bot_test.go::TestTelegramBotThinkingAndFailures",
-      "internal/server/telegram_bot_test.go::TestTelegramBotAnswersAnonymousAdmins"
+      "internal/server/telegram_bot_test.go::TestTelegramBotAnswersAnonymousAdmins",
+      "internal/server/telegram_bot_test.go::TestTelegramBotCommandsAndQuotes"
     ],
     "GET /v1/community/word-submissions": [
       "internal/server/word_submissions_test.go::TestWordSubmissionSettings"

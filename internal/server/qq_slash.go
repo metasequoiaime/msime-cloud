@@ -64,7 +64,7 @@ func qqWithQuote(content, quote string) string {
 }
 
 // qqSlashCommand 处理斜杠命令，返回处理结果的名字；不是斜杠命令时返回空字符串。改写成中文命令的交给 qqCommand。
-func (s *Server) qqSlashCommand(ctx context.Context, m qqGroupMessage, text string, admin bool, reply, progress func(string)) string {
+func (s *Server) qqSlashCommand(ctx context.Context, m botMessage, text string, admin bool, reply, progress func(string)) string {
 	name, args, ok := qqSlashParse(text)
 	if !ok {
 		return ""
@@ -206,11 +206,7 @@ func (s *Server) qqSlashCommand(ctx context.Context, m qqGroupMessage, text stri
 	if args != "" || !qqSlashWord.MatchString(name) {
 		return ""
 	}
-	usage := qqHelpText
-	if admin {
-		usage += qqAdminHelpText
-	}
-	reply("没有 /" + name + " 这个命令。\n" + usage)
+	reply("没有 /" + name + " 这个命令。\n" + qqHelpFor(m, admin))
 	return "cmd_slash_unknown"
 }
 
@@ -310,7 +306,7 @@ func (s *Server) qqSlashIssues(ctx context.Context, args string, reply func(stri
 }
 
 // qqSlashDraft 按引用的消息（和管理员补充的内容）新建一份草稿：整理成 bug 或需求、写上缺什么，不提交，回复编号。和群友报问题时自动记下的草稿一样，提交时（/submit）才查重和选仓库。
-func (s *Server) qqSlashDraft(ctx context.Context, m qqGroupMessage, content string, reply func(string)) string {
+func (s *Server) qqSlashDraft(ctx context.Context, m botMessage, content string, reply func(string)) string {
 	if s.qqDrafts == nil {
 		reply("草稿暂时用不了。")
 		return "unavailable"
@@ -324,8 +320,9 @@ func (s *Server) qqSlashDraft(ctx context.Context, m qqGroupMessage, content str
 		reply("这条看不出是 bug 还是需求，没建草稿。可以在 /draft 后面补一句现象或想要什么。")
 		return "not_report"
 	}
+	report.Origin = botSubjectOrigin(m.subject())
 	raw, _ := json.Marshal(report)
-	id, err := createQQDraft(ctx, s.qqDrafts, m.GroupOpenID+"/"+m.Author.MemberOpenID, qqTruncate(content, qqDraftOriginalRunes), string(raw))
+	id, err := createQQDraft(ctx, s.qqDrafts, m.subject(), qqTruncate(content, qqDraftOriginalRunes), string(raw))
 	if err != nil {
 		slog.Warn("qq bot: slash draft not stored", "reason", err.Error())
 		reply(qqReplyUnavailable)

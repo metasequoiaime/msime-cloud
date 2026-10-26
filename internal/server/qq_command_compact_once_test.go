@@ -27,7 +27,7 @@ func TestQQCommandCompactAllocationBudget(t *testing.T) {
 			allocations := testing.AllocsPerRun(100, func() {
 				var compact string
 				compact, free = qqFreeCommand(tc.input)
-				outcome = s.qqCommand(context.Background(), qqGroupMessage{}, tc.input, compact, false, reply, reply)
+				outcome = s.qqCommand(context.Background(), botMessage{}, tc.input, compact, false, reply, reply)
 			})
 			if free || outcome != "" || replies != 0 {
 				t.Fatalf("普通消息误触命令：免费命令=%t，结果=%q，回复=%d 次", free, outcome, replies)
@@ -56,7 +56,7 @@ func TestQQCommandSharedCompactKeepsRawCommands(t *testing.T) {
 			var replies []string
 			reply := func(text string) { replies = append(replies, text) }
 			compact, _ := qqFreeCommand(tc.input)
-			outcome := s.qqCommand(context.Background(), qqGroupMessage{}, tc.input, compact, tc.admin, reply, reply)
+			outcome := s.qqCommand(context.Background(), botMessage{}, tc.input, compact, tc.admin, reply, reply)
 			if outcome != tc.outcome || strings.Join(replies, "\n") != tc.reply {
 				t.Fatalf("原始命令或参数变化：结果=%q，回复=%q，期望结果=%q，回复=%q", outcome, replies, tc.outcome, tc.reply)
 			}
@@ -87,7 +87,7 @@ func TestQQCommandCompactRoutes(t *testing.T) {
 			if free != tc.free {
 				t.Fatalf("免费命令分类变化：结果=%t，期望=%t", free, tc.free)
 			}
-			outcome := s.qqCommand(context.Background(), qqGroupMessage{}, tc.input, compact, tc.admin, reply, reply)
+			outcome := s.qqCommand(context.Background(), botMessage{}, tc.input, compact, tc.admin, reply, reply)
 			if outcome != tc.outcome || strings.Join(replies, "\n") != tc.reply {
 				t.Fatalf("命令分发变化：结果=%q，回复=%q，期望结果=%q，回复=%q", outcome, replies, tc.outcome, tc.reply)
 			}

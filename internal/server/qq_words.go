@@ -240,9 +240,14 @@ func (s *Server) qqAddWords(ctx context.Context, subject, content string, reply 
 		return
 	}
 	// 敏感词过滤和官网投稿一样，有用户库时才做。
-	sub := submission{kind: kindWords, note: qqWordsNote}
+	// 投稿备注写明来自哪个群。
+	note := qqWordsNote
+	if botSubjectOrigin(subject) == botOriginTelegram {
+		note = "来自 Telegram 群"
+	}
+	sub := submission{kind: kindWords, note: note}
 	if s.accounts != nil {
-		blocked, flagged, err := screenSubmission(ctx, s.accounts.Sensitive(), entryTexts(entries, nil, nil), qqWordsNote)
+		blocked, flagged, err := screenSubmission(ctx, s.accounts.Sensitive(), entryTexts(entries, nil, nil), note)
 		switch {
 		case err != nil:
 			slog.Error("qq bot: sensitive word list unavailable", "reason", err.Error())
@@ -285,7 +290,7 @@ func (s *Server) qqAddWords(ctx context.Context, subject, content string, reply 
 	var listed alreadyListedError
 	switch {
 	case err == nil:
-		s.recordSubmission(ctx, number, kindWords, entries, nil, nil, qqWordsNote)
+		s.recordSubmission(ctx, number, kindWords, entries, nil, nil, note)
 		var labels []string
 		for _, e := range entries {
 			labels = append(labels, e.Word+"（"+e.Pinyin+"）")

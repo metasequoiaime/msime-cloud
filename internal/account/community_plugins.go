@@ -101,6 +101,8 @@ type CommunityPlugin struct {
 	// Moderation 是审核状态，只出现在作者自己的作品上，且只在带 `fields=moderation` 时出现（见 communityFields）。
 	Moderation string `json:"moderation,omitempty"`
 	moderation string
+	// Permissions 是脚本插件申请的能力名（清单 permissions），让客户端在安装前用白话列出来；数据类插件没有这个字段。只有在 `kinds` 里声明了 script 的客户端才会收到脚本插件，旧客户端按拒绝未知字段解析也不受影响。
+	Permissions []string `json:"permissions,omitempty"`
 	// Saved 和 Saves 是当前用户是否收藏（匿名为 false）和收藏总数，只在请求带 `fields=saved` 时出现（见 communitySavedFields）。
 	Saved *bool `json:"saved,omitempty"`
 	Saves *int  `json:"saves,omitempty"`
@@ -112,7 +114,7 @@ const pluginSelectBase = `SELECT p.id,p.kind,p.plugin_id,p.name,p.description,
  COALESCE(NULLIF(btrim(u.display_name),''),'水杉小鹿·'||upper(left(u.id,6))),p.version,p.license,p.size,p.sha256,
  (SELECT count(*) FROM community_plugin_downloads WHERE pack_id=p.id),
  rating_stats.count,rating_stats.average,p.owner_id=$1,rating_stats.mine,p.created_at,
- CASE WHEN p.owner_id=$1 THEN p.moderation ELSE '' END,`
+ CASE WHEN p.owner_id=$1 THEN p.moderation ELSE '' END,CASE WHEN p.kind='script' THEN p.permissions ELSE '{}'::text[] END,`
 
 // communityPluginSelect 只有客户端声明 fields=saved 时才计算收藏总数和当前用户的收藏状态；默认目录不需要这两个逐行子查询。
 func communityPluginSelect(saved bool) string {
@@ -142,7 +144,7 @@ func buildCommunityPluginSelectQuery(saved, page bool) string {
 
 func scanCommunityPlugin(row interface{ Scan(...any) error }) (CommunityPlugin, error) {
 	var p CommunityPlugin
-	err := row.Scan(&p.ID, &p.Kind, &p.PluginID, &p.Name, &p.Description, &p.Author, &p.Version, &p.License, &p.Size, &p.SHA256, &p.Downloads, &p.RatingCount, &p.RatingAverage, &p.Owned, &p.MyRating, &p.CreatedAt, &p.moderation, &p.saves, &p.saved)
+	err := row.Scan(&p.ID, &p.Kind, &p.PluginID, &p.Name, &p.Description, &p.Author, &p.Version, &p.License, &p.Size, &p.SHA256, &p.Downloads, &p.RatingCount, &p.RatingAverage, &p.Owned, &p.MyRating, &p.CreatedAt, &p.moderation, &p.Permissions, &p.saves, &p.saved)
 	return p, err
 }
 

@@ -246,7 +246,11 @@ func TestCommunityScriptPluginPreModeration(t *testing.T) {
 	if got := listed("?kinds=script&scope=mine&fields=moderation", owner.AccessToken); !slices.Equal(got, []string{script + ":pending", data + ":pending"}) {
 		t.Fatal(got)
 	}
-	if w := c.do("GET", "/v1/community/plugins/"+script+"?kinds=script&fields=moderation", "", owner.AccessToken); w.Code != 200 || !strings.Contains(w.Body.String(), `"moderation":"pending"`) {
+	if w := c.do("GET", "/v1/community/plugins/"+script+"?kinds=script&fields=moderation", "", owner.AccessToken); w.Code != 200 || !strings.Contains(w.Body.String(), `"moderation":"pending"`) || !strings.Contains(w.Body.String(), `"permissions":["read_commit","rewrite_commit"]`) {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	// 数据类插件不带 permissions 字段，旧客户端按拒绝未知字段解析不受影响。
+	if w := c.do("GET", "/v1/community/plugins/"+data, "", owner.AccessToken); w.Code != 200 || strings.Contains(w.Body.String(), "permissions") {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	if w := c.do("POST", "/v1/community/plugins/"+script+"/download", "{}", owner.AccessToken); w.Code != 200 {

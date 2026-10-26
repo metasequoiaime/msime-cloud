@@ -271,7 +271,7 @@ func (s *Server) adminGitHubApp(w http.ResponseWriter) (*githubapp.Client, bool)
 
 // startAdminJobs starts the console's background jobs; each runs until s.lifetime ends and is waited for by Close.
 func (s *Server) startAdminJobs() {
-	for _, job := range []func(context.Context){s.releaseSnapshotJob, s.statusProbeJob, s.crashSpikeJob} {
+	for _, job := range []func(context.Context){s.releaseSnapshotJob, s.releaseTelegramJob, s.statusProbeJob, s.crashSpikeJob} {
 		s.adminJobs.Add(1)
 		go func() {
 			defer s.adminJobs.Done()

@@ -409,6 +409,8 @@ GitHub 读请求在内存中缓存 60 秒，并使用 ETag 条件请求，以免
 
 公告的 Telegram 渠道。`chat_id` 为空时渠道关闭，此时在后台勾选 Telegram 发布会返回 409 `telegram_disabled`。`chat_id` 是数字会话 ID 或 `@频道名`；`bot_token_env` 默认 `MSIME_ADMIN_TELEGRAM_TOKEN`，启动时校验令牌格式。Bot 需要能在目标频道或群组里发消息（频道需设为管理员）。
 
+同时配置了 `admin.github`（`app_id` 不为 0 且有 `platforms`）时，同一个 chat 还会自动收到新版本消息：后台每 5 分钟读一次各平台的 GitHub Release（走 ETag 缓存，没有变化时不占 GitHub 接口额度），发现 24 小时内发布的正式版或公开测试版就发一条纯文本消息，方便复制到 QQ 群。消息第一行是「🎉 水杉输入法 Windows v0.5.4 已发布」（公开测试版写「公开测试版已发布」），接着一行请大家给 `metasequoiaime/msime` 点 Star，然后按发布说明的「新增」「改进」「修复」「说明」小标题分段列出条目（去掉 Markdown 符号、图片和链接，不写「待办」），最后是 GitHub 发布页地址。草稿、已撤回的版本和发布超过 24 小时的版本不发。每个版本按「仓库@tag」记在 `auth_rates`（作用域 `release-telegram`，保留 7 天），所有副本合计只发一次；发送失败时放回记录，5 分钟后重试。没有新增配置字段，升级后立即生效；第一次运行时，会把升级前 24 小时内已经发布的版本补发一次。
+
 ### 客户端跨域
 
 `/v1/notices` 和 `/v1/telemetry/events` 受 `/v1` 中间件的来源规则约束：浏览器从其他域名请求时，该域名必须在顶层 `allowed_origins` 中，否则返回 403。官网要显示公告横幅或上报镜像下载，需要先把官网域名加进去（生产为 `https://msime.app`）。
@@ -528,7 +530,7 @@ GitHub 读请求在内存中缓存 60 秒，并使用 ETag 条件请求，以免
 3. 社区举报：客户端需要在展示他人作品的画廊里增加「举报」入口，调用 `POST /v1/community/reports`。
 4. 公告的 App 内通知和官网横幅：App 和官网需要拉取 `GET /v1/notices`，官网域名还要加入 `allowed_origins`。在此之前公告只写入数据库，用户看不到。
 5. 「下载后完成安装」比例无法测量，已去掉。
-6. 公告只有 Telegram 一个推送渠道（QQ 群没有官方 Bot API）；触达人数需要客户端回执，显示「—」。
+6. 公告只有 Telegram 一个推送渠道（QQ 群没有官方 Bot API，新版本消息也是发到 Telegram 后再手动复制到 QQ 群）；触达人数需要客户端回执，显示「—」。
 7. 登录方式是 Google OIDC，两步验证由 Google 账号控制，后台不提供 2FA、通行密钥或 GitHub 登录。
 8. 登录设备不显示地理位置，这需要 GeoIP 库。
 9. 没有站内信系统，用户详情不提供「发送站内信」；也没有 AI 额度模型。

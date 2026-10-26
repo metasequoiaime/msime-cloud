@@ -1,9 +1,11 @@
 import { formatNumber, formatRate } from "../../utils/number";
 import { platformName } from "../../utils/platform";
+import { deviceRateSub, excludedVersionsNote, FORCED_TERMINATION_NOTE, INSUFFICIENT, sessionRateText } from "../../utils/crash-rate";
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useAPI } from "../../api/client";
+import { comparePlatforms } from "../../api/crash";
 import { keys } from "../../api/keys";
 import { overviewSchema } from "../../api/overview";
 import type { Overview, OverviewService, ServiceState } from "../../api/overview";
@@ -55,6 +57,9 @@ function KPIs({ data }: { data: Overview }) {
   const downloads = percentDelta(data.downloads_30d, data.downloads_prev_30d);
   const active = data.telemetry.active ? percentDelta(data.active_devices_7d, data.active_devices_prev_7d) : undefined;
   const crashFree = pointsDelta(data.crash_free_rate, data.crash_free_rate_prev);
+  const crashFreeSub = data.crash_free_rate !== null
+    ? (data.crash_top ? `${platformName(data.crash_top.platform)} ${data.crash_top.version} 拖累` : "近 7 天会话")
+    : !data.telemetry.sessions ? "客户端未上报" : data.crash_platforms.some(p => p.versions > 0) ? INSUFFICIENT : "近 7 天没有会话";
   const pending = shell?.pending;
   return <StatGrid kpi>
     <StatTile size="kpi" label="累计下载" value={formatNumber(data.downloads)} delta={downloads?.text} deltaTone={downloads?.tone}
@@ -62,7 +67,7 @@ function KPIs({ data }: { data: Overview }) {
     <StatTile size="kpi" label="7 日活跃设备" value={data.telemetry.active ? formatNumber(data.active_devices_7d) : "—"} delta={active?.text} deltaTone={active?.tone}
       sub={data.telemetry.active ? "全平台合计" : "客户端未上报"} />
     <StatTile size="kpi" label="无崩溃会话率" value={formatRate(data.crash_free_rate)} delta={crashFree?.text} deltaTone={crashFree?.tone}
-      sub={data.crash_free_rate !== null ? (data.crash_top ? `${platformName(data.crash_top.platform)} ${data.crash_top.version} 拖累` : "近 7 天会话") : data.telemetry.sessions ? "近 7 天没有会话" : "客户端未上报"} />
+      sub={data.device_crash_rate === null ? crashFreeSub : `${crashFreeSub} · 崩溃设备 ${formatRate(data.device_crash_rate)}`} />
     <StatTile size="kpi" label="待审核" value={pending ? formatNumber(pending.dict_prs + pending.community + pending.issues) : "—"}
       sub={pending ? `词库 PR ${pending.dict_prs} · 社区 ${pending.community} · Issue ${pending.issues}` : "正在加载…"} />
   </StatGrid>;
@@ -94,6 +99,28 @@ function PlatformActive({ data }: { data: Overview }) {
           <ProgressBar value={devices} max={max} label={`${platformName(platform)} 活跃设备`} />
         </li>)}
       </ul>}
+  </Card>;
+}
+
+// CrashPlatforms 把各平台的无崩溃会话率、崩溃设备占比和系统强制终止并排列出；会话率只合计会话数据充分的版本，被排除的版本数写在说明列。
+function CrashPlatforms({ data }: { data: Overview }) {
+  const rows = [...data.crash_platforms].sort((a, b) => comparePlatforms(a.platform, b.platform));
+  return <Card>
+    <CardHeader title="各平台稳定性" sub={<>近 7 天。每台活跃设备平均正常会话不足 0.5 次的版本视为会话数据不足，不计入无崩溃会话率；崩溃设备占比 = 有崩溃的设备 ÷ 活跃设备。<br />{FORCED_TERMINATION_NOTE}。</>} />
+    {rows.length === 0
+      ? <Empty title={data.telemetry.active || data.telemetry.sessions ? "近 7 天没有会话或活跃设备" : "客户端未上报"} className="py-8" />
+      : <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-left text-[13px]" aria-label="各平台无崩溃会话率与崩溃设备占比">
+          <thead><tr className="border-b border-hair text-muted"><th className="py-2 pr-4 font-medium">平台</th><th className="py-2 pr-4 font-medium">无崩溃会话率</th><th className="py-2 pr-4 font-medium">崩溃设备占比</th><th className="py-2 pr-4 font-medium" title={FORCED_TERMINATION_NOTE}>系统强制终止</th><th className="py-2 font-medium">说明</th></tr></thead>
+          <tbody>{rows.map(row => <tr key={row.platform} className="border-b border-hair last:border-b-0">
+            <td className="py-2 pr-4 text-ink">{platformName(row.platform)}</td>
+            <td className="py-2 pr-4 tabular-nums text-ink">{sessionRateText(row.crash_free_rate, row.versions, row.insufficient_versions)}</td>
+            <td className="py-2 pr-4 tabular-nums text-ink">{formatRate(row.device_crash_rate)} <span className="text-muted">{deviceRateSub(row.crash_devices_7d, row.active_devices_7d)}</span></td>
+            <td className="py-2 pr-4 tabular-nums text-ink">{formatRate(row.forced_termination_rate)} <span className="text-muted">{deviceRateSub(row.forced_termination_devices_7d, row.active_devices_7d)}</span></td>
+            <td className="py-2 text-muted">{excludedVersionsNote(row.insufficient_versions)}</td>
+          </tr>)}</tbody>
+        </table>
+      </div>}
   </Card>;
 }
 
@@ -200,6 +227,7 @@ export default function OverviewPage() {
         <ActiveDevices data={query.data} />
         <PlatformActive data={query.data} />
       </div>
+      <CrashPlatforms data={query.data} />
       <div className="grid gap-3.5 min-[820px]:grid-cols-2">
         <Todos data={query.data} />
         <Services data={query.data} />

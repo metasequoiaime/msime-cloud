@@ -53,9 +53,14 @@ type overviewBody struct {
 		Platform  string `json:"platform"`
 		Title     string `json:"title"`
 	} `json:"crash_group_latest"`
-	Pending            map[string]int    `json:"pending"`
-	ServicesConfigured bool              `json:"services_configured"`
-	Services           []overviewService `json:"services"`
+	CrashDevices7d  int                     `json:"crash_devices_7d"`
+	DeviceCrashRate *float64                `json:"device_crash_rate"`
+	CrashPlatforms  []overviewCrashPlatform `json:"crash_platforms"`
+
+	ForcedTerminationDevices7d int               `json:"forced_termination_devices_7d"`
+	Pending                    map[string]int    `json:"pending"`
+	ServicesConfigured         bool              `json:"services_configured"`
+	Services                   []overviewService `json:"services"`
 }
 
 type overviewService struct {
@@ -65,6 +70,21 @@ type overviewService struct {
 	State     string   `json:"state"`
 	Uptime60d *float64 `json:"uptime_60d"`
 	P95MS     *int     `json:"p95_ms"`
+}
+
+type overviewCrashPlatform struct {
+	Platform             string   `json:"platform"`
+	CrashFreeRate        *float64 `json:"crash_free_rate"`
+	Sessions             int      `json:"sessions"`
+	CrashedSessions      int      `json:"crashed_sessions"`
+	Versions             int      `json:"versions"`
+	InsufficientVersions int      `json:"insufficient_versions"`
+	ActiveDevices7d      int      `json:"active_devices_7d"`
+	CrashDevices7d       int      `json:"crash_devices_7d"`
+	DeviceCrashRate      *float64 `json:"device_crash_rate"`
+
+	ForcedTerminationDevices7d int      `json:"forced_termination_devices_7d"`
+	ForcedTerminationRate      *float64 `json:"forced_termination_rate"`
 }
 
 func overviewTestService(t *testing.T) *Service {
@@ -119,7 +139,7 @@ func TestOverviewDaysQuery(t *testing.T) {
 func TestOverviewWithoutClientTelemetry(t *testing.T) {
 	a := overviewTestService(t)
 	body := getOverview(t, a, "?days=7")
-	if body.Telemetry.Active || body.Telemetry.Sessions || body.CrashFreeRate != nil || body.CrashTop != nil || body.CrashGroupLatest != nil || body.ActiveDevices7d != 0 || len(body.PlatformActive7d) != 0 {
+	if body.Telemetry.Active || body.Telemetry.Sessions || body.CrashFreeRate != nil || body.CrashTop != nil || body.CrashGroupLatest != nil || body.ActiveDevices7d != 0 || len(body.PlatformActive7d) != 0 || body.CrashDevices7d != 0 || body.DeviceCrashRate != nil || body.CrashPlatforms == nil || len(body.CrashPlatforms) != 0 {
 		t.Fatalf("telemetry without events %+v", body)
 	}
 	if len(body.ActiveDevicesDaily) != 7 || len(body.Daily) != 7 || len(body.EmailDelivery) != 7 || body.RangeDays != 7 {

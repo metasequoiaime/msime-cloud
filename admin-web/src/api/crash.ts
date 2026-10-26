@@ -26,13 +26,30 @@ export const crashGroupSchema = z.object({
 });
 export type CrashGroup = z.infer<typeof crashGroupSchema>;
 
-// Summary tiles; installs_today and crash_free_rate need the optional active/session telemetry and are null until clients report it.
+// 近 7 天某个版本的会话统计；insufficient 表示会话数据不足，此时 crash_free_rate 为 null 且不计入合计。
+export const sessionVersionSchema = z.object({
+  platform: z.string(),
+  version: z.string(),
+  sessions: z.number(),
+  crashed_sessions: z.number(),
+  active_devices: z.number(),
+  crash_free_rate: z.number().nullable(),
+  insufficient: z.boolean(),
+});
+export type SessionVersion = z.infer<typeof sessionVersionSchema>;
+
+// 顶部统计。installs_today、crash_free_rate、active_devices_7d 依赖可选的 active/session 遥测，客户端未上报时为 null；crash_free_rate 只合计会话数据充分的版本。devices_7d 统计全部崩溃事件，其中真正崩溃的设备是 crash_devices_7d、被系统强制终止的设备是 forced_termination_devices_7d；device_crash_rate 是 crash_devices_7d 除以 active_devices_7d。
 export const crashSummarySchema = z.object({
   groups: z.number(),
   crashes_7d: z.number(),
   devices_7d: z.number().nullable(),
   installs_today: z.number().nullable(),
   crash_free_rate: z.number().nullable(),
+  active_devices_7d: z.number().nullable(),
+  device_crash_rate: z.number().nullable(),
+  versions: z.array(sessionVersionSchema),
+  crash_devices_7d: z.number(),
+  forced_termination_devices_7d: z.number(),
 });
 
 export const crashGroupsSchema = z.object({

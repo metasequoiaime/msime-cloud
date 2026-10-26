@@ -508,7 +508,7 @@ issue 和评论只包含模型转述的内容，不含群友的原话、昵称�
 
 ## Telegram 群答疑
 
-`admin.telegram` 的 Bot 被拉进 Telegram 群后，群友 @它 或回复它的消息时，用和 QQ 群机器人同一套流程答疑（`telegram_bot.go` 调用 `answerQQQuestion`）：挑段落、现查 GitHub、追问接上文、说「不对」时重答、答不上记进文档缺口、群友报问题时整理成草稿。这些草稿和 QQ 的草稿在同一个列表里，由管理员在 QQ 群或管理工具里统一处理。只处理文字消息，不支持 QQ 机器人的命令（帮助、版本、加词、#编号等）、看截图和管理员提 issue。只 @ 了 Bot、没写话但回复了别人的消息时，把那条消息当成问题。对话历史、额度和处理结果按 `tg:<chat_id>` 和 `tg:<user_id>` 记录：每个群友 24 小时 20 条、每个群 300 条，`auth_rates` 作用域是 `telegram-bot-member`、`telegram-bot-group`，与 QQ 分开计数；处理结果和 QQ 一起计入管理员周报。回复引用原消息，不展开链接预览，超过 4096 字时截断。群友的原话、昵称和 Telegram ID 不写进日志，只有名单外的群会记一条带群 ID 的日志，方便填进配置。
+`admin.telegram` 的 Bot 被拉进 Telegram 群后，群友 @它 或回复它的消息时，用和 QQ 群机器人同一套流程答疑（`telegram_bot.go` 调用 `answerQQQuestion`）：挑段落、现查 GitHub、追问接上文、说「不对」时重答、答不上记进文档缺口、群友报问题时整理成草稿。这些草稿和 QQ 的草稿在同一个列表里，由管理员在 QQ 群或管理工具里统一处理。只处理文字消息，不支持 QQ 机器人的命令（帮助、版本、加词、#编号等）、看截图和管理员提 issue。只 @ 了 Bot、没写话但回复了别人的消息时，把那条消息当成问题。开着「保持匿名」的管理员以群的身份发言（`from` 是 GroupAnonymousBot，`sender_chat` 是群本身）时照常答疑，群里所有匿名管理员共用一份个人额度和对话历史；以其他频道身份发的消息和其他 Bot 的消息不处理。对话历史、额度和处理结果按 `tg:<chat_id>` 和 `tg:<user_id>` 记录：每个群友 24 小时 20 条、每个群 300 条，`auth_rates` 作用域是 `telegram-bot-member`、`telegram-bot-group`，与 QQ 分开计数；处理结果和 QQ 一起计入管理员周报。回复引用原消息，不展开链接预览，超过 4096 字时截断。群友的原话、昵称和 Telegram ID 不写进日志，只有名单外的群会记一条带群 ID 的日志，方便填进配置。
 
 ```json
 {"telegram_bot":{"chats":[-1004492524988],"username":"msime_bot","webhook_secret_env":"MSIME_TELEGRAM_WEBHOOK_SECRET"}}

@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
@@ -22,7 +23,7 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/httpjson"
 )
 
-// Telegram 群答疑。admin.telegram 的 Bot 在 telegram_bot.chats 列出的群里被 @、被回复或收到「/命令@Bot用户名」时，把消息转成 botMessage，交给和 QQ 群机器人共用的 handleBotMessage：命令、额度、过渡语和知识库答疑都与 QQ 一致（见 group_bot.go）。Telegram 以 Webhook 把消息推到 telegramBotEventsPath，服务端校验 secret_token、按 update_id 在所有副本间去重后立即应答，再在后台处理，回复引用原消息。图片（照片、当作文件发的图片和被回复消息里的图片）用 getFile 下载后交给看图模型；管理员还没有接入。群友的原话、昵称和 Telegram ID 不写进日志。
+// Telegram 群答疑。admin.telegram 的 Bot 在 telegram_bot.chats 列出的群里被 @、被回复或收到「/命令@Bot用户名」时，把消息转成 botMessage，交给和 QQ 群机器人共用的 handleBotMessage：命令、额度、过渡语和知识库答疑都与 QQ 一致（见 group_bot.go）。Telegram 以 Webhook 把消息推到 telegramBotEventsPath，服务端校验 secret_token、按 update_id 在所有副本间去重后立即应答，再在后台处理，回复引用原消息。图片（照片、当作文件发的图片和被回复消息里的图片）用 getFile 下载后交给看图模型；群主、群管理员和 telegram_bot.admins 里的人是管理员，能提 issue、处理草稿和文档缺口。群友的原话、昵称和 Telegram ID 不写进日志。
 
 const (
 	telegramBotEventsPath    = "/v1/community/telegram-bot/events"
@@ -44,6 +45,8 @@ type TelegramBotConfig struct {
 	Chats []int64 `json:"chats"`
 	// Username 是 Bot 的用户名（不带 @，例如 msime_bot），用来认出群友 @ 了它。
 	Username string `json:"username"`
+	// Admins 是额外认作管理员的 Telegram 用户 ID。群主和群管理员由 getChatMember 自动识别，开着「保持匿名」的管理员以群的身份发言时也认作管理员，这份名单只用于不在群管理员里、又要提 issue 的人。
+	Admins []int64 `json:"admins"`
 	// WebhookSecretEnv 是保存 Webhook secret_token 的环境变量名，默认 MSIME_TELEGRAM_WEBHOOK_SECRET。调用 setWebhook 时传同一个值，Telegram 会在每次回调的 X-Telegram-Bot-Api-Secret-Token 头里带上它。
 	WebhookSecretEnv string `json:"webhook_secret_env"`
 	secret           string
@@ -53,7 +56,7 @@ func (c *TelegramBotConfig) enabled() bool { return len(c.Chats) > 0 }
 
 func (c *TelegramBotConfig) validate(cfg *Config) error {
 	if !c.enabled() {
-		if c.Username != "" || c.WebhookSecretEnv != "" {
+		if c.Username != "" || c.WebhookSecretEnv != "" || len(c.Admins) > 0 {
 			return errors.New("telegram_bot settings require chats")
 		}
 		return nil
@@ -67,6 +70,11 @@ func (c *TelegramBotConfig) validate(cfg *Config) error {
 	for _, chat := range c.Chats {
 		if chat == 0 {
 			return errors.New("telegram_bot chats must be numeric chat ids")
+		}
+	}
+	for _, admin := range c.Admins {
+		if admin <= 0 {
+			return errors.New("telegram_bot admins must be numeric user ids")
 		}
 	}
 	c.Username = strings.TrimPrefix(c.Username, "@")
@@ -96,18 +104,37 @@ type telegramBot struct {
 	// command 匹配开头的「/命令@Bot用户名」，第一个分组是「/命令」。
 	command *regexp.Regexp
 	client  *http.Client
+	// getChatMember 和 setMyCommands 是 Bot API 的地址，带着令牌。
+	getChatMember, setMyCommands string
+	// roles 缓存 getChatMember 查到的身份，键是「群/用户」，由 mu 保护，见 isAdmin。
+	mu    sync.Mutex
+	roles map[string]telegramRole
+	now   func() time.Time
 }
+
+// telegramRole 是缓存的群身份和查到的时间。
+type telegramRole struct {
+	admin bool
+	at    time.Time
+}
+
+// telegramRoleTTL 是 getChatMember 结果在每个副本缓存的时长，和 QQ 的群身份缓存一样。
+const telegramRoleTTL = 10 * time.Minute
 
 func newTelegramBot(c TelegramBotConfig, t AdminTelegramConfig) *telegramBot {
 	id, _ := strconv.ParseInt(strings.SplitN(t.botToken, ":", 2)[0], 10, 64)
 	base := strings.TrimRight(t.APIURL, "/")
 	return &telegramBot{
-		config:     c,
-		endpoint:   base + "/bot" + t.botToken + "/sendMessage",
-		getFile:    base + "/bot" + t.botToken + "/getFile",
-		files:      base + "/file/bot" + t.botToken + "/",
-		fileClient: httpclient.New(qqVisionTimeout),
-		botID:      id,
+		config:   c,
+		endpoint: base + "/bot" + t.botToken + "/sendMessage",
+		getFile:  base + "/bot" + t.botToken + "/getFile",
+		// 命令菜单和群身份查询。
+		getChatMember: base + "/bot" + t.botToken + "/getChatMember",
+		setMyCommands: base + "/bot" + t.botToken + "/setMyCommands",
+		now:           time.Now,
+		files:         base + "/file/bot" + t.botToken + "/",
+		fileClient:    httpclient.New(qqVisionTimeout),
+		botID:         id,
 		// 用户名不区分大小写；前后不能紧挨着用户名里允许的字符，免得 @msime_bot_fan 这样的别人被当成 @ 了机器人。
 		mention: regexp.MustCompile(`(?i)(^|[^A-Za-z0-9_])@` + regexp.QuoteMeta(c.Username) + `($|[^A-Za-z0-9_])`),
 		command: regexp.MustCompile(`(?i)^\s*(/[A-Za-z0-9_]+)@` + regexp.QuoteMeta(c.Username) + `($|[^A-Za-z0-9_])`),
@@ -154,19 +181,21 @@ type telegramUpdate struct {
 	Message  *telegramMessage `json:"message"`
 }
 
-// telegramChannel 是一条 Telegram 群消息的回复通道：sendMessage 引用原消息，次数不限，链接照常发。管理员还没有接入，一律按群友处理。
+// telegramChannel 是一条 Telegram 群消息的回复通道：sendMessage 引用原消息，次数不限，链接照常发；管理员见 telegramBot.isAdmin。member 是发消息的人，匿名管理员是群本身。
 type telegramChannel struct {
-	bot           *telegramBot
-	chat, message int64
+	bot                   *telegramBot
+	chat, message, member int64
 }
 
 func (c telegramChannel) reply(ctx context.Context, _ botMessage, _ int, text string) error {
 	return c.bot.reply(ctx, c.chat, c.message, text)
 }
 
-func (telegramChannel) maxReplies() int                          { return 0 }
-func (telegramChannel) rejectsLinks() bool                       { return false }
-func (telegramChannel) isAdmin(context.Context, botMessage) bool { return false }
+func (telegramChannel) maxReplies() int    { return 0 }
+func (telegramChannel) rejectsLinks() bool { return false }
+func (c telegramChannel) isAdmin(ctx context.Context, _ botMessage) bool {
+	return c.bot.isAdmin(ctx, c.chat, c.member)
+}
 
 // telegramBotEvents 处理 POST /v1/community/telegram-bot/events：Telegram 的 Webhook 回调。secret_token 不对返回 401；其余情况尽快返回 200，Telegram 收到非 2xx 才会重推，只有数据库暂时不可用、认领不了 update 时返回 503 让它稍后重推。
 func (s *Server) telegramBotEvents(w http.ResponseWriter, r *http.Request) {
@@ -254,6 +283,9 @@ func (b *telegramBot) message(m *telegramMessage) (botMessage, bool) {
 	text, command := m.messageText(), false
 	if loc := b.command.FindStringSubmatchIndex(text); loc != nil {
 		text, command = text[:loc[3]]+text[loc[1]:], true
+	} else if name, _, ok := qqSlashParse(text); ok && slices.Contains(telegramPlainCommands, name) {
+		// 群里只有这一个 Bot 时，从「/」菜单点出来的命令不带用户名。只认机器人自己的命令名，「/Library/…」这类路径不算。
+		command = true
 	}
 	if !command && !b.mention.MatchString(text) && !repliedToBot {
 		return botMessage{}, false
@@ -262,7 +294,7 @@ func (b *telegramBot) message(m *telegramMessage) (botMessage, bool) {
 	chat := strconv.FormatInt(m.Chat.ID, 10)
 	out := botMessage{
 		ID: "tg:" + chat + ":" + strconv.FormatInt(m.MessageID, 10), Text: text, Group: "tg:" + chat, Member: "tg:" + strconv.FormatInt(member, 10),
-		Attachments: b.attachments(m), Platform: botPlatformTelegram, channel: telegramChannel{bot: b, chat: m.Chat.ID, message: m.MessageID},
+		Attachments: b.attachments(m), Platform: botPlatformTelegram, channel: telegramChannel{bot: b, chat: m.Chat.ID, message: m.MessageID, member: member},
 	}
 	if m.ReplyTo != nil && !repliedToBot {
 		out.Quote = qqQuote{Text: qqTruncate(strings.TrimSpace(m.ReplyTo.messageText()), qqQuoteRunes), Images: b.attachments(m.ReplyTo), Referenced: true}
@@ -293,40 +325,107 @@ func (b *telegramBot) attachments(m *telegramMessage) []qqAttachment {
 // telegramFilePath 是 getFile 返回的 file_path 允许的形状，拼进下载地址前先检查，免得被拼出别的路径。
 var telegramFilePath = regexp.MustCompile(`^[A-Za-z0-9_-]+(?:/[A-Za-z0-9_.-]+)*$`)
 
-// fetchFile 下载一个 Telegram 文件：先用 getFile 换 file_path，再从文件地址下载，不超过 limit 字节。Bot API 只能下载 20 MB 以内的文件。错误只带状态和数字错误码，不含令牌、地址或上游描述。
-func (b *telegramBot) fetchFile(ctx context.Context, fileID string, limit int64) ([]byte, error) {
-	req, err := httpclient.NewJSONPayloadRequest(ctx, http.MethodPost, b.getFile, map[string]string{"file_id": fileID})
+// telegramPlainCommands 是不带「@Bot用户名」也认作发给机器人的斜杠命令，和 qqSlashCommand 认识的命令一致。
+var telegramPlainCommands = []string{"help", "h", "ver", "version", "today", "docs", "mcp", "doc", "issues", "add", "stats", "bind", "unbind",
+	"drafts", "darfts", "draft", "submit", "undraft", "issue", "faqs", "q", "a", "bad", "weekly"}
+
+// telegramMenuCommands 是注册到群聊「/」菜单的命令（setMyCommands），只列群友用得上的；管理员命令照样能用，见帮助。
+var telegramMenuCommands = []map[string]string{
+	{"command": "help", "description": "怎么提问和全部命令"},
+	{"command": "ver", "description": "各平台最新版本"},
+	{"command": "today", "description": "今天的农历、节气、假期和调休"},
+	{"command": "docs", "description": "使用文档和下载地址"},
+	{"command": "issues", "description": "查有没有人报过，例如 /issues 候选框 左上角"},
+	{"command": "add", "description": "投稿词条，例如 /add 扛把子 kang ba zi"},
+	{"command": "doc", "description": "文档缺了什么或写错了"},
+	{"command": "mcp", "description": "查词库、注音、释义和公共数据的用法"},
+}
+
+// registerCommands 把 telegramMenuCommands 注册成所有群聊的命令菜单。启动时调一次，多个副本重复注册结果相同；失败只记日志。
+func (b *telegramBot) registerCommands(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, qqBotReplyTimeout)
+	defer cancel()
+	if err := b.call(ctx, b.setMyCommands, map[string]any{"commands": telegramMenuCommands, "scope": map[string]string{"type": "all_group_chats"}}, nil); err != nil {
+		slog.Warn("telegram bot: commands not registered", "reason", err.Error())
+	}
+}
+
+// isAdmin 判断用户是不是这个群的管理员：匿名管理员以群的身份发言（member 就是群）时一定是；telegram_bot.admins 里的用户是；其余用 getChatMember 查，群主（creator）和管理员（administrator）是。查询结果按副本缓存 telegramRoleTTL；查询出错时沿用过期的缓存，从没查到过才按群友处理。
+func (b *telegramBot) isAdmin(ctx context.Context, chat, member int64) bool {
+	if member == chat || slices.Contains(b.config.Admins, member) {
+		return true
+	}
+	key := strconv.FormatInt(chat, 10) + "/" + strconv.FormatInt(member, 10)
+	b.mu.Lock()
+	cached, ok := b.roles[key]
+	b.mu.Unlock()
+	if ok && b.now().Sub(cached.at) < telegramRoleTTL {
+		return cached.admin
+	}
+	var result struct {
+		Status string `json:"status"`
+	}
+	ctx, cancel := context.WithTimeout(ctx, qqBotReplyTimeout)
+	defer cancel()
+	if err := b.call(ctx, b.getChatMember, map[string]int64{"chat_id": chat, "user_id": member}, &result); err != nil {
+		slog.Warn("telegram bot: member role unavailable", "reason", err.Error())
+		return cached.admin
+	}
+	admin := result.Status == "creator" || result.Status == "administrator"
+	b.mu.Lock()
+	if b.roles == nil {
+		b.roles = map[string]telegramRole{}
+	}
+	b.roles[key] = telegramRole{admin: admin, at: b.now()}
+	b.mu.Unlock()
+	return admin
+}
+
+// call 调用一个 Bot API 方法，Bot API 回 ok 才算成功，result 不为 nil 时解码返回的 result。错误只带状态和数字错误码，不含令牌或上游描述。
+func (b *telegramBot) call(ctx context.Context, endpoint string, payload, result any) error {
+	req, err := httpclient.NewJSONPayloadRequest(ctx, http.MethodPost, endpoint, payload)
 	if err != nil {
-		return nil, errors.New("telegram: invalid endpoint")
+		return errors.New("telegram: invalid endpoint")
 	}
 	resp, err := b.client.Do(req)
 	if err != nil {
-		return nil, errors.New("telegram: getFile failed")
+		return errors.New("telegram: request failed")
 	}
+	defer resp.Body.Close()
 	var answer struct {
-		OK        bool `json:"ok"`
-		ErrorCode int  `json:"error_code"`
-		Result    struct {
-			FilePath string `json:"file_path"`
-			FileSize int64  `json:"file_size"`
-		} `json:"result"`
+		OK        bool            `json:"ok"`
+		ErrorCode int             `json:"error_code"`
+		Result    json.RawMessage `json:"result"`
 	}
-	decoded := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&answer)
-	resp.Body.Close()
-	if decoded != nil || resp.StatusCode != http.StatusOK || !answer.OK {
-		return nil, fmt.Errorf("telegram: getFile answered %d (code %d)", resp.StatusCode, answer.ErrorCode)
+	if json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&answer) != nil || resp.StatusCode != http.StatusOK || !answer.OK {
+		return fmt.Errorf("telegram: Bot API answered %d (code %d)", resp.StatusCode, answer.ErrorCode)
 	}
-	if answer.Result.FileSize > limit {
+	if result != nil && json.Unmarshal(answer.Result, result) != nil {
+		return errors.New("telegram: invalid Bot API response")
+	}
+	return nil
+}
+
+// fetchFile 下载一个 Telegram 文件：先用 getFile 换 file_path，再从文件地址下载，不超过 limit 字节。Bot API 只能下载 20 MB 以内的文件。错误只带状态和数字错误码，不含令牌、地址或上游描述。
+func (b *telegramBot) fetchFile(ctx context.Context, fileID string, limit int64) ([]byte, error) {
+	var file struct {
+		FilePath string `json:"file_path"`
+		FileSize int64  `json:"file_size"`
+	}
+	if err := b.call(ctx, b.getFile, map[string]string{"file_id": fileID}, &file); err != nil {
+		return nil, err
+	}
+	if file.FileSize > limit {
 		return nil, errors.New("attachment too large")
 	}
-	if !telegramFilePath.MatchString(answer.Result.FilePath) || strings.Contains(answer.Result.FilePath, "..") {
+	if !telegramFilePath.MatchString(file.FilePath) || strings.Contains(file.FilePath, "..") {
 		return nil, errors.New("telegram: invalid file path")
 	}
-	req, err = http.NewRequestWithContext(ctx, http.MethodGet, b.files+answer.Result.FilePath, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.files+file.FilePath, nil)
 	if err != nil {
 		return nil, errors.New("telegram: invalid endpoint")
 	}
-	resp, err = b.fileClient.Do(req)
+	resp, err := b.fileClient.Do(req)
 	if err != nil {
 		return nil, errors.New("attachment download failed")
 	}
@@ -349,26 +448,10 @@ func (b *telegramBot) fetchFile(ctx context.Context, fileID string, limit int64)
 
 // reply 用 sendMessage 回复群里的一条消息，纯文本、不展开链接预览；被回复的消息已经删掉时照常发出。成功的标准是 Bot API 回 ok，错误只带状态和数字错误码，不含令牌或上游描述。
 func (b *telegramBot) reply(ctx context.Context, chat, message int64, text string) error {
-	req, err := httpclient.NewJSONPayloadRequest(ctx, http.MethodPost, b.endpoint, map[string]any{
+	return b.call(ctx, b.endpoint, map[string]any{
 		"chat_id":              chat,
 		"text":                 telegramText(account.Notice{Title: text}),
 		"reply_parameters":     map[string]any{"message_id": message, "allow_sending_without_reply": true},
 		"link_preview_options": map[string]bool{"is_disabled": true},
-	})
-	if err != nil {
-		return errors.New("telegram: invalid endpoint")
-	}
-	resp, err := b.client.Do(req)
-	if err != nil {
-		return errors.New("telegram: request failed")
-	}
-	defer resp.Body.Close()
-	var answer struct {
-		OK        bool `json:"ok"`
-		ErrorCode int  `json:"error_code"`
-	}
-	if json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&answer) != nil || resp.StatusCode != http.StatusOK || !answer.OK {
-		return fmt.Errorf("telegram: sendMessage answered %d (code %d)", resp.StatusCode, answer.ErrorCode)
-	}
-	return nil
+	}, nil)
 }

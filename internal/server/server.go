@@ -225,6 +225,11 @@ func New(c Config) (*Server, error) {
 		s.qq = newQQBot(c.QQBot)
 		if c.TelegramBot.enabled() {
 			s.tg = newTelegramBot(c.TelegramBot, c.Admin.Telegram)
+			s.adminJobs.Add(1)
+			go func() {
+				defer s.adminJobs.Done()
+				s.tg.registerCommands(s.lifetime)
+			}()
 		}
 		if s.accounts != nil {
 			s.media = s.accounts

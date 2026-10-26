@@ -1,10 +1,12 @@
 package server
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -46,6 +48,8 @@ func TestTelegramBotConfigValidation(t *testing.T) {
 		"没有 QQ 机器人":         {func(c *Config) { c.QQBot = QQBotConfig{} }, "requires qq_bot"},
 		"没有 admin.telegram": {func(c *Config) { c.Admin.Telegram = AdminTelegramConfig{} }, "requires admin.telegram"},
 		"群 ID 为 0":          {func(c *Config) { c.TelegramBot.Chats = []int64{0} }, "numeric chat ids"},
+		"管理员 ID 不对":         {func(c *Config) { c.TelegramBot.Admins = []int64{-5} }, "numeric user ids"},
+		"没有群却写了管理员":         {func(c *Config) { c.TelegramBot = TelegramBotConfig{Admins: []int64{7}} }, "require chats"},
 		"用户名不是 Bot":         {func(c *Config) { c.TelegramBot.Username = "msime_user" }, "ending in bot"},
 		"密钥太短":              {func(c *Config) { t.Setenv("TEST_TG_SECRET", "short") }, "webhook_secret_env"},
 	} {
@@ -79,12 +83,19 @@ func TestTelegramBotConfigValidation(t *testing.T) {
 // telegramServer 在 qqServer 上接好 Telegram 答疑，Bot API 由 fakeTelegram 扮演。
 func telegramServer(t *testing.T) (*Server, *qqFake, *qqLimiter, *fakeTelegram) {
 	t.Helper()
+	s, fake, limiter, api := telegramAPIServer(t)
+	return s, fake, limiter, api.fakeTelegram
+}
+
+// telegramAPIServer 和 telegramServer 一样，另外返回扮演 getFile、getChatMember 和 setMyCommands 的整个 Bot API。
+func telegramAPIServer(t *testing.T) (*Server, *qqFake, *qqLimiter, *fakeTelegramFiles) {
+	t.Helper()
 	s, fake, limiter := qqServer(t)
-	tg := &fakeTelegram{status: 200, ok: true}
-	srv := httptest.NewServer(tg)
+	api := &fakeTelegramFiles{fakeTelegram: &fakeTelegram{status: 200, ok: true}}
+	srv := httptest.NewServer(api)
 	t.Cleanup(srv.Close)
 	s.tg = newTelegramBot(TelegramBotConfig{Chats: []int64{testTelegramGroup}, Username: "msime_bot", secret: testTelegramSecret}, AdminTelegramConfig{APIURL: srv.URL, botToken: testTelegramToken})
-	return s, fake, limiter, tg
+	return s, fake, limiter, api
 }
 
 func telegramPost(s *Server, secret, body string) *httptest.ResponseRecorder {
@@ -307,7 +318,7 @@ func TestTelegramBotReplyLength(t *testing.T) {
 	}
 }
 
-// 开着「保持匿名」的管理员以群的身份发言（from 是 GroupAnonymousBot，sender_chat 是群本身）时照常答疑，按群计作提问者；以别的频道身份发的消息和其他 Bot 的消息不处理。
+// 开着「保持匿名」的管理员以群的身份发言（from 是 GroupAnonymousBot，sender_chat 是群本身）时照常处理，按群计作提问者，并认作管理员（只有管理员能匿名），额度记在管理员名下；以别的频道身份发的消息和其他 Bot 的消息不处理。
 func TestTelegramBotAnswersAnonymousAdmins(t *testing.T) {
 	s, _, limiter, tg := telegramServer(t)
 	anonymous := func(update int64, senderChat any) string {
@@ -333,7 +344,7 @@ func TestTelegramBotAnswersAnonymousAdmins(t *testing.T) {
 		t.Fatal(w.Code)
 	}
 	s.qqWorkers.Wait()
-	if texts := tg.texts(); len(texts) != 1 || texts[0] != "在设置的「输入方案」里选五笔。" || limiter.counts["qq-bot-member|tg:-1001234567890/tg:-1001234567890"] != 1 {
+	if texts := tg.texts(); len(texts) != 1 || texts[0] != "在设置的「输入方案」里选五笔。" || limiter.counts["qq-bot-admin|tg:-1001234567890"] != 1 {
 		t.Fatal(texts, limiter.counts)
 	}
 }
@@ -364,16 +375,44 @@ func TestTelegramBotCommandsAndQuotes(t *testing.T) {
 	}
 }
 
-// fakeTelegramFiles 在 fakeTelegram 之外再扮演 getFile 和文件下载：files 按 file_id 给出 file_path 和 file_size，contents 按 file_path 给出文件内容。
+// fakeTelegramFiles 是群答疑测试用的 Bot API：sendMessage 交给 fakeTelegram 记录；getFile 按 files（file_id → file_path、file_size）回答，文件内容见 contents；getChatMember 按 roles（用户 ID → status）回答，没列出的是 member，roleStatus 非 0 时回这个错误状态；setMyCommands 记进 commands。
 type fakeTelegramFiles struct {
 	*fakeTelegram
-	files    map[string]map[string]any
-	contents map[string][]byte
-	getFiles []string
+	files      map[string]map[string]any
+	contents   map[string][]byte
+	getFiles   []string
+	roles      map[int64]string
+	roleStatus int
+	roleCalls  int
+	commands   []map[string]any
 }
 
 func (f *fakeTelegramFiles) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
+	case r.URL.Path == "/bot"+testTelegramToken+"/getChatMember":
+		var body struct {
+			UserID int64 `json:"user_id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.mu.Lock()
+		f.roleCalls++
+		status, failure := f.roles[body.UserID], f.roleStatus
+		f.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if failure != 0 {
+			w.WriteHeader(failure)
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error_code": failure, "description": "synthetic " + testTelegramToken})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"status": cmp.Or(status, "member")}})
+	case r.URL.Path == "/bot"+testTelegramToken+"/setMyCommands":
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.mu.Lock()
+		f.commands = append(f.commands, body)
+		f.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": f.ok, "result": true})
 	case r.URL.Path == "/bot"+testTelegramToken+"/getFile":
 		var body struct {
 			FileID string `json:"file_id"`
@@ -404,20 +443,15 @@ func (f *fakeTelegramFiles) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // 照片和当作文件发的图片经 getFile 下载后交给看图模型：说明文字里 @ 机器人、只发图片回复机器人、回复别人的图片再 @ 都会看图；取不到的图片在问题后面注明没看清。日志里没有令牌。
 func TestTelegramBotImages(t *testing.T) {
-	s, fake, _ := qqServer(t)
+	s, fake, _, tg := telegramAPIServer(t)
 	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 32)...)
-	tg := &fakeTelegramFiles{fakeTelegram: &fakeTelegram{status: 200, ok: true},
-		files: map[string]map[string]any{
-			"photo-large": {"file_path": "photos/file_1.png", "file_size": len(png)},
-			"doc-png":     {"file_path": "documents/file_2.png", "file_size": len(png)},
-			"too-large":   {"file_path": "photos/file_3.png", "file_size": qqVisionBytes + 1},
-			"escape":      {"file_path": "../secrets", "file_size": 10},
-		},
-		contents: map[string][]byte{"photos/file_1.png": png, "documents/file_2.png": png},
+	tg.files = map[string]map[string]any{
+		"photo-large": {"file_path": "photos/file_1.png", "file_size": len(png)},
+		"doc-png":     {"file_path": "documents/file_2.png", "file_size": len(png)},
+		"too-large":   {"file_path": "photos/file_3.png", "file_size": qqVisionBytes + 1},
+		"escape":      {"file_path": "../secrets", "file_size": 10},
 	}
-	srv := httptest.NewServer(tg)
-	defer srv.Close()
-	s.tg = newTelegramBot(TelegramBotConfig{Chats: []int64{testTelegramGroup}, Username: "msime_bot", secret: testTelegramSecret}, AdminTelegramConfig{APIURL: srv.URL, botToken: testTelegramToken})
+	tg.contents = map[string][]byte{"photos/file_1.png": png, "documents/file_2.png": png}
 	logs := captureLogs(t)
 	photo := func(update int64, caption string, photos []string, reply map[string]any) string {
 		sizes := []map[string]any{}
@@ -479,5 +513,73 @@ func TestTelegramBotImages(t *testing.T) {
 	s.tg = nil
 	if _, err := s.downloadAttachment(t.Context(), qqAttachment{ContentType: "image/png", telegramFile: "photo-large"}, qqVisionBytes); err == nil {
 		t.Fatal("Telegram 关闭时下载了附件")
+	}
+}
+
+// Telegram 的管理员：群主、群管理员（getChatMember）、telegram_bot.admins 和匿名管理员。身份按副本缓存，查询出错时沿用过期的缓存；管理员能提 issue，issue 页脚写明来自 Telegram 群。不带用户名的菜单命令也认，命令菜单注册到所有群聊。
+func TestTelegramBotAdmins(t *testing.T) {
+	s, fake, _, api := telegramAPIServer(t)
+	logs := captureLogs(t)
+	api.roles = map[int64]string{7: "administrator", 8: "creator"}
+	s.tg.config.Admins = []int64{99}
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	s.tg.now = func() time.Time { return now }
+	ctx := t.Context()
+	for member, want := range map[int64]bool{7: true, 8: true, 42: false} {
+		if got := s.tg.isAdmin(ctx, testTelegramGroup, member); got != want {
+			t.Fatal(member, got)
+		}
+	}
+	// 名单里的人和匿名管理员不查接口；缓存期内也不再查。
+	if !s.tg.isAdmin(ctx, testTelegramGroup, 99) || !s.tg.isAdmin(ctx, testTelegramGroup, testTelegramGroup) || !s.tg.isAdmin(ctx, testTelegramGroup, 7) || api.roleCalls != 3 {
+		t.Fatal(api.roleCalls)
+	}
+	// 缓存过期后查询出错：沿用过期的身份；从没查到过的人按群友处理。
+	now = now.Add(telegramRoleTTL + time.Minute)
+	api.roleStatus = 500
+	if !s.tg.isAdmin(ctx, testTelegramGroup, 7) || s.tg.isAdmin(ctx, testTelegramGroup, 50) || !strings.Contains(logs.String(), "telegram bot: member role unavailable") || strings.Contains(logs.String(), testTelegramToken) {
+		t.Fatal(logs.String())
+	}
+	api.roleStatus = 0
+	from := func(update, user int64, text string) {
+		t.Helper()
+		body := strings.Replace(telegramUpdateJSON(update, testTelegramGroup, "supergroup", text, nil), `"id":42`, `"id":`+strconv.FormatInt(user, 10), 1)
+		if w := telegramPost(s, testTelegramSecret, body); w.Code != 200 {
+			t.Fatal(w.Code)
+		}
+		s.qqWorkers.Wait()
+	}
+	from(61, 7, "@msime_bot 我的ID")
+	if last := api.texts()[len(api.messages)-1]; last != "你的 ID 是 tg:7，机器人把你当作管理员。" {
+		t.Fatal(last)
+	}
+	// 管理员提 issue：页脚写明来自 Telegram 群。
+	from(62, 7, "@msime_bot 提issue Windows 11 上水杉 0.9.5 候选框停在左上角")
+	if len(fake.created) != 1 || !strings.Contains(fake.created[0]["body"].(string), "来自 Telegram 群反馈") {
+		t.Fatal(fake.created, api.texts())
+	}
+	// 群友发的「提issue」不提交。
+	from(63, 42, "@msime_bot 提issue Windows 11 上水杉 0.9.5 候选框停在左上角")
+	if len(fake.created) != 1 {
+		t.Fatal("群友提交了 issue")
+	}
+	// 菜单里点出来的命令不带用户名；不是机器人命令的斜杠开头的话不处理。
+	sent, calls := len(api.messages), len(fake.chatCalls)
+	from(64, 42, "/help")
+	from(65, 42, "/Library/Input Methods 里没有")
+	if len(api.messages) != sent+1 || api.texts()[sent] != telegramHelpText || len(fake.chatCalls) != calls {
+		t.Fatal(api.texts()[sent:], fake.chatCalls[calls:])
+	}
+	// 命令菜单注册到所有群聊；注册失败只记日志。
+	s.tg.registerCommands(ctx)
+	if len(api.commands) != 1 || api.commands[0]["scope"].(map[string]any)["type"] != "all_group_chats" || len(api.commands[0]["commands"].([]any)) != len(telegramMenuCommands) {
+		t.Fatal(api.commands)
+	}
+	api.mu.Lock()
+	api.ok = false
+	api.mu.Unlock()
+	s.tg.registerCommands(ctx)
+	if !strings.Contains(logs.String(), "telegram bot: commands not registered") || strings.Contains(logs.String(), testTelegramToken) {
+		t.Fatal(logs.String())
 	}
 }

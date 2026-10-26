@@ -16,7 +16,7 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/textutil"
 )
 
-// QQ 群里的命令和管理员提 issue 时的标签。命令不经过模型，直接查 GitHub 或给固定文字，回复快、结果稳定：帮助、版本、查 关键词、#编号、提文档（见 qq_docs.go）、我的ID（在 handleQQFeedback 里），以及只有管理员能用的「提issue」和「记录答案」（见 qq_faq.go）。管理员不用命令、但在消息里明确要求记录（「记一下」「反馈给开发」等）的具体反馈也会提交，见 fileAdminFeedback。管理员提 issue 时，模型从目标仓库已有的分类标签里挑 0 到 2 个；消息里写的「优先级 高」「effort S」在仓库有对应标签时打上标签，否则写进正文的「维护者标注」，不新建标签。
+// QQ 群里的命令和管理员提 issue 时的标签。命令不经过模型，直接查 GitHub 或给固定文字，回复快、结果稳定：帮助、版本、查 关键词、#编号、提文档（见 bot_docs.go）、我的ID（在 handleQQFeedback 里），以及只有管理员能用的「提issue」和「记录答案」（见 bot_faq.go）。管理员不用命令、但在消息里明确要求记录（「记一下」「反馈给开发」等）的具体反馈也会提交，见 fileAdminFeedback。管理员提 issue 时，模型从目标仓库已有的分类标签里挑 0 到 2 个；消息里写的「优先级 高」「effort S」在仓库有对应标签时打上标签，否则写进正文的「维护者标注」，不新建标签。
 
 // qqHelpText 是「帮助」的回复；管理员另外看到 qqAdminHelpText。群里 @机器人 再打「/」会弹出指令面板（开放平台的指令面板接口建的，见 README），所以帮助只列斜杠命令，每条一行、带一个能照着发的例子，十行以内：原来每个中文命令都写一段带 @水杉助手 的示例，群友看到的帮助二十多行、管理员的五十多行，千人群里一发就刷屏。中文命令照旧能用，管理员的帮助末尾提一句。不写实现细节（查重、标签、什么情况不提交）。
 const (
@@ -611,7 +611,7 @@ func (s *Server) qqCommand(ctx context.Context, m botMessage, text, compact stri
 	return ""
 }
 
-// qqIssueStatus 查一个 issue 的标题和状态，以及修复有没有发版和开发者最近的评论（截到 commentRunes 字，见 qq_issue_context.go）。仓库名为空时在每个答疑仓库里查同一个编号；仓库名只能是答疑仓库之一（按名字或 owner/name 匹配）。只有 GitHub 回 404 或 410 才算这个仓库没有这个编号；拿不到令牌、网络出错、限流和其他错误状态、解码失败都记为查询失败，一个都没查到又有失败时说暂时查不了，不说「没有查到」：这句话同时是命令回复和交给答疑模型的资料，说成没有查到，模型就会告诉群友没有这个 issue。
+// qqIssueStatus 查一个 issue 的标题和状态，以及修复有没有发版和开发者最近的评论（截到 commentRunes 字，见 bot_issue_context.go）。仓库名为空时在每个答疑仓库里查同一个编号；仓库名只能是答疑仓库之一（按名字或 owner/name 匹配）。只有 GitHub 回 404 或 410 才算这个仓库没有这个编号；拿不到令牌、网络出错、限流和其他错误状态、解码失败都记为查询失败，一个都没查到又有失败时说暂时查不了，不说「没有查到」：这句话同时是命令回复和交给答疑模型的资料，说成没有查到，模型就会告诉群友没有这个 issue。
 func (s *Server) qqIssueStatus(ctx context.Context, name, number string, commentRunes int) string {
 	repos := s.qqGitHubRepos()
 	if name != "" {

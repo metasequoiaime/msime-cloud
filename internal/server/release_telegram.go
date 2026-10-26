@@ -11,7 +11,7 @@ import (
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
 
-// 新版本发到 Telegram。后台定时读 admin.github.platforms 各平台的 GitHub Release，发现新发布的正式版或公开测试版时，把版本号、整理成纯文本的更新内容和发布页地址发到 admin.telegram 配置的 chat（和公告推送同一个），管理员从 Telegram 复制到 QQ 群即可：QQ 开放平台从 2025-04-21 起不再提供主动推送（见 qq_today.go），机器人没法自己往群里发。
+// 新版本发到 Telegram。后台定时读 admin.github.platforms 各平台的 GitHub Release，发现新发布的正式版或公开测试版时，把版本号、整理成纯文本的更新内容和发布页地址发到 admin.telegram 配置的 chat（和公告推送同一个），管理员从 Telegram 复制到 QQ 群即可：QQ 开放平台从 2025-04-21 起不再提供主动推送（见 bot_today.go），机器人没法自己往群里发。
 
 const (
 	// releaseTelegramInterval 是检查新版本的间隔。读 Release 走 githubapp 的 ETag 缓存，没有变化时 GitHub 回 304，不占接口额度。

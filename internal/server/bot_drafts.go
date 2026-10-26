@@ -184,7 +184,7 @@ func (s *Server) qqDraftReport(ctx context.Context, subject, text string, histor
 	}
 	missing := s.qqDraftMissing(ctx, report, text)
 	sendAnswer(missing != "" && report.Kind == "bug")
-	// 需求先找有没有人提过，提过就在那里记一票，不起新草稿（见 qq_votes.go）。
+	// 需求先找有没有人提过，提过就在那里记一票，不起新草稿（见 bot_votes.go）。
 	if report.Kind == "feature" {
 		if note := s.qqVoteFeature(ctx, subject, report, text); note != "" {
 			releaseDraftSlot()

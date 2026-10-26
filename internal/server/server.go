@@ -58,21 +58,21 @@ type Server struct {
 	qqHistory qqConversationStore
 	// qqLocks 是 QQ 机器人查重后创建 issue、FAQ PR 等操作用的跨副本锁（account.Service.WaitLock）；没有数据库时为 nil。
 	qqLocks sharedLocker
-	// qqVectors 是答疑的向量索引（account.Service，见 qq_vectors.go）；没有数据库时为 nil。
+	// qqVectors 是答疑的向量索引（account.Service，见 bot_vectors.go）；没有数据库时为 nil。
 	qqVectors qqVectorStore
-	// qqDrafts 是群友反馈整理成的 issue 草稿（account.Service，见 qq_drafts.go）；没有数据库时为 nil。
+	// qqDrafts 是群友反馈整理成的 issue 草稿（account.Service，见 bot_drafts.go）；没有数据库时为 nil。
 	qqDrafts qqDraftStore
-	// qqFAQCandidates 是答疑沉淀进文档的候选（account.Service，见 qq_faq_candidates.go）；没有数据库时为 nil。
+	// qqFAQCandidates 是答疑沉淀进文档的候选（account.Service，见 bot_faq_candidates.go）；没有数据库时为 nil。
 	qqFAQCandidates qqFAQCandidateStore
-	// qqBadAnswers 是被群友说答错的回答（account.Service，见 qq_bad_answers.go）；没有数据库时为 nil。
+	// qqBadAnswers 是被群友说答错的回答（account.Service，见 bot_bad_answers.go）；没有数据库时为 nil。
 	qqBadAnswers qqBadAnswerStore
-	// qqStats 是答疑每天的处理结果计数（account.Service，见 qq_digest.go）；没有数据库时为 nil。
+	// qqStats 是答疑每天的处理结果计数（account.Service，见 bot_digest.go）；没有数据库时为 nil。
 	qqStats qqStatsStore
-	// qqTyping 是群友的账号绑定和打字统计（account.Service，见 qq_typing.go）；没有数据库时为 nil。
+	// qqTyping 是群友的账号绑定和打字统计（account.Service，见 bot_typing.go）；没有数据库时为 nil。
 	qqTyping qqTypingStore
-	// qqImprovements 是答疑的改进依据（account.Service，见 qq_improvements.go）；没有数据库时为 nil。
+	// qqImprovements 是答疑的改进依据（account.Service，见 bot_improvements.go）；没有数据库时为 nil。
 	qqImprovements qqImprovementStore
-	// qqLearnedCases 是从核对过的答案里学到的自测题（account.Service，见 qq_selftest.go）；没有数据库时为 nil。
+	// qqLearnedCases 是从核对过的答案里学到的自测题（account.Service，见 bot_selftest.go）；没有数据库时为 nil。
 	qqLearnedCases qqSelfTestCaseStore
 
 	adminStore  adminAuthStore

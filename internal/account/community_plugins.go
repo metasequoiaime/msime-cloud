@@ -197,6 +197,16 @@ func extendPluginTransfer(w http.ResponseWriter) {
 	httpdeadline.Extend(w, pluginTransferTimeout, pluginTransferTimeout+5*time.Second)
 }
 
+// pluginPublicCondition 是插件对作者以外的人可见的条件：没有下架，并且不是还在待审的脚本插件。脚本插件先审后发，审核通过（approved）前只有作者和管理后台看得到；数据类插件发布即公开，pending 与 approved 一样可见。alias 是调用处固定的表别名前缀（如 "p." 或 ""），不是请求文本。
+func pluginPublicCondition(alias string) string {
+	return "(" + alias + "moderation='approved' OR " + alias + "moderation='pending' AND " + alias + "kind<>'script')"
+}
+
+// pluginVisibleTo 是插件对 viewer 可见的条件：作者本人看得到自己的全部作品，包括已下架和待审的；其他人按 pluginPublicCondition。viewer 是调用处固定的参数占位符。
+func pluginVisibleTo(alias, viewer string) string {
+	return "(" + alias + "owner_id=" + viewer + " OR " + pluginPublicCondition(alias) + ")"
+}
+
 // pluginVisibleKinds 返回本次请求能看到的类型：冻结的 legacyPluginKinds，加上客户端在 `kinds`（逗号分隔）里声明能安装的类型，再加上 `kind` 参数指定的类型。不认识的名字直接忽略而不是返回 400：声明只能放宽结果，不会让响应多出客户端不认识的类型，忽略未知值让声明了未来类型的客户端在后端认识它之前也能正常浏览。不带 `kinds` 或为空时只有旧类型，响应与引入这个参数之前逐字节相同。
 func pluginVisibleKinds(query url.Values, kind string) []string {
 	// 返回值只供读取；限制容量，使首次追加新类型时复制底层数组，避免修改冻结的旧类型集合。
@@ -244,7 +254,7 @@ func (a *Service) communityPluginList(w http.ResponseWriter, r *http.Request) {
 	}
 	listQuery := `WITH plugin_page AS MATERIALIZED (
  SELECT p.id FROM community_plugins p JOIN auth_users u ON u.id=p.owner_id ` + join + `
- WHERE strpos(lower(p.name),lower($2))>0 AND (` + kindCondition + `) AND (` + communityMineCondition(scope, "p", "$5") + `) AND (p.moderation<>'removed' OR p.owner_id=$1) AND p.kind=ANY($6)
+ WHERE strpos(lower(p.name),lower($2))>0 AND (` + kindCondition + `) AND (` + communityMineCondition(scope, "p", "$5") + `) AND ` + pluginVisibleTo("p.", "$1") + ` AND p.kind=ANY($6)
  ORDER BY ` + order + ` LIMIT 21 OFFSET $4
 ) ` + communityPluginSelectQuery(fields["saved"], true) + join + ` ORDER BY ` + order
 	args := []any{viewer, search, kind, offset, scope, pluginVisibleKinds(query, kind)}
@@ -291,7 +301,7 @@ func (a *Service) communityPluginDetail(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	defer tx.Rollback(r.Context())
-	v, e := scanCommunityPlugin(tx.QueryRow(r.Context(), communityPluginSelect(fields["saved"])+`WHERE p.id=$2 AND (p.moderation<>'removed' OR p.owner_id=$1) AND p.kind=ANY($3)`, viewer, r.PathValue("id"), pluginVisibleKinds(query, "")))
+	v, e := scanCommunityPlugin(tx.QueryRow(r.Context(), communityPluginSelect(fields["saved"])+`WHERE p.id=$2 AND `+pluginVisibleTo("p.", "$1")+` AND p.kind=ANY($3)`, viewer, r.PathValue("id"), pluginVisibleKinds(query, "")))
 	if errors.Is(e, pgx.ErrNoRows) {
 		writeError(w, 404, "plugin_not_found")
 		return
@@ -403,8 +413,8 @@ func (a *Service) communityPluginPublish(w http.ResponseWriter, r *http.Request)
 ), quota AS MATERIALIZED (
  SELECT count(*) AS count,COALESCE(sum(size),0)::bigint AS stored FROM community_plugins WHERE owner_id=$2
 ), inserted AS (
- INSERT INTO community_plugins(id,owner_id,kind,plugin_id,name,description,version,license,manifest,archive,request_sha256,moderation,moderation_reason)
- SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12 FROM quota
+ INSERT INTO community_plugins(id,owner_id,kind,plugin_id,name,description,version,license,manifest,archive,request_sha256,moderation,moderation_reason,permissions)
+ SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12,$16 FROM quota
  WHERE NOT EXISTS(SELECT 1 FROM existing) AND count<$13 AND stored+$14<=$15
  ON CONFLICT(id) DO NOTHING
  RETURNING id
@@ -412,7 +422,7 @@ func (a *Service) communityPluginPublish(w http.ResponseWriter, r *http.Request)
 	SELECT COALESCE((SELECT owner_id FROM existing),''),COALESCE((SELECT request_sha256 FROM existing),''),
  COALESCE((SELECT identical FROM existing),false),EXISTS(SELECT 1 FROM existing),
  (SELECT count<$13 FROM quota),(SELECT stored+$14<=$15 FROM quota),EXISTS(SELECT 1 FROM inserted)`,
-		input.ID, p.UserID, pack.Kind, pack.ID, input.Name, input.Description, pack.Version, pack.License, pack.Manifest, input.Archive, digest, flag, maxPluginsPerUser, int64(len(input.Archive)), maxPluginBytesPerUser).Scan(&existingOwner, &existingDigest, &identical, &exists, &withinCount, &withinStorage, &inserted); e != nil {
+		input.ID, p.UserID, pack.Kind, pack.ID, input.Name, input.Description, pack.Version, pack.License, pack.Manifest, input.Archive, digest, flag, maxPluginsPerUser, int64(len(input.Archive)), maxPluginBytesPerUser, pack.Permissions).Scan(&existingOwner, &existingDigest, &identical, &exists, &withinCount, &withinStorage, &inserted); e != nil {
 		a.error(w, e)
 		return
 	}
@@ -479,7 +489,7 @@ func (a *Service) communityPluginDownload(w http.ResponseWriter, r *http.Request
 	var kind, pluginID, version, sum string
 	var archive []byte
 	batch := &pgx.Batch{}
-	batch.Queue(`SELECT kind,plugin_id,version,sha256,archive FROM community_plugins WHERE id=$1 AND (moderation<>'removed' OR owner_id=$2) FOR SHARE`, r.PathValue("id"), p.UserID).QueryRow(func(row pgx.Row) error {
+	batch.Queue(`SELECT kind,plugin_id,version,sha256,archive FROM community_plugins WHERE id=$1 AND `+pluginVisibleTo("", "$2")+` FOR SHARE`, r.PathValue("id"), p.UserID).QueryRow(func(row pgx.Row) error {
 		return row.Scan(&kind, &pluginID, &version, &sum, &archive)
 	})
 	batch.Queue(`INSERT INTO community_plugin_downloads(pack_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, r.PathValue("id"), p.UserID)

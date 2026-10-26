@@ -16,7 +16,7 @@ func communityRatingStatsSQL(ratings, column, itemID string, personal bool) stri
 var (
 	communitySkinRatingQuery          = newCommunityRatingQuery("community_skins", "community_skin_ratings", "skin_id", "moderation<>'removed'")
 	communityCandidateSkinRatingQuery = newCommunityRatingQuery("community_candidate_skins", "community_candidate_skin_ratings", "skin_id", "visibility='public' AND moderation<>'removed'")
-	communityPluginRatingQuery        = newCommunityRatingQuery("community_plugins", "community_plugin_ratings", "pack_id", "moderation<>'removed'")
+	communityPluginRatingQuery        = newCommunityRatingQuery("community_plugins", "community_plugin_ratings", "pack_id", pluginPublicCondition(""))
 	communityResourceRatingQuery      = newCommunityRatingQuery("community_resources", "community_resource_ratings", "resource_id", "moderation<>'removed'")
 )
 

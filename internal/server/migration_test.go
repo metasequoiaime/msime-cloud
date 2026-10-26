@@ -207,7 +207,7 @@ func TestStartupMigratesCommunityCandidateSkinTablesAddedLater(t *testing.T) {
 func TestStartupMigratesAdminConsoleObjectsAddedLater(t *testing.T) {
 	public := []string{
 		"community_reports", "word_submissions", "admin_crash_groups", "admin_notices", "admin_sensitive_words", "admin_sensitive_hits",
-		"community_skins.moderation", "community_skins.moderated_by", "community_resources.previous_moderation", "community_candidate_skins.moderated_at", "community_candidate_skins.category", "community_skins.category", "community_plugins.moderation_reason",
+		"community_skins.moderation", "community_skins.moderated_by", "community_resources.previous_moderation", "community_candidate_skins.moderated_at", "community_candidate_skins.category", "community_skins.category", "community_plugins.moderation_reason", "community_plugins.permissions",
 		"auth_users.banned_at", "auth_users.ban_reason", "auth_users.banned_by", "auth_sessions.user_agent",
 		"admin_events.artifact", "admin_events.channel", "admin_events.install_id", "admin_events.signature", "admin_events_kind_check", "community_plugins_kind_known",
 	}
@@ -238,7 +238,7 @@ func TestStartupMigratesAdminConsoleObjectsAddedLater(t *testing.T) {
 			case object == "community_plugins_kind_known":
 				// 新增辅助码表、符号集、短语表和单词本之前的约束。
 				_, err = admin.Exec(ctx, "ALTER TABLE "+quoted+".community_plugins DROP CONSTRAINT community_plugins_kind_known, ADD CONSTRAINT community_plugins_kind_known CHECK(kind IN ('sound','music','command_table','effect'))")
-				exists = `SELECT EXISTS(SELECT 1 FROM pg_constraint c JOIN pg_namespace n ON n.oid=c.connamespace WHERE n.nspname=$1 AND c.conname=$2 AND pg_get_constraintdef(c.oid) LIKE '%wordbook%')`
+				exists = `SELECT EXISTS(SELECT 1 FROM pg_constraint c JOIN pg_namespace n ON n.oid=c.connamespace WHERE n.nspname=$1 AND c.conname=$2 AND pg_get_constraintdef(c.oid) LIKE '%''script''%')`
 			case isColumn:
 				_, err = admin.Exec(ctx, "ALTER TABLE "+quoted+"."+pgx.Identifier{table}.Sanitize()+" DROP COLUMN "+pgx.Identifier{column}.Sanitize()+" CASCADE")
 				exists = `SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=$1 AND table_name=$2 AND column_name=$3)`

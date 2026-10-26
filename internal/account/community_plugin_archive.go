@@ -98,8 +98,8 @@ const (
 	maxSymbolItemUnits    = 64
 )
 
-// pluginKinds 是可发布类型的白名单，即客户端的 PluginKind::ALL。
-var pluginKinds = []string{"sound", "music", "command_table", "effect", "helpcode", "symbol_set", "phrase_table", "wordbook"}
+// pluginKinds 是可发布类型的白名单，即客户端的 PluginKind::ALL；script 只在桌面客户端存在，只有在 `kinds` 里声明了它的客户端才会在列表和详情里看到它（见 pluginVisibleKinds）。
+var pluginKinds = []string{"sound", "music", "command_table", "effect", "helpcode", "symbol_set", "phrase_table", "wordbook", "script"}
 
 // legacyPluginKinds 是不支持 `kinds` 声明的旧客户端能识别的全部类型，列表和详情在客户端没有声明时只返回这些类型。它是冻结的：以后新增的类型只加进 pluginKinds，不加进这里，否则旧客户端会收到不认识的类型。
 var legacyPluginKinds = []string{"sound", "music", "command_table", "effect"}
@@ -108,6 +108,8 @@ var legacyPluginKinds = []string{"sound", "music", "command_table", "effect"}
 var builtinPluginIDs = map[string][]string{
 	"sound": {"default", "twinkle", "msime-typewriter", "msime-bubble", "msime-8bit", "msime-woodblock", "msime-pentatonic", "msime-canon", "msime-ode-to-joy"},
 	"music": {"msime-music-lofi", "msime-music-ambient"},
+	// 客户端 plugins.rs 的 BUILTIN_SCRIPT_PACKS：桌面安装包随带的官方脚本包。
+	"script": {"uuid"},
 }
 
 // pluginPack is what a validated archive yields for storage and listing.
@@ -118,6 +120,8 @@ type pluginPack struct {
 	Version  string
 	License  string
 	Manifest []byte
+	// Permissions 是脚本包申请的能力名，按清单顺序；其余类型为空。存进 community_plugins.permissions，给审核列表看。
+	Permissions []string
 }
 
 func isASCIIAlnum(c byte) bool {
@@ -544,6 +548,7 @@ type pluginManifest struct {
 		Keywords *string   `toml:"keywords"`
 		Items    *[]string `toml:"items"`
 	} `toml:"groups"`
+	Script *pluginScriptManifest `toml:"script"`
 }
 
 var pluginCommonKeys = []string{"schema_version", "kind", "id", "name", "version", "license", "author", "description", "permissions"}
@@ -557,6 +562,7 @@ var pluginKindKeys = map[string][]string{
 	"symbol_set":    {"groups"},
 	"phrase_table":  {"phrases"},
 	"wordbook":      {"wordbook"},
+	"script":        {"script"},
 }
 
 // pluginManifestKeys 精确校验公共键与当前类型的专属键，直接读取两份白名单，避免每次校验时合并切片。
@@ -594,10 +600,18 @@ func validPluginArchive(archive []byte) (pluginPack, string) {
 	if decoder.Decode(&m) != nil {
 		return pluginPack{}, "invalid_plugin_manifest"
 	}
-	if m.SchemaVersion == nil || *m.SchemaVersion != 1 || m.Kind == nil || !slices.Contains(pluginKinds, *m.Kind) {
+	if m.SchemaVersion == nil || m.Kind == nil || !slices.Contains(pluginKinds, *m.Kind) {
 		return pluginPack{}, "invalid_plugin_manifest"
 	}
 	kind := *m.Kind
+	// 脚本插件必须写 2，其余类型只认 1：不认识 script 的旧客户端在版本检查处就拒绝它。
+	want := int64(1)
+	if kind == "script" {
+		want = pluginScriptSchemaVersion
+	}
+	if *m.SchemaVersion != want {
+		return pluginPack{}, "invalid_plugin_manifest"
+	}
 	if !pluginManifestKeys(table, kind) {
 		return pluginPack{}, "invalid_plugin_manifest"
 	}
@@ -615,12 +629,20 @@ func validPluginArchive(archive []byte) (pluginPack, string) {
 	if m.Author != nil && !pluginBoundedText(*m.Author, 120) || m.Description != nil && !pluginBoundedText(*m.Description, 500) {
 		return pluginPack{}, "invalid_plugin_manifest"
 	}
-	if m.Permissions != nil && len(*m.Permissions) > 0 {
+	// 只有脚本插件能申请能力；数据类插件的 permissions 必须为空。
+	permissions := []string{}
+	if kind == "script" {
+		if permissions, ok = validScriptPermissions(m.Permissions); !ok {
+			return pluginPack{}, "invalid_plugin_manifest"
+		}
+	} else if m.Permissions != nil && len(*m.Permissions) > 0 {
 		return pluginPack{}, "invalid_plugin_manifest"
 	}
 	var audio []string
 	// data 是清单点名的数据文件：文件名到大小上限。
 	var data map[string]int
+	// scriptData 是脚本包 `[script].data` 点名的数据文件，合计大小另有上限。
+	var scriptData []string
 	var fileLimit, totalLimit, countLimit int
 	switch kind {
 	case "sound":
@@ -641,6 +663,8 @@ func validPluginArchive(archive []byte) (pluginPack, string) {
 		data, ok = validPluginWordbook(table, m)
 	case "symbol_set":
 		ok = validPluginSymbols(table, m)
+	case "script":
+		data, scriptData, ok = validPluginScript(table, m, permissions)
 	}
 	if !ok {
 		return pluginPack{}, "invalid_plugin_manifest"
@@ -654,11 +678,15 @@ func validPluginArchive(archive []byte) (pluginPack, string) {
 		ok = validHelpcodeTable(members[*m.Helpcode.Table].data)
 	case "wordbook":
 		ok = validWordbookEntries(members[*m.Wordbook.File].data)
+	case "script":
+		if code := validScriptFiles(members, *m.Script.Module, scriptData); code != "" {
+			return pluginPack{}, code
+		}
 	}
 	if !ok {
 		return pluginPack{}, "invalid_plugin_manifest"
 	}
-	return pluginPack{Kind: kind, ID: *m.ID, Name: *m.Name, Version: *m.Version, License: *m.License, Manifest: raw}, ""
+	return pluginPack{Kind: kind, ID: *m.ID, Name: *m.Name, Version: *m.Version, License: *m.License, Manifest: raw, Permissions: permissions}, ""
 }
 
 // validPluginFiles 对应客户端的 check_files：清单点名的音频文件必须存在、非空、在该类型的上限内且文件头与格式相符；清单点名的数据文件（data，文件名到上限）必须存在、非空且不超过上限，内容由各类型自己校验；其余文件只能是清单或小的说明文件。

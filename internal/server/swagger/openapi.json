@@ -19540,7 +19540,7 @@
           "QQ 群反馈"
         ],
         "security": [],
-        "description": "只供 Telegram Bot API 调用：用 setWebhook 把本接口设为 admin.telegram 那个 Bot 的回调地址，并传 telegram_bot.webhook_secret_env 里的 secret_token。不使用设备令牌或用户会话，靠 X-Telegram-Bot-Api-Secret-Token 头校验来源，不对返回 401 invalid_secret。请求体是 Bot API 的 Update，最多 64 KiB。只处理 telegram_bot.chats 列出的群里 @ 了 Bot（telegram_bot.username）、回复 Bot 消息或以「/命令@Bot用户名」开头的文字消息（开着「保持匿名」的管理员以群的身份发的也算），其余 update（编辑、频道、私聊、其他群、普通聊天、其他 Bot）直接返回 200。每个 update 按 update_id 在所有副本间只处理一次，返回 200 后在后台交给和 QQ 群机器人共用的处理流程：帮助、版本、今天、查、#编号、加词、提文档等命令，以及按知识库与 GitHub 资料答疑（追问接上文、说「不对」时重答、答不上时记进文档缺口、报问题时整理成草稿等管理员处理），回复引用原消息；回复别人的消息时那条消息作为引用。暂不支持看截图和管理员提 issue。每个群每天最多处理 300 条，每个群友每天 20 条，与 QQ 共用作用域、按 tg: 前缀分开计数。数据库暂时不可用、认领不了 update 时返回 503，Telegram 会稍后重推。未配置 telegram_bot 时返回 503 feature_disabled。",
+        "description": "只供 Telegram Bot API 调用：用 setWebhook 把本接口设为 admin.telegram 那个 Bot 的回调地址，并传 telegram_bot.webhook_secret_env 里的 secret_token。不使用设备令牌或用户会话，靠 X-Telegram-Bot-Api-Secret-Token 头校验来源，不对返回 401 invalid_secret。请求体是 Bot API 的 Update，最多 64 KiB。只处理 telegram_bot.chats 列出的群里 @ 了 Bot（telegram_bot.username）、回复 Bot 消息或以「/命令@Bot用户名」开头的文字消息（开着「保持匿名」的管理员以群的身份发的也算），其余 update（编辑、频道、私聊、其他群、普通聊天、其他 Bot）直接返回 200。每个 update 按 update_id 在所有副本间只处理一次，返回 200 后在后台交给和 QQ 群机器人共用的处理流程：帮助、版本、今天、查、#编号、加词、提文档等命令，以及按知识库与 GitHub 资料答疑（追问接上文、说「不对」时重答、答不上时记进文档缺口、报问题时整理成草稿等管理员处理），回复引用原消息；回复别人的消息时那条消息作为引用；照片和当作文件发的图片（在说明文字里 @ Bot）用 getFile 下载后交给看图模型。暂不支持管理员提 issue。每个群每天最多处理 300 条，每个群友每天 20 条，与 QQ 共用作用域、按 tg: 前缀分开计数。数据库暂时不可用、认领不了 update 时返回 503，Telegram 会稍后重推。未配置 telegram_bot 时返回 503 feature_disabled。",
         "requestBody": {
           "required": true,
           "content": {
@@ -19553,7 +19553,7 @@
                   },
                   "message": {
                     "type": "object",
-                    "description": "Bot API 的 Message，只用到 message_id、from{id,is_bot}、chat{id,type}、text 和 reply_to_message。"
+                    "description": "Bot API 的 Message，只用到 message_id、from{id,is_bot}、sender_chat、chat{id,type}、text、caption、photo、document 和 reply_to_message。"
                   }
                 },
                 "required": [

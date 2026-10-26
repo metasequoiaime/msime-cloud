@@ -30,10 +30,12 @@ const (
 // qqMediaHosts 是允许下载附件的主机后缀。附件地址来自签过名的回调，仍只从 QQ 的 CDN 下载，免得服务端被当成访问内网的跳板。
 var qqMediaHosts = []string{".qq.com", ".qq.com.cn", ".qpic.cn", ".gtimg.cn"}
 
-// qqAttachment 是 GROUP_AT_MESSAGE_CREATE 里的一个附件。content_type 由 QQ 给出（image/*、video/*、voice），只用来跳过语音和选择大小上限，真正的类型看文件头。
+// qqAttachment 是群消息里的一个附件（QQ 来自 GROUP_AT_MESSAGE_CREATE）。content_type 由平台给出（image/*、video/*、voice），只用来跳过语音和选择大小上限，真正的类型看文件头。
 type qqAttachment struct {
 	URL         string `json:"url"`
 	ContentType string `json:"content_type"`
+	// telegramFile 是 Telegram 附件的 file_id：要先用 getFile 换文件路径，下载地址里带着 Bot 令牌，所以不放进 URL。为空时按 URL 从 QQ 的 CDN 下载。
+	telegramFile string
 }
 
 // qqContentTypePrefix 按 HTTP 媒体类型的 ASCII 大小写规则检查前缀。
@@ -171,6 +173,17 @@ func (b *qqBot) downloadMedia(ctx context.Context, raw string, limit int64) ([]b
 	return body, nil
 }
 
+// downloadAttachment 下载一个附件，不超过 limit 字节：Telegram 的附件经 Bot API 下载，其余从 QQ 的 CDN 下载。
+func (s *Server) downloadAttachment(ctx context.Context, a qqAttachment, limit int64) ([]byte, error) {
+	if a.telegramFile != "" {
+		if s.tg == nil {
+			return nil, errors.New("telegram bot disabled")
+		}
+		return s.tg.fetchFile(ctx, a.telegramFile, limit)
+	}
+	return s.qq.downloadMedia(ctx, a.URL, limit)
+}
+
 // publishQQMedia 把消息里的图片和视频存进公开 bucket，返回存好的附件和没能保存的个数。语音等其他附件不算在内；没有配置 bucket 时图片和视频全部算作没能保存。只记录失败原因，不记录附件地址（里面带着 QQ 的访问签名）。
 func (s *Server) publishQQMedia(ctx context.Context, attachments []qqAttachment) (media []qqMedia, failed int) {
 	for _, a := range attachments {
@@ -186,7 +199,7 @@ func (s *Server) publishQQMedia(ctx context.Context, attachments []qqAttachment)
 		if videoDeclared {
 			limit = qqVideoBytes
 		}
-		body, err := s.qq.downloadMedia(ctx, a.URL, limit)
+		body, err := s.downloadAttachment(ctx, a, limit)
 		if err != nil {
 			slog.Warn("qq bot: attachment skipped", "reason", err.Error())
 			failed++

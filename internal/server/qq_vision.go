@@ -89,7 +89,7 @@ func (s *Server) qqDescribeImages(ctx context.Context, attachments []qqAttachmen
 func (s *Server) qqDescribeImage(ctx context.Context, a qqAttachment) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, qqVisionTimeout)
 	defer cancel()
-	body, err := s.qq.downloadMedia(ctx, a.URL, qqVisionBytes)
+	body, err := s.downloadAttachment(ctx, a, qqVisionBytes)
 	if err != nil {
 		return "", err
 	}

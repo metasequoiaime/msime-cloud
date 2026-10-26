@@ -48,6 +48,8 @@ type Server struct {
 	// qq 是 QQ 群反馈机器人，未配置或没有数据库时为 nil；qqWorkers 跟踪它在后台处理的消息，Close 等它们结束。
 	qq        *qqBot
 	qqWorkers sync.WaitGroup
+	// tg 是 Telegram 群答疑，未配置或 QQ 机器人没有启用时为 nil；它在后台处理的消息同样记在 qqWorkers 里。
+	tg *telegramBot
 	// qqBusy 是本副本里正在处理的群友（群 + member_openid）和处理完时关掉的 channel，由 mu 保护，见 qqLockSubject。
 	qqBusy map[string]chan struct{}
 	// media 把 QQ 管理员附带的图片和视频写进公开 bucket（account.Service.PublishMedia）；没有数据库时为 nil。
@@ -172,6 +174,7 @@ func New(c Config) (*Server, error) {
 	mux.HandleFunc("POST /v1/skins/jobs", s.createSkinArtworkJob)
 	mux.HandleFunc("POST "+voiceContributionsPath, s.voiceContribution)
 	mux.HandleFunc("POST "+qqBotEventsPath, s.qqBotEvents)
+	mux.HandleFunc("POST "+telegramBotEventsPath, s.telegramBotEvents)
 	mux.HandleFunc("GET /v1/skins/jobs/{job}", s.skinArtworkJob)
 	mux.HandleFunc("DELETE /v1/skins/jobs/{job}", s.skinArtworkJob)
 	mux.HandleFunc("GET /v1/skins", s.skinCatalog)
@@ -220,6 +223,9 @@ func New(c Config) (*Server, error) {
 	s.handler = s.middleware(recordRoute(mux))
 	if c.QQBot.enabled() && s.limits != nil {
 		s.qq = newQQBot(c.QQBot)
+		if c.TelegramBot.enabled() {
+			s.tg = newTelegramBot(c.TelegramBot, c.Admin.Telegram)
+		}
 		if s.accounts != nil {
 			s.media = s.accounts
 			s.qqHistory = s.accounts

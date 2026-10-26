@@ -506,6 +506,27 @@ issue 和评论只包含模型转述的内容，不含群友的原话、昵称�
 
 `labels` 里的标签要先在所有可能提交到的仓库（`qq_bot.repo` 和各平台的 `repo`）里建好，GitHub App 也要在这些仓库上有 Issues 写权限。在 QQ 开放平台的「开发 → 回调配置」填写 `https://api.msime.app/v1/community/qq-bot/events` 并勾选群 @ 消息事件；保存时开放平台发来的 op 13 校验请求由服务端用同一把密钥签名应答，所以要先部署好配置再填回调地址。机器人没有认证时只有管理员能用，只能加到管理员当群主的群里；个人认证后可以设成公开，最多 500 个群。`admins`、`knowledge_repo`、`knowledge_dir` 是新增的配置字段，要等所有副本都运行支持它们的版本之后再写进配置。
 
+## Telegram 群答疑
+
+`admin.telegram` 的 Bot 被拉进 Telegram 群后，群友 @它 或回复它的消息时，用和 QQ 群机器人同一套流程答疑（`telegram_bot.go` 调用 `answerQQQuestion`）：挑段落、现查 GitHub、追问接上文、说「不对」时重答、答不上记进文档缺口、群友报问题时整理成草稿。这些草稿和 QQ 的草稿在同一个列表里，由管理员在 QQ 群或管理工具里统一处理。只处理文字消息，不支持 QQ 机器人的命令（帮助、版本、加词、#编号等）、看截图和管理员提 issue。只 @ 了 Bot、没写话但回复了别人的消息时，把那条消息当成问题。对话历史、额度和处理结果按 `tg:<chat_id>` 和 `tg:<user_id>` 记录：每个群友 24 小时 20 条、每个群 300 条，`auth_rates` 作用域是 `telegram-bot-member`、`telegram-bot-group`，与 QQ 分开计数；处理结果和 QQ 一起计入管理员周报。回复引用原消息，不展开链接预览，超过 4096 字时截断。群友的原话、昵称和 Telegram ID 不写进日志，只有名单外的群会记一条带群 ID 的日志，方便填进配置。
+
+```json
+{"telegram_bot":{"chats":[-1004492524988],"username":"msime_bot","webhook_secret_env":"MSIME_TELEGRAM_WEBHOOK_SECRET"}}
+```
+
+`chats` 是接受提问的群（数字 chat_id），为空时功能关闭；`username` 是 Bot 的用户名，用来认出 @；`webhook_secret_env` 默认 `MSIME_TELEGRAM_WEBHOOK_SECRET`，值是 32–256 个字母、数字、下划线或连字符。启用时还要求 `qq_bot` 已启用（模型、知识库和 GitHub 查询都沿用它的配置），并配置了 `admin.telegram`（Bot 令牌是 `admin.telegram.bot_token_env`）。建议在 BotFather 里对 Bot 执行 `/setprivacy` 选 Enable：开着隐私模式时 Telegram 只推送 @ 它、回复它和命令消息，群里的其他聊天不会发到服务端。
+
+Telegram 以 Webhook 把消息推到 `POST /v1/community/telegram-bot/events`。服务端比对 `X-Telegram-Bot-Api-Secret-Token` 头，按 `update_id` 在 `auth_rates` 里认领（作用域 `telegram-bot-update`，7 天内同一个 update 只处理一次），立即返回 200，在后台处理，限时 4 分钟。数据库暂时不可用时返回 503，Telegram 会稍后重推。多副本部署不能用长轮询 `getUpdates`，各副本会互相抢消息。
+
+上线顺序：旧版本不认识 `telegram_bot`，配置中的未知字段会让服务拒绝启动。先让所有副本都运行包含此功能的版本，再把 `telegram_bot` 写进配置并滚动重启；回退到旧版本之前，先从配置中删除 `telegram_bot`。配置生效后调用一次 setWebhook，把回调地址和 secret_token 告诉 Telegram（设好之后 `getUpdates` 不再可用）：
+
+```sh
+curl -sS "https://api.telegram.org/bot$MSIME_ADMIN_TELEGRAM_TOKEN/setWebhook" \
+  -d url=https://api.msime.app/v1/community/telegram-bot/events \
+  -d secret_token="$MSIME_TELEGRAM_WEBHOOK_SECRET" \
+  -d allowed_updates='["message"]' -d drop_pending_updates=true
+```
+
 ## 用户皮肤社区
 
 用户可发布自定义键盘设计、下载使用、收藏和评分（登录即可评分，不能评自己的作品），使用 Apple 登录与 PostgreSQL 共享存储，支持 K8s 多副本。接口、迁移和上线说明见 [皮肤社区](docs/skin-community.md)。

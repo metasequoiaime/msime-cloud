@@ -135,8 +135,8 @@ func TestEveryAccountRouteAuthenticationAndDisabledService(t *testing.T) {
 	disabled.HandleFunc("POST "+TelemetryPath, Route(nil, "POST "+TelemetryPath, (*Service).Telemetry))
 	n := 0
 	for path, methods := range spec.Paths {
-		// 官网词条表单和 QQ 机器人回调由 server 包挂载，在那边有各自的测试。
-		if !IsPath(path) || path == "/v1/community/word-submissions" || path == "/v1/community/qq-bot/events" {
+		// 官网词条表单、QQ 机器人和 Telegram 机器人的回调由 server 包挂载，在那边有各自的测试。
+		if !IsPath(path) || path == "/v1/community/word-submissions" || path == "/v1/community/qq-bot/events" || path == "/v1/community/telegram-bot/events" {
 			continue
 		}
 		concrete := strings.NewReplacer("{id}", "missing", "{kind}", "pinyin").Replace(path)
@@ -291,8 +291,8 @@ func TestEveryAccountJSONBodyRejectsMalformedInput(t *testing.T) {
 	mux.HandleFunc("POST "+TelemetryPath, Route(&Service{store: db}, "POST "+TelemetryPath, (*Service).Telemetry))
 	count := 0
 	for path, methods := range spec.Paths {
-		// 官网词条表单和 QQ 机器人回调由 server 包挂载，畸形请求体的用例在那边的 TestWordSubmissionValidation 和 TestQQBotCallbackProtocol 里。
-		if !IsPath(path) || path == "/v1/community/word-submissions" || path == "/v1/community/qq-bot/events" {
+		// 官网词条表单、QQ 机器人和 Telegram 机器人的回调由 server 包挂载，畸形请求体的用例在那边的 TestWordSubmissionValidation、TestQQBotCallbackProtocol 和 TestTelegramBotWebhookProtocol 里。
+		if !IsPath(path) || path == "/v1/community/word-submissions" || path == "/v1/community/qq-bot/events" || path == "/v1/community/telegram-bot/events" {
 			continue
 		}
 		path = strings.NewReplacer("{id}", "missing", "{kind}", "pinyin", "{key_id}", "missing", "{device_id}", "missing").Replace(path)

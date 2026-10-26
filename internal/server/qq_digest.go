@@ -111,7 +111,12 @@ func (s *Server) qqWeeklyDigest(ctx context.Context, reply func(string)) {
 		}
 	}
 	if filed, ok := s.qqIssuesFiledSince(ctx, since); ok {
-		fmt.Fprintf(&b, "\n- 这周从 QQ 提的 issue %d 个", filed)
+		// 按 qq_bot.labels 搜，Telegram 群提的 issue 也带这些标签，开了 Telegram 群答疑时一并写明。
+		line := "\n- 这周从 QQ 提的 issue %d 个"
+		if s.tg != nil {
+			line = "\n- 这周从 QQ 群和 Telegram 群提的 issue %d 个"
+		}
+		fmt.Fprintf(&b, line, filed)
 	}
 	reply(b.String())
 }

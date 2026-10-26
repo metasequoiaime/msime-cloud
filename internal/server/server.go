@@ -20,6 +20,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -484,7 +485,7 @@ func (s *Server) doUpstreamJSON(req *http.Request, dst any) (bool, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		err = errors.New("upstream rejected request")
+		err = upstreamStatusError{resp.StatusCode}
 		captureMeter(req.Context(), started, err)
 		return false, err
 	}
@@ -545,6 +546,13 @@ func (s *Server) doUpstreamJSON(req *http.Request, dst any) (bool, error) {
 	return json.Unmarshal(body, dst) == nil, nil
 }
 
+// upstreamStatusError 是上游返回非 2xx 时的错误，只带状态码，不带响应正文（正文里可能有凭据、用户输入或上游的内部信息）。状态码写进日志后，429 限流、401 凭据失效、5xx 上游故障一眼就能分开；曾经只有「upstream rejected request」，向量同步每 10 分钟失败一次，要手动复现才知道是 EveryAPI 回了 429。
+type upstreamStatusError struct{ status int }
+
+func (e upstreamStatusError) Error() string {
+	return "upstream rejected request (status " + strconv.Itoa(e.status) + ")"
+}
+
 // upstreamTransportError 隐藏传输错误文本中的地址、凭据和用户参数，同时保留错误链供超时、取消和指标分类使用。
 type upstreamTransportError struct{ cause error }
 
@@ -558,7 +566,7 @@ func (s *Server) sendUpstream(req *http.Request) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, errors.New("upstream rejected request")
+		return nil, upstreamStatusError{resp.StatusCode}
 	}
 	b, err := httpclient.ReadResponseBody(resp, contract.UpstreamResponseBytes)
 	if err != nil {

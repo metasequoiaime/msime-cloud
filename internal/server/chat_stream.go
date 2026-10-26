@@ -186,7 +186,7 @@ func (s *Server) chatStreamOnce(w http.ResponseWriter, r *http.Request, v chatRe
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		err = errors.New("upstream rejected request")
+		err = upstreamStatusError{resp.StatusCode}
 		finish(err, false)
 		return failBefore(err)
 	}

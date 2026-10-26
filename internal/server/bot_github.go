@@ -28,6 +28,21 @@ const (
 
 var qqGitHubReadPerms = map[string]string{"contents": "read", "issues": "read", "metadata": "read"}
 
+// qqHistoryReposMax 是 qq_bot.history_repos 最多列的仓库数：每个仓库每次同步都要读一遍 issue 列表。
+const qqHistoryReposMax = 20
+
+// qqVectorRepos 是向量检索索引 issue 和 PR 的仓库：答疑仓库（qqGitHubRepos）加上 qq_bot.history_repos，不分大小写去重，按名字排序。
+func (s *Server) qqVectorRepos() []string {
+	repos := s.qqGitHubRepos()
+	for _, repo := range s.qq.config.HistoryRepos {
+		if !slices.ContainsFunc(repos, func(r string) bool { return strings.EqualFold(r, repo) }) {
+			repos = append(repos, repo)
+		}
+	}
+	slices.Sort(repos)
+	return repos
+}
+
 // qqGitHubRepos 是答疑时要查的仓库：qq_bot.repo 和 admin.github.platforms 里的各平台仓库，去重后按名字排序。
 func (s *Server) qqGitHubRepos() []string {
 	repos := []string{s.qq.config.Repo}

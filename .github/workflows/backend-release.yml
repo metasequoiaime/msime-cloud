@@ -79,7 +79,7 @@ jobs:
     needs: release
     # 验证期间 main 前进、新提交已排上下一次发布时，release 让位且不给出版本，这里随之跳过。
     if: needs.release.outputs.tag != ''
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04-8
     timeout-minutes: 30
     permissions:
       contents: write
@@ -131,7 +131,7 @@ jobs:
     needs: [release, image]
     # 命令行附在 image 创建的同一个 Release 上，所以跟着它跳过。
     if: needs.release.outputs.tag != ''
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04-8
     timeout-minutes: 15
     permissions:
       contents: write

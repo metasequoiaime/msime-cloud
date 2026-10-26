@@ -67,7 +67,7 @@ func TestTranslationResponseCompatibility(t *testing.T) {
 			{"无效JSON", `{"unfinished":`, "invalid upstream response", http.StatusOK, false},
 			{"尾随JSON", success + `{}`, "invalid upstream response", http.StatusOK, false},
 			{"响应超限", `{"ignored":"` + strings.Repeat("x", contract.UpstreamResponseBytes) + `"}`, "invalid upstream response", http.StatusOK, false},
-			{"HTTP拒绝", `{"error":"synthetic-private-details"}`, "upstream rejected request", http.StatusTooManyRequests, false},
+			{"HTTP拒绝", `{"error":"synthetic-private-details"}`, "upstream rejected request (status 429)", http.StatusTooManyRequests, false},
 		} {
 			t.Run(provider+"/"+tc.name, func(t *testing.T) {
 				var calls atomic.Int32

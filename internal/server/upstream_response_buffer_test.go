@@ -52,7 +52,7 @@ func TestUpstreamResponseBufferCompatibility(t *testing.T) {
 		{name: "尾部额外JSON", body: []byte(`{} {}`), length: 2, wantRead: 5, wantErr: "invalid upstream response"},
 		{name: "少报长度实际超限", body: bytes.Repeat([]byte(" "), contract.UpstreamResponseBytes+10), length: 512, wantRead: contract.UpstreamResponseBytes + 1, wantErr: "invalid upstream response"},
 		{name: "恰好上限", body: append([]byte(`{}`), bytes.Repeat([]byte(" "), contract.UpstreamResponseBytes-2)...), length: contract.UpstreamResponseBytes, wantRead: contract.UpstreamResponseBytes},
-		{name: "拒绝状态", body: []byte(`synthetic-private-response`), length: 26, status: 500, wantErr: "upstream rejected request"},
+		{name: "拒绝状态", body: []byte(`synthetic-private-response`), length: 26, status: 500, wantErr: "upstream rejected request (status 500)"},
 		{name: "读取错误", body: []byte(`{}`), length: 512, cause: privateFailure, wantRead: 2, wantErr: "upstream transport failed"},
 		{name: "截断", body: []byte(`{}`), length: 1024, cause: io.ErrUnexpectedEOF, wantRead: 2, wantErr: "upstream transport failed"},
 		{name: "超时", body: []byte(`{}`), length: 512, cause: context.DeadlineExceeded, wantRead: 2, wantErr: "upstream transport failed"},

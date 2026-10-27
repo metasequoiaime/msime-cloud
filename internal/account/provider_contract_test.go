@@ -33,7 +33,7 @@ func TestProviderIdentityContracts(t *testing.T) {
 	if _, err := (audienceVerifiers{failed}).Verify(t.Context(), "token"); err != ErrInvalid {
 		t.Fatal(err)
 	}
-	for _, provider := range []string{"apple", "google"} {
+	for _, provider := range []string{"apple", "google", "huawei"} {
 		a := &Service{verifiers: map[string]Verifier{provider: success}}
 		identity, _, err := a.identity(t.Context(), Challenge{Provider: provider, Nonce: "nonce"}, "token")
 		if err != nil || identity.Subject != "user" || identity.Provider != provider {
@@ -70,8 +70,8 @@ func TestProviderIdentityContracts(t *testing.T) {
 	if _, _, err := a.identity(t.Context(), Challenge{Provider: "missing"}, "code"); err != ErrInvalid {
 		t.Fatal(err)
 	}
-	verifiers := makeVerifiers(t.Context(), Config{Apple: OIDCConfig{ClientIDs: []string{"apple"}}, Google: GoogleConfig{ClientIDs: []string{"google1", "google2"}}}, http.DefaultClient)
-	if len(verifiers) != 2 || len(verifiers["google"].(audienceVerifiers)) != 2 {
+	verifiers := makeVerifiers(t.Context(), Config{Apple: OIDCConfig{ClientIDs: []string{"apple"}}, Google: GoogleConfig{ClientIDs: []string{"google1", "google2"}}, Huawei: OIDCConfig{ClientIDs: []string{"huawei"}}}, http.DefaultClient)
+	if len(verifiers) != 3 || len(verifiers["google"].(audienceVerifiers)) != 2 || len(verifiers["huawei"].(audienceVerifiers)) != 1 {
 		t.Fatal("audience configuration not applied")
 	}
 }
@@ -84,6 +84,7 @@ func TestAccountConfigurationValidation(t *testing.T) {
 	for _, change := range []func(*Config){
 		func(c *Config) { c.DatabaseEnv = "MISSING_CONFIG_DB" }, func(c *Config) { c.PepperEnv = "MISSING_CONFIG_PEPPER" },
 		func(c *Config) { c.Apple.ClientIDs = make([]string, 11) }, func(c *Config) { c.Google.ClientIDs = []string{"same", "same"} }, func(c *Config) { c.Google.ClientIDs = []string{" bad "} },
+		func(c *Config) { c.Huawei.ClientIDs = []string{"same", "same"} }, func(c *Config) { c.Huawei.ClientIDs = []string{""} }, func(c *Config) { c.Huawei.ClientIDs = make([]string, 11) },
 		func(c *Config) { c.Wechat = WechatConfig{AppID: "app", RedirectURI: "http://insecure"} },
 		func(c *Config) { c.Email = MailConfig{From: "Name <a@example.test>"} },
 		func(c *Config) {

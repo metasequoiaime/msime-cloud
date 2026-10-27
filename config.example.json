@@ -141,6 +141,9 @@
         "secret_env": "MSIME_GOOGLE_DESKTOP_CLIENT_SECRET"
       }
     },
+    "huawei": {
+      "client_ids": []
+    },
     "wechat": {
       "app_id": "",
       "secret_env": "MSIME_WECHAT_SECRET",

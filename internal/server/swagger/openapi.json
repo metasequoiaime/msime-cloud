@@ -1324,6 +1324,9 @@
                         "google": {
                           "type": "boolean"
                         },
+                        "huawei": {
+                          "type": "boolean"
+                        },
                         "wechat": {
                           "type": "boolean"
                         },
@@ -1538,6 +1541,7 @@
                     "enum": [
                       "apple",
                       "google",
+                      "huawei",
                       "wechat",
                       "phone",
                       "email"
@@ -1715,7 +1719,7 @@
                   },
                   "credential": {
                     "type": "string",
-                    "description": "六位验证码、Apple/Google ID Token、Google 桌面回环回调收到的授权 code，或微信授权 code。"
+                    "description": "六位验证码、Apple/Google/华为账号 ID Token、Google 桌面回环回调收到的授权 code，或微信授权 code。"
                   }
                 },
                 "required": [
@@ -2052,6 +2056,7 @@
                             "enum": [
                               "apple",
                               "google",
+                              "huawei",
                               "wechat",
                               "phone",
                               "email"
@@ -2502,6 +2507,7 @@
                             "enum": [
                               "apple",
                               "google",
+                              "huawei",
                               "wechat",
                               "phone",
                               "email"

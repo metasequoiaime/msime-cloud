@@ -211,7 +211,7 @@ func TestProviderDiscoveryAndMalformedAuthenticationBodies(t *testing.T) {
 	var response struct {
 		Providers map[string]bool `json:"providers"`
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil || len(response.Providers) != 7 || !response.Providers["google"] || !response.Providers["email"] || response.Providers["phone"] || response.Providers["anonymous"] || response.Providers["apple_web"] {
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil || len(response.Providers) != 8 || !response.Providers["google"] || !response.Providers["email"] || response.Providers["phone"] || response.Providers["anonymous"] || response.Providers["apple_web"] || response.Providers["huawei"] {
 		t.Fatal(w.Body.String(), err)
 	}
 	user := complete(t, db, Identity{"email", "malformed@example.test"})

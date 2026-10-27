@@ -28,7 +28,7 @@ export function contactText(user: Pick<UserRow, "contact" | "contact_kind">): st
   return user.contact_kind === "phone" ? `手机 ${user.contact}` : user.contact;
 }
 
-const providerLabels: Record<string, string> = { email: "邮箱", phone: "手机号", google: "Google", apple: "Apple", wechat: "微信", anonymous: "匿名口令" };
+const providerLabels: Record<string, string> = { email: "邮箱", phone: "手机号", google: "Google", apple: "Apple", huawei: "华为账号", wechat: "微信", anonymous: "匿名口令" };
 export function providersText(providers: readonly string[]): string {
   return providers.length ? providers.map(provider => providerLabels[provider] ?? provider).join("、") : "无";
 }

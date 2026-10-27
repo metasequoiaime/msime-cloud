@@ -114,3 +114,18 @@ func BenchmarkQQSelfTestBrief(b *testing.B) {
 		}
 	}
 }
+
+// 没通过的题的日志要分清「没去查」和「查了网上还是认不出」；小标题里本身就有「据网上资料」，不能据此判断。
+func TestQQWebSourced(t *testing.T) {
+	for material, want := range map[string]bool{
+		"": false,
+		"## Windows 正式版 · 输入方案\n在设置里选五笔":                               false,
+		"文档\n" + qqResearchHeading + "GitHub 上有 12 个贡献者\n":             false,
+		"文档\n" + qqResearchHeading + "据网上资料，Photon Studio 是图像编辑软件\n":   true,
+		"据网上资料，这是文档里的说法\n" + qqResearchHeading + "GitHub 上有 12 个贡献者\n": false,
+	} {
+		if got := qqWebSourced(material); got != want {
+			t.Errorf("%q: %v want %v", material, got, want)
+		}
+	}
+}

@@ -6659,7 +6659,8 @@ func TestQQAnswerPromptRules(t *testing.T) {
 	}
 	for _, want := range []string{
 		"水杉自己的功能和隐私只按文档段落说，不用网上查到的内容或 issue 介绍水杉；不根据 issue 说水杉现在没有某功能；不把开着的 issue 数量或 0.x 版本号当成缺点。",
-		"用户没说平台时：各平台做法都能用一行（不超过 40 字）说清的，每个平台一行，只写入口；有任何一个平台要多步操作的，answer 只写一句追问「你用的是哪个系统？」",
+		"用户没说平台时：每个有说明的平台写一行（不超过 40 字），只写入口或最关键的一步",
+		"不要只追问系统而不给任何做法",
 		"系统通用操作可以用常识简短回答",
 		"安装包格式、安装命令、依赖和安装后的配置步骤必须有对应平台的文档段落支持",
 		"现查结果已确认产品身份就直接说明它是什么",
@@ -6672,7 +6673,8 @@ func TestQQAnswerPromptRules(t *testing.T) {
 			t.Errorf("qqAnswerPrompt missing %q", want)
 		}
 	}
-	for _, gone := range []string{"各平台的入口各用一行写", "不列各平台的清单", "我这边没有…说明"} {
+	// 「有一个平台要多步就只追问系统」让五笔这类用法问题只得到一句追问，不能再回来。
+	for _, gone := range []string{"各平台的入口各用一行写", "不列各平台的清单", "我这边没有…说明", "answer 只写一句追问「你用的是哪个系统？」"} {
 		if strings.Contains(qqAnswerPrompt, gone) {
 			t.Errorf("qqAnswerPrompt still has %q", gone)
 		}
@@ -6830,6 +6832,11 @@ func TestQQDeploySelfTest(t *testing.T) {
 			case "qq bot: selftest case not passed":
 				if _, leaked := entry["question"]; leaked {
 					t.Fatal("自测失败日志不应包含题目原文", entry)
+				}
+				// 固定的题记下标对上是哪道题，并记下有没有现查、有没有联网搜到，用来区分「没去查」和「查了还是认不出」。
+				index, ok := entry["case"].(float64)
+				if _, researched := entry["researched"]; !ok || index < 0 || int(index) >= len(qqSelfTestCases) || !researched || entry["web"] == nil {
+					t.Fatal("自测失败日志缺少题目下标或现查标记", entry)
 				}
 				failed++
 			}

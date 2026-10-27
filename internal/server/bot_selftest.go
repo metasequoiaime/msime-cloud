@@ -132,6 +132,9 @@ type qqSelfTestResult struct {
 	Pass     bool
 	TimedOut bool
 	Reason   string
+	// Researched 表示回答用上了现查的结果，WebSourced 表示其中有联网搜索的内容；只写进没通过的题的日志，用来区分「没去查」和「查了还是认不出」。依据原文不写日志（见 qqAnswer.evidence）。
+	Researched bool
+	WebSourced bool
 }
 
 // qqSelfTestAnswerRunes 是没通过的题后面附上的机器人回答的长度。
@@ -178,6 +181,7 @@ func (s *Server) qqSelfTestOne(ctx context.Context, c qqSelfTestCase) qqSelfTest
 		return result
 	}
 	result.Answer = answer.Answer
+	result.Researched, result.WebSourced = answer.Researched, qqWebSourced(answer.evidence)
 	if limit := qqSelfTestLimits[c.Question]; limit != nil {
 		if reason := limit(answer.Answer); reason != "" {
 			result.Reason = reason
@@ -309,7 +313,12 @@ func qqLogSelfTest(results []qqSelfTestResult, version, trigger string) (alert b
 			}
 		}
 		if !r.Pass {
-			slog.Warn("qq bot: selftest case not passed", "version", version, "learned", r.Case.Learned, "reason", r.Reason)
+			attrs := []any{"version", version, "learned", r.Case.Learned, "reason", r.Reason, "researched", r.Researched, "web", r.WebSourced}
+			// 题目原文不写日志（学到的题可能来自群友反馈）；固定的题记它在 qqSelfTestCases 里的下标，用来对上是哪道题。
+			if !r.Case.Learned {
+				attrs = append(attrs, "case", slices.IndexFunc(qqSelfTestCases, func(c qqSelfTestCase) bool { return c.Question == r.Case.Question }))
+			}
+			slog.Warn("qq bot: selftest case not passed", attrs...)
 		}
 	}
 	attrs := []any{"passed", passed, "timed_out", timedOut, "total", len(results), "fixed_passed", fixedPassed, "fixed_total", fixed, "version", version, "trigger", trigger}
@@ -319,6 +328,12 @@ func qqLogSelfTest(results []qqSelfTestResult, version, trigger string) (alert b
 	}
 	slog.Info("qq bot: selftest", attrs...)
 	return false
+}
+
+// qqWebSourced 判断资料里现查的结果是否含联网搜索的内容。小标题本身写着「据网上资料」，所以只看小标题后面的部分。
+func qqWebSourced(material string) bool {
+	_, findings, ok := strings.Cut(material, qqResearchHeading)
+	return ok && strings.Contains(findings, "据网上资料")
 }
 
 // qqSelfTestSummary 是自测的回复：通过数，有超时的单独写几题超时（「自测 8/10 通过，1 题超时。」）；没通过的列出原因，判分没过的附上机器人回答的前 qqSelfTestAnswerRunes 字，不用再去群里问一遍看它答了什么；超时的只列问题。

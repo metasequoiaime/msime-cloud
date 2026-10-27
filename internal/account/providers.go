@@ -50,9 +50,12 @@ func makeVerifiers(ctx context.Context, c Config, client *http.Client) map[strin
 	for name, v := range map[string]struct {
 		ids          []string
 		issuer, keys string
+		algs         []string
 	}{
-		"google": {c.Google.ClientIDs, "https://accounts.google.com", "https://www.googleapis.com/oauth2/v3/certs"},
-		"apple":  {c.Apple.ClientIDs, "https://appleid.apple.com", "https://appleid.apple.com/auth/keys"},
+		"google": {c.Google.ClientIDs, "https://accounts.google.com", "https://www.googleapis.com/oauth2/v3/certs", []string{oidc.RS256}},
+		"apple":  {c.Apple.ClientIDs, "https://appleid.apple.com", "https://appleid.apple.com/auth/keys", []string{oidc.RS256}},
+		// 华为账号的 ID Token：`iss` 固定为 https://accounts.huawei.com，公钥在 oauth-login.cloud.huawei.com 的 JWKS（与 https://oauth-login.cloud.huawei.com/.well-known/openid-configuration 一致）。Account Kit 默认用 PS256 签名，也可选 RS256，两种都用同一组 RSA 公钥，所以两种都接受。
+		"huawei": {c.Huawei.ClientIDs, "https://accounts.huawei.com", "https://oauth-login.cloud.huawei.com/oauth2/v3/certs", []string{oidc.PS256, oidc.RS256}},
 	} {
 		if len(v.ids) == 0 {
 			continue
@@ -60,7 +63,7 @@ func makeVerifiers(ctx context.Context, c Config, client *http.Client) map[strin
 		keys := oidc.NewRemoteKeySet(oidc.ClientContext(ctx, client), v.keys)
 		verifiers := audienceVerifiers{}
 		for _, id := range v.ids {
-			verifiers = append(verifiers, oidc.NewVerifier(v.issuer, keys, &oidc.Config{ClientID: id, SupportedSigningAlgs: []string{"RS256"}}))
+			verifiers = append(verifiers, oidc.NewVerifier(v.issuer, keys, &oidc.Config{ClientID: id, SupportedSigningAlgs: v.algs}))
 		}
 		result[name] = verifiers
 	}
@@ -150,6 +153,7 @@ func (a *Service) identity(ctx context.Context, c Challenge, credential string) 
 		if e != nil || token.Subject == "" || len(token.Subject) > 255 || token.IssuedAt.IsZero() || token.IssuedAt.After(time.Now().Add(30*time.Second)) || subtle.ConstantTimeCompare([]byte(token.Nonce), []byte(c.Nonce)) != 1 {
 			return Identity{}, nil, ErrInvalid
 		}
+		// 华为账号 ID Token 的 `sub` 是 UnionID（同一开发者账号下各应用相同），不是按应用区分的 OpenID（在 `openid` 声明里），所以身份按 UnionID 记，以后同一开发者名下的其他应用或元服务登录也落到同一个账号。
 		identity := Identity{c.Provider, token.Subject}
 		if c.Provider != "google" {
 			return identity, nil, nil

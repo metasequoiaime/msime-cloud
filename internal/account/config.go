@@ -114,6 +114,8 @@ type Config struct {
 	PepperEnv     string       `json:"pepper_env"`
 	Google        GoogleConfig `json:"google"`
 	Apple         OIDCConfig   `json:"apple"`
+	// 华为账号（HarmonyOS Account Kit）：`client_ids` 填 AppGallery Connect 里应用的 Client ID（「常规 > 应用」），只校验 ID Token，不需要 Client Secret。
+	Huawei OIDCConfig `json:"huawei"`
 	// Names the environment variable holding the std-base64 AES-256 key that encrypts provider refresh tokens at rest. Required once the Google desktop client is configured.
 	TokenKeyEnv string `json:"token_key_env"`
 	// 匿名账号:装完就有一个可用身份,不必先有邮箱或第三方账号。开着就等于开户没有门槛,所以 begin 那侧
@@ -137,7 +139,7 @@ func (c Config) Validate() error {
 	if os.Getenv(c.DatabaseEnv) == "" || len(os.Getenv(c.PepperEnv)) < 32 {
 		return errors.New("用户数据库及至少 32 字节的验证码密钥未配置")
 	}
-	for _, ids := range [][]string{c.Apple.ClientIDs, c.Google.ClientIDs} {
+	for _, ids := range [][]string{c.Apple.ClientIDs, c.Google.ClientIDs, c.Huawei.ClientIDs} {
 		if len(ids) > 10 {
 			return errors.New("每个提供方最多配置 10 个 Client ID")
 		}

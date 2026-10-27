@@ -475,6 +475,8 @@ func (a *Service) enabled(provider string) bool {
 		return len(a.config.Google.ClientIDs) > 0
 	case "apple":
 		return len(a.config.Apple.ClientIDs) > 0
+	case "huawei":
+		return len(a.config.Huawei.ClientIDs) > 0
 	case "wechat":
 		return a.config.Wechat.AppID != ""
 	case "email":
@@ -491,7 +493,7 @@ func (a *Service) enabled(provider string) bool {
 }
 func (a *Service) providers(w http.ResponseWriter, r *http.Request) {
 	m := map[string]bool{}
-	for _, p := range []string{"apple", "apple_web", "google", "wechat", "phone", "email", "anonymous"} {
+	for _, p := range []string{"apple", "apple_web", "google", "huawei", "wechat", "phone", "email", "anonymous"} {
 		m[p] = a.enabled(p)
 	}
 	write(w, 200, map[string]any{"providers": m})

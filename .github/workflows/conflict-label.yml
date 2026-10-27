@@ -1,6 +1,6 @@
 name: Conflict label
 
-# 给与目标分支有冲突的拉取请求打上 conflict 标签，冲突解决后摘掉。目标分支每推进一次，开着的 PR 都可能因此冲突，所以在 main 的推送上把所有开着的 PR 过一遍；PR 自己推新提交时也过一遍，好及时摘掉标签。
+# 给与目标分支有冲突的拉取请求打上 conflict 标签，冲突解决后摘掉。目标分支每推进一次，开着的 PR 都可能因此冲突，所以在 main 的推送上把所有开着的 PR 过一遍；PR 自己推新提交时只检查这一个 PR，好及时摘掉标签。
 #
 # 冲突与否直接读 GitHub 算好的 mergeable 字段。推送刚发生时它可能还是 null（GitHub 在后台重算），这时等一会儿再读，几次后仍未知的留到下一次触发。
 #
@@ -14,8 +14,8 @@ on:
     types: [opened, synchronize, reopened]
 
 concurrency:
-  # 每次都检查全部开着的 PR，只需要最新的一次。
-  group: conflict-label
+  # main 的推送检查全部开着的 PR，只需要最新的一次；PR 事件只检查自己，按 PR 编号分组。共用一个分组时，dependabot 一次开出多个 PR 会让后一次运行取消前一次，被取消的检查在那些 PR 上显示为失败。
+  group: conflict-label-${{ github.event.pull_request.number || 'main' }}
   cancel-in-progress: true
 
 permissions:
@@ -32,20 +32,23 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       LABEL: conflict
+      PR_NUMBER: ${{ github.event.pull_request.number }}
     steps:
       - name: Ensure the label exists
-        run: |
-          set -euo pipefail
-          if ! gh label list --limit 500 --json name --jq '.[].name' | grep -qx "$LABEL"; then
-            gh label create "$LABEL" --color B60205 --description "与目标分支有合并冲突，需要先解决"
-          fi
+        # --force 在标签已存在时只更新颜色和描述，可以重复执行。不要改回 `gh label list | grep -q` 再创建：grep 匹配后提前退出，gh 继续写输出会收到 SIGPIPE，在 pipefail 下整条管道失败，已有的标签被误判为不存在，随后的创建报错。
+        run: gh label create "$LABEL" --color B60205 --description "与目标分支有合并冲突，需要先解决" --force
 
       - name: Label pull requests by their mergeable state
         run: |
           set -euo pipefail
           # 批量列表（包括 GraphQL 的 pullRequests 连接）不会触发 GitHub 计算 mergeable，一直是 UNKNOWN；逐个 GET /pulls/{number} 才会。所以先列出编号，再一个个读，读到 null 说明还在算，隔 10 秒再读，最多 4 次。
-          gh pr list --state open --limit 500 --json number,labels \
-            --jq '.[] | "\(.number) \(any(.labels[]; .name == env.LABEL))"' > prs.txt
+          if [ -n "$PR_NUMBER" ]; then
+            gh pr view "$PR_NUMBER" --json number,labels \
+              --jq '"\(.number) \(any(.labels[]; .name == env.LABEL))"' > prs.txt
+          else
+            gh pr list --state open --limit 500 --json number,labels \
+              --jq '.[] | "\(.number) \(any(.labels[]; .name == env.LABEL))"' > prs.txt
+          fi
           while read -r number labelled; do
             mergeable=null
             for attempt in 1 2 3 4; do

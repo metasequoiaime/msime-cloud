@@ -52,6 +52,37 @@ func TestCrashSignature(t *testing.T) {
 	if crashSignature("iPadOS", "EXC_BAD_ACCESS at 0x10", iosA) != a || crashSignature("Darwin", "x", "") != crashSignature("macos", "x", "") {
 		t.Fatal("platform aliases must share a group")
 	}
+	// iOS MetricKit summaries: an unsymbolicated app stack reduces to the binary name, so the exception type, code and signal are what tell an abort from a Swift trap or a bad access.
+	metricKit := "0 libsystem_kernel.dylib + 40892\n1 libsystem_pthread.dylib + 22144\n2 MSIMEApp + 3952532\n3 dyld + 24012"
+	abort := crashSignature("ios", "Crash exception 10 code 0 signal 6", metricKit)
+	if trap := crashSignature("ios", "Crash exception 6 code 1 signal 5 Namespace SIGNAL, Code 0x5", metricKit); trap == abort {
+		t.Fatal("a Swift trap must not share a group with an abort")
+	}
+	if segv := crashSignature("ios", "Crash exception 1 code 1 signal 11", metricKit); segv == abort {
+		t.Fatal("a bad access must not share a group with an abort")
+	}
+	if named := crashSignature("ios", "Crash exception 10 code 0 signal 6 NSInvalidArgumentException", metricKit); named == abort {
+		t.Fatal("a named ObjC exception must have its own group")
+	}
+	if later := crashSignature("ios", "Crash exception 10 code 0 signal 6", "0 libsystem_kernel.dylib + 1\n1 MSIMEApp + 4000000"); later != abort {
+		t.Fatal("app offsets that move between builds must not split a MetricKit group")
+	}
+	if a, b := crashSignature("ios", "Killed exception 10 code 0 signal 9 Namespace RUNNINGBOARD, Code 0xdead10cc", metricKit), crashSignature("ios", "Killed exception 10 code 0 signal 9 Namespace RUNNINGBOARD, Code 0x8badf00d", metricKit); a != b {
+		t.Fatal("codes after the summary prefix are still masked")
+	}
+	for message, want := range map[string]string{
+		"Crash exception 10 code 0 signal 6":                             "crash exception 10 code 0 signal 6",
+		"Crash exception 10 code 0 signal 6  Namespace SIGNAL, Code 0x6": "crash exception 10 code 0 signal 6 namespace signal, code #x?",
+		"Crash exception 10 signal 6":                                    "crash exception 10 signal 6",
+		"Crash exception 10x code 0":                                     "crash exception #x code #",
+		"Crash exception code 0":                                         "crash exception code #",
+		"crash exception 10 code 0 signal 6":                             "crash exception # code # signal #",
+		"Fatal signal 6 (SIGABRT)":                                       "fatal signal # (sigabrt)",
+	} {
+		if got := normalizeCrashMessage(message); got != want {
+			t.Fatalf("normalizeCrashMessage(%q) = %q, want %q", message, got, want)
+		}
+	}
 	if got := crashGroupTitle("\n  " + strings.Repeat("长", 250) + "\nrest"); got != strings.Repeat("长", 200) {
 		t.Fatal("title must be the first line within 200 characters", len([]rune(got)))
 	}

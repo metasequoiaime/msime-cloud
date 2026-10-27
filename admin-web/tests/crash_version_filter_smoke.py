@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""验证崩溃分组的版本下拉框：保持服务端从新到旧的顺序、选择后带上 version 参数，切换平台时清掉版本筛选。"""
+"""验证崩溃分组的版本下拉框：默认请求 version=latest 并显示服务端选出的最新版本，「全部版本」写成 version=all，保持服务端从新到旧的顺序，切换平台时回到新平台的最新版本。"""
 
 import re
 import threading
@@ -26,20 +26,33 @@ def check_crash_version_filter(browser, base):
         query = {key: values[0] for key, values in parse_qs(urlsplit(route.request.url).query).items()}
         queries.append(query)
         items = [item for item in crash["items"] if item["platform"] == query.get("platform", item["platform"])]
-        # 版本筛选只留下第一个分组，模拟服务端按版本缩小列表。
-        if query.get("version"):
+        # 模拟服务端：latest 选最新的版本，按版本筛选时只留下第一个分组。
+        version = query.get("version", "")
+        if version == "latest":
+            version = VERSIONS[0]["version"]
+        if version:
             items = items[:1]
-        route.fulfill(json={**crash, "items": items, "crash_versions": VERSIONS})
+        route.fulfill(json={**crash, "items": items, "crash_versions": VERSIONS, "version": version})
 
     page.route(re.compile(r".*/api/crash-groups(\?.*)?$"), respond)
     try:
+        # 默认看最新版本：请求 version=latest，下拉框显示服务端选出的版本，链接里不写 version。
         page.goto(base + "/crash")
         select = page.get_by_role("combobox", name="版本", exact=True)
-        expect(select).to_have_value("")
+        expect(select).to_have_value("1.0.10")
+        expect(select).to_be_enabled()
         options = select.locator("option")
         expect(options).to_have_text(["全部版本", "1.0.10（2 个分组）", "1.0.9（1 个分组）", "0.9.0（1 个分组）"])
         rows = page.get_by_role("table", name="崩溃分组", exact=True).locator("tbody tr")
+        expect(rows).to_have_count(1)
+        assert queries[-1] == {"version": "latest"}, queries
+        expect(page).not_to_have_url(re.compile(r"version="))
+
+        select.select_option("all")
+        expect(page).to_have_url(re.compile(r"[?&]version=all(&|$)"))
+        expect(select).to_have_value("all")
         expect(rows).to_have_count(2)
+        assert queries[-1] == {}, queries
 
         select.select_option("1.0.9")
         expect(page).to_have_url(re.compile(r"[?&]version=1\.0\.9(&|$)"))
@@ -54,8 +67,8 @@ def check_crash_version_filter(browser, base):
         page.get_by_role("radio", name=re.compile("^Windows")).click()
         expect(page).to_have_url(re.compile(r"[?&]platform=windows(&|$)"))
         expect(page).not_to_have_url(re.compile(r"version="))
-        expect(select).to_have_value("")
-        assert queries[-1] == {"platform": "windows"}, queries
+        expect(select).to_have_value("1.0.10")
+        assert queries[-1] == {"platform": "windows", "version": "latest"}, queries
         assert not errors, errors
         assert page.evaluate("window.cspViolations") == [], page.evaluate("window.cspViolations")
     finally:

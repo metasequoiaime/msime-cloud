@@ -135,6 +135,7 @@ type crashGroupsResponse struct {
 	HasMore       bool                 `json:"has_more"`
 	Platforms     []crashPlatformCount `json:"platforms"`
 	CrashVersions []crashVersionCount  `json:"crash_versions"`
+	Version       string               `json:"version"`
 	Summary       crashSummary         `json:"summary"`
 }
 
@@ -223,8 +224,27 @@ func TestCrashGroupsList(t *testing.T) {
 	if v := getCrashGroups(t, a, "?version=1.0.0", 200); v.Summary.Groups != 3 || v.Summary.Crashes7d != 4 || len(v.Platforms) != 3 || !slices.Equal(v.CrashVersions, all.CrashVersions) {
 		t.Fatalf("version must not narrow the tiles %+v", v)
 	}
-	if v := getCrashGroups(t, a, "?version=0.9.0", 200); len(v.Items) != 1 || v.Items[0].Count7d != 0 || v.Items[0].CountPrev7d != 1 || v.Items[0].Devices7d != nil {
-		t.Fatalf("previous week only %+v", v.Items)
+	if v := getCrashGroups(t, a, "?version=0.9.0", 200); len(v.Items) != 1 || v.Items[0].Count7d != 0 || v.Items[0].CountPrev7d != 1 || v.Items[0].Devices7d != nil || v.Version != "0.9.0" {
+		t.Fatalf("previous week only %+v", v)
+	}
+	if all.Version != "" {
+		t.Fatalf("no version filter must report an empty version: %q", all.Version)
+	}
+	// version=latest 选所选平台最新的版本：全部平台和 iOS 都是 1.0.1，Windows 是 0.5.4；安卓只有 20 天前的崩溃，没有可选的版本，退回全部版本。
+	for query, want := range map[string]struct {
+		version   string
+		signature string
+		count7d   int64
+	}{
+		"?version=latest":                  {"1.0.1", sigA, 1},
+		"?platform=ios&version=latest":     {"1.0.1", sigA, 1},
+		"?platform=windows&version=latest": {"0.5.4", sigB, 1},
+		"?platform=android&version=latest": {"", sigC, 0},
+	} {
+		v := getCrashGroups(t, a, query, 200)
+		if v.Version != want.version || len(v.Items) != 1 || v.Items[0].Signature != want.signature || v.Items[0].Count7d != want.count7d {
+			t.Fatalf("%s %+v", query, v)
+		}
 	}
 	for _, query := range []string{"?platform=windows&version=1.0.0", "?version=0.1.0", "?version=9.9.9"} {
 		if v := getCrashGroups(t, a, query, 200); len(v.Items) != 0 {

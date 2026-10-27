@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """验证崩溃分组撤销使用服务端版本，并在冲突后刷新列表。"""
 
+import re
 import threading
 
 from playwright.sync_api import expect, sync_playwright
@@ -20,7 +21,8 @@ def check_crash_undo(browser, base):
         page.route("**/api/auth/session", lambda route: route.fulfill(json=smoke.FIXTURES["/api/auth/session"]))
         page.route("**/api/shell", lambda route: route.fulfill(json={**shell, "me": {**shell["me"], "permissions": ["triage_issues"]}}))
         group = {**smoke.CRASH_GROUP, "status": "open", "issue_url": None}
-        page.route("**/api/crash-groups", lambda route: route.fulfill(json={**smoke.FIXTURES["/api/crash-groups"], "items": [group]}))
+        # 崩溃页默认带 ?version=latest 请求，路由要连查询参数一起匹配。
+        page.route(re.compile(r".*/api/crash-groups(\?.*)?$"), lambda route: route.fulfill(json={**smoke.FIXTURES["/api/crash-groups"], "items": [group]}))
         page.route("**/api/crash-groups/0123456789abcdef", lambda route: route.fulfill(json={"group": group, "samples": []}))
         undo = {"action": "crash_group_status", "id": group["signature"], "value": {"status": "fixed", "token": "a" * 32}}
 

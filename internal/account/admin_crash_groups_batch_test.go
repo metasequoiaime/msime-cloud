@@ -64,7 +64,8 @@ func TestAdminCrashGroupsBatchesItemsAndSummary(t *testing.T) {
 	trace.mu.Lock()
 	batches, queries := trace.batches, trace.queries
 	trace.mu.Unlock()
-	if batches != 1 || queries != 4 {
-		t.Fatalf("崩溃分组使用了 %d 次批量请求、%d 条语句，期望 1、4", batches, queries)
+	// 两次往返：先读平台计数和版本列表（version=latest 要先选出版本），再读列表和顶部统计。
+	if batches != 2 || queries != 4 {
+		t.Fatalf("崩溃分组使用了 %d 次批量请求、%d 条语句，期望 2、4", batches, queries)
 	}
 }

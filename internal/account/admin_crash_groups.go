@@ -296,7 +296,10 @@ func crashVersionDigits(s string) bool {
 	return s != ""
 }
 
-// adminCrashGroups 处理 GET /api/crash-groups?platform=&version=；version 只筛选分组列表和分组的次数，顶部统计仍按平台计算。
+// crashLatestVersion 是 version 参数的保留值：选所选平台 crash_versions 里最新的版本，平台近 14 天没有崩溃时不按版本筛选。崩溃页默认看最新版本，由服务端在同一个快照里选出版本再查列表，页面只发一次请求。
+const crashLatestVersion = "latest"
+
+// adminCrashGroups 处理 GET /api/crash-groups?platform=&version=；version 只筛选分组列表和分组的次数，顶部统计仍按平台计算。响应的 version 是实际用来筛选的版本，空字符串表示全部版本。
 func (a *Service) adminCrashGroups(w http.ResponseWriter, r *http.Request, _ string) {
 	query := r.URL.Query()
 	for key := range query {
@@ -320,18 +323,39 @@ func (a *Service) adminCrashGroups(w http.ResponseWriter, r *http.Request, _ str
 		return
 	}
 	defer tx.Rollback(ctx)
-	rows, err := tx.Query(ctx, `SELECT platform,count(*) FROM admin_crash_groups GROUP BY platform ORDER BY platform`)
-	if err != nil {
+	// 平台计数和版本列表先在一个批量请求里读出：选列表查询要用平台计数，version=latest 要用版本列表。
+	var platforms []crashPlatformCount
+	var versions []crashVersionCount
+	first := &pgx.Batch{}
+	first.Queue(`SELECT platform,count(*) FROM admin_crash_groups GROUP BY platform ORDER BY platform`).Query(func(rows pgx.Rows) error {
+		defer rows.Close()
+		var err error
+		platforms, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (crashPlatformCount, error) {
+			var p crashPlatformCount
+			return p, row.Scan(&p.Platform, &p.Count)
+		})
+		return err
+	})
+	first.Queue(crashVersionsQuery, platform).Query(func(rows pgx.Rows) error {
+		defer rows.Close()
+		var err error
+		versions, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (crashVersionCount, error) {
+			var v crashVersionCount
+			return v, row.Scan(&v.Version, &v.Count)
+		})
+		return err
+	})
+	if err = tx.SendBatch(ctx, first).Close(); err != nil {
 		a.error(w, err)
 		return
 	}
-	platforms, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (crashPlatformCount, error) {
-		var p crashPlatformCount
-		return p, row.Scan(&p.Platform, &p.Count)
-	})
-	if err != nil {
-		a.error(w, err)
-		return
+	// 最新的版本排在最前，供页面的版本下拉框直接使用。
+	slices.SortFunc(versions, func(x, y crashVersionCount) int { return compareCrashVersions(y.Version, x.Version) })
+	if version == crashLatestVersion {
+		version = ""
+		if len(versions) > 0 {
+			version = versions[0].Version
+		}
 	}
 	var totalGroups, selectedGroups int64
 	for _, p := range platforms {
@@ -354,16 +378,6 @@ func (a *Service) adminCrashGroups(w http.ResponseWriter, r *http.Request, _ str
 		items, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (crashGroupRow, error) { return scanCrashGroup(row) })
 		return err
 	})
-	var versions []crashVersionCount
-	batch.Queue(crashVersionsQuery, platform).Query(func(rows pgx.Rows) error {
-		defer rows.Close()
-		var err error
-		versions, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (crashVersionCount, error) {
-			var v crashVersionCount
-			return v, row.Scan(&v.Version, &v.Count)
-		})
-		return err
-	})
 	var summary crashSummary
 	batch.Queue(crashSummaryQuery, platform).QueryRow(func(row pgx.Row) error {
 		return row.Scan(&summary.Groups, &summary.Crashes7d, &summary.Devices7d, &summary.InstallsToday, &summary.CrashFreeRate, &summary.ActiveDevices7d, &summary.DeviceCrashRate, &summary.Versions, &summary.CrashDevices7d, &summary.ForcedTerminationDevices7d)
@@ -376,9 +390,7 @@ func (a *Service) adminCrashGroups(w http.ResponseWriter, r *http.Request, _ str
 	if hasMore {
 		items = items[:crashGroupsLimit]
 	}
-	// 最新的版本排在最前，供页面的版本下拉框直接使用。
-	slices.SortFunc(versions, func(x, y crashVersionCount) int { return compareCrashVersions(y.Version, x.Version) })
-	write(w, 200, map[string]any{"items": items, "has_more": hasMore, "platforms": platforms, "crash_versions": versions, "summary": summary})
+	write(w, 200, map[string]any{"items": items, "has_more": hasMore, "platforms": platforms, "crash_versions": versions, "version": version, "summary": summary})
 }
 
 // crashSample is one stored crash of a group, for the stack view.

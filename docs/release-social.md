@@ -49,6 +49,8 @@ n8n 进程需要能够访问公网，并设置 `N8N_BLOCK_ENV_ACCESS_IN_NODE=fal
 
 工作流使用 Webhook 的 Raw Body 验证 `X-MSIME-Signature`，再生成不同长度的文案：Telegram 4096 字符、Discord 2000 字符、Mastodon 500 字符、Bluesky 300 字符、X 280 字符。Reddit 发布链接帖，正文在 Release 页面保留。
 
+每个平台的 Release 链接会带独立的 UTM 参数：`utm_source=<channel>`、`utm_medium=social`、`utm_campaign=<idempotency_key>`。官网或下载页的分析工具应保留这些参数，并按 `utm_source` 比较点击、安装和后续 star；不要只比较各平台的发帖成功数。
+
 ### 测试请求
 
 先在 n8n 的 Test URL 上执行工作流，再用一个合成 Release 事件测试。签名必须对原始 JSON 正文计算，不能先格式化或重新排序：

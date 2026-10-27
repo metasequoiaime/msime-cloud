@@ -969,9 +969,56 @@ func trimCrashFrameOffset(line string) string {
 	return line[:end]
 }
 
-// normalizeCrashMessage 保留消息首个非空行，掩去地址、标识符和数字，让同一故障在不同运行中归为一组。
+// normalizeCrashMessage 保留消息首个非空行，掩去地址、标识符和数字，让同一故障在不同运行中归为一组。iOS MetricKit 摘要开头的异常类型、代码和信号是故障种类而不是随运行变化的值，原样保留：掩成 `#` 会让 SIGABRT、SIGTRAP（Swift trap）和 SIGSEGV 在首个自有帧只剩二进制名时落进同一组。
 func normalizeCrashMessage(message string) string {
 	line := crashFirstLine(message)
+	if n := crashDiagnosticPrefixLength(line); n > 0 {
+		rest := normalizeCrashLine(strings.TrimSpace(line[n:]))
+		if rest == "" {
+			return strings.ToLower(line[:n])
+		}
+		return strings.ToLower(line[:n]) + " " + rest
+	}
+	return normalizeCrashLine(line)
+}
+
+// crashDiagnosticPrefixLength 返回 iOS 客户端 MetricKit 摘要前缀 `Crash|Killed exception <类型>[ code <代码>][ signal <信号>]` 的字节长度，不是这种摘要时返回 0。前缀后必须是行尾或空白，`signal 61x` 这类不完整的数字不算。
+func crashDiagnosticPrefixLength(line string) int {
+	var i int
+	switch {
+	case strings.HasPrefix(line, "Crash exception "):
+		i = len("Crash exception ")
+	case strings.HasPrefix(line, "Killed exception "):
+		i = len("Killed exception ")
+	default:
+		return 0
+	}
+	digits := func(at int) int {
+		end := at
+		for end < len(line) && line[end] >= '0' && line[end] <= '9' {
+			end++
+		}
+		return end
+	}
+	end := digits(i)
+	if end == i {
+		return 0
+	}
+	for _, field := range []string{" code ", " signal "} {
+		if strings.HasPrefix(line[end:], field) {
+			if next := digits(end + len(field)); next > end+len(field) {
+				end = next
+			}
+		}
+	}
+	if end < len(line) && !crashWhitespaceByte(line[end]) {
+		return 0
+	}
+	return end
+}
+
+// normalizeCrashLine 对单行消息掩去地址、UUID、长十六进制串和数字，并规范空白。
+func normalizeCrashLine(line string) string {
 	if !crashMessageMayChange(line) {
 		return strings.ToLower(line)
 	}

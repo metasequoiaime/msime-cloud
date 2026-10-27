@@ -406,6 +406,8 @@ MCP 客户端配置示例（使用当前操作系统账号已保存的管理员�
 
 本流程不直接部署 Kubernetes，也不包含供应商 API Key 或客户端令牌。首次镜像成功发布并确认拉取权限后，再启用 yldm-platform 中的后端 ApplicationSet 条目。
 
+发版完成后的社交平台分发见[发版社交分发](docs/release-social.md)。
+
 ## 用户登录与实时语音
 
 用户体系支持 Apple、Google、华为账号、微信网站扫码、阿里云短信及 Lark 邮箱验证码，使用 PostgreSQL 存储用户和会话。数据库及客户端连接编码都必须为 `UTF8`，否则服务拒绝启动；升级前执行 `SHOW server_encoding; SHOW client_encoding;` 检查，已有非 UTF-8 数据库须先备份、检查数据并恢复到新建的 UTF-8 数据库。配置、建库、迁移和客户端流程见 [用户体系](docs/user-auth.md)，接口说明可在本地显式启用 `/swagger/` 后查看。

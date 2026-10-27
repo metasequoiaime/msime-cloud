@@ -20,7 +20,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// 答疑的向量检索。目录挑段落只看得到标题和开头几十个字，答案埋在正文深处、或者群友的口语问法和文档说法对不上时挑不中；GitHub 搜索要求每个词都匹配，也搜不到意思相同、说法不同的旧 issue。所以把文档段落、答疑仓库全部的 issue 和 PR 都算成向量存进 PostgreSQL（pgvector，见 account/qq_knowledge.go），答疑时把问题也算成向量，按余弦相似度召回：文档段落并进模型挑出的段落，issue 和 PR 作为「语义相近的历史记录」交给回答的模型。
+// 答疑的向量检索。目录挑段落只看得到标题和开头几十个字，答案埋在正文深处、或者群友的口语问法和文档说法对不上时挑不中；GitHub 搜索要求每个词都匹配，也搜不到意思相同、说法不同的旧 issue。所以把文档段落、答疑仓库和 qq_bot.history_repos 里的仓库全部的 issue 和 PR 都算成向量存进 PostgreSQL（pgvector，见 account/qq_knowledge.go），答疑时把问题也算成向量，按余弦相似度召回：文档段落并进模型挑出的段落，issue 和 PR 作为「语义相近的历史记录」交给回答的模型。
 //
 // 同步由一个副本做（auth_rates 认领，每 qqVectorSyncInterval 一次）：文档按段落内容的摘要比对，变了才重算；issue 和 PR 按仓库记下同步到的更新时间，每次从那里往后拉（GitHub 的 issues 接口同时返回 PR），首次全量回填分几次跑完，每次每个仓库最多 qqVectorSyncPages 页。数据库没装 pgvector、chat 端点不是 …/chat/completions 的形状，或者 embedding_model 写 none 时整个功能关闭，答疑照旧只用目录挑段落。
 
@@ -290,7 +290,7 @@ func (s *Server) syncQQVectors(ctx context.Context) {
 		slog.Warn("qq bot: doc vectors not synced", "reason", err.Error())
 	}
 	history := 0
-	for _, repo := range s.qqGitHubRepos() {
+	for _, repo := range s.qqVectorRepos() {
 		n, err := s.syncQQHistoryVectors(ctx, repo)
 		history += n
 		if err != nil && ctx.Err() == nil {

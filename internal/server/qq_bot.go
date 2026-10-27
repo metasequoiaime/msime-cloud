@@ -110,6 +110,8 @@ type QQBotConfig struct {
 	ImprovementRepo string `json:"improvement_repo"`
 	// EmbeddingModel 是答疑向量检索用的 embedding 模型，经 chat 端点所在服务的 /embeddings 接口调用（密钥沿用 chat）；为空时用 defaultQQEmbeddingModel，写 none 关闭向量检索。见 bot_vectors.go。
 	EmbeddingModel string `json:"embedding_model"`
+	// HistoryRepos 是向量检索额外索引的仓库（owner/name），例如 metasequoiaime/msime-cloud：它们的 issue 和 PR 只用来在答疑时按意思召回「语义相近的历史记录」，不参与提 issue、搜 issue、查 #编号和周报。qq_bot.repo 和各平台的仓库本来就会索引，不用重复写。管理后台的 GitHub App 要能读这些仓库的 issues 和 pull_requests。
+	HistoryRepos []string `json:"history_repos"`
 	// APIURL 覆盖 https://api.bot.qq.com，供测试使用。
 	APIURL string `json:"api_url,omitempty"`
 	secret string
@@ -130,7 +132,7 @@ var (
 
 func (c *QQBotConfig) validate(cfg *Config) error {
 	if !c.enabled() {
-		if c.APIURL != "" || c.Repo != "" || c.Model != "" || c.FallbackModel != "" || c.KnowledgeRepo != "" || c.KnowledgeDir != "" || c.GapsRepo != "" || c.EmbeddingModel != "" || c.ImprovementRepo != "" || c.StrongModel != "" || c.ChatModel != "" || len(c.Labels) > 0 || len(c.Groups) > 0 || len(c.Admins) > 0 {
+		if c.APIURL != "" || c.Repo != "" || c.Model != "" || c.FallbackModel != "" || c.KnowledgeRepo != "" || c.KnowledgeDir != "" || c.GapsRepo != "" || c.EmbeddingModel != "" || c.ImprovementRepo != "" || len(c.HistoryRepos) > 0 || c.StrongModel != "" || c.ChatModel != "" || len(c.Labels) > 0 || len(c.Groups) > 0 || len(c.Admins) > 0 {
 			return errors.New("qq_bot settings require app_id")
 		}
 		return nil
@@ -241,6 +243,14 @@ func (c *QQBotConfig) validate(cfg *Config) error {
 	}
 	if c.ImprovementRepo != "" && c.ImprovementRepo != "none" && !githubRepositoryPattern.MatchString(c.ImprovementRepo) {
 		return errors.New("qq_bot improvement_repo must be owner/name or none")
+	}
+	if len(c.HistoryRepos) > qqHistoryReposMax {
+		return errors.New("qq_bot history_repos must list at most 20 repositories")
+	}
+	for _, repo := range c.HistoryRepos {
+		if !githubRepositoryPattern.MatchString(repo) {
+			return errors.New("qq_bot history_repos must contain owner/name repositories")
+		}
 	}
 	if !normalizeAPIBaseURL(&c.APIURL, defaultQQBotAPIURL) {
 		return errors.New("qq_bot api_url must be an HTTPS URL without query or credentials")

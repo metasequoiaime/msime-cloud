@@ -1,5 +1,5 @@
 # 管理后台只产出静态文件，与目标架构无关，所以在构建机自己的架构上构建一次，不为每个目标架构在模拟器里重跑。
-FROM --platform=$BUILDPLATFORM node:24-alpine AS admin-build
+FROM --platform=$BUILDPLATFORM node:26-alpine AS admin-build
 WORKDIR /src
 RUN npm install --global pnpm@10.15.0
 COPY admin-web/package.json admin-web/pnpm-lock.yaml ./

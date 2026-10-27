@@ -1,0 +1,784 @@
+{
+  "name": "MSIME 发版社交分发",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "msime-release",
+        "responseMode": "onReceived",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "msime-release-01",
+      "name": "Release webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "msime-release-social"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst item = $input.first();\nconst raw = item.json.rawBody ?? (typeof item.json.body === 'string' ? item.json.body : JSON.stringify(item.json.body ?? item.json));\nconst headers = item.json.headers ?? {};\nconst supplied = headers['x-msime-signature'] ?? headers['X-MSIME-Signature'] ?? '';\nconst secret = $env.MSIME_SOCIAL_WEBHOOK_SECRET ?? '';\nif (!secret || !supplied) throw new Error('缺少社交 webhook 签名');\nconst expected = `sha256=${crypto.createHmac('sha256', secret).update(raw, 'utf8').digest('hex')}`;\nif (supplied.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) {\n  throw new Error('社交 webhook 签名无效');\n}\n\nlet payload;\ntry {\n  payload = JSON.parse(raw);\n} catch (error) {\n  throw new Error('社交 webhook 正文不是 JSON');\n}\nif (payload.schema_version !== 1 || payload.event !== 'release.published') {\n  throw new Error('社交 webhook 事件类型不支持');\n}\nconst release = payload.release ?? {};\nconst version = String(release.tag ?? '').replace(/^backend-/, '');\nconst body = String(release.body ?? '').replace(/```[\\s\\S]*?```/g, '').trim();\nconst bullets = body.split(/\\r?\\n/).map((line) => line.trim()).filter((line) => /^[-*] /.test(line)).slice(0, 3).map((line) => `• ${line.slice(2).trim()}`);\nconst highlights = bullets.join('\\n') || '查看本版更新内容';\nconst url = String(release.url ?? '');\nconst short = `水杉输入法后端 ${version} 已发布。\\n${highlights}\\n${url}`;\nconst long = `水杉输入法后端 ${version} 已发布。\\n\\n${body || '本版更新内容见 Release 说明。'}\\n\\n下载：${url}`;\nconst truncate = (text, length) => text.length <= length ? text : `${text.slice(0, length - 1)}…`;\nconst enabled = (flag, ...values) => $env[flag] === '1' && values.every(Boolean);\nconst state = $getWorkflowStaticData('global');\nconst completed = state.completed ?? {};\nconst pending = (channel) => !completed[payload.idempotency_key]?.[channel];\nconst out = [];\nif (enabled('MSIME_TELEGRAM_ENABLED', $env.MSIME_TELEGRAM_BOT_TOKEN, $env.MSIME_TELEGRAM_CHAT_ID) && pending('telegram')) out.push({json: {channel: 'telegram', idempotency_key: payload.idempotency_key, text: truncate(long, 4096)}});\nif (enabled('MSIME_DISCORD_ENABLED', $env.MSIME_DISCORD_WEBHOOK_URL) && pending('discord')) out.push({json: {channel: 'discord', idempotency_key: payload.idempotency_key, text: truncate(long, 2000)}});\nif (enabled('MSIME_MASTODON_ENABLED', $env.MSIME_MASTODON_INSTANCE, $env.MSIME_MASTODON_ACCESS_TOKEN) && pending('mastodon')) out.push({json: {channel: 'mastodon', idempotency_key: payload.idempotency_key, text: truncate(short, 500)}});\nif (enabled('MSIME_BLUESKY_ENABLED', $env.MSIME_BLUESKY_IDENTIFIER, $env.MSIME_BLUESKY_APP_PASSWORD) && pending('bluesky')) out.push({json: {channel: 'bluesky', idempotency_key: payload.idempotency_key, text: truncate(short, 300)}});\nif (enabled('MSIME_X_ENABLED', $env.MSIME_X_ACCESS_TOKEN) && pending('x')) out.push({json: {channel: 'x', idempotency_key: payload.idempotency_key, text: truncate(short, 280)}});\nif (enabled('MSIME_REDDIT_ENABLED', $env.MSIME_REDDIT_ACCESS_TOKEN, $env.MSIME_REDDIT_SUBREDDIT, $env.MSIME_REDDIT_USER_AGENT) && pending('reddit')) out.push({json: {channel: 'reddit', idempotency_key: payload.idempotency_key, title: truncate(`水杉输入法后端 ${version} 发布`, 300), text: long, url}});\nreturn out;"
+      },
+      "id": "msime-release-02",
+      "name": "验签和生成文案",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.channel }}",
+              "rightValue": "telegram",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "msime-release-03",
+      "name": "启用 Telegram",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        520,
+        -360
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.channel }}",
+              "rightValue": "discord",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "msime-release-04",
+      "name": "启用 Discord",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        520,
+        -220
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.channel }}",
+              "rightValue": "mastodon",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "msime-release-05",
+      "name": "启用 Mastodon",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        520,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.channel }}",
+              "rightValue": "bluesky",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "msime-release-06",
+      "name": "启用 Bluesky",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        520,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.channel }}",
+              "rightValue": "x",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "msime-release-07",
+      "name": "启用 X",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        520,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.channel }}",
+              "rightValue": "reddit",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "msime-release-08",
+      "name": "启用 Reddit",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        520,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://api.telegram.org/bot' + $env.MSIME_TELEGRAM_BOT_TOKEN + '/sendMessage' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({chat_id: $env.MSIME_TELEGRAM_CHAT_ID, text: $json.text, disable_web_page_preview: false}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "msime-release-09",
+      "name": "发送 Telegram",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        820,
+        -360
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MSIME_DISCORD_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({content: $json.text, username: '水杉输入法发布机器人', allowed_mentions: {parse: []}}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "msime-release-10",
+      "name": "发送 Discord",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        820,
+        -220
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MSIME_MASTODON_INSTANCE.replace(/\\/$/, '') + '/api/v1/statuses' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.MSIME_MASTODON_ACCESS_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "status",
+              "value": "={{ $json.text }}"
+            },
+            {
+              "name": "visibility",
+              "value": "public"
+            },
+            {
+              "name": "language",
+              "value": "zh"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "msime-release-11",
+      "name": "发送 Mastodon",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        820,
+        -80
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://bsky.social/xrpc/com.atproto.server.createSession",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({identifier: $env.MSIME_BLUESKY_IDENTIFIER, password: $env.MSIME_BLUESKY_APP_PASSWORD}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "msime-release-12",
+      "name": "Bluesky 创建会话",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        820,
+        80
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.x.com/2/tweets",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.MSIME_X_ACCESS_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({text: $json.text}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "msime-release-13",
+      "name": "发送 X",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        820,
+        220
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://oauth.reddit.com/api/submit",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.MSIME_REDDIT_ACCESS_TOKEN }}"
+            },
+            {
+              "name": "User-Agent",
+              "value": "={{ $env.MSIME_REDDIT_USER_AGENT }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "api_type",
+              "value": "json"
+            },
+            {
+              "name": "kind",
+              "value": "link"
+            },
+            {
+              "name": "sr",
+              "value": "={{ $env.MSIME_REDDIT_SUBREDDIT }}"
+            },
+            {
+              "name": "title",
+              "value": "={{ $json.title }}"
+            },
+            {
+              "name": "url",
+              "value": "={{ $json.url }}"
+            },
+            {
+              "name": "resubmit",
+              "value": "true"
+            },
+            {
+              "name": "sendreplies",
+              "value": "false"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "msime-release-14",
+      "name": "发送 Reddit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        820,
+        360
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://bsky.social/xrpc/com.atproto.repo.createRecord",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $json.accessJwt }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({repo: $json.did, collection: 'app.bsky.feed.post', record: {'$type': 'app.bsky.feed.post', text: $('验签和生成文案').item.json.text, createdAt: new Date().toISOString()}}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "msime-release-15",
+      "name": "Bluesky 发帖",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1080,
+        80
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const source = $('验签和生成文案').item.json;\nconst response = $json;\nconst failed = Boolean(response.error) || Number(response.statusCode ?? 200) >= 400;\nif (!failed) {\n  const state = $getWorkflowStaticData('global');\n  state.completed ??= {};\n  state.completed[source.idempotency_key] ??= {};\n  state.completed[source.idempotency_key]['telegram'] = new Date().toISOString();\n}\nreturn [{json: {channel: 'telegram', ok: !failed}}];"
+      },
+      "id": "msime-release-16",
+      "name": "记录 Telegram 成功",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        -360
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const source = $('验签和生成文案').item.json;\nconst response = $json;\nconst failed = Boolean(response.error) || Number(response.statusCode ?? 200) >= 400;\nif (!failed) {\n  const state = $getWorkflowStaticData('global');\n  state.completed ??= {};\n  state.completed[source.idempotency_key] ??= {};\n  state.completed[source.idempotency_key]['discord'] = new Date().toISOString();\n}\nreturn [{json: {channel: 'discord', ok: !failed}}];"
+      },
+      "id": "msime-release-17",
+      "name": "记录 Discord 成功",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        -220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const source = $('验签和生成文案').item.json;\nconst response = $json;\nconst failed = Boolean(response.error) || Number(response.statusCode ?? 200) >= 400;\nif (!failed) {\n  const state = $getWorkflowStaticData('global');\n  state.completed ??= {};\n  state.completed[source.idempotency_key] ??= {};\n  state.completed[source.idempotency_key]['mastodon'] = new Date().toISOString();\n}\nreturn [{json: {channel: 'mastodon', ok: !failed}}];"
+      },
+      "id": "msime-release-18",
+      "name": "记录 Mastodon 成功",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const source = $('验签和生成文案').item.json;\nconst response = $json;\nconst failed = Boolean(response.error) || Number(response.statusCode ?? 200) >= 400;\nif (!failed) {\n  const state = $getWorkflowStaticData('global');\n  state.completed ??= {};\n  state.completed[source.idempotency_key] ??= {};\n  state.completed[source.idempotency_key]['bluesky'] = new Date().toISOString();\n}\nreturn [{json: {channel: 'bluesky', ok: !failed}}];"
+      },
+      "id": "msime-release-19",
+      "name": "记录 Bluesky 成功",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const source = $('验签和生成文案').item.json;\nconst response = $json;\nconst failed = Boolean(response.error) || Number(response.statusCode ?? 200) >= 400;\nif (!failed) {\n  const state = $getWorkflowStaticData('global');\n  state.completed ??= {};\n  state.completed[source.idempotency_key] ??= {};\n  state.completed[source.idempotency_key]['x'] = new Date().toISOString();\n}\nreturn [{json: {channel: 'x', ok: !failed}}];"
+      },
+      "id": "msime-release-20",
+      "name": "记录 X 成功",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const source = $('验签和生成文案').item.json;\nconst response = $json;\nconst failed = Boolean(response.error) || Number(response.statusCode ?? 200) >= 400;\nif (!failed) {\n  const state = $getWorkflowStaticData('global');\n  state.completed ??= {};\n  state.completed[source.idempotency_key] ??= {};\n  state.completed[source.idempotency_key]['reddit'] = new Date().toISOString();\n}\nreturn [{json: {channel: 'reddit', ok: !failed}}];"
+      },
+      "id": "msime-release-21",
+      "name": "记录 Reddit 成功",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        360
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Release webhook": {
+      "main": [
+        [
+          {
+            "node": "验签和生成文案",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "验签和生成文案": {
+      "main": [
+        [
+          {
+            "node": "启用 Telegram",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "启用 Discord",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "启用 Mastodon",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "启用 Bluesky",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "启用 X",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "启用 Reddit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "启用 Telegram": {
+      "main": [
+        [
+          {
+            "node": "发送 Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "启用 Discord": {
+      "main": [
+        [
+          {
+            "node": "发送 Discord",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "启用 Mastodon": {
+      "main": [
+        [
+          {
+            "node": "发送 Mastodon",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "启用 Bluesky": {
+      "main": [
+        [
+          {
+            "node": "Bluesky 创建会话",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "启用 X": {
+      "main": [
+        [
+          {
+            "node": "发送 X",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "启用 Reddit": {
+      "main": [
+        [
+          {
+            "node": "发送 Reddit",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Bluesky 创建会话": {
+      "main": [
+        [
+          {
+            "node": "Bluesky 发帖",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "发送 Telegram": {
+      "main": [
+        [
+          {
+            "node": "记录 Telegram 成功",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "发送 Discord": {
+      "main": [
+        [
+          {
+            "node": "记录 Discord 成功",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "发送 Mastodon": {
+      "main": [
+        [
+          {
+            "node": "记录 Mastodon 成功",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bluesky 发帖": {
+      "main": [
+        [
+          {
+            "node": "记录 Bluesky 成功",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "发送 X": {
+      "main": [
+        [
+          {
+            "node": "记录 X 成功",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "发送 Reddit": {
+      "main": [
+        [
+          {
+            "node": "记录 Reddit 成功",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "none",
+    "saveDataSuccessExecution": "none"
+  },
+  "versionId": "msime-release-social-v1",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

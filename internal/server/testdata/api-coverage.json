@@ -463,7 +463,9 @@
       "internal/server/telegram_bot_test.go::TestTelegramBotCommandsAndQuotes",
       "internal/server/telegram_bot_test.go::TestTelegramBotImages",
       "internal/server/telegram_bot_test.go::TestTelegramBotAdmins",
-      "internal/server/telegram_bot_test.go::TestTelegramBotVideos"
+      "internal/server/telegram_bot_test.go::TestTelegramBotVideos",
+      "internal/server/telegram_private_test.go::TestTelegramBotPrivateChat",
+      "internal/server/telegram_private_test.go::TestTelegramBotBindCodePrivately"
     ],
     "GET /v1/community/word-submissions": [
       "internal/server/word_submissions_test.go::TestWordSubmissionSettings"

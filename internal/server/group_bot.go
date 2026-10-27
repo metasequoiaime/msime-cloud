@@ -19,6 +19,14 @@ type botChannel interface {
 	isAdmin(ctx context.Context, m botMessage) bool
 }
 
+// botPrivateSender 是能私聊消息发送者的平台（Telegram）。群里的绑定码这类只该本人看到的内容，经它私聊发送；QQ 官方机器人不能主动私聊群友，不实现它。
+type botPrivateSender interface {
+	// inGroup 表示消息来自群聊；私聊里的回复本来就只有发送者看得到。
+	inGroup() bool
+	// sendPrivate 私聊发送者；对方没有私聊过机器人（Telegram 上 Bot 不能先开口）时返回错误。
+	sendPrivate(ctx context.Context, text string) error
+}
+
 const (
 	botPlatformQQ       = "qq"
 	botPlatformTelegram = "telegram"

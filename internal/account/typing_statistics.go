@@ -33,8 +33,8 @@ const (
 	// typingStatisticsMaxKeys 是字符类别和输入来源各自最多的种类数，typingStatisticsMaxRanks 是候选位次最多的个数。
 	typingStatisticsMaxKeys  = 32
 	typingStatisticsMaxRanks = 16
-	// QQLinkCodeTTL 是绑定码的有效期。
-	QQLinkCodeTTL = 10 * time.Minute
+	// QQLinkCodeTTL 是绑定码的有效期。QQ 群里的码所有人都看得到，别人抢先在自己的客户端里输入，会把发码的群友绑到他的账号上（泄露不了发码人的数据，但能捣乱），所以给得短：曾经是 10 分钟。
+	QQLinkCodeTTL = 3 * time.Minute
 	// qqLinkAttemptsPerHour 是每个用户每小时能提交绑定码的次数，失败的也算：码只有 8 位数字，不限次数就能猜。
 	qqLinkAttemptsPerHour = 10
 	// qqLinksPerUser 是一个账号最多绑定的群友数。同一个人在不同的群里是不同的 member_openid。

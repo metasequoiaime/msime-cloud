@@ -187,6 +187,8 @@ type telegramUpdate struct {
 type telegramChannel struct {
 	bot                   *telegramBot
 	chat, message, member int64
+	// private 表示消息来自和机器人的私聊（chat 就是 member）。
+	private bool
 }
 
 func (c telegramChannel) reply(ctx context.Context, _ botMessage, _ int, text string) error {
@@ -195,8 +197,27 @@ func (c telegramChannel) reply(ctx context.Context, _ botMessage, _ int, text st
 
 func (telegramChannel) maxReplies() int    { return 0 }
 func (telegramChannel) rejectsLinks() bool { return false }
+
+// isAdmin 在群里见 telegramBot.isAdmin；私聊里没有群身份，只认 telegram_bot.admins。私聊的 chat 和 member 相同，不能套用群里「以群的身份发言就是匿名管理员」的判断。
 func (c telegramChannel) isAdmin(ctx context.Context, _ botMessage) bool {
+	if c.private {
+		return slices.Contains(c.bot.config.Admins, c.member)
+	}
 	return c.bot.isAdmin(ctx, c.chat, c.member)
+}
+
+func (c telegramChannel) inGroup() bool { return !c.private }
+
+// sendPrivate 私聊发送者。对方没私聊过机器人时 Bot API 拒绝（Bot 不能先开口）；匿名管理员以群的身份发言，member 就是群，私聊不到。
+func (c telegramChannel) sendPrivate(ctx context.Context, text string) error {
+	if c.member == c.chat || c.member <= 0 {
+		return errors.New("telegram: sender cannot be reached privately")
+	}
+	return c.bot.call(ctx, c.bot.endpoint, map[string]any{
+		"chat_id":              c.member,
+		"text":                 telegramText(account.Notice{Title: text}),
+		"link_preview_options": map[string]bool{"is_disabled": true},
+	}, nil)
 }
 
 // telegramBotEvents 处理 POST /v1/community/telegram-bot/events：Telegram 的 Webhook 回调。secret_token 不对返回 401；其余情况尽快返回 200，Telegram 收到非 2xx 才会重推，只有数据库暂时不可用、认领不了 update 时返回 503 让它稍后重推。
@@ -265,6 +286,9 @@ func (s *Server) acceptTelegramUpdate(ctx context.Context, u telegramUpdate) boo
 
 // message 判断一条消息是不是在问机器人，是的话转成 botMessage：去掉 @，「/ver@Bot用户名」这样带用户名的命令写成「/ver」。回复别人的消息时，那条消息作为引用，和 QQ 的引用消息一样处理：只 @ 了机器人、没写话时把它当成问题，否则接在问题后面；被回复的消息没有文字（图片、贴纸）时注明看不到。回复机器人自己的消息不算引用，上一轮的问答已经在对话历史里。
 func (b *telegramBot) message(m *telegramMessage) (botMessage, bool) {
+	if m != nil && m.Chat.Type == "private" {
+		return b.privateMessage(m)
+	}
 	if m == nil || m.From == nil || (m.Chat.Type != "group" && m.Chat.Type != "supergroup") {
 		return botMessage{}, false
 	}
@@ -300,6 +324,34 @@ func (b *telegramBot) message(m *telegramMessage) (botMessage, bool) {
 	}
 	if m.ReplyTo != nil && !repliedToBot {
 		out.Quote = qqQuote{Text: qqTruncate(strings.TrimSpace(m.ReplyTo.messageText()), qqQuoteRunes), Images: b.attachments(m.ReplyTo), Referenced: true}
+	}
+	return out, true
+}
+
+// telegramPrivateGroup 是私聊消息的「群」标识：所有私聊共用一份群额度（qqBotGroupDaily），每人照样有自己的额度、对话历史和打字数据绑定。
+const telegramPrivateGroup = "tg:private"
+
+// privateMessage 把和机器人的私聊转成 botMessage：私聊里每句话都是在问机器人，不用 @；打开私聊时 Telegram 自动发的 /start 当成「帮助」，带了 @Bot用户名 的命令去掉用户名。被回复的是别人转发进来的消息时按引用处理。
+func (b *telegramBot) privateMessage(m *telegramMessage) (botMessage, bool) {
+	if m.From == nil || m.From.IsBot || m.From.ID <= 0 {
+		return botMessage{}, false
+	}
+	text := m.messageText()
+	if loc := b.command.FindStringSubmatchIndex(text); loc != nil {
+		text = text[:loc[3]] + text[loc[1]:]
+	}
+	text = strings.TrimSpace(text)
+	if name, args, ok := qqSlashParse(text); ok && name == "start" && args == "" {
+		text = "/help"
+	}
+	user := strconv.FormatInt(m.From.ID, 10)
+	out := botMessage{
+		ID: "tg:" + user + ":" + strconv.FormatInt(m.MessageID, 10), Text: text, Group: telegramPrivateGroup, Member: "tg:" + user,
+		Attachments: b.attachments(m), Platform: botPlatformTelegram,
+		channel: telegramChannel{bot: b, chat: m.Chat.ID, message: m.MessageID, member: m.From.ID, private: true},
+	}
+	if r := m.ReplyTo; r != nil && (r.From == nil || r.From.ID != b.botID) {
+		out.Quote = qqQuote{Text: qqTruncate(strings.TrimSpace(r.messageText()), qqQuoteRunes), Images: b.attachments(r), Referenced: true}
 	}
 	return out, true
 }
@@ -347,12 +399,14 @@ var telegramMenuCommands = []map[string]string{
 	{"command": "stats", "description": "我的打字数据，先发 /bind 绑定水杉账号"},
 }
 
-// registerCommands 把 telegramMenuCommands 注册成所有群聊的命令菜单。启动时调一次，多个副本重复注册结果相同；失败只记日志。
+// registerCommands 把 telegramMenuCommands 注册成所有群聊和私聊的命令菜单。启动时调一次，多个副本重复注册结果相同；失败只记日志。
 func (b *telegramBot) registerCommands(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, qqBotReplyTimeout)
 	defer cancel()
-	if err := b.call(ctx, b.setMyCommands, map[string]any{"commands": telegramMenuCommands, "scope": map[string]string{"type": "all_group_chats"}}, nil); err != nil {
-		slog.Warn("telegram bot: commands not registered", "reason", err.Error())
+	for _, scope := range []string{"all_group_chats", "all_private_chats"} {
+		if err := b.call(ctx, b.setMyCommands, map[string]any{"commands": telegramMenuCommands, "scope": map[string]string{"type": scope}}, nil); err != nil {
+			slog.Warn("telegram bot: commands not registered", "scope", scope, "reason", err.Error())
+		}
 	}
 }
 

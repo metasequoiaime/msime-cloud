@@ -20,7 +20,7 @@ COPY admin-web/embed.go ./admin-web/embed.go
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -trimpath -ldflags="-s -w" -o /msime-server ./cmd/msime-server
 # The query process msime-cloud runs per request: msime-backend-engine from the msime submodule, the same Rust engine the clients ship. The toolchain is the submodule's rust-toolchain.toml; the image is the one msime's own Linux build gate uses.
 # 引擎在构建机自己的架构上交叉编译到目标架构：在 QEMU 里给 linux/arm64 跑 rustc，单这一步就让发布镜像的 job 超过 30 分钟上限被取消。ring 和内置的 SQLite 要编译 C 代码，所以目标架构不同时还要装 Debian 的交叉 gcc，它链接的 bookworm glibc 与 distroless 运行镜像一致。
-FROM --platform=$BUILDPLATFORM rust:1.97.1-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97 AS native-build
+FROM --platform=$BUILDPLATFORM rust:1.99.1-bookworm@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8 AS native-build
 ARG BUILDARCH
 ARG TARGETARCH
 WORKDIR /src/third_party/msime

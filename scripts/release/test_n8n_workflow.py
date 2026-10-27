@@ -38,6 +38,9 @@ class N8nWorkflowTests(unittest.TestCase):
         code = self.nodes["验签和生成文案"]["parameters"]["jsCode"]
         self.assertIn("X-MSIME-Signature", code)
         self.assertIn("MSIME_SOCIAL_WEBHOOK_SECRET", code)
+        self.assertIn("utm_source", code)
+        self.assertIn("utm_medium=social", code)
+        self.assertIn("utm_campaign", code)
         text = WORKFLOW.read_text(encoding="utf-8")
         for marker in ("bot-token", "access-token", "app-password", "client-secret"):
             self.assertNotIn(marker, text)

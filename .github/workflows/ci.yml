@@ -14,7 +14,7 @@ permissions:
 jobs:
   security:
     name: Go 已知漏洞检查
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
@@ -24,7 +24,7 @@ jobs:
 
   admin-web:
     name: Admin Web 构建与检查
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04-8
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
@@ -41,7 +41,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ fromJSON('{"ubuntu-latest":"depot-ubuntu-24.04-4","windows-latest":"depot-windows-2025-8"}')[matrix.os] }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -66,7 +66,7 @@ jobs:
 
   user-database:
     name: 用户体系 PostgreSQL 集成测试
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04-8
     services:
       postgres:
         # 带 pgvector 的官方镜像：QQ 答疑的向量索引（account/qq_knowledge.go）要用它，生产的 CloudNativePG 镜像也带这个扩展。
@@ -100,7 +100,7 @@ jobs:
 
   # 判断这次改动有没有碰到原生引擎：引擎子模块、调用代码及其测试、原生资源、镜像和验证门禁。路径规则由 test_native_trigger.py 检查，新增依赖引擎环境变量的测试不能漏跑。拉取请求比对目标分支，main 上的推送比对推送前的提交；推送前的提交不可用（新建分支、强推）时按碰到处理。
   changes:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     outputs:
       native: ${{ steps.diff.outputs.native }}
     steps:
@@ -122,7 +122,7 @@ jobs:
     # 编译 Rust 引擎、跑带真实引擎的全量测试和全仓覆盖率门禁、构建生产镜像，单次十几分钟。拉取请求和 main 上的推送都只在碰到原生引擎时跑：main 上的推送不会等它，发版工作流同时就推出了镜像，每次都跑只是事后通知；平时的覆盖率回退由「用户体系 PostgreSQL 集成测试」在合并前拦下。
     needs: changes
     if: needs.changes.outputs.native == 'true'
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04-8
     # Rust 引擎在 runner 上的编译结果按子模块提交缓存。
     timeout-minutes: 45
     services:

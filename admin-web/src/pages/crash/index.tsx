@@ -23,6 +23,9 @@ import { useCrashActions } from "./actions";
 import { CrashDrawer } from "./drawer";
 
 const ALL = "all";
+// 页面链接的 version：不写时看所选平台最新的版本（请求 version=latest，由服务端选出），写 all 看全部版本，其他值是具体版本。
+const ALL_VERSIONS = "all";
+const LATEST_VERSION = "latest";
 const SIGNATURE = /^[0-9a-f]{16}$/;
 const UNREPORTED = "客户端未上报";
 
@@ -52,17 +55,18 @@ export default function CrashPage() {
   const api = useAPI();
   const toast = useToast();
   const { can } = usePermissions();
-  const { platform = ALL, version = "", focus } = usePageSearch();
+  const { platform = ALL, version: versionParam, focus } = usePageSearch();
   const setSearch = useSetPageSearch();
   const { overrides, issueURLs, setStatus, createIssue } = useCrashActions();
   const filter = platform === ALL ? "" : platform;
+  const requestedVersion = versionParam === ALL_VERSIONS ? "" : versionParam ?? LATEST_VERSION;
 
   const list = useQuery({
-    queryKey: keys.page("crash", "groups", filter, version),
+    queryKey: keys.page("crash", "groups", filter, requestedVersion),
     queryFn: ({ signal }) => {
       const params = new URLSearchParams();
       if (filter) params.set("platform", filter);
-      if (version) params.set("version", version);
+      if (requestedVersion) params.set("version", requestedVersion);
       const query = params.toString();
       return api.get(`crash-groups${query ? `?${query}` : ""}`, crashGroupsSchema, { signal });
     },
@@ -116,7 +120,9 @@ export default function CrashPage() {
     return options;
   }, [list.data, filter]);
 
-  // 版本由服务端按从新到旧排好；URL 里的版本在当前平台没有崩溃时仍列出，让下拉框显示当前筛选。
+  // 实际筛选的版本以服务端返回为准：默认请求 latest 时由服务端选出；平台近 14 天没有崩溃时为空，即全部版本。
+  const version = list.data?.version ?? (requestedVersion === LATEST_VERSION ? "" : requestedVersion);
+  // 版本由服务端按从新到旧排好；链接里写的版本在当前平台没有崩溃时仍列出，让下拉框显示当前筛选。
   const versionOptions = useMemo<CrashVersion[]>(() => {
     const versions = list.data?.crash_versions ?? [];
     return version && list.data && !versions.some(v => v.version === version) ? [{ version, count: 0 }, ...versions] : versions;
@@ -188,11 +194,12 @@ export default function CrashPage() {
       columns={columns}
       getRowId={group => group.signature}
       toolbar={<div className="flex flex-wrap items-center gap-2">
-        {/* 各平台的版本号互不相干，切换平台时清掉版本筛选。 */}
+        {/* 各平台的版本号互不相干，切换平台时清掉版本筛选，回到新平台的最新版本。 */}
         <FilterChips label="平台" value={platform} onChange={key => setSearch({ platform: key === ALL ? undefined : key, version: undefined })} options={platformOptions} />
-        <select value={version} onChange={event => setSearch({ version: event.target.value || undefined })} aria-label="版本"
+        {/* 首次加载前不知道服务端选出的最新版本，先禁用，免得闪一下「全部版本」。 */}
+        <select value={version || ALL_VERSIONS} onChange={event => setSearch({ version: event.target.value })} aria-label="版本" disabled={!list.data}
           className="h-[30px] max-w-[220px] rounded-full bg-panel px-3 text-[13px] text-ink outline-none inset-ring inset-ring-hair-2 focus:inset-ring-accent">
-          <option value="">全部版本</option>
+          <option value={ALL_VERSIONS}>全部版本</option>
           {versionOptions.map(v => <option key={v.version} value={v.version}>{`${v.version}（${formatNumber(v.count)} 个分组）`}</option>)}
         </select>
       </div>}

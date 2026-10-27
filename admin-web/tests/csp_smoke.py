@@ -388,7 +388,8 @@ def check_count_bar_pages(context, base: str, problems: list[str]):
     page.on("pageerror", lambda error: problems.append(f"计数占比条页面异常：{error}"))
     page.route("**/api/auth/session", lambda route: route.fulfill(json=FIXTURES["/api/auth/session"]))
     crash = FIXTURES["/api/crash-groups"]
-    page.route("**/api/crash-groups", lambda route: route.fulfill(json={**crash, "items": [{**crash["items"][0], "status": "fixed"}, crash["items"][1]]}))
+    # 崩溃页默认带 ?version=latest 请求，路由要连查询参数一起匹配。
+    page.route(re.compile(r".*/api/crash-groups(\?.*)?$"), lambda route: route.fulfill(json={**crash, "items": [{**crash["items"][0], "status": "fixed"}, crash["items"][1]]}))
     try:
         for path, table, column, cases in (
             ("downloads", "下载记录", 4, (("5,120", 100, "accent"), ("2,410", 2410 / 5120 * 100, "accent"), ("3", 3 / 5120 * 100, "accent"))),

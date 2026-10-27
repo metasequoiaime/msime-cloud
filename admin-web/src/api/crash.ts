@@ -61,6 +61,8 @@ export const crashGroupsSchema = z.object({
   has_more: z.boolean(),
   platforms: z.array(z.object({ platform: z.string(), count: z.number() })),
   crash_versions: z.array(crashVersionSchema).default([]),
+  // 实际用来筛选的版本，请求 version=latest 时是服务端选出的最新版本；空字符串表示全部版本。滚动升级期间旧版服务端没有这个字段，按全部版本处理。
+  version: z.string().default(""),
   summary: crashSummarySchema,
 });
 

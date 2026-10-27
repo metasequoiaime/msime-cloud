@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -130,10 +131,11 @@ func resetCrashTables(t *testing.T, a *Service) {
 const day = 24 * time.Hour
 
 type crashGroupsResponse struct {
-	Items     []crashGroupRow      `json:"items"`
-	HasMore   bool                 `json:"has_more"`
-	Platforms []crashPlatformCount `json:"platforms"`
-	Summary   crashSummary         `json:"summary"`
+	Items         []crashGroupRow      `json:"items"`
+	HasMore       bool                 `json:"has_more"`
+	Platforms     []crashPlatformCount `json:"platforms"`
+	CrashVersions []crashVersionCount  `json:"crash_versions"`
+	Summary       crashSummary         `json:"summary"`
 }
 
 func getCrashGroups(t *testing.T, a *Service, query string, status int) crashGroupsResponse {
@@ -203,7 +205,33 @@ func TestCrashGroupsList(t *testing.T) {
 	if windows.Summary.Devices7d != nil || windows.Summary.InstallsToday != nil || windows.Summary.CrashFreeRate != nil {
 		t.Fatalf("telemetry clients have not reported must be null, not zero: %+v", windows.Summary)
 	}
-	for _, query := range []string{"?status=open", "?platform=" + strings.Repeat("x", 33), "?platform=a%0Ab", "?platform=ios&platform=windows", "?q=x"} {
+	// 版本按版本号从新到旧排列；20 天前的 0.1.0 不在 14 天窗口内。
+	if want := []crashVersionCount{{"1.0.1", 1}, {"1.0.0", 1}, {"0.9.0", 1}, {"0.5.4", 1}}; !slices.Equal(all.CrashVersions, want) {
+		t.Fatalf("crash versions %+v", all.CrashVersions)
+	}
+	if want := []crashVersionCount{{"1.0.1", 1}, {"1.0.0", 1}, {"0.9.0", 1}}; !slices.Equal(ios.CrashVersions, want) {
+		t.Fatalf("ios crash versions %+v", ios.CrashVersions)
+	}
+	// 按版本筛选时，分组的次数和影响设备只统计该版本，两种列表查询结果一致。
+	for _, query := range []string{"?version=1.0.0", "?platform=ios&version=1.0.0"} {
+		v := getCrashGroups(t, a, query, 200)
+		if len(v.Items) != 1 || v.Items[0].Signature != sigA || v.Items[0].Count7d != 2 || v.Items[0].CountPrev7d != 0 || v.Items[0].Devices7d == nil || *v.Items[0].Devices7d != 1 {
+			t.Fatalf("%s %+v", query, v)
+		}
+	}
+	// 顶部统计和平台计数不随版本变化。
+	if v := getCrashGroups(t, a, "?version=1.0.0", 200); v.Summary.Groups != 3 || v.Summary.Crashes7d != 4 || len(v.Platforms) != 3 || !slices.Equal(v.CrashVersions, all.CrashVersions) {
+		t.Fatalf("version must not narrow the tiles %+v", v)
+	}
+	if v := getCrashGroups(t, a, "?version=0.9.0", 200); len(v.Items) != 1 || v.Items[0].Count7d != 0 || v.Items[0].CountPrev7d != 1 || v.Items[0].Devices7d != nil {
+		t.Fatalf("previous week only %+v", v.Items)
+	}
+	for _, query := range []string{"?platform=windows&version=1.0.0", "?version=0.1.0", "?version=9.9.9"} {
+		if v := getCrashGroups(t, a, query, 200); len(v.Items) != 0 {
+			t.Fatalf("%s %+v", query, v.Items)
+		}
+	}
+	for _, query := range []string{"?status=open", "?platform=" + strings.Repeat("x", 33), "?platform=a%0Ab", "?platform=ios&platform=windows", "?q=x", "?version=" + strings.Repeat("1", 65), "?version=1&version=2", "?version=a%00b"} {
 		getCrashGroups(t, a, query, 400)
 	}
 
@@ -233,6 +261,15 @@ func TestCrashGroupsList(t *testing.T) {
 		if w.Code != status {
 			t.Fatal(path, w.Code, w.Body.String())
 		}
+	}
+}
+
+func TestCompareCrashVersions(t *testing.T) {
+	versions := []string{"0.9.0", "1.0.0-beta.2", "0.10.0", "1.0.0", "v1.0.1", "1.0.0-beta.10", "1.0", "2026.1.1", "unknown", "1.0.0-alpha", "00000000000000000000001.0", ""}
+	slices.SortFunc(versions, func(a, b string) int { return compareCrashVersions(b, a) })
+	want := []string{"2026.1.1", "v1.0.1", "1.0.0", "1.0.0-beta.10", "1.0.0-beta.2", "1.0.0-alpha", "1.0", "00000000000000000000001.0", "0.10.0", "0.9.0", "unknown", ""}
+	if !slices.Equal(versions, want) {
+		t.Fatalf("%q", versions)
 	}
 }
 

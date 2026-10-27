@@ -1,11 +1,11 @@
 import { formatNumber, formatRate } from "../../utils/number";
 import { deviceRateSub, excludedVersionsNote, FORCED_TERMINATION_NOTE, INSUFFICIENT, sessionRateText } from "../../utils/crash-rate";
 import { useCallback, useMemo } from "react";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQueries, useQuery } from "@tanstack/react-query";
 import { errorMessage, isGithubDisabled, useAPI } from "../../api/client";
 import { keys } from "../../api/keys";
 import { comparePlatforms, crashGroupsSchema, crashIssueTargetSchema, crashStatusLabel, crashStatusTone, crashTrend, platformName } from "../../api/crash";
-import type { CrashGroup, CrashIssueTarget, CrashStatus, SessionVersion } from "../../api/crash";
+import type { CrashGroup, CrashIssueTarget, CrashStatus, CrashVersion, SessionVersion } from "../../api/crash";
 import { PageIntro } from "../../shell/page-intro";
 import { usePageSearch, useSetPageSearch } from "../../shell/page-search";
 import { noPermissionHint, usePermissions } from "../../shell/permissions";
@@ -52,14 +52,21 @@ export default function CrashPage() {
   const api = useAPI();
   const toast = useToast();
   const { can } = usePermissions();
-  const { platform = ALL, focus } = usePageSearch();
+  const { platform = ALL, version = "", focus } = usePageSearch();
   const setSearch = useSetPageSearch();
   const { overrides, issueURLs, setStatus, createIssue } = useCrashActions();
   const filter = platform === ALL ? "" : platform;
 
   const list = useQuery({
-    queryKey: keys.page("crash", "groups", filter),
-    queryFn: ({ signal }) => api.get(`crash-groups${filter ? `?platform=${encodeURIComponent(filter)}` : ""}`, crashGroupsSchema, { signal }),
+    queryKey: keys.page("crash", "groups", filter, version),
+    queryFn: ({ signal }) => {
+      const params = new URLSearchParams();
+      if (filter) params.set("platform", filter);
+      if (version) params.set("version", version);
+      const query = params.toString();
+      return api.get(`crash-groups${query ? `?${query}` : ""}`, crashGroupsSchema, { signal });
+    },
+    placeholderData: keepPreviousData,
   });
   const rows = useMemo(() => list.data?.items.map(group => {
     const status = overrides[group.signature];
@@ -108,6 +115,12 @@ export default function CrashPage() {
     if (filter && list.data && !counts.some(p => p.platform === filter)) options.push({ key: filter, label: platformName(filter), count: 0 });
     return options;
   }, [list.data, filter]);
+
+  // 版本由服务端按从新到旧排好；URL 里的版本在当前平台没有崩溃时仍列出，让下拉框显示当前筛选。
+  const versionOptions = useMemo<CrashVersion[]>(() => {
+    const versions = list.data?.crash_versions ?? [];
+    return version && list.data && !versions.some(v => v.version === version) ? [{ version, count: 0 }, ...versions] : versions;
+  }, [list.data, version]);
 
   const max = useMemo(() => Math.max(1, ...(rows ?? []).map(group => group.count_7d)), [rows]);
   const columns = useMemo<Column<CrashGroup>[]>(() => [
@@ -174,10 +187,18 @@ export default function CrashPage() {
       onRetry={() => void list.refetch()}
       columns={columns}
       getRowId={group => group.signature}
-      toolbar={<FilterChips label="平台" value={platform} onChange={key => setSearch({ platform: key === ALL ? undefined : key })} options={platformOptions} />}
+      toolbar={<div className="flex flex-wrap items-center gap-2">
+        {/* 各平台的版本号互不相干，切换平台时清掉版本筛选。 */}
+        <FilterChips label="平台" value={platform} onChange={key => setSearch({ platform: key === ALL ? undefined : key, version: undefined })} options={platformOptions} />
+        <select value={version} onChange={event => setSearch({ version: event.target.value || undefined })} aria-label="版本"
+          className="h-[30px] max-w-[220px] rounded-full bg-panel px-3 text-[13px] text-ink outline-none inset-ring inset-ring-hair-2 focus:inset-ring-accent">
+          <option value="">全部版本</option>
+          {versionOptions.map(v => <option key={v.version} value={v.version}>{`${v.version}（${formatNumber(v.count)} 个分组）`}</option>)}
+        </select>
+      </div>}
       searchText={group => `${group.title} ${group.signature} ${platformName(group.platform)} ${group.version} ${crashStatusLabel[group.status]}`}
       onRowClick={group => setSearch({ focus: group.signature })}
-      emptyText={filter ? "这个平台还没有崩溃分组" : "还没有崩溃分组，客户端上报崩溃后会按签名自动分组。"}
+      emptyText={version ? "这个版本近 14 天没有崩溃" : filter ? "这个平台还没有崩溃分组" : "还没有崩溃分组，客户端上报崩溃后会按签名自动分组。"}
       minWidth="880px"
     />
     <CrashDrawer signature={openSignature} override={openSignature ? overrides[openSignature] : undefined} issueURL={openSignature ? issueURLs[openSignature] : undefined} canTriage={canTriage}

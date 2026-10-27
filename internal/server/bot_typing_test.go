@@ -142,7 +142,7 @@ func TestQQBotTypingCommands(t *testing.T) {
 	if got := send("m-stats-a", "/stats"); !strings.Contains(got, "还没绑定水杉账号") {
 		t.Fatal(got)
 	}
-	if got := send("m-bind-a", "/bind"); !strings.Contains(got, "绑定码 12345678，10 分钟内有效") || !strings.Contains(got, qqTypingBindPath) || !strings.Contains(got, "所有人都看得到") {
+	if got := send("m-bind-a", "/bind"); !strings.Contains(got, "绑定码 12345678，3 分钟内有效") || !strings.Contains(got, qqTypingBindPath) || !strings.Contains(got, "所有人都看得到") {
 		t.Fatal(got)
 	}
 	if got := send("m-bind-b", "绑定账号"); typing.codes["GROUP1/MEMBER3"] != 2 {

@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"cmp"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -188,12 +190,11 @@ func TestTelegramBotAnswersMentionsAndReplies(t *testing.T) {
 	if len(tg.messages) != 1 {
 		t.Fatal("同一个 update 答了两次", tg.texts())
 	}
-	// 没有 @、@ 的是别人、名单外的群、私聊和 Bot 发的消息都不处理。
+	// 没有 @、@ 的是别人、名单外的群和 Bot 发的消息都不处理（私聊见 TestTelegramBotPrivateChat）。
 	telegramDeliver(t, s, 8, "五笔怎么切换", nil)
 	telegramDeliver(t, s, 9, "@msime_bot_fan 五笔怎么切换", nil)
 	for i, body := range []string{
 		telegramUpdateJSON(10, -1009999, "supergroup", "@msime_bot 五笔怎么切换", nil),
-		telegramUpdateJSON(11, 42, "private", "@msime_bot 五笔怎么切换", nil),
 		strings.Replace(telegramUpdateJSON(12, testTelegramGroup, "supergroup", "@msime_bot 五笔怎么切换", nil), `"is_bot":false`, `"is_bot":true`, 1),
 	} {
 		if w := telegramPost(s, testTelegramSecret, body); w.Code != 200 {
@@ -385,6 +386,8 @@ type fakeTelegramFiles struct {
 	roleStatus int
 	roleCalls  int
 	commands   []map[string]any
+	// blocked 里的 chat 没有私聊过机器人：发给它的 sendMessage 回 403，不记进消息列表。
+	blocked map[int64]bool
 }
 
 func (f *fakeTelegramFiles) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -437,6 +440,21 @@ func (f *fakeTelegramFiles) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		_, _ = w.Write(content)
 	default:
+		raw, _ := io.ReadAll(r.Body)
+		var body struct {
+			ChatID int64 `json:"chat_id"`
+		}
+		_ = json.Unmarshal(raw, &body)
+		f.mu.Lock()
+		blocked := f.blocked[body.ChatID]
+		f.mu.Unlock()
+		if blocked {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error_code": 403, "description": "Forbidden: bot can't initiate conversation with a user"})
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(raw))
 		f.fakeTelegram.ServeHTTP(w, r)
 	}
 }
@@ -570,9 +588,9 @@ func TestTelegramBotAdmins(t *testing.T) {
 	if len(api.messages) != sent+1 || api.texts()[sent] != telegramHelpText || len(fake.chatCalls) != calls {
 		t.Fatal(api.texts()[sent:], fake.chatCalls[calls:])
 	}
-	// 命令菜单注册到所有群聊；注册失败只记日志。
+	// 命令菜单注册到所有群聊和私聊；注册失败只记日志。
 	s.tg.registerCommands(ctx)
-	if len(api.commands) != 1 || api.commands[0]["scope"].(map[string]any)["type"] != "all_group_chats" || len(api.commands[0]["commands"].([]any)) != len(telegramMenuCommands) {
+	if len(api.commands) != 2 || api.commands[0]["scope"].(map[string]any)["type"] != "all_group_chats" || api.commands[1]["scope"].(map[string]any)["type"] != "all_private_chats" || len(api.commands[0]["commands"].([]any)) != len(telegramMenuCommands) {
 		t.Fatal(api.commands)
 	}
 	api.mu.Lock()

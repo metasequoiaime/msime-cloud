@@ -49,6 +49,12 @@ var qqTypingSourceNames = map[string]string{
 // qqTypingSpeedKinds 是算速度时计入的字符类别，和客户端统计页的「每分钟」一致：汉字、拉丁字母和其他文字，不含数字、标点和符号。
 var qqTypingSpeedKinds = []string{"han", "latin", "otherLetter"}
 
+// qqTypingPrivateSent 和 qqTypingPrivateFirst 是在能私聊的平台的群里发「绑定」时的回复：码已经私聊发出，或者对方还没私聊过机器人（匿名管理员以群的身份发言，也私聊不到）。
+const (
+	qqTypingPrivateSent  = "绑定码已经私聊发给你了，去和我的私聊里看。"
+	qqTypingPrivateFirst = "绑定码只私聊发给本人：先点我的头像私聊我发 /start，再回群里发 /bind。开着匿名的管理员要先关掉匿名。"
+)
+
 // qqTypingCommands 处理 /stats、/bind、/unbind 和它们的中文说法，返回处理结果的名字；不是这几个命令时返回空字符串。
 // `compact` 已由命令分发规范化，直接用于别名匹配。
 func (s *Server) qqTypingCommands(ctx context.Context, m botMessage, compact string, reply func(string)) string {
@@ -76,7 +82,17 @@ func (s *Server) qqTypingCommands(ctx context.Context, m botMessage, compact str
 			reply(qqReplyUnavailable)
 			return command
 		}
-		reply(fmt.Sprintf("绑定码 %s，%d 分钟内有效，只能用一次。\n在水杉输入法里登录账号，%s；绑好后 @我 发 /stats 看打字数据。\n/stats 的回复群里所有人都看得到，不想公开就别绑，随时可以发 /unbind 解绑。", code, int(account.QQLinkCodeTTL.Minutes()), qqTypingBindPath))
+		text := fmt.Sprintf("绑定码 %s，%d 分钟内有效，只能用一次，看到后马上去输入，不要转发给别人。\n在水杉输入法里登录账号，%s；绑好后 @我 发 /stats 看打字数据。\n/stats 的回复群里所有人都看得到，不想公开就别绑，随时可以发 /unbind 解绑。", code, int(account.QQLinkCodeTTL.Minutes()), qqTypingBindPath)
+		// 群里的码所有人都看得到，能私聊的平台（Telegram）改为私聊发给本人；对方没私聊过机器人时群里只提示先私聊，码不出现在群里，没发出去的码到期作废。
+		if private, ok := m.channel.(botPrivateSender); ok && private.inGroup() {
+			if err := private.sendPrivate(ctx, text); err != nil {
+				reply(qqTypingPrivateFirst)
+				return command
+			}
+			reply(qqTypingPrivateSent)
+			return command
+		}
+		reply(text)
 	case "cmd_unbind":
 		removed, err := s.qqTyping.UnlinkQQ(ctx, subject)
 		switch {

@@ -52,10 +52,15 @@ export const crashSummarySchema = z.object({
   forced_termination_devices_7d: z.number(),
 });
 
+// 所选平台近 14 天有崩溃的版本，服务端已按版本号从新到旧排序；count 是该版本涉及的分组数。滚动升级期间旧版服务端没有这个字段，按没有版本处理。
+export const crashVersionSchema = z.object({ version: z.string(), count: z.number() });
+export type CrashVersion = z.infer<typeof crashVersionSchema>;
+
 export const crashGroupsSchema = z.object({
   items: z.array(crashGroupSchema),
   has_more: z.boolean(),
   platforms: z.array(z.object({ platform: z.string(), count: z.number() })),
+  crash_versions: z.array(crashVersionSchema).default([]),
   summary: crashSummarySchema,
 });
 

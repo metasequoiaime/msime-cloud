@@ -26,7 +26,8 @@ func TestCrashGroupPlatformLimitsEventAggregation(t *testing.T) {
  ANALYZE admin_events,admin_crash_groups;`); err != nil {
 		t.Fatal(err)
 	}
-	trace := &communityPaginationTrace{table: "admin_events", queries: make(chan communityPageQuery, 2)}
+	// 每次请求有列表、版本和顶部统计三条语句读取 admin_events，通道要容纳全部，否则追踪器的发送会阻塞请求。
+	trace := &communityPaginationTrace{table: "admin_events", queries: make(chan communityPageQuery, 3)}
 	cfg := db.pool.Config()
 	cfg.ConnConfig.Tracer = trace
 	pool, err := pgxpool.NewWithConfig(t.Context(), cfg)

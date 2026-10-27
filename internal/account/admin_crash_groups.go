@@ -1,6 +1,7 @@
 package account
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -189,15 +190,20 @@ SELECT
  count(DISTINCT install_id) FILTER (WHERE kind='crash' AND ` + crashForcedTerminationSQL("message") + `)
 	FROM admin_events WHERE kind IN ('download','crash','active','session','session_crash') AND created_at>=now()-interval '7 days' AND ($1='' OR ` + overviewPlatform("platform") + `=$1)`
 
+// 列表查询的 $4 非空时只统计该版本的崩溃，并只保留近 14 天在该版本出现过的分组。
 const (
-	crashGroupListQueryAll = `WITH c AS (` + crashGroupCounts + `)
+	crashGroupListQueryAll = `WITH c AS (` + crashGroupCountsBase + ` AND ($4='' OR version=$4) GROUP BY signature)
 SELECT ` + crashGroupColumns + ` FROM admin_crash_groups g LEFT JOIN c USING(signature)
-WHERE ($2='' OR g.platform=$2)
+WHERE ($2='' OR g.platform=$2) AND ($4='' OR c.c7 IS NOT NULL)
 ORDER BY COALESCE(c.c7,0) DESC,g.last_seen DESC,g.signature LIMIT $3`
-	crashGroupListQueryPlatform = `WITH c AS (` + crashGroupCountsBase + ` AND signature IN (SELECT signature FROM admin_crash_groups WHERE platform=$2) GROUP BY signature)
+	crashGroupListQueryPlatform = `WITH c AS (` + crashGroupCountsBase + ` AND signature IN (SELECT signature FROM admin_crash_groups WHERE platform=$2) AND ($4='' OR version=$4) GROUP BY signature)
 SELECT ` + crashGroupColumns + ` FROM admin_crash_groups g LEFT JOIN c USING(signature)
-WHERE ($2='' OR g.platform=$2)
+WHERE ($2='' OR g.platform=$2) AND ($4='' OR c.c7 IS NOT NULL)
 ORDER BY COALESCE(c.c7,0) DESC,g.last_seen DESC,g.signature LIMIT $3`
+	// crashVersionsQuery 列出所选平台近 14 天有崩溃的版本及各自涉及的分组数，窗口与分组统计一致。
+	crashVersionsQuery = `SELECT e.version,count(DISTINCT e.signature) FROM admin_events e JOIN admin_crash_groups g USING(signature)
+WHERE e.kind='crash' AND e.created_at>=now()-interval '14 days' AND ($1='' OR g.platform=$1)
+GROUP BY e.version`
 	crashGroupDetailQuery = `WITH c AS (` + crashGroupCounts + `)
 SELECT ` + crashGroupColumns + `,
  s.id IS NOT NULL,COALESCE(s.id,''),COALESCE(s.platform,''),COALESCE(s.version,''),
@@ -222,17 +228,85 @@ func crashGroupListQuery(platform bool) string {
 	return crashGroupListQueryAll
 }
 
-// adminCrashGroups serves GET /api/crash-groups?platform=.
+// crashVersionCount 是某个版本近 14 天有崩溃的分组数，供崩溃页的版本筛选。
+type crashVersionCount struct {
+	Version string `json:"version"`
+	Count   int64  `json:"count"`
+}
+
+// compareCrashVersions 按版本号比较：先逐段比较 `-`、`+` 之前以点分隔的部分，纯数字段按数值比较；主体相同时正式版高于预发布版；仍相同时按原字符串比较，保证顺序稳定。
+func compareCrashVersions(a, b string) int {
+	coreA, preA := splitCrashVersion(a)
+	coreB, preB := splitCrashVersion(b)
+	if c := compareCrashVersionParts(coreA, coreB); c != 0 {
+		return c
+	}
+	switch {
+	case preA == "" && preB != "":
+		return 1
+	case preA != "" && preB == "":
+		return -1
+	}
+	if c := compareCrashVersionParts(strings.Split(preA, "."), strings.Split(preB, ".")); c != 0 {
+		return c
+	}
+	return strings.Compare(a, b)
+}
+
+// splitCrashVersion 去掉开头的 v，把版本拆成点分隔的主体和 `-` 或 `+` 之后的预发布部分。
+func splitCrashVersion(v string) ([]string, string) {
+	v = strings.TrimPrefix(strings.TrimPrefix(v, "v"), "V")
+	pre := ""
+	if i := strings.IndexAny(v, "-+"); i >= 0 {
+		v, pre = v[:i], v[i+1:]
+	}
+	return strings.Split(v, "."), pre
+}
+
+// compareCrashVersionParts 逐段比较；纯数字段高于非数字段，让 `unknown` 这类上报值排在真实版本之后；两个数字段去掉前导零后先比长度再比字典序，避免整数溢出；缺少的段视为更小。
+func compareCrashVersionParts(a, b []string) int {
+	for i := 0; i < len(a) && i < len(b); i++ {
+		x, y := a[i], b[i]
+		digitsX, digitsY := crashVersionDigits(x), crashVersionDigits(y)
+		if digitsX != digitsY {
+			if digitsX {
+				return 1
+			}
+			return -1
+		}
+		if digitsX {
+			x, y = strings.TrimLeft(x, "0"), strings.TrimLeft(y, "0")
+			if c := cmp.Compare(len(x), len(y)); c != 0 {
+				return c
+			}
+		}
+		if c := strings.Compare(x, y); c != 0 {
+			return c
+		}
+	}
+	return cmp.Compare(len(a), len(b))
+}
+
+func crashVersionDigits(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return s != ""
+}
+
+// adminCrashGroups 处理 GET /api/crash-groups?platform=&version=；version 只筛选分组列表和分组的次数，顶部统计仍按平台计算。
 func (a *Service) adminCrashGroups(w http.ResponseWriter, r *http.Request, _ string) {
 	query := r.URL.Query()
 	for key := range query {
-		if key != "platform" {
+		if key != "platform" && key != "version" {
 			writeError(w, 400, "invalid_filter")
 			return
 		}
 	}
-	platform := query.Get("platform")
-	if len(query["platform"]) > 1 || !resourceText(platform, 0, 32, false) {
+	platform, version := query.Get("platform"), query.Get("version")
+	if len(query["platform"]) > 1 || !resourceText(platform, 0, 32, false) || len(query["version"]) > 1 || !resourceText(version, 0, 64, false) {
 		writeError(w, 400, "invalid_filter")
 		return
 	}
@@ -274,10 +348,20 @@ func (a *Service) adminCrashGroups(w http.ResponseWriter, r *http.Request, _ str
 	}
 	var items []crashGroupRow
 	batch := &pgx.Batch{}
-	batch.Queue(listQuery, "", platform, crashGroupsLimit+1).Query(func(rows pgx.Rows) error {
+	batch.Queue(listQuery, "", platform, crashGroupsLimit+1, version).Query(func(rows pgx.Rows) error {
 		defer rows.Close()
 		var err error
 		items, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (crashGroupRow, error) { return scanCrashGroup(row) })
+		return err
+	})
+	var versions []crashVersionCount
+	batch.Queue(crashVersionsQuery, platform).Query(func(rows pgx.Rows) error {
+		defer rows.Close()
+		var err error
+		versions, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (crashVersionCount, error) {
+			var v crashVersionCount
+			return v, row.Scan(&v.Version, &v.Count)
+		})
 		return err
 	})
 	var summary crashSummary
@@ -292,7 +376,9 @@ func (a *Service) adminCrashGroups(w http.ResponseWriter, r *http.Request, _ str
 	if hasMore {
 		items = items[:crashGroupsLimit]
 	}
-	write(w, 200, map[string]any{"items": items, "has_more": hasMore, "platforms": platforms, "summary": summary})
+	// 最新的版本排在最前，供页面的版本下拉框直接使用。
+	slices.SortFunc(versions, func(x, y crashVersionCount) int { return compareCrashVersions(y.Version, x.Version) })
+	write(w, 200, map[string]any{"items": items, "has_more": hasMore, "platforms": platforms, "crash_versions": versions, "summary": summary})
 }
 
 // crashSample is one stored crash of a group, for the stack view.

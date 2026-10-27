@@ -64,7 +64,7 @@ func TestAdminCrashGroupsBatchesItemsAndSummary(t *testing.T) {
 	trace.mu.Lock()
 	batches, queries := trace.batches, trace.queries
 	trace.mu.Unlock()
-	if batches != 1 || queries != 3 {
-		t.Fatalf("崩溃分组使用了 %d 次批量请求、%d 条语句，期望 1、3", batches, queries)
+	if batches != 1 || queries != 4 {
+		t.Fatalf("崩溃分组使用了 %d 次批量请求、%d 条语句，期望 1、4", batches, queries)
 	}
 }

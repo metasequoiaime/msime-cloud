@@ -55,12 +55,12 @@ func BenchmarkCrashQuerySelection(b *testing.B) {
 }
 
 func previousCrashGroupListQuery(platform bool) string {
-	countsQuery := crashGroupCounts
+	countsQuery := crashGroupCountsBase + ` AND ($4='' OR version=$4) GROUP BY signature`
 	if platform {
-		countsQuery = crashGroupCountsBase + ` AND signature IN (SELECT signature FROM admin_crash_groups WHERE platform=$2) GROUP BY signature`
+		countsQuery = crashGroupCountsBase + ` AND signature IN (SELECT signature FROM admin_crash_groups WHERE platform=$2) AND ($4='' OR version=$4) GROUP BY signature`
 	}
 	return `WITH c AS (` + countsQuery + `)
 SELECT ` + crashGroupColumns + ` FROM admin_crash_groups g LEFT JOIN c USING(signature)
-WHERE ($2='' OR g.platform=$2)
+WHERE ($2='' OR g.platform=$2) AND ($4='' OR c.c7 IS NOT NULL)
 ORDER BY COALESCE(c.c7,0) DESC,g.last_seen DESC,g.signature LIMIT $3`
 }

@@ -28,6 +28,9 @@ func moderationColumns(alias, section string) string {
  (SELECT count(*) FROM community_reports WHERE kind='` + section + `' AND item_id=` + alias + `.id) AS reports`
 }
 
+// skinOriginFilter 按来源（unknown、user、ai）筛选键盘皮肤。
+var skinOriginFilter = listFilter{param: "origin", field: "origin", max: len(skinOriginUnknown), values: map[string]string{skinOriginUnknown: skinOriginUnknown, skinOriginUser: skinOriginUser, skinOriginAI: skinOriginAI}}
+
 // statusFilter selects rows by moderation state.
 var statusFilter = listFilter{param: "status", field: "moderation", max: 8, values: map[string]string{"pending": "pending", "approved": "approved", "removed": "removed"}}
 
@@ -35,10 +38,10 @@ const authorColumn = `COALESCE(NULLIF(btrim(u.display_name),''),'水杉小鹿·'
 
 // The lists serve GET /api/{skins,candidate-skins,plugins,dictionaries,replies,phrases}.
 var (
-	// The skin design travels without its photo, so the console can draw the keyboard preview on each card. 也可以按图库分类筛选。
+	// 设计不带照片，后台据此在每张卡片上画键盘预览。可以按图库分类、审核状态和来源筛选，来源筛选让审核员找出 unknown 的作品逐个改判。
 	skinsList = adminList{
 		query:      `SELECT s.id,s.name,s.description,s.owner_id,` + authorColumn + `,s.created_at,s.design-'photo' AS design,` + contentEditToken("skins", "s") + ` AS edit_token,(SELECT count(*) FROM community_skin_downloads WHERE skin_id=s.id) AS downloads,s.category,s.origin,` + moderationColumns("s", "skins") + ` FROM community_skins s JOIN auth_users u ON u.id=s.owner_id`,
-		filters:    []listFilter{candidateCategoryFilter(), statusFilter},
+		filters:    []listFilter{candidateCategoryFilter(), statusFilter, skinOriginFilter},
 		unsearched: []string{"design", "edit_token"},
 	}
 	// Candidate skins hold both the public gallery and each account's private library, so moderation can list either one. 也可以按图库分类筛选。

@@ -107,7 +107,7 @@ func New(ctx context.Context, c Config) (*Service, error) {
 	return a, nil
 }
 
-// maintain runs until lifetime ends: it prunes expired rows every hour and writes pending sensitive-word hit counts every sensitiveRefresh, so a count waits at most that long even when no further hit arrives, and writes them once more on the way out.
+// maintain 一直运行到 lifetime 结束：每小时清理一次过期的行；每隔 sensitiveRefresh 写一次待写的敏感词命中计数，所以即使之后没有新的命中，计数最多等这么久，退出时再写一次；社区键盘皮肤的来源回填在开始时和每小时清理之后各跑一次，每次最多 30 秒，没做完的下次接着做。
 func (a *Service) maintain(lifetime context.Context) {
 	prune := time.NewTicker(time.Hour)
 	defer prune.Stop()
@@ -120,6 +120,14 @@ func (a *Service) maintain(lifetime context.Context) {
 			slog.Warn("sensitive words: hit counts not written yet", "reason", err.Error())
 		}
 	}
+	backfillOrigins := func() {
+		ctx, cancel := context.WithTimeout(lifetime, 30*time.Second)
+		defer cancel()
+		if err := a.store.backfillSkinOrigins(ctx); err != nil && lifetime.Err() == nil {
+			slog.Warn("community skins: origin backfill paused until the next run", "reason", err.Error())
+		}
+	}
+	backfillOrigins()
 	for {
 		select {
 		case <-lifetime.Done():
@@ -131,6 +139,7 @@ func (a *Service) maintain(lifetime context.Context) {
 			cleanup, cancel := context.WithTimeout(lifetime, 30*time.Second)
 			a.store.Prune(cleanup)
 			cancel()
+			backfillOrigins()
 		}
 	}
 }

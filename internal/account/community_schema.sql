@@ -20,14 +20,8 @@ BEGIN
 END $$;
 -- 社区键盘皮肤的图库分类，只是发布元数据，不属于 design。已有行迁移后为 other。取值与 Go 中的 candidateSkinCategories 一致（与候选窗皮肤共用同一组分类）。约束在下面的循环里以命名约束单独添加，因为 PostgreSQL 12 每次重跑 ADD COLUMN IF NOT EXISTS 都会再加一份行内 CHECK；之前重跑留下的副本（name1、name2……）会被删掉。
 ALTER TABLE community_skins ADD COLUMN IF NOT EXISTS category text NOT NULL DEFAULT 'other';
--- 社区键盘皮肤的来源：unknown、user 或 ai，取值与 Go 中的 skinOrigins 一致。发布时由服务端判定，见 community_skin_origin.go。PostgreSQL 11 起带常量默认值的加列不重写表；命名约束同样在下面的循环里添加。加列的同一次迁移按发布时的同一条规则回填已有作品：没有照片的记为 user，带照片的推不出来源（插画任务早已清理，照片也重新编码过），保持 unknown。回填只在加列时执行一次，之后重跑迁移不会改动审核员人工改判的结果；滚动升级期间旧副本写入的作品取默认值 unknown。
-DO $$
-BEGIN
- IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='community_skins'::regclass AND attname='origin' AND NOT attisdropped) THEN
-  ALTER TABLE community_skins ADD COLUMN origin text NOT NULL DEFAULT 'unknown';
-  UPDATE community_skins SET origin='user' WHERE NOT design ? 'photo';
- END IF;
-END $$;
+-- 社区键盘皮肤的来源：unknown、user 或 ai，取值与 Go 中的 skinOrigins 一致。发布时由服务端判定，见 community_skin_origin.go。PostgreSQL 11 起带常量默认值的加列不重写表；命名约束同样在下面的循环里添加。迁移只加列，已有作品都取默认值 unknown：没有照片的作品由服务启动后的后台回填（backfillSkinOrigins）分批改成 user，不放在这里，因为整份迁移在一个事务里、加列拿着表的 ACCESS EXCLUSIVE 锁直到提交，判断有没有照片又要把每一行的 design 从 TOAST 里取出来，作品多时会拖过启动的 30 秒期限，让旧副本对这张表的读写一直排队。
+ALTER TABLE community_skins ADD COLUMN IF NOT EXISTS origin text NOT NULL DEFAULT 'unknown';
 DO $$
 DECLARE c record; d record;
 BEGIN

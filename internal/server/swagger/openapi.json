@@ -13432,7 +13432,7 @@
               ],
               "default": ""
             },
-            "description": "逗号分隔：moderation 表示在自己的作品上接收 moderation 审核状态；saved 表示每个条目带上 saved 与 saves；origin 表示每个条目带上 origin 来源，响应带 X-MSIME-Skin-Origin: v1。其他值返回 400 invalid_fields。不带此参数时响应与以前逐字节相同。"
+            "description": "逗号分隔：moderation 表示在自己的作品上接收 moderation 审核状态；saved 表示每个条目带上 saved 与 saves；origin 表示每个条目带上 origin 来源，响应带 X-MSIME-Skin-Origin: v1；引入来源标记之前的旧副本不认 origin，返回 400 invalid_fields。其他值返回 400 invalid_fields。不带此参数时响应与以前逐字节相同。"
           },
           {
             "name": "exclude",
@@ -13680,7 +13680,7 @@
                               "user",
                               "ai"
                             ],
-                            "description": "作品来源：ai 为照片匹配到本服务生成过的插画或发布时声明 AI 生成，user 为其他新发布的作品，unknown 为引入来源标记之前带照片的作品和滚动升级期间旧副本写入的作品（来源推不出来）。仅在请求带 fields=origin 时出现；已发布客户端拒绝未知字段。"
+                            "description": "作品来源：ai 为照片匹配到本服务生成过的插画或发布时声明 AI 生成，user 为其他新发布的作品，unknown 为引入来源标记之前和滚动升级期间旧副本写入的带照片的作品（来源推不出来），以及后台回填还没处理到的没有照片的作品。仅在请求带 fields=origin 时出现；已发布客户端拒绝未知字段。"
                           }
                         }
                       }
@@ -14015,7 +14015,7 @@
               ],
               "default": ""
             },
-            "description": "逗号分隔：moderation 表示在自己的作品上接收 moderation 审核状态；saved 表示每个条目带上 saved 与 saves；origin 表示每个条目带上 origin 来源，响应带 X-MSIME-Skin-Origin: v1。其他值返回 400 invalid_fields。不带此参数时响应与以前逐字节相同。"
+            "description": "逗号分隔：moderation 表示在自己的作品上接收 moderation 审核状态；saved 表示每个条目带上 saved 与 saves；origin 表示每个条目带上 origin 来源，响应带 X-MSIME-Skin-Origin: v1；引入来源标记之前的旧副本不认 origin，返回 400 invalid_fields。其他值返回 400 invalid_fields。不带此参数时响应与以前逐字节相同。"
           },
           {
             "name": "exclude",
@@ -14240,7 +14240,7 @@
                         "user",
                         "ai"
                       ],
-                      "description": "作品来源：ai 为照片匹配到本服务生成过的插画或发布时声明 AI 生成，user 为其他新发布的作品，unknown 为引入来源标记之前带照片的作品和滚动升级期间旧副本写入的作品（来源推不出来）。仅在请求带 fields=origin 时出现；已发布客户端拒绝未知字段。"
+                      "description": "作品来源：ai 为照片匹配到本服务生成过的插画或发布时声明 AI 生成，user 为其他新发布的作品，unknown 为引入来源标记之前和滚动升级期间旧副本写入的带照片的作品（来源推不出来），以及后台回填还没处理到的没有照片的作品。仅在请求带 fields=origin 时出现；已发布客户端拒绝未知字段。"
                     }
                   }
                 }
@@ -14513,7 +14513,7 @@
                         "user",
                         "ai"
                       ],
-                      "description": "作品来源：ai 为照片匹配到本服务生成过的插画或发布时声明 AI 生成，user 为其他新发布的作品，unknown 为引入来源标记之前带照片的作品和滚动升级期间旧副本写入的作品（来源推不出来）。仅在请求带 fields=origin 时出现；已发布客户端拒绝未知字段。"
+                      "description": "作品来源：ai 为照片匹配到本服务生成过的插画或发布时声明 AI 生成，user 为其他新发布的作品，unknown 为引入来源标记之前和滚动升级期间旧副本写入的带照片的作品（来源推不出来），以及后台回填还没处理到的没有照片的作品。仅在请求带 fields=origin 时出现；已发布客户端拒绝未知字段。"
                     }
                   }
                 }

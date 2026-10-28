@@ -371,6 +371,20 @@ func TestAdminSkinOrigin(t *testing.T) {
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"origin":"user"`) {
 		t.Fatalf("后台列表：%d %s", w.Code, w.Body.String())
 	}
+	// 按来源筛选，审核员据此找出待改判的 unknown 作品。
+	if _, err := db.pool.Exec(ctx, `UPDATE community_skins SET origin='unknown' WHERE id='skin-b'`); err != nil {
+		t.Fatal(err)
+	}
+	w = call("GET", "/api/skins?origin=unknown", "")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"id":"skin-b"`) || strings.Contains(w.Body.String(), `"id":"skin-a"`) {
+		t.Fatalf("按来源筛选：%d %s", w.Code, w.Body.String())
+	}
+	if w = call("GET", "/api/skins?origin=robot", ""); w.Code != 400 {
+		t.Fatalf("未知来源筛选：%d %s", w.Code, w.Body.String())
+	}
+	if _, err := db.pool.Exec(ctx, `UPDATE community_skins SET origin='user' WHERE id='skin-b'`); err != nil {
+		t.Fatal(err)
+	}
 
 	// 后台新建按照片判定；修改只在新照片匹配到插画时抬成 ai，其余保留原值。
 	artwork := originTestArtwork(3, 1024)
@@ -411,7 +425,7 @@ func TestAdminSkinOrigin(t *testing.T) {
 	}
 }
 
-// 加列的那次迁移按发布时的规则回填已有作品：没有照片的记为 user，带照片的保持 unknown；之后重跑迁移不再改动来源。
+// 迁移只加列，不读 design；没有照片的已有作品由后台回填分批改成 user，带照片的保持 unknown。回填按游标推进，重跑只处理之后新出现的作品，不覆盖人工改判，也不碰创建不到 5 分钟的作品。
 func TestCommunitySkinOriginBackfill(t *testing.T) {
 	db := testStore(t)
 	ctx := context.Background()
@@ -420,10 +434,17 @@ func TestCommunitySkinOriginBackfill(t *testing.T) {
 	if _, err := db.pool.Exec(ctx, `ALTER TABLE community_skins DROP COLUMN origin`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.pool.Exec(ctx, `DELETE FROM site_settings WHERE key=$1`, skinOriginBackfillKey); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.Ready(ctx); err == nil {
 		t.Fatal("缺少来源列时 Ready 应失败并触发迁移")
 	}
-	if _, err := db.pool.Exec(ctx, `INSERT INTO community_skins(id,owner_id,name,description,design) VALUES('backfill-photo',$1,'旧照片','',$2),('backfill-plain',$1,'旧配色','',$3)`, owner.User.ID, []byte(photo), communityFixture); err != nil {
+	// 一批之外再多几行，覆盖跨批推进游标；照片行夹在中间。
+	if _, err := db.pool.Exec(ctx, `INSERT INTO community_skins(id,owner_id,name,description,design,created_at) SELECT 'backfill-'||lpad(n::text,3,'0'),$1,'旧配色','',$2,now()-interval '1 day'+n*interval '1 second' FROM generate_series(1,$3::int) n`, owner.User.ID, communityFixture, skinOriginBackfillBatch+20); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.pool.Exec(ctx, `INSERT INTO community_skins(id,owner_id,name,description,design,created_at) VALUES('backfill-photo',$1,'旧照片','',$2,now()-interval '1 day'+interval '50 seconds')`, owner.User.ID, []byte(photo)); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Migrate(ctx); err != nil {
@@ -432,27 +453,81 @@ func TestCommunitySkinOriginBackfill(t *testing.T) {
 	if err := db.Ready(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if originTestValue(t, db, "backfill-photo") != "unknown" || originTestValue(t, db, "backfill-plain") != "user" {
-		t.Fatal("回填结果", originTestValue(t, db, "backfill-photo"), originTestValue(t, db, "backfill-plain"))
+	var unknown int
+	if err := db.pool.QueryRow(ctx, `SELECT count(*) FROM community_skins WHERE id LIKE 'backfill-%' AND origin<>'unknown'`).Scan(&unknown); err != nil || unknown != 0 {
+		t.Fatal("迁移不应回填", unknown, err)
 	}
-	// 人工改判之后重跑迁移，结果保留；约束拒绝未知来源。
-	if _, err := db.pool.Exec(ctx, `UPDATE community_skins SET origin='unknown' WHERE id='backfill-plain'`); err != nil {
+
+	// 另一个副本正在回填时让出，什么都不改。
+	holder, err := db.pool.Begin(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Migrate(ctx); err != nil {
+	if _, err = holder.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, skinOriginBackfillLock); err != nil {
 		t.Fatal(err)
 	}
-	if originTestValue(t, db, "backfill-plain") != "unknown" {
+	if err = db.backfillSkinOrigins(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if originTestValue(t, db, "backfill-001") != "unknown" {
+		t.Fatal("拿不到锁时不应回填")
+	}
+	if err = holder.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if err = db.backfillSkinOrigins(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var plain int
+	if err = db.pool.QueryRow(ctx, `SELECT count(*) FROM community_skins WHERE id LIKE 'backfill-%' AND id<>'backfill-photo' AND origin='user'`).Scan(&plain); err != nil || plain != skinOriginBackfillBatch+20 {
+		t.Fatal("没有照片的作品应全部回填为 user", plain, err)
+	}
+	if originTestValue(t, db, "backfill-photo") != "unknown" {
+		t.Fatal("带照片的作品应保持 unknown")
+	}
+
+	// 回填之后：审核员改判的结果不被覆盖；滚动升级期间旧副本写入的作品下一轮补上；刚写入的作品等到下一轮。
+	if _, err = db.pool.Exec(ctx, `UPDATE community_skins SET origin='ai' WHERE id='backfill-001'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.pool.Exec(ctx, `INSERT INTO community_skins(id,owner_id,name,description,design,created_at) VALUES('backfill-late',$1,'旧副本','',$2,now()-interval '10 minutes'),('backfill-fresh',$1,'刚写入','',$2,now())`, owner.User.ID, communityFixture); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.backfillSkinOrigins(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]string{"backfill-001": "ai", "backfill-late": "user", "backfill-fresh": "unknown", "backfill-photo": "unknown"} {
+		if got := originTestValue(t, db, id); got != want {
+			t.Fatalf("%s 的来源 = %q，want %q", id, got, want)
+		}
+	}
+
+	// 重跑迁移不改动来源；约束拒绝未知来源，且只有一份。
+	if err = db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if originTestValue(t, db, "backfill-001") != "ai" || originTestValue(t, db, "backfill-002") != "user" {
 		t.Fatal("重跑迁移改动了来源")
 	}
-	if _, err := db.pool.Exec(ctx, `UPDATE community_skins SET origin='robot' WHERE id='backfill-plain'`); err == nil {
+	if _, err = db.pool.Exec(ctx, `UPDATE community_skins SET origin='robot' WHERE id='backfill-002'`); err == nil {
 		t.Fatal("约束接受了未知来源")
 	}
 	var constraints int
-	if err := db.pool.QueryRow(ctx, `SELECT count(*) FROM pg_constraint WHERE conrelid='community_skins'::regclass AND conname LIKE 'community_skins_origin_check%'`).Scan(&constraints); err != nil {
+	if err = db.pool.QueryRow(ctx, `SELECT count(*) FROM pg_constraint WHERE conrelid='community_skins'::regclass AND conname LIKE 'community_skins_origin_check%'`).Scan(&constraints); err != nil {
 		t.Fatal(err)
 	}
 	if constraints != 1 {
 		t.Fatal("来源约束数", constraints)
+	}
+	// 游标损坏时报错，不从头扫一遍。
+	if _, err = db.pool.Exec(ctx, `UPDATE site_settings SET value='not json' WHERE key=$1`, skinOriginBackfillKey); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.backfillSkinOrigins(ctx); err == nil {
+		t.Fatal("损坏的游标没有报错")
+	}
+	if _, err = db.pool.Exec(ctx, `DELETE FROM site_settings WHERE key=$1`, skinOriginBackfillKey); err != nil {
+		t.Fatal(err)
 	}
 }

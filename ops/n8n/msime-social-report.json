@@ -1,0 +1,589 @@
+{
+  "name": "MSIME 社交效果周报",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "value": 1
+            }
+          ]
+        }
+      },
+      "id": "msime-report-01",
+      "name": "每周触发",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const end = new Date();\nconst start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);\nconst repository = String($env.MSIME_GITHUB_REPOSITORY ?? '');\nconst siteId = String($env.MSIME_PLAUSIBLE_SITE_ID ?? '');\nif (!repository || !siteId || !$env.MSIME_PLAUSIBLE_API_KEY || !$env.MSIME_GITHUB_TOKEN) {\n  throw new Error('缺少周报所需的 Plausible 或 GitHub 配置');\n}\nconst date = (value) => value.toISOString().slice(0, 10);\nreturn [{json: {\n  period_start: date(start),\n  period_end: date(end),\n  repository,\n  site_id: siteId,\n  install_goal: String($env.MSIME_PLAUSIBLE_INSTALL_GOAL ?? 'Install')\n}}];"
+      },
+      "id": "msime-report-02",
+      "name": "准备查询",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://plausible.io/api/v2/query",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.MSIME_PLAUSIBLE_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({site_id: $('准备查询').first().json.site_id, date_range: [$('准备查询').first().json.period_start, $('准备查询').first().json.period_end], metrics: ['visitors', 'visits'], dimensions: ['visit:utm_source', 'visit:utm_medium', 'visit:utm_campaign'], filters: [['is', 'visit:utm_medium', ['social']]]}) }}",
+        "options": {}
+      },
+      "id": "msime-report-03",
+      "name": "查询社交访问",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "continueOnFail": true,
+      "position": [
+        480,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{json: {traffic: $json, period: $('准备查询').first().json}}];"
+      },
+      "id": "msime-report-04",
+      "name": "整理访问数据",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://plausible.io/api/v2/query",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.MSIME_PLAUSIBLE_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({site_id: $('准备查询').first().json.site_id, date_range: [$('准备查询').first().json.period_start, $('准备查询').first().json.period_end], metrics: ['events'], dimensions: ['visit:utm_source', 'visit:utm_medium', 'visit:utm_campaign'], filters: [['is', 'visit:utm_medium', ['social']], ['is', 'event:goal', [$('准备查询').first().json.install_goal]]]}) }}",
+        "options": {}
+      },
+      "id": "msime-report-05",
+      "name": "查询安装事件",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "continueOnFail": true,
+      "position": [
+        480,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{json: {installs: $json, period: $('准备查询').first().json}}];"
+      },
+      "id": "msime-report-06",
+      "name": "整理安装数据",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://api.github.com/repos/' + $('准备查询').first().json.repository }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.MSIME_GITHUB_TOKEN }}"
+            },
+            {
+              "name": "X-GitHub-Api-Version",
+              "value": "2022-11-28"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "msime-report-07",
+      "name": "查询 GitHub 仓库",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "continueOnFail": true,
+      "position": [
+        480,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{json: {github: $json, period: $('准备查询').first().json}}];"
+      },
+      "id": "msime-report-08",
+      "name": "整理仓库数据",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://api.github.com/repos/' + $('准备查询').first().json.repository + '/releases?per_page=20' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.MSIME_GITHUB_TOKEN }}"
+            },
+            {
+              "name": "X-GitHub-Api-Version",
+              "value": "2022-11-28"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "msime-report-09",
+      "name": "查询 GitHub 发布",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "continueOnFail": true,
+      "position": [
+        480,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{json: {releases: $json, period: $('准备查询').first().json}}];"
+      },
+      "id": "msime-report-10",
+      "name": "整理发布数据",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "msime-report-11",
+      "name": "合并访问和安装",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        960,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "msime-report-12",
+      "name": "合并仓库数据",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1200,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "msime-report-13",
+      "name": "合并发布数据",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $json;\nconst period = input.period ?? {};\nconst response = (value) => value && typeof value === 'object' && value.body && typeof value.body === 'object' ? value.body : value;\nconst traffic = response(input.traffic);\nconst installs = response(input.installs);\nconst github = response(input.github);\nconst releases = response(input.releases);\nconst number = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;\nconst rows = (value) => Array.isArray(value?.results) ? value.results : [];\nconst metricRows = (value) => rows(value).map((row) => {\n  const dimensions = Array.isArray(row.dimensions) ? row.dimensions : [];\n  const metrics = Array.isArray(row.metrics) ? row.metrics : [];\n  return {source: String(dimensions[0] ?? 'unknown'), medium: String(dimensions[1] ?? ''), campaign: String(dimensions[2] ?? ''), visitors: number(metrics[0]), visits: number(metrics[1]), events: number(metrics[0])};\n});\nconst trafficRows = metricRows(traffic);\nconst installRows = metricRows(installs).map((row) => ({...row, installs: row.events}));\nconst grouped = new Map();\nfor (const row of trafficRows) {\n  const current = grouped.get(row.source) ?? {visitors: 0, visits: 0, installs: 0};\n  current.visitors += row.visitors;\n  current.visits += row.visits;\n  grouped.set(row.source, current);\n}\nfor (const row of installRows) {\n  const current = grouped.get(row.source) ?? {visitors: 0, visits: 0, installs: 0};\n  current.installs += row.installs;\n  grouped.set(row.source, current);\n}\nconst platformRows = [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([source, values]) => ({source, ...values}));\nconst state = $getWorkflowStaticData('global');\nconst stars = number(github?.stargazers_count);\nconst forks = number(github?.forks_count);\nconst previousStars = state.last_stars;\nconst previousForks = state.last_forks;\nconst starDelta = Number.isFinite(Number(previousStars)) ? stars - Number(previousStars) : null;\nconst forkDelta = Number.isFinite(Number(previousForks)) ? forks - Number(previousForks) : null;\nif (github && !github.error && Number.isFinite(Number(github.stargazers_count))) {\n  state.last_stars = stars;\n  state.last_forks = forks;\n  state.last_snapshot_at = new Date().toISOString();\n}\nconst start = String(period.period_start ?? '').slice(0, 10);\nconst end = String(period.period_end ?? '').slice(0, 10);\nconst formatDelta = (delta) => delta === null ? '首次记录' : (delta >= 0 ? `+${delta}` : String(delta));\nconst platformText = platformRows.length ? platformRows.map((row) => `- ${row.source}：访问人数 ${row.visitors}，访问次数 ${row.visits}，安装事件 ${row.installs}`).join('\\n') : '- 暂无带 social UTM 的访问数据';\nconst releaseList = Array.isArray(releases) ? releases.filter((release) => { const published = String(release.published_at ?? '').slice(0, 10); return published >= start && published <= end; }) : [];\nconst releaseText = releaseList.length ? releaseList.map((release) => `- ${release.tag_name ?? release.name ?? '未命名版本'}（${String(release.published_at ?? '').slice(0, 10)}）`).join('\\n') : '- 本周期没有新 Release';\nconst report = [`水杉输入法社交效果周报（${start} 至 ${end}）`, '', '平台数据（按 utm_source 汇总）', platformText, '', 'GitHub 整体变化（无法归因到单个平台）', `- Star：${stars}（本周 ${formatDelta(starDelta)}）`, `- Fork：${forks}（本周 ${formatDelta(forkDelta)}）`, '', `本周期 Release（${releaseList.length} 个）`, releaseText].join('\\n');\nreturn [{json: {report, report_period_start: period.period_start, report_period_end: period.period_end, platform_rows: platformRows, star_delta: starDelta, fork_delta: forkDelta, release_count: releaseList.length}}];"
+      },
+      "id": "msime-report-14",
+      "name": "生成中文周报",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $env.MSIME_REPORT_TELEGRAM_ENABLED }}",
+              "rightValue": "1",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "msime-report-15",
+      "name": "启用周报 Telegram",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1920,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://api.telegram.org/bot' + $env.MSIME_REPORT_TELEGRAM_BOT_TOKEN + '/sendMessage' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({chat_id: $env.MSIME_REPORT_TELEGRAM_CHAT_ID, text: $json.report, disable_web_page_preview: true}) }}",
+        "options": {}
+      },
+      "id": "msime-report-16",
+      "name": "发送周报 Telegram",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "continueOnFail": true,
+      "position": [
+        2160,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $env.MSIME_REPORT_DISCORD_ENABLED }}",
+              "rightValue": "1",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "msime-report-17",
+      "name": "启用周报 Discord",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1920,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MSIME_REPORT_DISCORD_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({content: $json.report, username: '水杉输入法周报机器人', allowed_mentions: {parse: []}}) }}",
+        "options": {}
+      },
+      "id": "msime-report-18",
+      "name": "发送周报 Discord",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "continueOnFail": true,
+      "position": [
+        2160,
+        120
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "每周触发": {
+      "main": [
+        [
+          {
+            "node": "准备查询",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "准备查询": {
+      "main": [
+        [
+          {
+            "node": "查询社交访问",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "查询安装事件",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "查询 GitHub 仓库",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "查询 GitHub 发布",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "查询社交访问": {
+      "main": [
+        [
+          {
+            "node": "整理访问数据",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "查询安装事件": {
+      "main": [
+        [
+          {
+            "node": "整理安装数据",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "查询 GitHub 仓库": {
+      "main": [
+        [
+          {
+            "node": "整理仓库数据",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "查询 GitHub 发布": {
+      "main": [
+        [
+          {
+            "node": "整理发布数据",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "整理访问数据": {
+      "main": [
+        [
+          {
+            "node": "合并访问和安装",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "整理安装数据": {
+      "main": [
+        [
+          {
+            "node": "合并访问和安装",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "合并访问和安装": {
+      "main": [
+        [
+          {
+            "node": "合并仓库数据",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "整理仓库数据": {
+      "main": [
+        [
+          {
+            "node": "合并仓库数据",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "合并仓库数据": {
+      "main": [
+        [
+          {
+            "node": "合并发布数据",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "整理发布数据": {
+      "main": [
+        [
+          {
+            "node": "合并发布数据",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "合并发布数据": {
+      "main": [
+        [
+          {
+            "node": "生成中文周报",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "生成中文周报": {
+      "main": [
+        [
+          {
+            "node": "启用周报 Telegram",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "启用周报 Discord",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "启用周报 Telegram": {
+      "main": [
+        [
+          {
+            "node": "发送周报 Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "启用周报 Discord": {
+      "main": [
+        [
+          {
+            "node": "发送周报 Discord",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "saveExecutionProgress": false,
+    "saveDataSuccessExecution": "none"
+  },
+  "versionId": "msime-social-report-v1"
+}

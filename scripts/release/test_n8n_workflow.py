@@ -57,7 +57,7 @@ const payload = {schema_version: 1, event: 'release.published',
 const rawBody = JSON.stringify(payload);
 const env = {MSIME_SOCIAL_WEBHOOK_SECRET: 'synthetic-secret'};
 for (const channel of ['TELEGRAM', 'DISCORD', 'MASTODON', 'BLUESKY', 'X', 'REDDIT']) env['MSIME_' + channel + '_ENABLED'] = '1';
-for (const key of ['TELEGRAM_BOT_TOKEN','TELEGRAM_CHAT_ID','DISCORD_WEBHOOK_URL','MASTODON_INSTANCE','MASTODON_ACCESS_TOKEN','BLUESKY_IDENTIFIER','BLUESKY_APP_PASSWORD','X_ACCESS_TOKEN','REDDIT_ACCESS_TOKEN','REDDIT_SUBREDDIT','REDDIT_USER_AGENT']) env['MSIME_' + key] = 'synthetic';
+for (const key of ['TELEGRAM_BOT_TOKEN','TELEGRAM_CHAT_ID','DISCORD_WEBHOOK_URL','MASTODON_INSTANCE','MASTODON_ACCESS_TOKEN','BLUESKY_IDENTIFIER','BLUESKY_APP_PASSWORD','REDDIT_ACCESS_TOKEN','REDDIT_SUBREDDIT','REDDIT_USER_AGENT']) env['MSIME_' + key] = 'synthetic';
 if (process.argv[2]) env.MSIME_SOCIAL_SITE_URL = process.argv[2];
 const item = {json: {rawBody, headers: {'x-msime-signature': 'sha256=' + crypto.createHmac('sha256', env.MSIME_SOCIAL_WEBHOOK_SECRET).update(rawBody).digest('hex')}}};
 const code = workflow.nodes.find(node => node.name === '验签和生成文案').parameters.jsCode;
@@ -93,6 +93,14 @@ process.stdout.write(JSON.stringify(posts));
         self.assertTrue(json.loads(result.stdout)[0]["json"]["tracking_url"].startswith("https://example.test/download/?"))
         for invalid in ("http://example.test/", "https://user:password@example.test/", "https://example.test/?token=private"):
             self.assertNotEqual(self.build_posts(invalid).returncode, 0)
+
+    def test_x_uses_refreshable_n8n_oauth2_credentials(self):
+        node = self.nodes["发送 X"]
+        self.assertEqual(node["parameters"]["authentication"], "genericCredentialType")
+        self.assertEqual(node["parameters"]["genericAuthType"], "oAuth2Api")
+        self.assertEqual(node["credentials"]["oAuth2Api"]["id"], "msimeXOAuth2")
+        self.assertNotIn("headerParameters", node["parameters"])
+        self.assertNotIn("MSIME_X_ACCESS_TOKEN", WORKFLOW.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

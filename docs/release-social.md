@@ -43,12 +43,12 @@ n8n 进程需要能够访问公网，并设置 `N8N_BLOCK_ENV_ACCESS_IN_NODE=fal
 | `MSIME_DISCORD_ENABLED`、`MSIME_DISCORD_WEBHOOK_URL` | Discord 开关和 Webhook 地址 |
 | `MSIME_MASTODON_ENABLED`、`MSIME_MASTODON_INSTANCE`、`MSIME_MASTODON_ACCESS_TOKEN` | Mastodon 开关、实例地址和 `write:statuses` Token |
 | `MSIME_BLUESKY_ENABLED`、`MSIME_BLUESKY_IDENTIFIER`、`MSIME_BLUESKY_APP_PASSWORD` | Bluesky 开关、账号和 App Password |
-| `MSIME_X_ENABLED`、`MSIME_X_ACCESS_TOKEN` | X 开关和具有发帖权限的 OAuth 用户 Token |
+| `MSIME_X_ENABLED` | X 开关；发帖使用 n8n 中已授权的 `MSIME X OAuth2` 凭据 |
 | `MSIME_REDDIT_ENABLED`、`MSIME_REDDIT_ACCESS_TOKEN`、`MSIME_REDDIT_SUBREDDIT`、`MSIME_REDDIT_USER_AGENT` | Reddit 开关、带 `submit` 权限的 OAuth Token、目标 subreddit 和描述性 User-Agent |
 
-开关取值为 `1` 才会发帖。未配置的分支不会运行，单个平台失败也不会阻止其他分支。Reddit Token 和 X Token 可能过期，建议后续增加独立的 OAuth 刷新工作流；不要把长期凭据放进 GitHub Actions。
+开关取值为 `1` 才会发帖。未配置的分支不会运行，单个平台失败也不会阻止其他分支。X 使用 n8n OAuth2 凭据自动刷新，Reddit 仍直接使用环境变量中的用户 Token，启用持续发布前需补齐它的刷新接线。不要把长期凭据放进 GitHub Actions。
 
-X 应用从[开发者控制台](https://console.x.com/)申请。使用 OAuth 2.0 用户授权申请 `tweet.read`、`tweet.write`、`users.read` 和 `offline.access`，保存 Client ID 与 Client Secret，后续再完成账号授权和刷新令牌接线；App-only Bearer Token 不能用于发帖。授权流程与有效期见 [X 官方说明](https://docs.x.com/fundamentals/authentication/oauth-2-0/authorization-code)，发帖费用以[当前官方价格](https://docs.x.com/x-api/getting-started/pricing)为准。当前模板仍直接使用环境变量中的用户 Access Token，未实现自动续期，只有应用凭据还不能启用持续发帖。
+X 应用从[开发者控制台](https://console.x.com/)申请。使用 OAuth 2.0 用户授权申请 `tweet.read`、`tweet.write`、`users.read` 和 `offline.access`，保存 Client ID 与 Client Secret，后续再完成账号授权和刷新令牌接线；App-only Bearer Token 不能用于发帖。授权流程与有效期见 [X 官方说明](https://docs.x.com/fundamentals/authentication/oauth-2-0/authorization-code)，发帖费用以[当前官方价格](https://docs.x.com/x-api/getting-started/pricing)为准。模板的「发送 X」节点使用 Generic Credential Type → OAuth2 API，引用 ID 为 `msimeXOAuth2`、名称为 `MSIME X OAuth2` 的凭据。在 n8n 创建该凭据时，Grant Type 选 PKCE，Authorization URL 为 `https://x.com/i/oauth2/authorize`，Access Token URL 为 `https://api.x.com/2/oauth2/token`，Authentication 选 Header，Scope 为上述四项；点击 Connect my account 完成用户授权。仅保存 Client ID/Secret 不代表已授权。HTTP Request 节点通过 n8n 管理用户 Access Token 与 Refresh Token，不再读取 `MSIME_X_ACCESS_TOKEN`。其他实例导入时应在该节点重新选择自己的凭据，不要照搬生产凭据数据。
 
 Reddit 的外部 n8n 集成需提交 [Data API 访问申请](https://support.reddithelp.com/hc/en-us/requests/new?ticket_form_id=14868593862164)并获得审批。用途应如实描述为低频的项目版本公告，列出账号、目标 subreddit、项目链接及使用外部 n8n 的原因；Devvit 登录不会直接提供外部 API 凭据，见 [Reddit 官方 FAQ](https://developers.reddit.com/docs/guides/faq)。获批后再配置 OAuth 应用、`submit` 权限及令牌刷新，且只发布到允许此类公告的社区。Client Secret 和用户令牌存入 Vault，不要粘贴到 PR 或聊天中。
 

@@ -72,21 +72,22 @@ curl --fail-with-body -X POST "$N8N_TEST_WEBHOOK_URL" \
 
 ## 每周效果周报
 
-仓库还提供了 [`ops/n8n/msime-social-report.json`](../ops/n8n/msime-social-report.json) 周报模板。它每周运行一次，查询 Plausible 的 `social` UTM 访问和安装事件，查询 GitHub 仓库的 Star、Fork 与最近 Release，然后生成中文周报并按开关发送到内部 Telegram 或 Discord。Plausible 是可选的；关闭时仍会生成 GitHub 增长和 Release 周报，只跳过官网流量查询。工作流默认未激活，导入后先手动执行一次，确认统计周期、平台名称和安装事件数量都正确，再启用它。
+仓库还提供了 [`ops/n8n/msime-social-report.json`](../ops/n8n/msime-social-report.json) 周报模板。它每周运行一次，查询自托管 Umami 的 `social` UTM 访问和安装事件，查询 GitHub 仓库的 Star、Fork 与最近 Release，然后生成中文周报并按开关发送到内部 Telegram 或 Discord。Umami 是可选的；关闭时仍会生成 GitHub 增长和 Release 周报，只跳过官网流量查询。工作流默认未激活，导入后先手动执行一次，确认统计周期、平台名称和安装事件数量都正确，再启用它。
 
 周报使用以下 n8n 环境变量；令牌只放环境变量或 n8n Credentials，不要写入工作流 JSON：
 
 | 变量 | 作用 |
 | --- | --- |
-| `MSIME_PLAUSIBLE_ENABLED` | Plausible 查询开关，设为 `1` 才查询；未接入官网统计时保持关闭 |
-| `MSIME_PLAUSIBLE_API_KEY` | Plausible Stats API 的 Bearer API Key |
-| `MSIME_PLAUSIBLE_SITE_ID` | Plausible 中配置的站点 ID（通常是域名） |
-| `MSIME_PLAUSIBLE_INSTALL_GOAL` | 安装事件的 Plausible goal 名称，默认 `Install` |
+| `MSIME_UMAMI_ENABLED` | Umami 查询开关，设为 `1` 才查询；完成 Website 和 API key 配置前保持关闭 |
+| `MSIME_UMAMI_BASE_URL` | 自托管 Umami 地址，例如 `http://umami.umami.svc.cluster.local:3000` |
+| `MSIME_UMAMI_API_KEY` | Umami Settings → API keys 创建的 Bearer API key |
+| `MSIME_UMAMI_WEBSITE_ID` | Umami Website 的 ID |
+| `MSIME_UMAMI_INSTALL_EVENT` | 安装自定义事件名称，默认 `Install` |
 | `MSIME_GITHUB_REPOSITORY` | GitHub 仓库，例如 `metasequoiaime/msime-cloud` |
 | `MSIME_GITHUB_TOKEN` | 读取仓库和 Release 的 GitHub Token，只需 `Metadata: read` |
 | `MSIME_REPORT_TELEGRAM_ENABLED`、`MSIME_REPORT_TELEGRAM_BOT_TOKEN`、`MSIME_REPORT_TELEGRAM_CHAT_ID` | Telegram 周报开关、Bot Token 和内部群组 ID |
 | `MSIME_REPORT_DISCORD_ENABLED`、`MSIME_REPORT_DISCORD_WEBHOOK_URL` | Discord 周报开关和内部 Webhook 地址 |
 
-Plausible 的站点需要保留 `utm_source`、`utm_medium`、`utm_campaign`，并在下载或安装成功时触发与 `MSIME_PLAUSIBLE_INSTALL_GOAL` 同名的自定义事件。周报按 `utm_source` 汇总访问人数、访问次数和安装事件；`utm_campaign` 仍保留在查询结果中，方便需要时下钻到具体版本。GitHub Star 和 Fork 只能得到仓库总量，工作流用 n8n 静态数据保存上一次成功查询的快照，周报中的 Star/Fork 变化是仓库整体变化，不能归因到单个平台。第一次运行显示“首次记录”。
+Umami Website 需要保留 `utm_source`、`utm_medium`、`utm_campaign`，并在下载或安装成功时触发与 `MSIME_UMAMI_INSTALL_EVENT` 同名的自定义事件。工作流通过 Umami `/api/websites/{id}/breakdown` 按 `utmSource` 分组，过滤 `utmMedium=social`，再汇总访问人数、访问次数和安装事件；`utmCampaign` 仍保留在查询结果中，方便需要时下钻到具体版本。GitHub Star 和 Fork 只能得到仓库总量，工作流用 n8n 静态数据保存上一次成功查询的快照，周报中的 Star/Fork 变化是仓库整体变化，不能归因到单个平台。第一次运行显示“首次记录”。
 
-统计周期按 n8n 所在机器的 UTC 时间计算最近七天。工作流只保留上一份 Star/Fork 快照，不保存 Plausible 明细或 GitHub 响应；发送节点开启失败继续执行，因此 Telegram 故障不会阻止 Discord 周报。队列模式下应确认 n8n 静态数据由同一个主进程持久化，否则请把快照迁移到 Data Table 或 PostgreSQL。
+统计周期按 n8n 所在机器的 UTC 时间计算最近七天。工作流只保留上一份 Star/Fork 快照，不保存 Umami 明细或 GitHub 响应；发送节点开启失败继续执行，因此 Telegram 故障不会阻止 Discord 周报。队列模式下应确认 n8n 静态数据由同一个主进程持久化，否则请把快照迁移到 Data Table 或 PostgreSQL。

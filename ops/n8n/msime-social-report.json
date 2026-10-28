@@ -23,7 +23,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const end = new Date();\nconst start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);\nconst repository = String($env.MSIME_GITHUB_REPOSITORY ?? '');\nif (!repository || !$env.MSIME_GITHUB_TOKEN) {\n  throw new Error('缺少周报所需的 GitHub 配置');\n}\nconst date = (value) => value.toISOString().slice(0, 10);\nreturn [{json: {\n  period_start: date(start),\n  period_end: date(end),\n  repository,\n  site_id: String($env.MSIME_PLAUSIBLE_SITE_ID ?? ''),\n  install_goal: String($env.MSIME_PLAUSIBLE_INSTALL_GOAL ?? 'Install')\n}}];"
+        "jsCode": "const end = new Date();\nconst start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);\nconst repository = String($env.MSIME_GITHUB_REPOSITORY ?? '');\nif (!repository || !$env.MSIME_GITHUB_TOKEN) {\n  throw new Error('缺少周报所需的 GitHub 配置');\n}\nconst date = (value) => value.toISOString().slice(0, 10);\nreturn [{json: {\n  period_start: date(start),\n  period_end: date(end),\n  start_at: start.getTime(),\n  end_at: end.getTime(),\n  repository,\n  umami_base_url: String($env.MSIME_UMAMI_BASE_URL ?? '').replace(/\\/$/, ''),\n  website_id: String($env.MSIME_UMAMI_WEBSITE_ID ?? ''),\n  install_event: String($env.MSIME_UMAMI_INSTALL_EVENT ?? 'Install')\n}}];"
       },
       "id": "msime-report-02",
       "name": "准备查询",
@@ -37,23 +37,23 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://plausible.io/api/v2/query",
+        "url": "={{ $('准备查询').first().json.umami_base_url + '/api/websites/' + encodeURIComponent($('准备查询').first().json.website_id) + '/breakdown?startAt=' + $('准备查询').first().json.start_at + '&endAt=' + $('准备查询').first().json.end_at + '&fields=utmSource,utmMedium,utmCampaign&utmMedium=social' }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "Authorization",
-              "value": "={{ 'Bearer ' + $env.MSIME_PLAUSIBLE_API_KEY }}"
+              "value": "={{ 'Bearer ' + $env.MSIME_UMAMI_API_KEY }}"
             },
             {
-              "name": "Content-Type",
+              "name": "Accept",
               "value": "application/json"
             }
           ]
         },
-        "sendBody": true,
+        "sendBody": false,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({site_id: $('准备查询').first().json.site_id, date_range: [$('准备查询').first().json.period_start, $('准备查询').first().json.period_end], metrics: ['visitors', 'visits'], dimensions: ['visit:utm_source', 'visit:utm_medium', 'visit:utm_campaign'], filters: [['is', 'visit:utm_medium', ['social']]]}) }}",
+        "jsonBody": "",
         "options": {}
       },
       "id": "msime-report-03",
@@ -82,23 +82,23 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://plausible.io/api/v2/query",
+        "url": "={{ $('准备查询').first().json.umami_base_url + '/api/websites/' + encodeURIComponent($('准备查询').first().json.website_id) + '/breakdown?startAt=' + $('准备查询').first().json.start_at + '&endAt=' + $('准备查询').first().json.end_at + '&fields=utmSource,utmMedium,utmCampaign&utmMedium=social&event=' + encodeURIComponent($('准备查询').first().json.install_event) }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "Authorization",
-              "value": "={{ 'Bearer ' + $env.MSIME_PLAUSIBLE_API_KEY }}"
+              "value": "={{ 'Bearer ' + $env.MSIME_UMAMI_API_KEY }}"
             },
             {
-              "name": "Content-Type",
+              "name": "Accept",
               "value": "application/json"
             }
           ]
         },
-        "sendBody": true,
+        "sendBody": false,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({site_id: $('准备查询').first().json.site_id, date_range: [$('准备查询').first().json.period_start, $('准备查询').first().json.period_end], metrics: ['events'], dimensions: ['visit:utm_source', 'visit:utm_medium', 'visit:utm_campaign'], filters: [['is', 'visit:utm_medium', ['social']], ['is', 'event:goal', [$('准备查询').first().json.install_goal]]]}) }}",
+        "jsonBody": "",
         "options": {}
       },
       "id": "msime-report-05",
@@ -263,7 +263,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const input = $json;\nconst period = input.period ?? {};\nconst response = (value) => value && typeof value === 'object' && value.body && typeof value.body === 'object' ? value.body : value;\nconst traffic = response(input.traffic);\nconst installs = response(input.installs);\nconst github = response(input.github);\nconst releases = response(input.releases);\nconst number = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;\nconst rows = (value) => Array.isArray(value?.results) ? value.results : [];\nconst metricRows = (value) => rows(value).map((row) => {\n  const dimensions = Array.isArray(row.dimensions) ? row.dimensions : [];\n  const metrics = Array.isArray(row.metrics) ? row.metrics : [];\n  return {source: String(dimensions[0] ?? 'unknown'), medium: String(dimensions[1] ?? ''), campaign: String(dimensions[2] ?? ''), visitors: number(metrics[0]), visits: number(metrics[1]), events: number(metrics[0])};\n});\nconst trafficRows = metricRows(traffic);\nconst installRows = metricRows(installs).map((row) => ({...row, installs: row.events}));\nconst grouped = new Map();\nfor (const row of trafficRows) {\n  const current = grouped.get(row.source) ?? {visitors: 0, visits: 0, installs: 0};\n  current.visitors += row.visitors;\n  current.visits += row.visits;\n  grouped.set(row.source, current);\n}\nfor (const row of installRows) {\n  const current = grouped.get(row.source) ?? {visitors: 0, visits: 0, installs: 0};\n  current.installs += row.installs;\n  grouped.set(row.source, current);\n}\nconst platformRows = [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([source, values]) => ({source, ...values}));\nconst state = $getWorkflowStaticData('global');\nconst stars = number(github?.stargazers_count);\nconst forks = number(github?.forks_count);\nconst previousStars = state.last_stars;\nconst previousForks = state.last_forks;\nconst starDelta = Number.isFinite(Number(previousStars)) ? stars - Number(previousStars) : null;\nconst forkDelta = Number.isFinite(Number(previousForks)) ? forks - Number(previousForks) : null;\nif (github && !github.error && Number.isFinite(Number(github.stargazers_count))) {\n  state.last_stars = stars;\n  state.last_forks = forks;\n  state.last_snapshot_at = new Date().toISOString();\n}\nconst start = String(period.period_start ?? '').slice(0, 10);\nconst end = String(period.period_end ?? '').slice(0, 10);\nconst formatDelta = (delta) => delta === null ? '首次记录' : (delta >= 0 ? `+${delta}` : String(delta));\nconst platformText = platformRows.length ? platformRows.map((row) => `- ${row.source}：访问人数 ${row.visitors}，访问次数 ${row.visits}，安装事件 ${row.installs}`).join('\\n') : '- 暂无带 social UTM 的访问数据';\nconst releaseList = Array.isArray(releases) ? releases.filter((release) => { const published = String(release.published_at ?? '').slice(0, 10); return published >= start && published <= end; }) : [];\nconst releaseText = releaseList.length ? releaseList.map((release) => `- ${release.tag_name ?? release.name ?? '未命名版本'}（${String(release.published_at ?? '').slice(0, 10)}）`).join('\\n') : '- 本周期没有新 Release';\nconst report = [`水杉输入法社交效果周报（${start} 至 ${end}）`, '', '平台数据（按 utm_source 汇总）', platformText, '', 'GitHub 整体变化（无法归因到单个平台）', `- Star：${stars}（本周 ${formatDelta(starDelta)}）`, `- Fork：${forks}（本周 ${formatDelta(forkDelta)}）`, '', `本周期 Release（${releaseList.length} 个）`, releaseText].join('\\n');\nreturn [{json: {report, report_period_start: period.period_start, report_period_end: period.period_end, platform_rows: platformRows, star_delta: starDelta, fork_delta: forkDelta, release_count: releaseList.length}}];"
+        "jsCode": "const input = $json;\nconst period = input.period ?? {};\nconst response = (value) => value && typeof value === 'object' && value.body && typeof value.body === 'object' ? value.body : value;\nconst traffic = response(input.traffic);\nconst installs = response(input.installs);\nconst github = response(input.github);\nconst releases = response(input.releases);\nconst number = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;\nconst rows = (value) => Array.isArray(value) ? value : (Array.isArray(value?.data) ? value.data : (Array.isArray(value?.results) ? value.results : []));\nconst metricRows = (value, install = false) => rows(value).map((row) => {\n  const dimensions = Array.isArray(row.dimensions) ? row.dimensions : [];\n  const metrics = Array.isArray(row.metrics) ? row.metrics : [];\n  const field = (name, index) => row[name] ?? row[name.toLowerCase()] ?? dimensions[index] ?? '';\n  const source = String(field('utmSource', 0) || field('source', 0) || 'unknown');\n  const medium = String(field('utmMedium', 1));\n  const campaign = String(field('utmCampaign', 2));\n  const visitors = number(row.visitors ?? metrics[0]);\n  const visits = number(row.visits ?? metrics[1]);\n  const events = number(row.events ?? row.views ?? row.pageviews ?? metrics[0]);\n  return {source, medium, campaign, visitors, visits, events, installs: install ? events : 0};\n});\nconst trafficRows = metricRows(traffic);\nconst installRows = metricRows(installs, true);\nconst grouped = new Map();\nfor (const row of trafficRows) {\n  const current = grouped.get(row.source) ?? {visitors: 0, visits: 0, installs: 0};\n  current.visitors += row.visitors;\n  current.visits += row.visits;\n  grouped.set(row.source, current);\n}\nfor (const row of installRows) {\n  const current = grouped.get(row.source) ?? {visitors: 0, visits: 0, installs: 0};\n  current.installs += row.installs;\n  grouped.set(row.source, current);\n}\nconst platformRows = [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([source, values]) => ({source, ...values}));\nconst state = $getWorkflowStaticData('global');\nconst stars = number(github?.stargazers_count);\nconst forks = number(github?.forks_count);\nconst previousStars = state.last_stars;\nconst previousForks = state.last_forks;\nconst starDelta = Number.isFinite(Number(previousStars)) ? stars - Number(previousStars) : null;\nconst forkDelta = Number.isFinite(Number(previousForks)) ? forks - Number(previousForks) : null;\nif (github && !github.error && Number.isFinite(Number(github.stargazers_count))) {\n  state.last_stars = stars;\n  state.last_forks = forks;\n  state.last_snapshot_at = new Date().toISOString();\n}\nconst start = String(period.period_start ?? '').slice(0, 10);\nconst end = String(period.period_end ?? '').slice(0, 10);\nconst formatDelta = (delta) => delta === null ? '首次记录' : (delta >= 0 ? `+${delta}` : String(delta));\nconst platformText = platformRows.length ? platformRows.map((row) => `- ${row.source}：访问人数 ${row.visitors}，访问次数 ${row.visits}，安装事件 ${row.installs}`).join('\\n') : '- 暂无带 social UTM 的访问数据';\nconst releaseList = Array.isArray(releases) ? releases.filter((release) => { const published = String(release.published_at ?? '').slice(0, 10); return published >= start && published <= end; }) : [];\nconst releaseText = releaseList.length ? releaseList.map((release) => `- ${release.tag_name ?? release.name ?? '未命名版本'}（${String(release.published_at ?? '').slice(0, 10)}）`).join('\\n') : '- 本周期没有新 Release';\nconst report = [`水杉输入法社交效果周报（${start} 至 ${end}）`, '', '平台数据（按 utm_source 汇总）', platformText, '', 'GitHub 整体变化（无法归因到单个平台）', `- Star：${stars}（本周 ${formatDelta(starDelta)}）`, `- Fork：${forks}（本周 ${formatDelta(forkDelta)}）`, '', `本周期 Release（${releaseList.length} 个）`, releaseText].join('\\n');\nreturn [{json: {report, report_period_start: period.period_start, report_period_end: period.period_end, platform_rows: platformRows, star_delta: starDelta, fork_delta: forkDelta, release_count: releaseList.length}}];"
       },
       "id": "msime-report-14",
       "name": "生成中文周报",
@@ -389,7 +389,7 @@
           },
           "conditions": [
             {
-              "leftValue": "={{ $env.MSIME_PLAUSIBLE_ENABLED }}",
+              "leftValue": "={{ $env.MSIME_UMAMI_ENABLED }}",
               "rightValue": "1",
               "operator": {
                 "type": "string",
@@ -403,7 +403,7 @@
         "options": {}
       },
       "id": "msime-report-19",
-      "name": "启用 Plausible 访问",
+      "name": "启用 Umami 访问",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
@@ -422,7 +422,7 @@
           },
           "conditions": [
             {
-              "leftValue": "={{ $env.MSIME_PLAUSIBLE_ENABLED }}",
+              "leftValue": "={{ $env.MSIME_UMAMI_ENABLED }}",
               "rightValue": "1",
               "operator": {
                 "type": "string",
@@ -436,7 +436,7 @@
         "options": {}
       },
       "id": "msime-report-20",
-      "name": "启用 Plausible 安装",
+      "name": "启用 Umami 安装",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
@@ -449,7 +449,7 @@
         "jsCode": "return [{json: {traffic: {results: []}, period: $('准备查询').first().json}}];"
       },
       "id": "msime-report-21",
-      "name": "跳过社交访问",
+      "name": "跳过 Umami 社交访问",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -462,7 +462,7 @@
         "jsCode": "return [{json: {installs: {results: []}, period: $('准备查询').first().json}}];"
       },
       "id": "msime-report-22",
-      "name": "跳过安装事件",
+      "name": "跳过 Umami 安装事件",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -488,12 +488,12 @@
       "main": [
         [
           {
-            "node": "启用 Plausible 访问",
+            "node": "启用 Umami 访问",
             "type": "main",
             "index": 0
           },
           {
-            "node": "启用 Plausible 安装",
+            "node": "启用 Umami 安装",
             "type": "main",
             "index": 0
           },
@@ -671,7 +671,7 @@
         []
       ]
     },
-    "启用 Plausible 访问": {
+    "启用 Umami 访问": {
       "main": [
         [
           {
@@ -682,14 +682,14 @@
         ],
         [
           {
-            "node": "跳过社交访问",
+            "node": "跳过 Umami 社交访问",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "启用 Plausible 安装": {
+    "启用 Umami 安装": {
       "main": [
         [
           {
@@ -700,14 +700,14 @@
         ],
         [
           {
-            "node": "跳过安装事件",
+            "node": "跳过 Umami 安装事件",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "跳过社交访问": {
+    "跳过 Umami 社交访问": {
       "main": [
         [
           {
@@ -718,7 +718,7 @@
         ]
       ]
     },
-    "跳过安装事件": {
+    "跳过 Umami 安装事件": {
       "main": [
         [
           {

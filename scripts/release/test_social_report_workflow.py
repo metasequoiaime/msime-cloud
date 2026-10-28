@@ -34,25 +34,25 @@ class SocialReportWorkflowTests(unittest.TestCase):
                     for connection in branch:
                         self.assertIn(connection["node"], self.nodes)
 
-    def test_queries_keep_utm_and_install_goal(self):
-        traffic = self.nodes["查询社交访问"]["parameters"]["jsonBody"]
-        installs = self.nodes["查询安装事件"]["parameters"]["jsonBody"]
-        self.assertIn("启用 Plausible 访问", self.nodes)
-        self.assertIn("跳过社交访问", self.nodes)
-        self.assertIn("启用 Plausible 安装", self.nodes)
-        self.assertIn("跳过安装事件", self.nodes)
-        self.assertIn("visit:utm_source", traffic)
-        self.assertIn("visit:utm_medium", traffic)
-        self.assertIn("visit:utm_campaign", traffic)
-        self.assertIn("visitors", traffic)
-        self.assertIn("visits", traffic)
-        self.assertIn("event:goal", installs)
-        self.assertIn("install_goal", installs)
+    def test_queries_keep_utm_and_install_event(self):
+        traffic = self.nodes["查询社交访问"]["parameters"]["url"]
+        installs = self.nodes["查询安装事件"]["parameters"]["url"]
+        self.assertIn("启用 Umami 访问", self.nodes)
+        self.assertIn("跳过 Umami 社交访问", self.nodes)
+        self.assertIn("启用 Umami 安装", self.nodes)
+        self.assertIn("跳过 Umami 安装事件", self.nodes)
+        self.assertIn("utmSource", traffic)
+        self.assertIn("utmMedium", traffic)
+        self.assertIn("utmCampaign", traffic)
+        self.assertIn("breakdown", traffic)
+        self.assertIn("startAt", traffic)
+        self.assertIn("/breakdown", installs)
+        self.assertIn("install_event", installs)
 
-    def test_github_reporting_does_not_require_plausible(self):
+    def test_github_reporting_does_not_require_umami(self):
         code = self.nodes["准备查询"]["parameters"]["jsCode"]
         self.assertIn("MSIME_GITHUB_TOKEN", code)
-        self.assertNotIn("MSIME_PLAUSIBLE_API_KEY", code)
+        self.assertNotIn("MSIME_UMAMI_API_KEY", code)
 
     def test_report_tracks_snapshot_and_platform_metrics(self):
         code = self.nodes["生成中文周报"]["parameters"]["jsCode"]

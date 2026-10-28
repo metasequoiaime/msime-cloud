@@ -72,12 +72,13 @@ curl --fail-with-body -X POST "$N8N_TEST_WEBHOOK_URL" \
 
 ## 每周效果周报
 
-仓库还提供了 [`ops/n8n/msime-social-report.json`](../ops/n8n/msime-social-report.json) 周报模板。它每周运行一次，查询 Plausible 的 `social` UTM 访问和安装事件，查询 GitHub 仓库的 Star、Fork 与最近 Release，然后生成中文周报并按开关发送到内部 Telegram 或 Discord。工作流默认未激活，导入后先手动执行一次，确认统计周期、平台名称和安装事件数量都正确，再启用它。
+仓库还提供了 [`ops/n8n/msime-social-report.json`](../ops/n8n/msime-social-report.json) 周报模板。它每周运行一次，查询 Plausible 的 `social` UTM 访问和安装事件，查询 GitHub 仓库的 Star、Fork 与最近 Release，然后生成中文周报并按开关发送到内部 Telegram 或 Discord。Plausible 是可选的；关闭时仍会生成 GitHub 增长和 Release 周报，只跳过官网流量查询。工作流默认未激活，导入后先手动执行一次，确认统计周期、平台名称和安装事件数量都正确，再启用它。
 
 周报使用以下 n8n 环境变量；令牌只放环境变量或 n8n Credentials，不要写入工作流 JSON：
 
 | 变量 | 作用 |
 | --- | --- |
+| `MSIME_PLAUSIBLE_ENABLED` | Plausible 查询开关，设为 `1` 才查询；未接入官网统计时保持关闭 |
 | `MSIME_PLAUSIBLE_API_KEY` | Plausible Stats API 的 Bearer API Key |
 | `MSIME_PLAUSIBLE_SITE_ID` | Plausible 中配置的站点 ID（通常是域名） |
 | `MSIME_PLAUSIBLE_INSTALL_GOAL` | 安装事件的 Plausible goal 名称，默认 `Install` |

@@ -23,7 +23,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const end = new Date();\nconst start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);\nconst repository = String($env.MSIME_GITHUB_REPOSITORY ?? '');\nconst siteId = String($env.MSIME_PLAUSIBLE_SITE_ID ?? '');\nif (!repository || !siteId || !$env.MSIME_PLAUSIBLE_API_KEY || !$env.MSIME_GITHUB_TOKEN) {\n  throw new Error('缺少周报所需的 Plausible 或 GitHub 配置');\n}\nconst date = (value) => value.toISOString().slice(0, 10);\nreturn [{json: {\n  period_start: date(start),\n  period_end: date(end),\n  repository,\n  site_id: siteId,\n  install_goal: String($env.MSIME_PLAUSIBLE_INSTALL_GOAL ?? 'Install')\n}}];"
+        "jsCode": "const end = new Date();\nconst start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);\nconst repository = String($env.MSIME_GITHUB_REPOSITORY ?? '');\nif (!repository || !$env.MSIME_GITHUB_TOKEN) {\n  throw new Error('缺少周报所需的 GitHub 配置');\n}\nconst date = (value) => value.toISOString().slice(0, 10);\nreturn [{json: {\n  period_start: date(start),\n  period_end: date(end),\n  repository,\n  site_id: String($env.MSIME_PLAUSIBLE_SITE_ID ?? ''),\n  install_goal: String($env.MSIME_PLAUSIBLE_INSTALL_GOAL ?? 'Install')\n}}];"
       },
       "id": "msime-report-02",
       "name": "准备查询",
@@ -377,6 +377,98 @@
         2160,
         120
       ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $env.MSIME_PLAUSIBLE_ENABLED }}",
+              "rightValue": "1",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "msime-report-19",
+      "name": "启用 Plausible 访问",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        480,
+        -360
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $env.MSIME_PLAUSIBLE_ENABLED }}",
+              "rightValue": "1",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "msime-report-20",
+      "name": "启用 Plausible 安装",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        480,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{json: {traffic: {results: []}, period: $('准备查询').first().json}}];"
+      },
+      "id": "msime-report-21",
+      "name": "跳过社交访问",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        -360
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{json: {installs: {results: []}, period: $('准备查询').first().json}}];"
+      },
+      "id": "msime-report-22",
+      "name": "跳过安装事件",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        -20
+      ]
     }
   ],
   "pinData": {},
@@ -396,12 +488,12 @@
       "main": [
         [
           {
-            "node": "查询社交访问",
+            "node": "启用 Plausible 访问",
             "type": "main",
             "index": 0
           },
           {
-            "node": "查询安装事件",
+            "node": "启用 Plausible 安装",
             "type": "main",
             "index": 0
           },
@@ -577,6 +669,64 @@
           }
         ],
         []
+      ]
+    },
+    "启用 Plausible 访问": {
+      "main": [
+        [
+          {
+            "node": "查询社交访问",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "跳过社交访问",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "启用 Plausible 安装": {
+      "main": [
+        [
+          {
+            "node": "查询安装事件",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "跳过安装事件",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "跳过社交访问": {
+      "main": [
+        [
+          {
+            "node": "整理访问数据",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "跳过安装事件": {
+      "main": [
+        [
+          {
+            "node": "整理安装数据",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     }
   },

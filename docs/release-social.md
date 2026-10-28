@@ -38,18 +38,23 @@ n8n 进程需要能够访问公网，并设置 `N8N_BLOCK_ENV_ACCESS_IN_NODE=fal
 | 变量 | 作用 |
 | --- | --- |
 | `MSIME_SOCIAL_WEBHOOK_SECRET` | 与 GitHub Secret `SOCIAL_WEBHOOK_SECRET` 相同 |
+| `MSIME_SOCIAL_SITE_URL` | 官网推广入口，默认 `https://msime.app/download/`；必须为无账号、查询参数或锚点的 HTTPS 地址 |
 | `MSIME_TELEGRAM_ENABLED`、`MSIME_TELEGRAM_BOT_TOKEN`、`MSIME_TELEGRAM_CHAT_ID` | Telegram 开关、Bot Token 和会话 ID |
 | `MSIME_DISCORD_ENABLED`、`MSIME_DISCORD_WEBHOOK_URL` | Discord 开关和 Webhook 地址 |
 | `MSIME_MASTODON_ENABLED`、`MSIME_MASTODON_INSTANCE`、`MSIME_MASTODON_ACCESS_TOKEN` | Mastodon 开关、实例地址和 `write:statuses` Token |
 | `MSIME_BLUESKY_ENABLED`、`MSIME_BLUESKY_IDENTIFIER`、`MSIME_BLUESKY_APP_PASSWORD` | Bluesky 开关、账号和 App Password |
-| `MSIME_X_ENABLED`、`MSIME_X_ACCESS_TOKEN` | X 开关和具有发帖权限的 OAuth 用户 Token |
+| `MSIME_X_ENABLED` | X 开关；发帖使用 n8n 中已授权的 `MSIME X OAuth2` 凭据 |
 | `MSIME_REDDIT_ENABLED`、`MSIME_REDDIT_ACCESS_TOKEN`、`MSIME_REDDIT_SUBREDDIT`、`MSIME_REDDIT_USER_AGENT` | Reddit 开关、带 `submit` 权限的 OAuth Token、目标 subreddit 和描述性 User-Agent |
 
-开关取值为 `1` 才会发帖。未配置的分支不会运行，单个平台失败也不会阻止其他分支。Reddit Token 和 X Token 可能过期，建议后续增加独立的 OAuth 刷新工作流；不要把长期凭据放进 GitHub Actions。
+开关取值为 `1` 才会发帖。未配置的分支不会运行，单个平台失败也不会阻止其他分支。X 使用 n8n OAuth2 凭据自动刷新，Reddit 仍直接使用环境变量中的用户 Token，启用持续发布前需补齐它的刷新接线。不要把长期凭据放进 GitHub Actions。
+
+X 应用从[开发者控制台](https://console.x.com/)申请。使用 OAuth 2.0 用户授权申请 `tweet.read`、`tweet.write`、`users.read` 和 `offline.access`，保存 Client ID 与 Client Secret，后续再完成账号授权和刷新令牌接线；App-only Bearer Token 不能用于发帖。授权流程与有效期见 [X 官方说明](https://docs.x.com/fundamentals/authentication/oauth-2-0/authorization-code)，发帖费用以[当前官方价格](https://docs.x.com/x-api/getting-started/pricing)为准。模板的「发送 X」节点使用 Generic Credential Type → OAuth2 API，引用 ID 为 `msimeXOAuth2`、名称为 `MSIME X OAuth2` 的凭据。在 n8n 创建该凭据时，Grant Type 选 PKCE，Authorization URL 为 `https://x.com/i/oauth2/authorize`，Access Token URL 为 `https://api.x.com/2/oauth2/token`，Authentication 选 Header，Scope 为上述四项；点击 Connect my account 完成用户授权。仅保存 Client ID/Secret 不代表已授权。HTTP Request 节点通过 n8n 管理用户 Access Token 与 Refresh Token，不再读取 `MSIME_X_ACCESS_TOKEN`。其他实例导入时应在该节点重新选择自己的凭据，不要照搬生产凭据数据。
+
+Reddit 的外部 n8n 集成需提交 [Data API 访问申请](https://support.reddithelp.com/hc/en-us/requests/new?ticket_form_id=14868593862164)并获得审批。用途应如实描述为低频的项目版本公告，列出账号、目标 subreddit、项目链接及使用外部 n8n 的原因；Devvit 登录不会直接提供外部 API 凭据，见 [Reddit 官方 FAQ](https://developers.reddit.com/docs/guides/faq)。获批后再配置 OAuth 应用、`submit` 权限及令牌刷新，且只发布到允许此类公告的社区。Client Secret 和用户令牌存入 Vault，不要粘贴到 PR 或聊天中。
 
 工作流使用 Webhook 的 Raw Body 验证 `X-MSIME-Signature`，再生成不同长度的文案：Telegram 4096 字符、Discord 2000 字符、Mastodon 500 字符、Bluesky 300 字符、X 280 字符。Reddit 发布链接帖，正文在 Release 页面保留。
 
-每个平台的 Release 链接会带独立的 UTM 参数：`utm_source=<channel>`、`utm_medium=social`、`utm_campaign=<idempotency_key>`。官网或下载页的分析工具应保留这些参数，并按 `utm_source` 比较点击、安装和后续 star；不要只比较各平台的发帖成功数。
+每个平台的主推广链接指向官网，带独立的 `utm_source=<channel>`、`utm_medium=social` 和 `utm_campaign`。活动名称由版本标签与幂等键的 SHA-256 短摘要组成，只使用官网采集白名单允许的字符；完整幂等键仍用于去重，不变更历史发布记录。Telegram、Discord 和 Reddit 的长文另保留原始 Release 更新说明链接。文案先为完整链接预留长度，再截断更新内容，避免长说明切断推广入口。直接跳到 GitHub 的访问无法计入官网 Umami，不能据此比较官网转化。
 
 ### 测试请求
 
@@ -72,7 +77,7 @@ curl --fail-with-body -X POST "$N8N_TEST_WEBHOOK_URL" \
 
 ## 每周效果周报
 
-仓库还提供了 [`ops/n8n/msime-social-report.json`](../ops/n8n/msime-social-report.json) 周报模板。它每周运行一次，查询自托管 Umami 的 `social` UTM 访问和安装事件，查询 GitHub 仓库的 Star、Fork 与最近 Release，然后生成中文周报并按开关发送到内部 Telegram 或 Discord。Umami 是可选的；关闭时仍会生成 GitHub 增长和 Release 周报，只跳过官网流量查询。工作流默认未激活，导入后先手动执行一次，确认统计周期、平台名称和安装事件数量都正确，再启用它。
+仓库还提供了 [`ops/n8n/msime-social-report.json`](../ops/n8n/msime-social-report.json) 周报模板。它每周运行一次，查询自托管 Umami 的 `social` UTM 访问、`Download` 下载点击和可选安装事件，查询 GitHub 仓库的 Star、Fork 与最近 Release，然后生成中文周报并按开关发送到内部 Telegram 或 Discord。Umami 是可选的；关闭时仍会生成 GitHub 增长和 Release 周报，只跳过官网流量查询。工作流默认未激活，导入后先手动执行一次，确认统计周期、平台名称、下载点击数量和安装接入状态都正确，再启用它。
 
 周报使用以下 n8n 环境变量；令牌只放环境变量或 n8n Credentials，不要写入工作流 JSON：
 
@@ -82,12 +87,17 @@ curl --fail-with-body -X POST "$N8N_TEST_WEBHOOK_URL" \
 | `MSIME_UMAMI_BASE_URL` | 自托管 Umami 地址，例如 `http://umami.umami.svc.cluster.local:3000` |
 | `MSIME_UMAMI_API_KEY` | Umami Settings → API keys 创建的 Bearer API key |
 | `MSIME_UMAMI_WEBSITE_ID` | Umami Website 的 ID |
-| `MSIME_UMAMI_INSTALL_EVENT` | 安装自定义事件名称，默认 `Install` |
+| `MSIME_UMAMI_INSTALL_ENABLED` | 真实安装信号已接入后设为 `1`，默认关闭；关闭时显示“安装数据尚未接入” |
+| `MSIME_UMAMI_INSTALL_EVENT` | 真实安装自定义事件名称，默认 `Install`；不应配置成 `Download` |
 | `MSIME_GITHUB_REPOSITORY` | GitHub 仓库，例如 `metasequoiaime/msime-cloud` |
 | `MSIME_GITHUB_TOKEN` | 读取仓库和 Release 的 GitHub Token，只需 `Metadata: read` |
 | `MSIME_REPORT_TELEGRAM_ENABLED`、`MSIME_REPORT_TELEGRAM_BOT_TOKEN`、`MSIME_REPORT_TELEGRAM_CHAT_ID` | Telegram 周报开关、Bot Token 和内部群组 ID |
 | `MSIME_REPORT_DISCORD_ENABLED`、`MSIME_REPORT_DISCORD_WEBHOOK_URL` | Discord 周报开关和内部 Webhook 地址 |
 
-Umami Website 需要保留 `utm_source`、`utm_medium`、`utm_campaign`，并在下载或安装成功时触发与 `MSIME_UMAMI_INSTALL_EVENT` 同名的自定义事件。工作流通过 Umami `/api/websites/{id}/breakdown` 按 `utmSource` 分组，`fields` 使用 URL 编码后的 JSON 数组，过滤 `utmMedium=social`。只按来源分组可以避免把跨版本活动的同一访客重复累加。随后对本周期出现过访问的每个来源调用 `/api/websites/{id}/events/stats`，按 `event`、`utmSource` 和 `utmMedium=social` 查询安装事件数量；`breakdown` 只统计页面浏览，不能用于统计安装事件。`utmCampaign` 保留在 Umami 原始记录中，可以在管理界面下钻具体版本。没有访问来源时查询全体社交安装事件，有事件则显示为 `unknown`；本周期仅有安装、没有页面浏览的来源可能不在分平台结果中。GitHub Star 和 Fork 只能得到仓库总量，工作流用 n8n 静态数据保存上一次成功查询的快照，周报中的 Star/Fork 变化是仓库整体变化，不能归因到单个平台。第一次运行显示“首次记录”。
+Umami Website 需要保留 `utm_source`、`utm_medium`、`utm_campaign`。官网已通过 `Download` 记录下载按钮点击，它不代表文件下载完成或应用安装；真实客户端安装信号尚未接入，默认不查询 `Install`，也不显示“零安装”。完成可靠安装信号接入后，才打开 `MSIME_UMAMI_INSTALL_ENABLED`。不要把下载点击改名为安装事件。
+
+工作流通过 Umami `/api/websites/{id}/breakdown` 按 `utmSource` 分组，`fields` 使用 URL 编码后的 JSON 数组，过滤 `utmMedium=social`。只按来源分组可以避免把跨版本活动的同一访客重复累加。随后对本周期出现过访问的每个来源调用 `/api/websites/{id}/events/stats`，按 `event=Download`、`utmSource` 和 `utmMedium=social` 查询下载点击；安装启用时另查配置的安装事件。`breakdown` 只统计页面浏览，不能用于统计自定义事件。查询失败或响应缺少事件计数时标记数据不可用，不伪装成零点击。`utmCampaign` 保留在 Umami 原始记录中，可以在管理界面下钻具体版本。没有访问来源时查询全体社交事件，有事件则显示为 `unknown`；本周期仅有事件、没有页面浏览的来源可能不在分平台结果中。
+
+GitHub Star 和 Fork 只能得到仓库总量，工作流用 n8n 静态数据保存上一次成功查询的快照，变化标为“较上次快照”，不能归因到单个平台，也不保证间隔恰好七天。第一次运行显示“首次记录”，GitHub 查询失败则显示不可用，不生成零 Star 或虚假的负增长。Release 列表使用精确时间戳过滤最近七天，不把起始日之前的发布算进本周期。
 
 统计周期按 n8n 所在机器的 UTC 时间计算最近七天。工作流只保留上一份 Star/Fork 快照，不保存 Umami 明细或 GitHub 响应；HTTP 查询保留完整响应，使空数组仍能继续执行，Release 数组也不会被拆成多份重复周报。查询失败会在周报末尾标记数据不可用。发送节点开启失败继续执行，因此 Telegram 故障不会阻止 Discord 周报。队列模式下应确认 n8n 静态数据由同一个主进程持久化，否则请把快照迁移到 Data Table 或 PostgreSQL。

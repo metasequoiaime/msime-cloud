@@ -116,14 +116,19 @@ func saveAdminSkin(ctx context.Context, tx pgx.Tx, id string, input contentEdit,
 	if err != nil {
 		return err
 	}
+	photoHash, err := communityDesignPhotoHash(design)
+	if err != nil {
+		return err
+	}
+	// 来源与用户发布一样按照片判定；修改只会在新照片匹配到插画时把来源抬成 ai，其余情况保留原值，需要改判时用 set_skin_origin。
 	if create {
-		tag, err := tx.Exec(ctx, `INSERT INTO community_skins(id,owner_id,name,description,design,category) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO NOTHING`, id, input.OwnerID, input.Name, input.Description, raw, input.Category)
+		tag, err := tx.Exec(ctx, `INSERT INTO community_skins(id,owner_id,name,description,design,category,origin) VALUES($1,$2,$3,$4,$5,$6,`+skinPublishOriginSQL("false", "$7")+`) ON CONFLICT(id) DO NOTHING`, id, input.OwnerID, input.Name, input.Description, raw, input.Category, photoHash)
 		if err == nil && tag.RowsAffected() == 0 {
 			return actionFail(409, "skin_id_conflict")
 		}
 		return err
 	}
-	_, err = tx.Exec(ctx, `UPDATE community_skins SET name=$2,description=$3,design=$4,category=$5 WHERE id=$1`, id, input.Name, input.Description, raw, input.Category)
+	_, err = tx.Exec(ctx, `UPDATE community_skins SET name=$2,description=$3,design=$4,category=$5,origin=CASE WHEN `+skinArtworkMatchSQL("$6")+` THEN 'ai' ELSE origin END WHERE id=$1`, id, input.Name, input.Description, raw, input.Category, photoHash)
 	return err
 }
 

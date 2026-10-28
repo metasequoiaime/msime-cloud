@@ -140,12 +140,19 @@ type CommunitySkin struct {
 	Saves *int  `json:"saves,omitempty"`
 	saved bool
 	saves int
+	// Origin 是作品来源（unknown、user 或 ai，见 skinOrigins），只在请求带 `fields=origin` 时出现，客户端据此显示「AI 生成」标签。
+	Origin string `json:"origin,omitempty"`
+	origin string
 }
 
-// communitySkinItem 按客户端的声明裁剪条目：没有 fields=moderation 时去掉审核状态，没有 fields=saved 时去掉收藏状态，没有 include=category 时去掉分类，未声明的响应因此与加入这些字段之前逐字节相同。
+// communitySkinItem 按客户端的声明裁剪条目：没有 fields=moderation 时去掉审核状态，没有 fields=saved 时去掉收藏状态，没有 fields=origin 时去掉来源，没有 include=category 时去掉分类，未声明的响应因此与加入这些字段之前逐字节相同。
 func communitySkinItem(v CommunitySkin, fields map[string]bool, category bool) CommunitySkin {
 	v.Moderation = ownerModeration(fields, v.moderation)
 	v.Saved, v.Saves = communitySavedFields(fields, v.saved, v.saves)
+	v.Origin = ""
+	if fields["origin"] {
+		v.Origin = v.origin
+	}
 	if !category {
 		v.Category = ""
 	}
@@ -302,7 +309,7 @@ const communitySkinSelectBase = `SELECT s.id,s.name,s.description,
 const communitySkinSelectStats = `,
  (SELECT count(*) FROM community_skin_downloads WHERE skin_id=s.id),
  rating_stats.count,rating_stats.average,s.owner_id=$1,rating_stats.mine,
- CASE WHEN s.owner_id=$1 THEN s.moderation ELSE '' END,s.category,`
+ CASE WHEN s.owner_id=$1 THEN s.moderation ELSE '' END,s.category,s.origin,`
 
 // communitySkinSelect 只有客户端声明 fields=saved 时才计算收藏总数和当前用户的收藏状态；默认目录不需要这两个逐行子查询。
 func communitySkinSelect(saved bool) string {
@@ -363,7 +370,7 @@ func buildCommunitySkinSelectQuery(saved, page bool) string {
 
 func scanSkin(row interface{ Scan(...any) error }) (CommunitySkin, error) {
 	var s CommunitySkin
-	err := row.Scan(&s.ID, &s.Name, &s.Description, &s.Author, &s.Design, &s.Downloads, &s.RatingCount, &s.RatingAverage, &s.Owned, &s.MyRating, &s.moderation, &s.Category, &s.saves, &s.saved)
+	err := row.Scan(&s.ID, &s.Name, &s.Description, &s.Author, &s.Design, &s.Downloads, &s.RatingCount, &s.RatingAverage, &s.Owned, &s.MyRating, &s.moderation, &s.Category, &s.origin, &s.saves, &s.saved)
 	return s, err
 }
 
@@ -382,7 +389,7 @@ func (a *Service) communityList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, code)
 		return
 	}
-	scope, fields, code := communityListOptions(query, communityCatalogFields)
+	scope, fields, code := communityListOptions(query, communitySkinFields)
 	if code != "" {
 		writeError(w, 400, code)
 		return
@@ -390,6 +397,10 @@ func (a *Service) communityList(w http.ResponseWriter, r *http.Request) {
 	category, withCategory, code := communitySkinListCategory(query)
 	if code != "" {
 		writeError(w, 400, code)
+		return
+	}
+	excludeAI, ok := communitySkinOriginOptions(w, query, fields)
+	if !ok {
 		return
 	}
 	viewer, ok := a.communityListViewer(w, r, scope, "user_session_required")
@@ -404,7 +415,7 @@ func (a *Service) communityList(w http.ResponseWriter, r *http.Request) {
 	}
 	listQuery := `WITH skin_page AS MATERIALIZED (
  SELECT s.id FROM community_skins s JOIN auth_users u ON u.id=s.owner_id ` + join + `
- WHERE strpos(lower(s.name),lower($2))>0 AND (` + communityMineCondition(scope, "s", "$4") + `) AND (s.moderation<>'removed' OR s.owner_id=$1) AND (` + categoryCondition + `)
+ WHERE strpos(lower(s.name),lower($2))>0 AND (` + communityMineCondition(scope, "s", "$4") + `) AND (s.moderation<>'removed' OR s.owner_id=$1) AND (` + categoryCondition + `)` + communitySkinOriginFilter(excludeAI, "s") + `
  ORDER BY ` + order + ` LIMIT 21 OFFSET $3
 ) ` + communitySkinSelectQuery(fields["saved"], true) + join + ` ORDER BY ` + order
 	args := []any{viewer, search, offset, scope, category}
@@ -433,7 +444,7 @@ func (a *Service) communityList(w http.ResponseWriter, r *http.Request) {
 }
 func (a *Service) communityDetail(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
-	fields, ok := communityCatalogFields(query)
+	fields, ok := communitySkinFields(query)
 	if !ok {
 		writeError(w, 400, "invalid_fields")
 		return
@@ -443,11 +454,15 @@ func (a *Service) communityDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_include")
 		return
 	}
-	a.writeCommunitySkin(w, r, a.communityViewer(r), fields, withCategory)
+	excludeAI, ok := communitySkinOriginOptions(w, query, fields)
+	if !ok {
+		return
+	}
+	a.writeCommunitySkin(w, r, a.communityViewer(r), fields, withCategory, excludeAI)
 }
 
-// writeCommunitySkin 以详情接口的形状写出 viewer 看到的 {id} 作品（含完整 design），详情和作者修改分类的 PATCH 共用。
-func (a *Service) writeCommunitySkin(w http.ResponseWriter, r *http.Request, viewer string, fields map[string]bool, withCategory bool) {
+// writeCommunitySkin 以详情接口的形状写出 viewer 看到的 {id} 作品（含完整 design）。excludeAI 时被 `exclude=ai` 排除的作品与不存在一样返回 404。
+func (a *Service) writeCommunitySkin(w http.ResponseWriter, r *http.Request, viewer string, fields map[string]bool, withCategory, excludeAI bool) {
 	tx, e := a.store.communityItemReadTransaction(r.Context(), "community_skins", r.PathValue("id"))
 	if errors.Is(e, pgx.ErrNoRows) {
 		writeError(w, 404, "skin_not_found")
@@ -458,7 +473,7 @@ func (a *Service) writeCommunitySkin(w http.ResponseWriter, r *http.Request, vie
 		return
 	}
 	defer tx.Rollback(r.Context())
-	v, e := scanSkin(tx.QueryRow(r.Context(), communitySkinSelect(fields["saved"])+`WHERE s.id=$2 AND (s.moderation<>'removed' OR s.owner_id=$1)`, viewer, r.PathValue("id")))
+	v, e := scanSkin(tx.QueryRow(r.Context(), communitySkinSelect(fields["saved"])+`WHERE s.id=$2 AND (s.moderation<>'removed' OR s.owner_id=$1)`+communitySkinOriginFilter(excludeAI, "s"), viewer, r.PathValue("id")))
 	if errors.Is(e, pgx.ErrNoRows) {
 		writeError(w, 404, "skin_not_found")
 		return
@@ -490,6 +505,8 @@ func (a *Service) communityPublish(w http.ResponseWriter, r *http.Request) {
 		Design      json.RawMessage `json:"design"`
 		// 缺省（或 null）为 other。分类不参与下面的重试比较：同一内容的重试无论带什么分类都返回已存的作品，之后改分类走 PATCH。
 		Category *string `json:"category"`
+		// 缺省（或 null）由服务端按照片判定；只接受 ai，表示客户端知道这款皮肤是 AI 生成的（例如照片压缩失败被丢掉、或只有文字和配色由 AI 生成）。客户端不能把来源往下改。与分类一样不参与重试比较。
+		Origin *string `json:"origin"`
 	}
 	if !readSized(w, r, &input, 710000) {
 		return
@@ -499,6 +516,11 @@ func (a *Service) communityPublish(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_category")
 		return
 	}
+	if input.Origin != nil && *input.Origin != skinOriginAI {
+		writeError(w, 400, "invalid_skin_origin")
+		return
+	}
+	declaredAI := input.Origin != nil
 	input.ID = strings.ToLower(input.ID)
 	input.Name = strings.TrimSpace(input.Name)
 	input.Description = strings.TrimSpace(input.Description)
@@ -512,6 +534,11 @@ func (a *Service) communityPublish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	raw, e := json.Marshal(design)
+	if e != nil {
+		a.error(w, e)
+		return
+	}
+	photoHash, e := communityDesignPhotoHash(design)
 	if e != nil {
 		a.error(w, e)
 		return
@@ -551,14 +578,14 @@ func (a *Service) communityPublish(w http.ResponseWriter, r *http.Request) {
 ), quota AS MATERIALIZED (
  SELECT count(*)<50 AS available FROM community_skins WHERE owner_id=$2
 ), inserted AS (
- INSERT INTO community_skins(id,owner_id,name,description,design,moderation,moderation_reason,category)
- SELECT $1,$2,$3,$4,$5,'pending',$6,$7 FROM quota
+ INSERT INTO community_skins(id,owner_id,name,description,design,moderation,moderation_reason,category,origin)
+ SELECT $1,$2,$3,$4,$5,'pending',$6,$7,`+skinPublishOriginSQL("$8", "$9")+` FROM quota
  WHERE NOT EXISTS(SELECT 1 FROM existing) AND available
  ON CONFLICT(id) DO NOTHING
  RETURNING id
 )
 SELECT COALESCE((SELECT owner_id FROM existing),''),COALESCE((SELECT identical FROM existing),false),
- EXISTS(SELECT 1 FROM existing),(SELECT available FROM quota),EXISTS(SELECT 1 FROM inserted)`, input.ID, p.UserID, input.Name, input.Description, raw, flag, category).Scan(&existingOwner, &identical, &exists, &withinCount, &inserted); e != nil {
+ EXISTS(SELECT 1 FROM existing),(SELECT available FROM quota),EXISTS(SELECT 1 FROM inserted)`, input.ID, p.UserID, input.Name, input.Description, raw, flag, category, declaredAI, photoHash).Scan(&existingOwner, &identical, &exists, &withinCount, &inserted); e != nil {
 		a.error(w, e)
 		return
 	}
@@ -699,6 +726,11 @@ func (a *Service) communityDownload(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// 下载只认 `exclude=`，不认 `fields=`；声明后被排除的作品与不存在一样返回 404。
+	excludeAI, ok := communitySkinOriginOptions(w, r.URL.Query(), nil)
+	if !ok {
+		return
+	}
 	tx, e := a.store.userDataTransaction(r.Context(), p.UserID)
 	if e != nil {
 		a.error(w, e)
@@ -707,7 +739,7 @@ func (a *Service) communityDownload(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(r.Context())
 	var design json.RawMessage
 	batch := &pgx.Batch{}
-	batch.Queue(`SELECT design FROM community_skins WHERE id=$1 AND (moderation<>'removed' OR owner_id=$2) FOR SHARE`, r.PathValue("id"), p.UserID).QueryRow(func(row pgx.Row) error {
+	batch.Queue(`SELECT s.design FROM community_skins s WHERE s.id=$1 AND (s.moderation<>'removed' OR s.owner_id=$2)`+communitySkinOriginFilter(excludeAI, "s")+` FOR SHARE`, r.PathValue("id"), p.UserID).QueryRow(func(row pgx.Row) error {
 		return row.Scan(&design)
 	})
 	batch.Queue(`INSERT INTO community_skin_downloads(skin_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, r.PathValue("id"), p.UserID)

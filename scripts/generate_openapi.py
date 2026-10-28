@@ -274,10 +274,14 @@ screening_responses = {'422':{'description':'名称、描述或内容命中拦�
 candidate_categories=['nature','guofeng','acg','cute','food','tech','minimal','other']
 candidate_category=string(enum=candidate_categories,description='图库分类：nature 自然、guofeng 国风、acg 二次元、cute 可爱、food 美食、tech 科技夜色、minimal 简约、other 其他。')
 category_include_param={'name':'include','in':'query','schema':string(enum=['','category'],default=''),'description':'category 表示每个条目带上 category 字段；不带时响应与引入分类之前逐字节相同。其他值返回 400 invalid_include。'}
-community_skin = obj({'id':string(),'name':string(),'description':string(),'author':string(),'design':community_design,'downloads':{'type':'integer'},'rating_count':{'type':'integer'},'rating_average':{'type':'number'},'owned':{'type':'boolean'},'my_rating':{'type':'integer'},'moderation':moderation_field,'category':dict(candidate_category,description=candidate_category['description']+'仅在请求带 include=category 时出现；已发布客户端拒绝未知字段。'),**saved_fields})
+# 键盘皮肤的来源标记：fields=origin 时出现，exclude=ai 时服务端在分页前过滤；两者都只对声明的请求生效，并以 X-MSIME-Skin-Origin 响应头告知客户端过滤已生效。
+skin_origin_field = string(enum=['unknown','user','ai'],description='作品来源：ai 为照片匹配到本服务生成过的插画或发布时声明 AI 生成，user 为其他新发布的作品，unknown 为引入来源标记之前带照片的作品和滚动升级期间旧副本写入的作品（来源推不出来）。仅在请求带 fields=origin 时出现；已发布客户端拒绝未知字段。')
+community_skin_fields_param = {'name':'fields','in':'query','schema':string(enum=['','moderation','saved','origin','moderation,saved','moderation,origin','saved,origin','moderation,saved,origin'],default=''),'description':'逗号分隔：moderation 表示在自己的作品上接收 moderation 审核状态；saved 表示每个条目带上 saved 与 saves；origin 表示每个条目带上 origin 来源，响应带 X-MSIME-Skin-Origin: v1。其他值返回 400 invalid_fields。不带此参数时响应与以前逐字节相同。'}
+skin_exclude_param = {'name':'exclude','in':'query','schema':string(enum=['','ai'],default=''),'description':'ai 表示只留下 origin 为 user 的作品，排除 ai 和来源推不出来的 unknown（可能是 AI 插画）；列表在分页前过滤，作者自己的作品和收藏同样过滤，详情和下载对被排除的作品返回 404 skin_not_found。支持的副本在响应上带 X-MSIME-Skin-Origin: v1；旧副本忽略此参数，没有这个响应头时客户端不能认为过滤已生效。其他值返回 400 invalid_exclude。'}
+community_skin = obj({'id':string(),'name':string(),'description':string(),'author':string(),'design':community_design,'downloads':{'type':'integer'},'rating_count':{'type':'integer'},'rating_average':{'type':'number'},'owned':{'type':'boolean'},'my_rating':{'type':'integer'},'moderation':moderation_field,'category':dict(candidate_category,description=candidate_category['description']+'仅在请求带 include=category 时出现；已发布客户端拒绝未知字段。'),**saved_fields,'origin':skin_origin_field})
 for path,method,title,body,response,status in [
  ('/v1/community/skins','get','浏览用户皮肤',None,obj({'skins':{'type':'array','items':community_skin},'has_more':{'type':'boolean'}}),'200'),
- ('/v1/community/skins','post','发布用户皮肤',obj({'id':string(format='uuid'),'name':string(maxLength=32),'description':string(maxLength=280),'design':community_design,'category':dict(candidate_category,description=candidate_category['description']+'缺省（或 null）为 other，未知值或空串返回 400 invalid_category；不参与重试比较，同一内容换分类重试仍返回 200 且保留已存的分类。滚动升级期间旧版本副本会以 400 invalid_json 拒绝该键。')},['id','name','description','design'],True),obj({'id':string()}),'201'),
+ ('/v1/community/skins','post','发布用户皮肤',obj({'id':string(format='uuid'),'name':string(maxLength=32),'description':string(maxLength=280),'design':community_design,'category':dict(candidate_category,description=candidate_category['description']+'缺省（或 null）为 other，未知值或空串返回 400 invalid_category；不参与重试比较，同一内容换分类重试仍返回 200 且保留已存的分类。滚动升级期间旧版本副本会以 400 invalid_json 拒绝该键。'),'origin':string(enum=['ai'],nullable=True,description='缺省（或 null）由服务端判定：照片匹配到本服务生成过的插画时为 ai，否则为 user。ai 表示客户端知道这款皮肤是 AI 生成的，只能把来源往上抬；其他值返回 400 invalid_skin_origin。不参与重试比较。滚动升级期间旧版本副本会以 400 invalid_json 拒绝该键。')},['id','name','description','design'],True),obj({'id':string()}),'201'),
  ('/v1/community/skins/{id}','get','用户皮肤详情',None,community_skin,'200'),
  ('/v1/community/skins/{id}','patch','作者修改皮肤分类',obj({'category':candidate_category},['category'],True),community_skin,'200'),
  ('/v1/community/skins/{id}','delete','作者下架皮肤',None,obj({'deleted':{'type':'boolean'}}),'200'),
@@ -288,7 +292,8 @@ for path,method,title,body,response,status in [
     parameters=[]
     if '{id}' in path: parameters.append({'name':'id','in':'path','required':True,'schema':string(format='uuid')})
     elif method=='get': parameters=[{'name':'q','in':'query','schema':string(maxLength=128)},{'name':'offset','in':'query','schema':{'type':'integer','minimum':0,'maximum':100000,'default':0}},community_scope_param]
-    if method=='get' and path in ('/v1/community/skins','/v1/community/skins/{id}'): parameters.append(community_fields_param)
+    if method=='get' and path in ('/v1/community/skins','/v1/community/skins/{id}'): parameters += [community_skin_fields_param,skin_exclude_param]
+    if method=='post' and path=='/v1/community/skins/{id}/download': parameters.append(skin_exclude_param)
     if method=='patch' and path=='/v1/community/skins/{id}': parameters.append(moderation_param)
     if method=='get' and path=='/v1/community/skins': parameters.append({'name':'category','in':'query','schema':string(enum=candidate_categories),'description':'只列出该图库分类的作品；未知分类返回 400 invalid_category。'})
     if response is community_skin or method=='get' and path=='/v1/community/skins': parameters.append(category_include_param)

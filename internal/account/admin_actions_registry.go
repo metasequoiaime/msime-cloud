@@ -77,6 +77,7 @@ var adminActions = map[string]adminActionSpec{
 	"restore_content":             {PermReviewCommunity, moderationWithUndo(actionRestoreContent)},
 	"set_skin_category":           {PermReviewCommunity, actionSetSkinCategory},
 	"set_candidate_skin_category": {PermReviewCommunity, actionSetCandidateSkinCategory},
+	"set_skin_origin":             {PermReviewCommunity, actionSetSkinOrigin},
 	// U4 sensitive words: sensitive_words.go
 	"add_sensitive_word":       {PermReviewCommunity, actionAddSensitiveWord},
 	"set_sensitive_word_level": {PermReviewCommunity, actionSetSensitiveWordLevel},

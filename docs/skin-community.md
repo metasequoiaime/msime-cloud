@@ -33,6 +33,19 @@
 
 加入分类的版本在启动时给 `community_skins` 增加 `category text NOT NULL DEFAULT 'other'`（已有行为 `other`，PostgreSQL 11 起带常量默认值的加列不重写表）、命名约束 `community_skins_category_check` 和服务按分类筛选的索引 `community_skins_category_newest (category, created_at DESC, id)`，重复执行不会改变任何东西；启动探测会检查这一列，缺列时自动执行迁移。没有新表，所以不需要新的授权：按最小权限部署时只需在上线前用迁移账号执行新版本的 `-migrate-users`，运行角色对这张表已有的 SELECT/INSERT/UPDATE/DELETE 覆盖新列。旧二进制插入的行取默认值 `other`，回滚不需要处理这一列。
 
+### 键盘皮肤来源（AI 生成标记）
+
+每款社区键盘皮肤都有来源 `origin`，取值为 `ai`、`user` 或 `unknown`。它用来给 AI 生成的作品加标识，并让不能展示 AI 生成内容的客户端（目前是鸿蒙版）把它们过滤掉。
+
+- **判定**：生成 AI 插画的接口（`POST /v1/skins/generate` 和 `/v1/skins/jobs` 的任务，两者走同一段代码）在交付插画之前，先把插画的 64 位 dHash 写进 `skin_artwork_fingerprints`；写不进去就返回 503 `auth_unavailable`，不交付插画，避免它不带标记地进入社区。发布时服务端对重新编码后的照片算 dHash，与指纹表中任意一条的汉明距离不超过 8 就记为 `ai`，否则记为 `user`；没有照片时记为 `user`。客户端只缩放插画、转成 JPEG，服务端再按 q80 重新编码，这些处理只让少数几位翻转，两张无关图片的距离通常在 20 以上。指纹不关联账号（用户可能用匿名账号生成、换正式账号发布），也不能还原出图片，长期保留，不随账号注销删除。
+- **客户端声明**：发布请求体可以带 `"origin":"ai"`，表示客户端知道这款皮肤是 AI 生成的（照片压不下去被丢掉，或只有名字、描述和配色由 AI 生成）。只能把来源往上抬：缺省或 `null` 由服务端判定，其他值返回 400 `invalid_skin_origin`。来源和分类一样不参与发布重试的比较。滚动升级期间旧副本会以 400 `invalid_json` 拒绝这个键，所以客户端要等所有副本升级后再发送。
+- **存量回填与 unknown**：加列的那次迁移按发布时的同一条规则回填已有作品，没有照片的记为 `user`。带照片的存量作品推不出来源（插画任务 10 分钟后就被清理，社区照片也重新编码过），保持 `unknown`；滚动升级期间旧副本写入的作品同样取默认值 `unknown`。回填只在加列时执行一次，之后重跑迁移不改动来源。审核员可以在管理后台用 `set_skin_origin` 人工改判（见 [管理后台](admin.md)）。管理后台新建的皮肤同样按照片判定；修改设计时只有新照片匹配到插画才把来源抬成 `ai`，其余情况保留原值。
+- **读取来源**：列表和详情的 `fields=` 多认一个 `origin`，带上后每个条目多一个 `"origin":"ai"|"user"|"unknown"`，客户端据此显示「AI 生成」标签。不带时响应与引入来源标记之前逐字节相同。插件接口的 `fields=` 不认 `origin`。
+- **排除 AI 生成**：列表、详情和下载（`POST …/{id}/download`）接受 `exclude=ai`，只留下 `origin` 为 `user` 的作品：`ai` 是 AI 生成的作品，`unknown` 可能是 AI 插画，宁可不显示。过滤只比较来源列，不读 design，不会为判断有没有照片把每行的大照片从 TOAST 里取出来。列表在分页之前过滤，每页不会变短，`scope=mine` 和 `scope=saved` 同样过滤；详情和下载对被排除的作品返回 404 `skin_not_found`，与作品不存在相同。`exclude` 只接受空值和 `ai`，其他值返回 400 `invalid_exclude`。
+- **能力头**：请求带了 `exclude=ai` 或 `fields=origin` 时，响应带 `X-MSIME-Skin-Origin: v1`（也写进 `Access-Control-Expose-Headers`）。旧副本会忽略这两个参数并照常返回 200，所以依赖过滤的客户端必须检查这个头，没有这个头就当作社区暂时不可用，不能显示返回的条目。客户端不报自己的平台（社区请求的 User-Agent 不区分平台），所以过滤只能由客户端在请求里声明，服务端不按平台默认过滤，其他平台已发布的客户端看到的列表不变。
+
+加入来源的版本在启动时给 `community_skins` 增加 `origin text NOT NULL DEFAULT 'unknown'`（PostgreSQL 11 起带常量默认值的加列不重写表）和命名约束 `community_skins_origin_check`，加列时一次性回填没有照片的已有作品为 `user`（这一步要读每一行的 design，作品多时宜在低峰期执行），并新建表 `skin_artwork_fingerprints(hash bigint PRIMARY KEY, created_at timestamptz)`；重复执行不会改变任何东西，启动探测会检查这一列和这张表，缺任何一个时自动执行迁移。按最小权限部署时，上线前用迁移账号执行新版本的 `-migrate-users`，并给运行角色授予新表的权限：`GRANT SELECT, INSERT, UPDATE, DELETE ON skin_artwork_fingerprints TO msime_backend;`（配置了 default privileges 时自动获得）。汉明距离用 `bit(64)` 的文本数 1，兼容 PostgreSQL 12；指纹表每次发布整表比较一次，每行约 40 字节，按每个账号每天最多 10 张插画估算，增长很慢，不需要索引。回滚时旧二进制不读这一列和这张表，插入的行取默认值 `unknown`。
+
 ## 账号与 K8s
 
 复用现有 PostgreSQL 用户体系。配置 `auth.apple.client_ids: ["app.msime.ios"]`；Apple Developer 中为相同 App ID 启用 Sign in with Apple，并重新生成包含该 entitlement 的签名配置。客户端不包含设备共享令牌或 Apple 私钥。Apple nonce 来自后端挑战，ID Token 校验继续使用现有 issuer/audience/signature/nonce 校验。

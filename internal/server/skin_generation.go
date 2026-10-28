@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -78,10 +79,18 @@ func (s *Server) generateSkinArtwork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 尺寸和 JPEG 扫描数通过后再完整解码，避免把只有有效文件头的损坏图片当作成功插画。
-	_, cfg, format, valid := account.DecodePNGJPEG(data, 2048, 0)
+	artwork, cfg, format, valid := account.DecodePNGJPEG(data, 2048, 0)
 	if !valid {
 		fail(w, 502, "invalid_skin_artwork")
 		return
+	}
+	// 先记下插画指纹再返回插画，之后发布的皮肤照片与它相近时标记为 AI 生成。记不下来就不交付：交付了却没有指纹的插画会以普通照片的身份进入社区，在鸿蒙上不经标识地显示。没有数据库时也就没有社区，不需要指纹。
+	if s.accounts != nil {
+		if err := s.accounts.RecordSkinArtwork(r.Context(), artwork); err != nil {
+			slog.Error("skin artwork fingerprint failed", "reason", err.Error())
+			fail(w, 503, "auth_unavailable")
+			return
+		}
 	}
 	respond(w, 200, map[string]any{"b64_json": output.Data[0].Image, "mime_type": "image/" + format, "width": cfg.Width, "height": cfg.Height})
 }

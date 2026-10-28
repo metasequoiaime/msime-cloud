@@ -20,11 +20,20 @@ BEGIN
 END $$;
 -- 社区键盘皮肤的图库分类，只是发布元数据，不属于 design。已有行迁移后为 other。取值与 Go 中的 candidateSkinCategories 一致（与候选窗皮肤共用同一组分类）。约束在下面的循环里以命名约束单独添加，因为 PostgreSQL 12 每次重跑 ADD COLUMN IF NOT EXISTS 都会再加一份行内 CHECK；之前重跑留下的副本（name1、name2……）会被删掉。
 ALTER TABLE community_skins ADD COLUMN IF NOT EXISTS category text NOT NULL DEFAULT 'other';
+-- 社区键盘皮肤的来源：unknown、user 或 ai，取值与 Go 中的 skinOrigins 一致。发布时由服务端判定，见 community_skin_origin.go。PostgreSQL 11 起带常量默认值的加列不重写表；命名约束同样在下面的循环里添加。加列的同一次迁移按发布时的同一条规则回填已有作品：没有照片的记为 user，带照片的推不出来源（插画任务早已清理，照片也重新编码过），保持 unknown。回填只在加列时执行一次，之后重跑迁移不会改动审核员人工改判的结果；滚动升级期间旧副本写入的作品取默认值 unknown。
+DO $$
+BEGIN
+ IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='community_skins'::regclass AND attname='origin' AND NOT attisdropped) THEN
+  ALTER TABLE community_skins ADD COLUMN origin text NOT NULL DEFAULT 'unknown';
+  UPDATE community_skins SET origin='user' WHERE NOT design ? 'photo';
+ END IF;
+END $$;
 DO $$
 DECLARE c record; d record;
 BEGIN
  FOR c IN SELECT * FROM (VALUES
-  ('community_skins','community_skins_category_check','category IN (''nature'',''guofeng'',''acg'',''cute'',''food'',''tech'',''minimal'',''other'')')
+  ('community_skins','community_skins_category_check','category IN (''nature'',''guofeng'',''acg'',''cute'',''food'',''tech'',''minimal'',''other'')'),
+  ('community_skins','community_skins_origin_check','origin IN (''unknown'',''user'',''ai'')')
  ) v(tbl,name,expr) LOOP
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid=c.tbl::regclass AND conname=c.name) THEN
    EXECUTE format('ALTER TABLE %I ADD CONSTRAINT %I CHECK(%s)',c.tbl,c.name,c.expr);
@@ -36,6 +45,11 @@ BEGIN
 END $$;
 -- 按分类筛选的公开目录沿用 community_skins_newest 的排序（created_at DESC,id）。
 CREATE INDEX IF NOT EXISTS community_skins_category_newest ON community_skins(category,created_at DESC,id);
+-- 本服务生成过的皮肤插画的 64 位 dHash，发布时用来判定照片是否为 AI 插画。不关联账号，也不能还原出图片；长期保留，不随账号注销删除。
+CREATE TABLE IF NOT EXISTS skin_artwork_fingerprints (
+ hash bigint PRIMARY KEY,
+ created_at timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS community_skin_downloads (
  skin_id text NOT NULL REFERENCES community_skins(id) ON DELETE CASCADE,
  user_id text NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,

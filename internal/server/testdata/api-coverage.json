@@ -292,16 +292,21 @@
       "internal/account/community_test.go::TestCommunityPublishDownloadRatingOwnershipAndRestart",
       "internal/account/admin_moderation_test.go::TestAuthorSeesModerationStateOnlyWhenAsked",
       "internal/account/admin_moderation_test.go::TestSkinAndPluginScopeMine",
-      "internal/account/community_saves_test.go::TestCommunitySkinSaves"
+      "internal/account/community_saves_test.go::TestCommunitySkinSaves",
+      "internal/account/community_skin_origin_test.go::TestCommunitySkinOriginPublishAndExclude"
     ],
     "POST /v1/community/skins": [
       "internal/account/community_test.go::TestCommunityPublishDownloadRatingOwnershipAndRestart",
-      "internal/account/admin_moderation_test.go::TestScreenUploadReportsScreeningOutage"
+      "internal/account/admin_moderation_test.go::TestScreenUploadReportsScreeningOutage",
+      "internal/account/community_skin_origin_test.go::TestCommunitySkinOriginPublishAndExclude",
+      "internal/server/skin_artwork_fingerprint_test.go::TestSkinArtworkFingerprintMarksPublishedSkin"
     ],
     "GET /v1/community/skins/{id}": [
       "internal/account/community_test.go::TestCommunityPublishDownloadRatingOwnershipAndRestart",
       "internal/account/admin_moderation_test.go::TestAuthorSeesModerationStateOnlyWhenAsked",
-      "internal/account/community_saves_test.go::TestCommunitySkinSaves"
+      "internal/account/community_saves_test.go::TestCommunitySkinSaves",
+      "internal/account/community_skin_origin_test.go::TestCommunitySkinOriginPublishAndExclude",
+      "internal/server/skin_artwork_fingerprint_test.go::TestSkinArtworkFingerprintMarksPublishedSkin"
     ],
     "PATCH /v1/community/skins/{id}": [
       "internal/account/community_test.go::TestCommunitySkinCategory"
@@ -310,14 +315,16 @@
       "internal/account/community_test.go::TestCommunityPublishDownloadRatingOwnershipAndRestart"
     ],
     "POST /v1/community/skins/{id}/download": [
-      "internal/account/community_test.go::TestCommunityPublishDownloadRatingOwnershipAndRestart"
+      "internal/account/community_test.go::TestCommunityPublishDownloadRatingOwnershipAndRestart",
+      "internal/account/community_skin_origin_test.go::TestCommunitySkinOriginPublishAndExclude"
     ],
     "PUT /v1/community/skins/{id}/rating": [
       "internal/account/community_test.go::TestCommunityPublishDownloadRatingOwnershipAndRestart",
       "internal/account/community_saves_test.go::TestCommunitySkinSaves"
     ],
     "PUT /v1/community/skins/{id}/save": [
-      "internal/account/community_saves_test.go::TestCommunitySkinSaves"
+      "internal/account/community_saves_test.go::TestCommunitySkinSaves",
+      "internal/account/community_skin_origin_test.go::TestCommunitySkinOriginPublishAndExclude"
     ],
     "GET /v1/community/candidate-skins": [
       "internal/account/community_candidate_test.go::TestCommunityCandidateSkinLifecycle",
@@ -428,7 +435,8 @@
     ],
     "POST /v1/skins/generate": [
       "internal/server/skin_generation_test.go::TestSkinArtworkUsesFixedModelAndReturnsValidatedImage",
-      "internal/server/skin_generation_test.go::TestSkinArtworkRejectsRemoteURLAndDisabledProvider"
+      "internal/server/skin_generation_test.go::TestSkinArtworkRejectsRemoteURLAndDisabledProvider",
+      "internal/server/skin_artwork_fingerprint_test.go::TestSkinArtworkFingerprintMarksPublishedSkin"
     ],
     "POST /v1/skins/jobs": [
       "internal/server/skin_jobs_test.go::TestSkinJobReturnsBeforeUpstreamAndBindsOwner",

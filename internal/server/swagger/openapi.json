@@ -13424,11 +13424,28 @@
                 "",
                 "moderation",
                 "saved",
-                "moderation,saved"
+                "origin",
+                "moderation,saved",
+                "moderation,origin",
+                "saved,origin",
+                "moderation,saved,origin"
               ],
               "default": ""
             },
-            "description": "逗号分隔：moderation 表示在自己的作品上接收 moderation 审核状态；saved 表示每个条目带上 saved 与 saves。其他值返回 400 invalid_fields。不带此参数时响应与以前逐字节相同。"
+            "description": "逗号分隔：moderation 表示在自己的作品上接收 moderation 审核状态；saved 表示每个条目带上 saved 与 saves；origin 表示每个条目带上 origin 来源，响应带 X-MSIME-Skin-Origin: v1；引入来源标记之前的旧副本不认 origin，返回 400 invalid_fields。其他值返回 400 invalid_fields。不带此参数时响应与以前逐字节相同。"
+          },
+          {
+            "name": "exclude",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "",
+                "ai"
+              ],
+              "default": ""
+            },
+            "description": "ai 表示只留下 origin 为 user 的作品，排除 ai 和来源推不出来的 unknown（可能是 AI 插画）；列表在分页前过滤，作者自己的作品和收藏同样过滤，详情和下载对被排除的作品返回 404 skin_not_found。支持的副本在响应上带 X-MSIME-Skin-Origin: v1；旧副本忽略此参数，没有这个响应头时客户端不能认为过滤已生效。其他值返回 400 invalid_exclude。"
           },
           {
             "name": "category",
@@ -13655,6 +13672,15 @@
                           "saves": {
                             "type": "integer",
                             "description": "收藏总数。仅在请求带 fields=saved 时出现。"
+                          },
+                          "origin": {
+                            "type": "string",
+                            "enum": [
+                              "unknown",
+                              "user",
+                              "ai"
+                            ],
+                            "description": "作品来源：ai 为照片匹配到本服务生成过的插画或发布时声明 AI 生成，user 为其他新发布的作品，unknown 为引入来源标记之前和滚动升级期间旧副本写入的带照片的作品（来源推不出来），以及后台回填还没处理到的没有照片的作品。仅在请求带 fields=origin 时出现；已发布客户端拒绝未知字段。"
                           }
                         }
                       }
@@ -13927,6 +13953,14 @@
                       "other"
                     ],
                     "description": "图库分类：nature 自然、guofeng 国风、acg 二次元、cute 可爱、food 美食、tech 科技夜色、minimal 简约、other 其他。缺省（或 null）为 other，未知值或空串返回 400 invalid_category；不参与重试比较，同一内容换分类重试仍返回 200 且保留已存的分类。滚动升级期间旧版本副本会以 400 invalid_json 拒绝该键。"
+                  },
+                  "origin": {
+                    "type": "string",
+                    "enum": [
+                      "ai"
+                    ],
+                    "nullable": true,
+                    "description": "缺省（或 null）由服务端判定：照片匹配到本服务生成过的插画时为 ai，否则为 user。ai 表示客户端知道这款皮肤是 AI 生成的，只能把来源往上抬；其他值返回 400 invalid_skin_origin。不参与重试比较。滚动升级期间旧版本副本会以 400 invalid_json 拒绝该键。"
                   }
                 },
                 "required": [
@@ -13973,11 +14007,28 @@
                 "",
                 "moderation",
                 "saved",
-                "moderation,saved"
+                "origin",
+                "moderation,saved",
+                "moderation,origin",
+                "saved,origin",
+                "moderation,saved,origin"
               ],
               "default": ""
             },
-            "description": "逗号分隔：moderation 表示在自己的作品上接收 moderation 审核状态；saved 表示每个条目带上 saved 与 saves。其他值返回 400 invalid_fields。不带此参数时响应与以前逐字节相同。"
+            "description": "逗号分隔：moderation 表示在自己的作品上接收 moderation 审核状态；saved 表示每个条目带上 saved 与 saves；origin 表示每个条目带上 origin 来源，响应带 X-MSIME-Skin-Origin: v1；引入来源标记之前的旧副本不认 origin，返回 400 invalid_fields。其他值返回 400 invalid_fields。不带此参数时响应与以前逐字节相同。"
+          },
+          {
+            "name": "exclude",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "",
+                "ai"
+              ],
+              "default": ""
+            },
+            "description": "ai 表示只留下 origin 为 user 的作品，排除 ai 和来源推不出来的 unknown（可能是 AI 插画）；列表在分页前过滤，作者自己的作品和收藏同样过滤，详情和下载对被排除的作品返回 404 skin_not_found。支持的副本在响应上带 X-MSIME-Skin-Origin: v1；旧副本忽略此参数，没有这个响应头时客户端不能认为过滤已生效。其他值返回 400 invalid_exclude。"
           },
           {
             "name": "include",
@@ -14181,6 +14232,15 @@
                     "saves": {
                       "type": "integer",
                       "description": "收藏总数。仅在请求带 fields=saved 时出现。"
+                    },
+                    "origin": {
+                      "type": "string",
+                      "enum": [
+                        "unknown",
+                        "user",
+                        "ai"
+                      ],
+                      "description": "作品来源：ai 为照片匹配到本服务生成过的插画或发布时声明 AI 生成，user 为其他新发布的作品，unknown 为引入来源标记之前和滚动升级期间旧副本写入的带照片的作品（来源推不出来），以及后台回填还没处理到的没有照片的作品。仅在请求带 fields=origin 时出现；已发布客户端拒绝未知字段。"
                     }
                   }
                 }
@@ -14445,6 +14505,15 @@
                     "saves": {
                       "type": "integer",
                       "description": "收藏总数。仅在请求带 fields=saved 时出现。"
+                    },
+                    "origin": {
+                      "type": "string",
+                      "enum": [
+                        "unknown",
+                        "user",
+                        "ai"
+                      ],
+                      "description": "作品来源：ai 为照片匹配到本服务生成过的插画或发布时声明 AI 生成，user 为其他新发布的作品，unknown 为引入来源标记之前和滚动升级期间旧副本写入的带照片的作品（来源推不出来），以及后台回填还没处理到的没有照片的作品。仅在请求带 fields=origin 时出现；已发布客户端拒绝未知字段。"
                     }
                   }
                 }
@@ -14586,6 +14655,19 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "exclude",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "",
+                "ai"
+              ],
+              "default": ""
+            },
+            "description": "ai 表示只留下 origin 为 user 的作品，排除 ai 和来源推不出来的 unknown（可能是 AI 插画）；列表在分页前过滤，作者自己的作品和收藏同样过滤，详情和下载对被排除的作品返回 404 skin_not_found。支持的副本在响应上带 X-MSIME-Skin-Origin: v1；旧副本忽略此参数，没有这个响应头时客户端不能认为过滤已生效。其他值返回 400 invalid_exclude。"
           }
         ],
         "description": "仅支持数据型 Apple 键盘 v1。发布最多 50 款，重试使用相同 UUID；下载人数按账号去重。登录即可评分，不能给自己的作品评分（403 download_before_rating_or_own_skin），已下架的作品不能评分（404）。收藏请求体为 {\"saved\":bool}，重复提交结果相同，返回收藏状态与收藏总数；已下架的作品只有作者本人可收藏，其他人 404。列表每页 20 条，不包含照片字节。作者自己已下架的作品只对作者可见。详见 docs/skin-community.md。",

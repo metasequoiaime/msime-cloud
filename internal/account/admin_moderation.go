@@ -28,6 +28,9 @@ func moderationColumns(alias, section string) string {
  (SELECT count(*) FROM community_reports WHERE kind='` + section + `' AND item_id=` + alias + `.id) AS reports`
 }
 
+// skinOriginFilter 按来源（unknown、user、ai）筛选键盘皮肤。
+var skinOriginFilter = listFilter{param: "origin", field: "origin", max: len(skinOriginUnknown), values: map[string]string{skinOriginUnknown: skinOriginUnknown, skinOriginUser: skinOriginUser, skinOriginAI: skinOriginAI}}
+
 // statusFilter selects rows by moderation state.
 var statusFilter = listFilter{param: "status", field: "moderation", max: 8, values: map[string]string{"pending": "pending", "approved": "approved", "removed": "removed"}}
 
@@ -35,10 +38,10 @@ const authorColumn = `COALESCE(NULLIF(btrim(u.display_name),''),'水杉小鹿·'
 
 // The lists serve GET /api/{skins,candidate-skins,plugins,dictionaries,replies,phrases}.
 var (
-	// The skin design travels without its photo, so the console can draw the keyboard preview on each card. 也可以按图库分类筛选。
+	// 设计不带照片，后台据此在每张卡片上画键盘预览。可以按图库分类、审核状态和来源筛选，来源筛选让审核员找出 unknown 的作品逐个改判。
 	skinsList = adminList{
-		query:      `SELECT s.id,s.name,s.description,s.owner_id,` + authorColumn + `,s.created_at,s.design-'photo' AS design,` + contentEditToken("skins", "s") + ` AS edit_token,(SELECT count(*) FROM community_skin_downloads WHERE skin_id=s.id) AS downloads,s.category,` + moderationColumns("s", "skins") + ` FROM community_skins s JOIN auth_users u ON u.id=s.owner_id`,
-		filters:    []listFilter{candidateCategoryFilter(), statusFilter},
+		query:      `SELECT s.id,s.name,s.description,s.owner_id,` + authorColumn + `,s.created_at,s.design-'photo' AS design,` + contentEditToken("skins", "s") + ` AS edit_token,(SELECT count(*) FROM community_skin_downloads WHERE skin_id=s.id) AS downloads,s.category,s.origin,` + moderationColumns("s", "skins") + ` FROM community_skins s JOIN auth_users u ON u.id=s.owner_id`,
+		filters:    []listFilter{candidateCategoryFilter(), statusFilter, skinOriginFilter},
 		unsearched: []string{"design", "edit_token"},
 	}
 	// Candidate skins hold both the public gallery and each account's private library, so moderation can list either one. 也可以按图库分类筛选。
@@ -221,6 +224,48 @@ var (
 	// actionSetCandidateSkinCategory 修改候选皮肤的图库分类。
 	actionSetCandidateSkinCategory = setSkinCategory("candidate-skins", "community_candidate_skins")
 )
+
+// setSkinOriginQuery 在作品行锁内读取原来源并写入新来源，返回 id、名称和原来源。
+const setSkinOriginQuery = `UPDATE community_skins s SET origin=$2 FROM (SELECT id,origin FROM community_skins locked_skin WHERE id=ANY($1) FOR UPDATE) o WHERE s.id=o.id RETURNING s.id,s.name,o.origin`
+
+// actionSetSkinOrigin 人工改判社区键盘皮肤的来源（unknown、user 或 ai）：服务端推不出来源的存量作品，以及照片判定错了的作品。请求体 `{"action":"set_skin_origin","id":"…"（或 "ids":[…]）,"section":"skins"（可省略）,"value":{"origin":"ai"}}`。修改不改变审核状态；没有撤销，改回原值再提交一次即可。
+func actionSetSkinOrigin(a *Service, ctx context.Context, tx pgx.Tx, v actionRequest) (actionResult, error) {
+	if v.Section != "" && v.Section != "skins" {
+		return actionResult{}, actionFail(400, "invalid_section")
+	}
+	v.Section = "skins"
+	_, ids, err := moderationRequest(v)
+	if err != nil {
+		return actionResult{}, err
+	}
+	var value struct {
+		Origin string `json:"origin"`
+	}
+	if len(v.Value) == 0 || httpjson.DecodeBytes(v.Value, &value) != nil || !slices.Contains(skinOrigins, value.Origin) {
+		return actionResult{}, actionFail(400, "invalid_origin")
+	}
+	rows, err := tx.Query(ctx, setSkinOriginQuery, ids, value.Origin)
+	if err != nil {
+		return actionResult{}, err
+	}
+	var from string
+	changed, err := collectQueryRows(rows, func(row pgx.CollectableRow) (moderatedItem, error) {
+		var item moderatedItem
+		err := row.Scan(&item.ID, &item.Name, &from)
+		return item, err
+	})
+	if err != nil {
+		return actionResult{}, err
+	}
+	if len(changed) == 0 {
+		return actionResult{}, actionFail(404, "not_found")
+	}
+	extra := map[string]any{"origin": value.Origin}
+	if len(changed) == 1 {
+		extra["from"] = from
+	}
+	return moderationResult(v, changed, extra), nil
+}
 
 // moderationTable is where one admin section's rows live; kind narrows the shared resources table and label names the content kind in notifications. editable marks tables whose rows the author can change in place, which moves updated_at, so an approval can be pinned to the version the moderator reviewed.
 type moderationTable struct {

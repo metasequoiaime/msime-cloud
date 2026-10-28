@@ -374,7 +374,10 @@ SELECT id,owner,state,reason,artwork,cancelled,created_at,heartbeat_at,expires_a
 -- 候选窗皮肤的分类列与它的命名 CHECK 约束、索引在同一次迁移中加上，所以只探测列；缺列时启动会走迁移。
 SELECT category FROM community_candidate_skins WHERE false;
 -- 键盘皮肤的分类列同理：约束和索引与列在同一次迁移中加上，只探测列。
-SELECT category FROM community_skins WHERE false`); e != nil {
+SELECT category FROM community_skins WHERE false;
+-- 键盘皮肤的来源列与它的命名约束、插画指纹表在同一次迁移中加上；缺任何一个时启动走迁移。
+SELECT origin FROM community_skins WHERE false;
+SELECT hash,created_at FROM skin_artwork_fingerprints WHERE false`); e != nil {
 		return e
 	}
 	if err := s.checkReadinessMetadata(ctx, []readinessMetadataCheck{

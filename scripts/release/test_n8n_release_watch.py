@@ -17,8 +17,9 @@ class ReleaseWatchTests(unittest.TestCase):
         program = r"""
 const crypto = require('crypto');
 const fixture = JSON.parse(process.argv[1]);
-const watch = JSON.parse(process.argv[2]);
-const social = JSON.parse(process.argv[3]);
+const fs = require('fs');
+const watch = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const social = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
 const select = watch.nodes.find(n => n.name === '筛选并签名正式版本').parameters.jsCode;
 const dispatch = social.nodes.find(n => n.name === '验签和生成文案').parameters.jsCode;
 const now = Date.now();
@@ -46,8 +47,9 @@ const posts = selected.flatMap(item => new Function('$input', '$env', '$getWorkf
   env, () => dispatchState, require, Buffer));
 process.stdout.write(JSON.stringify({selected, posts, state, dispatchState}));
 """
+        # 工作流文件按路径交给 node：两份 JSON 原文作命令行参数会超过 Windows 的命令行长度上限（WinError 206）。
         result = subprocess.run(
-            ["node", "-e", program, json.dumps(fixture), WATCH.read_text(), SOCIAL.read_text()],
+            ["node", "-e", program, json.dumps(fixture), str(WATCH), str(SOCIAL)],
             capture_output=True, text=True, check=True,
         )
         return json.loads(result.stdout)

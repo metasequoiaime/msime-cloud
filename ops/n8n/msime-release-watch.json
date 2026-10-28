@@ -1,0 +1,211 @@
+{
+  "name": "MSIME 客户端正式版本自动检查",
+  "nodes": [
+    {
+      "id": "msime-watch-01",
+      "name": "每五分钟检查",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "msime-watch-02",
+      "name": "准备发布仓库",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const state = $getWorkflowStaticData('global');\n// 上线时固定起点，不补发启用前的历史版本；这个时间随成功执行持久化。\nstate.enabledAt ??= new Date().toISOString();\nreturn ['metasequoiaime/msime', 'metasequoiaime/msime-windows'].map(repository => ({json: {repository}}));"
+      }
+    },
+    {
+      "id": "msime-watch-03",
+      "name": "查询客户端 Release",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        0
+      ],
+      "continueOnFail": true,
+      "parameters": {
+        "url": "={{ 'https://api.github.com/repos/' + $json.repository + '/releases?per_page=100' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "msime-release-watch/1"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.MSIME_GITHUB_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "msime-watch-04",
+      "name": "筛选并签名正式版本",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst platformFor = (repository, tag) => {\n  if (repository === 'metasequoiaime/msime-windows' && /^v\\d+\\.\\d+\\.\\d+$/.test(tag)) return 'Windows';\n  if (repository !== 'metasequoiaime/msime') return null;\n  const match = /^(windows7|windows|macos|linux|android|ios|harmony)-v\\d+\\.\\d+\\.\\d+$/.exec(tag);\n  return match ? {windows7: 'Windows 7', windows: 'Windows', macos: 'macOS', linux: 'Linux', android: 'Android', ios: 'iOS', harmony: 'HarmonyOS'}[match[1]] : null;\n};\nconst repositories = $('准备发布仓库').all();\nconst state = $getWorkflowStaticData('global');\nconst cutoff = Date.parse(state.enabledAt);\nif (!Number.isFinite(cutoff)) throw new Error('客户端分发启用时间无效');\nconst now = Date.now();\nconst candidates = new Map();\nstate.sourceErrors ??= {};\nfor (const [index, item] of $input.all().entries()) {\n  const repository = repositories[index]?.json.repository;\n  if (!repository) throw new Error('客户端仓库关联缺失');\n  const response = item.json;\n  const releases = response.body ?? response;\n  if (response.error || Number(response.statusCode ?? 200) >= 400 || !Array.isArray(releases)) {\n    state.sourceErrors[repository] = {checked_at: new Date().toISOString(), status: Number(response.statusCode ?? 0)};\n    continue;\n  }\n  delete state.sourceErrors[repository];\n  for (const release of releases) {\n    const tag = String(release.tag_name ?? '');\n    const published = Date.parse(release.published_at);\n    const platform = platformFor(repository, tag);\n    if (!platform || release.draft || release.prerelease || !Number.isFinite(published) ||\n        published < cutoff || published < now - 86400000 || published > now) continue;\n    // 等附件上传完成后再发公告，空发行页留到下一轮检查。\n    if (!Array.isArray(release.assets) || !release.assets.length ||\n        release.assets.some(asset => asset.state !== 'uploaded' || !(asset.size > 0))) continue;\n    const payload = {\n      schema_version: 1, event: 'release.published', idempotency_key: `${repository}:${tag}`, repository,\n      release: {tag, name: release.name || tag, body: release.body || '', url: release.html_url,\n        published_at: release.published_at, target_commitish: release.target_commitish || ''},\n    };\n    if ($env.MSIME_RELEASE_WATCH_DRY_RUN === '1') payload.dry_run = true;\n    candidates.set(payload.idempotency_key, {payload, published});\n  }\n}\nstate.lastCheckAt = new Date().toISOString();\nstate.lastCandidateCount = candidates.size;\nconst secret = $env.MSIME_SOCIAL_WEBHOOK_SECRET;\nif (!secret) throw new Error('缺少社交 webhook 签名密钥');\nreturn [...candidates.values()].sort((a, b) => a.published - b.published).map(({payload}) => {\n  const body = JSON.stringify(payload);\n  return {json: {body, signature: 'sha256=' + crypto.createHmac('sha256', secret).update(body).digest('hex')}};\n});"
+      }
+    },
+    {
+      "id": "msime-watch-05",
+      "name": "分发正式客户端版本",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        0
+      ],
+      "continueOnFail": true,
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:5678/webhook/msime-release",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-MSIME-Signature",
+              "value": "={{ $json.signature }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}",
+        "options": {
+          "timeout": 120000,
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 1000
+            }
+          },
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "msime-watch-06",
+      "name": "记录分发检查",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const rows = $input.all();\nconst failures = rows.filter(item => item.json.error || Number(item.json.statusCode ?? 200) >= 400).length;\nconst state = $getWorkflowStaticData('global');\nstate.lastDispatch = {checked_at: new Date().toISOString(), requests: rows.length, failures};\nreturn [{json: state.lastDispatch}];"
+      }
+    }
+  ],
+  "connections": {
+    "每五分钟检查": {
+      "main": [
+        [
+          {
+            "node": "准备发布仓库",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "准备发布仓库": {
+      "main": [
+        [
+          {
+            "node": "查询客户端 Release",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "查询客户端 Release": {
+      "main": [
+        [
+          {
+            "node": "筛选并签名正式版本",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "筛选并签名正式版本": {
+      "main": [
+        [
+          {
+            "node": "分发正式客户端版本",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "分发正式客户端版本": {
+      "main": [
+        [
+          {
+            "node": "记录分发检查",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Shanghai",
+    "saveDataErrorExecution": "none",
+    "saveDataSuccessExecution": "none"
+  },
+  "pinData": {},
+  "tags": []
+}

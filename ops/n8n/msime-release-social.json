@@ -22,7 +22,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const crypto = require('crypto');\nconst item = $input.first();\nconst raw = item.json.rawBody ?? (typeof item.json.body === 'string' ? item.json.body : JSON.stringify(item.json.body ?? item.json));\nconst headers = item.json.headers ?? {};\nconst supplied = headers['x-msime-signature'] ?? headers['X-MSIME-Signature'] ?? '';\nconst secret = $env.MSIME_SOCIAL_WEBHOOK_SECRET ?? '';\nif (!secret || !supplied) throw new Error('缺少社交 webhook 签名');\nconst expected = `sha256=${crypto.createHmac('sha256', secret).update(raw, 'utf8').digest('hex')}`;\nif (supplied.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) {\n  throw new Error('社交 webhook 签名无效');\n}\n\nlet payload;\ntry {\n  payload = JSON.parse(raw);\n} catch (error) {\n  throw new Error('社交 webhook 正文不是 JSON');\n}\nif (payload.schema_version !== 1 || payload.event !== 'release.published') {\n  throw new Error('社交 webhook 事件类型不支持');\n}\nconst release = payload.release ?? {};\nconst version = String(release.tag ?? '').replace(/^backend-/, '');\nconst body = String(release.body ?? '').replace(/```[\\s\\S]*?```/g, '').trim();\nconst bullets = body.split(/\\r?\\n/).map((line) => line.trim()).filter((line) => /^[-*] /.test(line)).slice(0, 3).map((line) => `• ${line.slice(2).trim()}`);\nconst highlights = bullets.join('\\n') || '查看本版更新内容';\nconst url = String(release.url ?? '');\nconst landing = String($env.MSIME_SOCIAL_SITE_URL ?? 'https://msime.app/download/');\nif (!/^https:\\/\\/[^/?#\\s@]+(?:\\/[^?#\\s]*)?$/.test(landing)) throw new Error('社交官网入口必须是无查询参数的 HTTPS 地址');\nconst campaign = `${String(release.tag ?? 'release').replace(/[^a-zA-Z0-9._~-]/g, '-').slice(0, 100)}-${crypto.createHash('sha256').update(String(payload.idempotency_key)).digest('hex').slice(0, 12)}`;\nconst trackedUrl = channel => `${landing}?utm_source=${encodeURIComponent(channel)}&utm_medium=social&utm_campaign=${campaign}`;\nconst truncate = (text, length) => text.length <= length ? text : `${text.slice(0, length - 1)}…`;\n// 先为完整链接预留长度，更新内容再长也不能把推广入口截断。\nconst post = (channel, length, full = false) => {\n  const content = `水杉输入法后端 ${version} 已发布。\\n\\n${full ? (body || '本版更新内容见 Release 说明。') : highlights}`;\n  const links = `\\n\\n下载：${trackedUrl(channel)}${full ? `\\n更新说明：${url}` : ''}`;\n  if (links.length >= length) throw new Error('社交链接超过平台长度限制');\n  return truncate(content, length - links.length) + links;\n};\nconst enabled = (flag, ...values) => $env[flag] === '1' && values.every(Boolean);\nconst state = $getWorkflowStaticData('global');\nconst completed = state.completed ?? {};\nconst pending = (channel) => !completed[payload.idempotency_key]?.[channel];\nconst out = [];\nif (enabled('MSIME_TELEGRAM_ENABLED', $env.MSIME_TELEGRAM_BOT_TOKEN, $env.MSIME_TELEGRAM_CHAT_ID) && pending('telegram')) out.push({json: {channel: 'telegram', idempotency_key: payload.idempotency_key, tracking_url: trackedUrl('telegram'), text: post('telegram', 4096, true)}});\nif (enabled('MSIME_DISCORD_ENABLED', $env.MSIME_DISCORD_WEBHOOK_URL) && pending('discord')) out.push({json: {channel: 'discord', idempotency_key: payload.idempotency_key, tracking_url: trackedUrl('discord'), text: post('discord', 2000, true)}});\nif (enabled('MSIME_MASTODON_ENABLED', $env.MSIME_MASTODON_INSTANCE, $env.MSIME_MASTODON_ACCESS_TOKEN) && pending('mastodon')) out.push({json: {channel: 'mastodon', idempotency_key: payload.idempotency_key, tracking_url: trackedUrl('mastodon'), text: post('mastodon', 500)}});\nif (enabled('MSIME_BLUESKY_ENABLED', $env.MSIME_BLUESKY_IDENTIFIER, $env.MSIME_BLUESKY_APP_PASSWORD) && pending('bluesky')) out.push({json: {channel: 'bluesky', idempotency_key: payload.idempotency_key, tracking_url: trackedUrl('bluesky'), text: post('bluesky', 300)}});\nif (enabled('MSIME_X_ENABLED') && pending('x')) out.push({json: {channel: 'x', idempotency_key: payload.idempotency_key, tracking_url: trackedUrl('x'), text: post('x', 280)}});\nif (enabled('MSIME_REDDIT_ENABLED', $env.MSIME_REDDIT_ACCESS_TOKEN, $env.MSIME_REDDIT_SUBREDDIT, $env.MSIME_REDDIT_USER_AGENT) && pending('reddit')) out.push({json: {channel: 'reddit', idempotency_key: payload.idempotency_key, title: truncate(`水杉输入法后端 ${version} 发布`, 300), text: post('reddit', 40000, true), url: trackedUrl('reddit'), tracking_url: trackedUrl('reddit')}});\nreturn out;"
+        "jsCode": "const crypto = require('crypto');\nconst item = $input.first();\n// n8n 的 Raw Body 位于 binary.data，验签不能重新序列化解析后的 JSON。\nconst binaryBody = item.binary?.data?.data;\nconst raw = typeof binaryBody === 'string'\n  ? Buffer.from(binaryBody, 'base64').toString('utf8')\n  : item.json.rawBody ?? (typeof item.json.body === 'string' ? item.json.body : '');\nif (!raw) throw new Error('缺少社交 webhook 原始正文');\nconst headers = item.json.headers ?? {};\nconst supplied = headers['x-msime-signature'] ?? headers['X-MSIME-Signature'] ?? '';\nconst secret = $env.MSIME_SOCIAL_WEBHOOK_SECRET ?? '';\nif (!secret || !supplied) throw new Error('缺少社交 webhook 签名');\nconst expected = `sha256=${crypto.createHmac('sha256', secret).update(raw, 'utf8').digest('hex')}`;\nif (supplied.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) {\n  throw new Error('社交 webhook 签名无效');\n}\n\nlet payload;\ntry {\n  payload = JSON.parse(raw);\n} catch (error) {\n  throw new Error('社交 webhook 正文不是 JSON');\n}\nif (payload.schema_version !== 1 || payload.event !== 'release.published') {\n  throw new Error('社交 webhook 事件类型不支持');\n}\nconst release = payload.release ?? {};\nconst version = String(release.tag ?? '').replace(/^backend-/, '');\nconst body = String(release.body ?? '').replace(/```[\\s\\S]*?```/g, '').trim();\nconst bullets = body.split(/\\r?\\n/).map((line) => line.trim()).filter((line) => /^[-*] /.test(line)).slice(0, 3).map((line) => `• ${line.slice(2).trim()}`);\nconst highlights = bullets.join('\\n') || '查看本版更新内容';\nconst url = String(release.url ?? '');\nconst landing = String($env.MSIME_SOCIAL_SITE_URL ?? 'https://msime.app/download/');\nif (!/^https:\\/\\/[^/?#\\s@]+(?:\\/[^?#\\s]*)?$/.test(landing)) throw new Error('社交官网入口必须是无查询参数的 HTTPS 地址');\nconst campaign = `${String(release.tag ?? 'release').replace(/[^a-zA-Z0-9._~-]/g, '-').slice(0, 100)}-${crypto.createHash('sha256').update(String(payload.idempotency_key)).digest('hex').slice(0, 12)}`;\nconst trackedUrl = channel => `${landing}?utm_source=${encodeURIComponent(channel)}&utm_medium=social&utm_campaign=${campaign}`;\nconst truncate = (text, length) => text.length <= length ? text : `${text.slice(0, length - 1)}…`;\n// 先为完整链接预留长度，更新内容再长也不能把推广入口截断。\nconst post = (channel, length, full = false) => {\n  const content = `水杉输入法后端 ${version} 已发布。\\n\\n${full ? (body || '本版更新内容见 Release 说明。') : highlights}`;\n  const links = `\\n\\n下载：${trackedUrl(channel)}${full ? `\\n更新说明：${url}` : ''}`;\n  if (links.length >= length) throw new Error('社交链接超过平台长度限制');\n  return truncate(content, length - links.length) + links;\n};\nconst enabled = (flag, ...values) => $env[flag] === '1' && values.every(Boolean);\nconst state = $getWorkflowStaticData('global');\nconst completed = state.completed ?? {};\nconst pending = (channel) => !completed[payload.idempotency_key]?.[channel];\nconst out = [];\nif (enabled('MSIME_TELEGRAM_ENABLED', $env.MSIME_TELEGRAM_BOT_TOKEN, $env.MSIME_TELEGRAM_CHAT_ID) && pending('telegram')) out.push({json: {channel: 'telegram', idempotency_key: payload.idempotency_key, tracking_url: trackedUrl('telegram'), text: post('telegram', 4096, true)}});\nif (enabled('MSIME_DISCORD_ENABLED', $env.MSIME_DISCORD_WEBHOOK_URL) && pending('discord')) out.push({json: {channel: 'discord', idempotency_key: payload.idempotency_key, tracking_url: trackedUrl('discord'), text: post('discord', 2000, true)}});\nif (enabled('MSIME_MASTODON_ENABLED', $env.MSIME_MASTODON_INSTANCE, $env.MSIME_MASTODON_ACCESS_TOKEN) && pending('mastodon')) out.push({json: {channel: 'mastodon', idempotency_key: payload.idempotency_key, tracking_url: trackedUrl('mastodon'), text: post('mastodon', 500)}});\nif (enabled('MSIME_BLUESKY_ENABLED', $env.MSIME_BLUESKY_IDENTIFIER, $env.MSIME_BLUESKY_APP_PASSWORD) && pending('bluesky')) out.push({json: {channel: 'bluesky', idempotency_key: payload.idempotency_key, tracking_url: trackedUrl('bluesky'), text: post('bluesky', 300)}});\nif (enabled('MSIME_X_ENABLED') && pending('x')) out.push({json: {channel: 'x', idempotency_key: payload.idempotency_key, tracking_url: trackedUrl('x'), text: post('x', 280)}});\nif (enabled('MSIME_REDDIT_ENABLED', $env.MSIME_REDDIT_ACCESS_TOKEN, $env.MSIME_REDDIT_SUBREDDIT, $env.MSIME_REDDIT_USER_AGENT) && pending('reddit')) out.push({json: {channel: 'reddit', idempotency_key: payload.idempotency_key, title: truncate(`水杉输入法后端 ${version} 发布`, 300), text: post('reddit', 40000, true), url: trackedUrl('reddit'), tracking_url: trackedUrl('reddit')}});\nreturn out;"
       },
       "id": "msime-release-02",
       "name": "验签和生成文案",
@@ -291,6 +291,10 @@
             {
               "name": "Authorization",
               "value": "={{ 'Bearer ' + $env.MSIME_MASTODON_ACCESS_TOKEN }}"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $json.idempotency_key }}"
             }
           ]
         },
@@ -472,7 +476,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({repo: $json.did, collection: 'app.bsky.feed.post', record: {'$type': 'app.bsky.feed.post', text: $('验签和生成文案').item.json.text, createdAt: new Date().toISOString()}}) }}",
+        "jsonBody": "={{ JSON.stringify({repo: $json.repo, collection: 'app.bsky.feed.post', record: $json.record}) }}",
         "options": {
           "response": {
             "response": {
@@ -486,7 +490,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1080,
+        1500,
         80
       ],
       "continueOnFail": true
@@ -519,7 +523,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const source = $('验签和生成文案').item.json;\nconst response = $json;\nconst failed = Boolean(response.error) || Number(response.statusCode ?? 200) >= 400;\nif (!failed) {\n  const state = $getWorkflowStaticData('global');\n  state.completed ??= {};\n  state.completed[source.idempotency_key] ??= {};\n  state.completed[source.idempotency_key]['mastodon'] = new Date().toISOString();\n}\nreturn [{json: {channel: 'mastodon', ok: !failed}}];"
+        "jsCode": "const source = $('验签和生成文案').item.json;\nconst response = $json;\nconst failed = Boolean(response.error) || Number(response.statusCode ?? 200) >= 400 || !((response.body ?? response).id);\nif (!failed) {\n  const state = $getWorkflowStaticData('global');\n  state.completed ??= {};\n  state.completed[source.idempotency_key] ??= {};\n  state.completed[source.idempotency_key]['mastodon'] = new Date().toISOString();\n}\nreturn [{json: {channel: 'mastodon', ok: !failed}}];"
       },
       "id": "msime-release-18",
       "name": "记录 Mastodon 成功",
@@ -532,14 +536,14 @@
     },
     {
       "parameters": {
-        "jsCode": "const source = $('验签和生成文案').item.json;\nconst response = $json;\nconst failed = Boolean(response.error) || Number(response.statusCode ?? 200) >= 400;\nif (!failed) {\n  const state = $getWorkflowStaticData('global');\n  state.completed ??= {};\n  state.completed[source.idempotency_key] ??= {};\n  state.completed[source.idempotency_key]['bluesky'] = new Date().toISOString();\n}\nreturn [{json: {channel: 'bluesky', ok: !failed}}];"
+        "jsCode": "const source = $('验签和生成文案').item.json;\nconst response = $json;\nconst failed = Boolean(response.error) || Number(response.statusCode ?? 200) >= 400 || !((response.body ?? response).uri);\nif (!failed) {\n  const state = $getWorkflowStaticData('global');\n  state.completed ??= {};\n  state.completed[source.idempotency_key] ??= {};\n  state.completed[source.idempotency_key]['bluesky'] = new Date().toISOString();\n}\nreturn [{json: {channel: 'bluesky', ok: !failed}}];"
       },
       "id": "msime-release-19",
       "name": "记录 Bluesky 成功",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1080,
+        1740,
         80
       ]
     },
@@ -567,6 +571,52 @@
       "position": [
         1080,
         360
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $json;\nconst session = response.body ?? response;\nif (response.error || Number(response.statusCode ?? 200) >= 400 ||\n    typeof session.accessJwt !== 'string' || !session.accessJwt ||\n    typeof session.did !== 'string' || !session.did.startsWith('did:')) {\n  // 授权失败只返回固定标记，避免把令牌或平台响应传给后续节点。\n  return [{json: {error: true}}];\n}\nconst source = $('验签和生成文案').item.json;\nconst start = source.text.indexOf(source.tracking_url);\nif (start < 0) return [{json: {error: true}}];\n// Bluesky 链接范围按 UTF-8 字节计算，不能使用中文字符串的字符下标。\nconst byteStart = Buffer.byteLength(source.text.slice(0, start), 'utf8');\nconst record = {\n  '$type': 'app.bsky.feed.post',\n  text: source.text,\n  langs: ['zh'],\n  createdAt: new Date().toISOString(),\n  facets: [{\n    index: {byteStart, byteEnd: byteStart + Buffer.byteLength(source.tracking_url, 'utf8')},\n    features: [{'$type': 'app.bsky.richtext.facet#link', uri: source.tracking_url}],\n  }],\n};\nreturn [{json: {accessJwt: session.accessJwt, repo: session.did, record}}];"
+      },
+      "id": "msime-release-22",
+      "name": "准备 Bluesky 帖子",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.error !== true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "msime-release-23",
+      "name": "Bluesky 会话有效",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1260,
+        80
       ]
     }
   ],
@@ -695,7 +745,7 @@
       "main": [
         [
           {
-            "node": "Bluesky 发帖",
+            "node": "准备 Bluesky 帖子",
             "type": "main",
             "index": 0
           }
@@ -762,6 +812,35 @@
         [
           {
             "node": "记录 Reddit 成功",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "准备 Bluesky 帖子": {
+      "main": [
+        [
+          {
+            "node": "Bluesky 会话有效",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bluesky 会话有效": {
+      "main": [
+        [
+          {
+            "node": "Bluesky 发帖",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "记录 Bluesky 成功",
             "type": "main",
             "index": 0
           }

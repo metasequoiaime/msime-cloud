@@ -7,7 +7,12 @@
           "interval": [
             {
               "field": "weeks",
-              "value": 1
+              "weeksInterval": 1,
+              "triggerAtDay": [
+                1
+              ],
+              "triggerAtHour": 9,
+              "triggerAtMinute": 0
             }
           ]
         }
@@ -818,7 +823,8 @@
     "saveExecutionProgress": false,
     "saveDataSuccessExecution": "none",
     "saveDataErrorExecution": "none",
-    "saveManualExecutions": false
+    "saveManualExecutions": false,
+    "timezone": "Asia/Shanghai"
   },
   "versionId": "msime-social-report-v1"
 }

@@ -88,6 +88,6 @@ curl --fail-with-body -X POST "$N8N_TEST_WEBHOOK_URL" \
 | `MSIME_REPORT_TELEGRAM_ENABLED`、`MSIME_REPORT_TELEGRAM_BOT_TOKEN`、`MSIME_REPORT_TELEGRAM_CHAT_ID` | Telegram 周报开关、Bot Token 和内部群组 ID |
 | `MSIME_REPORT_DISCORD_ENABLED`、`MSIME_REPORT_DISCORD_WEBHOOK_URL` | Discord 周报开关和内部 Webhook 地址 |
 
-Umami Website 需要保留 `utm_source`、`utm_medium`、`utm_campaign`，并在下载或安装成功时触发与 `MSIME_UMAMI_INSTALL_EVENT` 同名的自定义事件。工作流通过 Umami `/api/websites/{id}/breakdown` 按 `utmSource` 分组，过滤 `utmMedium=social`，再汇总访问人数、访问次数和安装事件；`utmCampaign` 仍保留在查询结果中，方便需要时下钻到具体版本。GitHub Star 和 Fork 只能得到仓库总量，工作流用 n8n 静态数据保存上一次成功查询的快照，周报中的 Star/Fork 变化是仓库整体变化，不能归因到单个平台。第一次运行显示“首次记录”。
+Umami Website 需要保留 `utm_source`、`utm_medium`、`utm_campaign`，并在下载或安装成功时触发与 `MSIME_UMAMI_INSTALL_EVENT` 同名的自定义事件。工作流通过 Umami `/api/websites/{id}/breakdown` 按 `utmSource` 分组，`fields` 使用 URL 编码后的 JSON 数组，过滤 `utmMedium=social`。只按来源分组可以避免把跨版本活动的同一访客重复累加。随后对本周期出现过访问的每个来源调用 `/api/websites/{id}/events/stats`，按 `event`、`utmSource` 和 `utmMedium=social` 查询安装事件数量；`breakdown` 只统计页面浏览，不能用于统计安装事件。`utmCampaign` 保留在 Umami 原始记录中，可以在管理界面下钻具体版本。没有访问来源时查询全体社交安装事件，有事件则显示为 `unknown`；本周期仅有安装、没有页面浏览的来源可能不在分平台结果中。GitHub Star 和 Fork 只能得到仓库总量，工作流用 n8n 静态数据保存上一次成功查询的快照，周报中的 Star/Fork 变化是仓库整体变化，不能归因到单个平台。第一次运行显示“首次记录”。
 
-统计周期按 n8n 所在机器的 UTC 时间计算最近七天。工作流只保留上一份 Star/Fork 快照，不保存 Umami 明细或 GitHub 响应；发送节点开启失败继续执行，因此 Telegram 故障不会阻止 Discord 周报。队列模式下应确认 n8n 静态数据由同一个主进程持久化，否则请把快照迁移到 Data Table 或 PostgreSQL。
+统计周期按 n8n 所在机器的 UTC 时间计算最近七天。工作流只保留上一份 Star/Fork 快照，不保存 Umami 明细或 GitHub 响应；HTTP 查询保留完整响应，使空数组仍能继续执行，Release 数组也不会被拆成多份重复周报。查询失败会在周报末尾标记数据不可用。发送节点开启失败继续执行，因此 Telegram 故障不会阻止 Discord 周报。队列模式下应确认 n8n 静态数据由同一个主进程持久化，否则请把快照迁移到 Data Table 或 PostgreSQL。

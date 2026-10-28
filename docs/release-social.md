@@ -52,6 +52,14 @@ X 应用从[开发者控制台](https://console.x.com/)申请。使用 OAuth 2.0
 
 Reddit 的外部 n8n 集成需提交 [Data API 访问申请](https://support.reddithelp.com/hc/en-us/requests/new?ticket_form_id=14868593862164)并获得审批。用途应如实描述为低频的项目版本公告，列出账号、目标 subreddit、项目链接及使用外部 n8n 的原因；Devvit 登录不会直接提供外部 API 凭据，见 [Reddit 官方 FAQ](https://developers.reddit.com/docs/guides/faq)。获批后再配置 OAuth 应用、`submit` 权限及令牌刷新，且只发布到允许此类公告的社区。Client Secret 和用户令牌存入 Vault，不要粘贴到 PR 或聊天中。
 
+### Bluesky 与 Mastodon 接入
+
+Bluesky 使用 [bsky.app](https://bsky.app/) 账号的 App Password，应用密码入口是 [App passwords](https://bsky.app/settings/app-passwords)。当前模板连接 `bsky.social`，不使用账号主密码。登录响应启用完整响应后，JWT 和 DID 从 `body` 读取；会话无效时跳过发帖并返回固定失败标记，避免将令牌或上游响应传入结果。官网推广链接通过 rich-text facet 标记为可点击链接，范围按 UTF-8 字节计算，支持中文和 emoji。
+
+Mastodon 使用账号所在实例的 HTTPS 地址，在该实例 Settings → Development 创建具有 `write:statuses` 权限的用户 Token。实例由账号决定，不要填其他实例的地址。发帖携带 `Idempotency-Key`；实例只短期保存此键，工作流仍按版本和平台保留长期去重。两个平台仅在响应包含对应的帖子 `uri` 或 `id` 时记录成功，认证失败或响应缺少标识时不记成功。
+
+生产环境由 yldm-platform 的 ExternalSecret 从 Vault `secret/yldm/production/msime-social` 注入 `bluesky_enabled`、`bluesky_identifier`、`bluesky_app_password`、`mastodon_enabled`、`mastodon_instance`、`mastodon_access_token`。开关初始为 `0`，账号字段初始为空；字段必须先存在，再合并 ExternalSecret 映射。取得授权后通过身份查询验证，再将对应开关设为 `1`，等待 Secret 同步及 n8n 重启；不发送公开测试帖，不补发历史版本。DEV.to 未配置，当前工作流不会向其创建文章。
+
 工作流使用 Webhook 的 Raw Body 验证 `X-MSIME-Signature`，再生成不同长度的文案：Telegram 4096 字符、Discord 2000 字符、Mastodon 500 字符、Bluesky 300 字符、X 280 字符。Reddit 发布链接帖，正文在 Release 页面保留。
 
 每个平台的主推广链接指向官网，带独立的 `utm_source=<channel>`、`utm_medium=social` 和 `utm_campaign`。活动名称由版本标签与幂等键的 SHA-256 短摘要组成，只使用官网采集白名单允许的字符；完整幂等键仍用于去重，不变更历史发布记录。Telegram、Discord 和 Reddit 的长文另保留原始 Release 更新说明链接。文案先为完整链接预留长度，再截断更新内容，避免长说明切断推广入口。直接跳到 GitHub 的访问无法计入官网 Umami，不能据此比较官网转化。

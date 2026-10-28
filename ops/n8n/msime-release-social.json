@@ -291,6 +291,10 @@
             {
               "name": "Authorization",
               "value": "={{ 'Bearer ' + $env.MSIME_MASTODON_ACCESS_TOKEN }}"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $json.idempotency_key }}"
             }
           ]
         },
@@ -472,7 +476,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({repo: $json.did, collection: 'app.bsky.feed.post', record: {'$type': 'app.bsky.feed.post', text: $('验签和生成文案').item.json.text, createdAt: new Date().toISOString()}}) }}",
+        "jsonBody": "={{ JSON.stringify({repo: $json.repo, collection: 'app.bsky.feed.post', record: $json.record}) }}",
         "options": {
           "response": {
             "response": {
@@ -486,7 +490,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1080,
+        1500,
         80
       ],
       "continueOnFail": true
@@ -519,7 +523,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const source = $('验签和生成文案').item.json;\nconst response = $json;\nconst failed = Boolean(response.error) || Number(response.statusCode ?? 200) >= 400;\nif (!failed) {\n  const state = $getWorkflowStaticData('global');\n  state.completed ??= {};\n  state.completed[source.idempotency_key] ??= {};\n  state.completed[source.idempotency_key]['mastodon'] = new Date().toISOString();\n}\nreturn [{json: {channel: 'mastodon', ok: !failed}}];"
+        "jsCode": "const source = $('验签和生成文案').item.json;\nconst response = $json;\nconst failed = Boolean(response.error) || Number(response.statusCode ?? 200) >= 400 || !((response.body ?? response).id);\nif (!failed) {\n  const state = $getWorkflowStaticData('global');\n  state.completed ??= {};\n  state.completed[source.idempotency_key] ??= {};\n  state.completed[source.idempotency_key]['mastodon'] = new Date().toISOString();\n}\nreturn [{json: {channel: 'mastodon', ok: !failed}}];"
       },
       "id": "msime-release-18",
       "name": "记录 Mastodon 成功",
@@ -532,14 +536,14 @@
     },
     {
       "parameters": {
-        "jsCode": "const source = $('验签和生成文案').item.json;\nconst response = $json;\nconst failed = Boolean(response.error) || Number(response.statusCode ?? 200) >= 400;\nif (!failed) {\n  const state = $getWorkflowStaticData('global');\n  state.completed ??= {};\n  state.completed[source.idempotency_key] ??= {};\n  state.completed[source.idempotency_key]['bluesky'] = new Date().toISOString();\n}\nreturn [{json: {channel: 'bluesky', ok: !failed}}];"
+        "jsCode": "const source = $('验签和生成文案').item.json;\nconst response = $json;\nconst failed = Boolean(response.error) || Number(response.statusCode ?? 200) >= 400 || !((response.body ?? response).uri);\nif (!failed) {\n  const state = $getWorkflowStaticData('global');\n  state.completed ??= {};\n  state.completed[source.idempotency_key] ??= {};\n  state.completed[source.idempotency_key]['bluesky'] = new Date().toISOString();\n}\nreturn [{json: {channel: 'bluesky', ok: !failed}}];"
       },
       "id": "msime-release-19",
       "name": "记录 Bluesky 成功",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1080,
+        1740,
         80
       ]
     },
@@ -567,6 +571,52 @@
       "position": [
         1080,
         360
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $json;\nconst session = response.body ?? response;\nif (response.error || Number(response.statusCode ?? 200) >= 400 ||\n    typeof session.accessJwt !== 'string' || !session.accessJwt ||\n    typeof session.did !== 'string' || !session.did.startsWith('did:')) {\n  // 授权失败只返回固定标记，避免把令牌或平台响应传给后续节点。\n  return [{json: {error: true}}];\n}\nconst source = $('验签和生成文案').item.json;\nconst start = source.text.indexOf(source.tracking_url);\nif (start < 0) return [{json: {error: true}}];\n// Bluesky 链接范围按 UTF-8 字节计算，不能使用中文字符串的字符下标。\nconst byteStart = Buffer.byteLength(source.text.slice(0, start), 'utf8');\nconst record = {\n  '$type': 'app.bsky.feed.post',\n  text: source.text,\n  langs: ['zh'],\n  createdAt: new Date().toISOString(),\n  facets: [{\n    index: {byteStart, byteEnd: byteStart + Buffer.byteLength(source.tracking_url, 'utf8')},\n    features: [{'$type': 'app.bsky.richtext.facet#link', uri: source.tracking_url}],\n  }],\n};\nreturn [{json: {accessJwt: session.accessJwt, repo: session.did, record}}];"
+      },
+      "id": "msime-release-22",
+      "name": "准备 Bluesky 帖子",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.error !== true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "msime-release-23",
+      "name": "Bluesky 会话有效",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1260,
+        80
       ]
     }
   ],
@@ -695,7 +745,7 @@
       "main": [
         [
           {
-            "node": "Bluesky 发帖",
+            "node": "准备 Bluesky 帖子",
             "type": "main",
             "index": 0
           }
@@ -762,6 +812,35 @@
         [
           {
             "node": "记录 Reddit 成功",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "准备 Bluesky 帖子": {
+      "main": [
+        [
+          {
+            "node": "Bluesky 会话有效",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bluesky 会话有效": {
+      "main": [
+        [
+          {
+            "node": "Bluesky 发帖",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "记录 Bluesky 成功",
             "type": "main",
             "index": 0
           }

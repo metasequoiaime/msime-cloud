@@ -127,6 +127,65 @@ process.stdout.write(JSON.stringify({posts, rejected}));
         self.assertNotIn("headerParameters", node["parameters"])
         self.assertNotIn("MSIME_X_ACCESS_TOKEN", WORKFLOW.read_text(encoding="utf-8"))
 
+    def test_bluesky_session_and_utf8_link_facets(self):
+        program = """
+const workflow = JSON.parse(process.argv[1]);
+const code = workflow.nodes.find(n => n.name === '准备 Bluesky 帖子').parameters.jsCode;
+const url = 'https://example.test/download/?utm_source=bluesky';
+const source = {text: '水杉输入法 🌲 新版已发布。\\n下载：' + url, tracking_url: url};
+const execute = response => new Function('$json', '$', 'Buffer', code)(response,
+  name => ({item: {json: source}}), Buffer);
+const session = {accessJwt: 'synthetic-session', did: 'did:plc:synthetic'};
+const good = execute({statusCode: 200, body: session})[0].json;
+const facet = good.record.facets[0];
+const linked = Buffer.from(good.record.text).subarray(facet.index.byteStart, facet.index.byteEnd).toString('utf8');
+const failures = [{statusCode: 401, body: {error: 'AuthenticationRequired'}},
+  {error: {message: 'synthetic'}}, {statusCode: 200, body: {}},
+  {statusCode: 200, body: {...session, did: 'invalid'}},
+  {statusCode: 200, body: {...session, accessJwt: ''}}].map(execute);
+source.text = '缺少推广链接';
+failures.push(execute({statusCode: 200, body: session}));
+process.stdout.write(JSON.stringify({good, linked, failures}));
+"""
+        result = subprocess.run(["node", "-e", program, json.dumps(self.workflow)],
+            text=True, capture_output=True, check=True)
+        data = json.loads(result.stdout)
+        self.assertEqual(data["good"]["repo"], "did:plc:synthetic")
+        self.assertEqual(data["good"]["accessJwt"], "synthetic-session")
+        facet = data["good"]["record"]["facets"][0]
+        self.assertEqual(data["linked"], facet["features"][0]["uri"])
+        self.assertEqual(data["good"]["record"]["langs"], ["zh"])
+        for failure in data["failures"]:
+            self.assertEqual(failure, [{"json": {"error": True}}])
+        routes = self.workflow["connections"]["Bluesky 会话有效"]["main"]
+        self.assertEqual(routes[0][0]["node"], "Bluesky 发帖")
+        self.assertEqual(routes[1][0]["node"], "记录 Bluesky 成功")
+
+    def test_social_success_requires_platform_post_identifiers(self):
+        program = """
+const workflow = JSON.parse(process.argv[1]);
+const results = [];
+for (const [name, key, channel] of [['Bluesky', 'uri', 'bluesky'], ['Mastodon', 'id', 'mastodon']]) {
+  const code = workflow.nodes.find(n => n.name === '记录 ' + name + ' 成功').parameters.jsCode;
+  for (const [response, expected] of [[{error: true}, false], [{statusCode: 200, body: {}}, false],
+      [{statusCode: 500, body: {[key]: 'synthetic'}}, false],
+      [{statusCode: 200, body: {[key]: 'synthetic'}}, true]]) {
+    const state = {};
+    const output = new Function('$json', '$', '$getWorkflowStaticData', code)(response,
+      name => ({item: {json: {idempotency_key: 'synthetic:1'}}}), () => state);
+    results.push({ok: output[0].json.ok, marked: Boolean(state.completed?.['synthetic:1']?.[channel]), expected});
+  }
+}
+process.stdout.write(JSON.stringify(results));
+"""
+        result = subprocess.run(["node", "-e", program, json.dumps(self.workflow)],
+            text=True, capture_output=True, check=True)
+        for case in json.loads(result.stdout):
+            self.assertEqual(case["ok"], case["expected"])
+            self.assertEqual(case["marked"], case["expected"])
+        headers = self.nodes["发送 Mastodon"]["parameters"]["headerParameters"]["parameters"]
+        self.assertIn({"name": "Idempotency-Key", "value": "={{ $json.idempotency_key }}"}, headers)
+
 
 if __name__ == "__main__":
     unittest.main()

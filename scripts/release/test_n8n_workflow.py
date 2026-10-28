@@ -94,6 +94,31 @@ process.stdout.write(JSON.stringify(posts));
         for invalid in ("http://example.test/", "https://user:password@example.test/", "https://example.test/?token=private"):
             self.assertNotEqual(self.build_posts(invalid).returncode, 0)
 
+    def test_binary_raw_body_preserves_signature_and_rejects_tampering(self):
+        program = """
+const crypto = require('crypto');
+const code = JSON.parse(process.argv[1]).nodes.find(n => n.name === '验签和生成文案').parameters.jsCode;
+const raw = '{ "schema_version": 1, "event": "release.published", "idempotency_key": "test:1", "release": {"tag": "backend-v1", "body": "- 中文更新"} }';
+const secret = 'synthetic-secret';
+const signature = 'sha256=' + crypto.createHmac('sha256', secret).update(raw).digest('hex');
+const execute = (body, binary) => new Function('$input', '$env', '$getWorkflowStaticData', 'require', 'Buffer', code)(
+  {first: () => ({json: {headers: {'x-msime-signature': signature}, body: JSON.parse(body)},
+    ...(binary ? {binary: {data: {data: Buffer.from(body).toString('base64')}}} : {})})},
+  {MSIME_SOCIAL_WEBHOOK_SECRET: secret, MSIME_X_ENABLED: '1'}, () => ({}), require, Buffer);
+const posts = execute(raw, true);
+let rejected = 0;
+for (const [body, binary] of [[raw.replace('中文更新', '篡改更新'), true], [raw, false]]) {
+  try {execute(body, binary);} catch {rejected++;}
+}
+process.stdout.write(JSON.stringify({posts, rejected}));
+"""
+        result = subprocess.run(["node", "-e", program, json.dumps(self.workflow)],
+            text=True, capture_output=True, check=True)
+        data = json.loads(result.stdout)
+        self.assertEqual(data["rejected"], 2)
+        self.assertEqual(len(data["posts"]), 1)
+        self.assertIn("• 中文更新", data["posts"][0]["json"]["text"])
+
     def test_x_uses_refreshable_n8n_oauth2_credentials(self):
         node = self.nodes["发送 X"]
         self.assertEqual(node["parameters"]["authentication"], "genericCredentialType")

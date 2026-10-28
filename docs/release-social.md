@@ -77,7 +77,7 @@ curl --fail-with-body -X POST "$N8N_TEST_WEBHOOK_URL" \
 
 ## 每周效果周报
 
-仓库还提供了 [`ops/n8n/msime-social-report.json`](../ops/n8n/msime-social-report.json) 周报模板。它每周运行一次，查询自托管 Umami 的 `social` UTM 访问、`Download` 下载点击和可选安装事件，查询 GitHub 仓库的 Star、Fork 与最近 Release，然后生成中文周报并按开关发送到内部 Telegram 或 Discord。Umami 是可选的；关闭时仍会生成 GitHub 增长和 Release 周报，只跳过官网流量查询。工作流默认未激活，导入后先手动执行一次，确认统计周期、平台名称、下载点击数量和安装接入状态都正确，再启用它。
+仓库还提供了 [`ops/n8n/msime-social-report.json`](../ops/n8n/msime-social-report.json) 周报模板。它按 `Asia/Shanghai` 时区在每周一 09:00 运行一次，查询自托管 Umami 的 `social` UTM 访问、`Download` 下载点击和可选安装事件，查询 GitHub 仓库的 Star、Fork 与最近 Release，然后生成中文周报并按开关发送到内部 Telegram 或 Discord。Umami 是可选的；关闭时仍会生成 GitHub 增长和 Release 周报，只跳过官网流量查询。工作流默认未激活，导入后先手动执行一次，确认统计周期、平台名称、下载点击数量和安装接入状态都正确，再启用它。
 
 周报使用以下 n8n 环境变量；令牌只放环境变量或 n8n Credentials，不要写入工作流 JSON：
 

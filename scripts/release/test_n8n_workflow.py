@@ -52,8 +52,8 @@ class N8nWorkflowTests(unittest.TestCase):
 const crypto = require('crypto');
 const workflow = JSON.parse(process.argv[1]);
 const payload = {schema_version: 1, event: 'release.published',
-  idempotency_key: 'test/repo:backend-v1.2.3', repository: 'test/repo',
-  release: {tag: 'backend-v1.2.3', body: '- ' + '合成更新'.repeat(5000), url: 'https://github.com/test/repo/releases/tag/backend-v1.2.3'}};
+  idempotency_key: 'metasequoiaime/msime:android-v1.2.3', repository: 'metasequoiaime/msime',
+  release: {tag: 'android-v1.2.3', body: '- ' + '合成更新'.repeat(5000), url: 'https://github.com/metasequoiaime/msime/releases/tag/android-v1.2.3'}};
 const rawBody = JSON.stringify(payload);
 const env = {MSIME_SOCIAL_WEBHOOK_SECRET: 'synthetic-secret'};
 for (const channel of ['TELEGRAM', 'DISCORD', 'MASTODON', 'BLUESKY', 'X', 'REDDIT']) env['MSIME_' + channel + '_ENABLED'] = '1';
@@ -85,7 +85,7 @@ process.stdout.write(JSON.stringify(posts));
             self.assertIn(link, post["text"])
             self.assertLessEqual(len(post["text"]), limits[post["channel"]])
             if post["channel"] in ("telegram", "discord", "reddit"):
-                self.assertIn("更新说明：https://github.com/test/repo/releases/tag/backend-v1.2.3", post["text"])
+                self.assertIn("更新说明：https://github.com/metasequoiaime/msime/releases/tag/android-v1.2.3", post["text"])
 
     def test_landing_url_is_configurable_and_rejects_credentials_or_query_strings(self):
         result = self.build_posts("https://example.test/download/")
@@ -98,7 +98,7 @@ process.stdout.write(JSON.stringify(posts));
         program = """
 const crypto = require('crypto');
 const code = JSON.parse(process.argv[1]).nodes.find(n => n.name === '验签和生成文案').parameters.jsCode;
-const raw = '{ "schema_version": 1, "event": "release.published", "idempotency_key": "test:1", "release": {"tag": "backend-v1", "body": "- 中文更新"} }';
+const raw = '{ "schema_version": 1, "event": "release.published", "idempotency_key": "metasequoiaime/msime:android-v1.2.3", "repository": "metasequoiaime/msime", "release": {"tag": "android-v1.2.3", "body": "- 中文更新"} }';
 const secret = 'synthetic-secret';
 const signature = 'sha256=' + crypto.createHmac('sha256', secret).update(raw).digest('hex');
 const execute = (body, binary) => new Function('$input', '$env', '$getWorkflowStaticData', 'require', 'Buffer', code)(

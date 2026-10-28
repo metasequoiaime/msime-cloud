@@ -1,87 +1,60 @@
 # 发版社交分发
 
-后端版本与镜像发布工作流在镜像构建、GitHub Release 创建以及 `msime-cloud` 命令行资产上传完成后，执行最后的 `announce` job。这个 job 不直接保存各个平台的账号令牌，只把完整 Release 封装成一份带 HMAC 签名的 JSON，发送到社交分发 webhook。
+生产入口是自托管 n8n 的客户端 Release 定时检查，不依赖 GitHub Actions 访问集群内网。`ops/n8n/msime-release-watch.json` 每五分钟读取 `metasequoiaime/msime` 和 `metasequoiaime/msime-windows` 的 GitHub Releases，通过同一 Pod 的 `http://127.0.0.1:5678/webhook/msime-release` 向 `ops/n8n/msime-release-social.json` 发送 HMAC 签名事件，再分发到已启用的社交平台。
 
-## 配置 GitHub Secrets
+`n8n.yldm.tech` 的 DNS 指向内网地址，编辑器和 webhook 不向公网开放。GitHub 托管 runner 无法连接此地址；不要再把它填成 Actions 的分发目标。后端发版工作流已移除 `announce` job，后端版本不触发宣传，旧的 `SOCIAL_WEBHOOK_URL`、`SOCIAL_WEBHOOK_SECRET` Actions Secrets 不再被默认发布流程使用。`scripts/release/social.py` 保留为有内网连通性时的手动发送工具。
 
-在仓库的 Settings → Secrets and variables → Actions 中新增：
+## 宣传范围与重试
 
-| Secret | 内容 |
+只分发 Windows（含 Windows 7）、macOS、Linux、Android、iOS、HarmonyOS 的正式版。主仓标签必须是 `windows-vX.Y.Z`、`windows7-vX.Y.Z`、`macos-vX.Y.Z`、`linux-vX.Y.Z`、`android-vX.Y.Z`、`ios-vX.Y.Z`、`harmony-vX.Y.Z`，Windows 独立仓使用 `vX.Y.Z`。草稿、预发布、nightly、alpha、beta、后端和其他仓库的事件都会被过滤；分发工作流再次执行同样的范围检查。
+
+检查任务仅接受启用时间之后、最近 24 小时内发布的版本，并等待至少一个附件、全部附件上传完成且大小大于零。生产导入时固定静态数据 `enabledAt`，以后更新工作流必须保留它；首次导入其他实例且未设这个值时，第一次检查自动记录当前时间，不补发历史版本。停机超过一天的版本需管理员明确补发。
+
+在此时间范围内，每轮检查都以 `repository:tag` 重送事件。分发工作流按版本、平台记录成功，因此已成功的平台跳过、失败的平台下轮重试。请求按批次串行发送，webhook 等本次执行结束再返回，避免同一轮并发覆盖 n8n 的静态去重状态。发帖失败只记录平台名、时间和状态码到 `failures`，成功后清理对应失败标记，不保存平台响应或令牌。检查任务的 `sourceErrors` 和 `lastDispatch` 分别保留仓库读取与内部投递错误。
+
+这是单实例 n8n 的部署约定；升级为队列或多执行器前，必须把去重和任务租约迁移到共享 PostgreSQL，不能只复制工作流。
+
+## 上线顺序
+
+1. 配置固定 `N8N_ENCRYPTION_KEY`，启用 `N8N_BLOCK_ENV_ACCESS_IN_NODE=false`，只给可信管理员工作流编辑权限。
+2. 配置下表的 Vault/环境变量与已授权的 n8n X OAuth2 凭据。
+3. 按原 ID `msimeReleaseSocial` 导入、发布分发工作流，保留已有静态数据与 X 凭据引用；等待 Pod 重启加载。
+4. 导入检查工作流为 `msimeReleaseWatch`，设置 `staticData.global.enabledAt` 为启用时间。先运行不发帖验收，确认两个 GitHub 查询成功、签名请求确实到达本地 webhook。
+5. 发布检查工作流并重启 n8n，确认其已发布版本、每五分钟的实际执行和新的 `lastCheckAt`。不需要为客户端仓库创建新的 Actions Secrets 或 webhook。
+
+| 环境变量 | 用途 |
 | --- | --- |
-| `SOCIAL_WEBHOOK_URL` | n8n、Make 或自建分发服务的 HTTPS webhook 地址 |
-| `SOCIAL_WEBHOOK_SECRET` | 与分发服务约定的随机共享密钥 |
+| `MSIME_GITHUB_TOKEN` | 读取两个公开客户端仓库的 Release，复用周报已有 GitHub 凭据 |
+| `MSIME_SOCIAL_WEBHOOK_SECRET` | 检查与分发工作流共享的 HMAC 密钥，来自 Vault `secret/yldm/production/msime-social` 的 `webhook_secret` |
+| `MSIME_SOCIAL_SITE_URL` | 官网入口，默认 `https://msime.app/download/`，必须为无账号、查询参数和锚点的 HTTPS URL |
+| `MSIME_X_ENABLED` | 设为 `1` 启用，使用 n8n 已授权的 `MSIME X OAuth2` 凭据（ID `msimeXOAuth2`）自动刷新 Token |
+| `MSIME_BLUESKY_ENABLED`、`MSIME_BLUESKY_IDENTIFIER`、`MSIME_BLUESKY_APP_PASSWORD` | Bluesky 开关、账号和应用密码 |
+| `MSIME_MASTODON_ENABLED`、`MSIME_MASTODON_INSTANCE`、`MSIME_MASTODON_ACCESS_TOKEN` | Mastodon 开关、账号所在实例的 HTTPS URL 和 `write:statuses` 用户 Token |
+| `MSIME_TELEGRAM_ENABLED`、`MSIME_TELEGRAM_BOT_TOKEN`、`MSIME_TELEGRAM_CHAT_ID` | 可选 Telegram 分发；生产保持关闭，客户端公告已由后端通过 `@msime_bot` 投递到用户群，避免重复公告 |
+| `MSIME_DISCORD_ENABLED`、`MSIME_DISCORD_WEBHOOK_URL` | 可选 Discord 分发 |
+| `MSIME_REDDIT_ENABLED`、`MSIME_REDDIT_ACCESS_TOKEN`、`MSIME_REDDIT_SUBREDDIT`、`MSIME_REDDIT_USER_AGENT` | 可选 Reddit 分发，需先完成 Data API 审批和令牌刷新接线，当前未启用 |
 
-两个 Secret 都配置后，下一次正式 Release 会自动发送。只配置一个时 workflow 会跳过分发，不会影响镜像或 Release 发布。密钥只在 Actions 环境变量中使用，不要写进仓库、Release 说明或日志。
+`MSIME_RELEASE_WATCH_DRY_RUN=1` 只用于隔离验收进程：检查任务在签名的正文中添加 `dry_run: true`，分发器验签后返回 `probe` 项并更新 `lastVerification`，不触发发帖、不记录成功。生产容器不得设置此变量，否则正式版本也只会验收。
 
-## Webhook 合约
+## Webhook 合约与验收
 
-请求方法是 `POST`，正文是 UTF-8 JSON，带有以下请求头：
+内部请求使用 `POST`，正文为 UTF-8 JSON，`X-MSIME-Signature: sha256=<HMAC-SHA256>` 对原始字节计算。正文包含 `schema_version: 1`、`event: release.published`、`repository`、`idempotency_key: repository:tag` 与 `release`（`tag`、`name`、`body`、`url`、`published_at`、`target_commitish`）。Webhook 的 Raw Body 位于 `binary.data`，不能重新序列化后再验签。
 
-- `X-MSIME-Signature: sha256=<HMAC-SHA256>`：对原始请求正文用 `SOCIAL_WEBHOOK_SECRET` 计算。
-- `X-MSIME-Idempotency-Key: metasequoiaime/msime-cloud:backend-v1.2.3`：下游必须按此键去重。
-- `Content-Type: application/json`。
+不发帖验收使用合成的正式版标签，如 `android-v0.0.0`，在签名前加入 `dry_run: true`。确认返回的 `probe` 列出 X、Bluesky、Mastodon，且已发布工作流的 `lastVerification` 与请求一致；错误签名必须失败。验收不能删除真实版本的去重记录，也不补发历史 Release。
 
-正文包含 `schema_version`、`event`、`idempotency_key`、`repository` 和 `release`。`release` 中有 `tag`、`name`、`body`、`url`、`published_at` 和 `target_commitish`。下游应先验签和去重，再按平台限制生成短帖、长帖或线程。
+正式发版后，检查 `msimeReleaseWatch` 的 `lastCheckAt`、`lastDispatch`、`sourceErrors`，以及 `msimeReleaseSocial` 的 `completed` 和 `failures`。HTTP 成功只表示本次内部执行结束，具体平台是否发布以平台成功记录及帖子为准。
 
-分发服务建议把 Telegram、Discord、Mastodon 和 Bluesky 设为自动发布，把 X、微博、小红书和 Reddit 设为人工审核或延迟发布。每个平台单独记录发布结果，失败时只重试网络错误和 5xx；不要把上游响应正文原样转发到日志或帖子。
+## 平台授权与链接
 
-## 手动补发
+Bluesky 应用密码入口：[App passwords](https://bsky.app/settings/app-passwords)。模板使用 `bsky.social`，不使用账号主密码。完整会话响应从 `body` 读取 JWT/DID；授权失败不会发帖。推广链接用 UTF-8 字节范围的 facet 标记为可点击链接。
 
-在 Actions 页面重新运行同一个发版 workflow 会复用已有标签并重新构建缺失的 Release 资产。社交分发以版本标签为幂等键，下游应把已经成功的 `backend-v1.2.3` 判为已发送；需要重新发布时，应在分发服务中明确执行补发，而不是直接删除去重记录。
+Mastodon 在账号所在实例 Settings → Development 创建 `write:statuses` 用户 Token，Redirect URI 可用 `urn:ietf:wg:oauth:2.0:oob`。发帖携带 `Idempotency-Key` 减少短期重复；长期去重仍由工作流负责。Bluesky、Mastodon 只在响应包含帖子 `uri` 或 `id` 时记录成功。
 
-## 自托管 n8n
+X 使用 OAuth2 PKCE 的 `tweet.read tweet.write users.read offline.access`，通过 n8n 的 `MSIME X OAuth2` 完成账号授权和刷新，不能只保存 Client ID/Secret，也不能使用 App-only Token 发帖。替换账号或应用时在 n8n 重新授权；其他实例导入时重新选择自己的凭据。
 
-仓库提供了可直接导入的工作流模板 [`ops/n8n/msime-release-social.json`](../ops/n8n/msime-release-social.json)。在 n8n 中选择 Import from File 导入后，先保持工作流未激活，配置环境变量，再用 Test URL 验证；确认每个分支都收到测试消息后才激活 Production Webhook。
+主推广链接包含 `utm_source=<channel>`、`utm_medium=social`、由标签与幂等键摘要构成的 `utm_campaign`；完整链接先预留长度，再截断文案。Telegram、Discord 和 Reddit 长文另含原始 Release 链接。直接进入 GitHub 的流量无法计入官网 Umami。
 
-n8n 进程需要能够访问公网，并设置 `N8N_BLOCK_ENV_ACCESS_IN_NODE=false`，让验签和 HTTP Request 表达式读取下面的变量。不要把这些值写进工作流 JSON：
-
-| 变量 | 作用 |
-| --- | --- |
-| `MSIME_SOCIAL_WEBHOOK_SECRET` | 与 GitHub Secret `SOCIAL_WEBHOOK_SECRET` 相同 |
-| `MSIME_SOCIAL_SITE_URL` | 官网推广入口，默认 `https://msime.app/download/`；必须为无账号、查询参数或锚点的 HTTPS 地址 |
-| `MSIME_TELEGRAM_ENABLED`、`MSIME_TELEGRAM_BOT_TOKEN`、`MSIME_TELEGRAM_CHAT_ID` | Telegram 开关、Bot Token 和会话 ID |
-| `MSIME_DISCORD_ENABLED`、`MSIME_DISCORD_WEBHOOK_URL` | Discord 开关和 Webhook 地址 |
-| `MSIME_MASTODON_ENABLED`、`MSIME_MASTODON_INSTANCE`、`MSIME_MASTODON_ACCESS_TOKEN` | Mastodon 开关、实例地址和 `write:statuses` Token |
-| `MSIME_BLUESKY_ENABLED`、`MSIME_BLUESKY_IDENTIFIER`、`MSIME_BLUESKY_APP_PASSWORD` | Bluesky 开关、账号和 App Password |
-| `MSIME_X_ENABLED` | X 开关；发帖使用 n8n 中已授权的 `MSIME X OAuth2` 凭据 |
-| `MSIME_REDDIT_ENABLED`、`MSIME_REDDIT_ACCESS_TOKEN`、`MSIME_REDDIT_SUBREDDIT`、`MSIME_REDDIT_USER_AGENT` | Reddit 开关、带 `submit` 权限的 OAuth Token、目标 subreddit 和描述性 User-Agent |
-
-开关取值为 `1` 才会发帖。未配置的分支不会运行，单个平台失败也不会阻止其他分支。X 使用 n8n OAuth2 凭据自动刷新，Reddit 仍直接使用环境变量中的用户 Token，启用持续发布前需补齐它的刷新接线。不要把长期凭据放进 GitHub Actions。
-
-X 应用从[开发者控制台](https://console.x.com/)申请。使用 OAuth 2.0 用户授权申请 `tweet.read`、`tweet.write`、`users.read` 和 `offline.access`，保存 Client ID 与 Client Secret，后续再完成账号授权和刷新令牌接线；App-only Bearer Token 不能用于发帖。授权流程与有效期见 [X 官方说明](https://docs.x.com/fundamentals/authentication/oauth-2-0/authorization-code)，发帖费用以[当前官方价格](https://docs.x.com/x-api/getting-started/pricing)为准。模板的「发送 X」节点使用 Generic Credential Type → OAuth2 API，引用 ID 为 `msimeXOAuth2`、名称为 `MSIME X OAuth2` 的凭据。在 n8n 创建该凭据时，Grant Type 选 PKCE，Authorization URL 为 `https://x.com/i/oauth2/authorize`，Access Token URL 为 `https://api.x.com/2/oauth2/token`，Authentication 选 Header，Scope 为上述四项；点击 Connect my account 完成用户授权。仅保存 Client ID/Secret 不代表已授权。HTTP Request 节点通过 n8n 管理用户 Access Token 与 Refresh Token，不再读取 `MSIME_X_ACCESS_TOKEN`。其他实例导入时应在该节点重新选择自己的凭据，不要照搬生产凭据数据。
-
-Reddit 的外部 n8n 集成需提交 [Data API 访问申请](https://support.reddithelp.com/hc/en-us/requests/new?ticket_form_id=14868593862164)并获得审批。用途应如实描述为低频的项目版本公告，列出账号、目标 subreddit、项目链接及使用外部 n8n 的原因；Devvit 登录不会直接提供外部 API 凭据，见 [Reddit 官方 FAQ](https://developers.reddit.com/docs/guides/faq)。获批后再配置 OAuth 应用、`submit` 权限及令牌刷新，且只发布到允许此类公告的社区。Client Secret 和用户令牌存入 Vault，不要粘贴到 PR 或聊天中。
-
-### Bluesky 与 Mastodon 接入
-
-Bluesky 使用 [bsky.app](https://bsky.app/) 账号的 App Password，应用密码入口是 [App passwords](https://bsky.app/settings/app-passwords)。当前模板连接 `bsky.social`，不使用账号主密码。登录响应启用完整响应后，JWT 和 DID 从 `body` 读取；会话无效时跳过发帖并返回固定失败标记，避免将令牌或上游响应传入结果。官网推广链接通过 rich-text facet 标记为可点击链接，范围按 UTF-8 字节计算，支持中文和 emoji。
-
-Mastodon 使用账号所在实例的 HTTPS 地址，在该实例 Settings → Development 创建具有 `write:statuses` 权限的用户 Token。实例由账号决定，不要填其他实例的地址。发帖携带 `Idempotency-Key`；实例只短期保存此键，工作流仍按版本和平台保留长期去重。两个平台仅在响应包含对应的帖子 `uri` 或 `id` 时记录成功，认证失败或响应缺少标识时不记成功。
-
-生产环境由 yldm-platform 的 ExternalSecret 从 Vault `secret/yldm/production/msime-social` 注入 `bluesky_enabled`、`bluesky_identifier`、`bluesky_app_password`、`mastodon_enabled`、`mastodon_instance`、`mastodon_access_token`。开关初始为 `0`，账号字段初始为空；字段必须先存在，再合并 ExternalSecret 映射。取得授权后通过身份查询验证，再将对应开关设为 `1`，等待 Secret 同步及 n8n 重启；不发送公开测试帖，不补发历史版本。DEV.to 未配置，当前工作流不会向其创建文章。
-
-工作流使用 Webhook 的 Raw Body 验证 `X-MSIME-Signature`，再生成不同长度的文案：Telegram 4096 字符、Discord 2000 字符、Mastodon 500 字符、Bluesky 300 字符、X 280 字符。Reddit 发布链接帖，正文在 Release 页面保留。
-
-每个平台的主推广链接指向官网，带独立的 `utm_source=<channel>`、`utm_medium=social` 和 `utm_campaign`。活动名称由版本标签与幂等键的 SHA-256 短摘要组成，只使用官网采集白名单允许的字符；完整幂等键仍用于去重，不变更历史发布记录。Telegram、Discord 和 Reddit 的长文另保留原始 Release 更新说明链接。文案先为完整链接预留长度，再截断更新内容，避免长说明切断推广入口。直接跳到 GitHub 的访问无法计入官网 Umami，不能据此比较官网转化。
-
-### 测试请求
-
-先在 n8n 的 Test URL 上执行工作流，再用一个合成 Release 事件测试。签名必须对原始 JSON 正文计算，不能先格式化或重新排序：
-
-```sh
-payload='{"schema_version":1,"event":"release.published","idempotency_key":"test:backend-v0.0.0","repository":"test/repo","release":{"tag":"backend-v0.0.0","name":"测试版本","body":"- 合成变更","url":"https://example.test/release","published_at":"2026-01-01T00:00:00Z","target_commitish":"test"}}'
-signature="sha256=$(printf %s "$payload" | openssl dgst -sha256 -hmac "$MSIME_SOCIAL_WEBHOOK_SECRET" | awk '{print $2}')"
-curl --fail-with-body -X POST "$N8N_TEST_WEBHOOK_URL" \
-  -H 'Content-Type: application/json' \
-  -H "X-MSIME-Signature: $signature" \
-  --data-binary "$payload"
-```
-
-模板默认关闭所有平台分支，测试时只打开 Telegram 或 Discord 其中一个，确认内容、长度和链接正确后再逐个启用。n8n 的成功执行数据被关闭保存，避免把 Token 或社交正文长期写入执行记录；发生错误时只看状态码和节点名，不要把上游响应正文复制到 issue 或日志。
-
-工作流用 n8n 的全局静态数据记录每个平台已经成功的 `idempotency_key`，重跑时只补发失败的平台。这个记录只适合单进程或普通主从部署；n8n 队列模式下静态数据可能无法在执行器之间可靠共享，应把去重改成 Data Table 或 PostgreSQL，并让所有执行器使用同一个存储。静态数据会随工作流执行成功后保存，第一次在编辑器里手动测试时不会建立去重记录。
-
-自托管 n8n 应启用 HTTPS、固定 `N8N_ENCRYPTION_KEY`、关闭公开注册，并限制能够编辑 Code 节点和读取环境变量的账号。升级 n8n 后先在测试 URL 验证 Raw Body、HMAC 和各平台分支，再重新激活 Production Webhook。
+Bluesky、Mastodon 字段由 yldm-platform 的 ExternalSecret 从 `secret/yldm/production/msime-social` 注入，开关为 `1` 才发帖；X 用户令牌加密存放于 n8n 数据库。DEV.to 尚未接入。不要将凭据或上游响应写进 Git、PR、聊天或执行日志；成功与失败执行详情均关闭保存。
 
 ## 每周效果周报
 

@@ -36,7 +36,7 @@
     },
     {
       "parameters": {
-        "method": "POST",
+        "method": "GET",
         "url": "={{ $('准备查询').first().json.umami_base_url + '/api/websites/' + encodeURIComponent($('准备查询').first().json.website_id) + '/breakdown?startAt=' + $('准备查询').first().json.start_at + '&endAt=' + $('准备查询').first().json.end_at + '&fields=utmSource,utmMedium,utmCampaign&utmMedium=social' }}",
         "sendHeaders": true,
         "headerParameters": {
@@ -81,7 +81,7 @@
     },
     {
       "parameters": {
-        "method": "POST",
+        "method": "GET",
         "url": "={{ $('准备查询').first().json.umami_base_url + '/api/websites/' + encodeURIComponent($('准备查询').first().json.website_id) + '/breakdown?startAt=' + $('准备查询').first().json.start_at + '&endAt=' + $('准备查询').first().json.end_at + '&fields=utmSource,utmMedium,utmCampaign&utmMedium=social&event=' + encodeURIComponent($('准备查询').first().json.install_event) }}",
         "sendHeaders": true,
         "headerParameters": {

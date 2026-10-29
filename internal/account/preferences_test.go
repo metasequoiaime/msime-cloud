@@ -320,6 +320,8 @@ func TestTouchHostPreferenceFields(t *testing.T) {
 			{"twenty_six_symbol_first", "true", true},
 			{"number_pad_space", `"platform_default"`, true},
 			{"number_pad_space", `"` + strings.Repeat("a", 33) + `"`, false},
+			{"one_handed_side_panel", `"number_pad"`, true},
+			{"one_handed_side_panel", "true", false},
 			{"language_key_side", `"left"`, true},
 			{"nine_key_swipe", `"down"`, true},
 			{"nine_key_swipe", "true", false},

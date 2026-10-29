@@ -624,6 +624,174 @@
   "platform.android.voice_offline_fallback": {
     "type": "boolean"
   },
+  "platform.android.keyboard_skin_light": {
+    "type": "string",
+    "maxLength": 256
+  },
+  "platform.android.keyboard_skin_dark": {
+    "type": "string",
+    "maxLength": 256
+  },
+  "platform.android.number_keypad_order": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.android.twenty_six_key_number_layout": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.android.shuangpin_key_hints": {
+    "type": "boolean"
+  },
+  "platform.android.quanpin_shift": {
+    "type": "boolean"
+  },
+  "platform.android.twenty_six_key_style": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.android.fourteen_key_style": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.android.nine_key_style": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.android.number_row": {
+    "type": "boolean"
+  },
+  "platform.android.twenty_six_symbol_first": {
+    "type": "boolean"
+  },
+  "platform.android.number_pad_space": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.android.swipe_symbols_direction": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.android.language_key_side": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.android.nine_key_swipe": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.android.nine_key_symbols": {
+    "type": "string",
+    "maxLength": 1024
+  },
+  "platform.android.nine_key_digit_symbols": {
+    "type": "string",
+    "maxLength": 1024
+  },
+  "platform.harmony.keyboard_layout": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.harmony.global_theme": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.harmony.custom_theme_base": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.harmony.custom_keyboard_skin": {
+    "type": "string",
+    "maxLength": 786432
+  },
+  "platform.harmony.custom_candidate_skin": {
+    "type": "string",
+    "maxLength": 64
+  },
+  "platform.harmony.custom_candidate_skin_dark": {
+    "type": "string",
+    "maxLength": 64
+  },
+  "platform.harmony.theme": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.harmony.touch_key_spacing_tenths": {
+    "type": "integer"
+  },
+  "platform.harmony.touch_row_spacing_tenths": {
+    "type": "integer"
+  },
+  "platform.harmony.keyboard_height_adjustment": {
+    "type": "integer",
+    "minimum": -46,
+    "maximum": 55
+  },
+  "platform.harmony.voice_shortcut": {
+    "type": "boolean"
+  },
+  "platform.harmony.number_keypad_order": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.harmony.twenty_six_key_number_layout": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.harmony.shuangpin_key_hints": {
+    "type": "boolean"
+  },
+  "platform.harmony.quanpin_shift": {
+    "type": "boolean"
+  },
+  "platform.harmony.twenty_six_key_style": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.harmony.fourteen_key_style": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.harmony.nine_key_style": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.harmony.number_row": {
+    "type": "boolean"
+  },
+  "platform.harmony.twenty_six_symbol_first": {
+    "type": "boolean"
+  },
+  "platform.harmony.number_pad_space": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.harmony.sound_enabled": {
+    "type": "boolean"
+  },
+  "platform.harmony.haptics_enabled": {
+    "type": "boolean"
+  },
+  "platform.harmony.haptic_strength": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.harmony.language_key_side": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.harmony.nine_key_swipe": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.harmony.nine_key_symbols": {
+    "type": "string",
+    "maxLength": 1024
+  },
+  "platform.harmony.nine_key_digit_symbols": {
+    "type": "string",
+    "maxLength": 1024
+  },
   "mixed_input.quick_phrase": {
     "type": "boolean"
   },

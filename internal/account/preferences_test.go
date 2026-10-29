@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -297,5 +298,119 @@ func TestAndroidPreferenceFields(t *testing.T) {
 	stored, err := s.Preferences(context.Background(), user.User.ID)
 	if err != nil || string(stored.Settings["platform.android.keyboard_height_adjustment"]) != "-20" || string(stored.Settings["general.app_theme"]) != `"siji"` {
 		t.Fatal("android preferences roundtrip", stored, err)
+	}
+}
+
+// 触屏宿主的同步键：Android 和鸿蒙用同一套导出（msime 的 client-services `TouchHostKeys`），鸿蒙只是把同一批键放在 platform.harmony.* 下。字段表没收录的键客户端上传前就滤掉，所以漏一个键就是这项设置静默不同步；取值按客户端实际导出的写法校验。
+func TestTouchHostPreferenceFields(t *testing.T) {
+	for _, platform := range []string{"platform.android.", "platform.harmony."} {
+		for _, tc := range []struct {
+			key, value string
+			valid      bool
+		}{
+			{"number_keypad_order", `"calculator"`, true},
+			{"twenty_six_key_number_layout", `"nine_key"`, true},
+			{"shuangpin_key_hints", "true", true},
+			{"shuangpin_key_hints", `"true"`, false},
+			{"quanpin_shift", "false", true},
+			{"twenty_six_key_style", `"comma_period"`, true},
+			{"fourteen_key_style", `"long_space"`, true},
+			{"nine_key_style", `"tall_return"`, true},
+			{"number_row", "true", true},
+			{"twenty_six_symbol_first", "true", true},
+			{"number_pad_space", `"platform_default"`, true},
+			{"number_pad_space", `"` + strings.Repeat("a", 33) + `"`, false},
+			{"language_key_side", `"left"`, true},
+			{"nine_key_swipe", `"down"`, true},
+			{"nine_key_swipe", "true", false},
+		} {
+			if got := validPreference(platform+tc.key, json.RawMessage(tc.value)); got != tc.valid {
+				t.Errorf("%s%s %s: got %v", platform, tc.key, tc.value, got)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		key, value string
+		valid      bool
+	}{
+		// 键盘模式槽位是 `theme:<主题>` 或 `design:<最长 128 字节的设计 id>`。
+		{"platform.android.keyboard_skin_light", `"theme:night"`, true},
+		{"platform.android.keyboard_skin_dark", `"design:` + strings.Repeat("a", 128) + `"`, true},
+		{"platform.android.keyboard_skin_dark", `""`, true},
+		{"platform.android.keyboard_skin_dark", `"` + strings.Repeat("a", 257) + `"`, false},
+		{"platform.android.swipe_symbols_direction", `"up"`, true},
+		{"platform.harmony.keyboard_layout", `"eighteen_key"`, true},
+		{"platform.harmony.global_theme", `"shuishan"`, true},
+		{"platform.harmony.custom_theme_base", `"ink"`, true},
+		{"platform.harmony.custom_candidate_skin", `"` + strings.Repeat("a", 64) + `"`, true},
+		{"platform.harmony.custom_candidate_skin_dark", `"` + strings.Repeat("a", 65) + `"`, false},
+		{"platform.harmony.theme", `"system"`, true},
+		{"platform.harmony.touch_key_spacing_tenths", "45", true},
+		{"platform.harmony.touch_row_spacing_tenths", "-1", false},
+		{"platform.harmony.keyboard_height_adjustment", "-46", true},
+		{"platform.harmony.keyboard_height_adjustment", "55", true},
+		{"platform.harmony.keyboard_height_adjustment", "-47", false},
+		{"platform.harmony.keyboard_height_adjustment", "56", false},
+		{"platform.harmony.voice_shortcut", "true", true},
+		{"platform.harmony.sound_enabled", "false", true},
+		{"platform.harmony.haptics_enabled", "true", true},
+		{"platform.harmony.haptic_strength", `"system"`, true},
+		// 设备本地的偏好在鸿蒙下同样不进同步。
+		{"platform.harmony.touch_incognito", "true", false},
+	} {
+		if got := validPreference(tc.key, json.RawMessage(tc.value)); got != tc.valid {
+			t.Errorf("%s %s: got %v", tc.key, tc.value, got)
+		}
+	}
+	design, _ := json.Marshal(strings.Repeat("x", 786432))
+	if !validPreference("platform.harmony.custom_keyboard_skin", design) {
+		t.Fatal("harmony keyboard skin rejected at its limit")
+	}
+	// 九键左侧符号栏是空格连起来的符号表：客户端限定最多 30 项、每项最多 4 个码位、整串最多 200 个 UTF-16 单元。字段表按 UTF-8 字节计，一个 UTF-16 单元最多 3 字节，所以上限至少要 600，这里取 1024。空串表示用本端出厂表。
+	items := make([]string, 30)
+	for i := range items {
+		items[i] = string([]rune{'一' + rune(i*4), '一' + rune(i*4+1), '一' + rune(i*4+2), '一' + rune(i*4+3)})
+	}
+	widest, _ := json.Marshal(strings.Join(items, " "))
+	ceiling, _ := json.Marshal(strings.Repeat("字", 200))
+	for _, key := range []string{"platform.android.nine_key_symbols", "platform.android.nine_key_digit_symbols", "platform.harmony.nine_key_symbols", "platform.harmony.nine_key_digit_symbols"} {
+		for _, tc := range []struct {
+			value []byte
+			valid bool
+		}{
+			{[]byte(`""`), true},
+			{[]byte(`"， 。 ？ ！"`), true},
+			{widest, true},
+			{ceiling, true},
+			{[]byte(`["，"]`), false},
+			{[]byte(`"` + strings.Repeat("a", 1025) + `"`), false},
+		} {
+			if got := validPreference(key, tc.value); got != tc.valid {
+				t.Errorf("%s %s: got %v", key, tc.value, got)
+			}
+		}
+	}
+}
+
+// 鸿蒙的每个键都是 Android 同名键的镜像：两端导出同一份共享偏好里的同一批成员，定义不一致时同一个值在一端能存、在另一端会让整份 PUT 失败。
+func TestHarmonyPreferenceFieldsMirrorAndroid(t *testing.T) {
+	harmony := 0
+	for key, field := range preferenceFields {
+		suffix, ok := strings.CutPrefix(key, "platform.harmony.")
+		if !ok {
+			continue
+		}
+		harmony++
+		android, ok := preferenceFields["platform.android."+suffix]
+		if !ok {
+			t.Errorf("%s 没有对应的 platform.android.%s", key, suffix)
+			continue
+		}
+		if !reflect.DeepEqual(field, android) {
+			t.Errorf("%s 的定义 %+v 与 Android 的 %+v 不同", key, field, android)
+		}
+	}
+	if harmony == 0 {
+		t.Fatal("字段表里没有 platform.harmony.* 键")
 	}
 }

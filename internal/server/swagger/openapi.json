@@ -5063,6 +5063,14 @@
                           "type": "string",
                           "maxLength": 32
                         },
+                        "platform.android.nine_key_symbols": {
+                          "type": "string",
+                          "maxLength": 1024
+                        },
+                        "platform.android.nine_key_digit_symbols": {
+                          "type": "string",
+                          "maxLength": 1024
+                        },
                         "platform.harmony.keyboard_layout": {
                           "type": "string",
                           "maxLength": 32
@@ -5158,6 +5166,14 @@
                         "platform.harmony.nine_key_swipe": {
                           "type": "string",
                           "maxLength": 32
+                        },
+                        "platform.harmony.nine_key_symbols": {
+                          "type": "string",
+                          "maxLength": 1024
+                        },
+                        "platform.harmony.nine_key_digit_symbols": {
+                          "type": "string",
+                          "maxLength": 1024
                         },
                         "mixed_input.quick_phrase": {
                           "type": "boolean"
@@ -6004,6 +6020,14 @@
                           "type": "string",
                           "maxLength": 32
                         },
+                        "platform.android.nine_key_symbols": {
+                          "type": "string",
+                          "maxLength": 1024
+                        },
+                        "platform.android.nine_key_digit_symbols": {
+                          "type": "string",
+                          "maxLength": 1024
+                        },
                         "platform.harmony.keyboard_layout": {
                           "type": "string",
                           "maxLength": 32
@@ -6099,6 +6123,14 @@
                         "platform.harmony.nine_key_swipe": {
                           "type": "string",
                           "maxLength": 32
+                        },
+                        "platform.harmony.nine_key_symbols": {
+                          "type": "string",
+                          "maxLength": 1024
+                        },
+                        "platform.harmony.nine_key_digit_symbols": {
+                          "type": "string",
+                          "maxLength": 1024
                         },
                         "mixed_input.quick_phrase": {
                           "type": "boolean"
@@ -6932,6 +6964,14 @@
                         "type": "string",
                         "maxLength": 32
                       },
+                      "platform.android.nine_key_symbols": {
+                        "type": "string",
+                        "maxLength": 1024
+                      },
+                      "platform.android.nine_key_digit_symbols": {
+                        "type": "string",
+                        "maxLength": 1024
+                      },
                       "platform.harmony.keyboard_layout": {
                         "type": "string",
                         "maxLength": 32
@@ -7027,6 +7067,14 @@
                       "platform.harmony.nine_key_swipe": {
                         "type": "string",
                         "maxLength": 32
+                      },
+                      "platform.harmony.nine_key_symbols": {
+                        "type": "string",
+                        "maxLength": 1024
+                      },
+                      "platform.harmony.nine_key_digit_symbols": {
+                        "type": "string",
+                        "maxLength": 1024
                       },
                       "mixed_input.quick_phrase": {
                         "type": "boolean"

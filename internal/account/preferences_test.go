@@ -366,6 +366,30 @@ func TestTouchHostPreferenceFields(t *testing.T) {
 	if !validPreference("platform.harmony.custom_keyboard_skin", design) {
 		t.Fatal("harmony keyboard skin rejected at its limit")
 	}
+	// 九键左侧符号栏是空格连起来的符号表：客户端限定最多 30 项、每项最多 4 个码位、整串最多 200 个 UTF-16 单元。字段表按 UTF-8 字节计，一个 UTF-16 单元最多 3 字节，所以上限至少要 600，这里取 1024。空串表示用本端出厂表。
+	items := make([]string, 30)
+	for i := range items {
+		items[i] = string([]rune{'一' + rune(i*4), '一' + rune(i*4+1), '一' + rune(i*4+2), '一' + rune(i*4+3)})
+	}
+	widest, _ := json.Marshal(strings.Join(items, " "))
+	ceiling, _ := json.Marshal(strings.Repeat("字", 200))
+	for _, key := range []string{"platform.android.nine_key_symbols", "platform.android.nine_key_digit_symbols", "platform.harmony.nine_key_symbols", "platform.harmony.nine_key_digit_symbols"} {
+		for _, tc := range []struct {
+			value []byte
+			valid bool
+		}{
+			{[]byte(`""`), true},
+			{[]byte(`"， 。 ？ ！"`), true},
+			{widest, true},
+			{ceiling, true},
+			{[]byte(`["，"]`), false},
+			{[]byte(`"` + strings.Repeat("a", 1025) + `"`), false},
+		} {
+			if got := validPreference(key, tc.value); got != tc.valid {
+				t.Errorf("%s %s: got %v", key, tc.value, got)
+			}
+		}
+	}
 }
 
 // 鸿蒙的每个键都是 Android 同名键的镜像：两端导出同一份共享偏好里的同一批成员，定义不一致时同一个值在一端能存、在另一端会让整份 PUT 失败。

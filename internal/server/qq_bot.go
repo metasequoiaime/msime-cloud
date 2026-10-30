@@ -36,7 +36,7 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// QQ 群反馈机器人。群友在 QQ 群里 @机器人 描述遇到的问题或想要的功能，QQ 开放平台把事件以 Webhook 推到 qqBotEventsPath；服务端校验 Ed25519 签名、按消息 id 在所有副本间去重后立即应答，再在后台处理：大多数消息按知识库答疑；管理员明确要求记录（「提issue」命令或「记一下」这类说法）的具体 bug 或需求，用 chat 端点整理成结构化反馈，先对照知识库确认不是已有功能或正常现象，再用管理后台的 GitHub App 新建 issue，或补充到已有的同一问题下，最后在群里被动回复 issue 编号。官方机器人只能收到 @它 的消息，收不到群里的其他聊天。群友的原话、昵称和 openid 不写进 issue，也不写进日志：issue 里只有模型转述后的内容，并且打断了 @ 提及、# 引用和链接。
+// QQ 群反馈机器人。群友在 QQ 群里 @机器人 描述遇到的问题或想要的功能，QQ 开放平台把事件以 Webhook 推到 qqBotEventsPath；服务端校验 Ed25519 签名、按消息 id 在所有副本间去重后立即应答，再在后台处理：大多数消息按知识库答疑；管理员明确要求记录（「提issue」命令或「记一下」这类说法）的具体 bug 或需求，用 chat 端点整理成结构化反馈，先对照知识库确认不是已有功能或正常现象，再用管理后台的 GitHub App 新建 issue，或补充到已有的同一问题下，最后在群里被动回复 issue 编号。普通消息只有在平台开启全量消息、且配置开启自动答疑后才交给 Jev 判断，确认是输入法相关的提问才回复。群友的原话、昵称和 openid 不写进 issue，也不写进日志：issue 里只有模型转述后的内容，并且打断了 @ 提及、# 引用和链接。
 
 const (
 	qqBotEventsPath       = "/v1/community/qq-bot/events"
@@ -83,6 +83,10 @@ const (
 // QQBotConfig 启用 QQ 群反馈机器人。app_id 为空时功能关闭；设置后其余条件都必须满足，否则服务拒绝启动。
 type QQBotConfig struct {
 	AppID string `json:"app_id"`
+	// AutoReply 开启全量群消息的提问识别；仍需在 QQ 侧开启接收所有消息。默认关闭。
+	AutoReply bool `json:"auto_reply"`
+	// Jev 是 QQ 和 Telegram 共用的提问分类器，只判断是否答疑，不生成答案。
+	Jev BotJevConfig `json:"jev"`
 	// SecretEnv 是保存机器人 AppSecret 的环境变量名，默认 MSIME_QQ_BOT_SECRET。AppSecret 同时用于换取接口调用凭证和派生回调签名密钥。
 	SecretEnv string `json:"secret_env"`
 	// Repo 是看不出平台、或平台不在 admin.github.platforms 里时提交 issue 的仓库，默认 metasequoiaime/msime；能看出平台时提交到该平台配置的仓库。管理后台的 GitHub App 必须安装在这些仓库上并有 issues 写权限，qq_bot.labels 也要在这些仓库里都建好。
@@ -132,7 +136,7 @@ var (
 
 func (c *QQBotConfig) validate(cfg *Config) error {
 	if !c.enabled() {
-		if c.APIURL != "" || c.Repo != "" || c.Model != "" || c.FallbackModel != "" || c.KnowledgeRepo != "" || c.KnowledgeDir != "" || c.GapsRepo != "" || c.EmbeddingModel != "" || c.ImprovementRepo != "" || len(c.HistoryRepos) > 0 || c.StrongModel != "" || c.ChatModel != "" || len(c.Labels) > 0 || len(c.Groups) > 0 || len(c.Admins) > 0 {
+		if c.AutoReply || c.Jev != (BotJevConfig{}) || c.APIURL != "" || c.Repo != "" || c.Model != "" || c.FallbackModel != "" || c.KnowledgeRepo != "" || c.KnowledgeDir != "" || c.GapsRepo != "" || c.EmbeddingModel != "" || c.ImprovementRepo != "" || len(c.HistoryRepos) > 0 || c.StrongModel != "" || c.ChatModel != "" || len(c.Labels) > 0 || len(c.Groups) > 0 || len(c.Admins) > 0 {
 			return errors.New("qq_bot settings require app_id")
 		}
 		return nil
@@ -255,7 +259,7 @@ func (c *QQBotConfig) validate(cfg *Config) error {
 	if !normalizeAPIBaseURL(&c.APIURL, defaultQQBotAPIURL) {
 		return errors.New("qq_bot api_url must be an HTTPS URL without query or credentials")
 	}
-	return nil
+	return c.Jev.validate(c.AutoReply || cfg.TelegramBot.AutoReply)
 }
 
 // qqBot 是机器人的运行时状态：签名密钥、调用开放平台接口的客户端，以及本副本缓存的调用凭证。
@@ -522,7 +526,7 @@ func qqAck(ok bool) map[string]int {
 	return map[string]int{"op": qqOpCallbackAck, "d": 1}
 }
 
-// qqBotEvents 处理 POST /v1/community/qq-bot/events：开放平台的 Webhook 回调。签名不对返回 401；op 13 是配置回调地址时的校验，返回用同一把密钥对 event_ts+plain_token 的签名；op 0 是事件，只处理 GROUP_AT_MESSAGE_CREATE，其余事件直接应答成功。
+// qqBotEvents 处理 POST /v1/community/qq-bot/events：开放平台的 Webhook 回调。签名不对返回 401；op 13 是配置回调地址时的校验，返回用同一把密钥对 event_ts+plain_token 的签名；op 0 是事件，处理 GROUP_AT_MESSAGE_CREATE 和 GROUP_MESSAGE_CREATE，其余事件直接应答成功。
 func (s *Server) qqBotEvents(w http.ResponseWriter, r *http.Request) {
 	b := s.qq
 	if b == nil {
@@ -568,19 +572,31 @@ func (s *Server) qqBotEvents(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal(payload.Data, &seq)
 		respond(w, 200, map[string]any{"op": qqOpHeartbeatAck, "d": seq})
 	case qqOpDispatch:
-		respond(w, 200, qqAck(payload.Type != "GROUP_AT_MESSAGE_CREATE" || s.acceptQQMessage(r.Context(), payload.Data)))
+		ok := true
+		switch payload.Type {
+		case "GROUP_AT_MESSAGE_CREATE":
+			ok = s.acceptQQMessage(r.Context(), payload.Data)
+		case "GROUP_MESSAGE_CREATE":
+			ok = s.acceptQQGroupMessage(r.Context(), payload.Data, true)
+		}
+		respond(w, 200, qqAck(ok))
 	default:
 		respond(w, 200, qqAck(true))
 	}
 }
 
-// qqGroupMessage 是 GROUP_AT_MESSAGE_CREATE 事件里用到的字段。
+// qqGroupMessage 是群 @ 事件和全量群消息事件共用的字段。
 type qqGroupMessage struct {
 	ID          string `json:"id"`
 	Content     string `json:"content"`
 	GroupOpenID string `json:"group_openid"`
-	Author      struct {
+	// Mentions 在部分全量事件中用 is_you 标明 @ 的是本机器人，不能把其他机器人的 bot=true 当成本机器人。
+	Mentions []struct {
+		IsYou bool `json:"is_you"`
+	} `json:"mentions"`
+	Author struct {
 		MemberOpenID string `json:"member_openid"`
+		Bot          bool   `json:"bot"`
 		// MemberRole 是事件里带的群身份（owner、admin、member），可能没有；见 qqIsAdmin。
 		MemberRole string `json:"member_role"`
 	} `json:"author"`
@@ -591,18 +607,36 @@ type qqGroupMessage struct {
 	MsgElements      json.RawMessage `json:"msg_elements"`
 	MessageReference json.RawMessage `json:"message_reference"`
 	// Quote 是群友引用的那条消息，由 acceptQQMessage 另外解析（见 qqQuoteOf），不参与这个结构的解析。
-	Quote qqQuote `json:"-"`
+	Quote     qqQuote `json:"-"`
+	Automatic bool    `json:"-"`
 }
 
 // acceptQQMessage 认领一条 @ 消息并交给后台处理，返回是否应答成功。消息 id 在 auth_rates 里只能认领一次，重推的同一事件直接应答成功；数据库不可用时应答失败，让开放平台稍后重推。格式不对或来自未配置的群的消息直接丢弃，重推也不会变好。
 func (s *Server) acceptQQMessage(ctx context.Context, raw json.RawMessage) bool {
+	return s.acceptQQGroupMessage(ctx, raw, false)
+}
+
+// acceptQQGroupMessage 同时处理 @ 事件和全量群消息；机器人发言和未启用的自动答疑不进入后台。
+func (s *Server) acceptQQGroupMessage(ctx context.Context, raw json.RawMessage, automatic bool) bool {
 	var m qqGroupMessage
 	if json.Unmarshal(raw, &m) != nil || !qqMessageIDPattern.MatchString(m.ID) || !qqOpenIDPattern.MatchString(m.GroupOpenID) || !qqOpenIDPattern.MatchString(m.Author.MemberOpenID) {
 		return true
 	}
+	if m.Author.Bot {
+		return true
+	}
+	// 全量事件中的显式 @ 仍沿用命令和答疑；其他人的 @ 不应引来机器人插话。
+	addressed := strings.Contains(m.Content, "<@"+s.qq.config.AppID+">") || strings.Contains(m.Content, "<@!"+s.qq.config.AppID+">")
+	for _, mention := range m.Mentions {
+		addressed = addressed || mention.IsYou
+	}
+	m.Automatic = automatic && !addressed
+	m.Quote = qqQuoteFromFields(qqQuoteEventFields{MessageType: m.MessageType, MsgElements: m.MsgElements, MessageReference: m.MessageReference}, m)
+	if m.Automatic && (!s.qq.config.AutoReply || !botQuestionCandidate(m.Content) || strings.Contains(m.Content, "@") || len(m.Mentions) > 0 || m.Quote.Referenced) {
+		return true
+	}
 	s.qq.probeMemberRole(m.Author.MemberRole)
 	s.qq.probeEventFields(raw)
-	m.Quote = qqQuoteFromFields(qqQuoteEventFields{MessageType: m.MessageType, MsgElements: m.MsgElements, MessageReference: m.MessageReference}, m)
 	if groups := s.qq.config.Groups; len(groups) > 0 && !slices.Contains(groups, m.GroupOpenID) {
 		// 开放平台只给 group_openid，不给群号；记下被拦下的群标识，方便把要接受的群填进 qq_bot.groups。
 		slog.Info("qq bot: message from unlisted group")
@@ -802,6 +836,9 @@ func (s *Server) handleQQFeedback(ctx context.Context, m qqGroupMessage) {
 
 // handleBotMessage 在后台处理一条已认领的群消息（QQ 或 Telegram），所有结果都以回复告诉群友：先处理命令；管理员明确要求记录的具体 bug 或需求提 issue（见 fileAdminFeedback），其他消息（包括普通群友的所有消息）按知识库答疑。不记录消息内容，日志里只有失败原因。
 func (s *Server) handleBotMessage(ctx context.Context, m botMessage) {
+	if m.Automatic && !s.botShouldReply(ctx, m) {
+		return
+	}
 	// 每条消息记一行处理结果（不含内容和 openid），答上率、闲聊、命令、限流各占多少才能量化：Loki 里按 outcome 汇总。各阶段的耗时也在这一行（见 qqTiming）。
 	started, outcome, admin := s.qq.now(), "failed", false
 	timing := &qqTiming{}
@@ -846,6 +883,10 @@ func (s *Server) handleBotMessage(ctx context.Context, m botMessage) {
 	)
 	// interim 表示 text 是过渡语。
 	send := func(text string, interim bool) {
+		// 未被呼叫时，服务故障静默处理，避免群里反复出现兜底通知。
+		if m.Automatic && text == qqReplyUnavailable {
+			return
+		}
 		if thinking != nil {
 			thinking.Stop()
 		}
@@ -927,7 +968,7 @@ func (s *Server) handleBotMessage(ctx context.Context, m botMessage) {
 	if text == "" && m.Quote.Text != "" {
 		text, quoteAsked = m.Quote.Text, true
 	}
-	if slices.Contains(qqWhoAmI, qqCompact(text)) {
+	if !m.Automatic && slices.Contains(qqWhoAmI, qqCompact(text)) {
 		role := "普通成员"
 		if m.channel.isAdmin(ctx, m) {
 			role = "管理员"
@@ -953,7 +994,7 @@ func (s *Server) handleBotMessage(ctx context.Context, m botMessage) {
 	admin = m.channel.isAdmin(ctx, m)
 	// 不调模型的命令排在额度之前，只计宽松的 qqBotFreeDaily：群额度用完后帮助和查编号照样能用。加词、提文档、查、提issue 仍然要过下面的额度。
 	compact, free := qqFreeCommand(text)
-	if free {
+	if free && !m.Automatic {
 		switch wait, err := s.limits.RateLimitUntil(ctx, "qq-bot-free", m.subject(), qqBotFreeDaily, 24*time.Hour); {
 		case errors.Is(err, account.ErrLimited):
 			reply(qqLimitedReply(wait))
@@ -975,7 +1016,9 @@ func (s *Server) handleBotMessage(ctx context.Context, m botMessage) {
 		refund, wait, err := s.reserveRateLimit(ctx, limit.scope, limit.subject, limit.daily, 24*time.Hour)
 		switch {
 		case errors.Is(err, account.ErrLimited):
-			reply(limit.text(wait))
+			if !m.Automatic {
+				reply(limit.text(wait))
+			}
 			outcome = "limited_" + strings.TrimPrefix(limit.scope, "qq-bot-")
 			return
 		case err != nil:
@@ -997,9 +1040,11 @@ func (s *Server) handleBotMessage(ctx context.Context, m botMessage) {
 		// 截图描述替换了正文，旧的空正文规范化结果不能再复用。
 		compact = qqCompact(text)
 	}
-	if command := s.qqCommand(ctx, m, text, compact, admin, reply, progress); command != "" {
-		outcome = command
-		return
+	if !m.Automatic {
+		if command := s.qqCommand(ctx, m, text, compact, admin, reply, progress); command != "" {
+			outcome = command
+			return
+		}
 	}
 	// 常规答疑要挑段落、回答两次模型调用，常常 10–30 秒才答完，期间群友什么都收不到，以为机器人坏了就重发。qqThinkingDelay 后还没发过任何回复、也没发过过渡语时先回一句。阈值取 8 秒：闲聊一般 5–7 秒答完，「在吗」不该先收到一句「我想一下」。命令自己回「收到」（见 fileAdminFeedback、recordQQAnswer、fileQQDocs），所以计时器在命令之后才起。
 	mu.Lock()
@@ -1036,11 +1081,14 @@ func (s *Server) handleBotMessage(ctx context.Context, m botMessage) {
 		}
 	}
 	// 普通群友的消息都按问题回答。管理员的消息先整理一遍：只有明确要求记录（qqIssueIntent 或模型给出的 intent）的具体反馈才提交，其余的照常答疑，报问题时在答案后提示用「提issue」。曾经管理员的每条消息都先自动判断、像反馈就提交，群里讨论和吐槽也被提成了 issue；后来没要求记录的具体反馈只回一句复述，管理员问「候选框老跑到左上角怎么回事」拿不到回答。
-	if admin {
+	if admin && !m.Automatic {
 		outcome = "admin_" + s.fileAdminFeedback(ctx, m, text, false, s.qqBacklogReply(ctx, m.Member, reply), progress, chat)
 		return
 	}
-	outcome = s.answerQQQuestion(ctx, m.Group, m.Member, text, false, reply, progress, chat)
+	outcome = s.answerQQQuestion(ctx, m.Group, m.Member, text, admin, reply, progress, chat)
+	if admin {
+		outcome = "admin_" + outcome
+	}
 }
 
 // qqBacklogAge 是积压提醒只数创建了多久以上的草稿和文档候选，见 qqBacklogHint：刚起的草稿还轮不到催。

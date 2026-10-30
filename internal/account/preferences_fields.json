@@ -668,6 +668,10 @@
     "type": "string",
     "maxLength": 32
   },
+  "platform.android.one_handed_side_panel": {
+    "type": "string",
+    "maxLength": 32
+  },
   "platform.android.swipe_symbols_direction": {
     "type": "string",
     "maxLength": 32
@@ -763,6 +767,10 @@
     "type": "boolean"
   },
   "platform.harmony.number_pad_space": {
+    "type": "string",
+    "maxLength": 32
+  },
+  "platform.harmony.one_handed_side_panel": {
     "type": "string",
     "maxLength": 32
   },

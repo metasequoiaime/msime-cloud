@@ -32,8 +32,8 @@ func TestBotQuestionModelConfig(t *testing.T) {
 		}
 	}
 	c := qqValidConfig()
-	c.QQBot.QuestionModel = "custom-classifier"
-	if err := c.QQBot.validate(&c); err != nil || c.QQBot.QuestionModel != "custom-classifier" {
+	c.QQBot.QuestionModel = "jev-preview"
+	if err := c.QQBot.validate(&c); err != nil || c.QQBot.QuestionModel != "jev-preview" {
 		t.Fatal("自定义模型失败", err)
 	}
 	c = qqValidConfig()
@@ -64,7 +64,7 @@ func TestBotQuestionCandidate(t *testing.T) {
 	}
 }
 
-// installBotClassifier 用本地接口代替 EveryAPI，核对复用 chat 地址和密钥、只发送消息文字。
+// installBotClassifier 用本地接口代替 EveryAPI，核对 System One 路径、chat 密钥复用和原生请求。
 func installBotClassifier(t *testing.T, s *Server, response string, status int) *int {
 	t.Helper()
 	calls := new(int)
@@ -72,23 +72,20 @@ func installBotClassifier(t *testing.T, s *Server, response string, status int) 
 	s.qq.config.QuestionModel = defaultBotQuestionModel
 	client := *original
 	client.Transport = qqTestTransport(func(r *http.Request) (*http.Response, error) {
-		if r.Body == nil {
-			return original.Do(r)
-		}
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		r.Body = io.NopCloser(strings.NewReader(string(body)))
-		var request chatRequest
-		if json.Unmarshal(body, &request) != nil || request.Model != defaultBotQuestionModel {
+		if r.URL.String() != chatAPIURL(s.config.Chat.URL, "systemone") {
 			return original.Do(r)
 		}
 		*calls++
-		if r.URL.String() != s.config.Chat.URL || r.Header.Get("Authorization") != "Bearer "+s.config.Chat.token || s.config.Chat.token == "" || request.MaxTokens != botQuestionMaxTokens || request.ResponseFormat == nil || request.ResponseFormat.Type != "json_object" || request.Thinking == nil || request.Thinking.Type != "disabled" || len(request.Messages) != 3 {
-			t.Error("分类没有沿用 chat 端点、凭据或费用限制")
-		} else if request.Messages[0].Content != botQuestionPrompt || request.Messages[1].Role != "user" || request.Messages[2].Content != jsonObjectInstruction || strings.Contains(request.Messages[1].Content, "GROUP1") || strings.Contains(request.Messages[1].Content, "MEMBER1") {
-			t.Error("分类器收到了身份或非文字状态")
+		var request map[string]json.RawMessage
+		if json.NewDecoder(r.Body).Decode(&request) != nil || len(request) != 3 || r.Header.Get("Authorization") != "Bearer "+s.config.Chat.token || s.config.Chat.token == "" {
+			t.Error("分类没有沿用 chat 凭据或没有使用原生 System One 请求")
+		}
+		var model, state string
+		var questions map[string]struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(request["model"], &model) != nil || model != defaultBotQuestionModel || json.Unmarshal(request["state"], &state) != nil || strings.Contains(state, "GROUP1") || strings.Contains(state, "MEMBER1") || json.Unmarshal(request["questions"], &questions) != nil || len(questions) != 2 || questions["question"].Type != "noul" || questions["relevant"].Type != "noul" {
+			t.Error("分类器收到的模型、消息或问题不正确")
 		}
 		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(response)), Header: make(http.Header)}, nil
 	})
@@ -96,19 +93,18 @@ func installBotClassifier(t *testing.T, s *Server, response string, status int) 
 	return calls
 }
 
-const botClassifierYes = `{"choices":[{"message":{"content":"{\"question\":true,\"relevant\":true}"},"finish_reason":"stop"}]}`
-
-func botClassifierResponse(content string) string {
-	body, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": content}, "finish_reason": "stop"}}})
-	return string(body)
-}
+const botClassifierYes = `{"answers":{"question":{"type":"noul","noul":0.99},"relevant":{"type":"noul","noul":0.98}}}`
 
 func TestBotClassifierModelSelection(t *testing.T) {
-	for _, model := range []string{"", "custom-classifier"} {
+	for _, model := range []string{"", "jev-latest"} {
 		s, _, _ := qqServer(t)
 		s.qq.config.QuestionModel = model
+		// 同时验证自定义网关前缀与 query 沿用既有 URL 派生规则，不绕过到官方接口。
+		s.config.Chat.URL = "https://gateway.example.test/custom/v1/chat/completions?route=synthetic"
 		s.client = &http.Client{Transport: qqTestTransport(func(r *http.Request) (*http.Response, error) {
-			var request chatRequest
+			var request struct {
+				Model string `json:"model"`
+			}
 			if json.NewDecoder(r.Body).Decode(&request) != nil {
 				t.Fatal("请求不是 JSON")
 			}
@@ -116,8 +112,8 @@ func TestBotClassifierModelSelection(t *testing.T) {
 			if want == "" {
 				want = defaultBotQuestionModel
 			}
-			if request.Model != want || (request.Thinking != nil) != strings.HasPrefix(want, "doubao-") {
-				t.Error("没有使用配置的模型或附带了不支持的思考参数", request.Model)
+			if request.Model != want || r.URL.String() != "https://gateway.example.test/custom/v1/systemone?route=synthetic" || r.Header.Get("Authorization") != "Bearer "+s.config.Chat.token {
+				t.Error("没有使用配置的 Jev 模型、网关地址或凭据", request.Model)
 			}
 			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(botClassifierYes)), Header: make(http.Header)}, nil
 		})}
@@ -129,12 +125,11 @@ func TestBotClassifierModelSelection(t *testing.T) {
 
 func TestBotClassifierRejectsInvalidResponses(t *testing.T) {
 	for _, response := range []string{
-		`{}`, `not json`, botClassifierResponse(`{"question":true}`),
-		botClassifierResponse(`{"question":null,"relevant":true}`),
-		botClassifierResponse(`{"question":"true","relevant":true}`),
-		botClassifierResponse(`{"question":1,"relevant":true}`),
-		botClassifierResponse("```json\n{\"question\":true,\"relevant\":true}\n```"),
-		strings.Replace(botClassifierYes, `"stop"`, `"length"`, 1),
+		`{}`, `not json`, `{"answers":{"question":{"type":"noul","noul":0.99}}}`,
+		strings.Replace(botClassifierYes, `"noul":0.99`, `"noul":null`, 1),
+		strings.Replace(botClassifierYes, `"noul":0.99`, `"noul":1.1`, 1),
+		strings.Replace(botClassifierYes, `"noul":0.99`, `"noul":-0.1`, 1),
+		strings.Replace(botClassifierYes, `"type":"noul"`, `"type":"choice"`, 1),
 		botClassifierYes + ` trailing`, strings.Repeat("x", 16<<10+1),
 	} {
 		s, _, _ := qqServer(t)
@@ -195,8 +190,8 @@ func TestBotAutomaticReplies(t *testing.T) {
 				t.Fatal("重复处理", *calls, texts())
 			}
 			for i, response := range []string{
-				botClassifierResponse(`{"question":false,"relevant":true}`),
-				botClassifierResponse(`{"question":true,"relevant":false}`),
+				strings.Replace(botClassifierYes, `"noul":0.99`, `"noul":0.89`, 1),
+				strings.Replace(botClassifierYes, `"noul":0.98`, `"noul":0.1`, 1),
 				`{}`,
 			} {
 				installBotClassifier(t, s, response, 200)

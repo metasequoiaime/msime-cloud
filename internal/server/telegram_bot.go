@@ -42,6 +42,8 @@ var (
 
 // TelegramBotConfig 让 admin.telegram 的 Bot 在 Telegram 群里答疑。chats 为空时功能关闭；设置后其余条件都必须满足，否则服务拒绝启动。
 type TelegramBotConfig struct {
+	// AutoReply 开启未 @ 消息的提问识别；群里必须允许机器人接收普通消息。默认关闭。
+	AutoReply bool `json:"auto_reply"`
 	// Chats 是接受提问的群（数字 chat_id，超级群是 -100 开头的负数）。不在名单里的群和私聊一律不处理。
 	Chats []int64 `json:"chats"`
 	// Username 是 Bot 的用户名（不带 @，例如 msime_bot），用来认出群友 @ 了它。
@@ -57,7 +59,7 @@ func (c *TelegramBotConfig) enabled() bool { return len(c.Chats) > 0 }
 
 func (c *TelegramBotConfig) validate(cfg *Config) error {
 	if !c.enabled() {
-		if c.Username != "" || c.WebhookSecretEnv != "" || len(c.Admins) > 0 {
+		if c.AutoReply || c.Username != "" || c.WebhookSecretEnv != "" || len(c.Admins) > 0 {
 			return errors.New("telegram_bot settings require chats")
 		}
 		return nil
@@ -252,7 +254,7 @@ func (s *Server) telegramBotEvents(w http.ResponseWriter, r *http.Request) {
 	respond(w, 200, map[string]bool{"ok": true})
 }
 
-// acceptTelegramUpdate 认领一条提问并交给后台处理，返回是否应答成功。只认名单里的群中 @ 了机器人或回复机器人消息的文字消息，其余 update（编辑、频道、私聊、别的群、普通聊天）直接应答成功，重推也不会变好。update_id 在 auth_rates 里只能认领一次；数据库不可用时返回 false，让 Telegram 稍后重推。
+// acceptTelegramUpdate 认领一条提问并交给后台处理，返回是否应答成功。处理名单内群的明确呼叫、开启自动答疑后的普通消息和私聊；其余 update 直接应答成功，重推也不会变好。update_id 在 auth_rates 里只能认领一次；数据库不可用时返回 false，让 Telegram 稍后重推。
 func (s *Server) acceptTelegramUpdate(ctx context.Context, u telegramUpdate) bool {
 	m, ok := s.tg.message(u.Message)
 	if !ok {
@@ -313,14 +315,18 @@ func (b *telegramBot) message(m *telegramMessage) (botMessage, bool) {
 		// 群里只有这一个 Bot 时，从「/」菜单点出来的命令不带用户名。只认机器人自己的命令名，「/Library/…」这类路径不算。
 		command = true
 	}
-	if !command && !b.mention.MatchString(text) && !repliedToBot {
-		return botMessage{}, false
+	automatic := !command && !b.mention.MatchString(text) && !repliedToBot
+	if automatic {
+		// 回复别人、@ 别人和给其他 Bot 的命令留给原来的对话，不自动插话。
+		if !b.config.AutoReply || m.ReplyTo != nil || strings.Contains(text, "@") || !botQuestionCandidate(text) {
+			return botMessage{}, false
+		}
 	}
 	text = strings.TrimSpace(b.mention.ReplaceAllString(text, "$1$2"))
 	chat := strconv.FormatInt(m.Chat.ID, 10)
 	out := botMessage{
 		ID: "tg:" + chat + ":" + strconv.FormatInt(m.MessageID, 10), Text: text, Group: "tg:" + chat, Member: "tg:" + strconv.FormatInt(member, 10),
-		Attachments: b.attachments(m), Platform: botPlatformTelegram, channel: telegramChannel{bot: b, chat: m.Chat.ID, message: m.MessageID, member: member},
+		Attachments: b.attachments(m), Platform: botPlatformTelegram, Automatic: automatic, channel: telegramChannel{bot: b, chat: m.Chat.ID, message: m.MessageID, member: member},
 	}
 	if m.ReplyTo != nil && !repliedToBot {
 		out.Quote = qqQuote{Text: qqTruncate(strings.TrimSpace(m.ReplyTo.messageText()), qqQuoteRunes), Images: b.attachments(m.ReplyTo), Referenced: true}

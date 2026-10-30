@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// 群答疑机器人的平台无关部分。QQ 群的 @ 消息和 Telegram 群消息都先转成 botMessage，交给同一个 handleBotMessage 处理：命令、额度、过渡语、看截图、管理员提 issue 和知识库答疑都只写一份。平台之间的差别收在 botChannel 里：怎么回复（QQ 要带 msg_seq、最多 5 次、拒收未报备的链接，Telegram 引用原消息即可）和谁算管理员。
+// 群答疑机器人的平台无关部分。QQ 与 Telegram 群消息都先转成 botMessage，交给同一个 handleBotMessage 处理：命令、额度、过渡语、看截图、管理员提 issue 和知识库答疑都只写一份。平台之间的差别收在 botChannel 里：怎么回复（QQ 要带 msg_seq、最多 5 次、拒收未报备的链接，Telegram 引用原消息即可）和谁算管理员。
 
 // botChannel 是 handleBotMessage 和一个聊天平台之间的接口。
 type botChannel interface {
@@ -46,7 +46,9 @@ type botMessage struct {
 	Quote qqQuote
 	// Platform 是 botPlatformQQ 或 botPlatformTelegram，写进处理结果的日志；只有 QQ 有的功能（绑定 QQ 查打字数据）在别的平台上不提供。测试里直接调命令时为空，按 QQ 处理。
 	Platform string
-	channel  botChannel
+	// Automatic 表示没有明确呼叫机器人，须先识别提问，且不能执行命令或自动提交反馈。
+	Automatic bool
+	channel   botChannel
 }
 
 // subject 是这位成员在这个群里的标识：「Group/Member」。
@@ -87,10 +89,10 @@ func (c qqChannel) isAdmin(ctx context.Context, m botMessage) bool {
 	return c.s.qqIsAdmin(ctx, m.Group, m.Member, m.Role)
 }
 
-// qqBotMessage 把 QQ 的 @ 消息转成 botMessage：去掉 @ 标记和表情标签（qqFeedbackText），引用已经由 acceptQQMessage 解析好。
+// qqBotMessage 把 QQ 群消息转成 botMessage：去掉 @ 标记和表情标签（qqFeedbackText），引用已经由 acceptQQMessage 解析好。
 func (s *Server) qqBotMessage(m qqGroupMessage) botMessage {
 	return botMessage{
 		ID: m.ID, Text: qqFeedbackText(m.Content), Group: m.GroupOpenID, Member: m.Author.MemberOpenID, Role: m.Author.MemberRole,
-		Attachments: m.Attachments, Quote: m.Quote, Platform: botPlatformQQ, channel: qqChannel{s},
+		Attachments: m.Attachments, Quote: m.Quote, Platform: botPlatformQQ, Automatic: m.Automatic, channel: qqChannel{s},
 	}
 }

@@ -70,21 +70,25 @@ func niuTransMediaStatusPayload(size int) []byte {
 }
 
 func TestNiuTransMediaStatusAllocationBudget(t *testing.T) {
+	// 短采样下大正文可能只检查几次；合并多次检查，减少冷启动和对象池波动的影响。
+	const checksPerOp = 16
 	for _, size := range []int{0, 128 << 10, 900 << 10} {
 		t.Run(fmt.Sprint(size), func(t *testing.T) {
 			body := niuTransMediaStatusPayload(size)
 			var accepted bool
 			result := testing.Benchmark(func(b *testing.B) {
 				for b.Loop() {
-					accepted = niuTransMediaAccepted(body)
+					for range checksPerOp {
+						accepted = niuTransMediaAccepted(body)
+					}
 				}
 			})
 			if !accepted {
 				t.Fatal("成功响应未被接受")
 			}
 			// 检查只需要业务码，分配预算不随其余响应正文增长。
-			if result.AllocedBytesPerOp() > 2048 {
-				t.Fatalf("%d 字节译文的状态检查分配 %d 字节，超过 2048 字节预算", size, result.AllocedBytesPerOp())
+			if result.AllocedBytesPerOp() > 2048*checksPerOp {
+				t.Fatalf("%d 字节译文的状态检查平均分配 %d 字节，超过 2048 字节预算", size, result.AllocedBytesPerOp()/checksPerOp)
 			}
 		})
 	}

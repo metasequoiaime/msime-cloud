@@ -36,7 +36,7 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// QQ 群反馈机器人。群友在 QQ 群里 @机器人 描述遇到的问题或想要的功能，QQ 开放平台把事件以 Webhook 推到 qqBotEventsPath；服务端校验 Ed25519 签名、按消息 id 在所有副本间去重后立即应答，再在后台处理：大多数消息按知识库答疑；管理员明确要求记录（「提issue」命令或「记一下」这类说法）的具体 bug 或需求，用 chat 端点整理成结构化反馈，先对照知识库确认不是已有功能或正常现象，再用管理后台的 GitHub App 新建 issue，或补充到已有的同一问题下，最后在群里被动回复 issue 编号。普通消息只有在平台开启全量消息、且配置开启自动答疑后才交给 Jev 判断，确认是输入法相关的提问才回复。群友的原话、昵称和 openid 不写进 issue，也不写进日志：issue 里只有模型转述后的内容，并且打断了 @ 提及、# 引用和链接。
+// QQ 群反馈机器人。群友在 QQ 群里 @机器人 描述遇到的问题或想要的功能，QQ 开放平台把事件以 Webhook 推到 qqBotEventsPath；服务端校验 Ed25519 签名、按消息 id 在所有副本间去重后立即应答，再在后台处理：大多数消息按知识库答疑；管理员明确要求记录（「提issue」命令或「记一下」这类说法）的具体 bug 或需求，用 chat 端点整理成结构化反馈，先对照知识库确认不是已有功能或正常现象，再用管理后台的 GitHub App 新建 issue，或补充到已有的同一问题下，最后在群里被动回复 issue 编号。普通消息只有在平台开启全量消息、且配置开启自动答疑后才交给 EveryAPI 的轻量模型判断，确认是输入法相关的提问才回复。群友的原话、昵称和 openid 不写进 issue，也不写进日志：issue 里只有模型转述后的内容，并且打断了 @ 提及、# 引用和链接。
 
 const (
 	qqBotEventsPath       = "/v1/community/qq-bot/events"
@@ -85,8 +85,8 @@ type QQBotConfig struct {
 	AppID string `json:"app_id"`
 	// AutoReply 开启全量群消息的提问识别；仍需在 QQ 侧开启接收所有消息。默认关闭。
 	AutoReply bool `json:"auto_reply"`
-	// Jev 是 QQ 和 Telegram 共用的提问分类器，只判断是否答疑，不生成答案。
-	Jev BotJevConfig `json:"jev"`
+	// QuestionModel 是 QQ 和 Telegram 共用的提问分类模型，沿用 chat 的地址和凭据。
+	QuestionModel string `json:"question_model"`
 	// SecretEnv 是保存机器人 AppSecret 的环境变量名，默认 MSIME_QQ_BOT_SECRET。AppSecret 同时用于换取接口调用凭证和派生回调签名密钥。
 	SecretEnv string `json:"secret_env"`
 	// Repo 是看不出平台、或平台不在 admin.github.platforms 里时提交 issue 的仓库，默认 metasequoiaime/msime；能看出平台时提交到该平台配置的仓库。管理后台的 GitHub App 必须安装在这些仓库上并有 issues 写权限，qq_bot.labels 也要在这些仓库里都建好。
@@ -136,7 +136,7 @@ var (
 
 func (c *QQBotConfig) validate(cfg *Config) error {
 	if !c.enabled() {
-		if c.AutoReply || c.Jev != (BotJevConfig{}) || c.APIURL != "" || c.Repo != "" || c.Model != "" || c.FallbackModel != "" || c.KnowledgeRepo != "" || c.KnowledgeDir != "" || c.GapsRepo != "" || c.EmbeddingModel != "" || c.ImprovementRepo != "" || len(c.HistoryRepos) > 0 || c.StrongModel != "" || c.ChatModel != "" || len(c.Labels) > 0 || len(c.Groups) > 0 || len(c.Admins) > 0 {
+		if c.AutoReply || c.QuestionModel != "" || c.APIURL != "" || c.Repo != "" || c.Model != "" || c.FallbackModel != "" || c.KnowledgeRepo != "" || c.KnowledgeDir != "" || c.GapsRepo != "" || c.EmbeddingModel != "" || c.ImprovementRepo != "" || len(c.HistoryRepos) > 0 || c.StrongModel != "" || c.ChatModel != "" || len(c.Labels) > 0 || len(c.Groups) > 0 || len(c.Admins) > 0 {
 			return errors.New("qq_bot settings require app_id")
 		}
 		return nil
@@ -259,7 +259,13 @@ func (c *QQBotConfig) validate(cfg *Config) error {
 	if !normalizeAPIBaseURL(&c.APIURL, defaultQQBotAPIURL) {
 		return errors.New("qq_bot api_url must be an HTTPS URL without query or credentials")
 	}
-	return c.Jev.validate(c.AutoReply || cfg.TelegramBot.AutoReply)
+	if c.QuestionModel == "" && (c.AutoReply || cfg.TelegramBot.AutoReply) {
+		c.QuestionModel = defaultBotQuestionModel
+	}
+	if len(c.QuestionModel) > 200 || strings.ContainsAny(c.QuestionModel, " \r\n\t") {
+		return errors.New("qq_bot question_model must be a model name without whitespace")
+	}
+	return nil
 }
 
 // qqBot 是机器人的运行时状态：签名密钥、调用开放平台接口的客户端，以及本副本缓存的调用凭证。

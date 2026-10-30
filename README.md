@@ -515,17 +515,17 @@ issue 和评论只包含模型转述的内容，不含群友的原话、昵称�
 
 ### 自动识别群里的提问（QQ 与 Telegram）
 
-两个平台分别用 `qq_bot.auto_reply`、`telegram_bot.auto_reply` 开启，默认关闭；显式 @、Telegram 回复机器人和已有命令仍沿用原流程。未呼叫机器人的普通消息先交给共用的 Jev 分类器，同时判断「是否真的在提问或求助」和「是否与输入法有关」，两项概率都达到 `qq_bot.jev.threshold` 才进入现有知识库答疑。无需问号，也不靠关键词判定，例如「求教双拼设置」也能识别。普通闲聊、反问、对别人说的答案和无关问题保持安静；回复别人、@ 别人、只有表情或图片、超过 2000 字的消息和斜杠命令不自动分类。未显式呼叫机器人时只答疑，不执行命令或提交管理员反馈；分类失败、超时、结果不确定或额度用完时不在群里发错误或限额提示。分类可能误判或漏判，自动答疑的答案也可能不准确，想保证触发或继续追问时可以 @机器人。
+两个平台分别用 `qq_bot.auto_reply`、`telegram_bot.auto_reply` 开启，默认关闭；显式 @、Telegram 回复机器人和已有命令仍沿用原流程。未呼叫机器人的普通消息先交给 EveryAPI 的轻量模型，同时判断「是否真的在提问或求助」和「是否与输入法有关」，两项都返回 `true` 才进入现有知识库答疑。无需问号，也不靠关键词判定，例如「求教双拼设置」也可识别。普通闲聊、反问、对别人说的答案和无关问题应保持安静；回复别人、@ 别人、只有表情或图片、超过 2000 字的消息和斜杠命令不自动分类。未显式呼叫机器人时只答疑，不执行命令或提交管理员反馈；分类失败、超时、结果不合格式或额度用完时不在群里发错误或限额提示。分类可能误判或漏判，自动答疑的答案也可能不准确，想保证触发或继续追问时可以 @机器人。
 
-Jev 使用官方 `POST https://api.typesafe.ai/v1/systemone`，只发送当前消息的文字，不发送发送者身份、原始回调、附件或聊天历史；不是问题的消息不会记入对话历史或文档缺口。密钥从 `qq_bot.jev.token_env` 指定的环境变量读取，默认 `JEV_TOKEN`；模型默认固定为 `jev-1.14.0`，概率阈值默认 `0.9`，可设为大于 `0.5`、不超过 `1` 的数。Jev 只分类，生成答案、看截图和检索仍使用原有模型。未配置有效的 Jev 密钥就开启任一平台的自动答疑时，服务拒绝启动。配置片段（合并到原有配置，不替换其他字段）：
+分类复用原有 `chat.url`（EveryAPI 的 `/v1/chat/completions`）和 `chat.token_env` 凭据，不需要额外供应商密钥；两个平台共用 `qq_bot.question_model`，默认 `doubao-seed-2.0-mini`，可替换为该 EveryAPI 线路支持的其他 JSON 输出模型，现有密钥和线路须允许使用该模型。只发送当前消息的文字及分类指令，不发送发送者身份、原始回调、附件或聊天历史；不是问题的消息不会记入对话历史或文档缺口。分类返回两个布尔值，不把生成模型自报的置信度当成概率；看不准时指令要求返回 `false`。生成答案、看截图和检索仍使用原有模型。配置片段（合并到原有配置，不替换其他字段）：
 
 ```json
-{"qq_bot":{"auto_reply":true,"jev":{"token_env":"JEV_TOKEN","model":"jev-1.14.0","threshold":0.9}},"telegram_bot":{"auto_reply":true}}
+{"qq_bot":{"auto_reply":true,"question_model":"doubao-seed-2.0-mini"},"telegram_bot":{"auto_reply":true}}
 ```
 
-开启前先让所有副本升级到支持这些新字段的版本，再把 Jev 密钥注入部署环境、加入配置并滚动重启；回退前先删掉新增字段。QQ 开放平台订阅全量群消息事件，并在目标群的机器人设置里开启「接收所有消息」；Telegram 在 BotFather 的 `/setprivacy` 中选择 Disable 并重新将 Bot 加入群，或让 Bot 成为群管理员，才能收到普通消息。只修改服务端配置无法让平台推送当前无权接收的消息；QQ 与 Telegram 的群名单限制照旧生效。关闭对应的 `auto_reply` 即停止该平台的自动分类。
+开启前先让所有副本升级到支持这些新字段的版本，再加入配置并滚动重启；回退前先删掉新增字段。QQ 开放平台订阅全量群消息事件，并在目标群的机器人设置里开启「接收所有消息」；Telegram 在 BotFather 的 `/setprivacy` 中选择 Disable 并重新将 Bot 加入群，或让 Bot 成为群管理员，才能收到普通消息。只修改服务端配置无法让平台推送当前无权接收的消息；QQ 与 Telegram 的群名单限制照旧生效。关闭对应的 `auto_reply` 即停止该平台的自动分类。
 
-分类每条最多 8 秒，不重试、不切换到更贵的模型。费用保护按平台内的群和成员区分，记录在 PostgreSQL 的 `auth_rates`，所有副本共享：每位成员每 24 小时最多分类 100 条、每个群每 24 小时 3000 条，每个群每分钟最多 30 条，管理员也适用；这是独立的分类额度，未被判为提问的消息不占答疑额度。确认是提问后继续受原有个人、群和管理员答疑额度限制，显式 @ 不受分类额度影响。不新增数据库表或进程内共享计数。按 TypeSafe 2026-10-30 的公开单价，每百万输入 token 为 $0.042、输出免费；本次 21 条合成消息实测每次平均约 605 个输入 token（包含分类指令），每天 1000 条连续 30 天的分类约 $0.76，实际以接口计费 token 为准，生成答案另计。英文是 Jev 的主要训练语言，中文效果需要单独验证；保守阈值会漏掉「下载地址在哪」这种缺少对象的问题，明确写「水杉下载地址在哪」或 @机器人可直接提问；可用合成消息运行 `MSIME_TEST_JEV=1 go test ./internal/server -run '^TestBotJevLiveChinese$' -v`，默认测试不会调用付费接口。参考 [Jev 模型与价格](https://docs.typesafe.ai/models)、[QQ 全量群消息](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/group_message_create.html)、[Telegram 隐私模式](https://core.telegram.org/bots/features#privacy-mode)。
+分类每条最多 8 秒、最多 96 个输出 token；默认豆包模型关闭深度思考，不重试、不切换到答疑备用模型。费用保护按平台内的群和成员区分，记录在 PostgreSQL 的 `auth_rates`，所有副本共享：每位成员每 24 小时最多分类 100 条、每个群每 24 小时 3000 条，每个群每分钟最多 30 条，管理员也适用；这是独立的分类额度，未被判为提问的消息不占答疑额度。确认是提问后继续受原有个人、群和管理员答疑额度限制，显式 @ 不受分类额度影响。不新增数据库表或进程内共享计数。分类费用按 EveryAPI 当前模型与线路的实际费率结算，包含输入指令和输出，生成答案另计；中文分类效果需要结合实际群聊评估，不保证识别准确率。参考 [EveryAPI 文档](https://docs.everyapi.ai/)、[豆包深度思考参数](https://docs.volcengine.com/docs/ark/deep-thinking?lang=zh)、[QQ 全量群消息](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/group_message_create.html)、[Telegram 隐私模式](https://core.telegram.org/bots/features#privacy-mode)。
 
 ## Telegram 群答疑
 

@@ -323,6 +323,9 @@ func TestTouchHostPreferenceFields(t *testing.T) {
 			{"language_key_side", `"left"`, true},
 			{"nine_key_swipe", `"down"`, true},
 			{"nine_key_swipe", "true", false},
+			// 分离式键盘的主开关：Android 早就同步，鸿蒙从 msime#10224 起同步同名键。
+			{"split_keyboard", "true", true},
+			{"split_keyboard", `"on"`, false},
 		} {
 			if got := validPreference(platform+tc.key, json.RawMessage(tc.value)); got != tc.valid {
 				t.Errorf("%s%s %s: got %v", platform, tc.key, tc.value, got)

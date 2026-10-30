@@ -5183,6 +5183,9 @@
                           "type": "string",
                           "maxLength": 1024
                         },
+                        "platform.harmony.split_keyboard": {
+                          "type": "boolean"
+                        },
                         "mixed_input.quick_phrase": {
                           "type": "boolean"
                         },
@@ -6148,6 +6151,9 @@
                           "type": "string",
                           "maxLength": 1024
                         },
+                        "platform.harmony.split_keyboard": {
+                          "type": "boolean"
+                        },
                         "mixed_input.quick_phrase": {
                           "type": "boolean"
                         },
@@ -7099,6 +7105,9 @@
                       "platform.harmony.nine_key_digit_symbols": {
                         "type": "string",
                         "maxLength": 1024
+                      },
+                      "platform.harmony.split_keyboard": {
+                        "type": "boolean"
                       },
                       "mixed_input.quick_phrase": {
                         "type": "boolean"

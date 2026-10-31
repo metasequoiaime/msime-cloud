@@ -84,6 +84,9 @@ var qqKnowledgeSchema string
 
 //go:embed typing_statistics_schema.sql
 var typingStatisticsSchema string
+
+//go:embed learning_schema.sql
+var learningSchema string
 var ErrInvalid = errors.New("invalid_credentials")
 var ErrLimited = errors.New("rate_limit_exceeded")
 var ErrConflict = errors.New("identity_already_linked")
@@ -238,7 +241,7 @@ func (s *Store) MigrateAs(ctx context.Context, role string) error {
 			return e
 		}
 	}
-	if _, e = tx.Exec(ctx, schema+"\n"+userDataSchema+"\n"+communitySchema+"\n"+adminSchema+"\n"+translationSchema+"\n"+candidateSkinSchema+"\n"+communityCandidateSkinSchema+"\n"+communityPluginSchema+"\n"+adminOpsSchema+"\n"+skinJobSchema+"\n"+feedbackSchema+"\n"+voiceContributionsSchema+"\n"+diagnosticsSchema+"\n"+qqConversationsSchema+"\n"+qqDraftsSchema+"\n"+qqFAQCandidatesSchema+"\n"+qqBadAnswersSchema+"\n"+qqStatsSchema+"\n"+qqImprovementsSchema+"\n"+qqSelfTestCasesSchema+"\n"+typingStatisticsSchema); e != nil {
+	if _, e = tx.Exec(ctx, schema+"\n"+userDataSchema+"\n"+communitySchema+"\n"+adminSchema+"\n"+translationSchema+"\n"+candidateSkinSchema+"\n"+communityCandidateSkinSchema+"\n"+communityPluginSchema+"\n"+adminOpsSchema+"\n"+skinJobSchema+"\n"+feedbackSchema+"\n"+voiceContributionsSchema+"\n"+diagnosticsSchema+"\n"+qqConversationsSchema+"\n"+qqDraftsSchema+"\n"+qqFAQCandidatesSchema+"\n"+qqBadAnswersSchema+"\n"+qqStatsSchema+"\n"+qqImprovementsSchema+"\n"+qqSelfTestCasesSchema+"\n"+typingStatisticsSchema+"\n"+learningSchema); e != nil {
 		return e
 	}
 	// QQ 答疑的向量索引要用 pgvector：它的 halfvec 类型在当前 search_path 里解析得到才建表（扩展要超级用户安装，迁移角色装不了），否则答疑退回只用目录挑段落，服务照常启动。判断类型而不是判断扩展装没装：扩展装在 public，而 search_path 不含 public 的连接（例如测试用的独立 schema）解析不到它的类型，建表会让整个迁移失败。
@@ -357,7 +360,12 @@ SELECT id,question,answer,feedback,retry,state,created_at FROM qq_bad_answers WH
 SELECT user_id,device,platform,ranks,beyond,updated_at FROM typing_statistics_devices WHERE false;
 SELECT user_id,device,day,characters,active_seconds,hours,categories,sources,updated_at FROM typing_statistics_days WHERE false;
 SELECT id,subject,user_id,created_at FROM qq_account_links WHERE false;
-SELECT code_hash,subject,expires_at FROM qq_link_codes WHERE false`); e != nil {
+SELECT code_hash,subject,expires_at FROM qq_link_codes WHERE false;
+-- 输入习惯同步的设置、设备、封装和密文表；缺任何一个时启动走迁移。会话吊销触发器在下面的元数据检查里。
+SELECT user_id,key_id,updated_at FROM user_learning_settings WHERE false;
+SELECT user_id,device_id,public_key,name,session_id,created_at,last_seen FROM user_learning_devices WHERE false;
+SELECT user_id,device_id,key_id,wrap,approver_device_id,created_at FROM user_learning_wraps WHERE false;
+SELECT user_id,device_id,key_id,revision,blob,bytes,updated_at FROM user_learning_blobs WHERE false`); e != nil {
 		return e
 	}
 	// QQ 答疑的向量索引：pgvector 的 halfvec 解析得到、表却还没建时（扩展是在库已经迁移过之后才装的）启动走迁移；解析不到时这个功能本来就关闭，不算缺表。
@@ -383,6 +391,8 @@ SELECT hash,created_at FROM skin_artwork_fingerprints WHERE false`); e != nil {
 		return e
 	}
 	if err := s.checkReadinessMetadata(ctx, []readinessMetadataCheck{
+		// 会话吊销时删除输入习惯同步的设备绑定，旧副本的吊销也要经过它；缺少或停用时先迁移再接收请求。
+		{`SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='auth_sessions'::regclass AND tgname='user_learning_session_revoked' AND tgenabled IN ('O','A'))`, "learning session revocation trigger missing or disabled"},
 		// 两张候选窗皮肤表的保留 ID 写在 CHECK 约束里，SELECT 探测不到；约束还不含 msime-windows 后加的内置外观时启动走迁移。
 		{`SELECT count(*)=2 FROM pg_constraint WHERE conname IN ('candidate_skins_id_check','community_candidate_skins_package_id_check') AND conrelid IN ('candidate_skins'::regclass,'community_candidate_skins'::regclass) AND pg_get_constraintdef(oid) LIKE '%canvas%'`, "candidate skin id constraints predate the msime-windows looks"},
 		{`SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='candidate_skin_resources'::regclass AND conname='candidate_skin_resources_path_check' AND pg_get_constraintdef(oid) LIKE '%apng%')`, "candidate skin resource constraint predates APNG paths"},
@@ -1020,6 +1030,9 @@ func (s *Store) Prune(ctx context.Context) {
 		"DELETE FROM user_clipboard c USING user_clipboard_settings cs WHERE cs.user_id=c.user_id AND cs.retention_days>0 AND NOT c.pinned AND c.updated_at<now()-make_interval(days=>cs.retention_days)",
 		// 云剪贴板只保存密文；滚动升级期间旧版本副本可能还会写入明文条目，这里把它们删掉。
 		"DELETE FROM user_clipboard WHERE ciphertext=''",
+		// 输入习惯同步：长期不在线的设备连同封装和密文删除；会话过期删除时设备已随外键删除，账号因此没有设备时删除密钥编号。放在会话清理之后，与 `DeleteUserData` 一样先删设备再删密钥编号。
+		"DELETE FROM user_learning_devices WHERE last_seen<now()-interval '" + strconv.Itoa(learningInactiveDays) + " days'",
+		"DELETE FROM user_learning_settings s WHERE NOT EXISTS(SELECT 1 FROM user_learning_devices d WHERE d.user_id=s.user_id)",
 		// 与 `DeleteUserData` 一致，先锁剪贴板再锁语音贡献；语音只保留 `voiceContributionRetentionDays` 天。
 		"DELETE FROM voice_contributions WHERE created_at<now()-interval '" + strconv.Itoa(voiceContributionRetentionDays) + " days'"} {
 		batch.Queue(q)

@@ -29,6 +29,15 @@ func TestLogEmailDelivery(t *testing.T) {
 	if got = logs.String(); !strings.Contains(got, "domain=example.test") || !strings.Contains(got, "status=accepted") {
 		t.Fatalf("成功投递日志缺少域名或状态：%s", got)
 	}
+
+	logs.Reset()
+	logUnsupportedEmailDomain("Person@Outlook.COM")
+	if got = logs.String(); !strings.Contains(got, "domain=outlook.com") || !strings.Contains(got, "status=unsupported") {
+		t.Fatalf("不支持域名日志缺少域名或状态：%s", got)
+	}
+	if strings.Contains(got, "Person@Outlook.COM") || strings.Contains(got, "Person") {
+		t.Fatalf("不支持域名日志泄露了完整邮箱：%s", got)
+	}
 }
 
 func TestEmailDeliveryStatus(t *testing.T) {

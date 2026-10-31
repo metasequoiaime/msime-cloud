@@ -636,6 +636,7 @@ func (a *Service) begin(w http.ResponseWriter, r *http.Request) {
 		target, e := normalize(v.Provider, v.Target)
 		if e != nil {
 			if errors.Is(e, errUnsupportedEmailDomain) {
+				logUnsupportedEmailDomain(v.Target)
 				writeError(w, 400, "unsupported_email_domain")
 				return
 			}

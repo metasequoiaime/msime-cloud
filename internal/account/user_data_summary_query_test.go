@@ -30,11 +30,12 @@ func TestUserDataSummaryUsesOneScanPerTable(t *testing.T) {
 	uid := owner.User.ID
 	ctx := t.Context()
 	empty, total, err := db.UserDataSummary(ctx, uid)
+	// 没有输入习惯同步的数据时不列 learning 分区，其余 7 个分区照常列出。
 	if err != nil || total != 0 || len(empty) != 7 {
 		t.Fatalf("空汇总结果错误：%+v，总大小 %d，错误 %v", empty, total, err)
 	}
 	for _, section := range empty {
-		if section.Bytes != 0 || section.Items != 0 {
+		if section.Bytes != 0 || section.Items != 0 || section.ID == "learning" {
 			t.Fatalf("空分区应为零：%+v", section)
 		}
 	}
@@ -50,6 +51,10 @@ func TestUserDataSummaryUsesOneScanPerTable(t *testing.T) {
 			`INSERT INTO community_candidate_skins(id,owner_id,package_id,name,version,license_assets,manifest,preview_path,request_sha256) VALUES(md5($1)::uuid::text,$1,'summary-skin','汇总','1','MIT','x','preview.png',repeat('a',64))`,
 			`INSERT INTO community_resources(id,owner_id,kind,name,content) VALUES('summary-resource-'||$1,$1,'dictionary','汇总','{}')`,
 			`INSERT INTO community_plugins(id,owner_id,kind,plugin_id,name,version,license,manifest,archive,request_sha256) VALUES(md5($1)::uuid::text,$1,'sound','summary-plugin','汇总','1','MIT','x','x',repeat('b',64))`,
+			`INSERT INTO user_learning_settings(user_id,key_id) VALUES($1,repeat('a',32))`,
+			`INSERT INTO user_learning_devices(user_id,device_id,public_key,name,session_id) SELECT $1,repeat('d',32),'key','汇总',id FROM auth_sessions WHERE user_id=$1`,
+			`INSERT INTO user_learning_wraps(user_id,device_id,key_id,wrap,approver_device_id) VALUES($1,repeat('d',32),repeat('a',32),'v1.wrap',repeat('d',32))`,
+			`INSERT INTO user_learning_blobs(user_id,device_id,key_id,revision,blob) VALUES($1,repeat('d',32),repeat('a',32),1,convert_to(repeat('m',1000),'UTF8'))`,
 		} {
 			if _, err := db.pool.Exec(ctx, query, user); err != nil {
 				t.Fatal(err)
@@ -61,6 +66,7 @@ func TestUserDataSummaryUsesOneScanPerTable(t *testing.T) {
 	for section, tables := range map[string][]string{
 		"dictionary": {"user_dictionary_entries", "user_dictionary_overlay", "user_dictionary_changes", "user_candidate_positions", "user_candidate_selections"},
 		"community":  {"community_skins", "community_candidate_skins", "community_resources", "community_plugins"},
+		"learning":   {"user_learning_settings", "user_learning_devices", "user_learning_wraps"},
 	} {
 		column := "user_id"
 		if section == "community" {
@@ -75,6 +81,9 @@ func TestUserDataSummaryUsesOneScanPerTable(t *testing.T) {
 		}
 	}
 
+	// 输入习惯同步的密文按信封字节数计，不做行大小。
+	expectedBytes["learning"] += 1000
+
 	trace := &userDataSummaryQueryTrace{queries: make(chan communityPageQuery, 1)}
 	cfg := db.pool.Config()
 	cfg.ConnConfig.Tracer = trace
@@ -87,7 +96,7 @@ func TestUserDataSummaryUsesOneScanPerTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sections) != 7 || total != expectedBytes["dictionary"]+expectedBytes["community"] {
+	if len(sections) != 8 || total != expectedBytes["dictionary"]+expectedBytes["community"]+expectedBytes["learning"] {
 		t.Fatalf("汇总结果错误：%+v，总大小 %d，期望大小 %v", sections, total, expectedBytes)
 	}
 	order := make([]string, 0, len(sections))
@@ -99,10 +108,10 @@ func TestUserDataSummaryUsesOneScanPerTable(t *testing.T) {
 			t.Errorf("%s 大小为 %d，期望 %d", section.ID, section.Bytes, expectedBytes[section.ID])
 		}
 	}
-	if !slices.Equal(order, []string{"preferences", "dictionary", "phrases", "clipboard", "community", "voice", "avatar"}) {
+	if !slices.Equal(order, []string{"preferences", "dictionary", "phrases", "clipboard", "learning", "community", "voice", "avatar"}) {
 		t.Errorf("分区顺序错误：%v", order)
 	}
-	if items["dictionary"] != 1 || items["community"] != 4 {
+	if items["dictionary"] != 1 || items["community"] != 4 || items["learning"] != 1 {
 		t.Fatalf("汇总条目数错误：%v", items)
 	}
 	var query communityPageQuery
@@ -136,6 +145,7 @@ func TestUserDataSummaryUsesOneScanPerTable(t *testing.T) {
 		"user_dictionary_entries", "user_dictionary_overlay", "user_dictionary_changes", "user_candidate_positions", "user_candidate_selections",
 		"community_skins", "community_candidate_skins", "community_resources", "community_plugins",
 		"community_candidate_skin_files",
+		"user_learning_settings", "user_learning_devices", "user_learning_wraps", "user_learning_blobs",
 	} {
 		if scans[table] != 1 {
 			t.Errorf("%s 扫描了 %d 次，期望 1 次", table, scans[table])

@@ -23,7 +23,7 @@ const userDataExportTimeout = 2 * time.Minute
 const userDataExportsPerDay = 3
 
 // userDataDeletable 是 DELETE /v1/users/me/data 能删除的分区。账号、会话和社区作品不在其中：它们分别走注销账号、移除设备和作品管理。
-var userDataDeletable = map[string]bool{"preferences": true, "dictionary": true, "phrases": true, "clipboard": true, "voice": true}
+var userDataDeletable = map[string]bool{"preferences": true, "dictionary": true, "phrases": true, "clipboard": true, "learning": true, "voice": true}
 
 // UserDataSection 是云端数据汇总里的一个分区。bytes 是 PostgreSQL 报告的行大小之和，作为统计信息而不是精确的磁盘占用。
 type UserDataSection struct {
@@ -32,25 +32,27 @@ type UserDataSection struct {
 	Items int64  `json:"items"`
 }
 
-// userDataSummaryQuery 用一条语句汇总本人各分区的行数和大小。头像存在对象存储里，这里只报告有没有（items 0 或 1）。
+// userDataSummaryQuery 用一条语句汇总本人各分区的行数和大小。头像存在对象存储里，这里只报告有没有（items 0 或 1）。输入习惯同步的密文按信封字节数（`bytes` 列）计，不对大字段做 pg_column_size；items 是密文份数。
 const userDataSummaryQuery = `SELECT id,bytes,items FROM (
  SELECT 1 AS o,'preferences' AS id,COALESCE(sum(pg_column_size(t.*)),0)::bigint AS bytes,count(*)::bigint AS items FROM user_preferences t WHERE user_id=$1
  UNION ALL SELECT 2,'dictionary',entries.bytes+(SELECT COALESCE(sum(pg_column_size(t.*)),0) FROM user_dictionary_overlay t WHERE user_id=$1)+(SELECT COALESCE(sum(pg_column_size(t.*)),0) FROM user_dictionary_changes t WHERE user_id=$1)+(SELECT COALESCE(sum(pg_column_size(t.*)),0) FROM user_candidate_positions t WHERE user_id=$1)+(SELECT COALESCE(sum(pg_column_size(t.*)),0) FROM user_candidate_selections t WHERE user_id=$1),entries.items
  FROM (SELECT COALESCE(sum(pg_column_size(t.*)),0) AS bytes,count(*) AS items FROM user_dictionary_entries t WHERE user_id=$1) entries
  UNION ALL SELECT 3,'phrases',COALESCE(sum(pg_column_size(t.*)),0),COALESCE(sum(jsonb_array_length(t.phrases)),0) FROM user_phrases t WHERE user_id=$1
  UNION ALL SELECT 4,'clipboard',COALESCE(sum(pg_column_size(t.*)),0),count(*) FROM user_clipboard t WHERE user_id=$1
- UNION ALL SELECT 5,'community',sum(bytes)::bigint,sum(items)::bigint FROM (
+ UNION ALL SELECT 5,'learning',blobs.bytes+(SELECT COALESCE(sum(pg_column_size(t.*)),0) FROM user_learning_settings t WHERE user_id=$1)+(SELECT COALESCE(sum(pg_column_size(t.*)),0) FROM user_learning_devices t WHERE user_id=$1)+(SELECT COALESCE(sum(pg_column_size(t.*)),0) FROM user_learning_wraps t WHERE user_id=$1),blobs.items
+ FROM (SELECT COALESCE(sum(t.bytes),0) AS bytes,count(*) AS items FROM user_learning_blobs t WHERE user_id=$1) blobs
+ UNION ALL SELECT 6,'community',sum(bytes)::bigint,sum(items)::bigint FROM (
   SELECT COALESCE(sum(pg_column_size(t.*)),0) AS bytes,count(*) AS items FROM community_skins t WHERE owner_id=$1
   UNION ALL SELECT COALESCE(sum(pg_column_size(t.*)),0)+COALESCE(sum(files.bytes),0),count(*) FROM community_candidate_skins t
   CROSS JOIN LATERAL (SELECT COALESCE(sum(pg_column_size(f.*)),0) AS bytes FROM community_candidate_skin_files f WHERE f.skin_id=t.id) files WHERE t.owner_id=$1
   UNION ALL SELECT COALESCE(sum(pg_column_size(t.*)),0),count(*) FROM community_resources t WHERE owner_id=$1
   UNION ALL SELECT COALESCE(sum(pg_column_size(t.*)),0),count(*) FROM community_plugins t WHERE owner_id=$1
  ) community
- UNION ALL SELECT 6,'voice',COALESCE(sum(octet_length(t.audio)+octet_length(t.transcript)),0),count(*) FROM voice_contributions t WHERE user_id=$1
- UNION ALL SELECT 7,'avatar',0,(SELECT count(*) FROM auth_users WHERE id=$1 AND avatar_key<>'')
+ UNION ALL SELECT 7,'voice',COALESCE(sum(octet_length(t.audio)+octet_length(t.transcript)),0),count(*) FROM voice_contributions t WHERE user_id=$1
+ UNION ALL SELECT 8,'avatar',0,(SELECT count(*) FROM auth_users WHERE id=$1 AND avatar_key<>'')
 ) s WHERE EXISTS (SELECT 1 FROM auth_users WHERE id=$1) ORDER BY o`
 
-// UserDataSummary 返回本人云端数据的分区汇总，分区顺序固定。
+// UserDataSummary 返回本人云端数据的分区汇总，分区顺序固定。`learning` 分区只在账号有输入习惯同步的数据时出现：已发布的客户端会把认不出的分区按原始编号逐行显示，功能在客户端放出之前不能让它们的数据概览多出一行。
 func (s *Store) UserDataSummary(ctx context.Context, user string) ([]UserDataSection, int64, error) {
 	tx, err := s.userReadTransaction(ctx, user)
 	if err != nil {
@@ -68,6 +70,8 @@ func (s *Store) UserDataSummary(ctx context.Context, user string) ([]UserDataSec
 	if err != nil {
 		return nil, 0, err
 	}
+	// 密钥、设备、封装和密文都没有时行大小之和为 0，有任何一行时大于 0。
+	sections = slices.DeleteFunc(sections, func(v UserDataSection) bool { return v.ID == "learning" && v.Bytes == 0 })
 	var total int64
 	for _, v := range sections {
 		total += v.Bytes
@@ -78,7 +82,7 @@ func (s *Store) UserDataSummary(ctx context.Context, user string) ([]UserDataSec
 	return sections, total, nil
 }
 
-// DeleteUserData 在一个事务里删除所选分区。偏好和常用语清空内容并推进 revision，其他设备的旧 revision 写入会 409 并拉到空文档；词库删除条目、覆盖层、位置、选择次数和历史变更后写一条 reset 变更并推进 revision，开着同步的设备拉取时会整份重载而不是把旧数据推回来；剪贴板删除条目、密钥、封装和设备登记，保留同步开关和保留天数。
+// DeleteUserData 在一个事务里删除所选分区。偏好和常用语清空内容并推进 revision，其他设备的旧 revision 写入会 409 并拉到空文档；词库删除条目、覆盖层、位置、选择次数和历史变更后写一条 reset 变更并推进 revision，开着同步的设备拉取时会整份重载而不是把旧数据推回来；剪贴板删除条目、密钥、封装和设备登记，保留同步开关和保留天数；输入习惯同步删除全部设备登记（封装和密文随外键删除）和密钥编号，开着同步的设备之后重新登记，由第一台设备重新生成密钥。
 func (s *Store) DeleteUserData(ctx context.Context, user string, sections map[string]bool) error {
 	tx, err := s.userDataTransaction(ctx, user)
 	if err != nil {
@@ -100,6 +104,12 @@ func (s *Store) DeleteUserData(ctx context.Context, user string, sections map[st
 			`DELETE FROM user_clipboard WHERE user_id=$1`,
 			`DELETE FROM user_clipboard_devices WHERE user_id=$1`,
 			`UPDATE user_clipboard_settings SET key_id=NULL WHERE user_id=$1`)
+	}
+	if sections["learning"] {
+		// 设备名、公钥、登记时间和密文大小都是服务端看得到的元数据，和密文一起删除；先删设备再删密钥编号，与 Store.Prune 的顺序一致。
+		statements = append(statements,
+			`DELETE FROM user_learning_devices WHERE user_id=$1`,
+			`DELETE FROM user_learning_settings WHERE user_id=$1`)
 	}
 	if sections["voice"] {
 		statements = append(statements, `DELETE FROM voice_contributions WHERE user_id=$1`)
@@ -176,12 +186,13 @@ type userDataExportFile struct {
 	name, query string
 }
 
-// userDataExportFiles 是导出包里除词库外的文件。身份只列 provider 名，不含 subject、邮箱和令牌；会话只含设备信息与时间，不含令牌哈希；云剪贴板只有密文（服务端没有明文）和登记设备的名称与时间。
+// userDataExportFiles 是导出包里除词库外的文件。身份只列 provider 名，不含 subject、邮箱和令牌；会话只含设备信息与时间，不含令牌哈希；云剪贴板只有密文（服务端没有明文）和登记设备的名称与时间；输入习惯同步只有元数据（密钥编号、登记设备和每份密文的代次、大小与时间），不含密文本身，服务端也没有明文。
 var userDataExportFiles = []userDataExportFile{
 	{"profile.json", `SELECT jsonb_build_object('id',u.id,'display_name',u.display_name,'created_at',u.created_at,'identities',COALESCE((SELECT jsonb_agg(DISTINCT i.provider) FROM auth_identities i WHERE i.user_id=u.id),'[]'::jsonb)) FROM auth_users u WHERE u.id=$1`},
 	{"preferences.json", `SELECT COALESCE((SELECT jsonb_build_object('revision',revision,'settings',settings) FROM user_preferences WHERE user_id=$1),jsonb_build_object('revision',0,'settings','{}'::jsonb))`},
 	{"phrases.json", `SELECT COALESCE((SELECT jsonb_build_object('revision',revision,'phrases',phrases) FROM user_phrases WHERE user_id=$1),jsonb_build_object('revision',0,'phrases','[]'::jsonb))`},
 	{"clipboard.json", `SELECT jsonb_build_object('retention_days',COALESCE((SELECT retention_days FROM user_clipboard_settings WHERE user_id=$1),0),'key_id',(SELECT key_id FROM user_clipboard_settings WHERE user_id=$1),'items',COALESCE((SELECT jsonb_agg(jsonb_build_object('ciphertext',ciphertext,'key_id',key_id,'pinned',pinned,'device',device,'updated_at',updated_at) ORDER BY pinned DESC,sequence DESC) FROM user_clipboard WHERE user_id=$1 AND ciphertext<>''),'[]'::jsonb),'devices',COALESCE((SELECT jsonb_agg(jsonb_build_object('device_id',device_id,'name',name,'created_at',created_at) ORDER BY created_at,device_id) FROM user_clipboard_devices WHERE user_id=$1),'[]'::jsonb))`},
+	{"learning.json", `SELECT jsonb_build_object('key_id',(SELECT key_id FROM user_learning_settings WHERE user_id=$1),'devices',COALESCE((SELECT jsonb_agg(jsonb_build_object('device_id',d.device_id,'name',d.name,'created_at',d.created_at,'last_seen',d.last_seen,'approved',EXISTS(SELECT 1 FROM user_learning_wraps w JOIN user_learning_settings s ON s.user_id=w.user_id AND s.key_id=w.key_id WHERE w.user_id=d.user_id AND w.device_id=d.device_id)) ORDER BY d.created_at,d.device_id) FROM user_learning_devices d WHERE d.user_id=$1),'[]'::jsonb),'blobs',COALESCE((SELECT jsonb_agg(jsonb_build_object('device_id',device_id,'key_id',key_id,'revision',revision,'bytes',bytes,'updated_at',updated_at) ORDER BY device_id) FROM user_learning_blobs WHERE user_id=$1),'[]'::jsonb))`},
 	{"community.json", `SELECT jsonb_build_object(
  'skins',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id,'name',name,'created_at',created_at) ORDER BY created_at) FROM community_skins WHERE owner_id=$1),'[]'::jsonb),
  'candidate_skins',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id,'name',name,'created_at',created_at) ORDER BY created_at) FROM community_candidate_skins WHERE owner_id=$1),'[]'::jsonb),
@@ -227,7 +238,7 @@ FROM voice_contributions WHERE user_id=$1 ORDER BY created_at,id`, user)
 	return err
 }
 
-// userDataExport 处理 GET /v1/users/me/data/export：把本人的数据流式写成 zip（profile、preferences、phrases、clipboard、community、typing_statistics、sessions、voice.ndjson、dictionary.ndjson）。每用户每天 userDataExportsPerDay 次。开始写响应后出错只能中断连接，客户端会拿到不完整的 zip 而不是一个看似完整的包。内容不写日志。
+// userDataExport 处理 GET /v1/users/me/data/export：把本人的数据流式写成 zip（profile、preferences、phrases、clipboard、learning、community、typing_statistics、sessions、voice.ndjson、dictionary.ndjson）。每用户每天 userDataExportsPerDay 次。开始写响应后出错只能中断连接，客户端会拿到不完整的 zip 而不是一个看似完整的包。内容不写日志。
 func (a *Service) userDataExport(w http.ResponseWriter, r *http.Request) {
 	p, ok := a.principal(w, r, false)
 	if !ok {

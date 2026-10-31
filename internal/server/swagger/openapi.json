@@ -22225,7 +22225,7 @@
             "userSession": []
           }
         ],
-        "description": "一条 SQL 汇总本人各分区的行数和 PostgreSQL 行大小，是统计信息而不是精确的磁盘占用。分区顺序固定；头像存在对象存储里，只报告有没有。",
+        "description": "一条 SQL 汇总本人各分区的行数和 PostgreSQL 行大小，是统计信息而不是精确的磁盘占用。分区顺序固定；头像存在对象存储里，只报告有没有。learning（输入习惯同步）只在账号有这项数据时列出，大小是密文信封的字节数加设备、封装和密钥编号的行大小，items 是密文份数。",
         "responses": {
           "200": {
             "description": "成功",
@@ -22250,6 +22250,7 @@
                               "dictionary",
                               "phrases",
                               "clipboard",
+                              "learning",
                               "community",
                               "voice",
                               "avatar"
@@ -22332,7 +22333,7 @@
             "userSession": []
           }
         ],
-        "description": "要求最近 10 分钟内登录。在一个事务里删除所选分区：偏好和常用语清空并推进 revision，尚无记录时也创建 revision=1 的空文档，重复清空继续推进版本号，旧 revision 的写入返回 409 revision_conflict；词库删除条目、覆盖层、位置和选择次数，写一条 reset 变更并推进 revision，开着同步的其他设备会整份重载；剪贴板删除条目、当前密钥、封装和全部设备登记，保留同步开关和保留天数；语音贡献直接删除。账号、会话和社区作品不在可删范围内。",
+        "description": "要求最近 10 分钟内登录。在一个事务里删除所选分区：偏好和常用语清空并推进 revision，尚无记录时也创建 revision=1 的空文档，重复清空继续推进版本号，旧 revision 的写入返回 409 revision_conflict；词库删除条目、覆盖层、位置和选择次数，写一条 reset 变更并推进 revision，开着同步的其他设备会整份重载；剪贴板删除条目、当前密钥、封装和全部设备登记，保留同步开关和保留天数；输入习惯同步（learning）删除全部设备登记、封装、密文和密钥编号；语音贡献直接删除。账号、会话和社区作品不在可删范围内。",
         "requestBody": {
           "required": true,
           "content": {
@@ -22351,6 +22352,7 @@
                         "dictionary",
                         "phrases",
                         "clipboard",
+                        "learning",
                         "voice"
                       ]
                     }
@@ -22442,7 +22444,7 @@
             "userSession": []
           }
         ],
-        "description": "流式返回 zip（Content-Disposition: attachment; filename=msime-data-<日期>.zip），内含 profile.json（ID、昵称、创建时间、只含 provider 名的身份列表）、preferences.json、dictionary.ndjson（与词库快照同一格式）、phrases.json、clipboard.json、community.json（作品元数据）、sessions.json。每个用户每天 3 次，路由时限 2 分钟；开始传输后出错会中断连接。导出内容不写日志。",
+        "description": "流式返回 zip（Content-Disposition: attachment; filename=msime-data-<日期>.zip），内含 profile.json（ID、昵称、创建时间、只含 provider 名的身份列表）、preferences.json、dictionary.ndjson（与词库快照同一格式）、phrases.json、clipboard.json、learning.json（输入习惯同步的密钥编号、登记设备和每份密文的代次、大小与时间，不含密文）、community.json（作品元数据）、sessions.json。每个用户每天 3 次，路由时限 2 分钟；开始传输后出错会中断连接。导出内容不写日志。",
         "responses": {
           "200": {
             "description": "zip 文件",
@@ -25201,6 +25203,1125 @@
           },
           "503": {
             "description": "用户体系不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/users/me/learning": {
+      "get": {
+        "summary": "查询输入习惯同步的密钥、设备和密文",
+        "tags": [
+          "用户同步数据"
+        ],
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$",
+              "description": "设备编号：hex(SHA-256(公钥)[0..16])。"
+            }
+          }
+        ],
+        "description": "返回当前密钥编号（没有时为 null）、当前密钥给 device_id 这台设备的封装和批准者（没有时为 null）、全部登记设备（按登记时间排序）和全部密文的元数据，并刷新调用会话绑定设备的最后在线时间。服务端只检查格式，不验证密码学内容，也读不到明文。只有匿名身份的账号一律返回 403 learning_requires_account。每个用户写入（登记、删除设备、建钥、批准、换钥、上传和删除密文）每小时 120 次，读取（元数据和下载）每小时 960 次，超出返回 429 rate_limit_exceeded 并带 Retry-After。协议见 msime 主仓库 docs/learning-sync.md。",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "key_id": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{32}$",
+                      "description": "learning 密钥编号：hex(HKDF(K_learn, info=\"msime-learning-v1-key-id\", 16))。",
+                      "nullable": true
+                    },
+                    "wrap": {
+                      "type": "object",
+                      "properties": {
+                        "wrap": {
+                          "type": "string",
+                          "pattern": "^v1\\.[A-Za-z0-9_-]{139}$",
+                          "minLength": 142,
+                          "maxLength": 142,
+                          "description": "带认证的封装：\"v1.\" + base64url(临时公钥 32 字节 ‖ nonce 24 字节 ‖ 密文 32 字节 ‖ tag 16 字节)。"
+                        },
+                        "approver_device_id": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{32}$",
+                          "description": "设备编号：hex(SHA-256(公钥)[0..16])。"
+                        }
+                      },
+                      "required": [
+                        "wrap",
+                        "approver_device_id"
+                      ],
+                      "nullable": true
+                    },
+                    "devices": {
+                      "type": "array",
+                      "maxItems": 20,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "device_id": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{32}$",
+                            "description": "设备编号：hex(SHA-256(公钥)[0..16])。"
+                          },
+                          "public_key": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9_-]{43}$"
+                          },
+                          "name": {
+                            "type": "string",
+                            "maxLength": 64
+                          },
+                          "created_at": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "last_seen": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "approved": {
+                            "type": "boolean",
+                            "description": "该设备持有当前密钥的封装。"
+                          }
+                        },
+                        "required": [
+                          "device_id",
+                          "public_key",
+                          "name",
+                          "created_at",
+                          "last_seen",
+                          "approved"
+                        ]
+                      }
+                    },
+                    "blobs": {
+                      "type": "array",
+                      "maxItems": 20,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "device_id": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{32}$",
+                            "description": "设备编号：hex(SHA-256(公钥)[0..16])。"
+                          },
+                          "key_id": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{32}$",
+                            "description": "learning 密钥编号：hex(HKDF(K_learn, info=\"msime-learning-v1-key-id\", 16))。"
+                          },
+                          "revision": {
+                            "type": "integer",
+                            "format": "int64",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
+                          "bytes": {
+                            "type": "integer",
+                            "format": "int64",
+                            "description": "信封字节数（明文头加密文）。"
+                          },
+                          "updated_at": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        },
+                        "required": [
+                          "device_id",
+                          "key_id",
+                          "revision",
+                          "bytes",
+                          "updated_at"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "key_id",
+                    "wrap",
+                    "devices",
+                    "blobs"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_device_id：device_id 缺失或格式不对",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "需要有效用户会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "learning_requires_account：只有匿名身份的账号；account_banned：账号已封禁",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limit_exceeded（带 Retry-After）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "用户数据服务不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/users/me/learning/devices/{device_id}": {
+      "put": {
+        "summary": "登记输入习惯同步设备",
+        "tags": [
+          "用户同步数据"
+        ],
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$",
+              "description": "设备编号：hex(SHA-256(公钥)[0..16])。"
+            }
+          }
+        ],
+        "description": "登记一台设备并绑定调用会话，已由同一会话登记时只更新名称。一个会话只绑定一台设备：调用会话之前绑定过另一台设备时，那台设备连同封装和密文一起被替换；会话被吊销或过期时设备随之删除；绑定在已过期会话上的设备在登记时就按过期处理，同一台设备重新登录后登记成未批准的新设备。设备只活到它的会话结束，会话最长 30 天，重新登录后要重新批准。device_id 必须等于 hex(SHA-256(公钥)[0..16])，name 不超过 64 个字符、不含控制字符。每个账号最多 20 台。服务端只检查格式，不验证密码学内容，也读不到明文。只有匿名身份的账号一律返回 403 learning_requires_account。每个用户写入（登记、删除设备、建钥、批准、换钥、上传和删除密文）每小时 120 次，读取（元数据和下载）每小时 960 次，超出返回 429 rate_limit_exceeded 并带 Retry-After。协议见 msime 主仓库 docs/learning-sync.md。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "public_key": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{43}$",
+                    "description": "base64url(X25519 公钥 32 字节)。"
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "public_key"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "已登记"
+          },
+          "400": {
+            "description": "invalid_device_id 或 invalid_learning_device（公钥与编号不符、名称超长或含控制字符）或 JSON 无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "需要有效用户会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "learning_requires_account：只有匿名身份的账号；account_banned：账号已封禁；learning_device_mismatch：这台设备绑定在别的会话上",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "learning_device_limit：已有 20 台设备",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "需要 application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limit_exceeded（带 Retry-After）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "用户数据服务不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "删除输入习惯同步设备",
+        "tags": [
+          "用户同步数据"
+        ],
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$",
+              "description": "设备编号：hex(SHA-256(公钥)[0..16])。"
+            }
+          }
+        ],
+        "description": "删除设备、它的封装和密文，用于拒绝待批准的设备和本机关闭功能；移除一台已批准的设备要走换钥。删掉最后一台设备时一并删除密钥编号。服务端只检查格式，不验证密码学内容，也读不到明文。只有匿名身份的账号一律返回 403 learning_requires_account。每个用户写入（登记、删除设备、建钥、批准、换钥、上传和删除密文）每小时 120 次，读取（元数据和下载）每小时 960 次，超出返回 429 rate_limit_exceeded 并带 Retry-After。协议见 msime 主仓库 docs/learning-sync.md。",
+        "responses": {
+          "204": {
+            "description": "已删除"
+          },
+          "400": {
+            "description": "invalid_device_id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "需要有效用户会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "learning_requires_account：只有匿名身份的账号；account_banned：账号已封禁",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found：设备没有登记",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limit_exceeded（带 Retry-After）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "用户数据服务不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/users/me/learning/key": {
+      "post": {
+        "summary": "建立输入习惯同步的第一把密钥",
+        "tags": [
+          "用户同步数据"
+        ],
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "description": "只在账号还没有密钥时可建：写入密钥编号和给调用会话绑定设备的封装，批准者就是它自己。服务端只检查格式，不验证密码学内容，也读不到明文。只有匿名身份的账号一律返回 403 learning_requires_account。每个用户写入（登记、删除设备、建钥、批准、换钥、上传和删除密文）每小时 120 次，读取（元数据和下载）每小时 960 次，超出返回 429 rate_limit_exceeded 并带 Retry-After。协议见 msime 主仓库 docs/learning-sync.md。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "key_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{32}$",
+                    "description": "learning 密钥编号：hex(HKDF(K_learn, info=\"msime-learning-v1-key-id\", 16))。"
+                  },
+                  "wrap": {
+                    "type": "string",
+                    "pattern": "^v1\\.[A-Za-z0-9_-]{139}$",
+                    "minLength": 142,
+                    "maxLength": 142,
+                    "description": "带认证的封装：\"v1.\" + base64url(临时公钥 32 字节 ‖ nonce 24 字节 ‖ 密文 32 字节 ‖ tag 16 字节)。"
+                  }
+                },
+                "required": [
+                  "key_id",
+                  "wrap"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "已建立"
+          },
+          "400": {
+            "description": "invalid_learning_key：格式不对或调用会话没有登记设备；或 JSON 无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "需要有效用户会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "learning_requires_account：只有匿名身份的账号；account_banned：账号已封禁",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "learning_key_conflict：账号已有密钥",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "需要 application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limit_exceeded（带 Retry-After）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "用户数据服务不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/users/me/learning/wraps/{device_id}": {
+      "put": {
+        "summary": "批准输入习惯同步设备（写入封装）",
+        "tags": [
+          "用户同步数据"
+        ],
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$",
+              "description": "设备编号：hex(SHA-256(公钥)[0..16])。"
+            }
+          }
+        ],
+        "description": "写入当前密钥给一台已登记设备的封装，已有时替换。approver_device_id 必须是调用会话绑定、并且持有当前密钥封装的设备。服务端只检查格式，不验证密码学内容，也读不到明文。只有匿名身份的账号一律返回 403 learning_requires_account。每个用户写入（登记、删除设备、建钥、批准、换钥、上传和删除密文）每小时 120 次，读取（元数据和下载）每小时 960 次，超出返回 429 rate_limit_exceeded 并带 Retry-After。协议见 msime 主仓库 docs/learning-sync.md。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "key_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{32}$",
+                    "description": "learning 密钥编号：hex(HKDF(K_learn, info=\"msime-learning-v1-key-id\", 16))。"
+                  },
+                  "wrap": {
+                    "type": "string",
+                    "pattern": "^v1\\.[A-Za-z0-9_-]{139}$",
+                    "minLength": 142,
+                    "maxLength": 142,
+                    "description": "带认证的封装：\"v1.\" + base64url(临时公钥 32 字节 ‖ nonce 24 字节 ‖ 密文 32 字节 ‖ tag 16 字节)。"
+                  },
+                  "approver_device_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{32}$",
+                    "description": "设备编号：hex(SHA-256(公钥)[0..16])。"
+                  }
+                },
+                "required": [
+                  "key_id",
+                  "wrap",
+                  "approver_device_id"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "已批准"
+          },
+          "400": {
+            "description": "invalid_device_id；invalid_learning_key：格式不对或被批准的设备没有登记；或 JSON 无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "需要有效用户会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "learning_requires_account：只有匿名身份的账号；account_banned：账号已封禁；learning_device_mismatch：批准者不是调用会话绑定的设备",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "learning_key_conflict：key_id 不是当前密钥，或批准者不持有当前密钥的封装",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "需要 application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limit_exceeded（带 Retry-After）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "用户数据服务不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/users/me/learning/rekey": {
+      "post": {
+        "summary": "更换输入习惯同步的密钥",
+        "tags": [
+          "用户同步数据"
+        ],
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "description": "在一个事务里确认当前密钥编号等于 previous_key_id（比较后写入，并发换钥只有一个成功），删除 revoke 里的设备、全部密文和全部旧封装，写入新密钥编号和给调用会话绑定设备的封装。不要求调用设备持有旧密钥的封装，所有设备都丢了时从新设备重置也走这里。key_id 必须与 previous_key_id 不同，revoke 最多 20 项且不能包含调用设备。服务端只检查格式，不验证密码学内容，也读不到明文。只有匿名身份的账号一律返回 403 learning_requires_account。每个用户写入（登记、删除设备、建钥、批准、换钥、上传和删除密文）每小时 120 次，读取（元数据和下载）每小时 960 次，超出返回 429 rate_limit_exceeded 并带 Retry-After。协议见 msime 主仓库 docs/learning-sync.md。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "previous_key_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{32}$",
+                    "description": "learning 密钥编号：hex(HKDF(K_learn, info=\"msime-learning-v1-key-id\", 16))。"
+                  },
+                  "key_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{32}$",
+                    "description": "learning 密钥编号：hex(HKDF(K_learn, info=\"msime-learning-v1-key-id\", 16))。"
+                  },
+                  "wrap": {
+                    "type": "string",
+                    "pattern": "^v1\\.[A-Za-z0-9_-]{139}$",
+                    "minLength": 142,
+                    "maxLength": 142,
+                    "description": "带认证的封装：\"v1.\" + base64url(临时公钥 32 字节 ‖ nonce 24 字节 ‖ 密文 32 字节 ‖ tag 16 字节)。"
+                  },
+                  "revoke": {
+                    "type": "array",
+                    "maxItems": 20,
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{32}$",
+                      "description": "设备编号：hex(SHA-256(公钥)[0..16])。"
+                    }
+                  }
+                },
+                "required": [
+                  "previous_key_id",
+                  "key_id",
+                  "wrap"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "已更换"
+          },
+          "400": {
+            "description": "invalid_learning_key：格式不对、新旧编号相同、调用会话没有登记设备或调用设备在 revoke 里；或 JSON 无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "需要有效用户会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "learning_requires_account：只有匿名身份的账号；account_banned：账号已封禁",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "learning_key_conflict：账号没有密钥或 previous_key_id 不是当前密钥",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "需要 application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limit_exceeded（带 Retry-After）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "用户数据服务不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/users/me/learning/blobs/{device_id}": {
+      "get": {
+        "summary": "下载一台设备的输入习惯密文",
+        "tags": [
+          "用户同步数据"
+        ],
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$",
+              "description": "设备编号：hex(SHA-256(公钥)[0..16])。"
+            }
+          }
+        ],
+        "description": "返回这台设备的信封原样字节。任何会话都能读，读取方自己解密并核对信封头。路由时限 60 秒；每个副本同时最多传输 8 份密文，名额等不到时返回 503 server_busy 并带 Retry-After。信封 MSL1：68 字节明文头（\"MSL1\" ‖ key_id 16 字节 ‖ device_id 16 字节 ‖ 代次 u64 大端 ‖ nonce 24 字节）加 AEAD 密文和 16 字节 tag，整体 84 字节到 8 MiB。服务端只检查格式，不验证密码学内容，也读不到明文。只有匿名身份的账号一律返回 403 learning_requires_account。每个用户写入（登记、删除设备、建钥、批准、换钥、上传和删除密文）每小时 120 次，读取（元数据和下载）每小时 960 次，超出返回 429 rate_limit_exceeded 并带 Retry-After。协议见 msime 主仓库 docs/learning-sync.md。",
+        "responses": {
+          "200": {
+            "description": "信封",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_device_id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "需要有效用户会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "learning_requires_account：只有匿名身份的账号；account_banned：账号已封禁",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found：没有这台设备的密文",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limit_exceeded（带 Retry-After）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "用户数据服务不可用；server_busy：本副本同时传输的密文已达上限，带 Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "上传本机的输入习惯密文",
+        "tags": [
+          "用户同步数据"
+        ],
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$",
+              "description": "设备编号：hex(SHA-256(公钥)[0..16])。"
+            }
+          },
+          {
+            "name": "revision",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "description": "代次，必须等于信封头里的代次，并且大于这台设备已存的代次（没有时为 0）。"
+          }
+        ],
+        "description": "请求体是信封原样字节，只允许调用会话绑定、并且持有当前密钥封装的那台设备写自己的那份。服务端只检查格式：以 MSL1 开头，补齐后的明文长度（总长减 84）是 padme 的不动点，头里的 key_id 是当前密钥、device_id 与路径一致、代次等于 revision。代次在写入事务里比较并交换。一个账号全部密文合计不超过 64 MiB。路由时限 60 秒；每个副本同时最多传输 8 份密文，名额等不到时返回 503 server_busy 并带 Retry-After。信封 MSL1：68 字节明文头（\"MSL1\" ‖ key_id 16 字节 ‖ device_id 16 字节 ‖ 代次 u64 大端 ‖ nonce 24 字节）加 AEAD 密文和 16 字节 tag，整体 84 字节到 8 MiB。服务端只检查格式，不验证密码学内容，也读不到明文。只有匿名身份的账号一律返回 403 learning_requires_account。每个用户写入（登记、删除设备、建钥、批准、换钥、上传和删除密文）每小时 120 次，读取（元数据和下载）每小时 960 次，超出返回 429 rate_limit_exceeded 并带 Retry-After。协议见 msime 主仓库 docs/learning-sync.md。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "已保存"
+          },
+          "400": {
+            "description": "invalid_device_id；invalid_learning_blob：revision 或信封格式不对；learning_e2e_required：请求体以 { 或 gzip 魔数开头，看起来是明文",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "需要有效用户会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "learning_requires_account：只有匿名身份的账号；account_banned：账号已封禁；learning_device_mismatch：路径不是调用会话绑定的设备",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "revision_conflict：revision 不大于已存的代次；learning_key_conflict：信封的 key_id 不是当前密钥，或这台设备不持有当前密钥的封装",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "learning_too_large：信封超过 8 MiB；learning_quota：账号合计超过 64 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limit_exceeded（带 Retry-After）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "用户数据服务不可用；server_busy：本副本同时传输的密文已达上限，带 Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "删除本机的输入习惯密文",
+        "tags": [
+          "用户同步数据"
+        ],
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$",
+              "description": "设备编号：hex(SHA-256(公钥)[0..16])。"
+            }
+          }
+        ],
+        "description": "只允许调用会话绑定的那台设备删自己的那份，删除后这台设备的代次从 0 算起。服务端只检查格式，不验证密码学内容，也读不到明文。只有匿名身份的账号一律返回 403 learning_requires_account。每个用户写入（登记、删除设备、建钥、批准、换钥、上传和删除密文）每小时 120 次，读取（元数据和下载）每小时 960 次，超出返回 429 rate_limit_exceeded 并带 Retry-After。协议见 msime 主仓库 docs/learning-sync.md。",
+        "responses": {
+          "204": {
+            "description": "已删除"
+          },
+          "400": {
+            "description": "invalid_device_id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "需要有效用户会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "learning_requires_account：只有匿名身份的账号；account_banned：账号已封禁；learning_device_mismatch：路径不是调用会话绑定的设备",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found：没有这台设备的密文",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limit_exceeded（带 Retry-After）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "用户数据服务不可用",
             "content": {
               "application/json": {
                 "schema": {

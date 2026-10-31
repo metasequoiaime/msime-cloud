@@ -529,6 +529,10 @@ func (a *Service) suppressDeliveryTarget(parent context.Context, provider, targe
 	_ = a.store.SuppressDelivery(ctx, provider, target, "smtp_rcpt_rejected", deliverySuppressionTTL)
 }
 
+var errUnsupportedEmailDomain = errors.New("unsupported_email_domain")
+
+var unsupportedEmailDomains = []string{"outlook.com", "hotmail.com", "live.com", "msn.com"}
+
 // verificationCode 使用随机种子和服务端密钥生成六位验证码。相同目标复用有效挑战时，种子保持不变，因此不会再次发送邮件。
 func (a *Service) verificationCode(provider, target, seed string) string {
 	mac := digest.HMACSHA256([]byte(os.Getenv(a.config.PepperEnv)), []byte("verification-code-v1:"+provider+":"+target+":"+seed))
@@ -545,7 +549,15 @@ func normalize(provider, target string) (string, error) {
 		if e != nil || v.Address != target || len(target) > 254 || strings.ContainsAny(target, "\r\n") {
 			return "", ErrInvalid
 		}
-		return strings.ToLower(target), nil
+		normalized := strings.ToLower(target)
+		at := strings.LastIndexByte(normalized, '@')
+		domain := normalized[at+1:]
+		for _, blocked := range unsupportedEmailDomains {
+			if domain == blocked || strings.HasSuffix(domain, "."+blocked) {
+				return "", errUnsupportedEmailDomain
+			}
+		}
+		return normalized, nil
 	}
 	if provider == "phone" && phoneTargetPattern.MatchString(target) {
 		return target, nil
@@ -623,6 +635,10 @@ func (a *Service) begin(w http.ResponseWriter, r *http.Request) {
 	if v.Provider == "email" || v.Provider == "phone" {
 		target, e := normalize(v.Provider, v.Target)
 		if e != nil {
+			if errors.Is(e, errUnsupportedEmailDomain) {
+				writeError(w, 400, "unsupported_email_domain")
+				return
+			}
 			writeError(w, 400, "invalid_target")
 			return
 		}

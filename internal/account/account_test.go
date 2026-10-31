@@ -449,6 +449,12 @@ func TestEmailHTTPFlowAndFailure(t *testing.T) {
 		mux.ServeHTTP(w, r)
 		return w
 	}
+	for _, target := range []string{"person@outlook.com", "person@hotmail.com", "person@live.com", "person@msn.com", "person@mail.outlook.com"} {
+		w := request("/v1/auth/challenges", map[string]string{"provider": "email", "target": target})
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `"unsupported_email_domain"`) {
+			t.Fatalf("微软邮箱域名应在投递前拒绝：%s %d %s", target, w.Code, w.Body.String())
+		}
+	}
 	w := request("/v1/auth/challenges", map[string]string{"provider": "email", "target": "one@example.test"})
 	if w.Code != 201 {
 		t.Fatal(w.Code, w.Body.String())

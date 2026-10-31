@@ -55,7 +55,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE msime_migrator IN SCHEMA public GRANT USAGE, S
 
 ## 登录与账号管理
 
-1. `POST /v1/auth/challenges`：`{"provider":"email","target":"user@example.com","purpose":"login"}`。返回 `challenge_id`，不会返回验证码。第三方登录省略 target。同一邮箱已有未过期验证码时，服务端为本次请求建立新的挑战但复用原验证码，不重复发送邮件；响应额外带 `reused:true`，首次发送为 `false` 或省略。验证码仍只在各自挑战上可用，5 分钟后失效。
+1. `POST /v1/auth/challenges`：`{"provider":"email","target":"user@example.com","purpose":"login"}`。返回 `challenge_id`，不会返回验证码。由于当前 SMTP 出口对微软邮箱投递不稳定，`outlook.com`、`hotmail.com`、`live.com`、`msn.com` 及其子域名返回 `unsupported_email_domain`，客户端应提示用户改用其他邮箱或手机号。第三方登录省略 target。同一邮箱已有未过期验证码时，服务端为本次请求建立新的挑战但复用原验证码，不重复发送邮件；响应额外带 `reused:true`，首次发送为 `false` 或省略。验证码仍只在各自挑战上可用，5 分钟后失效。
 2. `POST /v1/auth/login`：`{"challenge_id":"...","credential":"..."}`。credential 为验证码、ID Token 或微信 code。首次有效登录自动创建账号，返回 access_token、refresh_token 和 user。
 3. 使用 `Authorization: Bearer <access_token>` 调用在线输入接口及 `GET /v1/users/me`。访问令牌有效期 15 分钟，会话最长 30 天。
 4. `POST /v1/auth/refresh`：提交 refresh_token，原访问令牌和刷新令牌立即失效。客户端应串行刷新。旧刷新令牌在被轮换后 30 秒内再次提交时，视为并发刷新输掉了竞争（官网 BFF、多个浏览器标签页同时刷新），返回 409 `refresh_superseded`，会话不撤销，调用方应改用并发请求已经拿到的新令牌，而不是重新登录；超过 30 秒的重放仍会撤销该会话，返回 401，需重新登录。会话已退出或已撤销时，30 秒内的旧令牌同样返回 401。令牌应存于操作系统安全存储，不放入 URL。轮换时间记在 `auth_used_refresh.used_at`，加列之前已轮换的令牌按超过 30 秒处理。

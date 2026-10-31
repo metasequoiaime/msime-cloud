@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 )
 
@@ -15,14 +16,46 @@ const (
 	emailDeliveryFailed   = "failed"
 )
 
-func (a *Service) recordEmailDelivery(provider string, err error) {
-	if provider != "email" || a.store == nil {
+func (a *Service) recordEmailDelivery(provider, target string, err error) {
+	if provider != "email" {
+		return
+	}
+	logEmailDelivery(target, err)
+	if a.store == nil {
 		return
 	}
 	// 统计写入使用独立短期限，邮件请求取消或统计表短暂故障都不能改变投递结果。
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	a.store.RecordEmailDelivery(ctx, emailDeliveryStatus(err))
+}
+
+// logEmailDelivery 只记录规范化后的域名和结果，不记录完整邮箱地址或 SMTP 原文。
+// 域名能帮助定位供应商按域名拒收的问题，且不会暴露收件人的本地部分。
+func logEmailDelivery(target string, err error) {
+	domain := emailDomain(target)
+	status := emailDeliveryStatus(err)
+	if err == nil {
+		slog.Info("邮件投递", "domain", domain, "status", status)
+		return
+	}
+	slog.Warn("邮件投递失败", "domain", domain, "status", status)
+}
+
+func logUnsupportedEmailDomain(target string) {
+	slog.Warn("邮箱域名不支持", "domain", emailDomain(target), "status", "unsupported")
+}
+
+func emailDomain(target string) string {
+	domain := "unknown"
+	target = strings.TrimSpace(target)
+	if at := strings.LastIndexByte(target, '@'); at > 0 && at < len(target)-1 {
+		domain = strings.ToLower(target[at+1:])
+		if strings.ContainsAny(domain, "\r\n") {
+			domain = "unknown"
+		}
+	}
+	return domain
 }
 
 // RecordEmailDelivery 记录一次已经调用邮件供应商的投递结果。记录失败不能阻断邮件请求，避免统计表故障扩大成登录故障。

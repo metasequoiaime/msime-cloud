@@ -1,10 +1,44 @@
 package account
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 )
+
+func TestLogEmailDelivery(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	logEmailDelivery("Person@Example.COM", &deliveryFailure{permanent: true})
+	got := logs.String()
+	if !strings.Contains(got, "domain=example.com") || !strings.Contains(got, "status=rejected") {
+		t.Fatalf("投递日志缺少域名或状态：%s", got)
+	}
+	if strings.Contains(got, "Person@Example.COM") || strings.Contains(got, "Person") {
+		t.Fatalf("投递日志泄露了完整邮箱：%s", got)
+	}
+
+	logs.Reset()
+	logEmailDelivery("user@example.test", nil)
+	if got = logs.String(); !strings.Contains(got, "domain=example.test") || !strings.Contains(got, "status=accepted") {
+		t.Fatalf("成功投递日志缺少域名或状态：%s", got)
+	}
+
+	logs.Reset()
+	logUnsupportedEmailDomain("Person@Outlook.COM")
+	if got = logs.String(); !strings.Contains(got, "domain=outlook.com") || !strings.Contains(got, "status=unsupported") {
+		t.Fatalf("不支持域名日志缺少域名或状态：%s", got)
+	}
+	if strings.Contains(got, "Person@Outlook.COM") || strings.Contains(got, "Person") {
+		t.Fatalf("不支持域名日志泄露了完整邮箱：%s", got)
+	}
+}
 
 func TestEmailDeliveryStatus(t *testing.T) {
 	if got := emailDeliveryStatus(nil); got != emailDeliveryAccepted {

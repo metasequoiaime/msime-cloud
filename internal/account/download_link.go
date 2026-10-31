@@ -137,7 +137,7 @@ func (a *Service) downloadLink(w http.ResponseWriter, r *http.Request) {
 		// 先释放用户事务的连接，再写统计、抑制记录或退款，确保单连接池也能完成请求。
 		rollback()
 		if attempted {
-			a.recordEmailDelivery("email", deliveryErr)
+			a.recordEmailDelivery("email", email, deliveryErr)
 			if permanentDeliveryFailure(deliveryErr) {
 				a.suppressDeliveryTarget(r.Context(), "email", email)
 			}

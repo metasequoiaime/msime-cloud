@@ -285,6 +285,20 @@
       "internal/account/admin_moderation_test.go::TestCommunityReport",
       "internal/account/community_resources_test.go::TestResourcePhrasePackHTTP"
     ],
+    "POST /v1/community/blocks": [
+      "internal/account/community_blocks_test.go::TestCommunityBlockCreateListDelete",
+      "internal/account/community_blocks_test.go::TestCommunityBlockLimitAndRate",
+      "internal/account/community_blocks_test.go::TestCommunityBlocksFilterCatalogs"
+    ],
+    "GET /v1/community/blocks": [
+      "internal/account/community_blocks_test.go::TestCommunityBlockCreateListDelete",
+      "internal/account/community_blocks_test.go::TestCommunityBlockLimitAndRate",
+      "internal/account/community_blocks_test.go::TestCommunityBlocksFollowAccountDeletion"
+    ],
+    "DELETE /v1/community/blocks/{id}": [
+      "internal/account/community_blocks_test.go::TestCommunityBlockCreateListDelete",
+      "internal/account/community_blocks_test.go::TestCommunityBlocksFilterCatalogs"
+    ],
     "GET /v1/site/download-mirrors": [
       "internal/account/site_settings_test.go::TestSiteDownloadMirrorAdminEditAndPublicRead"
     ],

@@ -415,7 +415,7 @@ func (a *Service) communityList(w http.ResponseWriter, r *http.Request) {
 	}
 	listQuery := `WITH skin_page AS MATERIALIZED (
  SELECT s.id FROM community_skins s JOIN auth_users u ON u.id=s.owner_id ` + join + `
- WHERE strpos(lower(s.name),lower($2))>0 AND (` + communityMineCondition(scope, "s", "$4") + `) AND (s.moderation<>'removed' OR s.owner_id=$1) AND (` + categoryCondition + `)` + communitySkinOriginFilter(excludeAI, "s") + `
+ WHERE strpos(lower(s.name),lower($2))>0 AND (` + communityMineCondition(scope, "s", "$4") + `) AND (s.moderation<>'removed' OR s.owner_id=$1) AND (` + categoryCondition + `)` + communitySkinOriginFilter(excludeAI, "s") + communityBlockedFilter(scope, viewer, "s") + `
  ORDER BY ` + order + ` LIMIT 21 OFFSET $3
 ) ` + communitySkinSelectQuery(fields["saved"], true) + join + ` ORDER BY ` + order
 	args := []any{viewer, search, offset, scope, category}

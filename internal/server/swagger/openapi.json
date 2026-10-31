@@ -14016,7 +14016,7 @@
             "description": "category 表示每个条目带上 category 字段；不带时响应与引入分类之前逐字节相同。其他值返回 400 invalid_include。"
           }
         ],
-        "description": "仅支持数据型 Apple 键盘 v1。发布最多 50 款，重试使用相同 UUID；下载人数按账号去重。登录即可评分，不能给自己的作品评分（403 download_before_rating_or_own_skin），已下架的作品不能评分（404）。收藏请求体为 {\"saved\":bool}，重复提交结果相同，返回收藏状态与收藏总数；已下架的作品只有作者本人可收藏，其他人 404。列表每页 20 条，不包含照片字节。作者自己已下架的作品只对作者可见。详见 docs/skin-community.md。",
+        "description": "仅支持数据型 Apple 键盘 v1。发布最多 50 款，重试使用相同 UUID；下载人数按账号去重。登录即可评分，不能给自己的作品评分（403 download_before_rating_or_own_skin），已下架的作品不能评分（404）。收藏请求体为 {\"saved\":bool}，重复提交结果相同，返回收藏状态与收藏总数；已下架的作品只有作者本人可收藏，其他人 404。列表每页 20 条，不包含照片字节。作者自己已下架的作品只对作者可见。详见 docs/skin-community.md。 带用户会话浏览时（scope=mine 除外），已用 POST /v1/community/blocks 屏蔽的作者的作品不出现在列表里。",
         "responses": {
           "200": {
             "description": "成功",
@@ -15650,7 +15650,7 @@
             "description": "声明扩展图片支持；默认过滤不兼容包，详情和下载返回 404。先确认响应头 X-MSIME-Candidate-Resources: canvas-v1，旧部署可能忽略该参数。"
           }
         ],
-        "description": "公开目录，按发布时间倒序每页 20 条，不含清单和图片字节。scope=mine 只列出自己的作品，scope=saved 只列出自己收藏的作品（按收藏时间倒序），都需要用户会话；只有 scope 非空且 fields 含 sync 时才包含自己的私有作品，别人的私有作品永远不出现。category 按图库分类筛选，未知分类返回 400 invalid_category。 详见 docs/skin-community.md。",
+        "description": "公开目录，按发布时间倒序每页 20 条，不含清单和图片字节。scope=mine 只列出自己的作品，scope=saved 只列出自己收藏的作品（按收藏时间倒序），都需要用户会话；只有 scope 非空且 fields 含 sync 时才包含自己的私有作品，别人的私有作品永远不出现。category 按图库分类筛选，未知分类返回 400 invalid_category。 详见 docs/skin-community.md。 带用户会话浏览时（scope=mine 除外），已用 POST /v1/community/blocks 屏蔽的作者的作品不出现在列表里。",
         "responses": {
           "200": {
             "description": "成功",
@@ -17616,7 +17616,7 @@
             "description": "逗号分隔的、客户端能安装的类型。sound、music、command_table、effect 总是返回；其余类型只在这里声明（或由 kind 指定）后才返回，详情未声明时为 404 plugin_not_found。不认识的名字忽略，不报错。"
           }
         ],
-        "description": "按发布时间倒序每页 20 条，可按 kind 过滤、按名称搜索，不含 zip 包字节。只返回旧客户端认识的类型和 kinds 声明的类型。scope=mine 只列出自己的作品（含已下架），scope=saved 只列出自己收藏的作品（按收藏时间倒序），都需要用户会话。 详见 docs/plugin-community.md。",
+        "description": "按发布时间倒序每页 20 条，可按 kind 过滤、按名称搜索，不含 zip 包字节。只返回旧客户端认识的类型和 kinds 声明的类型。scope=mine 只列出自己的作品（含已下架），scope=saved 只列出自己收藏的作品（按收藏时间倒序），都需要用户会话。 详见 docs/plugin-community.md。 带用户会话浏览时（scope=mine 除外），已用 POST /v1/community/blocks 屏蔽的作者的作品不出现在列表里。",
         "responses": {
           "200": {
             "description": "成功",
@@ -18668,7 +18668,7 @@
             "description": "moderation 表示在自己的作品上接收 moderation 审核状态；其他值返回 400 invalid_fields。不带此参数时响应与以前逐字节相同。"
           }
         ],
-        "description": "发现和详情公开；saved/mine 范围需要用户会话。词库仅携带显式选定的 1–128 条记录，由 Engine 校验；回复仅携带提示词（不含密钥）；短语包仅携带 1–200 条无编码常用语（content.phrases），客户端本地安装进常用语。列表只返回请求的 kind，旧客户端不会收到短语包。每账号最多 50 份。新建 revision=0，更新携带当前 revision，冲突返回 409；相同内容重试不增加版本。收藏按账号去重。登录即可评分，不需要先收藏；不能给自己的作品评分（403 save_before_rating_or_own_resource），不存在或已下架的作品返回 404 resource_not_found。查看版本不会自动覆盖个人词库。",
+        "description": "发现和详情公开；saved/mine 范围需要用户会话。词库仅携带显式选定的 1–128 条记录，由 Engine 校验；回复仅携带提示词（不含密钥）；短语包仅携带 1–200 条无编码常用语（content.phrases），客户端本地安装进常用语。列表只返回请求的 kind，旧客户端不会收到短语包。每账号最多 50 份。新建 revision=0，更新携带当前 revision，冲突返回 409；相同内容重试不增加版本。收藏按账号去重。登录即可评分，不需要先收藏；不能给自己的作品评分（403 save_before_rating_or_own_resource），不存在或已下架的作品返回 404 resource_not_found。查看版本不会自动覆盖个人词库。 带用户会话浏览时（scope=mine 除外），已用 POST /v1/community/blocks 屏蔽的作者的作品不出现在列表里。",
         "responses": {
           "200": {
             "description": "成功",
@@ -24821,6 +24821,386 @@
           },
           "503": {
             "description": "用户数据服务不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/community/blocks": {
+      "post": {
+        "summary": "屏蔽社区作者",
+        "tags": [
+          "创作社区"
+        ],
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "description": "登录用户（设备的匿名账号也算）屏蔽一项社区作品的作者。kind 与举报相同；作品必须对调用者可见，可见规则也与举报相同（已下架内容、私有候选皮肤和待审的脚本插件返回 404 item_not_found）。屏蔽后该作者的作品不再出现在调用者的键盘皮肤、候选窗皮肤、插件和词库 / 回复模板 / 短语包目录里（scope=mine 除外），详情、下载和收藏不受影响。同一作者已屏蔽过时返回 200 和原记录。每个账号最多屏蔽 500 位作者，已满返回 409 block_limit_reached；每个账号每小时最多新建 60 次。在用户行锁内执行，封禁账号返回 403 account_banned。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "skins",
+                      "candidate-skins",
+                      "plugins",
+                      "dictionaries",
+                      "replies",
+                      "phrases"
+                    ]
+                  },
+                  "item_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "description": "作品 ID，不含 /。"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "item_id"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "已屏蔽过该作者，返回原记录",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "block": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "description": "屏蔽记录的 ID，取消屏蔽时使用；不是被屏蔽用户的 ID，响应从不包含后者。"
+                        },
+                        "name": {
+                          "type": "string",
+                          "description": "被屏蔽作者的显示名，读取时计算：没有昵称时为「水杉小鹿·」加账号 ID 前 6 位的大写。"
+                        },
+                        "created_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name",
+                        "created_at"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "block"
+                  ]
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "已屏蔽",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "block": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "description": "屏蔽记录的 ID，取消屏蔽时使用；不是被屏蔽用户的 ID，响应从不包含后者。"
+                        },
+                        "name": {
+                          "type": "string",
+                          "description": "被屏蔽作者的显示名，读取时计算：没有昵称时为「水杉小鹿·」加账号 ID 前 6 位的大写。"
+                        },
+                        "created_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name",
+                        "created_at"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "block"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_block_kind：kind 不认识；invalid_id：item_id 无效；cannot_block_self：作品是自己的；invalid_json：JSON 无效、含未知字段或超过 16 KiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "需要用户会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "账号已封禁",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "item_not_found：作品不存在或不可见",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "block_limit_reached：已屏蔽 500 位作者",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "需要 application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求过多",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "用户体系不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "列出屏蔽的社区作者",
+        "tags": [
+          "创作社区"
+        ],
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "description": "返回本人的全部屏蔽（最多 500 条，不分页），新的在前。作者显示名在读取时计算，作者改名后随之更新；被屏蔽者注销账号后记录随之删除。",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "maxItems": 500,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "description": "屏蔽记录的 ID，取消屏蔽时使用；不是被屏蔽用户的 ID，响应从不包含后者。"
+                          },
+                          "name": {
+                            "type": "string",
+                            "description": "被屏蔽作者的显示名，读取时计算：没有昵称时为「水杉小鹿·」加账号 ID 前 6 位的大写。"
+                          },
+                          "created_at": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "name",
+                          "created_at"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "需要用户会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求过多",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "用户体系不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/community/blocks/{id}": {
+      "delete": {
+        "summary": "取消屏蔽社区作者",
+        "tags": [
+          "创作社区"
+        ],
+        "security": [
+          {
+            "userSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "description": "删除本人的一条屏蔽记录，该作者的作品重新出现在目录里。幂等：记录不存在、已删除或属于别人时同样返回 200，不影响别人的记录。",
+        "responses": {
+          "200": {
+            "description": "已取消（或本来就没有这条记录）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "blocked": {
+                      "type": "boolean",
+                      "enum": [
+                        false
+                      ]
+                    }
+                  },
+                  "required": [
+                    "blocked"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_id：id 不是 UUID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "需要用户会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求过多",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "用户体系不可用",
             "content": {
               "application/json": {
                 "schema": {

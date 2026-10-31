@@ -131,6 +131,10 @@ func TestEveryAccountRouteAuthenticationAndDisabledService(t *testing.T) {
 	// The server package registers the report route with Route instead of Mount; register it the same way so it meets the same contract.
 	mux.HandleFunc("POST /v1/community/reports", Route(a, "POST /v1/community/reports", (*Service).CommunityReport))
 	disabled.HandleFunc("POST /v1/community/reports", Route(nil, "POST /v1/community/reports", (*Service).CommunityReport))
+	for pattern, method := range communityBlockRoutes {
+		mux.HandleFunc(pattern, Route(a, pattern, method))
+		disabled.HandleFunc(pattern, Route(nil, pattern, method))
+	}
 	mux.HandleFunc("POST "+TelemetryPath, Route(a, "POST "+TelemetryPath, (*Service).Telemetry))
 	disabled.HandleFunc("POST "+TelemetryPath, Route(nil, "POST "+TelemetryPath, (*Service).Telemetry))
 	n := 0
@@ -149,8 +153,8 @@ func TestEveryAccountRouteAuthenticationAndDisabledService(t *testing.T) {
 			if method == "post" && path == "/v1/community/candidate-skins/{id}/download" {
 				expected = 404
 			}
-			// 社区和官网读取允许匿名访问，作者自己的同步列表除外。
-			if method == "get" && (strings.HasPrefix(path, "/v1/community/") || path == siteDownloadMirrorsPath || path == siteDownloadStatsPath) && path != "/v1/community/candidate-skins/sync" {
+			// 社区和官网读取允许匿名访问，作者自己的同步列表和本人的屏蔽列表除外。
+			if method == "get" && (strings.HasPrefix(path, "/v1/community/") || path == siteDownloadMirrorsPath || path == siteDownloadStatsPath) && path != "/v1/community/candidate-skins/sync" && path != "/v1/community/blocks" {
 				if strings.Contains(path, "{id}") {
 					expected = 404
 				} else {
@@ -288,6 +292,9 @@ func TestEveryAccountJSONBodyRejectsMalformedInput(t *testing.T) {
 	mux := http.NewServeMux()
 	Mount(mux, &Service{store: db})
 	mux.HandleFunc("POST /v1/community/reports", Route(&Service{store: db}, "POST /v1/community/reports", (*Service).CommunityReport))
+	for pattern, method := range communityBlockRoutes {
+		mux.HandleFunc(pattern, Route(&Service{store: db}, pattern, method))
+	}
 	mux.HandleFunc("POST "+TelemetryPath, Route(&Service{store: db}, "POST "+TelemetryPath, (*Service).Telemetry))
 	count := 0
 	for path, methods := range spec.Paths {

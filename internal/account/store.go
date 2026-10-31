@@ -317,6 +317,8 @@ func (s *Store) Ready(ctx context.Context) error {
 SELECT pg_advisory_xact_lock_shared(8372419);
 -- 资源删除后仍须保存版本，缺表时启动走迁移。
 SELECT id,revision FROM community_resource_revisions WHERE false;
+-- 社区作者屏蔽；它的 blocked_id 索引与表在同一次迁移中建出，只探测表。缺表时启动走迁移，否则登录用户浏览社区目录会失败。
+SELECT id,user_id,blocked_id,created_at FROM community_blocks WHERE false;
 -- App 内反馈与它的截图；缺表时启动走迁移。
 SELECT id,user_id,type,text,platform,app_version,edition,diagnostics,status,created_at FROM feedback WHERE false;
 SELECT feedback_id,position,mime,bytes FROM feedback_screenshots WHERE false;

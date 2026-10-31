@@ -24,7 +24,7 @@ createdb --encoding=UTF8 --template=template0 --lc-collate=C --lc-ctype=C msime
 msime-server -config /config/config.json -migrate-users
 ```
 
-迁移使用事务和 PostgreSQL advisory lock，可重复运行，多副本同时启动也会串行执行、后到的跑成空操作。生产可由运维迁移，再给运行账号授予本数据库的 CONNECT、public schema USAGE，以及迁移建出的所有表的 SELECT/INSERT/UPDATE/DELETE 和所有序列的 USAGE/SELECT；运行账号不需要超级用户、建库或建角色权限。需要授权的不只是 `auth_*` 表：即使没有启用管理后台，启动检查、社区接口、遥测上报和公告接口也会读写用户数据、社区、`admin_*`（如 `admin_events`、`admin_crash_groups`、`admin_notices`、`admin_sensitive_words`、`admin_sensitive_hits`）、`community_reports`、`word_submissions`、`site_settings` 和 AI 插画抽卡任务的 `skin_jobs` 等表，缺任何一张的权限，服务都会在启动时报「迁移后仍缺少必需的表」。最简单的做法是在迁移后整体授权，并配置 default privileges 让以后新建的表自动授权：
+迁移使用事务和 PostgreSQL advisory lock，可重复运行，多副本同时启动也会串行执行、后到的跑成空操作。生产可由运维迁移，再给运行账号授予本数据库的 CONNECT、public schema USAGE，以及迁移建出的所有表的 SELECT/INSERT/UPDATE/DELETE 和所有序列的 USAGE/SELECT；运行账号不需要超级用户、建库或建角色权限。需要授权的不只是 `auth_*` 表：即使没有启用管理后台，启动检查、社区接口、遥测上报和公告接口也会读写用户数据、社区、`admin_*`（如 `admin_events`、`admin_crash_groups`、`admin_notices`、`admin_sensitive_words`、`admin_sensitive_hits`）、`community_reports`、`community_blocks`、`word_submissions`、`site_settings` 和 AI 插画抽卡任务的 `skin_jobs` 等表，缺任何一张的权限，服务都会在启动时报「迁移后仍缺少必需的表」。最简单的做法是在迁移后整体授权，并配置 default privileges 让以后新建的表自动授权：
 
 ```sql
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO msime_backend;

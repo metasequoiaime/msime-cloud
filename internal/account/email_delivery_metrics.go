@@ -48,6 +48,7 @@ func logUnsupportedEmailDomain(target string) {
 
 func emailDomain(target string) string {
 	domain := "unknown"
+	target = strings.TrimSpace(target)
 	if at := strings.LastIndexByte(target, '@'); at > 0 && at < len(target)-1 {
 		domain = strings.ToLower(target[at+1:])
 		if strings.ContainsAny(domain, "\r\n") {

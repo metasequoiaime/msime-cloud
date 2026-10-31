@@ -550,13 +550,16 @@
       "internal/account/apple_web_test.go::TestPKCEHelpers"
     ],
     "GET /v1/users/me/data": [
-      "internal/account/user_data_test.go::TestUserDataSummaryExportAndDelete"
+      "internal/account/user_data_test.go::TestUserDataSummaryExportAndDelete",
+      "internal/account/learning_e2e_test.go::TestLearningUserDataDeleteExportAndAccountDeletion"
     ],
     "DELETE /v1/users/me/data": [
-      "internal/account/user_data_test.go::TestUserDataSummaryExportAndDelete"
+      "internal/account/user_data_test.go::TestUserDataSummaryExportAndDelete",
+      "internal/account/learning_e2e_test.go::TestLearningUserDataDeleteExportAndAccountDeletion"
     ],
     "GET /v1/users/me/data/export": [
-      "internal/account/user_data_test.go::TestUserDataSummaryExportAndDelete"
+      "internal/account/user_data_test.go::TestUserDataSummaryExportAndDelete",
+      "internal/account/learning_e2e_test.go::TestLearningUserDataDeleteExportAndAccountDeletion"
     ],
     "POST /v1/users/me/download-link": [
       "internal/account/download_link_test.go::TestDownloadLink",
@@ -567,6 +570,41 @@
     ],
     "PUT /v1/users/me/clipboard/{id}/pin": [
       "internal/account/clipboard_retention_test.go::TestClipboardRetentionPinAndDevice"
+    ],
+    "GET /v1/users/me/learning": [
+      "internal/account/learning_e2e_test.go::TestLearningDevicesKeyAndApproval",
+      "internal/account/learning_e2e_test.go::TestLearningRekey",
+      "internal/account/learning_e2e_test.go::TestLearningRateLimits"
+    ],
+    "PUT /v1/users/me/learning/devices/{device_id}": [
+      "internal/account/learning_e2e_test.go::TestLearningDevicesKeyAndApproval",
+      "internal/account/learning_e2e_test.go::TestLearningDeviceDeletionLimitAndReplacement",
+      "internal/account/learning_e2e_test.go::TestLearningRequiresRealAccount"
+    ],
+    "DELETE /v1/users/me/learning/devices/{device_id}": [
+      "internal/account/learning_e2e_test.go::TestLearningDeviceDeletionLimitAndReplacement",
+      "internal/account/learning_e2e_test.go::TestLearningDevicesKeyAndApproval"
+    ],
+    "POST /v1/users/me/learning/key": [
+      "internal/account/learning_e2e_test.go::TestLearningDevicesKeyAndApproval"
+    ],
+    "PUT /v1/users/me/learning/wraps/{device_id}": [
+      "internal/account/learning_e2e_test.go::TestLearningDevicesKeyAndApproval"
+    ],
+    "POST /v1/users/me/learning/rekey": [
+      "internal/account/learning_e2e_test.go::TestLearningRekey"
+    ],
+    "GET /v1/users/me/learning/blobs/{device_id}": [
+      "internal/account/learning_e2e_test.go::TestLearningBlobUploadDownloadAndCAS",
+      "internal/account/learning_e2e_test.go::TestLearningRateLimits"
+    ],
+    "PUT /v1/users/me/learning/blobs/{device_id}": [
+      "internal/account/learning_e2e_test.go::TestLearningBlobUploadDownloadAndCAS",
+      "internal/account/learning_e2e_test.go::TestLearningBlobConcurrentRevision",
+      "internal/account/learning_e2e_test.go::TestLearningBlobSizeAndQuota"
+    ],
+    "DELETE /v1/users/me/learning/blobs/{device_id}": [
+      "internal/account/learning_e2e_test.go::TestLearningBlobUploadDownloadAndCAS"
     ],
     "POST /v1/voice/contributions": [
       "internal/server/voice_contributions_test.go::TestVoiceContributions",

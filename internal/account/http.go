@@ -658,7 +658,7 @@ func (a *Service) begin(w http.ResponseWriter, r *http.Request) {
 		}
 		if !reused {
 			e = a.sender.Send(r.Context(), v.Provider, c.Subject, code)
-			a.recordEmailDelivery(v.Provider, e)
+			a.recordEmailDelivery(v.Provider, target, e)
 			if e != nil {
 				a.store.DropChallenge(r.Context(), c.IDHash)
 				if permanentDeliveryFailure(e) {
@@ -693,7 +693,7 @@ func (a *Service) begin(w http.ResponseWriter, r *http.Request) {
 	}
 	if code != "" {
 		e := a.sender.Send(r.Context(), v.Provider, c.Subject, code)
-		a.recordEmailDelivery(v.Provider, e)
+		a.recordEmailDelivery(v.Provider, c.Subject, e)
 		if e != nil {
 			a.store.DropChallenge(r.Context(), c.IDHash)
 			a.error(w, e)

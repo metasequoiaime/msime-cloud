@@ -46,6 +46,11 @@ var qqTypingSourceNames = map[string]string{
 	"english": "英文键盘", "local": "本地输入", "ai": "AI 润色", "reply": "高情商回复", "voice": "语音",
 }
 
+// qqTypingPlatformNames 是上传时报的平台在回复里的叫法，没报平台的设备叫「其他设备」；不认识的平台照写。
+var qqTypingPlatformNames = map[string]string{
+	"windows": "Windows", "macos": "Mac", "linux": "Linux", "android": "Android", "ios": "iOS", "harmony": "鸿蒙", "": "其他设备",
+}
+
 // qqTypingSpeedKinds 是算速度时计入的字符类别，和客户端统计页的「每分钟」一致：汉字、拉丁字母和其他文字，不含数字、标点和符号。
 var qqTypingSpeedKinds = []string{"han", "latin", "otherLetter"}
 
@@ -128,6 +133,8 @@ func qqTypingToday(now time.Time) time.Time {
 //	【一号 · 今天】
 //	983 字 · 活跃 21 分钟 · 每分钟 47 字
 //
+//	【设备】Mac 900 字 · iOS 83 字
+//
 //	【习惯】最常在 22 点打字
 //	全拼 92% · 语音 8%
 //
@@ -137,7 +144,7 @@ func qqTypingToday(now time.Time) time.Time {
 //
 //	（只统计打开了「上传到云端」的设备，现在有 2 台；别的设备要各自打开）
 //
-// 最后一句是因为上传开关只存在本机：在电脑上打开了，手机不会跟着打开，用户常以为打开一次就全算进去了。纯文本，段标题加空行分段：群聊发 Markdown 要内邀开通。
+// 「设备」一段只在上传过的设备不止一个平台时写，否则和第一行的总数一样。最后一句是因为上传开关只存在本机：在电脑上打开了，手机不会跟着打开，用户常以为打开一次就全算进去了。纯文本，段标题加空行分段：群聊发 Markdown 要内邀开通。
 func qqTypingCard(report account.QQTypingReport, today time.Time) string {
 	if !report.Linked {
 		return "还没绑定水杉账号。@我 发 /bind 拿绑定码，在水杉输入法里输入后就能查。"
@@ -181,6 +188,9 @@ func qqTypingCard(report account.QQTypingReport, today time.Time) string {
 		title = fmt.Sprintf("【%s · 今天】", displayName)
 	}
 	lines := []string{title + "\n" + qqTypingVolume(d)}
+	if line := qqTypingDevices(report, date); line != "" {
+		lines = append(lines, "【设备】"+line)
+	}
 	if line := qqTypingHabits(d); line != "" {
 		lines = append(lines, "【习惯】"+line)
 	}
@@ -230,6 +240,35 @@ func qqTypingVolume(d account.TypingDay) string {
 		line += fmt.Sprintf(" · 每分钟 %d 字", letters*60/d.ActiveSeconds)
 	}
 	return line
+}
+
+// qqTypingDevices 是「Mac 900 字 · iOS 83 字」：date 这一天各平台的字数，这天没打字的平台写 0 字，按字数从多到少；同一平台有几台设备时写成「Mac（2 台）」。上传过的设备只有一个平台时返回空字符串，这时不格式化日期，常见的单平台卡片不多分配。
+func qqTypingDevices(report account.QQTypingReport, date time.Time) string {
+	if len(report.Platforms) < 2 {
+		return ""
+	}
+	day := date.Format(time.DateOnly)
+	type platform struct {
+		name       string
+		characters int64
+	}
+	platforms := make([]platform, 0, len(report.Platforms))
+	for id, devices := range report.Platforms {
+		// 全角括号后面不再空格：「Mac 900 字」「Mac（2 台）900 字」。
+		name := cmp.Or(qqTypingPlatformNames[id], id) + " "
+		if devices > 1 {
+			name = cmp.Or(qqTypingPlatformNames[id], id) + fmt.Sprintf("（%d 台）", devices)
+		}
+		platforms = append(platforms, platform{name, report.DayPlatforms[day][id]})
+	}
+	slices.SortFunc(platforms, func(a, b platform) int {
+		return cmp.Or(cmp.Compare(b.characters, a.characters), cmp.Compare(a.name, b.name))
+	})
+	parts := make([]string, 0, len(platforms))
+	for _, p := range platforms {
+		parts = append(parts, p.name+qqThousands(p.characters)+" 字")
+	}
+	return strings.Join(parts, " · ")
 }
 
 // qqTypingHabits 是「最常在 22 点打字」，下一行「全拼 92% · 语音 8%」：字数最多的钟点，和占比不低于 5% 的输入方式（最多三种，按占比从高到低）。两样都没有时返回空字符串。

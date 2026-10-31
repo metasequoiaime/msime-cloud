@@ -137,3 +137,13 @@ CREATE TABLE IF NOT EXISTS community_resource_ratings (
  PRIMARY KEY(resource_id,user_id)
 );
 CREATE INDEX IF NOT EXISTS community_resource_ratings_user ON community_resource_ratings(user_id);
+-- 用户屏蔽的社区作者：屏蔽后该作者的作品不再出现在屏蔽者的社区目录里（mine 范围除外）。id 由服务端生成 UUID，响应只给出屏蔽记录的 ID 和作者显示名，不暴露被屏蔽用户的 ID。任意一方注销账号时由外键级联删除。
+CREATE TABLE IF NOT EXISTS community_blocks (
+ id text PRIMARY KEY,
+ user_id text NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
+ blocked_id text NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
+ created_at timestamptz NOT NULL DEFAULT now(),
+ UNIQUE(user_id,blocked_id)
+);
+-- UNIQUE(user_id,blocked_id) 服务目录的屏蔽探测和屏蔽者注销时的级联；被屏蔽者注销按 blocked_id 级联，需要单独的索引。
+CREATE INDEX IF NOT EXISTS community_blocks_blocked ON community_blocks(blocked_id);

@@ -207,7 +207,7 @@ func (a *Service) resourceList(w http.ResponseWriter, r *http.Request) {
 	listQuery := `WITH resource_page AS MATERIALIZED (
  SELECT s.id FROM community_resources s JOIN auth_users u ON u.id=s.owner_id
  WHERE s.kind=$2 AND strpos(lower(s.name),lower($3))>0 AND (s.moderation<>'removed' OR s.owner_id=$1)
- AND (` + scopeCondition + `)
+ AND (` + scopeCondition + `)` + communityBlockedFilter(scope, viewer, "s") + `
  ORDER BY s.created_at DESC,s.id LIMIT 21 OFFSET $5
 ) ` + resourcePageSelect + `ORDER BY s.created_at DESC,s.id`
 	args := []any{viewer, kind, q, scope, offset}

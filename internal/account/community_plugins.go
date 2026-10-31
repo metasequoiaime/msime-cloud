@@ -256,7 +256,7 @@ func (a *Service) communityPluginList(w http.ResponseWriter, r *http.Request) {
 	}
 	listQuery := `WITH plugin_page AS MATERIALIZED (
  SELECT p.id FROM community_plugins p JOIN auth_users u ON u.id=p.owner_id ` + join + `
- WHERE strpos(lower(p.name),lower($2))>0 AND (` + kindCondition + `) AND (` + communityMineCondition(scope, "p", "$5") + `) AND ` + pluginVisibleTo("p.", "$1") + ` AND p.kind=ANY($6)
+ WHERE strpos(lower(p.name),lower($2))>0 AND (` + kindCondition + `) AND (` + communityMineCondition(scope, "p", "$5") + `) AND ` + pluginVisibleTo("p.", "$1") + ` AND p.kind=ANY($6)` + communityBlockedFilter(scope, viewer, "p") + `
  ORDER BY ` + order + ` LIMIT 21 OFFSET $4
 ) ` + communityPluginSelectQuery(fields["saved"], true) + join + ` ORDER BY ` + order
 	args := []any{viewer, search, kind, offset, scope, pluginVisibleKinds(query, kind)}

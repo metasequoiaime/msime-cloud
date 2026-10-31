@@ -502,7 +502,7 @@ func (a *Service) communityCandidateList(w http.ResponseWriter, r *http.Request)
 	}
 	listQuery := `WITH candidate_page AS MATERIALIZED (
  SELECT s.id FROM community_candidate_skins s JOIN auth_users u ON u.id=s.owner_id ` + join + `
- WHERE strpos(lower(s.name),lower($2))>0 AND (` + communityMineCondition(scope, "s", "$3") + `) AND (s.visibility='public' OR ($3<>'' AND $5 AND s.owner_id=$1)) AND (s.moderation<>'removed' OR s.owner_id=$1) AND (` + categoryCondition + `)` + candidateResourceFilter(extended) + `
+ WHERE strpos(lower(s.name),lower($2))>0 AND (` + communityMineCondition(scope, "s", "$3") + `) AND (s.visibility='public' OR ($3<>'' AND $5 AND s.owner_id=$1)) AND (s.moderation<>'removed' OR s.owner_id=$1) AND (` + categoryCondition + `)` + candidateResourceFilter(extended) + communityBlockedFilter(scope, viewer, "s") + `
  ORDER BY ` + order + ` LIMIT 21 OFFSET $4
 ) ` + candidateSkinSelectQuery(fields["saved"], true) + join + ` ORDER BY ` + order
 	args := []any{viewer, search, scope, offset, sync, category}

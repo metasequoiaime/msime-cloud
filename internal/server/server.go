@@ -192,6 +192,10 @@ func New(c Config) (*Server, error) {
 	// Console-managed public data: the live notices feed needs no credentials, a content report needs a signed-in user (the /v1/community/ prefix skips Bearer authentication in the middleware and the handler checks the session itself).
 	mux.HandleFunc("GET "+noticesPath, account.Route(s.accounts, "GET "+noticesPath, (*account.Service).PublicNotices))
 	mux.HandleFunc("POST /v1/community/reports", account.Route(s.accounts, "POST /v1/community/reports", (*account.Service).CommunityReport))
+	// 屏蔽社区作者同样需要已登录用户（匿名账号也算），与举报一样走 /v1/community/ 前缀跳过 Bearer 中间件，由处理器自己校验会话；列表和取消屏蔽也一样。
+	mux.HandleFunc("POST /v1/community/blocks", account.Route(s.accounts, "POST /v1/community/blocks", (*account.Service).CommunityBlockCreate))
+	mux.HandleFunc("GET /v1/community/blocks", account.Route(s.accounts, "GET /v1/community/blocks", (*account.Service).CommunityBlockList))
+	mux.HandleFunc("DELETE /v1/community/blocks/{id}", account.Route(s.accounts, "DELETE /v1/community/blocks/{id}", (*account.Service).CommunityBlockDelete))
 	// 诊断快照的远程 MCP 端点：account.IsPath 让它绕过 Bearer 中间件，处理器自己校验快照令牌并按快照限流。
 	mux.Handle("POST "+account.DiagnosticsMCPPrefix+"{id}", s.diagnosticsMCP())
 	mux.Handle("GET "+account.DiagnosticsMCPPrefix+"{id}", s.diagnosticsMCP())

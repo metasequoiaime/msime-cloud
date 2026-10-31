@@ -19,7 +19,7 @@ type typingReportSnapshotTrace struct {
 type typingReportSnapshotKey struct{}
 
 func (trace *typingReportSnapshotTrace) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	if strings.Contains(data.SQL, "SELECT ranks,beyond FROM typing_statistics_devices") {
+	if strings.Contains(data.SQL, "SELECT platform,ranks,beyond FROM typing_statistics_devices") {
 		return context.WithValue(ctx, typingReportSnapshotKey{}, true)
 	}
 	return ctx

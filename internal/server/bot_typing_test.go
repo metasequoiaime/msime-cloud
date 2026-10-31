@@ -68,9 +68,10 @@ func TestQQTypingCard(t *testing.T) {
 	}
 	hours := make([]int64, 24)
 	hours[9], hours[22] = 100, 500
-	full := account.QQTypingReport{Linked: true, DisplayName: "一号", Devices: 2,
-		Days:       qqTypingWeek(today, 0, 900, 800, 700, 600, 500, 400, 100, 1000, 1000, 1000, 1000, 1000, 1000),
-		Selections: account.TypingSelections{Ranks: []int64{81, 10, 5, 2}, Beyond: 2}}
+	full := account.QQTypingReport{Linked: true, DisplayName: "一号", Devices: 2, Platforms: map[string]int{"macos": 1, "ios": 1},
+		DayPlatforms: map[string]map[string]int64{"2026-10-17": {"macos": 900, "ios": 83}},
+		Days:         qqTypingWeek(today, 0, 900, 800, 700, 600, 500, 400, 100, 1000, 1000, 1000, 1000, 1000, 1000),
+		Selections:   account.TypingSelections{Ranks: []int64{81, 10, 5, 2}, Beyond: 2}}
 	full.Days = append(full.Days, account.TypingDay{Day: "2026-10-17", Characters: 983, ActiveSeconds: 1260, Hours: hours,
 		Categories: map[string]int64{"han": 900, "latin": 87, "punctuation": 50}, Sources: map[string]int64{"quanpin": 900, "voice": 80, "wubi": 3, "unknown": 40, "brandNew": 300}})
 	for _, tc := range []struct {
@@ -83,10 +84,16 @@ func TestQQTypingCard(t *testing.T) {
 		{"没上传", account.QQTypingReport{Linked: true, DisplayName: "一号"}, []string{"已绑定「一号」", qqTypingUploadPath, "每台设备要各自打开"}, nil},
 		{"最近 7 天没打字", account.QQTypingReport{Linked: true, DisplayName: "一号", Devices: 1, Days: qqTypingWeek(today, 0, 0, 0, 0, 0, 0, 0, 5)}, []string{"「一号」最近 7 天没有打字记录。"}, nil},
 		{"今天", full, []string{
-			"【一号 · 今天】\n983 字 · 活跃 21 分钟 · 每分钟 47 字\n\n【习惯】最常在 22 点打字\n全拼 68% · brandNew 22% · 语音 6%\n\n【趋势】近 7 天 4,883 字，比上一周少 19%，已经连续 14 天\n\n【选词】首选一次就中 81%，前三个以内 96%（累计）\n\n（只统计打开了「上传到云端」的设备，现在有 2 台；别的设备要各自打开）",
+			"【一号 · 今天】\n983 字 · 活跃 21 分钟 · 每分钟 47 字\n\n【设备】Mac 900 字 · iOS 83 字\n\n【习惯】最常在 22 点打字\n全拼 68% · brandNew 22% · 语音 6%\n\n【趋势】近 7 天 4,883 字，比上一周少 19%，已经连续 14 天\n\n【选词】首选一次就中 81%，前三个以内 96%（累计）\n\n（只统计打开了「上传到云端」的设备，现在有 2 台；别的设备要各自打开）",
 		}, []string{"五笔", "unknown"}},
 		{"今天没打字，写最近一天", account.QQTypingReport{Linked: true, DisplayName: "一号", Devices: 1, Days: qqTypingWeek(today, 0, 0, 1200, 1100), Selections: account.TypingSelections{Ranks: []int64{5}}},
-			[]string{"【一号 · 10月15日】\n1,200 字", "近 7 天 2,300 字，已经连续 2 天"}, []string{"活跃", "最常", "首选", "上一周"}},
+			[]string{"【一号 · 10月15日】\n1,200 字", "近 7 天 2,300 字，已经连续 2 天"}, []string{"活跃", "最常", "首选", "上一周", "【设备】"}},
+		{"同一平台几台、当天没打字的平台", account.QQTypingReport{Linked: true, DisplayName: "一号", Devices: 4, Platforms: map[string]int{"windows": 2, "android": 1, "": 1},
+			DayPlatforms: map[string]map[string]int64{"2026-10-16": {"windows": 1200}}, Days: qqTypingWeek(today, 0, 1200)},
+			[]string{"【一号 · 10月16日】\n1,200 字\n\n【设备】Windows（2 台）1,200 字 · Android 0 字 · 其他设备 0 字\n\n"}, nil},
+		{"几台设备都在一个平台", account.QQTypingReport{Linked: true, DisplayName: "一号", Devices: 2, Platforms: map[string]int{"windows": 2},
+			DayPlatforms: map[string]map[string]int64{"2026-10-17": {"windows": 30}}, Days: qqTypingWeek(today, 30)},
+			[]string{"现在有 2 台"}, []string{"【设备】"}},
 		{"和上一周一样", account.QQTypingReport{Linked: true, DisplayName: "一号", Devices: 1, Days: qqTypingWeek(today, 10, 0, 0, 0, 0, 0, 0, 10)}, []string{"近 7 天 10 字，和上一周差不多"}, []string{"连续"}},
 		{"比上一周多", account.QQTypingReport{Linked: true, DisplayName: "一号", Devices: 1, Days: qqTypingWeek(today, 30, 0, 0, 0, 0, 0, 0, 10)}, []string{"比上一周多 200%"}, nil},
 	} {

@@ -115,6 +115,10 @@ func TestTypingStatisticsUploadAndDelete(t *testing.T) {
 	if fmt.Sprint(report.Selections.Ranks) != "[9 3 1]" || report.Selections.Beyond != 1 {
 		t.Fatalf("%+v", report.Selections)
 	}
+	// 每天各平台的字数分开记，/stats 的「设备」一段用。
+	if fmt.Sprint(report.Platforms) != "map[android:1 windows:1]" || fmt.Sprint(report.DayPlatforms) != "map["+yesterday+":map[windows:50] "+today+":map[android:30 windows:120]]" {
+		t.Fatalf("%v %v", report.Platforms, report.DayPlatforms)
+	}
 	// 同一天只有一台设备有每小时的数时用它的；两台都没有时仍然没有。
 	if got := addTypingDay(TypingDay{Day: today, Characters: 1}, TypingDay{Day: today, Characters: 2}); got.Hours != nil || got.Characters != 3 {
 		t.Fatalf("%+v", got)

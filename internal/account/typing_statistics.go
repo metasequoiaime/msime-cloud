@@ -432,13 +432,16 @@ func (a *Service) UnlinkQQ(ctx context.Context, subject string) (bool, error) {
 	return tag.RowsAffected() > 0, nil
 }
 
-// QQTypingReport 是机器人 /stats 用的数据：群友绑定的账号、这个账号从 since 起每天的计数（各设备相加，按日期从早到晚），以及各设备候选位次的合计。没有绑定或账号被封禁时 Linked 为 false；Devices 是上传过的设备数，为 0 表示还没打开上传。
+// QQTypingReport 是机器人 /stats 用的数据：群友绑定的账号、这个账号从 since 起每天的计数（各设备相加，按日期从早到晚），每天各平台的字数，以及各设备候选位次的合计。没有绑定或账号被封禁时 Linked 为 false；Devices 是上传过的设备数，为 0 表示还没打开上传；Platforms 是各平台上传过的设备数，键是上传时报的平台，没报平台的是空字符串。
 type QQTypingReport struct {
 	Linked      bool
 	DisplayName string
 	Devices     int
+	Platforms   map[string]int
 	Days        []TypingDay
-	Selections  TypingSelections
+	// DayPlatforms 是日期到各平台字数的表，同一平台的几台设备相加。
+	DayPlatforms map[string]map[string]int64
+	Selections   TypingSelections
 }
 
 // QQTypingReport 读出群友 subject 的打字数据，见 QQTypingReport 类型。
@@ -460,18 +463,21 @@ func (a *Service) QQTypingReport(ctx context.Context, subject string, since time
 		return report, err
 	}
 	report.Linked = true
-	rows, err := tx.Query(ctx, `SELECT ranks,beyond FROM typing_statistics_devices WHERE user_id=$1`, user)
+	rows, err := tx.Query(ctx, `SELECT platform,ranks,beyond FROM typing_statistics_devices WHERE user_id=$1`, user)
 	if err != nil {
 		return report, err
 	}
+	report.Platforms = map[string]int{}
 	for rows.Next() {
+		var platform string
 		var ranks []int64
 		var beyond int64
-		if err = rows.Scan(&ranks, &beyond); err != nil {
+		if err = rows.Scan(&platform, &ranks, &beyond); err != nil {
 			rows.Close()
 			return report, err
 		}
 		report.Devices++
+		report.Platforms[platform]++
 		report.Selections.Beyond += beyond
 		for i, n := range ranks {
 			if i == len(report.Selections.Ranks) {
@@ -484,17 +490,24 @@ func (a *Service) QQTypingReport(ctx context.Context, subject string, since time
 	if err = rows.Err(); err != nil {
 		return report, err
 	}
-	rows, err = tx.Query(ctx, `SELECT to_char(day,'YYYY-MM-DD'),characters,active_seconds,hours,categories,sources FROM typing_statistics_days WHERE user_id=$1 AND day>=$2 ORDER BY day`, user, since.Format(time.DateOnly))
+	rows, err = tx.Query(ctx, `SELECT to_char(d.day,'YYYY-MM-DD'),d.characters,d.active_seconds,d.hours,d.categories,d.sources,v.platform
+ FROM typing_statistics_days d JOIN typing_statistics_devices v ON v.user_id=d.user_id AND v.device=d.device WHERE d.user_id=$1 AND d.day>=$2 ORDER BY d.day`, user, since.Format(time.DateOnly))
 	if err != nil {
 		return report, err
 	}
 	defer rows.Close()
+	report.DayPlatforms = map[string]map[string]int64{}
 	for rows.Next() {
 		var d TypingDay
 		var categories, sources []byte
-		if err = rows.Scan(&d.Day, &d.Characters, &d.ActiveSeconds, &d.Hours, &categories, &sources); err != nil {
+		var platform string
+		if err = rows.Scan(&d.Day, &d.Characters, &d.ActiveSeconds, &d.Hours, &categories, &sources, &platform); err != nil {
 			return report, err
 		}
+		if report.DayPlatforms[d.Day] == nil {
+			report.DayPlatforms[d.Day] = map[string]int64{}
+		}
+		report.DayPlatforms[d.Day][platform] += d.Characters
 		if err = json.Unmarshal(categories, &d.Categories); err != nil {
 			return report, err
 		}

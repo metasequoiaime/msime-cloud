@@ -13,15 +13,18 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// blockMux 挂载账号路由，并像 server 包一样单独挂上屏蔽的三条路由。
+// communityBlockRoutes 是 server 包用 Route 单独挂载的三条屏蔽路由，测试按同样的方式挂上。
+var communityBlockRoutes = map[string]func(*Service, http.ResponseWriter, *http.Request){
+	"POST /v1/community/blocks":        (*Service).CommunityBlockCreate,
+	"GET /v1/community/blocks":         (*Service).CommunityBlockList,
+	"DELETE /v1/community/blocks/{id}": (*Service).CommunityBlockDelete,
+}
+
+// blockMux 挂载账号路由，并像 server 包一样单独挂上屏蔽路由。
 func blockMux(a *Service) *http.ServeMux {
 	mux := http.NewServeMux()
 	Mount(mux, a)
-	for pattern, method := range map[string]func(*Service, http.ResponseWriter, *http.Request){
-		"POST /v1/community/blocks":        (*Service).CommunityBlockCreate,
-		"GET /v1/community/blocks":         (*Service).CommunityBlockList,
-		"DELETE /v1/community/blocks/{id}": (*Service).CommunityBlockDelete,
-	} {
+	for pattern, method := range communityBlockRoutes {
 		mux.HandleFunc(pattern, Route(a, pattern, method))
 	}
 	return mux

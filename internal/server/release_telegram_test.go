@@ -3,12 +3,13 @@ package server
 import (
 	"context"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
 
-// 发到 Telegram 的消息是能直接复制到 QQ 群的纯文本：开头请大家点 Star，按小标题分段，去掉 Markdown 符号、图片和链接，不写待办。
+// 发到 Telegram 的消息是能直接复制到 QQ 群的纯文本：下载地址和 Star 放在最前面，后面只列要点，不写待办。
 func TestReleaseTelegramNotice(t *testing.T) {
 	windows := releaseTestPlatforms[0]
 	for _, tc := range []struct {
@@ -21,13 +22,13 @@ func TestReleaseTelegramNotice(t *testing.T) {
 			name:  "正式版",
 			r:     ghRelease{TagName: "windows-v0.5.4", Body: "### 修复\r\n- Win11 24H2 候选窗偏移\r\n\r\n### 新增\r\n* 剪贴板历史支持固定条目\r\n", HTMLURL: "https://github.com/metasequoiaime/msime-windows/releases/tag/windows-v0.5.4"},
 			title: "🎉 水杉输入法 Windows v0.5.4 已发布",
-			body:  "⭐ Star 助力发版：https://github.com/metasequoiaime/msime\n\n🐛 修复\n• Win11 24H2 候选窗偏移\n\n✨ 新增\n• 剪贴板历史支持固定条目\n\n📥 下载：https://github.com/metasequoiaime/msime-windows/releases/tag/windows-v0.5.4",
+			body:  "📥 下载：https://github.com/metasequoiaime/msime-windows/releases/tag/windows-v0.5.4\n⭐ Star 助力发版：https://github.com/metasequoiaime/msime\n\n✨ 主要更新\n• Win11 24H2 候选窗偏移\n• 剪贴板历史支持固定条目",
 		},
 		{
 			name:  "公开测试版",
 			r:     ghRelease{TagName: "windows-v0.6.0", Prerelease: true, Body: "<!-- 内部备注 -->\n本版改动较大\n### 新增\n- 支持 **固定** 候选和 [`skin.toml`](https://example.test/skin) 动画\n- ![截图](https://example.test/a.png)\n### 待办\n- 签名证书\n### 修复\n- 重启后丢失自造词"},
 			title: "🎉 水杉输入法 Windows v0.6.0 公开测试版已发布",
-			body:  "⭐ Star 助力发版：https://github.com/metasequoiaime/msime\n\n• 本版改动较大\n\n✨ 新增\n• 支持 固定 候选和 skin.toml 动画\n\n🐛 修复\n• 重启后丢失自造词",
+			body:  "⭐ Star 助力发版：https://github.com/metasequoiaime/msime\n\n✨ 主要更新\n• 支持 固定 候选和 skin.toml 动画\n• 重启后丢失自造词",
 		},
 		{
 			name:  "没有说明",
@@ -45,6 +46,26 @@ func TestReleaseTelegramNotice(t *testing.T) {
 	}
 }
 
+// 很长的发布说明只列要点：跳过下载说明块和缩进的子项，「**标题**：说明」只取标题，其余取第一句并去掉 issue 编号，每个小标题最多三条、全文最多八条，超出的注明数量；下载地址始终在消息里。
+func TestReleaseTelegramNoticeHighlights(t *testing.T) {
+	var body strings.Builder
+	body.WriteString("<!-- msime-download-guide -->\n## 下载\n\n大多数人下载第一行的**水杉输入法**就行。\n\n| 版本 | 安装包 |\n| --- | --- |\n| 水杉输入法 | [a.dmg](https://example.test/a.dmg) |\n- 下载说明里的列表项\n<!-- /msime-download-guide -->\n\n## v1.2.0 更新内容\n\n")
+	body.WriteString("### 🔄 词库同步\n\n- **「我的词条」WebDAV 同步**：可以通过自己的 WebDAV 网盘同步。(#10033, #10040，相关 #9880)\n- 同步状态新增「额度等待时间」，自动同步等待时可以显示何时继续。\n- 本机出现失败时，后台轮询会等退避结束 (#10265)\n- 第四条同步改动\n\n")
+	body.WriteString("### ✨ 新功能\n\n**输入**\n\n- **脚本插件能力扩充**：\n  - 新增设置值\n  - 插件可以往候选列表里加行\n- 符号模式（Shift+S）的分组表改为按 Unicode 17.0.0 字符数据库重新生成，组内按码位排序。\n\n")
+	body.WriteString("### 🐛 修复\n\n")
+	for i := range 6 {
+		body.WriteString("- 修复第 " + strconv.Itoa(i+1) + " 个问题。\n")
+	}
+	n := releaseTelegramNotice(releaseTestPlatforms[0], ghRelease{TagName: "windows-v1.2.0", Body: body.String(), HTMLURL: "https://github.com/metasequoiaime/msime/releases/tag/windows-v1.2.0"})
+	want := "📥 下载：https://github.com/metasequoiaime/msime/releases/tag/windows-v1.2.0\n⭐ Star 助力发版：https://github.com/metasequoiaime/msime\n\n✨ 主要更新\n• 「我的词条」WebDAV 同步\n• 同步状态新增「额度等待时间」，自动同步等待时可以显示何时继续\n• 本机出现失败时，后台轮询会等退避结束\n• 脚本插件能力扩充\n• 符号模式（Shift+S）的分组表改为按 Unicode 17.0.0 字符数据…\n• 修复第 1 个问题\n• 修复第 2 个问题\n• 修复第 3 个问题\n…另有 4 项更新，见下载页"
+	if n.Body != want {
+		t.Errorf("正文 %q", n.Body)
+	}
+	if len(n.Title)+2+len(n.Body) > telegramMessageMax {
+		t.Errorf("消息超过 Telegram 上限：%d", len(n.Title)+2+len(n.Body))
+	}
+}
+
 // 后台检查只发 24 小时内发布、没有撤回的正式版和公开测试版，每个版本在所有副本间只发一次；发送失败时下一轮重试。
 func TestReleaseTelegramAnnounce(t *testing.T) {
 	s, f, _, _ := releaseDBServer(t)
@@ -58,7 +79,7 @@ func TestReleaseTelegramAnnounce(t *testing.T) {
 	now := time.Date(2026, 9, 26, 10, 0, 0, 0, time.UTC)
 	logs := captureLogs(t)
 	s.announceReleases(ctx, b, now)
-	if len(fake.messages) != 1 || !strings.HasPrefix(fake.messages[0]["text"].(string), "🎉 水杉输入法 Windows v0.5.4 已发布\n\n⭐ Star 助力发版：https://github.com/metasequoiaime/msime\n\n🐛 修复\n• Win11 24H2 候选窗偏移") || fake.messages[0]["chat_id"] != "@synthetic_news" {
+	if len(fake.messages) != 1 || !strings.HasPrefix(fake.messages[0]["text"].(string), "🎉 水杉输入法 Windows v0.5.4 已发布\n\n📥 下载：") || fake.messages[0]["chat_id"] != "@synthetic_news" {
 		t.Fatal(fake.messages)
 	}
 	if !strings.Contains(logs.String(), "release telegram: releases not read") || !strings.Contains(logs.String(), "metasequoiaime/missing") {
@@ -90,7 +111,7 @@ func TestReleaseTelegramAnnounce(t *testing.T) {
 	fake.status = 200
 	s.announceReleases(ctx, b, now)
 	s.announceReleases(ctx, b, now)
-	if len(fake.messages) != 3 || fake.messages[2]["text"] != "🎉 水杉输入法 Linux v0.2.0 公开测试版已发布\n\n⭐ Star 助力发版：https://github.com/metasequoiaime/msime\n\n✨ 新增\n• Wayland 支持" {
+	if len(fake.messages) != 3 || fake.messages[2]["text"] != "🎉 水杉输入法 Linux v0.2.0 公开测试版已发布\n\n⭐ Star 助力发版：https://github.com/metasequoiaime/msime\n\n✨ 主要更新\n• Wayland 支持" {
 		t.Fatal(len(fake.messages), fake.messages[len(fake.messages)-1])
 	}
 	for _, private := range []string{testTelegramToken, "synthetic_news"} {

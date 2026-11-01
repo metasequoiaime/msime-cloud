@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,8 +27,23 @@ const (
 	releaseTelegramStarURL = "https://github.com/metasequoiaime/msime"
 )
 
-// releaseTelegramNoteMarks 是发布说明各小标题在消息里的前缀，没有列出的小标题和小标题之前的说明不加标题。
-var releaseTelegramNoteMarks = map[string]string{"新增": "✨ 新增", "改进": "⚡ 改进", "修复": "🐛 修复", "说明": "📌 说明"}
+// 发版消息只列要点：每个小标题下最多 releaseTelegramPerSection 条、全文最多 releaseTelegramHighlights 条，每条最多 releaseTelegramHighlightRunes 个字，其余让读者去发布页看。完整的发布说明常有几十条，原样转发会超过 Telegram 单条 4096 字的上限，被截掉的正是末尾的下载地址。
+const (
+	releaseTelegramHighlights       = 8
+	releaseTelegramPerSection       = 3
+	releaseTelegramHighlightRunes   = 40
+	releaseTelegramDownloadGuide    = "<!-- msime-download-guide -->"
+	releaseTelegramDownloadGuideEnd = "<!-- /msime-download-guide -->"
+)
+
+var (
+	// releaseTelegramTopBullet 只认顶格的列表项；缩进的子项是上一条的展开，不单独列出。
+	releaseTelegramTopBullet = regexp.MustCompile(`^(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.*)$`)
+	// releaseTelegramBoldLead 是「**标题**：说明」写法的标题部分。
+	releaseTelegramBoldLead = regexp.MustCompile(`^\*\*([^*]+?)\*\*\s*[：:]`)
+	// releaseTelegramIssueRefs 是条目末尾的「(#10033, #10040，相关 #9880)」这类编号。
+	releaseTelegramIssueRefs = regexp.MustCompile(`\s*[（(][^()（）]*#\d+[^()（）]*[)）]\s*$`)
+)
 
 // releaseTelegramJob 在配置了 Telegram 和 GitHub App 时，每 releaseTelegramInterval 检查一次新版本，直到 ctx 结束。第一次检查等一分钟，不拖慢启动。和 releaseSnapshotJob 一样先看 GitHub App 有没有配置，没配置时不读其余配置就返回。
 func (s *Server) releaseTelegramJob(ctx context.Context) {
@@ -104,7 +121,7 @@ func (s *Server) announceRelease(ctx context.Context, broadcaster account.Notice
 	slog.Info("release telegram: sent", "platform", p.ID, "tag", r.TagName)
 }
 
-// releaseTelegramNotice 是发到 Telegram 的消息，写成复制到 QQ 群就能用的纯文本：标题「🎉 水杉输入法 Windows v0.5.4 已发布」，公开测试版写成「v0.6.0 公开测试版已发布」；正文第一行请大家给 msime 仓库点 Star，接着按发布说明里的「新增」「修复」这类小标题分段（标题前加 releaseTelegramNoteMarks 的符号），每条一行「• 」开头，去掉 Markdown 符号、图片和链接，「待办」不写，最后一行是 GitHub 发布页（下载地址）。
+// releaseTelegramNotice 是发到 Telegram 的消息，写成复制到 QQ 群就能用的纯文本：标题「🎉 水杉输入法 Windows v0.5.4 已发布」，公开测试版写成「v0.6.0 公开测试版已发布」；正文先写下载地址（GitHub 发布页）和请大家点 Star 的仓库，放在最前面，消息再长也不会被截掉；然后是 releaseTelegramHighlightsOf 挑出的要点，条目更多时注明还有几项在发布页。
 func releaseTelegramNotice(p AdminPlatformConfig, r ghRelease) account.Notice {
 	published := " 已发布"
 	if r.Prerelease {
@@ -112,28 +129,67 @@ func releaseTelegramNotice(p AdminPlatformConfig, r ghRelease) account.Notice {
 	}
 	title := "🎉 水杉输入法 " + p.Name + " " + releaseVersion(p, r.TagName) + published
 	var b strings.Builder
+	if r.HTMLURL != "" {
+		b.WriteString("📥 下载：" + r.HTMLURL + "\n")
+	}
 	b.WriteString("⭐ Star 助力发版：" + releaseTelegramStarURL + "\n")
-	// started 表示已经写过条目；同一小标题下的条目连在一起，换小标题时空一行再写标题。
-	started, kind := false, ""
-	for _, note := range parseReleaseNotes(releaseUserBody(r.Body)) {
-		if note.Kind == "待办" {
+	highlights, total := releaseTelegramHighlightsOf(r.Body)
+	if len(highlights) > 0 {
+		b.WriteString("\n✨ 主要更新\n")
+		for _, text := range highlights {
+			b.WriteString("• " + text + "\n")
+		}
+		if rest := total - len(highlights); rest > 0 {
+			b.WriteString("…另有 " + strconv.Itoa(rest) + " 项更新，见下载页\n")
+		}
+	}
+	return account.Notice{Title: title, Body: strings.TrimRight(b.String(), "\n")}
+}
+
+// releaseTelegramHighlightsOf 从发布说明里挑要点，返回挑出的条目和可列的条目总数。只看顶格的列表项，跳过下载说明块、HTML 注释和「待办」小标题下的条目；「**标题**：说明」只取标题，其余取第一句，去掉 Markdown 符号、图片、链接和末尾的 issue 编号。
+func releaseTelegramHighlightsOf(body string) ([]string, int) {
+	body = releaseUserBody(body)
+	if start := strings.Index(body, releaseTelegramDownloadGuide); start >= 0 {
+		if end := strings.Index(body[start:], releaseTelegramDownloadGuideEnd); end >= 0 {
+			body = body[:start] + body[start+end+len(releaseTelegramDownloadGuideEnd):]
+		}
+	}
+	body = releaseHTMLComment.ReplaceAllString(body, "")
+	highlights := []string{}
+	total, inSection, skip := 0, 0, false
+	for line := range strings.SplitSeq(body, "\n") {
+		line = strings.TrimRight(line, " \t\r")
+		if heading := releaseHeading.FindStringSubmatch(line); heading != nil {
+			skip = strings.Contains(heading[1], "待办")
+			inSection = 0
 			continue
 		}
-		text := qqPlainText(qqStripImagesAndHTML(note.Text))
+		bullet := releaseTelegramTopBullet.FindStringSubmatch(line)
+		if bullet == nil || skip {
+			continue
+		}
+		text := releaseTelegramHighlightText(bullet[1])
 		if text == "" {
 			continue
 		}
-		if !started || note.Kind != kind {
-			b.WriteString("\n")
-			if mark := releaseTelegramNoteMarks[note.Kind]; mark != "" {
-				b.WriteString(mark + "\n")
-			}
-			started, kind = true, note.Kind
+		total++
+		if inSection < releaseTelegramPerSection && len(highlights) < releaseTelegramHighlights {
+			highlights = append(highlights, text)
+			inSection++
 		}
-		b.WriteString("• " + text + "\n")
 	}
-	if r.HTMLURL != "" {
-		b.WriteString("\n📥 下载：" + r.HTMLURL)
+	return highlights, total
+}
+
+// releaseTelegramHighlightText 把一条发布说明缩成一行要点。
+func releaseTelegramHighlightText(item string) string {
+	if lead := releaseTelegramBoldLead.FindStringSubmatch(item); lead != nil {
+		item = lead[1]
+	} else if end := strings.Index(item, "。"); end >= 0 {
+		item = item[:end]
 	}
-	return account.Notice{Title: title, Body: strings.TrimRight(b.String(), "\n")}
+	text := qqPlainText(qqStripImagesAndHTML(item))
+	text = strings.TrimSpace(releaseTelegramIssueRefs.ReplaceAllString(text, ""))
+	text = strings.TrimRight(text, "：:，,；;")
+	return qqTruncate(text, releaseTelegramHighlightRunes)
 }

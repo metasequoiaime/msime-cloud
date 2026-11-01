@@ -249,7 +249,7 @@ func IsPath(path string) bool {
 	return strings.HasPrefix(path, "/v1/community/") || path == siteDownloadMirrorsPath || path == siteDownloadStatsPath || path == TelemetryPath || path == FeedbackPath || strings.HasPrefix(path, "/v1/auth/") || path == "/v1/users/me" || strings.HasPrefix(path, "/v1/users/me/") || strings.HasPrefix(path, DiagnosticsMCPPrefix)
 }
 
-// accountRouteTimeout 是每条挂载路由的上下文时限：默认 15 秒；大文件传输单独延长，包括词库快照恢复和下载、TSV 下载、整包数据导出、候选窗皮肤发布或替换、插件包发布或下载，以及带截图的反馈。
+// accountRouteTimeout 是每条挂载路由的上下文时限：默认 15 秒；大文件传输单独延长，包括词库快照恢复和下载、TSV 下载、整包数据导出、候选窗皮肤发布或替换、插件包发布或下载、带截图的反馈，以及输入习惯同步的密文上传和下载。
 func accountRouteTimeout(pattern string) time.Duration {
 	switch pattern {
 	case "PUT /v1/users/me/dictionary/snapshot":
@@ -264,6 +264,8 @@ func accountRouteTimeout(pattern string) time.Duration {
 		return feedbackTimeout
 	case "GET /v1/users/me/data/export":
 		return userDataExportTimeout
+	case "GET /v1/users/me/learning/blobs/{device_id}", "PUT /v1/users/me/learning/blobs/{device_id}":
+		return learningTransferTimeout
 	default:
 		return 15 * time.Second
 	}
@@ -384,6 +386,17 @@ func Mount(mux *http.ServeMux, a *Service) {
 		"PUT /v1/users/me/clipboard/keys/{key_id}/wraps/{device_id}": (*Service).clipboardWrap,
 		"DELETE /v1/users/me/clipboard/devices/{device_id}":          (*Service).clipboardDevice,
 		"PUT /v1/users/me/clipboard/{id}/{action}":                   (*Service).clipboardItemPut,
+
+		// 输入习惯同步（learning 域）的设备、密钥、封装和每台设备一份的密文信封。
+		"GET /v1/users/me/learning":                        (*Service).learningState,
+		"PUT /v1/users/me/learning/devices/{device_id}":    (*Service).learningDevice,
+		"DELETE /v1/users/me/learning/devices/{device_id}": (*Service).learningDevice,
+		"POST /v1/users/me/learning/key":                   (*Service).learningKey,
+		"PUT /v1/users/me/learning/wraps/{device_id}":      (*Service).learningWrap,
+		"POST /v1/users/me/learning/rekey":                 (*Service).learningRekey,
+		"GET /v1/users/me/learning/blobs/{device_id}":      (*Service).learningBlob,
+		"PUT /v1/users/me/learning/blobs/{device_id}":      (*Service).learningBlob,
+		"DELETE /v1/users/me/learning/blobs/{device_id}":   (*Service).learningBlob,
 	} {
 		mux.HandleFunc(pattern, Route(a, pattern, method))
 	}

@@ -70,6 +70,10 @@ func TestUserDataSummaryExportAndDelete(t *testing.T) {
 	for _, v := range summary.Sections {
 		items[v.ID] = v.Items
 	}
+	// 没有输入习惯同步的数据时不列 learning 分区。
+	if _, ok := items["learning"]; ok {
+		t.Fatal(w.Body.String())
+	}
 	if summary.Bytes <= 0 || items["preferences"] != 1 || items["phrases"] != 1 || items["clipboard"] != 1 || items["dictionary"] != 1 || items["community"] != 0 || items["avatar"] != 0 || len(summary.Sections) != 7 {
 		t.Fatal(w.Body.String())
 	}
@@ -89,7 +93,7 @@ func TestUserDataSummaryExportAndDelete(t *testing.T) {
 		r.Close()
 		files[f.Name] = string(b)
 	}
-	for _, name := range []string{"profile.json", "preferences.json", "dictionary.ndjson", "phrases.json", "clipboard.json", "community.json", "typing_statistics.json", "sessions.json"} {
+	for _, name := range []string{"profile.json", "preferences.json", "dictionary.ndjson", "phrases.json", "clipboard.json", "learning.json", "community.json", "typing_statistics.json", "sessions.json"} {
 		if _, ok := files[name]; !ok {
 			t.Fatal("missing", name)
 		}

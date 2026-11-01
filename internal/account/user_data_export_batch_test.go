@@ -120,7 +120,7 @@ func TestUserDataExportReadsFilesTogether(t *testing.T) {
 			}
 		}
 	}
-	if !slices.Equal(names, []string{"profile.json", "preferences.json", "phrases.json", "clipboard.json", "community.json", "typing_statistics.json", "sessions.json", "voice.ndjson", "dictionary.ndjson"}) {
+	if !slices.Equal(names, []string{"profile.json", "preferences.json", "phrases.json", "clipboard.json", "learning.json", "community.json", "typing_statistics.json", "sessions.json", "voice.ndjson", "dictionary.ndjson"}) {
 		t.Fatalf("导出文件或顺序错误：%v", names)
 	}
 }

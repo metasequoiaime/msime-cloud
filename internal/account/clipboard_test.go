@@ -39,7 +39,7 @@ func clipboardTestKeyID(seed string) string {
 }
 
 func clipboardTestWrap(seed string) string {
-	return "v1." + clipboardTestBytes("wrap/"+seed, clipboardWrapBytes)
+	return "v1." + clipboardTestBytes("wrap/"+seed, e2eWrapBytes)
 }
 
 // clipboardTestUpload 返回一条用密钥 key 上传的条目；相同的 key 和 text 得到相同的去重标签。
@@ -585,32 +585,32 @@ func TestClipboardPlaintextRowsAreDeleted(t *testing.T) {
 func TestClipboardE2EFormats(t *testing.T) {
 	id, public := clipboardTestDevice("formats")
 	raw, _ := base64.RawURLEncoding.DecodeString(public)
-	if !validClipboardDevice(id, public) || len(public) != 43 || len(raw) != 32 {
+	if !validE2EDevice(id, public) || len(public) != 43 || len(raw) != 32 {
 		t.Fatal(id, public)
 	}
 	// 43 个字符的最后一个只用到 2 位，其余位不为零的写法不规范。
 	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 	last := public[:42] + string(alphabet[strings.IndexByte(alphabet, public[42])+1])
 	for name, ok := range map[string]bool{
-		"非规范尾位":    validClipboardDevice(id, last),
-		"编号大写":     validClipboardDevice(strings.ToUpper(id), public),
-		"编号不符":     validClipboardDevice(strings.Repeat("0", 32), public),
-		"公钥 31 字节": validClipboardDevice(id, base64.RawURLEncoding.EncodeToString(raw[:31])),
-		"公钥含换行":    validClipboardDevice(id, public[:20]+"\r\n"+public[20:]),
+		"非规范尾位":    validE2EDevice(id, last),
+		"编号大写":     validE2EDevice(strings.ToUpper(id), public),
+		"编号不符":     validE2EDevice(strings.Repeat("0", 32), public),
+		"公钥 31 字节": validE2EDevice(id, base64.RawURLEncoding.EncodeToString(raw[:31])),
+		"公钥含换行":    validE2EDevice(id, public[:20]+"\r\n"+public[20:]),
 	} {
 		if ok {
 			t.Error(name)
 		}
 	}
 	wrap := clipboardTestWrap("formats")
-	if len(wrap) != 142 || !validClipboardWrap(wrap) || validClipboardWrap(wrap[3:]) || validClipboardWrap(wrap+"AA") || validClipboardWrap("v1."+clipboardTestBytes("w", 103)) {
+	if len(wrap) != 142 || !validE2EWrap(wrap) || validE2EWrap(wrap[3:]) || validE2EWrap(wrap+"AA") || validE2EWrap("v1."+clipboardTestBytes("w", 103)) {
 		t.Fatal(wrap)
 	}
 	if !validClipboardCiphertext("v1."+clipboardTestBytes("c", 41)) || validClipboardCiphertext("v1."+clipboardTestBytes("c", 40)) || validClipboardCiphertext("v1.") || validClipboardCiphertext("") {
 		t.Fatal("ciphertext bounds")
 	}
 	for name, want := range map[string]bool{"": true, "MacBook Pro": true, strings.Repeat("é", 64): true, strings.Repeat("é", 65): false, "tab\t": false, "\u0085": false, string([]byte{0xff}): false} {
-		if validClipboardDeviceName(name) != want {
+		if validE2EDeviceName(name) != want {
 			t.Errorf("name %q", name)
 		}
 	}

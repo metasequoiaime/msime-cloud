@@ -122,7 +122,7 @@ func TestUserDataExportOutlivesServerWriteTimeout(t *testing.T) {
 		t.Fatalf("导出被截断：status=%d，error=%v", response.StatusCode, err)
 	}
 	archive, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
-	if err != nil || len(archive.File) != 9 {
+	if err != nil || len(archive.File) != 10 {
 		t.Fatalf("导出没有完整的 ZIP 目录：%v", err)
 	}
 	for _, file := range archive.File {

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/metasequoiaime/MSIME-Backend/internal/account"
 )
@@ -34,6 +36,9 @@ const (
 	releaseTelegramHighlightRunes   = 40
 	releaseTelegramDownloadGuide    = "<!-- msime-download-guide -->"
 	releaseTelegramDownloadGuideEnd = "<!-- /msime-download-guide -->"
+	// X 按加权长度限制一条推文：拉丁字母、数字和常用标点记 1，汉字、全角标点和 emoji 记 2，上限 280，相当于 140 个汉字；链接不论长短都记 23。X 不渲染 Markdown，短版和要点版一样是纯文本。
+	releaseXMaxWeight = 280
+	releaseXURLWeight = 23
 )
 
 var (
@@ -97,28 +102,33 @@ func (s *Server) announceReleases(ctx context.Context, broadcaster account.Notic
 	}
 }
 
-// announceRelease 先抢这个版本的去重租约，抢到的副本才发送；已被别的副本或上一轮发过时直接返回。发送失败时放回租约，下一轮重试。
+// announceRelease 为一个版本发两条消息：复制到 QQ 群用的要点版和复制到 X 用的短版。两条各占一个去重租约，抢到的副本才发送；已被别的副本或上一轮发过时跳过，发送失败时放回租约，下一轮只重试失败的那条。
 func (s *Server) announceRelease(ctx context.Context, broadcaster account.NoticeBroadcaster, p AdminPlatformConfig, r ghRelease) {
 	// 共用仓库、tag 前缀重叠的平台会读到同一个 Release，按仓库和 tag 去重只发一次。
 	subject := p.Repo + "@" + r.TagName
+	s.announceReleaseNotice(ctx, broadcaster, p, r, "qq", subject, releaseTelegramNotice(p, r))
+	s.announceReleaseNotice(ctx, broadcaster, p, r, "x", subject+"#x", account.Notice{Title: releaseXPost(p, r)})
+}
+
+func (s *Server) announceReleaseNotice(ctx context.Context, broadcaster account.NoticeBroadcaster, p AdminPlatformConfig, r ghRelease, kind, subject string, notice account.Notice) {
 	until, err := s.accounts.AcquireRateLease(ctx, releaseTelegramScope, subject, releaseTelegramWindow)
 	if errors.Is(err, account.ErrLimited) {
 		return
 	}
 	if err != nil {
-		slog.Warn("release telegram: lease unavailable", "platform", p.ID, "tag", r.TagName, "reason", err.Error())
+		slog.Warn("release telegram: lease unavailable", "platform", p.ID, "tag", r.TagName, "kind", kind, "reason", err.Error())
 		return
 	}
-	if err := broadcaster.BroadcastNotice(ctx, releaseTelegramNotice(p, r)); err != nil {
-		slog.Warn("release telegram: not sent", "platform", p.ID, "tag", r.TagName, "reason", err.Error())
+	if err := broadcaster.BroadcastNotice(ctx, notice); err != nil {
+		slog.Warn("release telegram: not sent", "platform", p.ID, "tag", r.TagName, "kind", kind, "reason", err.Error())
 		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 		defer cancel()
 		if err := s.accounts.ReleaseRateLease(releaseCtx, releaseTelegramScope, subject, until); err != nil {
-			slog.Warn("release telegram: lease not released", "platform", p.ID, "tag", r.TagName, "reason", err.Error())
+			slog.Warn("release telegram: lease not released", "platform", p.ID, "tag", r.TagName, "kind", kind, "reason", err.Error())
 		}
 		return
 	}
-	slog.Info("release telegram: sent", "platform", p.ID, "tag", r.TagName)
+	slog.Info("release telegram: sent", "platform", p.ID, "tag", r.TagName, "kind", kind)
 }
 
 // releaseTelegramNotice 是发到 Telegram 的消息，写成复制到 QQ 群就能用的纯文本：标题「🎉 水杉输入法 Windows v0.5.4 已发布」，公开测试版写成「v0.6.0 公开测试版已发布」；正文先写下载地址（GitHub 发布页）和请大家点 Star 的仓库，放在最前面，消息再长也不会被截掉；然后是 releaseTelegramHighlightsOf 挑出的要点，条目更多时注明还有几项在发布页。
@@ -192,4 +202,70 @@ func releaseTelegramHighlightText(item string) string {
 	text = strings.TrimSpace(releaseTelegramIssueRefs.ReplaceAllString(text, ""))
 	text = strings.TrimRight(text, "：:，,；;")
 	return qqTruncate(text, releaseTelegramHighlightRunes)
+}
+
+// releaseXPost 是复制到 X 用的短版：一行版本号，一行「更新：A；B 等 N 项」，一行下载地址，按 X 的加权长度不超过 releaseXMaxWeight。要点取 releaseTelegramHighlightsOf 的前几条，每条只留第一个逗号之前的部分，没有逗号又被截短的不列，放得下几条就列几条；一条也放不下时只写更新数量。
+func releaseXPost(p AdminPlatformConfig, r ghRelease) string {
+	head := "水杉输入法 " + p.Name + " " + releaseVersion(p, r.TagName) + " 已发布"
+	if r.Prerelease {
+		head = "水杉输入法 " + p.Name + " " + releaseVersion(p, r.TagName) + " 公开测试版已发布"
+	}
+	tail := ""
+	if r.HTMLURL != "" {
+		tail = "\n下载：" + r.HTMLURL
+	}
+	highlights, total := releaseTelegramHighlightsOf(r.Body)
+	items := make([]string, 0, len(highlights))
+	for _, text := range highlights {
+		if end := strings.IndexAny(text, "，,"); end > 0 {
+			text = text[:end]
+		} else if strings.HasSuffix(text, "…") {
+			// 被截短的要点在 X 上读不完整，宁可不列。
+			continue
+		}
+		items = append(items, text)
+	}
+	for k := len(items); k > 0; k-- {
+		line := "\n更新：" + strings.Join(items[:k], "；")
+		if k < total {
+			line += " 等 " + strconv.Itoa(total) + " 项"
+		}
+		if post := head + line + tail; releaseXWeight(post) <= releaseXMaxWeight {
+			return post
+		}
+	}
+	if total > 0 {
+		return head + "\n共 " + strconv.Itoa(total) + " 项更新" + tail
+	}
+	return head + tail
+}
+
+// releaseXWeight 按 X 的规则计算推文长度：http(s):// 开头直到空白的链接记 releaseXURLWeight，其余按 releaseXRuneWeight 逐字累加。
+func releaseXWeight(text string) int {
+	weight := 0
+	for len(text) > 0 {
+		if strings.HasPrefix(text, "https://") || strings.HasPrefix(text, "http://") {
+			end := strings.IndexFunc(text, unicode.IsSpace)
+			if end < 0 {
+				end = len(text)
+			}
+			weight += releaseXURLWeight
+			text = text[end:]
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(text)
+		weight += releaseXRuneWeight(r)
+		text = text[size:]
+	}
+	return weight
+}
+
+// releaseXRuneWeight 是 X（twitter-text 第 3 版配置）给一个字符的权重：U+0000–U+10FF 以及几段常用标点记 1，其余记 2。
+func releaseXRuneWeight(r rune) int {
+	switch {
+	case r <= 0x10FF, r >= 0x2000 && r <= 0x200D, r >= 0x2010 && r <= 0x201F, r >= 0x2032 && r <= 0x2037:
+		return 1
+	default:
+		return 2
+	}
 }

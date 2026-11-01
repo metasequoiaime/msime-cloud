@@ -66,6 +66,39 @@ func TestReleaseTelegramNoticeHighlights(t *testing.T) {
 	}
 }
 
+// X 用的短版是纯文本，按 X 的加权长度（汉字记 2、链接记 23）不超过 280：要点只留第一个逗号之前的部分，被截短的不列，放不下的写成「等 N 项」。
+func TestReleaseXPost(t *testing.T) {
+	windows := releaseTestPlatforms[0]
+	short := ghRelease{TagName: "windows-v0.5.4", Body: "### 修复\n- Win11 24H2 候选窗偏移，重启后恢复\n### 新增\n- **剪贴板历史**：支持固定条目\n", HTMLURL: "https://github.com/metasequoiaime/msime-windows/releases/tag/windows-v0.5.4"}
+	if got, want := releaseXPost(windows, short), "水杉输入法 Windows v0.5.4 已发布\n更新：Win11 24H2 候选窗偏移；剪贴板历史\n下载：https://github.com/metasequoiaime/msime-windows/releases/tag/windows-v0.5.4"; got != want {
+		t.Errorf("短版 %q", got)
+	}
+	if got := releaseXPost(windows, ghRelease{TagName: "windows-v0.6.0", Prerelease: true}); got != "水杉输入法 Windows v0.6.0 公开测试版已发布" {
+		t.Errorf("没有说明 %q", got)
+	}
+	var body strings.Builder
+	body.WriteString("### 新增\n- 这一条要点非常长超过四十个字以后会被截短所以不应该出现在推文里面才对的吧对吧对吧对吧对吧对吧\n")
+	for i := range 12 {
+		body.WriteString("### 第 " + strconv.Itoa(i) + " 节\n- 第 " + strconv.Itoa(i) + " 节的一项相当长的更新说明文字，用来把推文撑满\n")
+	}
+	long := releaseXPost(windows, ghRelease{TagName: "windows-v1.0.0", Body: body.String(), HTMLURL: "https://github.com/metasequoiaime/msime-windows/releases/tag/windows-v1.0.0"})
+	if releaseXWeight(long) > releaseXMaxWeight || strings.Contains(long, "非常长") || !strings.Contains(long, " 等 13 项\n下载：https://") || strings.Contains(long, "**") {
+		t.Errorf("长版 %q（%d）", long, releaseXWeight(long))
+	}
+	// 一条也放不下时只写数量。
+	huge := ghRelease{TagName: "windows-v1.0.1", Body: "- " + strings.Repeat("长", 39) + "，后半句\n", HTMLURL: "https://example.test/" + strings.Repeat("a", 500)}
+	p := windows
+	p.Name = strings.Repeat("名", 100)
+	if got := releaseXPost(p, huge); !strings.HasSuffix(got, "\n共 1 项更新\n下载："+huge.HTMLURL) {
+		t.Errorf("放不下 %q", got)
+	}
+	for text, want := range map[string]int{"abc": 3, "水杉": 4, "a https://example.test/" + strings.Repeat("x", 100) + " b": 27, "“引号”": 6, "🎉": 2} {
+		if got := releaseXWeight(text); got != want {
+			t.Errorf("%q 的权重是 %d，应为 %d", text, got, want)
+		}
+	}
+}
+
 // 后台检查只发 24 小时内发布、没有撤回的正式版和公开测试版，每个版本在所有副本间只发一次；发送失败时下一轮重试。
 func TestReleaseTelegramAnnounce(t *testing.T) {
 	s, f, _, _ := releaseDBServer(t)
@@ -79,7 +112,8 @@ func TestReleaseTelegramAnnounce(t *testing.T) {
 	now := time.Date(2026, 9, 26, 10, 0, 0, 0, time.UTC)
 	logs := captureLogs(t)
 	s.announceReleases(ctx, b, now)
-	if len(fake.messages) != 1 || !strings.HasPrefix(fake.messages[0]["text"].(string), "🎉 水杉输入法 Windows v0.5.4 已发布\n\n📥 下载：") || fake.messages[0]["chat_id"] != "@synthetic_news" {
+	// 每个版本发两条：QQ 群用的要点版和 X 用的短版。
+	if len(fake.messages) != 2 || !strings.HasPrefix(fake.messages[0]["text"].(string), "🎉 水杉输入法 Windows v0.5.4 已发布\n\n📥 下载：") || !strings.HasPrefix(fake.messages[1]["text"].(string), "水杉输入法 Windows v0.5.4 已发布\n更新：") || fake.messages[0]["chat_id"] != "@synthetic_news" {
 		t.Fatal(fake.messages)
 	}
 	if !strings.Contains(logs.String(), "release telegram: releases not read") || !strings.Contains(logs.String(), "metasequoiaime/missing") {
@@ -89,7 +123,7 @@ func TestReleaseTelegramAnnounce(t *testing.T) {
 	s.announceReleases(ctx, b, now.Add(releaseTelegramInterval))
 	other := &Server{config: s.config, accounts: s.accounts, adminGitHub: s.adminGitHub}
 	other.announceReleases(ctx, b, now.Add(releaseTelegramInterval))
-	if len(fake.messages) != 1 {
+	if len(fake.messages) != 2 {
 		t.Fatal("同一个版本发了多次", len(fake.messages))
 	}
 
@@ -105,13 +139,13 @@ func TestReleaseTelegramAnnounce(t *testing.T) {
 	s.adminGitHub.Invalidate("/repos/")
 	fake.status = 500
 	s.announceReleases(ctx, b, now)
-	if len(fake.messages) != 2 || !strings.Contains(logs.String(), "release telegram: not sent") {
+	if len(fake.messages) != 4 || !strings.Contains(logs.String(), "release telegram: not sent") {
 		t.Fatal("发送失败没有尝试或没有记日志", len(fake.messages), logs.String())
 	}
 	fake.status = 200
 	s.announceReleases(ctx, b, now)
 	s.announceReleases(ctx, b, now)
-	if len(fake.messages) != 3 || fake.messages[2]["text"] != "🎉 水杉输入法 Linux v0.2.0 公开测试版已发布\n\n⭐ Star 助力发版：https://github.com/metasequoiaime/msime\n\n✨ 主要更新\n• Wayland 支持" {
+	if len(fake.messages) != 6 || fake.messages[4]["text"] != "🎉 水杉输入法 Linux v0.2.0 公开测试版已发布\n\n⭐ Star 助力发版：https://github.com/metasequoiaime/msime\n\n✨ 主要更新\n• Wayland 支持" || fake.messages[5]["text"] != "水杉输入法 Linux v0.2.0 公开测试版已发布\n更新：Wayland 支持" {
 		t.Fatal(len(fake.messages), fake.messages[len(fake.messages)-1])
 	}
 	for _, private := range []string{testTelegramToken, "synthetic_news"} {
@@ -124,7 +158,7 @@ func TestReleaseTelegramAnnounce(t *testing.T) {
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
 	s.announceRelease(cancelled, b, releaseTestPlatforms[0], ghRelease{TagName: "windows-v0.7.0"})
-	if len(fake.messages) != 3 || !strings.Contains(logs.String(), "release telegram: lease unavailable") {
+	if len(fake.messages) != 6 || !strings.Contains(logs.String(), "release telegram: lease unavailable") {
 		t.Fatal("拿不到租约时仍然发送了", len(fake.messages))
 	}
 }

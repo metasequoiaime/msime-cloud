@@ -544,7 +544,12 @@ func (a *Service) suppressDeliveryTarget(parent context.Context, provider, targe
 
 var errUnsupportedEmailDomain = errors.New("unsupported_email_domain")
 
-var unsupportedEmailDomains = []string{"outlook.com", "hotmail.com", "live.com", "msn.com"}
+// 只允许常用邮箱服务商的正式域名；自定义域名的 SMTP 收件人状态不可控，不能用于验证码登录。
+var supportedEmailDomains = []string{
+	"qq.com", "163.com", "126.com", "foxmail.com", "139.com", "189.cn", "aliyun.com",
+	"gmail.com", "icloud.com", "yahoo.com",
+	"proton.me", "protonmail.com", "aol.com", "mail.com", "gmx.com", "naver.com", "yahoo.co.jp",
+}
 
 // verificationCode 使用随机种子和服务端密钥生成六位验证码。相同目标复用有效挑战时，种子保持不变，因此不会再次发送邮件。
 func (a *Service) verificationCode(provider, target, seed string) string {
@@ -565,10 +570,15 @@ func normalize(provider, target string) (string, error) {
 		normalized := strings.ToLower(target)
 		at := strings.LastIndexByte(normalized, '@')
 		domain := normalized[at+1:]
-		for _, blocked := range unsupportedEmailDomains {
-			if domain == blocked || strings.HasSuffix(domain, "."+blocked) {
-				return "", errUnsupportedEmailDomain
+		supported := false
+		for _, allowed := range supportedEmailDomains {
+			if domain == allowed {
+				supported = true
+				break
 			}
+		}
+		if !supported {
+			return "", errUnsupportedEmailDomain
 		}
 		return normalized, nil
 	}

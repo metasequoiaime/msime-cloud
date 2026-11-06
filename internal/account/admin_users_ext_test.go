@@ -270,7 +270,7 @@ func TestLoginRecordsUserAgentAndRejectsBanned(t *testing.T) {
 		if _, err := db.pool.Exec(t.Context(), `TRUNCATE auth_rates`); err != nil {
 			t.Fatal(err)
 		}
-		w := apiRequest(t, mux, "POST", "/v1/auth/challenges", `{"provider":"email","target":"device@example.test"}`, "", 201)
+		w := apiRequest(t, mux, "POST", "/v1/auth/challenges", `{"provider":"email","target":"device@qq.com"}`, "", 201)
 		var c struct {
 			ID string `json:"challenge_id"`
 		}

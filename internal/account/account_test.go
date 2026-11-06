@@ -449,13 +449,13 @@ func TestEmailHTTPFlowAndFailure(t *testing.T) {
 		mux.ServeHTTP(w, r)
 		return w
 	}
-	for _, target := range []string{"person@outlook.com", "person@hotmail.com", "person@live.com", "person@msn.com", "person@mail.outlook.com"} {
+	for _, target := range []string{"person@bankwen.com", "person@chitthi.in", "person@outlook.jp", "person@outlook.com", "person@hotmail.com", "person@live.com", "person@msn.com", "person@foo.qq.com", "person@qqcom", "person@qq.com9", "person@qq"} {
 		w := request("/v1/auth/challenges", map[string]string{"provider": "email", "target": target})
 		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `"unsupported_email_domain"`) {
-			t.Fatalf("微软邮箱域名应在投递前拒绝：%s %d %s", target, w.Code, w.Body.String())
+			t.Fatalf("自定义或非标准邮箱域名应在投递前拒绝：%s %d %s", target, w.Code, w.Body.String())
 		}
 	}
-	w := request("/v1/auth/challenges", map[string]string{"provider": "email", "target": "one@example.test"})
+	w := request("/v1/auth/challenges", map[string]string{"provider": "email", "target": "one@qq.com"})
 	if w.Code != 201 {
 		t.Fatal(w.Code, w.Body.String())
 	}
@@ -472,7 +472,7 @@ func TestEmailHTTPFlowAndFailure(t *testing.T) {
 	if _, e := s.pool.Exec(context.Background(), `UPDATE auth_rates SET expires_at=now()-interval '1 second' WHERE key LIKE 'target-minute:%'`); e != nil {
 		t.Fatal(e)
 	}
-	w = request("/v1/auth/challenges", map[string]string{"provider": "email", "target": "one@example.test"})
+	w = request("/v1/auth/challenges", map[string]string{"provider": "email", "target": "one@qq.com"})
 	if w.Code != 201 {
 		t.Fatal(w.Code, w.Body.String())
 	}
@@ -504,12 +504,12 @@ func TestEmailHTTPFlowAndFailure(t *testing.T) {
 		t.Fatal("OTP 重放应失败", w.Code)
 	}
 	sender.fail, sender.permanent = true, true
-	w = request("/v1/auth/challenges", map[string]string{"provider": "email", "target": "two@example.test"})
+	w = request("/v1/auth/challenges", map[string]string{"provider": "email", "target": "two@qq.com"})
 	if w.Code != 503 {
 		t.Fatal(w.Code)
 	}
 	sent := sender.sent
-	w = request("/v1/auth/challenges", map[string]string{"provider": "email", "target": "two@example.test"})
+	w = request("/v1/auth/challenges", map[string]string{"provider": "email", "target": "two@qq.com"})
 	if w.Code != 503 || sender.sent != sent {
 		t.Fatal("永久拒收目标不应再次投递", w.Code, sender.sent, sent)
 	}
@@ -517,7 +517,7 @@ func TestEmailHTTPFlowAndFailure(t *testing.T) {
 		t.Fatal("永久拒收应退回全站发信额度", deliveries, e)
 	}
 	var n int
-	s.pool.QueryRow(context.Background(), "SELECT count(*) FROM auth_challenges WHERE subject='two@example.test'").Scan(&n)
+	s.pool.QueryRow(context.Background(), "SELECT count(*) FROM auth_challenges WHERE subject='two@qq.com'").Scan(&n)
 	if n != 0 {
 		t.Fatal("失败发送应删除挑战")
 	}

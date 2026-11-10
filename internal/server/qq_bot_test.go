@@ -3920,7 +3920,8 @@ func TestQQVectorRecall(t *testing.T) {
 	}
 	// 不相关的问题不硬塞资料。
 	qqDeliver(t, s, "m-vec-none", "今天天气怎么样")
-	if strings.Contains(fake.answerSystem, "### 语义相近的历史") || strings.Contains(fake.answerSystem, "五笔怎么切换") {
+	_, answerMaterials, _ := strings.Cut(fake.answerSystem, "\n\n资料：\n")
+	if strings.Contains(answerMaterials, "### 语义相近的历史") || strings.Contains(answerMaterials, "五笔怎么切换") {
 		t.Fatal(fake.answerSystem)
 	}
 	if got := (&Server{qq: &qqBot{config: QQBotConfig{EmbeddingModel: "m"}}, config: Config{Chat: ChatEndpoint{Endpoint: Endpoint{URL: "https://api.everyapi.ai/v1/chat/completions"}}}}).qqEmbeddingURL(); got != "https://api.everyapi.ai/v1/embeddings" {

@@ -39,7 +39,18 @@ const (
 	// X 按加权长度限制一条推文：拉丁字母、数字和常用标点记 1，汉字、全角标点和 emoji 记 2，上限 280，相当于 140 个汉字；链接不论长短都记 23。X 不渲染 Markdown，短版和要点版一样是纯文本。
 	releaseXMaxWeight = 280
 	releaseXURLWeight = 23
+	// 短版另按实际字数不超过 releaseXMaxRunes，链接按全长计：从 Telegram 复制过去时看到的就是这个长度，比 X 的加权上限更严。
+	releaseXMaxRunes = 140
+	// 短版最多列 releaseXHighlights 条要点，每条不超过 releaseXHighlightRunes 个字，更长的不列，不截半句。
+	releaseXHighlights     = 3
+	releaseXHighlightRunes = 18
 )
+
+// releaseXSkippedSections 是短版不列也不计数的小标题：开发构建、致谢和升级须知不是给用户看的更新，待办还没做。
+var releaseXSkippedSections = []string{"待办", "开发", "构建", "感谢", "致谢", "须知"}
+
+// releaseXAddLeads 是没有加粗标题的条目里，第一个逗号之前就是一项完整更新的开头：「新增 X，用于 Y」截到逗号仍然读得通。
+var releaseXAddLeads = []string{"新增", "支持"}
 
 var (
 	// releaseTelegramTopBullet 只认顶格的列表项；缩进的子项是上一条的展开，不单独列出。
@@ -158,16 +169,9 @@ func releaseTelegramNotice(p AdminPlatformConfig, r ghRelease) account.Notice {
 
 // releaseTelegramHighlightsOf 从发布说明里挑要点，返回挑出的条目和可列的条目总数。只看顶格的列表项，跳过下载说明块、HTML 注释和「待办」小标题下的条目；「**标题**：说明」只取标题，其余取第一句，去掉 Markdown 符号、图片、链接和末尾的 issue 编号。
 func releaseTelegramHighlightsOf(body string) ([]string, int) {
-	body = releaseUserBody(body)
-	if start := strings.Index(body, releaseTelegramDownloadGuide); start >= 0 {
-		if end := strings.Index(body[start:], releaseTelegramDownloadGuideEnd); end >= 0 {
-			body = body[:start] + body[start+end+len(releaseTelegramDownloadGuideEnd):]
-		}
-	}
-	body = releaseHTMLComment.ReplaceAllString(body, "")
 	highlights := []string{}
 	total, inSection, skip := 0, 0, false
-	for line := range strings.SplitSeq(body, "\n") {
+	for line := range strings.SplitSeq(releaseNotesBody(body), "\n") {
 		line = strings.TrimRight(line, " \t\r")
 		if heading := releaseHeading.FindStringSubmatch(line); heading != nil {
 			skip = strings.Contains(heading[1], "待办")
@@ -191,6 +195,59 @@ func releaseTelegramHighlightsOf(body string) ([]string, int) {
 	return highlights, total
 }
 
+// releaseNotesBody 是发布说明里列更新条目的部分：去掉撤回说明、下载说明块和 HTML 注释。
+func releaseNotesBody(body string) string {
+	body = releaseUserBody(body)
+	if start := strings.Index(body, releaseTelegramDownloadGuide); start >= 0 {
+		if end := strings.Index(body[start:], releaseTelegramDownloadGuideEnd); end >= 0 {
+			body = body[:start] + body[start+end+len(releaseTelegramDownloadGuideEnd):]
+		}
+	}
+	return releaseHTMLComment.ReplaceAllString(body, "")
+}
+
+// releaseXHighlightsOf 给短版挑要点，返回挑出的条目（最多 releaseXHighlights 条）和面向用户的条目总数。跳过 releaseXSkippedSections 下的条目；「**标题**：说明」的标题就是功能名，按出现顺序排在前面；其次是没有加粗标题的条目的第一句，以 releaseXAddLeads 开头的取到第一个逗号，以「修复」开头的要整句不带逗号（「修复 X 后，Y 的问题」截到逗号是半句话），别的开头不列。超过 releaseXHighlightRunes 个字或带逗号、冒号、分号的不列，那多半是半句话或一整段说明。
+func releaseXHighlightsOf(body string) ([]string, int) {
+	short := func(text string) bool {
+		return utf8.RuneCountInString(text) <= releaseXHighlightRunes && !strings.ContainsAny(text, "，,：:；;…")
+	}
+	var titled, plain []string
+	total, skip := 0, false
+	for line := range strings.SplitSeq(releaseNotesBody(body), "\n") {
+		line = strings.TrimRight(line, " \t\r")
+		if heading := releaseHeading.FindStringSubmatch(line); heading != nil {
+			skip = slices.ContainsFunc(releaseXSkippedSections, func(s string) bool { return strings.Contains(heading[1], s) })
+			continue
+		}
+		bullet := releaseTelegramTopBullet.FindStringSubmatch(line)
+		if bullet == nil || skip {
+			continue
+		}
+		text := releaseTelegramHighlightText(bullet[1])
+		if text == "" {
+			continue
+		}
+		total++
+		switch {
+		case releaseTelegramBoldLead.MatchString(bullet[1]):
+			if short(text) {
+				titled = append(titled, text)
+			}
+		case slices.ContainsFunc(releaseXAddLeads, func(lead string) bool { return strings.HasPrefix(text, lead) }):
+			if end := strings.IndexAny(text, "，,"); end > 0 {
+				text = text[:end]
+			}
+			if short(text) {
+				plain = append(plain, text)
+			}
+		case strings.HasPrefix(text, "修复") && short(text):
+			plain = append(plain, text)
+		}
+	}
+	items := append(titled, plain...)
+	return items[:min(len(items), releaseXHighlights)], total
+}
+
 // releaseTelegramHighlightText 把一条发布说明缩成一行要点。
 func releaseTelegramHighlightText(item string) string {
 	if lead := releaseTelegramBoldLead.FindStringSubmatch(item); lead != nil {
@@ -204,7 +261,7 @@ func releaseTelegramHighlightText(item string) string {
 	return qqTruncate(text, releaseTelegramHighlightRunes)
 }
 
-// releaseXPost 是复制到 X 用的短版：一行版本号，一行「更新：A；B 等 N 项」，一行下载地址，按 X 的加权长度不超过 releaseXMaxWeight。要点取 releaseTelegramHighlightsOf 的前几条，每条只留第一个逗号之前的部分，没有逗号又被截短的不列，放得下几条就列几条；一条也放不下时只写更新数量。
+// releaseXPost 是复制到 X 用的短版，两行：「水杉输入法 macOS v0.59.1 已发布：A、B、C等 N 项更新」和发布页地址，实际字数不超过 releaseXMaxRunes，X 的加权长度不超过 releaseXMaxWeight。要点取 releaseXHighlightsOf，放得下几条就列几条；一条也放不下时只写「已发布，含 N 项更新」。
 func releaseXPost(p AdminPlatformConfig, r ghRelease) string {
 	head := "水杉输入法 " + p.Name + " " + releaseVersion(p, r.TagName) + " 已发布"
 	if r.Prerelease {
@@ -212,30 +269,25 @@ func releaseXPost(p AdminPlatformConfig, r ghRelease) string {
 	}
 	tail := ""
 	if r.HTMLURL != "" {
-		tail = "\n下载：" + r.HTMLURL
+		tail = "\n" + r.HTMLURL
 	}
-	highlights, total := releaseTelegramHighlightsOf(r.Body)
-	items := make([]string, 0, len(highlights))
-	for _, text := range highlights {
-		if end := strings.IndexAny(text, "，,"); end > 0 {
-			text = text[:end]
-		} else if strings.HasSuffix(text, "…") {
-			// 被截短的要点在 X 上读不完整，宁可不列。
-			continue
-		}
-		items = append(items, text)
-	}
+	items, total := releaseXHighlightsOf(r.Body)
 	for k := len(items); k > 0; k-- {
-		line := "\n更新：" + strings.Join(items[:k], "；")
-		if k < total {
-			line += " 等 " + strconv.Itoa(total) + " 项"
+		// 要点自己带顿号（「全拼 14 键、18 键」）时改用分号隔开，不然分不清哪几个词是一条。
+		sep := "、"
+		if slices.ContainsFunc(items[:k], func(text string) bool { return strings.Contains(text, "、") }) {
+			sep = "；"
 		}
-		if post := head + line + tail; releaseXWeight(post) <= releaseXMaxWeight {
+		post := head + "：" + strings.Join(items[:k], sep)
+		if k < total {
+			post += "等 " + strconv.Itoa(total) + " 项更新"
+		}
+		if post += tail; utf8.RuneCountInString(post) <= releaseXMaxRunes && releaseXWeight(post) <= releaseXMaxWeight {
 			return post
 		}
 	}
 	if total > 0 {
-		return head + "\n共 " + strconv.Itoa(total) + " 项更新" + tail
+		return head + "，含 " + strconv.Itoa(total) + " 项更新" + tail
 	}
 	return head + tail
 }

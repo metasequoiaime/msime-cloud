@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // 发到 Telegram 的消息是能直接复制到 QQ 群的纯文本：下载地址和 Star 放在最前面，后面只列要点，不写待办。
@@ -69,27 +70,48 @@ func TestReleaseTelegramNoticeHighlights(t *testing.T) {
 // X 用的短版是纯文本，按 X 的加权长度（汉字记 2、链接记 23）不超过 280：要点只留第一个逗号之前的部分，被截短的不列，放不下的写成「等 N 项」。
 func TestReleaseXPost(t *testing.T) {
 	windows := releaseTestPlatforms[0]
-	short := ghRelease{TagName: "windows-v0.5.4", Body: "### 修复\n- Win11 24H2 候选窗偏移，重启后恢复\n### 新增\n- **剪贴板历史**：支持固定条目\n", HTMLURL: "https://github.com/metasequoiaime/msime-windows/releases/tag/windows-v0.5.4"}
-	if got, want := releaseXPost(windows, short), "水杉输入法 Windows v0.5.4 已发布\n更新：Win11 24H2 候选窗偏移；剪贴板历史\n下载：https://github.com/metasequoiaime/msime-windows/releases/tag/windows-v0.5.4"; got != want {
+	url := "https://github.com/metasequoiaime/msime-windows/releases/tag/windows-v0.5.4"
+	body := "### ✨ 新功能\n" +
+		"- 新增个人生词本，可以从候选释义一键加入。(#10462)\n" +
+		"- **剪贴板历史**：支持固定条目，重启后仍在。\n" +
+		"- 这个功能默认关闭。\n" +
+		"### 🐛 问题修复\n" +
+		"- 修复「键盘调整」打开后，按钮点了没反应的问题。\n" +
+		"- 修复候选窗偏移的问题。(#10001)\n" +
+		"### 🔧 开发与构建\n" +
+		"- **新的发版流程**：自动提交。\n" +
+		"### 🙏 感谢\n" +
+		"- 问题反馈：#10999 的各位报告者\n"
+	// 加粗标题排最前；「新增」取到第一个逗号；「修复」带逗号的是半句话，不列；别的开头不列；开发与构建、感谢两节不列也不计数。
+	if got, want := releaseXPost(windows, ghRelease{TagName: "windows-v0.5.4", Body: body, HTMLURL: url}), "水杉输入法 Windows v0.5.4 已发布：剪贴板历史、新增个人生词本、修复候选窗偏移的问题等 5 项更新\n"+url; got != want {
 		t.Errorf("短版 %q", got)
+	}
+	// 全部列出时不写总数。
+	if got, want := releaseXPost(windows, ghRelease{TagName: "windows-v0.5.5", Body: "- **剪贴板历史**：固定条目\n", HTMLURL: url}), "水杉输入法 Windows v0.5.5 已发布：剪贴板历史\n"+url; got != want {
+		t.Errorf("全部列出 %q", got)
 	}
 	if got := releaseXPost(windows, ghRelease{TagName: "windows-v0.6.0", Prerelease: true}); got != "水杉输入法 Windows v0.6.0 公开测试版已发布" {
 		t.Errorf("没有说明 %q", got)
 	}
-	var body strings.Builder
-	body.WriteString("### 新增\n- 这一条要点非常长超过四十个字以后会被截短所以不应该出现在推文里面才对的吧对吧对吧对吧对吧对吧\n")
-	for i := range 12 {
-		body.WriteString("### 第 " + strconv.Itoa(i) + " 节\n- 第 " + strconv.Itoa(i) + " 节的一项相当长的更新说明文字，用来把推文撑满\n")
+	// 要点自己带顿号时改用分号隔开。
+	if got, want := releaseXPost(windows, ghRelease{TagName: "windows-v0.6.1", Body: "- **全拼 14 键、18 键**：新布局\n- **五笔 14 键**：新布局\n"}), "水杉输入法 Windows v0.6.1 已发布：全拼 14 键、18 键；五笔 14 键"; got != want {
+		t.Errorf("顿号 %q", got)
 	}
-	long := releaseXPost(windows, ghRelease{TagName: "windows-v1.0.0", Body: body.String(), HTMLURL: "https://github.com/metasequoiaime/msime-windows/releases/tag/windows-v1.0.0"})
-	if releaseXWeight(long) > releaseXMaxWeight || strings.Contains(long, "非常长") || !strings.Contains(long, " 等 13 项\n下载：https://") || strings.Contains(long, "**") {
-		t.Errorf("长版 %q（%d）", long, releaseXWeight(long))
+	// 放不下时少列几条，实际字数和 X 的加权长度都不超过上限，超过 releaseXHighlightRunes 的要点不列。
+	var long strings.Builder
+	long.WriteString("- **" + strings.Repeat("长", releaseXHighlightRunes+1) + "**：太长\n")
+	for i := range 12 {
+		long.WriteString("- **第 " + strconv.Itoa(i) + " 项相当长的更新标题**：说明\n")
+	}
+	longURL := "https://github.com/metasequoiaime/msime-windows/releases/tag/windows-v1.0.0"
+	post := releaseXPost(windows, ghRelease{TagName: "windows-v1.0.0", Body: long.String(), HTMLURL: longURL})
+	if utf8.RuneCountInString(post) > releaseXMaxRunes || releaseXWeight(post) > releaseXMaxWeight || strings.Contains(post, "长长") || !strings.Contains(post, "：第 0 项相当长的更新标题、第 1 项") || !strings.HasSuffix(post, "等 13 项更新\n"+longURL) {
+		t.Errorf("长版 %q（%d 字）", post, utf8.RuneCountInString(post))
 	}
 	// 一条也放不下时只写数量。
-	huge := ghRelease{TagName: "windows-v1.0.1", Body: "- " + strings.Repeat("长", 39) + "，后半句\n", HTMLURL: "https://example.test/" + strings.Repeat("a", 500)}
 	p := windows
 	p.Name = strings.Repeat("名", 100)
-	if got := releaseXPost(p, huge); !strings.HasSuffix(got, "\n共 1 项更新\n下载："+huge.HTMLURL) {
+	if got := releaseXPost(p, ghRelease{TagName: "windows-v1.0.1", Body: "- **剪贴板历史**：固定条目\n- 其他\n", HTMLURL: url}); got != "水杉输入法 "+p.Name+" v1.0.1 已发布，含 2 项更新\n"+url {
 		t.Errorf("放不下 %q", got)
 	}
 	for text, want := range map[string]int{"abc": 3, "水杉": 4, "a https://example.test/" + strings.Repeat("x", 100) + " b": 27, "“引号”": 6, "🎉": 2} {
@@ -113,7 +135,7 @@ func TestReleaseTelegramAnnounce(t *testing.T) {
 	logs := captureLogs(t)
 	s.announceReleases(ctx, b, now)
 	// 每个版本发两条：QQ 群用的要点版和 X 用的短版。
-	if len(fake.messages) != 2 || !strings.HasPrefix(fake.messages[0]["text"].(string), "🎉 水杉输入法 Windows v0.5.4 已发布\n\n📥 下载：") || !strings.HasPrefix(fake.messages[1]["text"].(string), "水杉输入法 Windows v0.5.4 已发布\n更新：") || fake.messages[0]["chat_id"] != "@synthetic_news" {
+	if len(fake.messages) != 2 || !strings.HasPrefix(fake.messages[0]["text"].(string), "🎉 水杉输入法 Windows v0.5.4 已发布\n\n📥 下载：") || fake.messages[1]["text"] != "水杉输入法 Windows v0.5.4 已发布，含 2 项更新\nhttps://github.com/metasequoiaime/msime-windows/releases/tag/windows-v0.5.4" || fake.messages[0]["chat_id"] != "@synthetic_news" {
 		t.Fatal(fake.messages)
 	}
 	if !strings.Contains(logs.String(), "release telegram: releases not read") || !strings.Contains(logs.String(), "metasequoiaime/missing") {
@@ -145,7 +167,7 @@ func TestReleaseTelegramAnnounce(t *testing.T) {
 	fake.status = 200
 	s.announceReleases(ctx, b, now)
 	s.announceReleases(ctx, b, now)
-	if len(fake.messages) != 6 || fake.messages[4]["text"] != "🎉 水杉输入法 Linux v0.2.0 公开测试版已发布\n\n⭐ Star 助力发版：https://github.com/metasequoiaime/msime\n\n✨ 主要更新\n• Wayland 支持" || fake.messages[5]["text"] != "水杉输入法 Linux v0.2.0 公开测试版已发布\n更新：Wayland 支持" {
+	if len(fake.messages) != 6 || fake.messages[4]["text"] != "🎉 水杉输入法 Linux v0.2.0 公开测试版已发布\n\n⭐ Star 助力发版：https://github.com/metasequoiaime/msime\n\n✨ 主要更新\n• Wayland 支持" || fake.messages[5]["text"] != "水杉输入法 Linux v0.2.0 公开测试版已发布，含 1 项更新" {
 		t.Fatal(len(fake.messages), fake.messages[len(fake.messages)-1])
 	}
 	for _, private := range []string{testTelegramToken, "synthetic_news"} {

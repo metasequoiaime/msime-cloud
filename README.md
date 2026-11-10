@@ -554,7 +554,7 @@ curl -sS "https://api.telegram.org/bot$MSIME_ADMIN_TELEGRAM_TOKEN/setWebhook" \
 
 用户可发布自定义键盘设计、下载使用、收藏和评分（登录即可评分，不能评自己的作品），使用 Apple 登录与 PostgreSQL 共享存储，支持 K8s 多副本。接口、迁移和上线说明见 [皮肤社区](docs/skin-community.md)。
 
-用户也可以分享候选窗皮肤包（`skin.toml` 加图片，服务器校验与清理图片；经能力协商可用 PNG/JPEG/APNG/GIF/WebP 动画资源），接口 `/v1/community/candidate-skins` 与限制见 [皮肤社区 · 候选窗皮肤包分享](docs/skin-community.md#候选窗皮肤包分享)。`auth.community.official_skin_publishers`（用户 ID 列表，64 位小写十六进制，默认为空，最多 50 个）指定官方发布账号，它们不受公开 20 款和每小时 10 次公开发布的限制，仍走审核和包校验。旧版本不认识这个配置项，会因未知字段拒绝启动：先让所有副本升级到新版本，再把它写进生产配置；回退版本前先删除它。
+用户也可以分享候选窗皮肤包（`skin.toml` 加图片，服务器校验与清理图片；经能力协商可用 PNG/JPEG/APNG/GIF/WebP 动画资源），接口 `/v1/community/candidate-skins` 与限制见 [皮肤社区 · 候选窗皮肤包分享](docs/skin-community.md#候选窗皮肤包分享)。`auth.community.official_skin_publishers`（用户 ID 列表，64 位小写十六进制，默认为空，最多 50 个）指定官方发布账号，它们不受公开 20 款和每小时 10 次公开发布的限制，每账号总数上限从 100 款放宽到 1000 款，仍走审核和包校验。旧版本不认识这个配置项，会因未知字段拒绝启动：先让所有副本升级到新版本，再把它写进生产配置；回退版本前先删除它。
 
 用户还可以分享客户端插件包（音效包、音乐包、指令表、特效包、辅助码表、符号集、短语表和单词本，zip 内含 plugin.toml、音频或数据文件和说明），服务器只校验和原样分发、从不执行。旧客户端不认识的后四种类型只返回给用 `kinds` 参数声明支持它们的客户端；升级时迁移会替换 `community_plugins` 的类型约束，上线顺序是先发容忍未知类型的客户端、再部署服务端、最后发布新类型的客户端。接口 `/v1/community/plugins`、包校验规则、配额与部署说明见 [插件社区](docs/plugin-community.md)。
 

@@ -37,7 +37,7 @@ func TestVerificationDeliveryCancellationDoesNotLeaveReusableChallenge(t *testin
 	a := &Service{store: db, config: Config{PepperEnv: "AUTH_TEST_PEPPER", Email: MailConfig{From: "login@example.test"}}, sender: sender}
 	mux := http.NewServeMux()
 	Mount(mux, a)
-	const target = "cancelled-verification@example.test"
+	const target = "cancelled-verification@qq.com"
 	request := func(ctx context.Context, path, body string) *httptest.ResponseRecorder {
 		t.Helper()
 		r := httptest.NewRequestWithContext(ctx, http.MethodPost, path, strings.NewReader(body))

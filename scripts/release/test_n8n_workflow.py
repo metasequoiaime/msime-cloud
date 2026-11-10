@@ -6,6 +6,7 @@ import unittest
 from urllib.parse import parse_qs, urlsplit
 
 
+# 测试里的 node 脚本按这个路径自己读工作流，不把内容放进命令行参数：Windows 的命令行上限是 32767 个字符，整份工作流加上引号转义会超过它。
 WORKFLOW = Path(__file__).resolve().parents[2] / "ops/n8n/msime-release-social.json"
 
 
@@ -50,7 +51,7 @@ class N8nWorkflowTests(unittest.TestCase):
     def build_posts(self, landing=None):
         program = """
 const crypto = require('crypto');
-const workflow = JSON.parse(process.argv[1]);
+const workflow = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
 const payload = {schema_version: 1, event: 'release.published',
   idempotency_key: 'metasequoiaime/msime:android-v1.2.3', repository: 'metasequoiaime/msime',
   release: {tag: 'android-v1.2.3', body: '- ' + '合成更新'.repeat(5000), url: 'https://github.com/metasequoiaime/msime/releases/tag/android-v1.2.3'}};
@@ -65,7 +66,7 @@ const posts = new Function('$input', '$env', '$getWorkflowStaticData', 'require'
   {first: () => item}, env, () => ({}), require, Buffer);
 process.stdout.write(JSON.stringify(posts));
 """
-        return subprocess.run(["node", "-e", program, json.dumps(self.workflow), landing or ""], text=True, capture_output=True)
+        return subprocess.run(["node", "-e", program, str(WORKFLOW), landing or ""], text=True, capture_output=True)
 
     def test_all_platforms_keep_complete_trackable_links_when_release_notes_are_long(self):
         result = self.build_posts()
@@ -97,7 +98,7 @@ process.stdout.write(JSON.stringify(posts));
     def test_binary_raw_body_preserves_signature_and_rejects_tampering(self):
         program = """
 const crypto = require('crypto');
-const code = JSON.parse(process.argv[1]).nodes.find(n => n.name === '验签和生成文案').parameters.jsCode;
+const code = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')).nodes.find(n => n.name === '验签和生成文案').parameters.jsCode;
 const raw = '{ "schema_version": 1, "event": "release.published", "idempotency_key": "metasequoiaime/msime:android-v1.2.3", "repository": "metasequoiaime/msime", "release": {"tag": "android-v1.2.3", "body": "- **中文更新**：说明"} }';
 const secret = 'synthetic-secret';
 const signature = 'sha256=' + crypto.createHmac('sha256', secret).update(raw).digest('hex');
@@ -112,7 +113,7 @@ for (const [body, binary] of [[raw.replace('中文更新', '篡改更新'), true
 }
 process.stdout.write(JSON.stringify({posts, rejected}));
 """
-        result = subprocess.run(["node", "-e", program, json.dumps(self.workflow)],
+        result = subprocess.run(["node", "-e", program, str(WORKFLOW)],
             text=True, capture_output=True, check=True)
         data = json.loads(result.stdout)
         self.assertEqual(data["rejected"], 2)
@@ -122,7 +123,7 @@ process.stdout.write(JSON.stringify({posts, rejected}));
     def short_posts(self, body):
         program = """
 const crypto = require('crypto');
-const workflow = JSON.parse(process.argv[1]);
+const workflow = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
 const payload = {schema_version: 1, event: 'release.published',
   idempotency_key: 'metasequoiaime/msime:macos-v1.2.3', repository: 'metasequoiaime/msime',
   release: {tag: 'macos-v1.2.3', body: process.argv[2], url: 'https://github.com/metasequoiaime/msime/releases/tag/macos-v1.2.3'}};
@@ -135,7 +136,7 @@ const posts = new Function('$input', '$env', '$getWorkflowStaticData', 'require'
   {first: () => item}, env, () => ({}), require, Buffer);
 process.stdout.write(JSON.stringify(posts));
 """
-        result = subprocess.run(["node", "-e", program, json.dumps(self.workflow), body], text=True, capture_output=True)
+        result = subprocess.run(["node", "-e", program, str(WORKFLOW), body], text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         return {item["json"]["channel"]: item["json"] for item in json.loads(result.stdout)}
 
@@ -216,7 +217,7 @@ process.stdout.write(JSON.stringify(posts));
 
     def test_bluesky_session_and_utf8_link_facets(self):
         program = """
-const workflow = JSON.parse(process.argv[1]);
+const workflow = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
 const code = workflow.nodes.find(n => n.name === '准备 Bluesky 帖子').parameters.jsCode;
 const url = 'https://example.test/download/?utm_source=bluesky';
 const source = {text: '水杉输入法 🌲 新版已发布。\\n下载：' + url, tracking_url: url};
@@ -234,7 +235,7 @@ source.text = '缺少推广链接';
 failures.push(execute({statusCode: 200, body: session}));
 process.stdout.write(JSON.stringify({good, linked, failures}));
 """
-        result = subprocess.run(["node", "-e", program, json.dumps(self.workflow)],
+        result = subprocess.run(["node", "-e", program, str(WORKFLOW)],
             text=True, capture_output=True, check=True)
         data = json.loads(result.stdout)
         self.assertEqual(data["good"]["repo"], "did:plc:synthetic")
@@ -250,7 +251,7 @@ process.stdout.write(JSON.stringify({good, linked, failures}));
 
     def test_social_success_requires_platform_post_identifiers(self):
         program = """
-const workflow = JSON.parse(process.argv[1]);
+const workflow = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
 const results = [];
 for (const [name, key, channel] of [['Bluesky', 'uri', 'bluesky'], ['Mastodon', 'id', 'mastodon']]) {
   const code = workflow.nodes.find(n => n.name === '记录 ' + name + ' 成功').parameters.jsCode;
@@ -265,7 +266,7 @@ for (const [name, key, channel] of [['Bluesky', 'uri', 'bluesky'], ['Mastodon', 
 }
 process.stdout.write(JSON.stringify(results));
 """
-        result = subprocess.run(["node", "-e", program, json.dumps(self.workflow)],
+        result = subprocess.run(["node", "-e", program, str(WORKFLOW)],
             text=True, capture_output=True, check=True)
         for case in json.loads(result.stdout):
             self.assertEqual(case["ok"], case["expected"])

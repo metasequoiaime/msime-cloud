@@ -4832,6 +4832,169 @@
                           "type": "string",
                           "maxLength": 64
                         },
+                        "platform.macos.global_theme": {
+                          "type": "string",
+                          "maxLength": 64
+                        },
+                        "platform.macos.custom_theme_base": {
+                          "type": "string",
+                          "maxLength": 64
+                        },
+                        "platform.macos.custom_candidate_skin": {
+                          "type": "string",
+                          "maxLength": 64
+                        },
+                        "platform.macos.custom_candidate_skin_dark": {
+                          "type": "string",
+                          "maxLength": 64
+                        },
+                        "platform.macos.candidate_theme": {
+                          "type": "string",
+                          "maxLength": 16
+                        },
+                        "platform.macos.candidate_layout": {
+                          "type": "string",
+                          "maxLength": 16
+                        },
+                        "platform.macos.candidate_preedit_style": {
+                          "type": "string",
+                          "maxLength": 16
+                        },
+                        "platform.macos.candidate_count_mode": {
+                          "type": "string",
+                          "maxLength": 16
+                        },
+                        "platform.macos.candidate_font_weight": {
+                          "type": "string",
+                          "maxLength": 16
+                        },
+                        "platform.macos.candidate_max_width": {
+                          "type": "integer",
+                          "minimum": 160,
+                          "maximum": 1200
+                        },
+                        "platform.macos.candidate_columns": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 10
+                        },
+                        "platform.macos.candidate_preedit_font_size": {
+                          "type": "integer",
+                          "minimum": 12,
+                          "maximum": 32
+                        },
+                        "platform.macos.candidate_translation_font_size": {
+                          "type": "integer",
+                          "minimum": -1,
+                          "maximum": 32
+                        },
+                        "platform.macos.candidate_scale_percent": {
+                          "type": "integer",
+                          "minimum": 50,
+                          "maximum": 200
+                        },
+                        "platform.macos.candidate_opacity_percent": {
+                          "type": "integer",
+                          "minimum": 50,
+                          "maximum": 100
+                        },
+                        "platform.macos.candidate_corner_radius": {
+                          "type": "integer",
+                          "minimum": -1,
+                          "maximum": 32
+                        },
+                        "platform.macos.candidate_padding": {
+                          "type": "integer",
+                          "minimum": -1,
+                          "maximum": 16
+                        },
+                        "platform.macos.candidate_padding_horizontal": {
+                          "type": "integer",
+                          "minimum": -1,
+                          "maximum": 16
+                        },
+                        "platform.macos.candidate_padding_vertical": {
+                          "type": "integer",
+                          "minimum": -1,
+                          "maximum": 16
+                        },
+                        "platform.macos.candidate_item_padding_horizontal": {
+                          "type": "integer",
+                          "minimum": -1,
+                          "maximum": 16
+                        },
+                        "platform.macos.candidate_item_padding_vertical": {
+                          "type": "integer",
+                          "minimum": -1,
+                          "maximum": 16
+                        },
+                        "platform.macos.candidate_item_corner_radius": {
+                          "type": "integer",
+                          "minimum": -1,
+                          "maximum": 32
+                        },
+                        "platform.macos.candidate_item_spacing": {
+                          "type": "integer",
+                          "minimum": -1,
+                          "maximum": 16
+                        },
+                        "platform.macos.candidate_window_fit_content": {
+                          "type": "boolean"
+                        },
+                        "platform.macos.candidate_font_family": {
+                          "type": "string",
+                          "maxLength": 256
+                        },
+                        "platform.macos.candidate_english_font": {
+                          "type": "string",
+                          "maxLength": 256
+                        },
+                        "platform.macos.candidate_fallback_fonts": {
+                          "type": "string",
+                          "maxLength": 8192
+                        },
+                        "platform.macos.candidate_color_text": {
+                          "type": "string",
+                          "maxLength": 16
+                        },
+                        "platform.macos.candidate_color_accent": {
+                          "type": "string",
+                          "maxLength": 16
+                        },
+                        "platform.macos.candidate_color_selected": {
+                          "type": "string",
+                          "maxLength": 16
+                        },
+                        "platform.macos.candidate_color_selected_text": {
+                          "type": "string",
+                          "maxLength": 16
+                        },
+                        "platform.macos.candidate_color_hover": {
+                          "type": "string",
+                          "maxLength": 16
+                        },
+                        "platform.macos.candidate_color_surface": {
+                          "type": "string",
+                          "maxLength": 16
+                        },
+                        "platform.macos.candidate_follow_cursor": {
+                          "type": "boolean"
+                        },
+                        "platform.macos.show_candidate_page_number": {
+                          "type": "boolean"
+                        },
+                        "platform.macos.show_candidate_status": {
+                          "type": "boolean"
+                        },
+                        "platform.macos.show_app_logo": {
+                          "type": "boolean"
+                        },
+                        "platform.macos.expand_candidates": {
+                          "type": "boolean"
+                        },
+                        "platform.macos.show_candidate_expand_button": {
+                          "type": "boolean"
+                        },
                         "general.app_theme": {
                           "type": "string",
                           "maxLength": 32
@@ -5800,6 +5963,169 @@
                           "type": "string",
                           "maxLength": 64
                         },
+                        "platform.macos.global_theme": {
+                          "type": "string",
+                          "maxLength": 64
+                        },
+                        "platform.macos.custom_theme_base": {
+                          "type": "string",
+                          "maxLength": 64
+                        },
+                        "platform.macos.custom_candidate_skin": {
+                          "type": "string",
+                          "maxLength": 64
+                        },
+                        "platform.macos.custom_candidate_skin_dark": {
+                          "type": "string",
+                          "maxLength": 64
+                        },
+                        "platform.macos.candidate_theme": {
+                          "type": "string",
+                          "maxLength": 16
+                        },
+                        "platform.macos.candidate_layout": {
+                          "type": "string",
+                          "maxLength": 16
+                        },
+                        "platform.macos.candidate_preedit_style": {
+                          "type": "string",
+                          "maxLength": 16
+                        },
+                        "platform.macos.candidate_count_mode": {
+                          "type": "string",
+                          "maxLength": 16
+                        },
+                        "platform.macos.candidate_font_weight": {
+                          "type": "string",
+                          "maxLength": 16
+                        },
+                        "platform.macos.candidate_max_width": {
+                          "type": "integer",
+                          "minimum": 160,
+                          "maximum": 1200
+                        },
+                        "platform.macos.candidate_columns": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 10
+                        },
+                        "platform.macos.candidate_preedit_font_size": {
+                          "type": "integer",
+                          "minimum": 12,
+                          "maximum": 32
+                        },
+                        "platform.macos.candidate_translation_font_size": {
+                          "type": "integer",
+                          "minimum": -1,
+                          "maximum": 32
+                        },
+                        "platform.macos.candidate_scale_percent": {
+                          "type": "integer",
+                          "minimum": 50,
+                          "maximum": 200
+                        },
+                        "platform.macos.candidate_opacity_percent": {
+                          "type": "integer",
+                          "minimum": 50,
+                          "maximum": 100
+                        },
+                        "platform.macos.candidate_corner_radius": {
+                          "type": "integer",
+                          "minimum": -1,
+                          "maximum": 32
+                        },
+                        "platform.macos.candidate_padding": {
+                          "type": "integer",
+                          "minimum": -1,
+                          "maximum": 16
+                        },
+                        "platform.macos.candidate_padding_horizontal": {
+                          "type": "integer",
+                          "minimum": -1,
+                          "maximum": 16
+                        },
+                        "platform.macos.candidate_padding_vertical": {
+                          "type": "integer",
+                          "minimum": -1,
+                          "maximum": 16
+                        },
+                        "platform.macos.candidate_item_padding_horizontal": {
+                          "type": "integer",
+                          "minimum": -1,
+                          "maximum": 16
+                        },
+                        "platform.macos.candidate_item_padding_vertical": {
+                          "type": "integer",
+                          "minimum": -1,
+                          "maximum": 16
+                        },
+                        "platform.macos.candidate_item_corner_radius": {
+                          "type": "integer",
+                          "minimum": -1,
+                          "maximum": 32
+                        },
+                        "platform.macos.candidate_item_spacing": {
+                          "type": "integer",
+                          "minimum": -1,
+                          "maximum": 16
+                        },
+                        "platform.macos.candidate_window_fit_content": {
+                          "type": "boolean"
+                        },
+                        "platform.macos.candidate_font_family": {
+                          "type": "string",
+                          "maxLength": 256
+                        },
+                        "platform.macos.candidate_english_font": {
+                          "type": "string",
+                          "maxLength": 256
+                        },
+                        "platform.macos.candidate_fallback_fonts": {
+                          "type": "string",
+                          "maxLength": 8192
+                        },
+                        "platform.macos.candidate_color_text": {
+                          "type": "string",
+                          "maxLength": 16
+                        },
+                        "platform.macos.candidate_color_accent": {
+                          "type": "string",
+                          "maxLength": 16
+                        },
+                        "platform.macos.candidate_color_selected": {
+                          "type": "string",
+                          "maxLength": 16
+                        },
+                        "platform.macos.candidate_color_selected_text": {
+                          "type": "string",
+                          "maxLength": 16
+                        },
+                        "platform.macos.candidate_color_hover": {
+                          "type": "string",
+                          "maxLength": 16
+                        },
+                        "platform.macos.candidate_color_surface": {
+                          "type": "string",
+                          "maxLength": 16
+                        },
+                        "platform.macos.candidate_follow_cursor": {
+                          "type": "boolean"
+                        },
+                        "platform.macos.show_candidate_page_number": {
+                          "type": "boolean"
+                        },
+                        "platform.macos.show_candidate_status": {
+                          "type": "boolean"
+                        },
+                        "platform.macos.show_app_logo": {
+                          "type": "boolean"
+                        },
+                        "platform.macos.expand_candidates": {
+                          "type": "boolean"
+                        },
+                        "platform.macos.show_candidate_expand_button": {
+                          "type": "boolean"
+                        },
                         "general.app_theme": {
                           "type": "string",
                           "maxLength": 32
@@ -6754,6 +7080,169 @@
                       "platform.macos.candidate_skin": {
                         "type": "string",
                         "maxLength": 64
+                      },
+                      "platform.macos.global_theme": {
+                        "type": "string",
+                        "maxLength": 64
+                      },
+                      "platform.macos.custom_theme_base": {
+                        "type": "string",
+                        "maxLength": 64
+                      },
+                      "platform.macos.custom_candidate_skin": {
+                        "type": "string",
+                        "maxLength": 64
+                      },
+                      "platform.macos.custom_candidate_skin_dark": {
+                        "type": "string",
+                        "maxLength": 64
+                      },
+                      "platform.macos.candidate_theme": {
+                        "type": "string",
+                        "maxLength": 16
+                      },
+                      "platform.macos.candidate_layout": {
+                        "type": "string",
+                        "maxLength": 16
+                      },
+                      "platform.macos.candidate_preedit_style": {
+                        "type": "string",
+                        "maxLength": 16
+                      },
+                      "platform.macos.candidate_count_mode": {
+                        "type": "string",
+                        "maxLength": 16
+                      },
+                      "platform.macos.candidate_font_weight": {
+                        "type": "string",
+                        "maxLength": 16
+                      },
+                      "platform.macos.candidate_max_width": {
+                        "type": "integer",
+                        "minimum": 160,
+                        "maximum": 1200
+                      },
+                      "platform.macos.candidate_columns": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10
+                      },
+                      "platform.macos.candidate_preedit_font_size": {
+                        "type": "integer",
+                        "minimum": 12,
+                        "maximum": 32
+                      },
+                      "platform.macos.candidate_translation_font_size": {
+                        "type": "integer",
+                        "minimum": -1,
+                        "maximum": 32
+                      },
+                      "platform.macos.candidate_scale_percent": {
+                        "type": "integer",
+                        "minimum": 50,
+                        "maximum": 200
+                      },
+                      "platform.macos.candidate_opacity_percent": {
+                        "type": "integer",
+                        "minimum": 50,
+                        "maximum": 100
+                      },
+                      "platform.macos.candidate_corner_radius": {
+                        "type": "integer",
+                        "minimum": -1,
+                        "maximum": 32
+                      },
+                      "platform.macos.candidate_padding": {
+                        "type": "integer",
+                        "minimum": -1,
+                        "maximum": 16
+                      },
+                      "platform.macos.candidate_padding_horizontal": {
+                        "type": "integer",
+                        "minimum": -1,
+                        "maximum": 16
+                      },
+                      "platform.macos.candidate_padding_vertical": {
+                        "type": "integer",
+                        "minimum": -1,
+                        "maximum": 16
+                      },
+                      "platform.macos.candidate_item_padding_horizontal": {
+                        "type": "integer",
+                        "minimum": -1,
+                        "maximum": 16
+                      },
+                      "platform.macos.candidate_item_padding_vertical": {
+                        "type": "integer",
+                        "minimum": -1,
+                        "maximum": 16
+                      },
+                      "platform.macos.candidate_item_corner_radius": {
+                        "type": "integer",
+                        "minimum": -1,
+                        "maximum": 32
+                      },
+                      "platform.macos.candidate_item_spacing": {
+                        "type": "integer",
+                        "minimum": -1,
+                        "maximum": 16
+                      },
+                      "platform.macos.candidate_window_fit_content": {
+                        "type": "boolean"
+                      },
+                      "platform.macos.candidate_font_family": {
+                        "type": "string",
+                        "maxLength": 256
+                      },
+                      "platform.macos.candidate_english_font": {
+                        "type": "string",
+                        "maxLength": 256
+                      },
+                      "platform.macos.candidate_fallback_fonts": {
+                        "type": "string",
+                        "maxLength": 8192
+                      },
+                      "platform.macos.candidate_color_text": {
+                        "type": "string",
+                        "maxLength": 16
+                      },
+                      "platform.macos.candidate_color_accent": {
+                        "type": "string",
+                        "maxLength": 16
+                      },
+                      "platform.macos.candidate_color_selected": {
+                        "type": "string",
+                        "maxLength": 16
+                      },
+                      "platform.macos.candidate_color_selected_text": {
+                        "type": "string",
+                        "maxLength": 16
+                      },
+                      "platform.macos.candidate_color_hover": {
+                        "type": "string",
+                        "maxLength": 16
+                      },
+                      "platform.macos.candidate_color_surface": {
+                        "type": "string",
+                        "maxLength": 16
+                      },
+                      "platform.macos.candidate_follow_cursor": {
+                        "type": "boolean"
+                      },
+                      "platform.macos.show_candidate_page_number": {
+                        "type": "boolean"
+                      },
+                      "platform.macos.show_candidate_status": {
+                        "type": "boolean"
+                      },
+                      "platform.macos.show_app_logo": {
+                        "type": "boolean"
+                      },
+                      "platform.macos.expand_candidates": {
+                        "type": "boolean"
+                      },
+                      "platform.macos.show_candidate_expand_button": {
+                        "type": "boolean"
                       },
                       "general.app_theme": {
                         "type": "string",

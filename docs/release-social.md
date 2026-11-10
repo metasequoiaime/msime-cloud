@@ -52,7 +52,9 @@ Mastodon 在账号所在实例 Settings → Development 创建 `write:statuses` 
 
 X 使用 OAuth2 PKCE 的 `tweet.read tweet.write users.read offline.access`，通过 n8n 的 `MSIME X OAuth2` 完成账号授权和刷新，不能只保存 Client ID/Secret，也不能使用 App-only Token 发帖。替换账号或应用时在 n8n 重新授权；其他实例导入时重新选择自己的凭据。
 
-主推广链接包含 `utm_source=<channel>`、`utm_medium=social`、由标签与幂等键摘要构成的 `utm_campaign`；完整链接先预留长度，再截断文案。Telegram、Discord 和 Reddit 长文另含原始 Release 链接。直接进入 GitHub 的流量无法计入官网 Umami。
+X、Bluesky 和 Mastodon 不渲染 Markdown，发的是纯文本短帖，共两行：第一行「水杉输入法 macOS v0.59.1 已发布：新世纪五笔、跨输入法语音快捷键、PLaMo 离线翻译等 26 项更新」，第二行是推广链接。要点从发布说明里挑，最多 3 条、每条不超过 18 字，规则与后端发到 Telegram 的 X 短版（`internal/server/release_telegram.go` 的 `releaseXHighlightsOf`）相同：只看顶格的列表项，跳过下载说明块和「开发与构建」「感谢」「升级须知」「待办」下的条目；「**标题**：说明」取标题，没有加粗标题的条目里「新增」「支持」开头的取到第一个逗号，「修复」开头的要整句不带逗号，其余不列；加粗、反引号、链接语法和末尾的 issue 编号都去掉。第一行不超过 140 字，整条不超过 X 的 280 加权上限（链接记 23）；没有可列的要点时写「已发布，含 N 项更新」。改这套规则时两边一起改。
+
+主推广链接包含 `utm_source=<channel>`、`utm_medium=social`、由标签与幂等键摘要构成的 `utm_campaign`；Telegram、Discord 和 Reddit 发带完整发布说明的长文：先为完整链接预留长度，再截断文案，另含原始 Release 链接。直接进入 GitHub 的流量无法计入官网 Umami。
 
 Bluesky、Mastodon 字段由 yldm-platform 的 ExternalSecret 从 `secret/yldm/production/msime-social` 注入，开关为 `1` 才发帖；X 用户令牌加密存放于 n8n 数据库。DEV.to 尚未接入。不要将凭据或上游响应写进 Git、PR、聊天或执行日志；成功与失败执行详情均关闭保存。
 

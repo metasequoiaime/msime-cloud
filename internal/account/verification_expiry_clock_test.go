@@ -20,7 +20,7 @@ func TestVerificationChallengeAfterTargetLockWait(t *testing.T) {
 			t.Setenv("AUTH_TEST_PEPPER", strings.Repeat("p", 32))
 			sender := &captureSender{}
 			a := &Service{store: db, config: Config{PepperEnv: "AUTH_TEST_PEPPER", Email: MailConfig{From: "login@example.test"}}, sender: sender}
-			const provider, target = "email", "lock-expiry@example.test"
+			const provider, target = "email", "lock-expiry@qq.com"
 			oldID, oldSeed := randomToken(), "code-v1:"+randomToken()
 			if kind != "new" {
 				challenge := Challenge{IDHash: hash(oldID), Provider: provider, Subject: target, Nonce: oldSeed, CodeHash: a.codeHash(oldID, a.verificationCode(provider, target, oldSeed))}

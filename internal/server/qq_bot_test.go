@@ -1373,7 +1373,8 @@ func TestQQBotAnswersMembersFromKnowledge(t *testing.T) {
 		t.Fatal("toc", fake.selectSystem)
 	}
 	// 回答只拿到挑出的段落，重复和越界的编号被忽略。
-	if !strings.Contains(fake.answerSystem, "### [FAQ · 以 Windows 正式版为主 · 常见问题] 输入 > 五笔怎么切换\n在设置的「输入方案」里选五笔。") || !strings.Contains(fake.answerSystem, "### [Windows 正式版 · windows] 安装\n双击安装包。") || strings.Contains(fake.answerSystem, "同步需要登录") || strings.Count(fake.answerSystem, "五笔怎么切换") != 1 {
+	_, answerMaterials, _ := strings.Cut(fake.answerSystem, "\n\n资料：\n")
+	if !strings.Contains(fake.answerSystem, "### [FAQ · 以 Windows 正式版为主 · 常见问题] 输入 > 五笔怎么切换\n在设置的「输入方案」里选五笔。") || !strings.Contains(fake.answerSystem, "### [Windows 正式版 · windows] 安装\n双击安装包。") || strings.Contains(fake.answerSystem, "同步需要登录") || strings.Count(answerMaterials, "五笔怎么切换") != 1 {
 		t.Fatal(fake.answerSystem)
 	}
 	// 回答的系统说明列出 qqDocPlatforms 里的平台（不含 FAQ、通用、各平台这类标签），资料只有部分平台时不会说成其他平台没有。

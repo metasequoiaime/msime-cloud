@@ -41,6 +41,8 @@ const (
 	candidatePublishesPerHour = 10
 	// Private creates and replacements are background sync traffic, so they get their own hourly budget instead of the gallery's.
 	candidateLibraryWritesPerHour = 60
+	// 官方发布账号（auth.community.official_skin_publishers）的总数上限。官方皮肤目录本身就超过普通账号的 100 款，所以单独放宽；取 1000 是因为同步列表不分页，而已发布的客户端最多接受 1000 条、512 KiB 的同步响应（每条约 280 字节），再高旧客户端就同步不了。
+	maxCandidateOfficialLibraryRows = 1000
 	// 官方发布账号（auth.community.official_skin_publishers）不受公开 20 款的限制，公开作品只受每账号总数上限约束；两份每小时额度都换成这个更宽的值，足够在一小时内把整个库同步、替换并公开一遍，同时让配置失误或客户端死循环仍有上限。
 	candidateOfficialWritesPerHour = 200
 )
@@ -712,7 +714,7 @@ func (a *Service) communityCandidatePublish(w http.ResponseWriter, r *http.Reque
 	SELECT COALESCE((SELECT owner_id FROM existing),''),COALESCE((SELECT request_sha256 FROM existing),''),
  COALESCE((SELECT identical FROM existing),false),EXISTS(SELECT 1 FROM existing),
  (SELECT total_count<$16 FROM quota),(SELECT $13<>'public' OR public_count<$17 FROM quota),EXISTS(SELECT 1 FROM inserted)`,
-		input.ID, p.UserID, pkg.ID, input.Name, input.Description, pkg.Version, license.Code, license.Assets, license.Source, []byte(input.Manifest), pkg.Preview, digest, visibility, flag, category, maxCandidateLibraryRows, publicLimit).Scan(&existingOwner, &existingDigest, &identical, &exists, &withinTotal, &withinPublic, &inserted); e != nil {
+		input.ID, p.UserID, pkg.ID, input.Name, input.Description, pkg.Version, license.Code, license.Assets, license.Source, []byte(input.Manifest), pkg.Preview, digest, visibility, flag, category, a.candidateLibraryLimit(p.UserID), publicLimit).Scan(&existingOwner, &existingDigest, &identical, &exists, &withinTotal, &withinPublic, &inserted); e != nil {
 		a.error(w, e)
 		return
 	}
@@ -777,10 +779,18 @@ func (a *Service) candidateWriteRatePolicy(userID, visibility string) (string, i
 	return scope, limit
 }
 
-// candidatePublicLimit 返回账号最多可以有几款公开作品：普通账号 maxCandidateSkinsPerUser，官方发布账号只受总数上限 maxCandidateLibraryRows 约束。
+// candidateLibraryLimit 返回账号最多可以有几款作品（公开加私有）：普通账号 maxCandidateLibraryRows，官方发布账号 maxCandidateOfficialLibraryRows。
+func (a *Service) candidateLibraryLimit(userID string) int {
+	if a.config.Community.officialSkinPublisher(userID) {
+		return maxCandidateOfficialLibraryRows
+	}
+	return maxCandidateLibraryRows
+}
+
+// candidatePublicLimit 返回账号最多可以有几款公开作品：普通账号 maxCandidateSkinsPerUser，官方发布账号只受自己的总数上限 maxCandidateOfficialLibraryRows 约束。
 func (a *Service) candidatePublicLimit(userID string) int {
 	if a.config.Community.officialSkinPublisher(userID) {
-		return maxCandidateLibraryRows
+		return maxCandidateOfficialLibraryRows
 	}
 	return maxCandidateSkinsPerUser
 }
@@ -899,7 +909,7 @@ func (a *Service) communityCandidateDelete(w http.ResponseWriter, r *http.Reques
 	a.deleteCommunityItem(w, r, "community_candidate_skins", "skin_not_found")
 }
 
-// communityCandidateSync lists every row the account owns, private ones included, as the identifiers a client needs to reconcile its local packages. It is not paginated: an account holds at most maxCandidateLibraryRows rows.
+// communityCandidateSync lists every row the account owns, private ones included, as the identifiers a client needs to reconcile its local packages. It is not paginated: an account holds at most maxCandidateLibraryRows rows, an official publisher at most maxCandidateOfficialLibraryRows, which is the number of entries released clients accept.
 func (a *Service) communityCandidateSync(w http.ResponseWriter, r *http.Request) {
 	extended, ok := candidateResources(w, r.URL.Query(), a.config.Community.CanvasResources)
 	if !ok {

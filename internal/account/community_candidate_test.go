@@ -1598,7 +1598,38 @@ func TestCommunityCandidateOfficialPublisher(t *testing.T) {
 	// 官方账号的每小时额度仍有上限，公开作品数仍受每账号总数上限约束。
 	setRate("candidate-publish", official.User.ID, candidateOfficialWritesPerHour)
 	apiRequest(t, mux, "POST", "/v1/community/candidate-skins", candidatePublishBody(t, "0f334455-1234-4234-8234-cccccccccccc", "Official over", manifest, files), official.AccessToken, 429)
-	if a.candidatePublicLimit(official.User.ID) != maxCandidateLibraryRows || a.candidatePublicLimit(normal.User.ID) != maxCandidateSkinsPerUser {
+	if a.candidatePublicLimit(official.User.ID) != maxCandidateOfficialLibraryRows || a.candidatePublicLimit(normal.User.ID) != maxCandidateSkinsPerUser {
 		t.Fatal("public limits")
+	}
+	if a.candidateLibraryLimit(official.User.ID) != maxCandidateOfficialLibraryRows || a.candidateLibraryLimit(normal.User.ID) != maxCandidateLibraryRows {
+		t.Fatal("library limits")
+	}
+
+	// 两个账号都补到普通账号的总数上限 100 款：普通账号再建私有作品收到 409，官方账号仍能公开发布第 101 款。
+	setRate("candidate-publish", official.User.ID, 0)
+	setRate("candidate-library", normal.User.ID, 0)
+	fill := func(prefix, userID string) {
+		t.Helper()
+		var have int
+		if err := db.pool.QueryRow(t.Context(), `SELECT count(*) FROM community_candidate_skins WHERE owner_id=$1`, userID).Scan(&have); err != nil {
+			t.Fatal(err)
+		}
+		for i := have; i < maxCandidateLibraryRows; i++ {
+			insertCandidateSkin(t, db, fmt.Sprintf("%s-1234-4234-9234-%012d", prefix, i), userID, fmt.Sprintf("fill %03d", i))
+		}
+	}
+	fill("0f334455", official.User.ID)
+	fill("1f334455", normal.User.ID)
+	w = apiRequest(t, mux, "POST", "/v1/community/candidate-skins", candidateSyncBody(t, "1f334455-1234-4234-8234-dddddddddddd", "Normal over", "private", manifest, files), normal.AccessToken, 409)
+	if !strings.Contains(w.Body.String(), "candidate_skin_library_limit") {
+		t.Fatal(w.Body.String())
+	}
+	apiRequest(t, mux, "POST", "/v1/community/candidate-skins", candidatePublishBody(t, "0f334455-1234-4234-8234-dddddddddddd", "Official 101", manifest, files), official.AccessToken, 201)
+	var total int
+	if err := db.pool.QueryRow(t.Context(), `SELECT count(*) FROM community_candidate_skins WHERE owner_id=$1`, official.User.ID).Scan(&total); err != nil {
+		t.Fatal(err)
+	}
+	if total != maxCandidateLibraryRows+1 {
+		t.Fatal("official library rows", total)
 	}
 }

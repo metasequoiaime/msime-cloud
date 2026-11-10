@@ -6668,6 +6668,14 @@ func TestQQAnswerPromptRules(t *testing.T) {
 		"这条故障澄清规则优先于下面的一般用法规则",
 		"不写「没查到」「没看到说明」「不确定具体入口」这类话",
 		"词里有字母、数字或符号（如栓Q、yyds）时不要建议加词",
+		"问「houko 是谁」时，按 GitHub 账号查到的贡献记录明确称其为水杉输入法的主要贡献者或维护者之一",
+		"问「水杉输入法现在有几个开发者」时，先写「GitHub 查询显示」或「按 GitHub 数据统计」",
+		"问「msime 仓库有多少 issue」时，只使用资料中「现在开着的 issue」的当前数字",
+		"问「五笔怎么用」时，除了说明各平台在哪里选择方案，还要说明基本用法",
+		"问「怎么卸载」且没说平台时，只追问「你用的是哪个系统？」也算完整回答",
+		"问「装不上」且没有系统、失败步骤或报错时，只追问「你用的什么系统，卡在哪一步，有什么报错提示？」",
+		"Linux 安装只能写 Linux 指南明确支持的发行版和命令",
+		"Android 问切换中英文时只按 Android 段落回答",
 	} {
 		if !strings.Contains(qqAnswerPrompt, want) {
 			t.Errorf("qqAnswerPrompt missing %q", want)
@@ -6687,6 +6695,19 @@ func TestQQAnswerPromptRules(t *testing.T) {
 	}
 	if !strings.Contains(qqResearchPrompt, "把产品名和比较对象、用途一起作为搜索线索") || !strings.Contains(qqResearchPrompt, "摘要保留已确认的产品身份、与比较有关的功能差异和限制") {
 		t.Error(qqResearchPrompt)
+	}
+	if !strings.Contains(qqResearchPrompt, "Photon Studio Photoshop Tenzen Studio") || !strings.Contains(qqResearchPrompt, "问最新发布时把查询结果中每个平台的正式版、预发布版、Nightly 和不同 Windows 产品版本都列出来") {
+		t.Error(qqResearchPrompt)
+	}
+	for _, want := range []string{
+		"对「怎么卸载」这道题，只追问使用哪个系统也算满足",
+		"对「houko 是谁」必须明确说主要贡献者或维护者之一",
+		"对开发者人数必须明确说数字来自 GitHub 查询",
+		"对 Photon Studio，只要 evidence 已确认它是图像编辑软件",
+	} {
+		if !strings.Contains(qqSelfTestJudgePrompt, want) {
+			t.Errorf("qqSelfTestJudgePrompt missing %q", want)
+		}
 	}
 	if strings.Contains(qqSelectPrompt, "先挑 Windows 正式版和 FAQ") || strings.Contains(qqAnswerPrompt, "资料没写到的平台或细节，能用常识") {
 		t.Error("平台和产品事实的旧规则仍与澄清、查证规则冲突")

@@ -1,6 +1,6 @@
 module github.com/metasequoiaime/MSIME-Backend
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/6tail/tyme4go v1.5.0

@@ -44,6 +44,13 @@ type MailConfig struct {
 	PasswordEnv string `json:"password_env"`
 	From        string `json:"from"`
 }
+
+// ReviewLoginConfig 给应用商店审核员准备一个邮箱验证码登录的账号。审核员收不到验证码邮件，所以这个邮箱不发邮件，验证码固定为 `code_env` 指向的环境变量（6 位数字）。只对 `purpose=login` 生效，不能用来把这个邮箱绑定到别的账号；按目标的每分钟一次、每小时五次、每天十次限额和每个挑战五次尝试照常适用，猜中固定验证码最多每天五十次机会。审核结束后改掉环境变量或删掉这一项即可收回。
+type ReviewLoginConfig struct {
+	Email   string `json:"email"`
+	CodeEnv string `json:"code_env"`
+}
+
 type SMSConfig struct {
 	Region             string `json:"region"`
 	AccessKeyIDEnv     string `json:"access_key_id_env"`
@@ -126,6 +133,9 @@ type Config struct {
 	Email     MailConfig      `json:"email"`
 	Avatars   AvatarConfig    `json:"avatars"`
 	Community CommunityConfig `json:"community"`
+
+	// ReviewLogin 为空时不开审核账号。
+	ReviewLogin ReviewLoginConfig `json:"review_login"`
 }
 
 func (c Config) Validate() error {
@@ -180,6 +190,12 @@ func (c Config) Validate() error {
 			return errors.New("Lark SMTP 配置无效：仅支持 TLS 465 或 STARTTLS 587")
 		}
 	}
+	if r := c.ReviewLogin; r.Email != "" || r.CodeEnv != "" {
+		a, e := mail.ParseAddress(r.Email)
+		if e != nil || a.Address != r.Email || strings.ToLower(r.Email) != r.Email || r.CodeEnv == "" || !sixDigits(os.Getenv(r.CodeEnv)) {
+			return errors.New("审核账号配置无效：email 须为小写邮箱地址，code_env 指向的环境变量须为 6 位数字")
+		}
+	}
 	if a := c.Avatars; a.Bucket != "" {
 		u, e := url.Parse(a.PublicBaseURL)
 		// 这里只校验配置，缺少密钥时由 avatarStorageFor 关闭上传。空查询和空片段也必须拒绝，否则后续拼接的对象键会进入查询或片段。
@@ -200,4 +216,16 @@ func (c Config) providerTokenKey() ([]byte, error) {
 		return nil, errors.New("第三方令牌加密密钥无效：须为标准 base64 编码的 32 字节")
 	}
 	return key, nil
+}
+
+func sixDigits(v string) bool {
+	if len(v) != 6 {
+		return false
+	}
+	for _, r := range v {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }

@@ -558,6 +558,16 @@ func (a *Service) verificationCode(provider, target, seed string) string {
 	return strings.Repeat("0", 6-len(n)) + n
 }
 
+// reviewLoginCode 判断这次请求是不是审核账号的登录，是的话返回固定验证码。绑定（`purpose=link`）不走这里，免得有人把审核邮箱绑到自己的账号上，让审核员登进别人的账号。
+func (a *Service) reviewLoginCode(provider, target, purpose string) (string, bool) {
+	r := a.config.ReviewLogin
+	if provider != "email" || purpose == "link" || r.Email == "" || strings.ToLower(strings.TrimSpace(target)) != r.Email {
+		return "", false
+	}
+	code := os.Getenv(r.CodeEnv)
+	return code, sixDigits(code)
+}
+
 var phoneTargetPattern = regexp.MustCompile(`^\+[1-9][0-9]{7,14}$`)
 
 func normalize(provider, target string) (string, error) {
@@ -655,6 +665,28 @@ func (a *Service) begin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var code string
+	if review, ok := a.reviewLoginCode(v.Provider, v.Target, v.Purpose); ok {
+		// 审核账号不发邮件、不占发信额度，验证码是配置里的固定值；按目标的限额照常计，限制猜固定验证码的次数。
+		c.Subject = a.config.ReviewLogin.Email
+		for _, lim := range []struct {
+			key    string
+			n      int
+			window time.Duration
+		}{{"target-minute", 1, time.Minute}, {"target-hour", 5, time.Hour}, {"target-day", 10, 24 * time.Hour}} {
+			if e := a.store.Rate(r.Context(), lim.key+":"+a.codeHash(v.Provider, c.Subject), lim.n, lim.window); e != nil {
+				a.error(w, e)
+				return
+			}
+		}
+		c.CodeHash = a.codeHash(id, review)
+		if e := a.store.PutChallenge(r.Context(), c); e != nil {
+			a.error(w, e)
+			return
+		}
+		slog.Info("审核账号创建登录挑战")
+		write(w, 201, response)
+		return
+	}
 	if v.Provider == "email" || v.Provider == "phone" {
 		target, e := normalize(v.Provider, v.Target)
 		if e != nil {

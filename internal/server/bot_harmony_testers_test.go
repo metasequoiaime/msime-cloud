@@ -322,7 +322,7 @@ func TestQQBotHarmonyTesterFailures(t *testing.T) {
 			if agc.responses == nil {
 				agc.responses = map[string][2]string{}
 			}
-			qqDeliver(t, s, "m-"+name, "<@!1> 鸿蒙内测 13800138000")
+			qqDeliver(t, s, "m-"+strings.ReplaceAll(name, " ", "-"), "<@!1> 鸿蒙内测 13800138000")
 			replies := fake.replyTexts()
 			if len(replies) != 1 || !strings.Contains(replies[0], tc.want) || strings.Contains(replies[0], "secret") || strings.Contains(replies[0], "<html>") {
 				t.Fatal(replies)

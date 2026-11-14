@@ -41,11 +41,14 @@ var qqHarmonyTesterCommands = []string{"鸿蒙内测", "加鸿蒙内测", "鸿�
 var (
 	harmonyTestIDPattern    = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 	harmonyTestEmailPattern = regexp.MustCompile(`^[a-z0-9._%+-]{1,64}@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}$`)
-	// harmonyTestMobilePattern 是中国大陆手机号，前面可以带 +86、86、0086 和连字符；harmonyTestIntlPattern 是其他地区写成「+区号 号码」或「区号-号码」的手机号。
+	// harmonyTestMobilePattern 是去掉连字符后的中国大陆手机号，前面可以带 +86、86、0086，都不带时补上 86；harmonyTestIntlPattern 是其他地区写成「+区号 号码」或「区号-号码」的手机号。
 	harmonyTestMobilePattern = regexp.MustCompile(`^(?:\+?86-?|0086-?)?(1[3-9][0-9]{9})$`)
 	harmonyTestIntlPattern   = regexp.MustCompile(`^\+?([1-9][0-9]{0,3})-([0-9]{4,14})$`)
 	// harmonyTestCountryCodePattern 是和号码之间隔了空格的「+区号」。
 	harmonyTestCountryCodePattern = regexp.MustCompile(`^\+[1-9][0-9]{0,3}$`)
+	// harmonyTestMobileHeadPattern、harmonyTestFourDigitsPattern 认出用空格分成「138 0013 8000」的大陆手机号。
+	harmonyTestMobileHeadPattern = regexp.MustCompile(`^1[3-9][0-9]$`)
+	harmonyTestFourDigitsPattern = regexp.MustCompile(`^[0-9]{4}$`)
 	// harmonyTestAttemptPattern 判断命令后面是不是在写账号：有 5 位以上的数字或 @。「鸿蒙测试 发现候选框不跟随」这类反馈不算，照常交给答疑和提 issue。
 	harmonyTestAttemptPattern = regexp.MustCompile(`[0-9]{5}|@`)
 	// harmonyTestCodePattern 限制写进回复和日志的华为返回码，不认识的形状一律记成 unknown，免得把上游正文带出去。
@@ -340,13 +343,22 @@ func parseHarmonyAccounts(content string) ([]string, error) {
 	if len(fields) == 0 {
 		return nil, errors.New("empty")
 	}
-	// 「+86 138…」这种区号和号码之间带空格的写法，先把区号和后面的号码拼起来。
+	// 「138 0013 8000」这种用空格分段的手机号先拼成一个；「+86 138…」这种区号和号码之间带空格的写法，把区号和后面的号码拼起来。
 	var tokens []string
 	for i := 0; i < len(fields); i++ {
 		field := fields[i]
+		if i+2 < len(fields) && harmonyTestMobileHeadPattern.MatchString(field) && harmonyTestFourDigitsPattern.MatchString(fields[i+1]) && harmonyTestFourDigitsPattern.MatchString(fields[i+2]) {
+			field += fields[i+1] + fields[i+2]
+			i += 2
+		}
 		if i+1 < len(fields) && harmonyTestCountryCodePattern.MatchString(field) {
 			field += "-" + fields[i+1]
 			i++
+			// 「+86 138 0013 8000」。
+			if i+2 < len(fields) && harmonyTestMobileHeadPattern.MatchString(fields[i]) && harmonyTestFourDigitsPattern.MatchString(fields[i+1]) && harmonyTestFourDigitsPattern.MatchString(fields[i+2]) {
+				field += fields[i+1] + fields[i+2]
+				i += 2
+			}
 		}
 		tokens = append(tokens, field)
 	}
@@ -375,8 +387,11 @@ func normalizeHarmonyAccount(token string) (string, bool) {
 		email := strings.ToLower(token)
 		return email, len(email) <= 256 && harmonyTestEmailPattern.MatchString(email)
 	}
-	if m := harmonyTestMobilePattern.FindStringSubmatch(token); m != nil {
-		return "86-" + m[1], true
+	// 不带区号的大陆手机号补上 86；去掉连字符再认，「138-0013-8000」「138-00138000」都是大陆手机号，不能把 138 当成区号。以 1 开头的区号只有北美的 1，所以第一段正好是 1 时（「1-4155550123」）按区号处理，不当成 14 开头的大陆手机号。
+	if first, _, _ := strings.Cut(strings.TrimPrefix(token, "+"), "-"); first != "1" {
+		if m := harmonyTestMobilePattern.FindStringSubmatch(strings.ReplaceAll(token, "-", "")); m != nil {
+			return "86-" + m[1], true
+		}
 	}
 	if m := harmonyTestIntlPattern.FindStringSubmatch(token); m != nil {
 		return m[1] + "-" + m[2], true
@@ -403,7 +418,7 @@ func (s *Server) qqHarmonyTesterCommand(ctx context.Context, m botMessage, text 
 		return ""
 	}
 	accounts, err := parseHarmonyAccounts(content)
-	const usage = "用法：@我 发「鸿蒙内测 手机号或邮箱」，多个账号用空格隔开，一次最多 10 个。手机号只写 11 位就行，其他地区写成「+区号 号码」。"
+	const usage = "用法：@我 发「鸿蒙内测 手机号或邮箱」，多个账号用空格隔开，一次最多 10 个。大陆手机号只写 11 位就行，会自动加 86；其他地区写成「+区号 号码」。"
 	switch {
 	case !admin && err != nil:
 		return ""

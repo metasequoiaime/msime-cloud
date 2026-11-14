@@ -116,6 +116,8 @@ type QQBotConfig struct {
 	EmbeddingModel string `json:"embedding_model"`
 	// HistoryRepos 是向量检索额外索引的仓库（owner/name），例如 metasequoiaime/msime-cloud：它们的 issue 和 PR 只用来在答疑时按意思召回「语义相近的历史记录」，不参与提 issue、搜 issue、查 #编号和周报。qq_bot.repo 和各平台的仓库本来就会索引，不用重复写。管理后台的 GitHub App 要能读这些仓库的 issues 和 pull_requests。
 	HistoryRepos []string `json:"history_repos"`
+	// HarmonyTest 让管理员在群里发「鸿蒙内测 手机号或邮箱」把华为账号加进鸿蒙版的邀请测试，见 bot_harmony_testers.go。不配置时关闭。
+	HarmonyTest HarmonyTestConfig `json:"harmony_test"`
 	// APIURL 覆盖 https://api.bot.qq.com，供测试使用。
 	APIURL string `json:"api_url,omitempty"`
 	secret string
@@ -136,7 +138,7 @@ var (
 
 func (c *QQBotConfig) validate(cfg *Config) error {
 	if !c.enabled() {
-		if c.AutoReply || c.QuestionModel != "" || c.APIURL != "" || c.Repo != "" || c.Model != "" || c.FallbackModel != "" || c.KnowledgeRepo != "" || c.KnowledgeDir != "" || c.GapsRepo != "" || c.EmbeddingModel != "" || c.ImprovementRepo != "" || len(c.HistoryRepos) > 0 || c.StrongModel != "" || c.ChatModel != "" || len(c.Labels) > 0 || len(c.Groups) > 0 || len(c.Admins) > 0 {
+		if c.AutoReply || c.QuestionModel != "" || c.APIURL != "" || c.Repo != "" || c.Model != "" || c.FallbackModel != "" || c.KnowledgeRepo != "" || c.KnowledgeDir != "" || c.GapsRepo != "" || c.EmbeddingModel != "" || c.ImprovementRepo != "" || len(c.HistoryRepos) > 0 || c.StrongModel != "" || c.ChatModel != "" || len(c.Labels) > 0 || len(c.Groups) > 0 || len(c.Admins) > 0 || c.HarmonyTest != (HarmonyTestConfig{}) {
 			return errors.New("qq_bot settings require app_id")
 		}
 		return nil
@@ -265,7 +267,7 @@ func (c *QQBotConfig) validate(cfg *Config) error {
 	if len(c.QuestionModel) > 200 || strings.ContainsAny(c.QuestionModel, " \r\n\t") {
 		return errors.New("qq_bot question_model must be a model name without whitespace")
 	}
-	return nil
+	return c.HarmonyTest.validate()
 }
 
 // qqBot 是机器人的运行时状态：签名密钥、调用开放平台接口的客户端，以及本副本缓存的调用凭证。
@@ -301,6 +303,8 @@ type qqBot struct {
 	repoVisibility map[string]qqRepoVisibility
 	// appLogin 是管理后台 GitHub App 的 bot 账号「<slug>[bot]」，取到后不再变，见 qqAppLogin；由 mu 保护。
 	appLogin string
+	// harmony 调 AppGallery Connect 添加鸿蒙内测用户，没配置 harmony_test 时为 nil，见 bot_harmony_testers.go。
+	harmony *harmonyTesters
 }
 
 // probeMemberRole 在每个副本第一次收到 @ 消息时记一行日志，说明事件里有没有带群身份（author.member_role）：开放平台的文档写了这个字段，但没确认生产的事件里真的有。有的话群主和群管理员不用加进名单就能识别（见 qq_roles.go）。
@@ -392,7 +396,7 @@ func qqEventFields(raw json.RawMessage) (keys, numbers, nested []string) {
 
 func newQQBot(c QQBotConfig) *qqBot {
 	b := &qqBot{config: c, key: qqBotKey(c.secret), now: time.Now, mediaHosts: qqMediaHosts,
-		client: httpclient.New(qqBotTokenTimeout)}
+		client: httpclient.New(qqBotTokenTimeout), harmony: newHarmonyTesters(c.HarmonyTest)}
 	b.mediaClient = newQQMediaClient(&b.mediaHosts)
 	return b
 }

@@ -59,6 +59,7 @@ const (
 /issue 引用一条消息直接提 issue，后面可以补版本、优先级
 /faqs 文档缺口　/a 3 答案 写进 FAQ　/q 引用的问题记成文档缺口
 /bad 被说答错的　/weekly 周报
+鸿蒙内测 手机号或邮箱 把华为账号加进鸿蒙版内测
 中文命令照旧能用：草稿、提交 D12、写进FAQ F3、记录答案 问：… 答：…`
 )
 
@@ -517,6 +518,9 @@ func (s *Server) qqCommand(ctx context.Context, m botMessage, text, compact stri
 		return command
 	}
 	if command := s.qqFAQCandidateCommands(ctx, text, compact, admin, reply); command != "" {
+		return command
+	}
+	if command := s.qqHarmonyTesterCommand(ctx, m, text, admin, reply); command != "" {
 		return command
 	}
 	if compact == "周报" {

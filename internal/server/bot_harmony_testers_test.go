@@ -119,7 +119,8 @@ func TestHarmonyTestConfigValidation(t *testing.T) {
 	if err := c.QQBot.validate(&c); err != nil || newQQBot(c.QQBot).harmony == nil {
 		t.Fatal("validate must be idempotent", err)
 	}
-	if newQQBot(qqValidConfig().QQBot).harmony != nil {
+	// 没配置时不建客户端。不能拿未校验的配置调 newQQBot：secret 为空时 qqBotKey 不会返回。
+	if newHarmonyTesters(HarmonyTestConfig{}) != nil {
 		t.Fatal("harmony testers without config")
 	}
 	t.Setenv("TEST_AGC_BAD_JSON", "{")

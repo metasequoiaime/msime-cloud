@@ -119,7 +119,8 @@ func TestHarmonyTestConfigValidation(t *testing.T) {
 	if err := c.QQBot.validate(&c); err != nil || newQQBot(c.QQBot).harmony == nil {
 		t.Fatal("validate must be idempotent", err)
 	}
-	if newQQBot(qqValidConfig().QQBot).harmony != nil {
+	// 没配置时不建客户端。不能拿未校验的配置调 newQQBot：secret 为空时 qqBotKey 不会返回。
+	if newHarmonyTesters(HarmonyTestConfig{}) != nil {
 		t.Fatal("harmony testers without config")
 	}
 	t.Setenv("TEST_AGC_BAD_JSON", "{")
@@ -321,7 +322,7 @@ func TestQQBotHarmonyTesterFailures(t *testing.T) {
 			if agc.responses == nil {
 				agc.responses = map[string][2]string{}
 			}
-			qqDeliver(t, s, "m-"+name, "<@!1> 鸿蒙内测 13800138000")
+			qqDeliver(t, s, "m-"+strings.ReplaceAll(name, " ", "-"), "<@!1> 鸿蒙内测 13800138000")
 			replies := fake.replyTexts()
 			if len(replies) != 1 || !strings.Contains(replies[0], tc.want) || strings.Contains(replies[0], "secret") || strings.Contains(replies[0], "<html>") {
 				t.Fatal(replies)

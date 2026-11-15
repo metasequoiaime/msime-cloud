@@ -42,8 +42,8 @@ func TestEveryPublishedRouteSecurityContract(t *testing.T) {
 					w := httptest.NewRecorder()
 					s.ServeHTTP(w, r)
 					expected := 401
-					if path == "/healthz" || method == "get" && path == wordSubmissionsPath {
-						// The word form settings are anonymous and answer enabled:false when unconfigured.
+					if path == "/healthz" || method == "get" && (path == wordSubmissionsPath || path == harmonySignupPath) {
+						// 词条表单和鸿蒙内测登记的设置接口是匿名的，未配置时返回 enabled:false。
 						expected = 200
 					} else if account.IsPath(path) || path == noticesPath {
 						// The notices feed needs no credentials and answers 503 without the account service.

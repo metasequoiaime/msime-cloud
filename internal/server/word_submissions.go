@@ -427,7 +427,7 @@ func (s *Server) submitWords(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	// 45 秒处理后还可能各用 5 秒释放共享锁和记录投稿，再留 5 秒写响应，避免全局连接写期限提前截断。
 	httpdeadline.Extend(w, 0, wordSubmissionTimeout+15*time.Second)
-	if err = ws.verifyTurnstile(ctx, input.Token); err != nil {
+	if err = ws.verifyTurnstile(ctx, input.Token, "words"); err != nil {
 		if errors.Is(err, errTurnstileRejected) {
 			wordsFail(w, 403, "verification_failed", "验证已失效，请重新验证后提交。")
 		} else {
@@ -679,7 +679,8 @@ func sanitizeWordNote(note string) (string, bool) {
 
 var errTurnstileRejected = errors.New("turnstile rejected the token")
 
-func (ws *wordSubmitter) verifyTurnstile(ctx context.Context, token string) error {
+// verifyTurnstile 向 Cloudflare 校验令牌，并要求 action 与表单一致：词条表单是 words，鸿蒙内测登记是 harmony，一个表单的令牌不能拿去提交另一个。
+func (ws *wordSubmitter) verifyTurnstile(ctx context.Context, token, action string) error {
 	form := url.Values{"secret": {ws.config.Turnstile.secret}, "response": {token}}
 	req, err := httpclient.NewFormBodyRequest(ctx, http.MethodPost, ws.config.Turnstile.SiteverifyURL, form.Encode())
 	if err != nil {
@@ -701,7 +702,7 @@ func (ws *wordSubmitter) verifyTurnstile(ctx context.Context, token string) erro
 	if err = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&result); err != nil {
 		return errors.New("siteverify returned an invalid response")
 	}
-	if !result.Success || result.Action != "words" || !slices.Contains(ws.hostnames, result.Hostname) {
+	if !result.Success || result.Action != action || !slices.Contains(ws.hostnames, result.Hostname) {
 		return errTurnstileRejected
 	}
 	return nil

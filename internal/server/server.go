@@ -171,6 +171,8 @@ func New(c Config) (*Server, error) {
 	// Anonymous website endpoints: the /v1/community/ prefix skips Bearer authentication in the middleware, and the handlers apply their own origin, Turnstile and rate checks.
 	mux.HandleFunc("GET "+wordSubmissionsPath, s.wordSubmissionSettings)
 	mux.HandleFunc("POST "+wordSubmissionsPath, s.submitWords)
+	mux.HandleFunc("GET "+harmonySignupPath, s.harmonySignupSettings)
+	mux.HandleFunc("POST "+harmonySignupPath, s.registerHarmonyTester)
 	mux.HandleFunc("POST /v1/skins/generate", s.generateSkinArtwork)
 	mux.HandleFunc("POST /v1/skins/jobs", s.createSkinArtworkJob)
 	mux.HandleFunc("POST "+voiceContributionsPath, s.voiceContribution)

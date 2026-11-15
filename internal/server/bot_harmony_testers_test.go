@@ -365,7 +365,7 @@ func TestQQBotHarmonyTesterCommandGuards(t *testing.T) {
 	// 普通群友带账号时说明只有管理员能加，不调华为接口；在问内测的消息交给答疑。
 	s.qq.config.Admins = nil
 	qqDeliver(t, s, "m-member", "<@!1> 鸿蒙内测 13800138000")
-	if replies := fake.replyTexts(); !strings.HasPrefix(replies[len(replies)-1], "只有管理员能添加鸿蒙内测用户") || len(agc.calls) != 0 {
+	if replies := fake.replyTexts(); !strings.HasPrefix(replies[len(replies)-1], "只有管理员能在群里添加鸿蒙内测用户") || len(agc.calls) != 0 {
 		t.Fatal(replies, agc.calls)
 	}
 	for i, question := range []string{"鸿蒙内测", "鸿蒙内测 怎么参加", "鸿蒙内测 我也想要"} {

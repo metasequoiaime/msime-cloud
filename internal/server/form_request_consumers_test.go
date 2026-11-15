@@ -43,7 +43,7 @@ func TestFormBodyConsumersWireFormat(t *testing.T) {
 				}
 			} else {
 				ws := &wordSubmitter{client: upstream.Client(), hostnames: []string{"site.example.test"}, config: WordSubmissionsConfig{Turnstile: TurnstileConfig{SiteverifyURL: upstream.URL + "/form", secret: "synthetic-secret"}}}
-				if err := ws.verifyTurnstile(t.Context(), "synthetic +%&="); err != nil {
+				if err := ws.verifyTurnstile(t.Context(), "synthetic +%&=", "words"); err != nil {
 					t.Fatal(err)
 				}
 			}

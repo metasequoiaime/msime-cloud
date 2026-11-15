@@ -302,8 +302,8 @@ type harmonyTestOutcome struct {
 	err      *harmonyTestError
 }
 
-// add 把一个账号加进测试群组并发邀请通知。已经在群组里的账号不重复添加，只重发通知；加进去了但通知没发出去时照样算加上，回复里说明。
-func (h *harmonyTesters) add(ctx context.Context, account, nickName string) harmonyTestOutcome {
+// add 把一个账号加进测试群组，notify 为真时再发邀请通知。已经在群组里的账号不重复添加，只重发通知；加进去了但通知没发出去时照样算加上，回复里说明。官网自助登记不发通知，见 harmony_signup.go。
+func (h *harmonyTesters) add(ctx context.Context, account, nickName string, notify bool) harmonyTestOutcome {
 	outcome := harmonyTestOutcome{account: account}
 	fail := func(err error) harmonyTestOutcome {
 		var agcErr *harmonyTestError
@@ -323,10 +323,16 @@ func (h *harmonyTesters) add(ctx context.Context, account, nickName string) harm
 		if err := h.call(ctx, "add", http.MethodPost, "/publish/v2/test/user", nil, body, nil); err != nil {
 			return fail(err)
 		}
+		if !notify {
+			return outcome
+		}
 		if id, err = h.find(ctx, account); err != nil || id == "" {
 			// 加上了但查不到成员 ID，就发不了通知；不算失败，回复里请管理员到控制台补发。
 			return outcome
 		}
+	}
+	if !notify {
+		return outcome
 	}
 	body := map[string]any{"groupId": h.config.GroupID, "testerIds": []string{id}}
 	if err := h.call(ctx, "notify", http.MethodPost, "/publish/v1/test/user/action/notify", nil, body, nil); err == nil {
@@ -423,7 +429,7 @@ func (s *Server) qqHarmonyTesterCommand(ctx context.Context, m botMessage, text 
 	case !admin && err != nil:
 		return ""
 	case !admin:
-		reply("只有管理员能添加鸿蒙内测用户。想参加内测可以在群里说一声，管理员会帮你加。")
+		reply("只有管理员能在群里添加鸿蒙内测用户。想参加内测可以到官网下载页的 HarmonyOS 版自己登记华为账号：https://msime.app/download/?platform=harmony")
 	case s.qq == nil || s.qq.harmony == nil:
 		reply("还没有配置鸿蒙邀请测试，请先在 AppGallery Connect 控制台手动添加。")
 	case content == "":
@@ -438,7 +444,7 @@ func (s *Server) qqHarmonyTesterCommand(ctx context.Context, m botMessage, text 
 		var lines []string
 		failed := 0
 		for _, account := range accounts {
-			outcome := s.qq.harmony.add(ctx, account, nickName)
+			outcome := s.qq.harmony.add(ctx, account, nickName, true)
 			lines = append(lines, harmonyTestLine(outcome))
 			result := "added"
 			switch {

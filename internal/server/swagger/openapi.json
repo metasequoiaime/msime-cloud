@@ -20736,6 +20736,255 @@
         }
       }
     },
+    "/v1/community/harmony-testers": {
+      "get": {
+        "summary": "查询官网鸿蒙内测登记是否开放",
+        "tags": [
+          "鸿蒙内测"
+        ],
+        "security": [],
+        "description": "匿名接口，无需令牌。qq_bot.harmony_test 和 word_submissions 都配置时 enabled=true，site_key 是词条提交共用的 Cloudflare Turnstile 站点密钥（公开值）；否则 enabled=false、site_key 为空字符串。",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "site_key": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "enabled",
+                    "site_key"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "把访客自己的华为账号登记到鸿蒙版邀请测试",
+        "tags": [
+          "鸿蒙内测"
+        ],
+        "security": [],
+        "description": "仅接受 allowed_origins 中网站发出的浏览器请求（必须携带 Origin），请求体最多 4 KiB。服务端依次校验账号、Cloudflare Turnstile（action 为 harmony，hostname 属于 allowed_origins）以及 PostgreSQL 限流（每个客户端地址每 10 分钟 3 次、每天 10 次，全站每天 200 次，只计通过人机验证的请求），然后用 qq_bot.harmony_test 的服务账号调 AppGallery Connect，把账号加进配置的外部测试群组，成员昵称为「官网」。与群里管理员的「鸿蒙内测」命令不同，这里不发邀请测试通知，访客登记后自己扫码或输入邀请码加入。账号已经在群组里时不重复添加，返回与新加时相同的结果。服务不保存访客信息，不记录账号或令牌，也不把华为的响应正文返回给调用方。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "account": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "description": "登录华为账号用的手机号或邮箱，只能一个。大陆手机号写 11 位即可（可带 +86、86、0086 或空格、连字符），自动补成 86-号码；其他地区写成「+区号 号码」或「区号-号码」；邮箱转为小写。",
+                    "example": "13800138000"
+                  },
+                  "token": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "description": "Turnstile 令牌，一次有效，action 必须是 harmony。"
+                  }
+                },
+                "required": [
+                  "account",
+                  "token"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "已登记（包括原本就在测试群组里）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "registered": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  },
+                  "required": [
+                    "registered"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求无效：invalid_json、invalid_account（不是一个手机号或邮箱）、token_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "可直接展示给用户的中文说明。"
+                    },
+                    "code": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "来源不是配置的网站（origin_required），或 Turnstile 验证失败（verification_failed）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "可直接展示给用户的中文说明。"
+                    },
+                    "code": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ]
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "请求体超过 4 KiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "可直接展示给用户的中文说明。"
+                    },
+                    "code": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "需要 application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "可直接展示给用户的中文说明。"
+                    },
+                    "code": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "提交过于频繁，或全站当天的登记名额已用完",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "可直接展示给用户的中文说明。"
+                    },
+                    "code": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ]
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "重试等待秒数",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "功能未开启（harmony_signup_disabled）、Turnstile 或数据库暂不可用、测试群组人数已满（group_full），或 AppGallery Connect 暂不可用（agc_unavailable）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "可直接展示给用户的中文说明。"
+                    },
+                    "code": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ]
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "重试等待秒数",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/community/qq-bot/events": {
       "post": {
         "summary": "QQ 群反馈机器人的 Webhook 回调",

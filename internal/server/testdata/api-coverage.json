@@ -489,6 +489,16 @@
       "internal/server/telegram_private_test.go::TestTelegramBotPrivateChat",
       "internal/server/telegram_private_test.go::TestTelegramBotBindCodePrivately"
     ],
+    "GET /v1/community/harmony-testers": [
+      "internal/server/harmony_signup_test.go::TestHarmonySignupSettings"
+    ],
+    "POST /v1/community/harmony-testers": [
+      "internal/server/harmony_signup_test.go::TestHarmonySignupRegisters",
+      "internal/server/harmony_signup_test.go::TestHarmonySignupRejections",
+      "internal/server/harmony_signup_test.go::TestHarmonySignupTurnstile",
+      "internal/server/harmony_signup_test.go::TestHarmonySignupRateLimit",
+      "internal/server/harmony_signup_test.go::TestHarmonySignupAGCFailures"
+    ],
     "GET /v1/community/word-submissions": [
       "internal/server/word_submissions_test.go::TestWordSubmissionSettings"
     ],
